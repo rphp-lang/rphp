@@ -88,6 +88,16 @@ impl Parser {
             // must be recognized before parse_bitwise_and consumes `&` as an
             // infix operator and asks for an expression after `$left =`.
             self.finish_assignment_expression(expr)
+        } else if self.is_empty_array_dimension_suffix()
+            && Self::compound_assign_op(&self.peek_at(2)).is_some()
+        {
+            let bracket_line = self.expect_lbracket()?;
+            self.expect(&Token::RBracket)?;
+            let line = self.last_primary_line.unwrap_or(bracket_line);
+            self.finish_compound_assignment_expression(Expr::ArrayAppendArgument {
+                target: Box::new(expr),
+                line,
+            })
         } else if self.is_array_append_suffix() {
             self.finish_array_append_assignment_expression(expr)
         } else if self.peek() == Token::QuestionQuestionAssign {
@@ -145,7 +155,7 @@ impl Parser {
             None
         };
         let write_root_error = if nullsafe_line.is_none()
-            && matches!(target, Expr::ArrayAccess { .. })
+            && matches!(target, Expr::ArrayAccess { .. } | Expr::ArrayAppendArgument { .. })
         {
             self.array_write_root_error(&target)
         } else {
@@ -157,6 +167,7 @@ impl Parser {
                 | Expr::DynamicVariable { .. }
                 | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
+                | Expr::ArrayAppendArgument { .. }
                 | Expr::PropertyAccess {
                     nullsafe: false,
                     ..

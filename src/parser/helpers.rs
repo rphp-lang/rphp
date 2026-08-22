@@ -101,6 +101,24 @@ impl Parser {
         })
     }
 
+    /// Parse a foreach key/value target while preserving one terminal empty
+    /// dimension. In this write context `$target[]` is an append destination,
+    /// not the ordinary read error produced by expression parsing.
+    fn parse_foreach_target_expression(&mut self) -> Result<Expr, String> {
+        let target = self.parse_empty_dimension_target_prefix()?;
+        if !self.is_empty_array_dimension_suffix() {
+            return Ok(target);
+        }
+
+        let bracket_line = self.expect_lbracket()?;
+        self.expect(&Token::RBracket)?;
+        let line = self.last_primary_line.unwrap_or(bracket_line);
+        Ok(Expr::ArrayAppendArgument {
+            target: Box::new(target),
+            line,
+        })
+    }
+
     fn comma_list_error(&self, line: usize, expecting_closing_paren: bool) -> String {
         let expectation = if expecting_closing_paren {
             ", expecting \")\""
@@ -1421,7 +1439,7 @@ impl Parser {
         if let Some(error) = self.call_write_error(&expr) {
             return Ok(ForeachTarget::Target(error));
         }
-        if matches!(expr, Expr::ArrayAccess { .. })
+        if matches!(expr, Expr::ArrayAccess { .. } | Expr::ArrayAppendArgument { .. })
             && let Some((message, line)) = self.array_write_root_error(&expr)
         {
             return Ok(ForeachTarget::Target(self.compile_error(message, line)));
@@ -1436,6 +1454,7 @@ impl Parser {
                 self.globals_modification_error(line),
             )),
             target @ (Expr::ArrayAccess { .. }
+            | Expr::ArrayAppendArgument { .. }
             | Expr::PropertyAccess {
                 nullsafe: false, ..
             }

@@ -8087,6 +8087,25 @@ impl Compiler {
                                 right_type,
                             )
                         }
+                        Expr::ArrayAppendArgument { target, .. } => {
+                            let (left, left_type) =
+                                match self.compile_array_append_argument_reference(target, &[]) {
+                                    Ok(source) => source,
+                                    Err(error) => {
+                                        self.deferred_error = Some(error);
+                                        let null = self.add_literal(Value::null());
+                                        return (null, OpType::Const);
+                                    }
+                                };
+                            let (right, right_type) = self.compile_expr(expr);
+                            (
+                                left,
+                                left_type,
+                                ForeachArrayWriteback::Variable(left),
+                                right,
+                                right_type,
+                            )
+                        }
                         _ => {
                             let mut root = target.as_ref();
                             while let Expr::ArrayAccess { array, .. } = root {

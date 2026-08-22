@@ -4888,7 +4888,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 // Callee done. eg.current_execute_data is our caller (frame).
                                 // (*frame).opline was already set to DoFcall+1 above.
                                 // op_array unchanged (same caller function).
-                                continue;
+                                continue 'vm;
                             }
                             super::hot::HotResult::Bailout => {
                                 match super::hot::resume_after_long_comparison(eg, call)? {
@@ -5515,31 +5515,93 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
-            OpCode::FetchDimR => {
+            OpCode::FetchDimR => 'fetch_dim: {
                 #[cfg(feature = "quick-loops")]
                 if opline._pad & FETCH_DIM_ISSET == 0
+                    && opline._pad & FETCH_DIM_MUTABLE == 0
                     && opline.extended_value != 0
                     && unsafe {
                         execute_quick_region_entry(eg, frame, op_array, opline)?
                     }
                 {
-                    continue;
+                    continue 'vm;
                 }
 
                 // result = op1[op2]
                 // SAFETY: each compiler-selected operand slot belongs to this
                 // live frame. The cold diagnostic helper separately retains an
                 // array before invoking synchronous user code.
-                let arr_val = unsafe {
-                    (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array))
-                        .dereferenced()
-                };
                 let idx_val = unsafe {
                     &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
                 };
                 let result_ptr = unsafe {
                     (*frame).get_op_mut(opline.result as u32, opline.result_type)
                 };
+
+                // SAFETY: FetchDimR operands are compiler-owned live-frame or
+                // immutable literal slots. Keep only a raw read pointer across
+                // the branch and reacquire it after diagnostic dispatch.
+                let (mut arr_ptr, arr_is_false) = unsafe {
+                    let ptr =
+                        (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) as *mut Value;
+                    let is_false = (&*ptr).dereferenced().value_type() == ValueType::False;
+                    (ptr, is_false)
+                };
+
+                if opline._pad & FETCH_DIM_MUTABLE != 0 && arr_is_false {
+                    // A false container is converted before PHP normalizes the
+                    // current key. Publishing the empty array first lets a
+                    // synchronous error handler observe or replace it.
+                    let conversion = convert_false_array_location(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        FalseArrayLocation::Operand {
+                            operand: opline.op1,
+                            operand_type: opline.op1_type,
+                        },
+                        (opline.extended_value != 0)
+                            .then_some(opline.extended_value as usize),
+                    )?;
+                    if let Some(exception) = eg.exception.take() {
+                        match throw_in_frame(eg, frame, exception)? {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue 'vm;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
+                    match conversion {
+                        FalseArrayConversion::Jumped => continue 'vm,
+                        FalseArrayConversion::Survived(None)
+                        | FalseArrayConversion::Clobbered => {
+                            // SAFETY: the callback is complete; resolve the
+                            // compiler-owned operand again before reading it.
+                            arr_ptr = unsafe {
+                                (*frame).get_op_ptr(
+                                    opline.op1 as u32,
+                                    opline.op1_type,
+                                    op_array,
+                                ) as *mut Value
+                            };
+                        }
+                        FalseArrayConversion::NotFalse
+                        | FalseArrayConversion::Survived(Some(_)) => {
+                            unreachable!("a prechecked false operand must convert")
+                        }
+                    }
+                }
+
+                // SAFETY: op1 still names a compiler-selected live-frame
+                // operand after any synchronous conversion callback. Resolve
+                // it again here instead of retaining the pre-callback borrow.
+                let arr_val = unsafe { (&*arr_ptr).dereferenced() };
 
                 if let Some(arr) = arr_val.as_array() {
                     if opline._pad & FETCH_DIM_ISSET != 0
@@ -5568,6 +5630,65 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                         }
                                     }
                                 };
+                                let mutable_false = opline._pad & FETCH_DIM_MUTABLE != 0
+                                    && fetched.is_some_and(|value| {
+                                        value.dereferenced().value_type() == ValueType::False
+                                    });
+                                if mutable_false {
+                                    let key = match array_key {
+                                        ArrayKeyRef::Int(key) => ArrayKey::Int(key),
+                                        ArrayKeyRef::String(key) => {
+                                            ArrayKey::String(key.to_string())
+                                        }
+                                    };
+                                    let conversion = convert_false_array_location(
+                                        eg,
+                                        frame,
+                                        op_array,
+                                        opline,
+                                        FalseArrayLocation::Child {
+                                            operand: opline.op1,
+                                            operand_type: opline.op1_type,
+                                            key,
+                                        },
+                                        (opline.extended_value != 0)
+                                            .then_some(opline.extended_value as usize),
+                                    )?;
+                                    if let Some(exception) = eg.exception.take() {
+                                        match throw_in_frame(eg, frame, exception)? {
+                                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                                frame = new_frame;
+                                                op_array = new_op_array;
+                                                continue 'vm;
+                                            }
+                                            ThrowResult::Unhandled(exception) => {
+                                                eg.exception = Some(exception);
+                                                return Ok(());
+                                            }
+                                        }
+                                    }
+                                    match conversion {
+                                        FalseArrayConversion::Survived(Some(converted)) => {
+                                            write_fetch_dim_result(frame, result_ptr, converted);
+                                            break 'fetch_dim;
+                                        }
+                                        FalseArrayConversion::Jumped => continue 'vm,
+                                        FalseArrayConversion::Clobbered => {
+                                            write_fetch_dim_result(
+                                                frame,
+                                                result_ptr,
+                                                Value::null(),
+                                            );
+                                            break 'fetch_dim;
+                                        }
+                                        FalseArrayConversion::NotFalse
+                                        | FalseArrayConversion::Survived(None) => {
+                                            unreachable!(
+                                                "a prechecked false child must convert or be clobbered"
+                                            )
+                                        }
+                                    }
+                                }
                                 if fetched.is_none()
                                     && opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_SILENT) == 0
                                 {
@@ -5734,7 +5855,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
-                                    continue;
+                                    continue 'vm;
                                 }
                                 ThrowResult::Unhandled(exception) => {
                                     eg.exception = Some(exception);
@@ -5982,25 +6103,25 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
                     val.clone()
                 };
-                // SAFETY: op1 names a compiler-owned mutable slot in this
-                // live frame. A Reference operand keeps its target alive for
-                // this non-reentrant dimension mutation.
-                let arr_ptr = unsafe {
+                // SAFETY: AssignDim op1 names a compiler-owned mutable slot in this
+                // live frame. A PHP reference owns its target; if false-array
+                // reporting runs, the pointer is reacquired before mutation.
+                let (mut arr_ptr, arr_type) = unsafe {
                     let ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
-                    if (&*ptr).is_reference() {
+                    let ptr = if (&*ptr).is_reference() {
                         (&mut *ptr).as_ref_ptr()
                     } else {
                         ptr
-                    }
+                    };
+                    (ptr, (&*ptr).value_type())
                 };
-                let arr = unsafe { &mut *arr_ptr };
                 if opline._pad & ASSIGN_DIM_UNSET_REBUILD != 0
                     && !matches!(
-                        arr.value_type(),
+                        arr_type,
                         ValueType::Array | ValueType::Object | ValueType::Closure
                     )
                 {
-                    if arr.value_type() == ValueType::False {
+                    if arr_type == ValueType::False {
                         report_php_deprecation(
                             eg,
                             frame,
@@ -6023,10 +6144,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                         break 'assign_dim;
                     }
-                    if matches!(arr.value_type(), ValueType::Undef | ValueType::Null) {
+                    if matches!(arr_type, ValueType::Undef | ValueType::Null) {
                         break 'assign_dim;
                     }
-                    let message = if arr.value_type() == ValueType::String {
+                    let message = if arr_type == ValueType::String {
                         "Cannot use string offset as an array"
                     } else {
                         "Cannot unset offset in a non-array variable"
@@ -6052,6 +6173,55 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     }
                 }
+                if arr_type == ValueType::False {
+                    let conversion = convert_false_array_location(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        FalseArrayLocation::Operand {
+                            operand: opline.op1,
+                            operand_type: opline.op1_type,
+                        },
+                        None,
+                    )?;
+                    if let Some(exception) = eg.exception.take() {
+                        match throw_in_frame(eg, frame, exception)? {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue 'vm;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
+                    match conversion {
+                        FalseArrayConversion::Survived(None) => {}
+                        FalseArrayConversion::Clobbered => break 'assign_dim,
+                        FalseArrayConversion::NotFalse
+                        | FalseArrayConversion::Survived(Some(_))
+                        | FalseArrayConversion::Jumped => {
+                            unreachable!("a prechecked false operand must convert")
+                        }
+                    }
+                    // SAFETY: the diagnostic callback has returned and the
+                    // identity check proved that the converted operand still
+                    // owns the published array. Resolve its current slot anew.
+                    arr_ptr = unsafe {
+                        let ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                        if (&*ptr).is_reference() {
+                            (&mut *ptr).as_ref_ptr()
+                        } else {
+                            ptr
+                        }
+                    };
+                }
+                // SAFETY: arr_ptr was resolved from the active frame after
+                // any reentrant callback and remains owned by its operand.
+                let arr = unsafe { &mut *arr_ptr };
                 if matches!(arr.value_type(), ValueType::Object | ValueType::Closure) {
                     let receiver = arr.clone();
                     let args = [idx_val.clone(), cloned_val];
@@ -6148,7 +6318,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
-            OpCode::ArrayPushOp => {
+            OpCode::ArrayPushOp => 'array_push: {
                 // op1[] = op2
                 let cloned_val = if opline._pad & crate::vm::instruction::ARRAY_ELEMENT_REFERENCE != 0 {
                     if opline.op2_type != OpType::Cv {
@@ -6167,17 +6337,66 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                     val.clone()
                 };
-                // SAFETY: op1 names a compiler-owned mutable slot in this
-                // live frame. A Reference operand keeps its target alive for
-                // this non-reentrant append operation.
-                let arr_ptr = unsafe {
+                // SAFETY: ArrayPushOp op1 names a compiler-owned mutable slot in this
+                // live frame. A PHP reference owns its target; if false-array
+                // reporting runs, the pointer is reacquired before mutation.
+                let (mut arr_ptr, arr_is_false) = unsafe {
                     let ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
-                    if (&*ptr).is_reference() {
+                    let ptr = if (&*ptr).is_reference() {
                         (&mut *ptr).as_ref_ptr()
                     } else {
                         ptr
-                    }
+                    };
+                    (ptr, (&*ptr).value_type() == ValueType::False)
                 };
+                if arr_is_false {
+                    let conversion = convert_false_array_location(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        FalseArrayLocation::Operand {
+                            operand: opline.op1,
+                            operand_type: opline.op1_type,
+                        },
+                        None,
+                    )?;
+                    if let Some(exception) = eg.exception.take() {
+                        match throw_in_frame(eg, frame, exception)? {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue 'vm;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
+                    match conversion {
+                        FalseArrayConversion::Survived(None) => {}
+                        FalseArrayConversion::Clobbered => break 'array_push,
+                        FalseArrayConversion::NotFalse
+                        | FalseArrayConversion::Survived(Some(_))
+                        | FalseArrayConversion::Jumped => {
+                            unreachable!("a prechecked false operand must convert")
+                        }
+                    }
+                    // SAFETY: reacquire the compiler-owned slot after the
+                    // callback; identity validation proved the conversion was
+                    // not replaced by synchronous user code.
+                    arr_ptr = unsafe {
+                        let ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                        if (&*ptr).is_reference() {
+                            (&mut *ptr).as_ref_ptr()
+                        } else {
+                            ptr
+                        }
+                    };
+                }
+                // SAFETY: arr_ptr was resolved from the active frame after
+                // any reentrant callback and remains owned by its operand.
                 let arr = unsafe { &mut *arr_ptr };
                 if matches!(arr.value_type(), ValueType::Object | ValueType::Closure) {
                     let receiver = arr.clone();
@@ -6203,7 +6422,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
-                                continue;
+                                continue 'vm;
                             }
                             ThrowResult::Unhandled(exception) => {
                                 eg.exception = Some(exception);
@@ -6216,7 +6435,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
-                                continue;
+                                continue 'vm;
                             }
                             ThrowResult::Unhandled(exception) => {
                                 eg.exception = Some(exception);
@@ -6239,7 +6458,40 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
-            OpCode::BindArrayAppendRef => {
+            OpCode::BindArrayAppendRef => 'bind_array_append: {
+                let conversion = if operand_is_false(frame, opline.op1, opline.op1_type) {
+                    convert_false_array_location(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        FalseArrayLocation::Operand {
+                            operand: opline.op1,
+                            operand_type: opline.op1_type,
+                        },
+                        None,
+                    )?
+                } else {
+                    FalseArrayConversion::NotFalse
+                };
+                if !matches!(conversion, FalseArrayConversion::NotFalse) {
+                    if let Some(exception) = eg.exception.take() {
+                        match throw_in_frame(eg, frame, exception)? {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue 'vm;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
+                    if matches!(conversion, FalseArrayConversion::Clobbered) {
+                        break 'bind_array_append;
+                    }
+                }
                 // SAFETY: both operands are compiler-allocated mutable slots
                 // in the active frame. The owned reference cell is Rc-backed,
                 // so array reallocations and frame teardown cannot invalidate

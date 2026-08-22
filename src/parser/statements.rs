@@ -961,7 +961,7 @@ impl Parser {
                        body,
                    });
                }
-                let first_expr = self.parse_expr()?;
+                let first_expr = self.parse_foreach_target_expression()?;
                 let first = self.into_foreach_target(first_expr)?;
                 let (key, value, by_ref) = if self.peek() == Token::DoubleArrow {
                    if first_by_ref {
@@ -982,7 +982,7 @@ impl Parser {
                         }
                        ForeachTarget::Destructure(targets)
                    } else {
-                        let value_expr = self.parse_expr()?;
+                        let value_expr = self.parse_foreach_target_expression()?;
                         self.into_foreach_target(value_expr)?
                    };
                     (Some(first), value, by_ref)
@@ -1386,7 +1386,7 @@ impl Parser {
 
     fn finish_coalesce_assign_statement(&mut self, target: Expr) -> Result<Stmt, String> {
         let write_root_error = if Self::nullsafe_chain_line(&target).is_none()
-            && matches!(&target, Expr::ArrayAccess { .. })
+            && matches!(&target, Expr::ArrayAccess { .. } | Expr::ArrayAppendArgument { .. })
         {
             self.array_write_root_error(&target)
         } else {
@@ -1398,6 +1398,7 @@ impl Parser {
                 | Expr::DynamicVariable { .. }
                 | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
+                | Expr::ArrayAppendArgument { .. }
                 | Expr::PropertyAccess {
                     nullsafe: false,
                     ..

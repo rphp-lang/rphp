@@ -176,6 +176,157 @@ fn report_php_deprecation(
     )
 }
 
+enum FalseArrayLocation {
+    Operand {
+        operand: u16,
+        operand_type: OpType,
+    },
+    Child {
+        operand: u16,
+        operand_type: OpType,
+        key: ArrayKey,
+    },
+}
+
+enum FalseArrayConversion {
+    NotFalse,
+    Survived(Option<Value>),
+    Clobbered,
+    Jumped,
+}
+
+#[inline]
+fn operand_value_type(
+    frame: *mut ExecuteData,
+    operand: u16,
+    operand_type: OpType,
+) -> ValueType {
+    // SAFETY: mutable-write opcodes only pass compiler-owned slots in their
+    // current live frame. Dereferencing an Rc-backed PHP reference is valid
+    // for the duration of this non-reentrant type check.
+    unsafe {
+        (&*(*frame).get_op_mut(operand as u32, operand_type))
+            .dereferenced()
+            .value_type()
+    }
+}
+
+#[inline]
+fn operand_is_false(frame: *mut ExecuteData, operand: u16, operand_type: OpType) -> bool {
+    operand_value_type(frame, operand, operand_type) == ValueType::False
+}
+
+/// Convert one mutable false location before the rest of its write operation.
+/// A diagnostic callback may replace either the operand or the selected child;
+/// reacquiring the location after dispatch preserves that replacement and lets
+/// the compiler-provided statement boundary skip stale synthetic writeback.
+#[cold]
+fn convert_false_array_location(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    location: FalseArrayLocation,
+    clobber_target: Option<usize>,
+) -> Result<FalseArrayConversion, VmError> {
+    // SAFETY: both operand forms name compiler-owned slots in the suspended
+    // live frame. A reference target is Rc-owned by that slot. No Value or
+    // PhpArray borrow crosses error-handler dispatch: the location is resolved
+    // again afterward, so synchronous rebinding cannot leave a stale borrow.
+    unsafe {
+        let resolve_operand = || {
+            let (operand, operand_type) = match &location {
+                FalseArrayLocation::Operand {
+                    operand,
+                    operand_type,
+                }
+                | FalseArrayLocation::Child {
+                    operand,
+                    operand_type,
+                    ..
+                } => (*operand, *operand_type),
+            };
+            let slot = (*frame).get_op_mut(operand as u32, operand_type);
+            if (&*slot).is_reference() {
+                (&mut *slot).as_ref_ptr()
+            } else {
+                slot
+            }
+        };
+
+        let converted_identity = match &location {
+            FalseArrayLocation::Operand { .. } => {
+                let target = resolve_operand();
+                if (&*target).value_type() != ValueType::False {
+                    return Ok(FalseArrayConversion::NotFalse);
+                }
+                slot_set(target, Value::array(PhpArray::new()));
+                (&*target).array_identity().unwrap()
+            }
+            FalseArrayLocation::Child { key, .. } => {
+                let parent = resolve_operand();
+                let Some(parent) = (&mut *parent).as_array_mut() else {
+                    return Ok(FalseArrayConversion::NotFalse);
+                };
+                let Some(child) = parent.get_key_mut(key) else {
+                    return Ok(FalseArrayConversion::NotFalse);
+                };
+                if child.dereferenced().value_type() != ValueType::False {
+                    return Ok(FalseArrayConversion::NotFalse);
+                }
+                assignment_slot_set(child, Value::array(PhpArray::new()));
+                child.dereferenced().array_identity().unwrap()
+            }
+        };
+
+        report_php_deprecation(
+            eg,
+            frame,
+            op_array,
+            opline,
+            "Automatic conversion of false to array is deprecated",
+        )?;
+
+        let converted = match &location {
+            FalseArrayLocation::Operand { .. } => {
+                let target = resolve_operand();
+                ((&*target).array_identity() == Some(converted_identity)
+                    && (&*target)
+                        .as_array()
+                        .is_some_and(PhpArray::is_pristine_empty))
+                .then_some(None)
+            }
+            FalseArrayLocation::Child { key, .. } => {
+                let parent = resolve_operand();
+                (&*parent)
+                    .as_array()
+                    .and_then(|parent| match key {
+                        ArrayKey::Int(key) => parent.get_int(*key),
+                        ArrayKey::String(key) => parent.get_str(key),
+                    })
+                    .filter(|child| {
+                        child.dereferenced().array_identity() == Some(converted_identity)
+                            && child
+                                .dereferenced()
+                                .as_array()
+                                .is_some_and(PhpArray::is_pristine_empty)
+                    })
+                    .map(|child| Some(child.dereferenced().clone()))
+            }
+        };
+        if let Some(converted) = converted {
+            return Ok(FalseArrayConversion::Survived(converted));
+        }
+        if eg.exception.is_none()
+            && let Some(target) = clobber_target
+        {
+            (*frame).opline = op_array.instructions.as_ptr().add(target);
+            return Ok(FalseArrayConversion::Jumped);
+        }
+        Ok(FalseArrayConversion::Clobbered)
+    }
+}
+
 #[cold]
 fn report_user_call_diagnostic(
     eg: &mut ExecutorGlobals,

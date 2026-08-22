@@ -32,6 +32,7 @@ pub(super) struct MutableArrayPath {
     containers: Vec<(u16, OpType)>,
     keys: Vec<(u16, OpType)>,
     writeback: ArrayRootWriteback,
+    mutable_fetches: Vec<usize>,
 }
 
 enum CoalesceWrite {
@@ -1134,6 +1135,11 @@ impl Compiler {
                 line: usize,
             },
             Array(MutableArrayPath),
+            Append {
+                array: u16,
+                array_type: OpType,
+                writeback: ForeachArrayWriteback,
+            },
         }
 
         let write = match target {
@@ -1223,6 +1229,15 @@ impl Compiler {
                     false,
                 )?)
             }
+            Expr::ArrayAppendArgument { target, .. } => {
+                let (array, array_type, writeback) =
+                    self.compile_array_append_source(target, true, false)?;
+                WriteTarget::Append {
+                    array,
+                    array_type,
+                    writeback,
+                }
+            }
             _ => return Err("Invalid assignment target".into()),
         };
 
@@ -1307,6 +1322,19 @@ impl Compiler {
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
             }
+            WriteTarget::Append {
+                array,
+                array_type,
+                writeback,
+            } => {
+                let mut append = Instruction::new(OpCode::ArrayPushOp);
+                append.op1 = array;
+                append.op1_type = array_type;
+                append.op2 = result;
+                append.op2_type = OpType::Tmp;
+                self.instructions.push(append);
+                self.emit_foreach_reference_source_writeback(writeback, array, array_type);
+            }
         }
 
         Ok((result, OpType::Tmp))
@@ -1328,6 +1356,20 @@ impl Compiler {
         }
         if let Expr::Globals { line } = source {
             return Err(self.goto_error("Cannot acquire reference to $GLOBALS", *line));
+        }
+        if let Expr::ArrayAppendArgument { target, .. } = target {
+            let (array, array_type, writeback) =
+                self.compile_array_append_source(target, true, false)?;
+            let source = self.compile_array_element_reference_source(source)?;
+            let mut append = Instruction::new(OpCode::ArrayPushOp);
+            append.op1 = array;
+            append.op1_type = array_type;
+            append.op2 = source;
+            append.op2_type = OpType::Cv;
+            append._pad |= ARRAY_ELEMENT_REFERENCE;
+            self.instructions.push(append);
+            self.emit_foreach_reference_source_writeback(writeback, array, array_type);
+            return Ok((source, OpType::Cv));
         }
         let source_is_call = Self::is_call_result_reference_source(source);
         if source_is_call && !Self::supports_call_result_reference_target(target) {
@@ -1786,13 +1828,16 @@ impl Compiler {
             ),
             _ => return Err("Unsupported array mutation target".into()),
         };
-        let keys: Vec<(u16, OpType)> = path_indices
-            .iter()
-            .map(|index| self.compile_expr(index))
-            .collect();
+        let mut keys = Vec::with_capacity(path_indices.len());
         let mut containers = Vec::with_capacity(indices.len());
+        let mut mutable_fetches = Vec::with_capacity(indices.len().saturating_sub(1));
         containers.push(root);
-        for &(key, key_type) in keys.iter().take(keys.len() - 1) {
+        for (position, index) in path_indices.iter().enumerate() {
+            let (key, key_type) = self.compile_expr(index);
+            keys.push((key, key_type));
+            if position + 1 == path_indices.len() {
+                break;
+            }
             let (container, container_type) = *containers.last().unwrap();
             let child = self.alloc_tmp();
             let mut fetch = Instruction::new(OpCode::FetchDimR);
@@ -1805,6 +1850,8 @@ impl Compiler {
             if silent_root_fetch {
                 fetch._pad |= FETCH_DIM_SILENT;
             }
+            fetch._pad |= FETCH_DIM_MUTABLE;
+            mutable_fetches.push(self.instructions.len());
             self.instructions.push(fetch);
             containers.push((child, OpType::Tmp));
         }
@@ -1813,7 +1860,15 @@ impl Compiler {
             containers,
             keys,
             writeback,
+            mutable_fetches,
         })
+    }
+
+    fn patch_mutable_fetch_abort_targets(&mut self, path: &MutableArrayPath) {
+        let target = self.instructions.len() as u32;
+        for &instruction in &path.mutable_fetches {
+            self.instructions[instruction].extended_value = target;
+        }
     }
 
     fn rebuild_mutable_array_path(&mut self, path: &MutableArrayPath) {
@@ -1856,7 +1911,10 @@ impl Compiler {
 
     fn write_back_mutable_array_root(&mut self, path: &MutableArrayPath) {
         let mut writeback = match path.writeback {
-            ArrayRootWriteback::None => return,
+            ArrayRootWriteback::None => {
+                self.patch_mutable_fetch_abort_targets(path);
+                return;
+            }
             ArrayRootWriteback::DynamicVariable {
                 key,
                 key_type,
@@ -1868,6 +1926,7 @@ impl Compiler {
                 instruction.op2 = path.root.0;
                 instruction.op2_type = path.root.1;
                 self.push_instruction_at_line(instruction, line);
+                self.patch_mutable_fetch_abort_targets(path);
                 return;
             }
             ArrayRootWriteback::Global { key, key_type } => {
@@ -1877,6 +1936,7 @@ impl Compiler {
                 instruction.op2 = path.root.0;
                 instruction.op2_type = path.root.1;
                 self.instructions.push(instruction);
+                self.patch_mutable_fetch_abort_targets(path);
                 return;
             }
             ArrayRootWriteback::Object {
@@ -1921,12 +1981,14 @@ impl Compiler {
                 instruction.result_type = path.root.1;
                 instruction._pad |= STATIC_PROP_INDIRECT_MODIFY;
                 self.push_instruction_at_line(instruction, line);
+                self.patch_mutable_fetch_abort_targets(path);
                 return;
             }
         };
         writeback.result = path.root.0;
         writeback.result_type = path.root.1;
         self.instructions.push(writeback);
+        self.patch_mutable_fetch_abort_targets(path);
     }
 
     fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {

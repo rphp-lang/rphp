@@ -349,6 +349,7 @@ impl Parser {
                         }
                         if self.preserve_empty_dimension_suffix
                             || self.peek_at(2) == Token::Assign
+                            || Self::compound_assign_op(&self.peek_at(2)).is_some()
                         {
                             break;
                         }
