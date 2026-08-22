@@ -1224,6 +1224,25 @@ ratio at 1.009096, both below the +5% gate. Temporary non-call write
 diagnostics, false-to-array conversion, string append diagnostics and
 clone-result spelling remain independent checkpoints.
 
+The `temporary-write-context` checkpoint reaches 3,988 exact passes with 1,311
+failures, 115 skips, no XFAIL, 185 unsupported cases, zero timeouts and zero
+crashes. A parser-level root classifier preserves mutable l-values and ordinary
+call-result writes while rejecting literal, operator, control-expression,
+assignment, `new`, pipe and constant temporaries before source execution.
+Indexed/append, compound/coalescing, increment/decrement, unset and reference
+forms share the PHP 8.5 temporary diagnostic; `clone` uses the distinct Zend
+built-in-result diagnostic, including by-reference foreach. The exact
+full-corpus delta from `b19f32fa` is +1/-0, solely
+`varSyntax/writeToTempExpr.phpt`, with no other status or category movement and
+two byte-identical final manifests/summaries. All five feature configurations,
+all-target, formatting, unsafe policy, Composer S0, four Symfony S1 gates and
+PHP 8.5.9 S2/S3 pass. A CPU-pinned 32-pair release control puts the paired
+median empty-request ratio at 0.995201 and the 1,000-source-unit compile/write
+ratio at 1.001989, below the +5% gate. Dynamic by-reference argument errors,
+destructuring writable-value diagnostics, nested temporary by-reference
+foreach sources, false-to-array conversion and string append diagnostics
+remain independent checkpoints.
+
 ## Measurement system
 
 ### Contract baseline

@@ -8,6 +8,60 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `4b3b69e4`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,988 pass, 1,311 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 75.259% and the whole-corpus rate is 71.227%; 4,783 of
+5,299 attempted cases reach runtime (90.262%). Relative to exact integration
+baseline `b19f32fa`, the pass-set delta is +1/-0.
+
+The exact addition is `Zend/tests/varSyntax/writeToTempExpr.phpt`, which moves
+from compile failure to pass. Every previous pass remains a pass and no other
+status or failure category moves. Two sequential candidate runs have
+byte-identical merged manifests and summaries. Their manifest and summary
+SHA-256 values are
+`da35904d48ed169c4cfc62bbfbb74a20b4194abd32a1a6a590fa3969674c0283`
+and `8a9e977463222769bfc7d929703d941efc8eb94213b07802abe0fa0183508214`.
+
+The parser now walks an indexed or appended write target to its semantic root
+before admitting it. Variables, mutable properties and ordinary call results
+retain their established write behavior. Array/string literals, binary,
+ternary, coalescing, match, assignment, `new`, pipe and constant results emit
+PHP 8.5's compile-time `Cannot use temporary expression in write context`
+fatal instead of leaking the compiler's internal unsupported-target message.
+The classification applies to indexed assignment, nested append, compound and
+coalescing assignment, prefix/postfix mutation, `unset()`, direct and element
+reference binding. `clone` retains PHP's distinct
+`Cannot use result of built-in function in write context` wording, including
+the by-reference foreach source path, because Zend lowers it through a
+dedicated result opcode.
+
+One original four-test CLI suite covers ten mutating forms, ten temporary-root
+families, the clone boundary, source-unit non-execution and ordinary call,
+read, `isset()`, by-value argument and temporary-array foreach controls. All
+five Cargo configurations, all-features/all-targets, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass. The production
+inventory remains 1,612 unsafe blocks, 289 unsafe functions and 321 SAFETY
+annotations. Composer 2.8.12 S0, all four Symfony S1 gates, and exact PHP 8.5.9
+warmed-kernel S2 and cold-build S3 also pass.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison with
+the performance governor, four warmups and no excluded sample keeps both
+front-end controls below the +5% gate. One hundred empty cold requests per
+observation measure candidate/baseline ratios of 0.994948 by independent
+medians and 0.995201 by paired medians. One request compiling and executing
+1,000 source units containing an ordinary user-call indexed write and internal
+call append measures 0.999530 and 1.001989 respectively, with exact output.
+The baseline and candidate binary SHA-256 values are
+`6bd04f742da17ac725b052af40b34f9f1110658f01ba514ec44319b6904eb3b3`
+and `732a53c419def118f661aa11cf9425c3aa1481dfe68069786d36fd23c8bf1f22`;
+the exact TSV SHA-256 is
+`e37e4cc1238042611ad8ba9b6da6e5dcbb2d25cd76275466451e2f63facf649d`.
+Deferred/dynamic by-reference argument errors, destructuring's writable-value
+diagnostic, nested temporary by-reference foreach sources, false-to-array
+conversion and string append diagnostics remain separate surfaces.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `65008ae6`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,987 pass, 1,312 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
