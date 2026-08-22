@@ -1746,6 +1746,46 @@ trace. The 16 independent focused blockers, `array_change_key_case()`, ordinary
 variadic `array_intersect()`, the complete array suite and broader compatibility
 remain separate work.
 
+The `array-ordinary-sort-batch` checkpoint advances `sort()`, `rsort()`,
+`asort()`, `arsort()`, `ksort()`, `krsort()` and `array_multisort()` together.
+The shared PHP-aware comparison layer covers regular, numeric, string,
+C-locale string and natural flags, stable ties, ascending/descending direction,
+key preservation or reindexing, multi-column movement, structural snapshots,
+live reference cells, numeric diagnostics, Stringable conversion, exceptions,
+recursive comparisons and duplicate `array_multisort()` flag rejection. The
+general value path uses an independently implemented stable bottom-up merge;
+a guarded homogeneous-long path preserves the relevant performance gate. No
+php-src implementation is copied or translated.
+
+The 98-case unmodified `ext/standard/tests/array/sort` cluster moves from 40
+to 78 passes, an exact +38/-0 release delta; PHP 8.5.9 records 97 passes and
+one architecture skip. The complete recursive 842-case array audit moves from
+378 to 418 passes with no lost pass, reducing failures from 443 to 403 while
+13 skips, one unsupported case, seven inherited timeouts and zero crashes
+remain. Two serial array manifests are byte-identical. An original 2,671-result
+clean-room matrix, including 1,103-entry boundaries, is byte-identical to PHP
+8.5.9 across 1,048,734 bytes. Because the supplying cases are outside the
+pinned Zend/lang corpus, two byte-identical full manifests remain at 4,098
+pass, 1,205 fail, 115 skip and 181 unsupported with zero timeouts or crashes
+and exact +0/-0 movement from `0ed17346`.
+
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, the unchanged 1,620/289/332 unsafe ratchet, Composer S0, four Symfony
+S1 gates and PHP 8.5.9 S2/S3 pass. No compiler/opcode, frame, Value/object
+layout, dependency or production unsafe change is made. CPU-pinned 32-pair
+release controls put independent/paired median changes at +0.240%/+0.243% for
+100 empty requests, -1.963%/-1.657% for one 300,000-entry integer `sort()`,
+-6.619%/-6.954% for one 200,000-entry natural case-insensitive `ksort()` and
+-0.595%/+0.272% for one 150,000-entry `array_multisort()`, below the +5% gate.
+
+Nineteen focused failures remain separate: eight leading-dot numeric parser
+forms, six double-quoted escape forms and five cases whose non-transitive mixed
+values expose PHP's implementation-specific comparison schedule. The admitted
+contract does not claim locale-specific collation, PHP's exact arbitrary
+mixed-value comparator or magic-method call trace, partial permutation after a
+throwing comparison, the seven inherited array-suite timeout paths, the
+complete array suite or broader compatibility.
+
 The `array-case-natural-batch` checkpoint adds `array_change_key_case()`, the
 `key_exists()` alias, `strnatcasecmp()`, `natsort()` and `natcasesort()`, and
 corrects the shared `strnatcmp()`/natural-sort comparison rule. The admitted

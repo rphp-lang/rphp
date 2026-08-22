@@ -8,6 +8,99 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`array-ordinary-sort-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+candidate commit `eb18683c`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 4,098 pass, 1,205 fail, 115 skip, none remain XFAIL, 181
+are unsupported, and none time out or crash. The headline pass rate remains
+77.277%, the whole-corpus rate remains 73.192%, and 4,809 of 5,303 attempted
+cases reach runtime (90.685%). Two independently executed final runs have the
+same manifest SHA-256,
+`dff002f63754267cbc2969e38fd8d60f691d5ede1dc2b7aea14209ce352d3224`,
+and the same summary SHA-256,
+`de3c02f8543d76537f8a2114c6ff63ee5482929dfb34e2e9e768bd8714b04365`.
+The exact main-corpus delta from `0ed17346` is intentionally +0/-0 because the
+supplying tests live in `ext/standard`.
+
+`sort()`, `rsort()`, `asort()`, `arsort()`, `ksort()` and `krsort()` now share
+PHP-aware regular, numeric, string, C-locale string and natural comparison
+rules, including case folding, stable ties, key preservation or numeric-key
+reindexing, structural snapshots and live reference cells. Runtime value
+comparison covers PHP numeric diagnostics, Stringable conversion and
+exceptions, the null/string regular-comparison boundary, and catchable
+recursive-dependency errors. `array_multisort()` uses the same comparison
+layer for stable lexicographic multi-column ordering, preserves string keys,
+reindexes integer keys, moves reference cells with their values, and rejects a
+repeated direction or comparison flag with the PHP 8.5 TypeError. Descending
+sorts reverse the comparison result rather than exchanging operands, which
+preserves PHP's observable mixed-comparison direction.
+
+The general value sorter is an independently implemented stable bottom-up
+merge over a structural index snapshot; it does not copy or translate
+php-src's sorting implementation. A guarded stable direct-long path handles
+homogeneous integer `SORT_REGULAR` and `SORT_NUMERIC` inputs without changing
+mixed or conversion-visible behavior. Pure key comparisons use the existing
+stable host sort. No framework, fixture or benchmark name is recognized.
+
+The 98-case unmodified PHP 8.5 `ext/standard/tests/array/sort` cluster moves
+from 40 pass, 57 fail and one architecture skip to 78 pass, 19 fail and one
+skip in release, an exact +38/-0 pass-set delta. PHP 8.5.9 records 97 pass and
+one skip. The complete recursive 842-case `ext/standard/tests/array` audit
+moves from 378 to 418 passes with no lost pass: failures fall from 443 to 403,
+while 13 skips, one unsupported case, the same seven inherited timeout paths
+and zero crashes remain. Two serial candidate runs have the same manifest
+SHA-256,
+`c589b5b1e710bae354437f705168dbf36f83afa2f1850dca98300925c85ebb80`,
+and summary SHA-256,
+`9f589ac30dd03a66542d7d5fb93c50eb1ea050b1d6d7fcc71cbf6cf158552606`.
+The PHP 8.5.9 array oracle records 829 pass, one FFI-environment failure and 12
+skips.
+
+An original clean-room differential matrix covers all seven functions across
+homogeneous integer, numeric-string and ordinary-string values, numeric and
+string keys, all admitted flags, stable duplicates, four multi-column forms
+and 1,103-entry boundaries. All 2,671 results and 1,048,734 output bytes are
+byte-identical to PHP 8.5.9 with SHA-256
+`d8eaa2d5c8bb4969c246729a635ce1d590b76acd1784ba5499b295e794ef48e1`.
+Three original E2E tests cover flags, stable order, preserved/reindexed keys,
+multi-column movement, references, duplicate-flag errors, numeric object
+diagnostics, large inputs and recursive comparison failure.
+
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, the unchanged 1,620/289/332 unsafe
+ratchet, Composer 2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-
+kernel S2 and cold-build S3 pass. The implementation changes one existing
+stdlib source and adds one test module; it changes no compiler, opcode, call
+frame, PHP Value/object layout, dependency or production unsafe code.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison used
+performance-governor CPU 2, three warmups per binary and no excluded samples.
+Batches of 100 empty requests measured baseline/candidate medians of
+192.826/193.288 milliseconds, +0.240% independently and +0.243% paired. One
+300,000-entry homogeneous integer `sort(..., SORT_REGULAR)` request measured
+231.598/227.051 milliseconds, -1.963% independently and -1.657% paired. One
+200,000-entry natural case-insensitive `ksort()` request measured
+469.497/438.420 milliseconds, -6.619% independently and -6.954% paired. One
+150,000-entry `array_multisort()` request measured 407.146/404.726
+milliseconds, -0.595% independently and +0.272% paired. Paired p10/p90 ranges
+are -0.301%/+0.587%, -5.069%/+4.495%, -9.066%/-3.888% and
+-3.120%/+4.166%; every workload remains below the +5% gate. Baseline and
+candidate binary SHA-256 values are
+`1bcf9954ec35f90c456ccf2c2681121a61f4b4483f215bb476cac07bda277dc5`
+and `128bfda79812f084d66026e589ca9e56b94f82a3573054882ded43c7cda922a0`.
+
+The 19 remaining focused failures stay explicit: eight require unsupported
+leading-dot numeric literals, six require missing double-quoted `\e`/`\f`/`\v`
+escapes, and five expose PHP's implementation-specific comparison schedule for
+non-transitive mixed values (`array_multisort_variation7.phpt`,
+`array_multisort_variation9.phpt`, `internal_sorts_basic.phpt`,
+`rsort_variation11.phpt` and `sort_variation11.phpt`). This checkpoint claims
+the exercised default C-locale results, not locale-specific collation, PHP's
+exact arbitrary mixed-value comparator or magic-method call trace, nor PHP's
+partially permuted array state after a comparison throws. The inherited seven
+array-suite timeouts, the remaining array-suite failures and broader PHP
+compatibility remain separate work.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is the
 `array-case-natural-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 candidate commit `86ae8c89`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 4,098 pass, 1,205 fail, 115 skip, none remain XFAIL, 181
