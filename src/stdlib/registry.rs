@@ -4,6 +4,7 @@
 //! their deterministic request-startup registration order, signatures and
 //! reference metadata.
 
+use super::array_traversal::*;
 use super::filesystem::*;
 use super::process::*;
 use super::recursive_arrays::*;
@@ -161,6 +162,19 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
     reg!("array_reverse", fn_array_reverse, 1, 1, "array");
     reg!("array_is_list", fn_array_is_list, 1, 1, "array");
+    reg!("array_find", fn_array_find, 2, 2, "array", "callback");
+    reg!(
+        "array_find_key",
+        fn_array_find_key,
+        2,
+        2,
+        "array",
+        "callback"
+    );
+    reg!("array_any", fn_array_any, 2, 2, "array", "callback");
+    reg!("array_all", fn_array_all, 2, 2, "array", "callback");
+    reg!("array_first", fn_array_first, 1, 1, "array");
+    reg!("array_last", fn_array_last, 1, 1, "array");
     reg_var!("array_merge", fn_array_merge, 0, "arrays");
     reg_var!(
         "array_merge_recursive",

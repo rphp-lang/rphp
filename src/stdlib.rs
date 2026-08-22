@@ -174,6 +174,7 @@ macro_rules! ret {
     }};
 }
 
+mod array_traversal;
 mod builtin_classes;
 mod fiber;
 mod filesystem;
@@ -8515,20 +8516,54 @@ fn var_export_value(val: &Value, eg: &ExecutorGlobals) -> String {
     }
 }
 
-/// Simple JSON encoder
-/// Convert a PHP Value to serde_json::Value for encoding.
+/// JSON value that retains PHP array insertion order for object-shaped arrays.
+/// `serde_json::Value::Object` uses its map representation's key order, which
+/// is not a PHP array's observable iteration order without an extra dependency.
+enum PhpJsonValue {
+    Null,
+    Bool(bool),
+    Number(serde_json::Number),
+    String(String),
+    Array(Vec<PhpJsonValue>),
+    Object(Vec<(String, PhpJsonValue)>),
+}
+
+impl serde::Serialize for PhpJsonValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Null => serializer.serialize_none(),
+            Self::Bool(value) => serializer.serialize_bool(*value),
+            Self::Number(value) => value.serialize(serializer),
+            Self::String(value) => serializer.serialize_str(value),
+            Self::Array(values) => values.serialize(serializer),
+            Self::Object(entries) => {
+                use serde::ser::SerializeMap as _;
+
+                let mut map = serializer.serialize_map(Some(entries.len()))?;
+                for (key, value) in entries {
+                    map.serialize_entry(key, value)?;
+                }
+                map.end()
+            }
+        }
+    }
+}
+
+/// Convert a PHP value to the order-preserving JSON projection used above.
 fn value_to_json(
     val: &Value,
     eg: &mut ExecutorGlobals,
     compact_formatter_compatible: &mut bool,
-) -> Result<serde_json::Value, VmError> {
+) -> Result<PhpJsonValue, VmError> {
+    let val = val.dereferenced();
     Ok(match val.value_type() {
-        ValueType::Null | ValueType::Undef => serde_json::Value::Null,
-        ValueType::True => serde_json::Value::Bool(true),
-        ValueType::False => serde_json::Value::Bool(false),
-        ValueType::Long => {
-            serde_json::Value::Number(serde_json::Number::from(val.as_long().unwrap()))
-        }
+        ValueType::Null | ValueType::Undef => PhpJsonValue::Null,
+        ValueType::True => PhpJsonValue::Bool(true),
+        ValueType::False => PhpJsonValue::Bool(false),
+        ValueType::Long => PhpJsonValue::Number(serde_json::Number::from(val.as_long().unwrap())),
         ValueType::Double => {
             let d = val.as_double().unwrap();
             if d.is_finite() {
@@ -8538,13 +8573,13 @@ fn value_to_json(
                         d.fract() != 0.0 && (1e-4..1e17).contains(&magnitude);
                 }
                 serde_json::Number::from_f64(d)
-                    .map(serde_json::Value::Number)
-                    .unwrap_or(serde_json::Value::Null)
+                    .map(PhpJsonValue::Number)
+                    .unwrap_or(PhpJsonValue::Null)
             } else {
-                serde_json::Value::Null
+                PhpJsonValue::Null
             }
         }
-        ValueType::String => serde_json::Value::String(val.as_str().unwrap().to_string()),
+        ValueType::String => PhpJsonValue::String(val.as_str().unwrap().to_string()),
         ValueType::Array => {
             let arr = val.as_array().unwrap();
             let is_list = arr
@@ -8556,17 +8591,17 @@ fn value_to_json(
                 for value in arr.values() {
                     values.push(value_to_json(value, eg, compact_formatter_compatible)?);
                 }
-                serde_json::Value::Array(values)
+                PhpJsonValue::Array(values)
             } else {
-                let mut map = serde_json::Map::new();
+                let mut entries = Vec::with_capacity(arr.len());
                 for (k, v) in arr.iter() {
                     let key = match k {
                         ArrayKey::Int(n) => n.to_string(),
                         ArrayKey::String(s) => s,
                     };
-                    map.insert(key, value_to_json(v, eg, compact_formatter_compatible)?);
+                    entries.push((key, value_to_json(v, eg, compact_formatter_compatible)?));
                 }
-                serde_json::Value::Object(map)
+                PhpJsonValue::Object(entries)
             }
         }
         ValueType::Object => {
@@ -8576,11 +8611,11 @@ fn value_to_json(
                 None
             };
             if eg.exception.is_some() {
-                return Ok(serde_json::Value::Null);
+                return Ok(PhpJsonValue::Null);
             }
             let val = projection_owner.as_ref().unwrap_or(val);
             let Some(class_id) = val.as_object().map(|object| object.class_id) else {
-                return Ok(serde_json::Value::Null);
+                return Ok(PhpJsonValue::Null);
             };
             let slots = eg.visible_instance_property_slots(class_id, None);
             let mut properties = Vec::with_capacity(slots.len());
@@ -8603,7 +8638,7 @@ fn value_to_json(
                     })
                 };
                 if eg.exception.is_some() {
-                    return Ok(serde_json::Value::Null);
+                    return Ok(PhpJsonValue::Null);
                 }
                 if let Some(property) = property {
                     properties.push((definition.name, property));
@@ -8616,16 +8651,20 @@ fn value_to_json(
                     }
                 });
             }
-            let mut map = serde_json::Map::new();
+            let mut entries = Vec::with_capacity(properties.len());
             for (key, value) in properties {
-                map.insert(
+                entries.push((
                     key,
                     value_to_json(&value, eg, compact_formatter_compatible)?,
-                );
+                ));
             }
-            serde_json::Value::Object(map)
+            // Preserve the existing deterministic object projection. PHP
+            // array insertion order is handled above; object property-order
+            // storage is a separate runtime contract.
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
+            PhpJsonValue::Object(entries)
         }
-        _ => serde_json::Value::Null,
+        _ => PhpJsonValue::Null,
     })
 }
 

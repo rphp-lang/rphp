@@ -2076,6 +2076,159 @@ fn test_e2e_array_filter_manual() {
 }
 
 #[test]
+fn array_traversal_functions_preserve_order_and_short_circuit() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$input = [7 => "zero", "k" => "match", 2 => "tail"];
+$seen = [];
+echo array_find($input, function ($value, $key) use (&$seen) {
+    $seen[] = $key . "=" . $value;
+    return $value === "match";
+}), "|";
+var_export(array_find_key($input, fn($value, $key) => $value === "tail"));
+echo "|", array_any($input, fn($value, $key) => $key === "k") ? "T" : "F";
+echo "|", array_all($input, fn($value, $key) => strlen($value) >= 4) ? "T" : "F";
+echo "|", implode(",", $seen), "\n";
+var_dump(array_any([], fn($value, $key) => true));
+var_dump(array_all([], fn($value, $key) => false));
+var_export(array_first($input));
+echo "|";
+var_export(array_last($input));
+echo "\n";
+"#,
+        ),
+        concat!(
+            "match|2|T|T|7=zero,k=match\n",
+            "bool(false)\n",
+            "bool(true)\n",
+            "'zero'|'tail'\n",
+        )
+    );
+}
+
+#[test]
+fn array_traversal_functions_snapshot_structure_and_preserve_value_semantics() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$source = ["a" => 1, "b" => 2];
+$seen = [];
+var_dump(array_find($source, function ($value, $key) use (&$source, &$seen) {
+    $seen[] = $key . ":" . $value;
+    if ($key === "a") {
+        unset($source["b"]);
+        $source["c"] = 3;
+    }
+    return false;
+}));
+echo json_encode($seen), "|", json_encode($source), "\n";
+
+$shared = 10;
+$refs = [&$shared, &$shared];
+$result = array_find($refs, function ($value, $key) use (&$shared) {
+    if ($key === 0) {
+        $shared = 20;
+        return false;
+    }
+    return true;
+});
+$result = 99;
+echo $shared, "|", $refs[1], "\n";
+
+$object = (object) ["n" => 1];
+$firstObject = array_first([$object]);
+$firstObject->n = 2;
+echo $object->n, "|";
+$arrays = [["n" => 1]];
+$firstArray = array_first($arrays);
+$firstArray["n"] = 2;
+echo $arrays[0]["n"], "\n";
+"#,
+        ),
+        concat!(
+            "NULL\n",
+            "[\"a:1\",\"b:2\"]|{\"a\":1,\"c\":3}\n",
+            "20|20\n",
+            "2|1\n",
+        )
+    );
+}
+
+#[test]
+fn array_traversal_functions_propagate_exceptions_and_validate_arguments() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$calls = 0;
+var_dump(array_any([1, 2], function ($value, $key) use (&$calls) {
+    $calls++;
+    if ($key === 1) {
+        throw new Exception("late");
+    }
+    return true;
+}));
+echo $calls, "|";
+$calls = 0;
+var_dump(array_all([1, 2], function ($value, $key) use (&$calls) {
+    $calls++;
+    if ($key === 1) {
+        throw new Exception("late");
+    }
+    return false;
+}));
+echo $calls, "\n";
+
+try {
+    array_find([1], function () { throw new Exception("boom"); });
+} catch (Exception $error) {
+    echo $error->getMessage(), "\n";
+}
+foreach ([[[1], "not_callable"], [[1], [null, "method"]], [[1], ["NoSuchClass", "method"]]] as $case) {
+    try {
+        array_find($case[0], $case[1]);
+    } catch (TypeError $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+try {
+    array_first(1);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+        ),
+        concat!(
+            "bool(true)\n",
+            "1|bool(false)\n",
+            "1\n",
+            "boom\n",
+            "array_find(): Argument #2 ($callback) must be a valid callback, function \"not_callable\" not found or invalid function name\n",
+            "array_find(): Argument #2 ($callback) must be a valid callback, first array member is not a valid class name or object\n",
+            "array_find(): Argument #2 ($callback) must be a valid callback, class \"NoSuchClass\" not found\n",
+            "array_first(): Argument #1 ($array) must be of type array, int given\n",
+        )
+    );
+}
+
+#[test]
+fn json_encode_dereferences_values_and_preserves_php_array_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$value = "live";
+echo json_encode([1 => &$value, 0 => "zero", 3 => 3]), "\n";
+echo json_encode(["b" => 2, "a" => 1]), "\n";
+"#,
+        ),
+        concat!(
+            "{\"1\":\"live\",\"0\":\"zero\",\"3\":3}\n",
+            "{\"b\":2,\"a\":1}\n",
+        )
+    );
+}
+
+#[test]
 fn test_e2e_word_count() {
     assert_eq!(
         run_php(
