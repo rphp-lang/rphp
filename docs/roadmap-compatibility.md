@@ -1344,6 +1344,27 @@ construction, below the +5% gate. Broader SPL/`ArrayObject` behavior,
 independent diagnostics outside the covered forms and broader compatibility
 remain separate checkpoints.
 
+The `exit-keyword-contract` checkpoint reaches 4,067 exact passes with 1,232
+failures, 115 skips, no XFAIL, 185 unsupported cases and zero timeouts or
+crashes. Case-insensitive unqualified `exit` and `die` now share PHP 8.5's
+reserved keyword, direct-function and first-class callable identity while
+relaxed member, enum-case and named-argument contexts preserve their spelling.
+The direct internal `string|int` contract covers strict calls, weak scalar and
+float boundaries, diagnostics, stringable objects and catchable conversion
+exceptions. The exact full-corpus delta from `ac0bdf91` is +14/-0: eleven
+output and three runtime failures under `Zend/tests/exit` become exact with
+every prior pass preserved. `throw/leaks.phpt` advances to its independent
+`error_reporting()` output boundary after bare exit becomes executable; no
+other non-pass movement occurs, and two final manifests/summaries are
+byte-identical. All five feature configurations, all-feature/all-target,
+formatting, PHPT runner, unsafe, Composer S0, four Symfony S1 gates and PHP
+8.5.9 S2/S3 pass. CPU-pinned 32-pair release controls put independent/paired
+median changes at +0.916%/+1.017% for 100 empty requests, +0.608%/+0.421% for
+1,000 ordinary identifier writes and +0.392%/+0.451% for 25,000
+short-circuited exit expressions, below the +5% gate. Process helpers, CLI INI,
+output-buffer chunk callbacks and broader compatibility remain separate
+checkpoints.
+
 ## Measurement system
 
 ### Contract baseline

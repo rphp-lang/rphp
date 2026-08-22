@@ -8,6 +8,77 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `b6910daa`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 4,067 pass, 1,232 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 76.750% and the whole-corpus rate is 72.638%; 4,805 of
+5,299 attempted cases reach runtime (90.677%). Relative to exact integration
+baseline `ac0bdf91`, the pass-set delta is +14/-0.
+
+The exact additions are `Zend/tests/exit/define_die_constant.phpt`,
+`define_die_constant_namespace.phpt`, `define_die_function.phpt`,
+`define_die_function_namespace.phpt`, `define_exit_constant.phpt`,
+`define_exit_constant_namespace.phpt`, `define_exit_function.phpt`,
+`define_exit_function_namespace.phpt`, all four `define_goto_label_*` cases,
+`die_string_cast_exception.phpt` and `exit_as_function.phpt`. Eleven output and
+three runtime failures become exact with every previous pass preserved.
+`Zend/tests/throw/leaks.phpt` advances from an undefined-constant runtime error
+to its independent `error_reporting()` output mismatch after its bare `exit`
+now executes; it remains a visible failure. There are no other non-pass status
+or category movements. Two sequential final candidate runs have byte-identical
+manifests and summaries. Their SHA-256 values are
+`de8b76b4d48e44fa189c4b8a699b4f696f06faf6c12667f0235fab01be058e22`
+and `d05d347480235bbb5e89f91f006c7bda84d39092dbbd4d8d3dae4650059de672`.
+
+Case-insensitive unqualified `exit` and `die` now share PHP 8.5's reserved
+keyword and canonical direct-function identity. Bare, parenthesized, named-
+argument and first-class forms use the same call path; global declarations,
+imports and goto labels stop with the required parse diagnostics. Qualified
+function names remain ordinary names, while class methods/constants, enum cases
+and named-argument labels retain their relaxed keyword spelling. The internal
+`string|int` contract handles strict calls, weak null/bool/float conversion,
+precision-loss deprecations, `NAN`, concrete invalid types, stringable objects
+and exceptions from diagnostics or `__toString()` before process exit.
+
+The focused 27-case upstream `Zend/tests/exit` cluster moves from 5 passes to
+19, with five failures and three explicit unsupported CLI-INI cases remaining;
+the final focused manifest/summary hashes are
+`3e24dc5064403ff564b351a2bfb7fe1455686d21498ca350d2977f4d12a613e1`
+and `0a96fbefd14225ec98a5db686c8ab6c742fedf354832a464c0aa7cf9c97a064e`.
+Five original CLI regressions cover declaration diagnostics, relaxed member
+names, canonical callable identity, evaluation order, weak scalar boundaries,
+strict and structural type errors, re-entrant diagnostics and stringable
+objects. An adjacent 799-case grammar, namespace, callable, jump, enum,
+closure, magic-method and coercion slice has 551 passes, 216 failures, 21 skips
+and 11 unsupported cases, with the same exact +14/-0 pass-set delta.
+
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, the exact unsafe ratchet, Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass. The production inventory remains 1,618 unsafe blocks, 289
+unsafe functions and 330 SAFETY annotations. No opcode, frame, value/object
+layout, dependency or production-unsafe change is made.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used CPU 2 with the performance governor, four warmups and no
+excluded samples. Batches of 100 empty requests measured baseline/candidate
+p10/median/p90 0.144919/0.145430/0.146189 and
+0.145911/0.146761/0.147858 seconds, +0.916% independently and +1.017% paired.
+Batches of 12 requests compiling 1,000 ordinary identifier writes measured
+0.081616/0.081972/0.084298 and 0.082079/0.082470/0.084405 seconds, +0.608%
+independently and +0.421% paired. Batches of five requests compiling and
+executing 5,000 short-circuited exit expressions measured
+0.671911/0.673822/0.679266 and 0.674386/0.676460/0.688085 seconds, +0.392%
+independently and +0.451% paired. All remain below the +5% gate with exact
+output and status. The baseline and candidate binary SHA-256 values are
+`2a6e48b145cbc6cc64326ffefdb08c2a3724620e82cccf03c0c3c32b74a488b7`
+and `2e050fbacd9afec5bc8e3ab9fa5618bde3ce006711898aa4c29dfe2eebc91b64`.
+
+This checkpoint does not claim the missing process helpers `exec()` and
+`escapeshellarg()`, `auto_prepend_file` or `disable_functions` CLI-INI support,
+automatic output-buffer chunk callbacks, or broader PHP compatibility.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `185f06bd`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 4,053 pass, 1,246 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
