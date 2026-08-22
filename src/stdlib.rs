@@ -4246,6 +4246,99 @@ fn fn_get_declared_classes(
     ret!(rv, declared_names_value(eg.declared_class_names()));
 }
 
+fn get_defined_functions_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+) -> Result<bool, VmError> {
+    let Some(argument) = arg_opt!(ed, 0).map(|argument| argument.dereferenced().clone()) else {
+        return Ok(true);
+    };
+    let strict = internal_call_is_strict(ed);
+    let valid = match argument.value_type() {
+        ValueType::True | ValueType::False => true,
+        ValueType::Null if !strict => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                "get_defined_functions(): Passing null to parameter #1 ($exclude_disabled) of type bool is deprecated",
+            )?;
+            eg.exception.is_none()
+        }
+        ValueType::Long | ValueType::String if !strict => true,
+        ValueType::Double if !strict => {
+            if argument.as_double().is_some_and(f64::is_nan) {
+                report_internal_diagnostic(
+                    eg,
+                    ed,
+                    2,
+                    "Warning",
+                    "unexpected NAN value was coerced to bool",
+                )?;
+            }
+            eg.exception.is_none()
+        }
+        _ => false,
+    };
+    if !valid {
+        if eg.exception.is_none() {
+            let actual = match argument.value_type() {
+                ValueType::True => "true".to_string(),
+                ValueType::False => "false".to_string(),
+                _ => argument.diagnostic_type_name().into_owned(),
+            };
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                &format!(
+                    "get_defined_functions(): Argument #1 ($exclude_disabled) must be of type bool, {actual} given"
+                ),
+            ));
+        }
+        return Ok(false);
+    }
+
+    report_internal_deprecation(
+        eg,
+        ed,
+        "get_defined_functions(): The $exclude_disabled parameter has no effect since PHP 8.0",
+    )?;
+    Ok(eg.exception.is_none())
+}
+
+fn fn_get_defined_functions(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if !get_defined_functions_argument(ed, eg)? {
+        return Ok(());
+    }
+
+    let mut internal = Vec::new();
+    let mut user = Vec::new();
+    for (name, &function) in &eg.function_table {
+        if name.contains("::") || name.starts_with("__closure_") {
+            continue;
+        }
+        // SAFETY: every function-table entry is registered from a live
+        // FunctionCommon owner and remains valid for the complete request.
+        let function_type = unsafe { Function::from_common_ptr(function) }.fn_type();
+        match function_type {
+            FunctionType::Internal => internal.push(name.clone()),
+            FunctionType::User => user.push(name.clone()),
+            FunctionType::Undef => {}
+        }
+    }
+    // The function table is hash-backed. PHP does not specify list ordering,
+    // so make the exposed RPHP inventory stable across repeated requests.
+    internal.sort_unstable();
+    user.sort_unstable();
+
+    let mut result = PhpArray::new();
+    result.set_str("internal", declared_names_value(internal));
+    result.set_str("user", declared_names_value(user));
+    ret!(rv, Value::array(result));
+}
+
 fn fn_get_included_files(
     _ed: *mut ExecuteData,
     rv: *mut Value,

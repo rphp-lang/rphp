@@ -1809,6 +1809,91 @@ var_dump(base_convert('10', 10, 2));
 }
 
 #[test]
+fn get_defined_functions_reports_real_inventory_and_php_85_argument_diagnostics() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function AlphaInventory() {}
+function MixedInventory() {}
+class InventoryMethods {
+    public function hiddenFromFunctionList() {}
+}
+
+$functions = get_defined_functions();
+echo implode(',', array_keys($functions)), '|';
+echo in_array('strlen', $functions['internal'], true) ? 'strlen' : 'missing';
+echo ':', in_array('base_convert', $functions['internal'], true) ? 'base' : 'missing';
+echo '|', implode(',', $functions['user']), "\n";
+
+set_error_handler(function ($level, $message) {
+    echo $level, ':', $message, "\n";
+    return true;
+});
+var_dump(count(get_defined_functions(true)) === 2);
+var_dump(count(get_defined_functions(false)) === 2);
+var_dump(count(get_defined_functions(null)) === 2);
+var_dump(count(get_defined_functions(NAN)) === 2);
+try {
+    get_defined_functions([]);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+
+set_error_handler(function ($level, $message) {
+    throw new Exception("handled:$level:$message");
+});
+try {
+    get_defined_functions(true);
+} catch (Exception $error) {
+    echo $error->getMessage(), "\n";
+}
+"#
+        ),
+        concat!(
+            "internal,user|strlen:base|alphainventory,mixedinventory\n",
+            "8192:get_defined_functions(): The $exclude_disabled parameter has no effect since PHP 8.0\n",
+            "bool(true)\n",
+            "8192:get_defined_functions(): The $exclude_disabled parameter has no effect since PHP 8.0\n",
+            "bool(true)\n",
+            "8192:get_defined_functions(): Passing null to parameter #1 ($exclude_disabled) of type bool is deprecated\n",
+            "8192:get_defined_functions(): The $exclude_disabled parameter has no effect since PHP 8.0\n",
+            "bool(true)\n",
+            "2:unexpected NAN value was coerced to bool\n",
+            "8192:get_defined_functions(): The $exclude_disabled parameter has no effect since PHP 8.0\n",
+            "bool(true)\n",
+            "get_defined_functions(): Argument #1 ($exclude_disabled) must be of type bool, array given\n",
+            "handled:8192:get_defined_functions(): The $exclude_disabled parameter has no effect since PHP 8.0\n"
+        )
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+declare(strict_types=1);
+set_error_handler(function ($level, $message) {
+    echo $level, ':', $message, "\n";
+    return true;
+});
+get_defined_functions(false);
+foreach ([null, 0, '0'] as $value) {
+    try {
+        get_defined_functions($value);
+    } catch (TypeError $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+"#
+        ),
+        concat!(
+            "8192:get_defined_functions(): The $exclude_disabled parameter has no effect since PHP 8.0\n",
+            "get_defined_functions(): Argument #1 ($exclude_disabled) must be of type bool, null given\n",
+            "get_defined_functions(): Argument #1 ($exclude_disabled) must be of type bool, int given\n",
+            "get_defined_functions(): Argument #1 ($exclude_disabled) must be of type bool, string given\n"
+        )
+    );
+}
+
+#[test]
 fn extract_updates_the_caller_scope_with_flags_references_and_atomic_errors() {
     assert_eq!(
         run_php(

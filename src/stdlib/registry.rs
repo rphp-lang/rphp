@@ -497,6 +497,13 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
     reg!("get_included_files", fn_get_included_files, 0, 0);
     reg!("get_required_files", fn_get_included_files, 0, 0);
+    reg!(
+        "get_defined_functions",
+        fn_get_defined_functions,
+        1,
+        0,
+        "exclude_disabled"
+    );
     reg!("get_declared_classes", fn_get_declared_classes, 0, 0);
     reg!("get_declared_interfaces", fn_get_declared_interfaces, 0, 0);
     reg!("get_declared_traits", fn_get_declared_traits, 0, 0);
