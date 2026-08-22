@@ -1431,6 +1431,51 @@ var_dump($reused);
     );
 }
 
+#[test]
+fn spl_object_hash_formats_the_php_85_object_handle_and_tracks_live_identity() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$first = new stdClass;
+$second = new stdClass;
+$closure = static fn() => null;
+echo spl_object_id($first), ':', spl_object_hash($first), "\n";
+echo spl_object_id($second), ':', spl_object_hash($second), "\n";
+var_dump(spl_object_hash($first) === spl_object_hash($first));
+var_dump(spl_object_hash($first) !== spl_object_hash($second));
+echo spl_object_id($closure), ':', spl_object_hash($closure), "\n";
+$clone = clone $first;
+$cloneHash = spl_object_hash($clone);
+echo spl_object_id($clone), ':', $cloneHash, "\n";
+var_dump($cloneHash !== spl_object_hash($first));
+unset($clone);
+
+foreach ([null, true, []] as $invalid) {
+    try { spl_object_hash($invalid); }
+    catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+    try { spl_object_id($invalid); }
+    catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+"#,
+        ),
+        concat!(
+            "1:00000000000000010000000000000000\n",
+            "2:00000000000000020000000000000000\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "3:00000000000000030000000000000000\n",
+            "4:00000000000000040000000000000000\n",
+            "bool(true)\n",
+            "spl_object_hash(): Argument #1 ($object) must be of type object, null given\n",
+            "spl_object_id(): Argument #1 ($object) must be of type object, null given\n",
+            "spl_object_hash(): Argument #1 ($object) must be of type object, true given\n",
+            "spl_object_id(): Argument #1 ($object) must be of type object, true given\n",
+            "spl_object_hash(): Argument #1 ($object) must be of type object, array given\n",
+            "spl_object_id(): Argument #1 ($object) must be of type object, array given\n",
+        )
+    );
+}
+
 // === print_r ===
 
 #[test]

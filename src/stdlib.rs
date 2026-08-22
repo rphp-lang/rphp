@@ -5144,23 +5144,47 @@ fn fn_var_export(
     }
 }
 
+fn spl_object_handle_argument(
+    function: &str,
+    value: &Value,
+    eg: &mut ExecutorGlobals,
+) -> Option<u32> {
+    let value = value.dereferenced();
+    let Some(handle) = value.object_handle() else {
+        let actual = match value.value_type() {
+            ValueType::True => "true".to_string(),
+            ValueType::False => "false".to_string(),
+            _ => value.diagnostic_type_name().into_owned(),
+        };
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!("{function}(): Argument #1 ($object) must be of type object, {actual} given"),
+        ));
+        return None;
+    };
+    Some(handle)
+}
+
 fn fn_spl_object_id(
     ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let value = arg!(ed, 0).dereferenced();
-    let Some(handle) = value.object_handle() else {
-        eg.exception = Some(crate::value::make_error_value(
-            "TypeError",
-            &format!(
-                "spl_object_id(): Argument #1 ($object) must be of type object, {} given",
-                value.type_name()
-            ),
-        ));
+    let Some(handle) = spl_object_handle_argument("spl_object_id", arg!(ed, 0), eg) else {
         return Ok(());
     };
     ret!(rv, Value::long(i64::from(handle)));
+}
+
+fn fn_spl_object_hash(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(handle) = spl_object_handle_argument("spl_object_hash", arg!(ed, 0), eg) else {
+        return Ok(());
+    };
+    ret!(rv, Value::string(format!("{handle:016x}0000000000000000")));
 }
 
 // ============================================================================

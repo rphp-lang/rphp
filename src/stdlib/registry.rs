@@ -688,6 +688,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg_var!("debug_zval_dump", fn_debug_zval_dump, 1, "value");
     reg!("print_r", fn_print_r, 2, 1, "value", "return");
     reg!("var_export", fn_var_export, 2, 1, "value", "return");
+    reg!("spl_object_hash", fn_spl_object_hash, 1, 1, "object");
     reg!("spl_object_id", fn_spl_object_id, 1, 1, "object");
 
     // --- Constants ---
