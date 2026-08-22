@@ -8,6 +8,90 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `0952d95e`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 4,081 pass, 1,218 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 77.015% and the whole-corpus rate is 72.888%; 4,805 of
+5,299 attempted cases reach runtime (90.677%). Relative to exact integration
+baseline `9b56808a`, the pass-set delta is +2/-0.
+
+The exact additions are `Zend/tests/backtrace/bug76047.phpt` and
+`Zend/tests/gh13145.phpt`, which move from missing-function runtime failures to
+pass. Every previous pass is preserved and there is no other status or category
+movement. Two sequential final candidate runs have byte-identical manifests
+and summaries. Their SHA-256 values are
+`9d6646984edd0a11b6c9cf80a104ddf8d05b4f98f3eb7eae0a652208aa1d8b4c`
+and `1abc9f4bf488b3f0440a57791106a6fcf3fea165df91a774907ae0e592c857be`.
+
+`strtok()` now clones a PHP byte string into request-local state, returns each
+nonempty region separated by any byte from the delimiter string and accepts a
+new delimiter on every continuation call. A new two-argument call replaces the
+cursor; changing the source variable cannot affect the retained copy. Empty,
+leading, repeated and trailing delimiters, embedded NULs and non-ASCII bytes
+follow PHP's distinct exhausted/invalidated states. A continuation without a
+live cursor emits the exact warning. A null optional second argument selects
+the continuation form, while failed argument conversion leaves the previous
+cursor intact.
+
+`str_shuffle()` now returns an unbiased Fisher-Yates permutation of the input
+bytes without modifying its argument. Existing by-reference `shuffle()` uses
+the same request-local xorshift64* stream, reindexes all output values as a
+list and now emits PHP's exact array TypeError rather than returning false for
+a non-array. The stream is seeded once from the system random source and range
+reduction rejects modulo bias; a cold `ExecutorGlobals` sidecar keeps ordinary
+requests allocation-free on this path.
+
+Both string functions enforce PHP 8.5 weak and strict string boundaries,
+including scalar and Stringable conversion, null deprecation, concrete invalid
+`__toString()` returns and parameter-specific TypeErrors. Three clean-room unit
+tests and two original E2E regressions cover tokenizer transitions, binary
+round trips, current delimiters, conversion failure atomicity, all 24 four-byte
+permutations, unchanged string inputs, array reindexing and strict diagnostics.
+An exhaustive 7,161-case differential sweep across byte strings and delimiter
+sets has the same aggregate digest and all 8,848 warning transitions under
+RPHP and PHP 8.5.9.
+
+The two supplying Zend regressions, all six unmodified upstream `strtok` PHPTs,
+both independent `str_shuffle` PHPTs and seven direct `shuffle` PHPTs pass, for
+17/17 focused passes. The broader distribution PHPT reaches all 24 statistically
+balanced permutations before its independent unsupported `sprintf('%0.3f')`
+formatting, and `array_shuffle_basic.phpt` validates every leading shuffle
+result before its independent missing `array_diff_assoc()` call. All five Cargo
+feature configurations, all-feature/all-target, formatting, PHPT-runner and
+unsafe-policy self-tests, the exact unsafe ratchet, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+The production inventory remains 1,619 unsafe blocks, 289 unsafe functions and
+331 SAFETY annotations. The one null sidecar word changes only
+`ExecutorGlobals`; no opcode, call frame, PHP Value/object layout, dependency or
+production-unsafe change is made.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used performance-governor CPU 2, four warmups and no excluded
+samples. Batches of 100 empty `-r` requests measured baseline/candidate p10/
+median/p90 0.157130/0.161082/0.164876 and
+0.157509/0.159624/0.163448 seconds, -0.905% independently and -0.424% paired.
+One request executing 500,000 existing eight-element `shuffle()` calls measured
+0.429048/0.444990/0.452386 and 0.411096/0.431029/0.439938 seconds, -3.137%
+independently and -3.446% paired, with exact value-sum checksum `18000000`.
+Both controls remain below the +5% gate; paired p10/p90 changes are
+-3.117%/+0.774% and -6.614%/-0.456%. As absolute changed-path sanity checks,
+fifteen candidate runs measured 500,000 complete three-token sequences at
+p10/median/p90 0.371376/0.373544/0.380765 seconds with checksum `5500000`, and
+one million eight-byte `str_shuffle()` calls at
+0.185583/0.187312/0.197056 seconds with checksum `8000000`. No A/B claim is
+possible for the two new functions. The baseline and candidate binary SHA-256
+values are
+`01a2fe37623774866648f00c6c83a450e711f5b144c61652cf4178ac69838dd5`
+and `9943bbd87d9a56989ee712857007d1a63058c702c0631d7a9325e0d7d0302f50`.
+
+This checkpoint does not claim cryptographic randomness, PHP's exact random
+sequence, deterministic `srand()`/`mt_srand()` interoperability, corrections to
+`rand()`, `mt_rand()` or `array_rand()`, the missing `sprintf()` or
+`array_diff_assoc()` surfaces, byte-correctness of consumers such as the
+existing `strlen()`, nested reentrant tokenizer mutation from conversion
+callbacks, the complete random/string suites or broader PHP compatibility.
+
+The preceding `similar-text-contract` checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `bb5a80a4`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 4,079 pass, 1,220 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The

@@ -1563,6 +1563,31 @@ large/untrusted-input suitability, every complex by-reference expression form,
 detached-call strict metadata, the complete string suite and broader
 compatibility remain separate checkpoints.
 
+The `strtok-shuffle-batch` checkpoint reaches 4,081 exact passes with 1,218
+failures, 115 skips, no XFAIL, 185 unsupported cases and zero timeouts or
+crashes. `strtok()` implements PHP's request-local byte cursor, per-call
+delimiter sets, source-copy isolation, exhausted/invalidated warning states,
+nullable continuation overload and atomic weak/strict typed boundary.
+`str_shuffle()` supplies an unbiased byte permutation, while existing
+by-reference `shuffle()` shares its lazily seeded request PRNG, list reindexing
+and exact array TypeError. The exact full-corpus delta from `9b56808a` is
++2/-0: `bug76047.phpt` and `gh13145.phpt` become exact with every prior pass
+preserved and no other status or category movement; two final manifests and
+summaries are byte-identical. Seventeen focused upstream PHPTs pass, and a
+7,161-case clean-room differential sweep reproduces PHP 8.5.9's token digest
+and all 8,848 warning transitions. Two broader shuffle PHPTs advance to the
+independent missing `sprintf('%0.3f')` and `array_diff_assoc()` surfaces. All
+five feature configurations, all-feature/all-target, formatting, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. A single
+cold null sidecar word is added to `ExecutorGlobals`; no opcode, call-frame,
+PHP Value/object layout, dependency or unsafe change is made. CPU-pinned
+32-pair release controls put independent/paired median changes at
+-0.905%/-0.424% for 100 empty requests and -3.137%/-3.446% for 500,000 existing
+eight-element `shuffle()` calls. Cryptographic or PHP-exact seeded randomness,
+other random APIs, the two later blockers, reentrant tokenizer mutation, the
+complete string/random suites and broader compatibility remain separate
+checkpoints.
+
 ## Measurement system
 
 ### Contract baseline
