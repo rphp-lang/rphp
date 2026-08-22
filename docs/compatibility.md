@@ -8,6 +8,72 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `ce214f02`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 4,073 pass, 1,226 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 76.864% and the whole-corpus rate is 72.745%; 4,805 of
+5,299 attempted cases reach runtime (90.677%). Relative to exact integration
+baseline `cfe92d09`, the pass-set delta is +1/-0.
+
+The exact addition is `Zend/tests/bug70124.phpt`, which moves from output
+failure to pass. Adding the missing public function exposes the test's earlier
+argument-evaluation errors; its lower-case static call now also renders the
+canonical declared class name in the cold undefined-method diagnostic. Every
+previous pass is preserved and there is no other non-pass status or category
+movement. Two sequential final candidate runs have byte-identical manifests
+and summaries. Their SHA-256 values are
+`a0642dbef2e245812fcb015735518852d5759a68366e832f07159d5ae5710944`
+and `1f5b4f27de0cc0d2bddb410d3443725d3ae15232d15aef7ceaf72499b35332bf`.
+
+`base_convert()` implements PHP 8.5's case-insensitive bases 2 through 36,
+matching `0b`, `0o` and `0x` prefixes, admitted leading/trailing whitespace
+and the historical ignore-with-deprecation behavior for other invalid bytes.
+Accumulation stays in a signed 64-bit integer until overflow and then follows
+PHP's floating-point conversion path, including its observable rounding and
+the `ValueError` for an infinite intermediate value. The weak and strict
+`string`, `int`, `int` call boundary covers scalar conversions, null and lossy
+float deprecations, stringable objects, concrete invalid types, base-range
+errors and exceptions from conversion or diagnostic handlers.
+
+Two original unit tests and one E2E regression cover the conversion grammar,
+integer/double boundary, precision loss, invalid characters and bases,
+weak/strict arguments, Stringable behavior, handler exceptions, infinity and
+canonical static-call diagnostics. A deterministic clean-room sweep of
+502,245 input/from-base/to-base combinations is byte-identical to PHP 8.5.9;
+both outputs have SHA-256
+`3df636915bdfcc5aa70b07d0486246b29ced84274a7eda3f349031bf5168e605`.
+An independent scalar/container argument matrix is also byte-identical, with
+SHA-256
+`c8012f1260e534fe4527729b4aed7e4b31c75145359713681411f51dd6646b0c`.
+
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, the exact unsafe ratchet, Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass. The production inventory remains 1,618 unsafe blocks, 289
+unsafe functions and 330 SAFETY annotations. No opcode, frame, value/object,
+executor-globals, dependency or production-unsafe change is made; ordinary
+static-call dispatch and its hot cache are unchanged.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used performance-governor CPU 2, four warmups and no excluded
+samples. Batches of 100 empty requests measured baseline/candidate p10/median/
+p90 0.202734/0.205041/0.211595 and 0.200989/0.203758/0.208873 seconds,
+-0.626% independently and -0.737% paired. One request executing two million
+existing `is_float()` calls measured 0.181775/0.182297/0.185102 and
+0.185114/0.185699/0.186195 seconds, +1.866% independently and +1.831% paired,
+with exact checksum `2000000`. Both controls remain below the +5% gate. As an
+absolute changed-path sanity check, fifteen candidate runs of 500,000 decimal-
+to-hexadecimal conversions measured p10/median/p90
+0.110259/0.110763/0.112369 seconds with checksum `2430096`; no A/B claim is
+possible because the baseline lacks the function. The baseline and candidate
+binary SHA-256 values are
+`8df8e168b3aa69623c4612464b99276c3e6dc434be5ce63282baf7659b24cffd`
+and `7dbcca75ca2577319bcdc70080b9f2da933b94687ad8d3cf2712904bdf6eabe2`.
+
+This checkpoint does not claim `bindec()`, `octdec()`, `hexdec()`, arbitrary-
+precision conversion or broader PHP compatibility.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `7a1e2af7`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 4,072 pass, 1,227 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The

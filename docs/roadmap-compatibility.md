@@ -1421,6 +1421,24 @@ existing `parse_ini_string()` calls, below the +5% gate. CLI/INI setting
 integration, unavailable `zend_test` helpers, ordinary Reflection snapshots
 and broader compatibility remain separate checkpoints.
 
+The `base-convert-contract` checkpoint reaches 4,073 exact passes with 1,226
+failures, 115 skips, no XFAIL, 185 unsupported cases and zero timeouts or
+crashes. `base_convert()` covers PHP 8.5's bases 2 through 36, matching binary,
+octal and hexadecimal prefixes, ignored-character deprecation, strict/weak
+`string`, `int`, `int` arguments and the signed-integer-to-double precision
+boundary. Undefined static-method diagnostics now render the canonical
+declared class name after case-insensitive resolution. The exact full-corpus
+delta from `cfe92d09` is +1/-0: `bug70124.phpt` becomes exact with every prior
+pass preserved and no other non-pass movement; two final manifests/summaries
+are byte-identical. All five feature configurations, all-feature/all-target,
+formatting, PHPT runner, unsafe, Composer S0, four Symfony S1 gates and PHP
+8.5.9 S2/S3 pass. A 502,245-case clean-room conversion sweep and a separate
+argument-boundary matrix are byte-identical to PHP 8.5.9. CPU-pinned 32-pair
+release controls put independent/paired median changes at -0.626%/-0.737% for
+100 empty requests and +1.866%/+1.831% for two million existing `is_float()`
+calls, below the +5% gate. Companion base-conversion functions, arbitrary
+precision and broader compatibility remain separate checkpoints.
+
 ## Measurement system
 
 ### Contract baseline
