@@ -1266,6 +1266,25 @@ commit timing, direct effectful terminal keys, typed boolean properties,
 by-reference foreach teardown and the four later failure boundaries remain
 separate checkpoints.
 
+The `integer-literal-overflow` checkpoint reaches 4,003 exact passes with 1,296
+failures, 115 skips, no XFAIL, 185 unsupported cases and zero timeouts or
+crashes. Decimal, binary, hexadecimal, explicit octal and legacy octal literals
+now retain AMD64 integers through `PHP_INT_MAX`, promote through a cold
+PHP-compatible finite/infinite double conversion after overflow, and preserve
+numeric separators plus legacy invalid-octal diagnostics. The exact full-corpus
+delta from `5da46076` is +11/-0: the broad binary/decimal/octal cases, both
+64-bit boundary regressions, all three 64-bit integer-literal suites and the
+invalid-legacy-octal case become exact with every prior pass preserved. One
+remaining case advances to its independent reentrant float-key output boundary;
+an error-suppressed assignment case reaches a separate parser restriction. Two
+final manifests/summaries are byte-identical. All five feature configurations,
+all-feature/all-target, formatting, PHPT runner, unsafe, Composer S0, four
+Symfony S1 gates and PHP 8.5.9 S2/S3 pass. CPU-pinned 32-pair release controls
+put independent/paired median candidate-to-baseline changes at +0.008%/+0.028%
+for 100 empty requests and +0.978%/+0.801% for 50,000 ordinary integer
+expressions, below the +5% gate. Malformed explicit-prefix diagnostics, 32-bit
+boundaries and the two later blockers remain separate checkpoints.
+
 ## Measurement system
 
 ### Contract baseline

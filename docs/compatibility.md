@@ -8,6 +8,66 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `9450ecb8`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 4,003 pass, 1,296 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 75.543% and the whole-corpus rate is 71.495%; 4,798 of
+5,299 attempted cases reach runtime (90.545%). Relative to exact integration
+baseline `5da46076`, the pass-set delta is +11/-0.
+
+The exact additions are `Zend/tests/binary.phpt`, `bug74947.phpt`,
+`double_to_string_64bit.phpt`, `int_underflow_64bit.phpt`,
+`oct_overflow.phpt`, `tests/lang/bug27354.phpt`, `bug73172.phpt`,
+all three 64-bit cases under `tests/lang/integer_literals`, and
+`tests/lang/invalid_octal.phpt`. Every previous pass remains a pass.
+`Zend/tests/offsets/array_offset_002.phpt` advances from its literal parse
+failure to an independent reentrant float-key conversion output mismatch;
+`Zend/tests/bug39018.phpt` remains in the parse category but now reaches its
+independent error-suppressed assignment-target rejection. No other status or
+category moves. Two sequential final candidate runs have byte-identical
+manifests and summaries. Their SHA-256 values are
+`67c07e1eafda864aaddaf5363f620169ab0427c21f66c000fafb140870776b55`
+and `953ee1a0d5ea534e5a61fa2fb7401d9acb9b8bd4513c41fca638069adff403ff`.
+
+On AMD64, decimal, binary, hexadecimal, explicit octal and legacy leading-zero
+octal literals now remain integers through `PHP_INT_MAX` and promote to double
+after that boundary. The cold overflow conversion reaches finite doubles or
+infinity and preserves PHP 8.5's observable binary/octal rounding order;
+ordinary `i64` parsing remains the inline fast path. Numeric separators work in
+all admitted bases. Legacy octal digits 8 and 9 produce PHP's source-located
+`Invalid numeric literal` parse error, including after a compact unary minus,
+while leading-zero decimal floats remain decimal.
+
+Original lexer, CLI and end-to-end regressions cover exact double bit patterns,
+positive and negative boundaries, separators, explicit and legacy octal,
+infinity and invalid-digit diagnostics. A deterministic differential sample of
+500 additional literals matched PHP 8.5.9 exactly. The adjacent 17-case numeric
+separator/integer-literal slice has 14 passes and the expected three AMD64
+32-bit skips. All five Cargo feature configurations, all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy self-tests, the exact unsafe ratchet,
+Composer 2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2
+and cold-build S3 pass. The production inventory remains 1,618 unsafe blocks,
+289 unsafe functions and 330 SAFETY annotations.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used CPU 0 with the performance governor, four warmups and no
+excluded samples. Batches of 100 empty requests measured baseline
+p10/median/p90 0.143564/0.144225/0.144779 seconds and candidate
+0.143729/0.144236/0.144847 seconds, +0.008% by independent medians and +0.028%
+by the paired median. One request lexing, compiling and executing 50,000
+ordinary integer expressions measured baseline 0.044994/0.045422/0.046269
+seconds and candidate 0.045144/0.045867/0.046712 seconds, +0.978%
+independently and +0.801% paired. Both remain below the +5% gate with exact
+output. The baseline and candidate binary SHA-256 values are
+`928392628b498c69e7cb2378e844871d0ba89e3bdd7f0dcad33517be7aa7b56f`
+and `a696ea142435a42d35369f874ff28c78562ced8fc8cc9bdaf10cf91b6b5af212`.
+
+This checkpoint does not claim the remaining error-suppressed assignment or
+reentrant float-key behavior above, PHP-compatible diagnostics for malformed
+explicit base prefixes, 32-bit integer boundaries, or broader PHP
+compatibility.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `618532c3`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,992 pass, 1,307 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
