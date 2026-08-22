@@ -1206,6 +1206,24 @@ cached, deleted, malformed and concurrent cache publication/load behavior.
 None of these bounded gates establishes general PHP, extension, SAPI or
 production compatibility.
 
+The `builtin-write-context` checkpoint reaches 3,987 exact passes with 1,312
+failures, 115 skips, no XFAIL, 185 unsupported cases, zero timeouts and zero
+crashes. A compiler-only metadata table reproduces PHP 8.5's special global
+built-in call shapes without coupling the source diagnostic to RPHP's runtime
+lowering. Indexed/append writes, coalescing and compound mutation, direct
+references and references to indexed special results, `unset()` and
+by-reference iteration reject the special
+temporary before any source code executes; namespace shadows and ordinary
+call shapes remain writable. The exact full-corpus delta from integration base
+`ba435240` is +3/-0 with no other status or category movement, and two final
+manifests and summaries are byte-identical. All five feature configurations,
+all-target, formatting, unsafe policy, Composer S0, four Symfony S1 gates and
+PHP 8.5.9 S2/S3 pass. A CPU-pinned 32-pair release control puts the paired
+median empty-request ratio at 0.998261 and the 1,000-source-unit compile/write
+ratio at 1.009096, both below the +5% gate. Temporary non-call write
+diagnostics, false-to-array conversion, string append diagnostics and
+clone-result spelling remain independent checkpoints.
+
 ## Measurement system
 
 ### Contract baseline

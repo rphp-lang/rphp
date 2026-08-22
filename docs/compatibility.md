@@ -8,6 +8,65 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `65008ae6`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,987 pass, 1,312 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 75.241% and the whole-corpus rate is 71.209%; 4,782 of
+5,299 attempted cases reach runtime (90.243%). Relative to integration
+baseline `ba435240`, whose executable state is candidate `bf9a63eb`, the exact
+pass-set delta is +3/-0.
+
+The additions are `Zend/tests/builtin_in_write_context_error1.phpt`,
+`builtin_in_write_context_error2.phpt` and
+`Zend/tests/coalesce/assign_coalesce_009.phpt`. The first and third move from
+runtime failure to exact pass, and the reference case moves from output
+failure to exact pass. Every previous pass remains a pass and no other status
+or failure category moves. Two sequential candidate runs have byte-identical
+merged manifests and summaries. Their manifest and summary SHA-256 values are
+`58ec2db8100692f8670561a0e25f77d4d715c7ce7a9671572c8ce7c849549823`
+and `45c4b516504aaca76958d80193b648aebadf131ddfa34ba09ffa7051af7e80b8`.
+
+PHP 8.5 compiler-special global built-in call shapes now produce the
+compile-time `Cannot use result of built-in function in write context` fatal
+when their result is used as an indexed or appended array root, coalescing or
+compound assignment root, increment/decrement or `unset()` root, direct
+reference target, reference to an indexed special result, or by-reference
+`foreach` source. The bounded
+metadata covers the PHP-special arities and constant forms for scalar/type
+built-ins, `count()`/`sizeof()`, class and argument introspection,
+`array_key_exists()`, `defined()`, strict literal `in_array()` and the
+`array_slice(func_get_args(), literal)` form. It remains deliberately separate
+from RPHP's runtime direct-call lowering.
+
+Only lexically unambiguous global calls, fully qualified calls and imported
+global aliases receive the diagnostic. Namespaced user shadows, ordinary
+internal and user calls, named or unpacked forms, non-special arities and
+dynamic constant/array forms retain their writable discarded-temporary or
+returned-reference behavior. One original CLI suite exercises all admitted
+families, write forms, namespace boundaries and negative controls. All five
+Cargo configurations, all-features/all-targets, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass. The production
+inventory remains 1,612 unsafe blocks, 289 unsafe functions and 321 SAFETY
+annotations. Composer 2.8.12 S0, all four Symfony S1 gates, and exact PHP 8.5.9
+warmed-kernel S2 and cold-build S3 also pass.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison with
+the performance governor, four warmups and no excluded sample keeps both
+front-end controls below the +5% gate. One hundred empty cold requests per
+observation measure candidate/baseline ratios of 0.998608 by independent
+medians and 0.998261 by paired medians. One request compiling and executing
+1,000 source units containing an ordinary user-call indexed write and internal
+call append measures 1.008287 and 1.009096 respectively, with exact output.
+The baseline and candidate binary SHA-256 values are
+`f72a40d9a2b7d717e2ff6879fb05eb8356ac25965ced12fa8bc9452f35b214db`
+and `6bd04f742da17ac725b052af40b34f9f1110658f01ba514ec44319b6904eb3b3`;
+the exact TSV SHA-256 is
+`542241df3473c0e55f084306a558ae6cdd39c27fbee6f19578c6ace4127cb82f`.
+Temporary non-call expression diagnostics, automatic false-to-array
+conversion, string append diagnostics and clone-result diagnostic spelling
+remain separate surfaces.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `bf9a63eb`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,984 pass, 1,315 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The

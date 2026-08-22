@@ -1,6 +1,6 @@
 # RPHP engineering roadmap
 
-Status: active coordination map, 2026-08-20
+Status: active coordination map, 2026-08-22
 
 This document coordinates two independent engineering workstreams. It stays
 short and current; detailed plans live in the workstream roadmaps, while the
@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is now 3,443/5,599 with zero timeouts and zero crashes. Ordinary class `__CLASS__` property defaults bind to their declaration, while trait `__CLASS__` and `self::class` defaults rebind at each nested composition; inheritance, explicit reuse, collision order, static storage and child Reflection metadata follow PHP 8.5. The exact delta is +2/-0 over `e9ac0b43`, with two byte-identical full manifests and no other category movement. All five feature configurations, unsafe ratchet and Composer/Symfony S0-S3 gates pass; a 32-pair five-request/1,000-composition release control measures -0.911% independently, -0.508% by paired means and +0.324% by paired median, below the +5% gate. Relative `parent::class` defaults, deprecated parent callables, missing library functions and other PHP 8.5 clusters stay explicit work. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is now 3,987/5,599 with zero timeouts and zero crashes. PHP compiler-special global built-in call shapes now reject array-write and direct-reference contexts at compile time while namespace shadows, ordinary call shapes and returned-reference behavior remain intact. The exact delta is +3/-0 over `ba435240`, with two byte-identical full manifests and no other category movement. All five feature configurations, unsafe ratchet and Composer/Symfony S0-S3 gates pass; paired release controls put empty requests at 0.998261 and the relevant 1,000-source-unit compile/write workload at 1.009096, below the +5% gate. Temporary non-call write diagnostics, false-to-array conversion, string append diagnostics, clone-result spelling and other PHP 8.5 clusters stay explicit work. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,
