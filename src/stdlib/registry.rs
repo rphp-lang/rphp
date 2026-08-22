@@ -1170,6 +1170,13 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("ini_get", fn_ini_get, 1, 1, "option");
     reg!("ini_set", fn_ini_set, 2, 2, "option", "value");
     reg!(
+        "ini_parse_quantity",
+        parse_ini::fn_ini_parse_quantity,
+        1,
+        1,
+        "shorthand"
+    );
+    reg!(
         "parse_ini_string",
         parse_ini::fn_parse_ini_string,
         3,

@@ -1597,6 +1597,98 @@ echo $normal['mask'], ':', $normal['full'];
 }
 
 #[test]
+fn ini_parse_quantity_matches_php_bases_multipliers_warnings_and_call_boundary() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($level, $message) {
+    echo $level, ':', $message, "\n";
+});
+
+foreach (['0x0b', '-0Xbeef', '0b101', '0o77', '077', '2K', '3m', '4 G'] as $quantity) {
+    var_dump(ini_parse_quantity($quantity));
+}
+foreach (['0x+0', '0b2', '08', '1.5K', '123 abc'] as $quantity) {
+    var_dump(ini_parse_quantity($quantity));
+}
+var_dump(ini_parse_quantity(12), ini_parse_quantity(false), ini_parse_quantity(null));
+
+class QuantityText {
+    public function __toString(): string { return '0x10K'; }
+}
+var_dump(ini_parse_quantity(new QuantityText()));
+
+foreach ([[], new stdClass(), STDIN, function () {}] as $value) {
+    try {
+        ini_parse_quantity($value);
+    } catch (TypeError $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+
+class BrokenQuantityText {
+    public function __toString(): string { throw new Exception('string stop'); }
+}
+try {
+    ini_parse_quantity(new BrokenQuantityText());
+} catch (Exception $error) {
+    echo $error->getMessage(), "\n";
+}
+
+set_error_handler(function ($level, $message) {
+    throw new Exception("handled:$level:$message");
+});
+try {
+    ini_parse_quantity('0x+0');
+} catch (Exception $error) {
+    echo $error->getMessage(), "\n";
+}
+"#
+        ),
+        concat!(
+            "int(11)\nint(-48879)\nint(5)\nint(63)\nint(63)\n",
+            "int(2048)\nint(3145728)\nint(4294967296)\n",
+            "2:Invalid quantity \"0x+0\": no digits after base prefix, interpreting as \"0\" for backwards compatibility\nint(0)\n",
+            "2:Invalid quantity \"0b2\": no valid leading digits, interpreting as \"0\" for backwards compatibility\nint(0)\n",
+            "2:Invalid quantity \"08\": unknown multiplier \"8\", interpreting as \"0\" for backwards compatibility\nint(0)\n",
+            "2:Invalid quantity \"1.5K\", interpreting as \"1K\" for backwards compatibility\nint(1024)\n",
+            "2:Invalid quantity \"123 abc\": unknown multiplier \"c\", interpreting as \"123 \" for backwards compatibility\nint(123)\n",
+            "8192:ini_parse_quantity(): Passing null to parameter #1 ($shorthand) of type string is deprecated\n",
+            "int(12)\nint(0)\nint(0)\nint(16384)\n",
+            "ini_parse_quantity(): Argument #1 ($shorthand) must be of type string, array given\n",
+            "ini_parse_quantity(): Argument #1 ($shorthand) must be of type string, stdClass given\n",
+            "ini_parse_quantity(): Argument #1 ($shorthand) must be of type string, resource given\n",
+            "ini_parse_quantity(): Argument #1 ($shorthand) must be of type string, Closure given\n",
+            "string stop\n",
+            "handled:2:Invalid quantity \"0x+0\": no digits after base prefix, interpreting as \"0\" for backwards compatibility\n"
+        )
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+declare(strict_types=1);
+foreach ([false, true, 12, 1.5] as $value) {
+    try {
+        ini_parse_quantity($value);
+    } catch (TypeError $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+var_dump(ini_parse_quantity('1K'));
+"#
+        ),
+        concat!(
+            "ini_parse_quantity(): Argument #1 ($shorthand) must be of type string, false given\n",
+            "ini_parse_quantity(): Argument #1 ($shorthand) must be of type string, true given\n",
+            "ini_parse_quantity(): Argument #1 ($shorthand) must be of type string, int given\n",
+            "ini_parse_quantity(): Argument #1 ($shorthand) must be of type string, float given\n",
+            "int(1024)\n"
+        )
+    );
+}
+
+#[test]
 fn extract_updates_the_caller_scope_with_flags_references_and_atomic_errors() {
     assert_eq!(
         run_php(

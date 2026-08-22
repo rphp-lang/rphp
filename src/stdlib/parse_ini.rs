@@ -8,6 +8,304 @@ const INI_SCANNER_NORMAL: i64 = 0;
 const INI_SCANNER_RAW: i64 = 1;
 const INI_SCANNER_TYPED: i64 = 2;
 
+pub(super) fn fn_ini_parse_quantity(
+    execute_data: *mut ExecuteData,
+    return_value: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(shorthand) = quantity_string_argument(execute_data, eg)? else {
+        return Ok(());
+    };
+    let parsed = parse_quantity(&shorthand);
+    if let Some(warning) = parsed.warning {
+        super::report_internal_diagnostic(eg, execute_data, 2, "Warning", &warning)?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    return_value_with(return_value, Value::long(parsed.value))
+}
+
+fn quantity_string_argument(
+    execute_data: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+) -> Result<Option<String>, VmError> {
+    let argument = super::owned_argument(execute_data, 0);
+    let argument = argument.dereferenced();
+    let strict = super::internal_call_is_strict(execute_data);
+
+    let converted = match argument.value_type() {
+        ValueType::String => Some(argument.as_str().unwrap_or("").to_string()),
+        ValueType::Null if !strict => {
+            super::report_internal_deprecation(
+                eg,
+                execute_data,
+                "ini_parse_quantity(): Passing null to parameter #1 ($shorthand) of type string is deprecated",
+            )?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            Some(String::new())
+        }
+        ValueType::False if !strict => Some(String::new()),
+        ValueType::True if !strict => Some("1".to_string()),
+        ValueType::Long | ValueType::Double if !strict => {
+            Some(argument.echo_to_string_with_precision(eg.precision))
+        }
+        ValueType::Object if !strict => {
+            let rendered = crate::vm::execute::call_object_string_conversion(eg, argument)?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            let Some(rendered) = rendered else {
+                return quantity_argument_type_error(eg, argument);
+            };
+            let Some(rendered) = rendered.as_str() else {
+                let class_name = argument.diagnostic_type_name();
+                eg.exception = Some(crate::value::make_error_value(
+                    "TypeError",
+                    &format!("{class_name}::__toString(): Return value must be of type string"),
+                ));
+                return Ok(None);
+            };
+            Some(rendered.to_string())
+        }
+        _ => return quantity_argument_type_error(eg, argument),
+    };
+    Ok(converted)
+}
+
+fn quantity_argument_type_error(
+    eg: &mut ExecutorGlobals,
+    argument: &Value,
+) -> Result<Option<String>, VmError> {
+    let actual = match argument.value_type() {
+        ValueType::True => "true".to_string(),
+        ValueType::False => "false".to_string(),
+        _ => argument.diagnostic_type_name().into_owned(),
+    };
+    eg.exception = Some(crate::value::make_error_value(
+        "TypeError",
+        &format!(
+            "ini_parse_quantity(): Argument #1 ($shorthand) must be of type string, {actual} given"
+        ),
+    ));
+    Ok(None)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ParsedQuantity {
+    value: i64,
+    warning: Option<String>,
+}
+
+/// Parse the byte-oriented quantity grammar used by PHP's public
+/// `ini_parse_quantity()` function. This is intentionally separate from the
+/// INI expression parser below: quantities have base prefixes and K/M/G
+/// multipliers, but do not evaluate constants or operators.
+fn parse_quantity(shorthand: &str) -> ParsedQuantity {
+    let bytes = shorthand.as_bytes();
+    let escaped = || escape_quantity_bytes(bytes);
+    let mut offset = skip_quantity_whitespace(bytes, 0);
+    if offset == bytes.len() {
+        return ParsedQuantity {
+            value: 0,
+            warning: None,
+        };
+    }
+
+    let negative = match bytes[offset] {
+        b'+' => {
+            offset += 1;
+            false
+        }
+        b'-' => {
+            offset += 1;
+            true
+        }
+        _ => false,
+    };
+
+    let mut base = 10_u32;
+    let mut explicit_prefix = false;
+    if bytes.get(offset) == Some(&b'0') {
+        if let Some(second) = bytes.get(offset + 1).copied() {
+            let recognized_after_zero = second.is_ascii_digit()
+                || matches!(
+                    second,
+                    b'x' | b'X'
+                        | b'b'
+                        | b'B'
+                        | b'o'
+                        | b'O'
+                        | b'k'
+                        | b'K'
+                        | b'm'
+                        | b'M'
+                        | b'g'
+                        | b'G'
+                )
+                || (second.is_ascii_whitespace()
+                    && bytes[offset + 1..].iter().all(u8::is_ascii_whitespace));
+            if !recognized_after_zero {
+                let prefix = String::from_utf8_lossy(&bytes[offset..offset + 2]);
+                return ParsedQuantity {
+                    value: 0,
+                    warning: Some(format!(
+                        "Invalid prefix \"{prefix}\", interpreting as \"0\" for backwards compatibility"
+                    )),
+                };
+            }
+        }
+        base = 8;
+        if let Some(prefix) = bytes.get(offset + 1).copied() {
+            let explicit_base = match prefix {
+                b'x' | b'X' => Some(16),
+                b'b' | b'B' => Some(2),
+                b'o' | b'O' => Some(8),
+                _ => None,
+            };
+            if let Some(explicit_base) = explicit_base {
+                base = explicit_base;
+                explicit_prefix = true;
+                offset += 2;
+            }
+        }
+    }
+    let digit_start = offset;
+
+    let mut magnitude = 0_u64;
+    let mut digit_overflow = false;
+    while let Some(digit) = bytes.get(offset).copied().and_then(quantity_digit) {
+        if u32::from(digit) >= base {
+            break;
+        }
+        magnitude = magnitude
+            .checked_mul(u64::from(base))
+            .and_then(|value| value.checked_add(u64::from(digit)))
+            .unwrap_or_else(|| {
+                digit_overflow = true;
+                u64::MAX
+            });
+        offset += 1;
+    }
+
+    if offset == digit_start {
+        let missing_after_prefix = explicit_prefix
+            && bytes
+                .get(digit_start)
+                .is_none_or(|byte| byte.is_ascii_whitespace() || matches!(byte, b'+' | b'-'));
+        let reason = if missing_after_prefix {
+            "no digits after base prefix"
+        } else {
+            "no valid leading digits"
+        };
+        return ParsedQuantity {
+            value: 0,
+            warning: Some(format!(
+                "Invalid quantity \"{}\": {reason}, interpreting as \"0\" for backwards compatibility",
+                escaped()
+            )),
+        };
+    }
+
+    let digit_end = offset;
+    let prefix_end = skip_quantity_whitespace(bytes, digit_end);
+    let last_non_whitespace = bytes.iter().rposition(|byte| !byte.is_ascii_whitespace());
+    let multiplier = last_non_whitespace.and_then(|index| match bytes[index] {
+        b'k' | b'K' => Some((index, 10_u32)),
+        b'm' | b'M' => Some((index, 20_u32)),
+        b'g' | b'G' => Some((index, 30_u32)),
+        _ => None,
+    });
+    let clean_syntax = match multiplier {
+        Some((multiplier_offset, _)) => {
+            prefix_end == multiplier_offset
+                && bytes[multiplier_offset + 1..]
+                    .iter()
+                    .all(u8::is_ascii_whitespace)
+        }
+        None => prefix_end == bytes.len(),
+    };
+    let shift = multiplier.map_or(0, |(_, shift)| shift);
+
+    let mut signed = magnitude as i64;
+    if negative && magnitude <= (1_u64 << 63) {
+        signed = signed.wrapping_neg();
+    }
+    let value = signed.wrapping_shl(shift);
+
+    let warning = if !clean_syntax {
+        let mut interpreted = bytes[..prefix_end].to_vec();
+        if let Some((multiplier_offset, _)) = multiplier {
+            interpreted.push(bytes[multiplier_offset]);
+            Some(format!(
+                "Invalid quantity \"{}\", interpreting as \"{}\" for backwards compatibility",
+                escaped(),
+                escape_quantity_bytes(&interpreted)
+            ))
+        } else {
+            let unknown = last_non_whitespace
+                .map(|index| escape_quantity_bytes(&bytes[index..index + 1]))
+                .unwrap_or_default();
+            Some(format!(
+                "Invalid quantity \"{}\": unknown multiplier \"{unknown}\", interpreting as \"{}\" for backwards compatibility",
+                escaped(),
+                escape_quantity_bytes(&interpreted)
+            ))
+        }
+    } else {
+        let limit = if negative {
+            (1_u64 << 63) >> shift
+        } else {
+            (i64::MAX as u64) >> shift
+        };
+        (digit_overflow || magnitude > limit).then(|| {
+            format!(
+                "Invalid quantity \"{}\": value is out of range, using overflow result for backwards compatibility",
+                escaped()
+            )
+        })
+    };
+
+    ParsedQuantity { value, warning }
+}
+
+fn quantity_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn skip_quantity_whitespace(bytes: &[u8], mut offset: usize) -> usize {
+    while bytes.get(offset).is_some_and(u8::is_ascii_whitespace) {
+        offset += 1;
+    }
+    offset
+}
+
+fn escape_quantity_bytes(bytes: &[u8]) -> String {
+    let mut escaped = String::with_capacity(bytes.len());
+    for byte in bytes.iter().copied() {
+        match byte {
+            b'\\' => escaped.push_str("\\\\"),
+            b'\0' => escaped.push_str("\\x00"),
+            0x1b => escaped.push_str("\\e"),
+            b'\t' => escaped.push_str("\\t"),
+            b'\n' => escaped.push_str("\\n"),
+            0x0b => escaped.push_str("\\v"),
+            0x0c => escaped.push_str("\\f"),
+            b'\r' => escaped.push_str("\\r"),
+            0x20..=0x7e => escaped.push(char::from(byte)),
+            _ => escaped.push_str(&format!("\\x{byte:02X}")),
+        }
+    }
+    escaped
+}
+
 pub(super) fn fn_parse_ini_string(
     execute_data: *mut ExecuteData,
     return_value: *mut Value,
@@ -479,7 +777,108 @@ fn return_value_with(pointer: *mut Value, value: Value) -> Result<(), VmError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{INI_SCANNER_RAW, INI_SCANNER_TYPED, parse_ini};
+    use super::{INI_SCANNER_RAW, INI_SCANNER_TYPED, parse_ini, parse_quantity};
+
+    #[test]
+    fn quantity_parser_supports_signs_bases_multipliers_and_signed_boundaries() {
+        let cases = [
+            ("", 0),
+            ("  \t", 0),
+            ("+17", 17),
+            ("-17", -17),
+            ("077", 63),
+            ("0o77", 63),
+            ("0b101", 5),
+            ("0x0b", 11),
+            ("-0XBEEF", -48_879),
+            ("1K", 1_024),
+            ("0x10 m", 16_777_216),
+            ("0b10G", 2_147_483_648),
+            ("9223372036854775807", i64::MAX),
+            ("-9223372036854775808", i64::MIN),
+        ];
+        for (source, expected) in cases {
+            let parsed = parse_quantity(source);
+            assert_eq!(parsed.value, expected, "{source}");
+            assert_eq!(parsed.warning, None, "{source}");
+        }
+    }
+
+    #[test]
+    fn quantity_parser_reports_invalid_syntax_without_losing_legacy_results() {
+        let cases = [
+            (
+                "0x+0",
+                0,
+                "Invalid quantity \"0x+0\": no digits after base prefix, interpreting as \"0\" for backwards compatibility",
+            ),
+            (
+                "0b2",
+                0,
+                "Invalid quantity \"0b2\": no valid leading digits, interpreting as \"0\" for backwards compatibility",
+            ),
+            (
+                "08",
+                0,
+                "Invalid quantity \"08\": unknown multiplier \"8\", interpreting as \"0\" for backwards compatibility",
+            ),
+            (
+                "0a7",
+                0,
+                "Invalid prefix \"0a\", interpreting as \"0\" for backwards compatibility",
+            ),
+            (
+                "0 K",
+                0,
+                "Invalid prefix \"0 \", interpreting as \"0\" for backwards compatibility",
+            ),
+            (
+                "1.5K",
+                1_024,
+                "Invalid quantity \"1.5K\", interpreting as \"1K\" for backwards compatibility",
+            ),
+            (
+                " 123 junk K ",
+                125_952,
+                "Invalid quantity \" 123 junk K \", interpreting as \" 123 K\" for backwards compatibility",
+            ),
+            (
+                "123 abc",
+                123,
+                "Invalid quantity \"123 abc\": unknown multiplier \"c\", interpreting as \"123 \" for backwards compatibility",
+            ),
+        ];
+        for (source, expected, warning) in cases {
+            let parsed = parse_quantity(source);
+            assert_eq!(parsed.value, expected, "{source}");
+            assert_eq!(parsed.warning.as_deref(), Some(warning), "{source}");
+        }
+    }
+
+    #[test]
+    fn quantity_parser_uses_php_overflow_results_and_warning_escaping() {
+        let positive = parse_quantity("9223372036854775808");
+        assert_eq!(positive.value, i64::MIN);
+        assert_eq!(
+            positive.warning.as_deref(),
+            Some(
+                "Invalid quantity \"9223372036854775808\": value is out of range, using overflow result for backwards compatibility"
+            )
+        );
+
+        let saturated = parse_quantity("999999999999999999999999G");
+        assert_eq!(saturated.value, -1_073_741_824);
+        assert!(saturated.warning.is_some());
+
+        let escaped = parse_quantity("1\\\n\0x");
+        assert_eq!(escaped.value, 1);
+        assert_eq!(
+            escaped.warning.as_deref(),
+            Some(
+                "Invalid quantity \"1\\\\\\n\\x00x\": unknown multiplier \"x\", interpreting as \"1\" for backwards compatibility"
+            )
+        );
+    }
 
     #[test]
     fn parses_sections_typed_values_comments_and_raw_quotes() {
