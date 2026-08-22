@@ -454,9 +454,12 @@ fn runtime_values_checked(
 
         Ok(match mode {
             RuntimeComparisonMode::LooseEquality => {
-                values_equal_checked(left, right).map(|equal| i32::from(!equal))
+                values_equal_checked_with_precision(left, right, eg.precision)
+                    .map(|equal| i32::from(!equal))
             }
-            RuntimeComparisonMode::Ordering => values_compare_checked(left, right),
+            RuntimeComparisonMode::Ordering => {
+                values_compare_checked_with_precision(left, right, eg.precision)
+            }
         })
     }
 

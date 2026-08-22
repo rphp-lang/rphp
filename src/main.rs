@@ -235,6 +235,7 @@ fn main() {
 
     let result = Compiler::new()
         .with_zend_assertions(stdlib::startup_zend_assertions(&ini_settings))
+        .with_precision(stdlib::startup_precision(&ini_settings))
         .with_source_context(source_file, source_directory)
         .compile(&stmts)
         .unwrap_or_else(|failure| {

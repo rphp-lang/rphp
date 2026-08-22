@@ -3871,11 +3871,15 @@ struct ComparisonContext {
 /// PHP == comparison for compound values. Recursive structures raise a
 /// catchable Error through the checked entry point rather than overflowing the
 /// host stack. Scalar leaves retain PHP's ordinary loose behavior.
-pub(crate) fn values_equal_checked(a: &Value, b: &Value) -> Result<bool, ()> {
+pub(crate) fn values_equal_checked_with_precision(
+    a: &Value,
+    b: &Value,
+    precision: i32,
+) -> Result<bool, ()> {
     #[inline]
-    fn scalar_number_string_equal(number: &Value, string: &str) -> bool {
+    fn scalar_number_string_equal(number: &Value, string: &str, precision: i32) -> bool {
         parse_php_numeric_string(string).map_or_else(
-            || number.echo_to_string() == string,
+            || number.echo_to_string_with_precision(precision) == string,
             |right| number.to_double().is_some_and(|left| left == right.number),
         )
     }
@@ -3885,6 +3889,7 @@ pub(crate) fn values_equal_checked(a: &Value, b: &Value) -> Result<bool, ()> {
         b: &Value,
         context: &mut ComparisonContext,
         depth: usize,
+        precision: i32,
     ) -> Result<bool, ()> {
         let a = a.dereferenced();
         let b = b.dereferenced();
@@ -3916,10 +3921,10 @@ pub(crate) fn values_equal_checked(a: &Value, b: &Value) -> Result<bool, ()> {
                 }
             }
             (ValueType::Long | ValueType::Double | ValueType::Resource, ValueType::String) => {
-                scalar_number_string_equal(a, b.as_str().unwrap())
+                scalar_number_string_equal(a, b.as_str().unwrap(), precision)
             }
             (ValueType::String, ValueType::Long | ValueType::Double | ValueType::Resource) => {
-                scalar_number_string_equal(b, a.as_str().unwrap())
+                scalar_number_string_equal(b, a.as_str().unwrap(), precision)
             }
             (ValueType::Array, ValueType::Array) => {
                 let left_identity = a.array_identity().unwrap();
@@ -3948,7 +3953,7 @@ pub(crate) fn values_equal_checked(a: &Value, b: &Value) -> Result<bool, ()> {
                             equal = false;
                             break;
                         };
-                        if !equal_inner(value, other, context, depth + 1)? {
+                        if !equal_inner(value, other, context, depth + 1, precision)? {
                             equal = false;
                             break;
                         }
@@ -3992,10 +3997,12 @@ pub(crate) fn values_equal_checked(a: &Value, b: &Value) -> Result<bool, ()> {
                     left_count += 1;
                     if properties_equal && !comparison_error {
                         match right.get_property(name) {
-                            Some(other) => match equal_inner(value, other, context, depth + 1) {
-                                Ok(equal) => properties_equal = equal,
-                                Err(()) => comparison_error = true,
-                            },
+                            Some(other) => {
+                                match equal_inner(value, other, context, depth + 1, precision) {
+                                    Ok(equal) => properties_equal = equal,
+                                    Err(()) => comparison_error = true,
+                                }
+                            }
                             None => properties_equal = false,
                         }
                     }
@@ -4017,13 +4024,17 @@ pub(crate) fn values_equal_checked(a: &Value, b: &Value) -> Result<bool, ()> {
         })
     }
 
-    equal_inner(a, b, &mut ComparisonContext::default(), 0)
+    equal_inner(a, b, &mut ComparisonContext::default(), 0, precision)
 }
 
 /// PHP three-way comparison for compound values. Object and array tables are
 /// compared by key without requiring insertion-order identity, and recursive
 /// dependencies use the same bounded error contract as loose equality.
-pub(crate) fn values_compare_checked(a: &Value, b: &Value) -> Result<i32, ()> {
+pub(crate) fn values_compare_checked_with_precision(
+    a: &Value,
+    b: &Value,
+    precision: i32,
+) -> Result<i32, ()> {
     #[inline]
     fn ordering(value: std::cmp::Ordering) -> i32 {
         match value {
@@ -4038,6 +4049,7 @@ pub(crate) fn values_compare_checked(a: &Value, b: &Value) -> Result<i32, ()> {
         b: &Value,
         context: &mut ComparisonContext,
         depth: usize,
+        precision: i32,
     ) -> Result<i32, ()> {
         let a = a.dereferenced();
         let b = b.dereferenced();
@@ -4092,7 +4104,11 @@ pub(crate) fn values_compare_checked(a: &Value, b: &Value) -> Result<i32, ()> {
                         if a.to_double().is_some_and(f64::is_nan) {
                             PHP_COMPARISON_UNORDERED
                         } else {
-                            ordering(a.echo_to_string().as_str().cmp(right))
+                            ordering(
+                                a.echo_to_string_with_precision(precision)
+                                    .as_str()
+                                    .cmp(right),
+                            )
                         }
                     },
                     |right| {
@@ -4104,7 +4120,7 @@ pub(crate) fn values_compare_checked(a: &Value, b: &Value) -> Result<i32, ()> {
                 ))
             }
             (ValueType::String, ValueType::Long | ValueType::Double | ValueType::Resource) => {
-                compare_inner(b, a, context, depth).map(|comparison| {
+                compare_inner(b, a, context, depth, precision).map(|comparison| {
                     if comparison == PHP_COMPARISON_UNORDERED {
                         comparison
                     } else {
@@ -4138,7 +4154,7 @@ pub(crate) fn values_compare_checked(a: &Value, b: &Value) -> Result<i32, ()> {
                             result = 1;
                             break;
                         };
-                        match compare_inner(value, other, context, depth + 1) {
+                        match compare_inner(value, other, context, depth + 1, precision) {
                             Ok(cmp) if cmp != 0 => {
                                 result = cmp;
                                 break;
@@ -4200,7 +4216,7 @@ pub(crate) fn values_compare_checked(a: &Value, b: &Value) -> Result<i32, ()> {
                             result = 1;
                             return;
                         };
-                        match compare_inner(value, other, context, depth + 1) {
+                        match compare_inner(value, other, context, depth + 1, precision) {
                             Ok(cmp) => result = cmp,
                             Err(()) => comparison_error = true,
                         }
@@ -4234,7 +4250,7 @@ pub(crate) fn values_compare_checked(a: &Value, b: &Value) -> Result<i32, ()> {
         }
     }
 
-    compare_inner(a, b, &mut ComparisonContext::default(), 0)
+    compare_inner(a, b, &mut ComparisonContext::default(), 0, precision)
 }
 
 /// PHP === comparison: same type and same value (recursive for arrays).

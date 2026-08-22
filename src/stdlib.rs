@@ -12422,6 +12422,18 @@ pub fn startup_zend_assertions(settings: &[(String, String)]) -> i8 {
         .unwrap_or(1)
 }
 
+/// Resolve the request-startup precision before source compilation. Constant
+/// comparisons use this value, while later `ini_set()` calls affect only
+/// expressions that remain dynamic at runtime.
+pub fn startup_precision(settings: &[(String, String)]) -> i32 {
+    settings
+        .iter()
+        .rev()
+        .find(|(name, _)| name.eq_ignore_ascii_case("precision"))
+        .and_then(|(_, value)| parse_precision_ini(value))
+        .unwrap_or(14)
+}
+
 /// Apply the admitted request-startup INI subset after compilation. Unknown
 /// CLI definitions remain accepted by the CLI but are not published through
 /// `ini_get()` until their observable runtime contract is implemented.

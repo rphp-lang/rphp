@@ -2953,6 +2953,9 @@ pub struct Compiler {
     /// removes the expression; zero and one retain a runtime guard so
     /// `ini_set("zend.assertions", ...)` can toggle already-compiled code.
     zend_assertions: i8,
+    /// Request precision at the time this source unit begins compilation.
+    /// PHP folds constant float/string comparisons against this snapshot.
+    precision: i32,
     /// Current namespace (None = global namespace)
     current_namespace: Option<String>,
     /// Use aliases: alias → fully qualified name
@@ -3201,6 +3204,7 @@ impl Compiler {
             known_ref_args: HashMap::new(),
             strict_types: false,
             zend_assertions: 1,
+            precision: 14,
             current_namespace: None,
             use_map: HashMap::new(),
             class_import_map: HashMap::new(),
@@ -3268,6 +3272,11 @@ impl Compiler {
 
     pub fn with_zend_assertions(mut self, mode: i8) -> Self {
         self.zend_assertions = mode.clamp(-1, 1);
+        self
+    }
+
+    pub fn with_precision(mut self, precision: i32) -> Self {
+        self.precision = precision;
         self
     }
 
@@ -3401,6 +3410,7 @@ impl Compiler {
         // emitted by a fresh compiler instance.
         child.strict_types = self.strict_types;
         child.zend_assertions = self.zend_assertions;
+        child.precision = self.precision;
         child.current_namespace = self.current_namespace.clone();
         child.use_map = self.use_map.clone();
         child.class_import_map = self.class_import_map.clone();
@@ -3927,6 +3937,7 @@ impl Compiler {
             &mut HashSet::new(),
             &mut self.known_constants,
             file_context,
+            self.precision,
         );
         // Pass 2: retry with the now-larger table (handles forward refs like const B = A)
         Self::prescan_constants_pass(
@@ -3935,6 +3946,7 @@ impl Compiler {
             &mut HashSet::new(),
             &mut self.known_constants,
             file_context,
+            self.precision,
         );
     }
 
@@ -3946,6 +3958,7 @@ impl Compiler {
         declared: &mut HashSet<String>,
         known: &mut HashMap<String, Value>,
         file_context: Option<(&str, &str)>,
+        precision: i32,
     ) {
         for stmt in stmts {
             match stmt {
@@ -3957,8 +3970,12 @@ impl Compiler {
                         };
                         if declared.insert(fqn.clone())
                             && !known.contains_key(&fqn)
-                            && let Ok(val) =
-                                Self::eval_const_expr_with_context(value, known, file_context)
+                            && let Ok(val) = Self::eval_const_expr_with_context(
+                                value,
+                                known,
+                                file_context,
+                                precision,
+                            )
                         {
                             known.insert(fqn, val);
                         }
@@ -3971,10 +3988,18 @@ impl Compiler {
                         declared,
                         known,
                         file_context,
+                        precision,
                     );
                 }
                 Stmt::Block(body) => {
-                    Self::prescan_constants_pass(body, ns, declared, known, file_context);
+                    Self::prescan_constants_pass(
+                        body,
+                        ns,
+                        declared,
+                        known,
+                        file_context,
+                        precision,
+                    );
                 }
                 _ => {}
             }
@@ -5120,7 +5145,7 @@ impl Compiler {
         expr: &Expr,
         known: &HashMap<String, Value>,
     ) -> Result<Value, String> {
-        Self::eval_const_expr_with_context(expr, known, None)
+        Self::eval_const_expr_with_context(expr, known, None, 14)
     }
 
     fn eval_const_expr_in_source(
@@ -5184,6 +5209,7 @@ impl Compiler {
             expr,
             &imported,
             Some((self.source_file.as_str(), self.source_directory.as_str())),
+            self.precision,
         )
     }
 
@@ -5674,6 +5700,7 @@ impl Compiler {
         expr: &Expr,
         known: &HashMap<String, Value>,
         file_context: Option<(&str, &str)>,
+        precision: i32,
     ) -> Result<Value, String> {
         match expr {
             Expr::Integer(n) => Ok(Value::long(*n)),
@@ -5758,7 +5785,8 @@ impl Compiler {
                 class_name,
                 constant,
             } => {
-                let constant = Self::eval_const_expr_with_context(constant, known, file_context)?;
+                let constant =
+                    Self::eval_const_expr_with_context(constant, known, file_context, precision)?;
                 let constant = constant.as_str().ok_or_else(|| {
                     format!(
                         "value of type {} cannot be used as a class constant name",
@@ -5778,14 +5806,16 @@ impl Compiler {
             Expr::DynamicClassConstant {
                 class, constant, ..
             } => {
-                let class = Self::eval_const_expr_with_context(class, known, file_context)?;
+                let class =
+                    Self::eval_const_expr_with_context(class, known, file_context, precision)?;
                 let class = class.as_str().ok_or_else(|| {
                     format!(
                         "value of type {} cannot be used as a class name",
                         class.type_name()
                     )
                 })?;
-                let constant = Self::eval_const_expr_with_context(constant, known, file_context)?;
+                let constant =
+                    Self::eval_const_expr_with_context(constant, known, file_context, precision)?;
                 let constant = constant.as_str().ok_or_else(|| {
                     format!(
                         "value of type {} cannot be used as a class constant name",
@@ -5803,7 +5833,8 @@ impl Compiler {
                     })
             }
             Expr::BinaryOp { op, left, right } => {
-                let left = Self::eval_const_expr_with_context(left, known, file_context)?;
+                let left =
+                    Self::eval_const_expr_with_context(left, known, file_context, precision)?;
                 // Preserve PHP's short-circuit rules even though constant
                 // evaluation itself has no observable side effects.
                 match op {
@@ -5811,14 +5842,17 @@ impl Compiler {
                     BinOp::Or if left.is_truthy() => return Ok(Value::bool(true)),
                     _ => {}
                 }
-                let right = Self::eval_const_expr_with_context(right, known, file_context)?;
-                Self::eval_const_binary(*op, &left, &right)
+                let right =
+                    Self::eval_const_expr_with_context(right, known, file_context, precision)?;
+                Self::eval_const_binary_with_precision(*op, &left, &right, precision)
             }
             Expr::Not(inner) => Ok(Value::bool(
-                !Self::eval_const_expr_with_context(inner, known, file_context)?.is_truthy(),
+                !Self::eval_const_expr_with_context(inner, known, file_context, precision)?
+                    .is_truthy(),
             )),
             Expr::UnaryPlus(inner) => {
-                let value = Self::eval_const_expr_with_context(inner, known, file_context)?;
+                let value =
+                    Self::eval_const_expr_with_context(inner, known, file_context, precision)?;
                 if let Some(number) = value.as_long() {
                     Ok(Value::long(number))
                 } else if let Some(number) = value.as_double() {
@@ -5828,7 +5862,8 @@ impl Compiler {
                 }
             }
             Expr::UnaryMinus(inner) => {
-                let value = Self::eval_const_expr_with_context(inner, known, file_context)?;
+                let value =
+                    Self::eval_const_expr_with_context(inner, known, file_context, precision)?;
                 if let Some(number) = value.as_long() {
                     Ok(number
                         .checked_neg()
@@ -5845,24 +5880,28 @@ impl Compiler {
                 then_expr,
                 else_expr,
             } => {
-                if Self::eval_const_expr_with_context(condition, known, file_context)?.is_truthy() {
-                    Self::eval_const_expr_with_context(then_expr, known, file_context)
+                if Self::eval_const_expr_with_context(condition, known, file_context, precision)?
+                    .is_truthy()
+                {
+                    Self::eval_const_expr_with_context(then_expr, known, file_context, precision)
                 } else {
-                    Self::eval_const_expr_with_context(else_expr, known, file_context)
+                    Self::eval_const_expr_with_context(else_expr, known, file_context, precision)
                 }
             }
             Expr::Elvis { left, right } => {
-                let left = Self::eval_const_expr_with_context(left, known, file_context)?;
+                let left =
+                    Self::eval_const_expr_with_context(left, known, file_context, precision)?;
                 if left.is_truthy() {
                     Ok(left)
                 } else {
-                    Self::eval_const_expr_with_context(right, known, file_context)
+                    Self::eval_const_expr_with_context(right, known, file_context, precision)
                 }
             }
             Expr::NullCoalesce { left, right } => {
-                let left = Self::eval_const_expr_with_context(left, known, file_context)?;
+                let left =
+                    Self::eval_const_expr_with_context(left, known, file_context, precision)?;
                 if left.value_type() == ValueType::Null {
-                    Self::eval_const_expr_with_context(right, known, file_context)
+                    Self::eval_const_expr_with_context(right, known, file_context, precision)
                 } else {
                     Ok(left)
                 }
@@ -5885,7 +5924,12 @@ impl Compiler {
             Expr::ArrayLiteral(elements) => {
                 let mut arr = crate::value::PhpArray::new();
                 for elem in elements {
-                    let val = Self::eval_const_expr_with_context(&elem.value, known, file_context)?;
+                    let val = Self::eval_const_expr_with_context(
+                        &elem.value,
+                        known,
+                        file_context,
+                        precision,
+                    )?;
                     if elem.unpack {
                         let source = val.as_array().ok_or_else(|| {
                             "Only arrays and Traversables can be unpacked".to_string()
@@ -5908,8 +5952,12 @@ impl Compiler {
                         continue;
                     }
                     if let Some(key_expr) = &elem.key {
-                        let key =
-                            Self::eval_const_expr_with_context(key_expr, known, file_context)?;
+                        let key = Self::eval_const_expr_with_context(
+                            key_expr,
+                            known,
+                            file_context,
+                            precision,
+                        )?;
                         if let Some(n) = key.as_long() {
                             arr.set_int(n, val);
                         } else if let Some(s) = key.as_str() {
@@ -5926,8 +5974,10 @@ impl Compiler {
                 Ok(Value::array(arr))
             }
             Expr::ArrayAccess { array, index, .. } => {
-                let array = Self::eval_const_expr_with_context(array, known, file_context)?;
-                let index = Self::eval_const_expr_with_context(index, known, file_context)?;
+                let array =
+                    Self::eval_const_expr_with_context(array, known, file_context, precision)?;
+                let index =
+                    Self::eval_const_expr_with_context(index, known, file_context, precision)?;
                 let array = array
                     .as_array()
                     .ok_or_else(|| "constant expression cannot index a non-array".to_string())?;
@@ -5953,6 +6003,15 @@ impl Compiler {
         op: BinOp,
         left: &Value,
         right: &Value,
+    ) -> Result<Value, String> {
+        Self::eval_const_binary_with_precision(op, left, right, 14)
+    }
+
+    fn eval_const_binary_with_precision(
+        op: BinOp,
+        left: &Value,
+        right: &Value,
+        precision: i32,
     ) -> Result<Value, String> {
         let integer_pair = || left.to_arithmetic_long().zip(right.to_arithmetic_long());
         let numeric_pair = || {
@@ -6051,8 +6110,9 @@ impl Compiler {
                 }))
             }
             BinOp::Equal | BinOp::NotEqual => {
-                let equal = crate::vm::execute::values_equal_checked(left, right)
-                    .map_err(|()| "recursive comparison in constant expression".to_string())?;
+                let equal =
+                    crate::vm::execute::values_equal_checked_with_precision(left, right, precision)
+                        .map_err(|()| "recursive comparison in constant expression".to_string())?;
                 Ok(Value::bool(if op == BinOp::Equal { equal } else { !equal }))
             }
             BinOp::Less
@@ -6060,8 +6120,10 @@ impl Compiler {
             | BinOp::Greater
             | BinOp::GreaterEqual
             | BinOp::Spaceship => {
-                let comparison = crate::vm::execute::values_compare_checked(left, right)
-                    .map_err(|()| "recursive comparison in constant expression".to_string())?;
+                let comparison = crate::vm::execute::values_compare_checked_with_precision(
+                    left, right, precision,
+                )
+                .map_err(|()| "recursive comparison in constant expression".to_string())?;
                 match op {
                     BinOp::Less => Ok(Value::bool(comparison < 0)),
                     BinOp::LessEqual => Ok(Value::bool(comparison <= 0)),
@@ -6122,6 +6184,20 @@ impl Compiler {
                     left.wrapping_shr(shift)
                 }))
             }
+        }
+    }
+
+    fn scalar_comparison_uses_precision(left: &Value, right: &Value) -> bool {
+        let left = left.dereferenced();
+        let right = right.dereferenced();
+        match (left.value_type(), right.value_type()) {
+            (ValueType::Double, ValueType::String) => right.as_str().is_some_and(|value| {
+                crate::vm::execute::php_numeric_string_to_float(value).is_none()
+            }),
+            (ValueType::String, ValueType::Double) => left.as_str().is_some_and(|value| {
+                crate::vm::execute::php_numeric_string_to_float(value).is_none()
+            }),
+            _ => false,
         }
     }
 
@@ -7821,6 +7897,32 @@ impl Compiler {
                 (result, OpType::Tmp)
             }
             Expr::BinaryOp { op, left, right } => {
+                if matches!(
+                    op,
+                    BinOp::Equal
+                        | BinOp::NotEqual
+                        | BinOp::Less
+                        | BinOp::LessEqual
+                        | BinOp::Greater
+                        | BinOp::GreaterEqual
+                        | BinOp::Spaceship
+                ) && deferred_constant_expression_is_supported(left)
+                    && deferred_constant_expression_is_supported(right)
+                    && let (Ok(left_value), Ok(right_value)) = (
+                        self.eval_const_expr_in_source(left, &self.known_constants),
+                        self.eval_const_expr_in_source(right, &self.known_constants),
+                    )
+                    && Self::scalar_comparison_uses_precision(&left_value, &right_value)
+                    && let Ok(value) = Self::eval_const_binary_with_precision(
+                        *op,
+                        &left_value,
+                        &right_value,
+                        self.precision,
+                    )
+                {
+                    let constant = self.add_literal(value);
+                    return (constant, OpType::Const);
+                }
                 if matches!(op, BinOp::Concat) {
                     return self.compile_concat_chain(left, right);
                 }
