@@ -8,6 +8,75 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `618532c3`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,992 pass, 1,307 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 75.335% and the whole-corpus rate is 71.298%; 4,789 of
+5,299 attempted cases reach runtime (90.376%). Relative to exact integration
+baseline `67e45bcd`, whose executable state is candidate `4b3b69e4`, the
+pass-set delta is +4/-0.
+
+The exact additions are `Zend/tests/concat/bug32833.phpt`,
+`Zend/tests/falsetoarray.phpt`, `Zend/tests/falsetoarray_002.phpt` and
+`Zend/tests/fe_fetch_op2_live_range.phpt`. The first and fourth move from parse
+failure to pass, the false-autovivification pair move from parse/runtime
+failure to pass, and every previous pass remains a pass. Four remaining
+failures advance past the newly admitted append syntax or false conversion:
+`ArrayAccess/bug69955.phpt` reaches its independent ArrayAccess compound-append
+output mismatch, `assign_dim_obj_null_return.phpt` reaches later max-key and
+catchable-scalar assignment behavior, `bug63882_2.phpt` reaches an output
+mismatch rooted in recursive serialization returning false, and
+`bug70182.phpt` reaches the existing string-append diagnostic mismatch. No
+other status, category or stage moves. Two sequential final candidate runs
+have byte-identical manifests and summaries. Their SHA-256 values are
+`92977b7f9ae8e3d51db645fdc1a8a7e2717cd9ec8879554186e201e1c4482068`
+and `43d02056848ad7e6f5f638f3032659189215412d82f8c76957256a4a4bc03385`.
+
+False used as an indexed, appended, nested, referenced, property, static-
+property, destructuring, foreach or compound write destination now publishes
+an empty array and emits PHP 8.5's
+`Automatic conversion of false to array is deprecated` through the ordinary
+error-handler pipeline. After a reentrant handler returns, the VM reacquires
+the destination and compares array identity plus its pristine state; a handler
+replacement wins and the compiler-provided statement boundary prevents later
+dimension evaluation or stale synthetic writeback. Mutable nested paths now
+interleave each key evaluation with its container fetch, while `unset()` keeps
+PHP's deprecation without converting false. Terminal empty dimensions are
+also valid compound-assignment and by-value foreach destinations. Null/undef
+autovivification and true/integer scalar errors retain their existing paths.
+
+One original four-test CLI suite covers direct, alias, nested, instance/static
+property, destructuring, foreach, compound, append-reference and unset forms;
+whole-target and child reentrant clobbering; unrelated handler mutation; key,
+value and nested foreach append targets; and true/integer negative controls.
+The five-case focused upstream slice, all five Cargo feature configurations,
+all-features/all-targets, formatting, PHPT-runner and unsafe-policy self-tests,
+the exact unsafe ratchet, Composer S0, all four Symfony S1 gates and PHP 8.5.9
+warmed-kernel S2 and cold-build S3 pass. The production inventory is 1,618
+unsafe blocks against the 1,623 ceiling, 289 unsafe functions and 330 SAFETY
+annotations.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison with
+the performance governor, four warmups and no excluded sample keeps all
+relevant controls below the +5% gate. Batches of 100 empty requests measure
+0.223659 seconds for the exact baseline and 0.223236 seconds for the candidate,
+with candidate/baseline ratios of 0.998111 independently and 0.996750 by paired
+medians. Three million ordinary indexed-plus-append writes retain output
+`8787931422` and measure 0.220782 versus 0.218214 seconds, ratios 0.988370 and
+0.983890. One and a half million nested writes retain output
+`750000:1499999` and measure 0.569146 versus 0.547530 seconds, ratios 0.962020
+and 0.961226. This is evidence of no regression, not an optimization claim.
+The exact baseline and candidate binary SHA-256 values are
+`732a53c419def118f661aa11cf9425c3aa1481dfe68069786d36fd23c8bf1f22`
+and `928392628b498c69e7cb2378e844871d0ba89e3bdd7f0dcad33517be7aa7b56f`.
+
+This checkpoint does not claim the pending terminal write when a conversion
+handler throws, effectful terminal-key ordering on a direct false root, typed
+boolean-property auto-initialization diagnostics, by-reference foreach append
+teardown, ArrayAccess append read-modify-write, string append diagnostics,
+recursive serialization fidelity or broader PHP compatibility.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `4b3b69e4`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,988 pass, 1,311 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The

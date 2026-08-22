@@ -1243,6 +1243,29 @@ destructuring writable-value diagnostics, nested temporary by-reference
 foreach sources, false-to-array conversion and string append diagnostics
 remain independent checkpoints.
 
+The `false-array-autovivification` checkpoint reaches 3,992 exact passes with
+1,307 failures, 115 skips, no XFAIL, 185 unsupported cases, zero timeouts and
+zero crashes. False indexed, append, reference, nested, property,
+destructuring, foreach and compound write destinations publish an empty array,
+emit PHP 8.5's deprecation through the normal reentrant handler pipeline and
+abandon stale nested writeback when the handler replaces the converted
+location. Terminal `[]` is also admitted for compound assignment and by-value
+foreach targets; `unset(false[$key])` deprecates without conversion. The exact
+full-corpus delta from `67e45bcd` is +4/-0:
+`concat/bug32833.phpt`, both previously failing `falsetoarray` cases and
+`fe_fetch_op2_live_range.phpt` become exact with every prior pass preserved.
+Four remaining failures move to documented independent ArrayAccess, max-key/
+catchable assignment, recursive serialization and string-append boundaries;
+no other category moves, and two final manifests/summaries are byte-identical.
+All five feature configurations, all-target, formatting, unsafe, Composer S0,
+four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. CPU-pinned 32-pair release
+controls put paired median candidate/baseline ratios at 0.996750 for 100 empty
+requests, 0.983890 for three million indexed-plus-append writes and 0.961226
+for one and a half million nested writes, below the +5% gate. Throwing-handler
+commit timing, direct effectful terminal keys, typed boolean properties,
+by-reference foreach teardown and the four later failure boundaries remain
+separate checkpoints.
+
 ## Measurement system
 
 ### Contract baseline
