@@ -174,6 +174,7 @@ macro_rules! ret {
     }};
 }
 
+mod array_assoc_sets;
 mod array_traversal;
 mod builtin_classes;
 mod fiber;
@@ -210,6 +211,85 @@ pub(super) fn write_return_value(rv: *mut Value, value: Value) {
     // SAFETY: the VM supplies either null for a discarded result or one live,
     // uninitialized return slot owned by the current internal call.
     unsafe { rv.write(value) };
+}
+
+/// Render the ordinary PHP callable error tail shared by fixed and variadic
+/// internal functions. Legacy relative-scope callbacks take their separate
+/// checked-resolution path before this helper is reached.
+fn ordinary_callback_invalid_reason(callback: &Value, eg: &ExecutorGlobals) -> String {
+    let callback = callback.dereferenced();
+    if let Some(name) = callback.as_str() {
+        let Some((class, method)) = name.rsplit_once("::") else {
+            return format!("function \"{name}\" not found or invalid function name");
+        };
+        return callback_class_method_invalid_reason(
+            eg,
+            class.trim_start_matches('\\'),
+            method,
+            false,
+        );
+    }
+
+    let Some(array) = callback.as_array() else {
+        return "no array or string given".to_string();
+    };
+    if array.len() != 2 {
+        return "array callback must have exactly two members".to_string();
+    }
+    let Some(first) = array.get_value_at(0).map(Value::dereferenced) else {
+        return "first array member is not a valid class name or object".to_string();
+    };
+    let Some(method) = array
+        .get_value_at(1)
+        .map(Value::dereferenced)
+        .and_then(Value::as_str)
+    else {
+        return "second array member is not a valid method".to_string();
+    };
+    if let Some(class) = first.as_str() {
+        return callback_class_method_invalid_reason(
+            eg,
+            class.trim_start_matches('\\'),
+            method,
+            false,
+        );
+    }
+    if let Some(object) = first.as_object() {
+        return callback_class_method_invalid_reason(eg, &object.class_name, method, true);
+    }
+    if first.value_type() == ValueType::Closure {
+        return callback_class_method_invalid_reason(eg, "Closure", method, true);
+    }
+    "first array member is not a valid class name or object".to_string()
+}
+
+fn callback_class_method_invalid_reason(
+    eg: &ExecutorGlobals,
+    class: &str,
+    method: &str,
+    object_form: bool,
+) -> String {
+    let Some(class_definition) = find_class_case_insensitive(eg, class) else {
+        return format!("class \"{class}\" not found");
+    };
+    let canonical = class_definition.name.clone();
+    let Some((visibility, is_static, _, declaring)) =
+        find_method_in_class_hierarchy(eg, &canonical, method)
+    else {
+        return format!("class {canonical} does not have a method \"{method}\"");
+    };
+    if visibility != Visibility::Public {
+        let visibility = match visibility {
+            Visibility::Private => "private",
+            Visibility::Protected => "protected",
+            Visibility::Public => unreachable!(),
+        };
+        return format!("cannot access {visibility} method {declaring}::{method}()");
+    }
+    if !object_form && !is_static {
+        return format!("non-static method {declaring}::{method}() cannot be called statically");
+    }
+    "no array or string given".to_string()
 }
 
 pub(crate) mod autoload;

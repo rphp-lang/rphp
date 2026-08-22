@@ -6,9 +6,8 @@
 //! value/key pairs in insertion order. Short-circuiting is observable through
 //! callback side effects and exceptions, so it stays in this baseline path.
 
-use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
-use crate::value::{ArrayKey, PhpArray, Value, ValueType};
+use crate::value::{ArrayKey, PhpArray, Value};
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 
@@ -46,67 +45,6 @@ fn array_argument(
     None
 }
 
-fn ordinary_callback_invalid_reason(callback: &Value, eg: &ExecutorGlobals) -> String {
-    if let Some(name) = callback.as_str() {
-        let Some((class, method)) = name.rsplit_once("::") else {
-            return format!("function \"{name}\" not found or invalid function name");
-        };
-        return class_method_invalid_reason(eg, class.trim_start_matches('\\'), method, false);
-    }
-
-    let Some(array) = callback.as_array() else {
-        return "no array or string given".to_string();
-    };
-    if array.len() != 2 {
-        return "array callback must have exactly two members".to_string();
-    }
-    let Some(first) = array.get_value_at(0) else {
-        return "first array member is not a valid class name or object".to_string();
-    };
-    let Some(method) = array.get_value_at(1).and_then(Value::as_str) else {
-        return "second array member is not a valid method".to_string();
-    };
-    if let Some(class) = first.as_str() {
-        return class_method_invalid_reason(eg, class.trim_start_matches('\\'), method, false);
-    }
-    if let Some(object) = first.as_object() {
-        return class_method_invalid_reason(eg, &object.class_name, method, true);
-    }
-    if first.value_type() == ValueType::Closure {
-        return class_method_invalid_reason(eg, "Closure", method, true);
-    }
-    "first array member is not a valid class name or object".to_string()
-}
-
-fn class_method_invalid_reason(
-    eg: &ExecutorGlobals,
-    class: &str,
-    method: &str,
-    object_form: bool,
-) -> String {
-    let Some(class_definition) = super::find_class_case_insensitive(eg, class) else {
-        return format!("class \"{class}\" not found");
-    };
-    let canonical = class_definition.name.clone();
-    let Some((visibility, is_static, _, declaring)) =
-        super::find_method_in_class_hierarchy(eg, &canonical, method)
-    else {
-        return format!("class {canonical} does not have a method \"{method}\"");
-    };
-    if visibility != Visibility::Public {
-        let visibility = match visibility {
-            Visibility::Private => "private",
-            Visibility::Protected => "protected",
-            Visibility::Public => unreachable!(),
-        };
-        return format!("cannot access {visibility} method {declaring}::{method}()");
-    }
-    if !object_form && !is_static {
-        return format!("non-static method {declaring}::{method}() cannot be called statically");
-    }
-    "no array or string given".to_string()
-}
-
 fn traversal_entries(array: &PhpArray) -> Vec<(ArrayKey, Value)> {
     array
         .iter()
@@ -128,7 +66,7 @@ fn traverse(
     let Some(resolved) = super::resolve_callback_at_callsite_checked(&callback, eg, execute_data)?
     else {
         if eg.exception.is_none() {
-            let reason = ordinary_callback_invalid_reason(&callback, eg);
+            let reason = super::ordinary_callback_invalid_reason(&callback, eg);
             eg.exception = Some(crate::value::make_error_value(
                 "TypeError",
                 &format!(

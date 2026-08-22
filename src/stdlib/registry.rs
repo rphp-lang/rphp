@@ -4,6 +4,7 @@
 //! their deterministic request-startup registration order, signatures and
 //! reference metadata.
 
+use super::array_assoc_sets::*;
 use super::array_traversal::*;
 use super::filesystem::*;
 use super::process::*;
@@ -1184,7 +1185,43 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg_ref!("uasort", fn_uasort, 2, 2, 0b1, "array", "callback");
     reg_ref!("uksort", fn_uksort, 2, 2, 0b1, "array", "callback");
     reg_var!("array_diff", fn_array_diff, 1, "array", "arrays");
+    reg_var!(
+        "array_diff_assoc",
+        fn_array_diff_assoc,
+        1,
+        "array",
+        "arrays"
+    );
+    reg_var!(
+        "array_diff_uassoc",
+        fn_array_diff_uassoc,
+        1,
+        "array",
+        "rest"
+    );
+    reg_var!("array_diff_ukey", fn_array_diff_ukey, 1, "array", "rest");
     reg_var!("array_diff_key", fn_array_diff_key, 2, "array", "arrays");
+    reg_var!(
+        "array_intersect_assoc",
+        fn_array_intersect_assoc,
+        1,
+        "array",
+        "arrays"
+    );
+    reg_var!(
+        "array_intersect_uassoc",
+        fn_array_intersect_uassoc,
+        1,
+        "array",
+        "rest"
+    );
+    reg_var!(
+        "array_intersect_ukey",
+        fn_array_intersect_ukey,
+        1,
+        "array",
+        "rest"
+    );
     reg_var!(
         "array_intersect_key",
         fn_array_intersect_key,

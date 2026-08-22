@@ -1619,6 +1619,181 @@ fn array_key_set_operations_accept_variadic_comparison_arrays() {
 }
 
 #[test]
+fn array_assoc_set_operations_match_pairs_across_all_comparison_arrays() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$shared = "live";
+$source = ["keep" => 1, "same" => "2", 4 => &$shared, "drop" => 3];
+$diff = array_diff_assoc($source, ["same" => 2], ["drop" => "3"]);
+var_dump($diff);
+$diff[4] = "changed";
+echo $shared, "\n";
+
+$intersect = array_intersect_assoc(
+    ["a" => 1, "b" => "2", "c" => 3],
+    ["a" => "1", "b" => 2, "c" => 9],
+    ["a" => 1, "b" => "2"]
+);
+var_dump($intersect);
+var_export(array_intersect_uassoc(["A" => 1, "b" => 2], ["a" => "1", "B" => 9], "strcasecmp"));
+echo "\n";
+var_export(array_diff_ukey(["A" => 1, "b" => 2], ["a" => 9], "strcasecmp"));
+echo "\n";
+"#,
+        ),
+        concat!(
+            "array(2) {\n",
+            "  [\"keep\"]=>\n",
+            "  int(1)\n",
+            "  [4]=>\n",
+            "  &string(4) \"live\"\n",
+            "}\n",
+            "changed\n",
+            "array(2) {\n",
+            "  [\"a\"]=>\n",
+            "  int(1)\n",
+            "  [\"b\"]=>\n",
+            "  string(1) \"2\"\n",
+            "}\n",
+            "array (\n",
+            "  'A' => 1,\n",
+            ")\n",
+            "array (\n",
+            "  'b' => 2,\n",
+            ")\n",
+        )
+    );
+}
+
+#[test]
+fn array_user_key_sets_preserve_php_85_comparator_order_and_short_circuiting() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$trace = [];
+$compare = function ($left, $right) use (&$trace) {
+    $trace[] = $left . ":" . $right;
+    return strcmp((string) $left, (string) $right);
+};
+var_export(array_diff_uassoc(
+    ["b" => 2, "a" => 1, 4 => "x"],
+    ["a" => 1, "b" => 9, 4 => "x"],
+    $compare
+));
+echo "|", json_encode($trace), "\n";
+
+$trace = [];
+var_export(array_intersect_ukey(
+    ["b" => 2, "a" => 1, 4 => "x"],
+    ["a" => 9, "b" => 8, 4 => 0],
+    $compare
+));
+echo "|", json_encode($trace), "\n";
+
+$trace = [];
+var_export(array_diff_ukey(["d" => 1, "c" => 2, "b" => 3, "a" => 4], $compare));
+echo "|", json_encode($trace), "\n";
+"#,
+        ),
+        concat!(
+            "array (\n  'b' => 2,\n)",
+            "|[\"b:a\",\"4:a\",\"a:b\",\"b:4\",\"a:4\",\"4:4\",\"a:4\",\"a:a\",\"b:4\",\"b:a\",\"b:b\"]\n",
+            "array (\n  'b' => 2,\n  'a' => 1,\n  4 => 'x',\n)",
+            "|[\"b:a\",\"4:a\",\"a:b\",\"b:4\",\"a:4\",\"4:4\",\"a:a\",\"b:b\"]\n",
+            "array (\n  'd' => 1,\n  'c' => 2,\n  'b' => 3,\n  'a' => 4,\n)",
+            "|[\"d:c\",\"b:c\",\"d:a\",\"c:a\",\"b:a\"]\n",
+        )
+    );
+}
+
+#[test]
+fn array_user_key_sets_snapshot_structure_keep_live_cells_and_validate_callback_first() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$shared = "old";
+$left = ["k" => &$shared];
+$right = ["k" => "new"];
+$calls = 0;
+$result = array_diff_uassoc($left, $right, function ($a, $b) use (&$shared, &$left, &$right, &$calls) {
+    $calls++;
+    $shared = "new";
+    $left["later"] = 1;
+    $right = [];
+    return 0;
+});
+var_dump($result);
+echo "$calls:$shared:", count($left), ":", count($right), "\n";
+
+foreach ([[42, [], "missing_callback"], [[1], 42, "strcasecmp"]] as $args) {
+    try {
+        array_diff_uassoc(...$args);
+    } catch (TypeError $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+try {
+    array_intersect_ukey(["b" => 1, "a" => 2], ["a" => 3], function ($a, $b) {
+        echo "$a:$b\n";
+        throw new Exception("stop");
+    });
+} catch (Exception $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+        ),
+        concat!(
+            "array(0) {\n}\n",
+            "1:new:2:0\n",
+            "array_diff_uassoc(): Argument #3 must be a valid callback, function \"missing_callback\" not found or invalid function name\n",
+            "array_diff_uassoc(): Argument #2 must be of type array, int given\n",
+            "b:a\n",
+            "stop\n",
+        )
+    );
+}
+
+#[test]
+fn array_assoc_set_signatures_match_php_85_reflection_and_runtime_arity() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach ([
+    "array_diff_assoc",
+    "array_diff_uassoc",
+    "array_diff_ukey",
+    "array_intersect_assoc",
+    "array_intersect_uassoc",
+    "array_intersect_ukey",
+] as $function) {
+    $reflection = new ReflectionFunction($function);
+    echo $function, ":", $reflection->getNumberOfRequiredParameters(), ":", $reflection->getNumberOfParameters();
+    foreach ($reflection->getParameters() as $parameter) {
+        echo ":$", $parameter->getName(), $parameter->isVariadic() ? "..." : "";
+    }
+    echo "\n";
+}
+try {
+    array_diff_uassoc([1]);
+} catch (ArgumentCountError $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+        ),
+        concat!(
+            "array_diff_assoc:1:2:$array:$arrays...\n",
+            "array_diff_uassoc:1:2:$array:$rest...\n",
+            "array_diff_ukey:1:2:$array:$rest...\n",
+            "array_intersect_assoc:1:2:$array:$arrays...\n",
+            "array_intersect_uassoc:1:2:$array:$rest...\n",
+            "array_intersect_ukey:1:2:$array:$rest...\n",
+            "array_diff_uassoc() expects at least 2 arguments, 1 given\n",
+        )
+    );
+}
+
+#[test]
 fn array_is_list_checks_ordered_keys_without_requiring_packed_storage() {
     assert_eq!(
         run_php(
