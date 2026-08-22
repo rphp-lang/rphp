@@ -8,6 +8,72 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `68f2eab7`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 4,077 pass, 1,222 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 76.939% and the whole-corpus rate is 72.817%; 4,805 of
+5,299 attempted cases reach runtime (90.677%). Relative to exact integration
+baseline `bc9bc620`, the pass-set delta is +1/-0.
+
+The exact addition is `Zend/tests/gh12457.phpt`, which moves from a missing-
+function runtime failure to pass. Every previous pass is preserved and there
+is no other status or category movement. Two sequential final candidate runs
+have byte-identical manifests and summaries. Their SHA-256 values are
+`9d40b257aa7d3e3138d315bcc05e74b47a7d9f1a663e62d3c94490048866566c`
+and `4fc6b79a68521b403d7216273dfe1cbaae40e5a45191e9e5f378258c183d2592`.
+
+`stristr()` now returns the original-cased suffix beginning at the first
+case-insensitive match, or the prefix before that match when `before_needle`
+is true. Search is binary-safe: an empty needle matches byte zero, embedded
+NULs are preserved, ASCII bytes fold without locale dependence and non-ASCII
+bytes compare by identity. A missing needle returns false.
+
+The ordinary weak boundary converts scalar and Stringable haystack/needle
+values with request precision, null deprecations and NAN warnings; scalar
+`__toString()` returns follow weak PHP string conversion while invalid returns
+retain their concrete returned type. The optional bool applies PHP truthiness,
+null deprecation and NAN diagnostics. Arrays, resources, closures and
+non-stringable objects receive parameter-specific TypeErrors, strict direct
+calls reject non-exact arguments, and exceptions from diagnostics or
+`__toString()` stop later conversion.
+
+One original E2E regression is byte-identical to PHP 8.5.9. It covers ASCII
+and non-ASCII bytes, NUL and empty needles, before/after results, weak and
+strict arguments, Stringable side effects and invalid returns, diagnostics,
+throwing handlers and concrete TypeErrors. The unmodified Zend regression and
+three independent adjacent `ext/standard` `stristr` PHPTs pass. The fourth
+adjacent PHPT produces the expected first five `stristr()` results before
+reaching its independent missing `md5()` dependency. All five Cargo feature
+configurations, all-feature/all-target, formatting, PHPT-runner and unsafe-
+policy self-tests, the exact unsafe ratchet, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The
+production inventory remains 1,619 unsafe blocks, 289 unsafe functions and
+331 SAFETY annotations. No compiler, opcode, value/string layout, dependency,
+production-unsafe or existing string-handler change is made.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used performance-governor CPU 2, four warmups and no excluded
+samples. Batches of 100 empty `-r` requests measured baseline/candidate p10/
+median/p90 0.149653/0.151142/0.152844 and
+0.149394/0.151945/0.152785 seconds, +0.531% independently and +0.327% paired.
+One request executing two million existing `strstr()` calls measured
+0.341949/0.345621/0.354609 and 0.346737/0.350484/0.368391 seconds, +1.407%
+independently and +1.392% paired, with exact checksum `14000000`. Both median
+controls remain below the +5% gate; paired p10/p90 changes are
+-0.653%/+0.889% and -0.613%/+5.202%. As an absolute changed-path sanity check,
+fifteen candidate runs of two million `stristr()` calls measured p10/median/
+p90 0.399429/0.403481/0.433328 seconds with the same checksum; no A/B claim is
+possible because the baseline lacks the function. The baseline and candidate
+binary SHA-256 values are
+`05e2415920cdb8c8851568dc655bcfdf570d4bd75a207ea8f4d4b3f5657c26ff`
+and `06adec3dab1bf55bc8fdbef5fc34787e67b2e68f869ca2e3317bc1805d84da72`.
+
+This checkpoint does not claim Unicode case folding, `md5()`, corrections to
+the existing `strstr()`/`stripos()` surfaces, strict-caller propagation through
+source unpack or other detached internal-call paths, the complete string suite
+or broader PHP compatibility.
+
+The preceding `spl-object-hash-contract` checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `dc4d6449`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 4,076 pass, 1,223 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The

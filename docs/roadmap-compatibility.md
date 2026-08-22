@@ -1498,6 +1498,26 @@ calls, below the +5% gate. Cross-request uniqueness, mandated handle-reuse
 timing, the complete SPL object suite and broader compatibility remain
 separate checkpoints.
 
+The `stristr-contract` checkpoint reaches 4,077 exact passes with 1,222
+failures, 115 skips, no XFAIL, 185 unsupported cases and zero timeouts or
+crashes. `stristr()` implements PHP 8.5 binary-safe first-match suffix/prefix
+selection, empty and NUL needles, locale-independent ASCII folding,
+non-ASCII byte identity, scalar/Stringable conversion, null/NAN diagnostics,
+throwing-handler order and parameter-specific weak/strict TypeErrors. The
+exact full-corpus delta from `bc9bc620` is +1/-0: `gh12457.phpt` becomes exact
+with every prior pass preserved and no other status or category movement; two
+final manifests and summaries are byte-identical. Three adjacent unmodified
+`ext/standard` PHPTs also pass, while the fourth validates its leading
+`stristr()` results before reaching independent missing `md5()`. All five
+feature configurations, all-feature/all-target, formatting, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. No unsafe,
+compiler, opcode, layout, dependency or existing handler change is made.
+CPU-pinned 32-pair release controls put independent/paired median changes at
++0.531%/+0.327% for 100 empty requests and +1.407%/+1.392% for two million
+existing `strstr()` calls, below the +5% gate. Unicode folding, `md5()`, strict
+metadata propagation through detached internal calls, the complete string
+suite and broader compatibility remain separate checkpoints.
+
 ## Measurement system
 
 ### Contract baseline
