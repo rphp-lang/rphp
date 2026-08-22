@@ -233,9 +233,10 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("random_bytes", fn_random_bytes, 1, 1, "length");
     reg!("bin2hex", fn_bin2hex, 1, 1, "string");
     reg!("hex2bin", fn_hex2bin, 1, 1, "string");
-    // S3 exposes xxh128, including the raw-output path used by Symfony's
-    // deterministic service identifiers. The wider algorithm catalogue stays
-    // explicit compatibility work rather than returning invented digests.
+    reg!("md5", fn_md5, 2, 1, "string", "binary");
+    // S3 exposes md5, xxh128 and crc32, including binary output. The wider
+    // algorithm catalogue stays explicit compatibility work rather than
+    // returning invented digests.
     reg!("hash", fn_hash, 3, 2, "algo", "data", "binary");
     reg!("hash_init", fn_hash_init, 1, 1, "algo");
     reg!("hash_update", fn_hash_update, 2, 2, "context", "data");

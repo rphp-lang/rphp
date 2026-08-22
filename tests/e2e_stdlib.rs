@@ -46,6 +46,119 @@ foreach ([
 }
 
 #[test]
+fn md5_matches_php_85_vectors_binary_output_and_typed_call_boundaries() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+echo md5(''), "\n";
+echo md5('abc'), "\n";
+echo md5("a\0b"), "\n";
+echo bin2hex(md5("a\0b", true)), "\n";
+echo hash('md5', 'abc'), "\n";
+echo bin2hex(hash('MD5', "a\0b", true)), "\n";
+"#,
+        ),
+        concat!(
+            "d41d8cd98f00b204e9800998ecf8427e\n",
+            "900150983cd24fb0d6963f7d28e17f72\n",
+            "70350f6027bce3713f6b76473084309b\n",
+            "70350f6027bce3713f6b76473084309b\n",
+            "900150983cd24fb0d6963f7d28e17f72\n",
+            "70350f6027bce3713f6b76473084309b\n",
+        )
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($level, $message) {
+    echo "diag:$level:$message\n";
+    return true;
+});
+class Md5Text {
+    public function __toString(): string { echo "toString\n"; return 'abc'; }
+}
+class Md5ScalarText {
+    public function __toString() { return 123; }
+}
+class Md5BadText {
+    public function __toString() { return []; }
+}
+
+echo md5(123), "\n";
+echo md5(false), "\n";
+echo md5(null), "\n";
+echo md5(NAN), "\n";
+echo md5(new Md5Text), "\n";
+echo md5(new Md5ScalarText), "\n";
+try { md5(new Md5BadText); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+echo md5('abc', null), "\n";
+echo bin2hex(md5('abc', NAN)), "\n";
+
+$resource = fopen('php://memory', 'r+');
+foreach ([[], $resource, new stdClass, static fn() => null] as $value) {
+    try { md5($value); }
+    catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+foreach ([[], new stdClass] as $value) {
+    try { md5('abc', $value); }
+    catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+
+set_error_handler(function ($level, $message) {
+    throw new RuntimeException("stop:$message");
+});
+try { md5(null); }
+catch (RuntimeException $error) { echo $error->getMessage(), "\n"; }
+"#,
+        ),
+        concat!(
+            "202cb962ac59075b964b07152d234b70\n",
+            "d41d8cd98f00b204e9800998ecf8427e\n",
+            "diag:8192:md5(): Passing null to parameter #1 ($string) of type string is deprecated\n",
+            "d41d8cd98f00b204e9800998ecf8427e\n",
+            "diag:2:unexpected NAN value was coerced to string\n",
+            "f3e78f3265a769c4ce90390e0f40be55\n",
+            "toString\n",
+            "900150983cd24fb0d6963f7d28e17f72\n",
+            "202cb962ac59075b964b07152d234b70\n",
+            "Md5BadText::__toString(): Return value must be of type string, array returned\n",
+            "diag:8192:md5(): Passing null to parameter #2 ($binary) of type bool is deprecated\n",
+            "900150983cd24fb0d6963f7d28e17f72\n",
+            "diag:2:unexpected NAN value was coerced to bool\n",
+            "900150983cd24fb0d6963f7d28e17f72\n",
+            "md5(): Argument #1 ($string) must be of type string, array given\n",
+            "md5(): Argument #1 ($string) must be of type string, resource given\n",
+            "md5(): Argument #1 ($string) must be of type string, stdClass given\n",
+            "md5(): Argument #1 ($string) must be of type string, Closure given\n",
+            "md5(): Argument #2 ($binary) must be of type bool, array given\n",
+            "md5(): Argument #2 ($binary) must be of type bool, stdClass given\n",
+            "stop:md5(): Passing null to parameter #1 ($string) of type string is deprecated\n",
+        )
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php declare(strict_types=1);
+echo md5('abc'), "\n";
+echo bin2hex(md5('abc', true)), "\n";
+try { md5(123); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { md5('abc', 1); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+"#,
+        ),
+        concat!(
+            "900150983cd24fb0d6963f7d28e17f72\n",
+            "900150983cd24fb0d6963f7d28e17f72\n",
+            "md5(): Argument #1 ($string) must be of type string, int given\n",
+            "md5(): Argument #2 ($binary) must be of type bool, int given\n",
+        )
+    );
+}
+
+#[test]
 fn stristr_matches_php_85_ascii_bytes_and_typed_call_boundaries() {
     assert_eq!(
         run_php(

@@ -728,6 +728,16 @@ fn crc32_hash_matches_php_byte_order_and_binary_output() {
 }
 
 #[test]
+fn md5_hash_matches_one_shot_function_and_raw_output() {
+    assert_eq!(
+        run_php(
+            "<?php echo hash('md5', ''), '|', hash('MD5', 'Symfony'), '|', base64_encode(hash('md5', 'Symfony', true)), '|', md5('Symfony');"
+        ),
+        "d41d8cd98f00b204e9800998ecf8427e|878d66f98b73e26b50c1392e7ee12ad9|h41m+Ytz4mtQwTkufuEq2Q==|878d66f98b73e26b50c1392e7ee12ad9"
+    );
+}
+
+#[test]
 fn scalar_array_serialization_round_trips_php_wire_format() {
     let serialized = concat!(
         "a:3:{",
