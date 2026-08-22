@@ -1619,6 +1619,29 @@ APIs, `system()`/`passthru()`/`proc_open()`/backticks, real `-e` extended info,
 readline `-a`, internal Reflection arginfo, the three later blockers and
 broader compatibility remain separate checkpoints.
 
+The `source-text-filter-batch` checkpoint reaches 4,097 exact passes with
+1,206 failures, 115 skips, no XFAIL, 181 unsupported cases and zero timeouts
+or crashes. A shared cold scanner supplies `strip_tags()`,
+`highlight_string()`, `highlight_file()`/`show_source()` and
+`php_strip_whitespace()` across the exercised PHP/HTML transitions, comments,
+quoted strings, heredoc/nowdoc, allowed tags, malformed brackets, color
+overrides and local-file diagnostics. The five real `highlight.*` CLI-INI
+directives are now admitted by the runner. The exact full-corpus delta from
+`e861099a` is +9/-0 with every previous pass preserved: five runtime failures
+and four unsupported CLI-INI cases become exact, while `bug36513.phpt`
+advances only to its independent `eval()` output mismatch. Two final manifests
+and summaries are byte-identical. Nine of ten focused Zend PHPTs and 21 of 44
+adjacent `ext/standard` samples pass; the remainder delimit independent parser,
+stdlib and rarer scanner work. All five feature configurations, all-feature/
+all-target, formatting, PHPT runner, the unchanged 1,620/289/332 unsafe
+ratchet, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. No
+opcode, call-frame, Value/object layout, dependency or unsafe change is made.
+CPU-pinned 32-pair release startup controls put independent/paired median
+changes at -3.305%/-3.634%, below the +5% gate. Complete lexer fidelity,
+remote/custom wrappers, broader path diagnostics, every historical malformed
+`strip_tags()` state, sanitizer suitability, the `eval()` blocker and broader
+compatibility remain separate checkpoints.
+
 ## Measurement system
 
 ### Contract baseline

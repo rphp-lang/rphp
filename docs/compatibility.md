@@ -8,6 +8,80 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`source-text-filter-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+candidate commit `475182f3`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 4,097 pass, 1,206 fail, 115 skip, none remain XFAIL, 181
+are unsupported, and none time out or crash. The headline pass rate is
+77.258% and the whole-corpus rate is 73.174%; 4,809 of 5,303 attempted cases
+reach runtime (90.685%). Relative to exact integration baseline `e861099a`,
+the pass-set delta is +9/-0.
+
+The exact additions are `Zend/tests/67468.phpt`, `bug42767.phpt`,
+`bug53629.phpt`, `bug61165.phpt`, `bug66660.phpt`, `bug71086.phpt`,
+`heredoc_nowdoc/bug35655.phpt`, `heredoc_nowdoc/nowdoc_013.phpt` and
+`heredoc_nowdoc/nowdoc_014.phpt`. Every previous pass is preserved. Five move
+from runtime failure to pass and four from the runner's unsupported CLI-INI
+classification to pass. `bug36513.phpt` separately advances from a runtime
+failure to its pre-existing `eval()` output mismatch, so it does not
+contribute to the pass delta. Two sequential final candidate runs have byte-
+identical manifests and summaries. Their SHA-256 values are
+`75eb393e8cc5f91c77b029671088316066b8dcadfab47847c4b763455580c66f`
+and `8bc01135956e39ada9b84c749b734259677c0473eabfc0bc4017a1ed875954ce`.
+
+`strip_tags()` now applies a PHP-byte source filter with NUL removal,
+case-insensitive allowed-tag names supplied as a string or array, quote-aware
+attributes, comments and PHP blocks, and exercised malformed nested brackets.
+Its typed boundary includes PHP 8.5 weak/strict conversion, Stringable objects
+and exact diagnostics. `highlight_string()` emits the exercised PHP lexical
+color classes with HTML escaping across PHP/HTML transitions, comments,
+quoted strings, invalid numerics and heredoc/nowdoc. Its five request-local
+`highlight.*` colors have PHP defaults and are truthfully admitted through the
+PHPT CLI runner.
+
+`highlight_file()` and its `show_source()` alias apply the same presentation
+contract to local regular files. `php_strip_whitespace()` preserves PHP/HTML,
+string and heredoc contents while removing comments and collapsing source
+whitespace without merging exercised token boundaries. The file functions
+validate the `$return` argument before filesystem access, preserve the
+requested filename in diagnostics and reproduce the exercised warning and
+return order. The implementation is a cold, independent RPHP scanner; it does
+not copy or translate php-src code and does not alter opcodes, call frames,
+the PHP Value/object layout, dependencies or the unsafe inventory.
+
+Nine of ten focused Zend PHPTs pass. The tenth is the documented independent
+`eval()` mismatch. An adjacent 44-test `ext/standard` sample produces 21
+passes, one skip and one unsupported result; the other 21 cases expose
+separately scoped parser, standard-library and rarer scanner behavior rather
+than being claimed by this checkpoint. Original unit and E2E regressions cover
+color overrides and invalid numerics, allowed tags, NUL and Stringable input,
+and validation before file access. All five Cargo feature configurations,
+all-feature/all-target, formatting, PHPT-runner and unsafe-policy self-tests,
+the exact 1,620/289/332 unsafe ratchet, Composer 2.8.12 S0, all four Symfony S1
+gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used performance-governor CPU 2, four warmup pairs and no
+excluded samples. Batches of 100 empty `-r` requests measured baseline/
+candidate p10/median/p90 0.233631/0.241191/0.245092 and
+0.223725/0.233221/0.239657 seconds. The independent median change is -3.305%;
+paired p10/median/p90 ratios are 0.924858/0.963662/1.015576, with a -3.634%
+paired median change. This remains safely below the +5% gate. There is no
+existing changed hot path to compare because the scanner functions are new
+and cold; the startup control remains relevant for their five registrations.
+The baseline and candidate binary SHA-256 values are
+`041b2b6ec5f60e6410b0a78b4f167a239470fba401f00cf5002e736ccc0f99f3`
+and `49d7ebd4b7ea837271a13a148c1259ba3b8365d6dd417e51a5df5460d336d880`.
+
+This checkpoint does not claim the complete `ext/standard` source/string
+suite, every PHP lexer token or color transition, attributes, every
+interpolation or malformed-input state, remote or custom stream wrappers,
+`include_path` and platform diagnostics beyond the exercised AMD64 Unix
+paths, the complete historical `strip_tags()` malformed-input state machine,
+or suitability as an HTML security sanitizer. The independent `eval()`
+blocker, broader PHP compatibility and all unmeasured behavior remain separate
+work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `unix-process-helper-batch`, pinned to php-src 8.5.6 commit `fcc29c8` and
 candidate commit `cd161267`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 4,088 pass, 1,211 fail, 115 skip, none remain XFAIL, 185
