@@ -1439,6 +1439,26 @@ release controls put independent/paired median changes at -0.626%/-0.737% for
 calls, below the +5% gate. Companion base-conversion functions, arbitrary
 precision and broader compatibility remain separate checkpoints.
 
+The `defined-function-inventory` checkpoint reaches 4,074 exact passes with
+1,225 failures, 115 skips, no XFAIL, 185 unsupported cases and zero timeouts
+or crashes. `get_defined_functions()` exposes the live RPHP internal/user
+function inventory, excludes methods and runtime closures, and implements PHP
+8.5's deprecated optional-bool call boundary without claiming php-src's full
+extension set or list order. The exact full-corpus delta from `73147de1` is
++1/-0: `get_defined_functions_basic.phpt` becomes exact with every prior pass
+preserved and no other status or category movement; two final manifests and
+summaries are byte-identical. Both arginfo mismatch probes advance to an
+independent `chunk_split()` failure without changing category. All five
+feature configurations, all-feature/all-target, formatting, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. The one
+new cold validated function-table pointer raises the production inventory to
+1,619 unsafe blocks and 331 SAFETY annotations while retaining 289 unsafe
+functions. CPU-pinned 32-pair release controls put independent/paired median
+changes at +1.320%/+0.082% for 100 empty requests and -2.642%/-2.618% for two
+million existing `is_float()` calls, below the +5% gate. Disabled-function
+configuration, exact extension inventory, `chunk_split()` and broader
+compatibility remain separate checkpoints.
+
 ## Measurement system
 
 ### Contract baseline

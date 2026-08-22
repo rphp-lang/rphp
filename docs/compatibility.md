@@ -8,7 +8,65 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `ce214f02`. Across all 5,599
+8.5.6 commit `fcc29c8` and candidate commit `aa65a255`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 4,074 pass, 1,225 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 76.882% and the whole-corpus rate is 72.763%; 4,805 of
+5,299 attempted cases reach runtime (90.677%). Relative to exact integration
+baseline `73147de1`, the pass-set delta is +1/-0.
+
+The exact addition is `Zend/tests/get_defined_functions_basic.phpt`, which
+moves from a missing-function runtime failure to pass. Every previous pass is
+preserved and there is no other status or category movement. The two arginfo
+ZPP mismatch tests that first exposed the missing function now advance to an
+independent `chunk_split()` argument failure while remaining in the same
+runtime-failure category. Two sequential final candidate runs have
+byte-identical manifests and summaries. Their SHA-256 values are
+`2e85a774ab2194d1d9c298e93a58313fab3c941464fb519ed3bc9f2807889bfc`
+and `2d3e9f3d4f32224b5ffbe6e6109eb57bb25f0094d52caf6a6cbc18410ac6d74c`.
+
+`get_defined_functions()` now reports the live RPHP function table under the
+`internal` and `user` keys. Class methods and runtime closure implementation
+names are excluded, registered names retain their canonical lower-case form,
+and RPHP sorts both lists to make its otherwise unspecified order
+deterministic. The deprecated optional `bool $exclude_disabled` parameter has
+PHP 8.5-compatible weak and strict scalar boundaries, null and NAN diagnostic
+ordering, the parameter-has-no-effect deprecation and throwing-handler
+behavior.
+
+The original E2E regression is byte-identical to PHP 8.5.9 and covers real
+internal/user inventory, method and closure exclusion, repeated-call
+stability, weak/strict arguments and diagnostic-handler exceptions. All five
+Cargo feature configurations, all-feature/all-target, formatting, PHPT-runner
+and unsafe-policy self-tests, the exact unsafe ratchet, Composer 2.8.12 S0,
+all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3
+pass. The production inventory is 1,619 unsafe blocks, 289 unsafe functions
+and 331 SAFETY annotations. The single new cold unsafe read validates a live
+function-table entry before classification; there is no opcode, layout,
+dependency or hot registration-path change.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used performance-governor CPU 2, four warmups and no excluded
+samples. Batches of 100 empty `-r` requests measured baseline/candidate p10/
+median/p90 0.200053/0.207986/0.217385 and
+0.204203/0.210732/0.218119 seconds, +1.320% independently and +0.082% paired.
+One request executing two million existing `is_float()` calls measured
+0.191177/0.192250/0.194263 and 0.186290/0.187171/0.189396 seconds, -2.642%
+independently and -2.618% paired, with exact checksum `2000000`. Both controls
+remain below the +5% gate. As an absolute changed-path sanity check, fifteen
+candidate runs of 20,000 `get_defined_functions()` calls measured p10/median/
+p90 0.690816/0.699904/0.706702 seconds with checksum `7140000`; no A/B claim is
+possible because the baseline lacks the function. The baseline and candidate
+binary SHA-256 values are
+`7dbcca75ca2577319bcdc70080b9f2da933b94687ad8d3cf2712904bdf6eabe2`
+and `0cd4895c48fda348b3312eb32525452747c8a144a318886d059d7ecbb320e72a`.
+
+This checkpoint reports RPHP's implemented inventory; it does not claim exact
+PHP extension/function-set parity, CLI disabled-function support, PHP list
+ordering, `chunk_split()` argument compatibility or broader PHP compatibility.
+
+The preceding `base-convert-contract` checkpoint is pinned to php-src 8.5.6
+commit `fcc29c8` and candidate commit `ce214f02`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 4,073 pass, 1,226 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
 headline pass rate is 76.864% and the whole-corpus rate is 72.745%; 4,805 of
