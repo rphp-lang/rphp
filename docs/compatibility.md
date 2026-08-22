@@ -8,6 +8,74 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `b59539d2`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 4,078 pass, 1,221 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 76.958% and the whole-corpus rate is 72.834%; 4,805 of
+5,299 attempted cases reach runtime (90.677%). Relative to exact integration
+baseline `0ccfebf1`, the pass-set delta is +1/-0.
+
+The exact addition is `Zend/tests/gh19280.phpt`, which moves from a missing-
+function runtime failure to pass. Every previous pass is preserved and there
+is no other status or category movement. Two sequential final candidate runs
+have byte-identical manifests and summaries. Their SHA-256 values are
+`6722f83f414db46cc8e962322b9782d79d9158f1d5cec47105e54494fa643ac2`
+and `4e5f2fd8096884e60d247f312d981de339e90e4eb3bdd3e6f1ffe3e79c7625df`.
+
+`md5()` now accepts PHP strings as byte sequences and returns the RFC 1321
+digest as 32 lower-case hexadecimal characters by default. Its binary form
+round-trips all 16 digest bytes through admitted byte-aware consumers such as
+`bin2hex()`. Empty, embedded-NUL and multi-block inputs are covered, including
+the RFC million-`a` vector. Valid case-insensitive `hash('md5', ...)` calls
+reuse the same one-shot digest and binary result.
+
+The weak `string $string, bool $binary = false` boundary converts scalars and
+Stringable objects with request precision, null deprecations and NAN warnings.
+Invalid `__toString()` returns keep their concrete returned type; arrays,
+resources, closures and non-stringable objects receive parameter-specific
+TypeErrors. Strict direct calls reject non-exact arguments, and exceptions
+from diagnostics or conversion stop the call. The existing `stristr()` path
+shares the generalized typed-internal conversion helpers without an
+observable change.
+
+Two original E2E regressions and two clean-room digest unit tests cover public
+vectors, raw bytes, NUL, one-shot hash integration, weak and strict arguments,
+Stringable side effects and invalid returns, diagnostics, throwing handlers
+and concrete TypeErrors. The supplying Zend regression, all four unmodified
+`ext/standard` MD5 PHPTs, `ext/hash/tests/md5.phpt` and the previously blocked
+adjacent `stristr.phpt` pass. All five Cargo feature configurations,
+all-feature/all-target, formatting, PHPT-runner and unsafe-policy self-tests,
+the exact unsafe ratchet, Composer 2.8.12 S0, all four Symfony S1 gates and PHP
+8.5.9 warmed-kernel S2 and cold-build S3 pass. The production inventory remains
+1,619 unsafe blocks, 289 unsafe functions and 331 SAFETY annotations. No
+compiler, opcode, value/string layout, dependency or production-unsafe change
+is made.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used performance-governor CPU 2, four warmups and no excluded
+samples. Batches of 100 empty `-r` requests measured baseline/candidate p10/
+median/p90 0.151756/0.152921/0.154553 and
+0.150535/0.151545/0.152259 seconds, -0.900% independently and -0.778% paired.
+One request executing two million existing `hash('xxh128', ...)` calls measured
+0.377229/0.379231/0.385006 and 0.371054/0.373631/0.386140 seconds, -1.477%
+independently and -1.466% paired, with exact checksum `2000000`. Both controls
+remain below the +5% gate; paired p10/p90 changes are -2.570%/-0.307% and
+-3.607%/+0.609%. As an absolute changed-path sanity check, fifteen candidate
+runs of two million `md5()` calls measured p10/median/p90
+0.862190/0.864552/0.871230 seconds with the same checksum; no A/B claim is
+possible because the baseline lacks the function. The baseline and candidate
+binary SHA-256 values are
+`06adec3dab1bf55bc8fdbef5fc34787e67b2e68f869ca2e3317bc1805d84da72`
+and `9ad19edefc3b75f50c9ee6a465dac210574b3fd0cb00bdd7991f45ef94558fa5`.
+
+This checkpoint does not claim password or security suitability, `md5_file()`,
+HMAC, streaming `hash_init('md5')`, the complete hash extension, exact invalid
+argument behavior for the wider `hash()` surface, binary-string consumers such
+as the existing `strlen()` implementation, strict-caller propagation through
+source unpack or other detached internal-call paths, or broader PHP
+compatibility.
+
+The preceding `stristr-contract` checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `68f2eab7`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 4,077 pass, 1,222 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The

@@ -1518,6 +1518,26 @@ existing `strstr()` calls, below the +5% gate. Unicode folding, `md5()`, strict
 metadata propagation through detached internal calls, the complete string
 suite and broader compatibility remain separate checkpoints.
 
+The `md5-contract` checkpoint reaches 4,078 exact passes with 1,221 failures,
+115 skips, no XFAIL, 185 unsupported cases and zero timeouts or crashes. A
+clean-room RFC 1321 digest powers PHP 8.5-compatible `md5()` hexadecimal and
+raw byte output plus valid one-shot `hash('md5', ...)` calls. The typed weak
+and strict boundary covers scalar/Stringable conversion, null/NAN diagnostics,
+throwing-handler order, invalid `__toString()` returns and parameter-specific
+TypeErrors. The exact full-corpus delta from `0ccfebf1` is +1/-0:
+`gh19280.phpt` becomes exact with every prior pass preserved and no other
+status or category movement; two final manifests and summaries are byte-
+identical. Four upstream standard MD5 PHPTs, an adjacent hash PHPT and the
+previously blocked `stristr.phpt` also pass. All five feature configurations,
+all-feature/all-target, formatting, PHPT runner, unsafe, Composer S0, four
+Symfony S1 gates and PHP 8.5.9 S2/S3 pass. No unsafe, compiler, opcode, layout
+or dependency change is made. CPU-pinned 32-pair release controls put
+independent/paired median changes at -0.900%/-0.778% for 100 empty requests and
+-1.477%/-1.466% for two million existing `hash('xxh128', ...)` calls, below
+the +5% gate. Password/security suitability, file/HMAC/streaming hashing,
+broader binary-string consumers, detached-call strict metadata, the complete
+hash extension and broader compatibility remain separate checkpoints.
+
 ## Measurement system
 
 ### Contract baseline
