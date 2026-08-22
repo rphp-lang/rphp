@@ -166,6 +166,7 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "ENT_QUOTES" => Some(value::Value::long(3)),
         "ENT_SUBSTITUTE" => Some(value::Value::long(8)),
         "CASE_LOWER" => Some(value::Value::long(0)),
+        "CASE_UPPER" => Some(value::Value::long(1)),
         "E_ERROR" => Some(value::Value::long(1)),
         "E_WARNING" => Some(value::Value::long(2)),
         "E_PARSE" => Some(value::Value::long(4)),

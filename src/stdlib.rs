@@ -677,10 +677,11 @@ fn fn_array_unshift(
     }
 }
 
-fn fn_array_key_exists(
+fn fn_array_key_exists_named(
     ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
+    function: &str,
 ) -> Result<(), VmError> {
     let key = arg!(ed, 0);
     let arr = arg!(ed, 1);
@@ -688,7 +689,7 @@ fn fn_array_key_exists(
         eg.exception = Some(crate::value::make_error_value(
             "TypeError",
             &format!(
-                "array_key_exists(): Argument #2 ($array) must be of type array, {} given",
+                "{function}(): Argument #2 ($array) must be of type array, {} given",
                 arr.dereferenced().type_name()
             ),
         ));
@@ -704,6 +705,150 @@ fn fn_array_key_exists(
         false
     };
     ret!(rv, Value::bool(exists));
+}
+
+fn fn_array_key_exists(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    fn_array_key_exists_named(ed, rv, eg, "array_key_exists")
+}
+
+fn fn_key_exists(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    fn_array_key_exists_named(ed, rv, eg, "key_exists")
+}
+
+fn array_change_key_case_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+) -> Result<Option<i64>, VmError> {
+    let argument = owned_argument(ed, 1);
+    let argument = argument.dereferenced();
+    let strict = internal_call_is_strict(ed);
+    let converted = match argument.value_type() {
+        ValueType::Long => argument.as_long(),
+        ValueType::Null if !strict => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                "array_change_key_case(): Passing null to parameter #2 ($case) of type int is deprecated",
+            )?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            Some(0)
+        }
+        ValueType::True | ValueType::False if !strict => Some(i64::from(argument.is_truthy())),
+        ValueType::Double if !strict => {
+            let number = argument.as_double().unwrap_or(f64::NAN);
+            let upper_exclusive = -(i64::MIN as f64);
+            if !number.is_finite() || number < i64::MIN as f64 || number >= upper_exclusive {
+                None
+            } else {
+                let integer = number as i64;
+                if integer as f64 != number {
+                    report_internal_deprecation(
+                        eg,
+                        ed,
+                        &format!(
+                            "Implicit conversion from float {} to int loses precision",
+                            argument.echo_to_string_with_precision(-1)
+                        ),
+                    )?;
+                    if eg.exception.is_some() {
+                        return Ok(None);
+                    }
+                }
+                Some(integer)
+            }
+        }
+        ValueType::String if !strict => {
+            let source = argument.as_str().unwrap_or("");
+            let Some(number) = php_numeric_string_to_float(source) else {
+                typed_internal_argument_error(
+                    eg,
+                    "array_change_key_case",
+                    argument,
+                    2,
+                    "case",
+                    "int",
+                );
+                return Ok(None);
+            };
+            let upper_exclusive = -(i64::MIN as f64);
+            if !number.is_finite() || number < i64::MIN as f64 || number >= upper_exclusive {
+                None
+            } else {
+                let integer = number as i64;
+                if integer as f64 != number {
+                    report_internal_deprecation(
+                        eg,
+                        ed,
+                        &format!(
+                            "Implicit conversion from float-string \"{source}\" to int loses precision"
+                        ),
+                    )?;
+                    if eg.exception.is_some() {
+                        return Ok(None);
+                    }
+                }
+                Some(integer)
+            }
+        }
+        _ => None,
+    };
+    if converted.is_none() && eg.exception.is_none() {
+        typed_internal_argument_error(eg, "array_change_key_case", argument, 2, "case", "int");
+    }
+    Ok(converted)
+}
+
+fn fn_array_change_key_case(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let source = owned_argument(ed, 0);
+    let Some(array) = source.dereferenced().as_array() else {
+        typed_internal_argument_error(
+            eg,
+            "array_change_key_case",
+            source.dereferenced(),
+            1,
+            "array",
+            "array",
+        );
+        return Ok(());
+    };
+    let case = if arg_opt!(ed, 1).is_some() {
+        let Some(case) = array_change_key_case_argument(ed, eg)? else {
+            return Ok(());
+        };
+        case
+    } else {
+        0
+    };
+
+    let mut result = PhpArray::new();
+    for (key, value) in array.iter() {
+        match key {
+            ArrayKey::Int(index) => result.set_int(index, array_projection_value(value)),
+            ArrayKey::String(mut name) => {
+                if case != 0 {
+                    name.make_ascii_uppercase();
+                } else {
+                    name.make_ascii_lowercase();
+                }
+                result.set_str(&name, array_projection_value(value));
+            }
+        }
+    }
+    ret!(rv, Value::array(result));
 }
 
 fn fn_in_array(
@@ -2394,12 +2539,7 @@ fn fn_substr(
     }
 }
 
-fn natural_compare(left: &[u8], right: &[u8]) -> std::cmp::Ordering {
-    fn numeric_string(bytes: &[u8]) -> Option<&[u8]> {
-        let bytes = bytes.trim_ascii();
-        bytes.iter().all(u8::is_ascii_digit).then_some(bytes)
-    }
-
+fn natural_compare(left: &[u8], right: &[u8], case_insensitive: bool) -> std::cmp::Ordering {
     fn compare_integer(left: &[u8], right: &[u8]) -> std::cmp::Ordering {
         let left = left
             .iter()
@@ -2412,13 +2552,25 @@ fn natural_compare(left: &[u8], right: &[u8]) -> std::cmp::Ordering {
         left.len().cmp(&right.len()).then_with(|| left.cmp(right))
     }
 
-    if let (Some(left), Some(right)) = (numeric_string(left), numeric_string(right)) {
-        return compare_integer(left, right);
-    }
-
     let mut left_index = 0;
     let mut right_index = 0;
+    while left.get(left_index) == Some(&b'0')
+        && left.get(left_index + 1).is_some_and(u8::is_ascii_digit)
+    {
+        left_index += 1;
+    }
+    while right.get(right_index) == Some(&b'0')
+        && right.get(right_index + 1).is_some_and(u8::is_ascii_digit)
+    {
+        right_index += 1;
+    }
     while left_index < left.len() || right_index < right.len() {
+        match (left.get(left_index), right.get(right_index)) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (Some(_), Some(_)) => {}
+        }
         while left.get(left_index).is_some_and(u8::is_ascii_whitespace) {
             left_index += 1;
         }
@@ -2461,6 +2613,16 @@ fn natural_compare(left: &[u8], right: &[u8]) -> std::cmp::Ordering {
             continue;
         }
 
+        let left_byte = if case_insensitive {
+            left_byte.to_ascii_lowercase()
+        } else {
+            left_byte
+        };
+        let right_byte = if case_insensitive {
+            right_byte.to_ascii_lowercase()
+        } else {
+            right_byte
+        };
         let ordering = left_byte.cmp(&right_byte);
         if ordering != std::cmp::Ordering::Equal {
             return ordering;
@@ -2474,11 +2636,46 @@ fn natural_compare(left: &[u8], right: &[u8]) -> std::cmp::Ordering {
 fn fn_strnatcmp(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let left = arg_str!(ed, 0);
-    let right = arg_str!(ed, 1);
-    let result = match natural_compare(left.as_bytes(), right.as_bytes()) {
+    let ordering = if let (Some(left), Some(right)) = (arg!(ed, 0).as_str(), arg!(ed, 1).as_str()) {
+        natural_compare(left.as_bytes(), right.as_bytes(), false)
+    } else {
+        let Some(left) = typed_internal_string_argument(ed, eg, "strnatcmp", 0, "string1")? else {
+            return Ok(());
+        };
+        let Some(right) = typed_internal_string_argument(ed, eg, "strnatcmp", 1, "string2")? else {
+            return Ok(());
+        };
+        natural_compare(left.as_bytes(), right.as_bytes(), false)
+    };
+    let result = match ordering {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    };
+    ret!(rv, Value::long(result));
+}
+
+fn fn_strnatcasecmp(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let ordering = if let (Some(left), Some(right)) = (arg!(ed, 0).as_str(), arg!(ed, 1).as_str()) {
+        natural_compare(left.as_bytes(), right.as_bytes(), true)
+    } else {
+        let Some(left) = typed_internal_string_argument(ed, eg, "strnatcasecmp", 0, "string1")?
+        else {
+            return Ok(());
+        };
+        let Some(right) = typed_internal_string_argument(ed, eg, "strnatcasecmp", 1, "string2")?
+        else {
+            return Ok(());
+        };
+        natural_compare(left.as_bytes(), right.as_bytes(), true)
+    };
+    let result = match ordering {
         std::cmp::Ordering::Less => -1,
         std::cmp::Ordering::Equal => 0,
         std::cmp::Ordering::Greater => 1,
@@ -7705,61 +7902,160 @@ const SORT_NATURAL: i64 = 6;
 const SORT_FLAG_CASE: i64 = 8;
 
 fn natural_string_cmp(left: &str, right: &str, case_insensitive: bool) -> std::cmp::Ordering {
-    let left = left.as_bytes();
-    let right = right.as_bytes();
-    let mut left_index = 0usize;
-    let mut right_index = 0usize;
-    while left_index < left.len() && right_index < right.len() {
-        if left[left_index].is_ascii_digit() && right[right_index].is_ascii_digit() {
-            let left_end = left_index
-                + left[left_index..]
-                    .iter()
-                    .take_while(|byte| byte.is_ascii_digit())
-                    .count();
-            let right_end = right_index
-                + right[right_index..]
-                    .iter()
-                    .take_while(|byte| byte.is_ascii_digit())
-                    .count();
-            let left_significant = left_index
-                + left[left_index..left_end]
-                    .iter()
-                    .take_while(|byte| **byte == b'0')
-                    .count();
-            let right_significant = right_index
-                + right[right_index..right_end]
-                    .iter()
-                    .take_while(|byte| **byte == b'0')
-                    .count();
-            let left_digits = &left[left_significant..left_end];
-            let right_digits = &right[right_significant..right_end];
-            let numeric = left_digits
-                .len()
-                .cmp(&right_digits.len())
-                .then_with(|| left_digits.cmp(right_digits));
-            if numeric != std::cmp::Ordering::Equal {
-                return numeric;
-            }
-            left_index = left_end;
-            right_index = right_end;
-            continue;
-        }
+    natural_compare(left.as_bytes(), right.as_bytes(), case_insensitive)
+}
 
-        let mut left_byte = left[left_index];
-        let mut right_byte = right[right_index];
-        if case_insensitive {
-            left_byte = left_byte.to_ascii_lowercase();
-            right_byte = right_byte.to_ascii_lowercase();
-        }
-        match left_byte.cmp(&right_byte) {
-            std::cmp::Ordering::Equal => {
-                left_index += 1;
-                right_index += 1;
-            }
-            ordering => return ordering,
-        }
+fn natural_value_order(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    left: &Value,
+    right: &Value,
+    case_insensitive: bool,
+) -> Result<Option<std::cmp::Ordering>, VmError> {
+    let Some(left) = internal_value_to_string(ed, eg, left)? else {
+        return Ok(None);
+    };
+    if eg.exception.is_some() {
+        return Ok(None);
     }
-    (left.len() - left_index).cmp(&(right.len() - right_index))
+    let Some(right) = internal_value_to_string(ed, eg, right)? else {
+        return Ok(None);
+    };
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    Ok(Some(natural_string_cmp(&left, &right, case_insensitive)))
+}
+
+fn array_sort_snapshot_value(value: &Value) -> Value {
+    if value.is_owned_reference() {
+        let mut alias = value.clone_owned_reference_alias();
+        alias.mark_internal_reference_alias();
+        alias
+    } else {
+        value.clone()
+    }
+}
+
+fn array_projection_value(value: &Value) -> Value {
+    if value.is_owned_reference() && value.owned_reference_is_aliased() {
+        value.clone_owned_reference_alias()
+    } else {
+        value.clone()
+    }
+}
+
+fn sort_natural_entries(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    entries: &mut Vec<(ArrayKey, Value)>,
+    case_insensitive: bool,
+) -> Result<bool, VmError> {
+    let length = entries.len();
+    if length < 2 {
+        return Ok(true);
+    }
+
+    let mut order = (0..length).collect::<Vec<_>>();
+    let mut merged = order.clone();
+    let mut width = 1usize;
+    while width < length {
+        let mut start = 0usize;
+        while start < length {
+            let middle = (start + width).min(length);
+            let end = (middle + width).min(length);
+            let (mut left, mut right, mut output) = (start, middle, start);
+            while left < middle && right < end {
+                let Some(ordering) = natural_value_order(
+                    ed,
+                    eg,
+                    &entries[order[left]].1,
+                    &entries[order[right]].1,
+                    case_insensitive,
+                )?
+                else {
+                    return Ok(false);
+                };
+                if ordering == std::cmp::Ordering::Greater {
+                    merged[output] = order[right];
+                    right += 1;
+                } else {
+                    merged[output] = order[left];
+                    left += 1;
+                }
+                output += 1;
+            }
+            while left < middle {
+                merged[output] = order[left];
+                left += 1;
+                output += 1;
+            }
+            while right < end {
+                merged[output] = order[right];
+                right += 1;
+                output += 1;
+            }
+            start = end;
+        }
+        std::mem::swap(&mut order, &mut merged);
+        width = width.saturating_mul(2);
+    }
+
+    let original = std::mem::take(entries);
+    let mut slots = original.into_iter().map(Some).collect::<Vec<_>>();
+    entries.reserve(length);
+    for index in order {
+        entries.push(
+            slots[index]
+                .take()
+                .expect("natural-sort permutation consumes each entry once"),
+        );
+    }
+    Ok(true)
+}
+
+fn fn_natural_key_preserving_sort(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    case_insensitive: bool,
+) -> Result<(), VmError> {
+    let source = owned_argument(ed, 0);
+    let Some(array) = source.dereferenced().as_array() else {
+        typed_internal_argument_error(eg, function, source.dereferenced(), 1, "array", "array");
+        return Ok(());
+    };
+    let mut entries = array
+        .iter()
+        .map(|(key, value)| (key, array_sort_snapshot_value(value)))
+        .collect::<Vec<_>>();
+    if !sort_natural_entries(ed, eg, &mut entries, case_insensitive)? {
+        return Ok(());
+    }
+
+    let mut result = PhpArray::new();
+    for (key, value) in entries {
+        result.set(key, array_projection_value(&value));
+    }
+    arg_mut!(ed, 0, Value::array(result));
+    ret!(rv, Value::bool(true));
+}
+
+fn fn_natsort(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    fn_natural_key_preserving_sort(ed, rv, eg, "natsort", false)
+}
+
+fn fn_natcasesort(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    fn_natural_key_preserving_sort(ed, rv, eg, "natcasesort", true)
 }
 
 fn sort_value_cmp(left: &Value, right: &Value, flags: i64) -> std::cmp::Ordering {

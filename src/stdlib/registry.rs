@@ -152,6 +152,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "key",
         "array"
     );
+    reg!("key_exists", fn_key_exists, 2, 2, "key", "array");
+    reg!(
+        "array_change_key_case",
+        fn_array_change_key_case,
+        2,
+        1,
+        "array",
+        "case"
+    );
     reg!(
         "in_array",
         fn_in_array,
@@ -304,6 +313,14 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "length"
     );
     reg!("strnatcmp", fn_strnatcmp, 2, 2, "string1", "string2");
+    reg!(
+        "strnatcasecmp",
+        fn_strnatcasecmp,
+        2,
+        2,
+        "string1",
+        "string2"
+    );
     reg!(
         "substr_compare",
         fn_substr_compare,
@@ -1286,6 +1303,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
     reg_ref!("asort", fn_asort, 2, 1, 0b1, "array", "flags");
     reg_ref!("arsort", fn_arsort, 2, 1, 0b1, "array", "flags");
+    reg_ref!("natsort", fn_natsort, 1, 1, 0b1, "array");
+    reg_ref!("natcasesort", fn_natcasesort, 1, 1, 0b1, "array");
     reg_ref!("ksort", fn_ksort, 2, 1, 0b1, "array", "flags");
     reg_ref!("krsort", fn_krsort, 2, 1, 0b1, "array", "flags");
     reg!("array_key_first", fn_array_key_first, 1, 1, "array");

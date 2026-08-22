@@ -3059,6 +3059,8 @@ fn builtin_ref_args(name: &str) -> u64 {
         | "uksort"
         | "asort"
         | "arsort"
+        | "natsort"
+        | "natcasesort"
         | "ksort"
         | "krsort"
         | "array_walk"

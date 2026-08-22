@@ -1521,6 +1521,100 @@ fn strnatcmp_orders_numeric_segments_like_php() {
 }
 
 #[test]
+fn array_change_key_case_and_key_exists_match_php_array_contracts() {
+    assert_eq!(
+        run_php(
+            r##"<?php
+function show_case_array(array $array): void {
+    foreach ($array as $key => $value) {
+        echo is_int($key) ? "#$key" : $key, "=", $value, "|";
+    }
+    echo "\n";
+}
+$input = ["Foo" => 1, "fOO" => 2, 3 => "N", "UP" => 4];
+show_case_array($input);
+show_case_array(array_change_key_case($input));
+show_case_array(array_change_key_case($input, 2));
+show_case_array($input);
+$slot = 10;
+$referenced = ["B" => &$slot, "C" => 20];
+$changed = array_change_key_case($referenced);
+$changed["b"] = 30;
+echo $slot, ":", $referenced["B"], ":", $changed["c"], "\n";
+var_dump(key_exists("Foo", $input), key_exists(3, $input), key_exists("missing", $input));
+$non_ascii = chr(195) . chr(132) . "BC";
+echo bin2hex(array_key_first(array_change_key_case([$non_ascii => 1]))), "\n";
+"##,
+        ),
+        "Foo=1|fOO=2|#3=N|UP=4|\nfoo=2|#3=N|up=4|\nFOO=2|#3=N|UP=4|\nFoo=1|fOO=2|#3=N|UP=4|\n30:30:20\nbool(true)\nbool(true)\nbool(false)\nc3846263\n"
+    );
+}
+
+#[test]
+fn natural_comparison_and_key_preserving_sorts_match_php() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach ([["00", "0"], [" 00", " 0"], ["acc ", "acc"], ["1.10", "1.2"], ["IMG12", "img2"]] as [$left, $right]) {
+    echo strnatcmp($left, $right), ":", strnatcasecmp($left, $right), "\n";
+}
+class NaturalStringValue {
+    public function __construct(private string $value) {}
+    public function __toString(): string { return $this->value; }
+}
+echo strnatcasecmp(new NaturalStringValue("File02"), "file2"), "\n";
+function show_natural_array(array $array): void {
+    foreach ($array as $key => $value) echo $key, "=", $value, "|";
+    echo "\n";
+}
+$natural = ["z" => "img12", "a" => "img10", 7 => "img2", "n" => "img02", "e" => "IMG1", "q" => "img1"];
+var_dump(natsort($natural));
+show_natural_array($natural);
+$folded = ["z" => "A10", "a" => "a2", 7 => "A02", "e" => "a1"];
+var_dump(natcasesort($folded));
+show_natural_array($folded);
+$slot = "v10";
+$referenced = ["z" => &$slot, "a" => "v2"];
+natsort($referenced);
+$referenced["z"] = "changed";
+echo $slot, ":", $referenced["a"], "\n";
+"#,
+        ),
+        "0:0\n1:1\n1:1\n1:1\n-1:1\n-1\nbool(true)\ne=IMG1|n=img02|q=img1|7=img2|a=img10|z=img12|\nbool(true)\n7=A02|e=a1|a=a2|z=A10|\nchanged:v2\n"
+    );
+}
+
+#[test]
+fn array_case_and_natural_functions_expose_php_signatures_and_errors() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach (["array_change_key_case", "key_exists", "strnatcasecmp", "natsort", "natcasesort"] as $function) {
+    $reflection = new ReflectionFunction($function);
+    echo $reflection->getName(), ":", $reflection->getNumberOfRequiredParameters(), "/", $reflection->getNumberOfParameters();
+    foreach ($reflection->getParameters() as $parameter) {
+        echo ":", $parameter->getName(), "=", $parameter->isPassedByReference() ? "ref" : "val";
+    }
+    echo "\n";
+}
+try { array_change_key_case(null); } catch (Throwable $error) { echo $error->getMessage(), "\n"; }
+try { key_exists("x", null); } catch (Throwable $error) { echo $error->getMessage(), "\n"; }
+$null = null;
+try { natsort($null); } catch (Throwable $error) { echo $error->getMessage(), "\n"; }
+$null = null;
+try { natcasesort($null); } catch (Throwable $error) { echo $error->getMessage(), "\n"; }
+class NaturalStringFailure {
+    public function __toString(): string { throw new Exception("natural boom"); }
+}
+$values = ["z2", new NaturalStringFailure(), "z1"];
+try { natsort($values); } catch (Throwable $error) { echo get_class($error), ":", $error->getMessage(), "\n"; }
+"#,
+        ),
+        "array_change_key_case:1/2:array=val:case=val\nkey_exists:2/2:key=val:array=val\nstrnatcasecmp:2/2:string1=val:string2=val\nnatsort:1/1:array=ref\nnatcasesort:1/1:array=ref\narray_change_key_case(): Argument #1 ($array) must be of type array, null given\nkey_exists(): Argument #2 ($array) must be of type array, null given\nnatsort(): Argument #1 ($array) must be of type array, null given\nnatcasesort(): Argument #1 ($array) must be of type array, null given\nException:natural boom\n"
+    );
+}
+
+#[test]
 fn string_comparisons_preserve_byte_differences_limits_and_ascii_case_folding() {
     assert_eq!(
         run_php(
