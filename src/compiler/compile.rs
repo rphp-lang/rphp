@@ -4301,6 +4301,141 @@ impl Compiler {
         )
     }
 
+    fn zend_defined_literal_without_scope_separator(expression: &Expr) -> bool {
+        match expression {
+            Expr::StringLiteral(name) => !name.contains('\\') && !name.contains(':'),
+            Expr::Integer(_) | Expr::Float(_) => true,
+            Expr::BinaryOp {
+                op: BinOp::Concat,
+                left,
+                right,
+            } => {
+                Self::zend_defined_literal_without_scope_separator(left)
+                    && Self::zend_defined_literal_without_scope_separator(right)
+            }
+            _ => false,
+        }
+    }
+
+    fn zend_in_array_strict_literal(expression: &Expr) -> bool {
+        match expression {
+            Expr::Bool(value) => *value,
+            Expr::Integer(value) => *value != 0,
+            Expr::Float(value) => *value != 0.0,
+            Expr::StringLiteral(value) => !value.is_empty() && value != "0",
+            Expr::Constant(name) => crate::builtin_constant(name.trim_start_matches('\\'))
+                .is_some_and(|value| value.is_truthy()),
+            _ => false,
+        }
+    }
+
+    fn zend_in_array_literal_haystack(expression: &Expr) -> bool {
+        if !matches!(expression, Expr::ArrayLiteral(_)) {
+            return false;
+        }
+        Self::eval_const_expr(expression)
+            .ok()
+            .and_then(|value| {
+                value.as_array().map(|array| {
+                    array.iter().all(|(_, value)| {
+                        matches!(
+                            value.dereferenced().value_type(),
+                            ValueType::Long | ValueType::String
+                        )
+                    })
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    fn is_func_get_args_slice_write(&self, args: &[CallArg]) -> bool {
+        let [
+            CallArg::Positional(Expr::FunctionCall {
+                name,
+                args: inner_args,
+                generic_args,
+                ..
+            }),
+            CallArg::Positional(Expr::Integer(offset)),
+        ] = args
+        else {
+            return false;
+        };
+        *offset >= 0
+            && generic_args.is_empty()
+            && inner_args.is_empty()
+            && self.is_global_builtin_call(name, "func_get_args")
+            && !self.current_function_name.is_empty()
+    }
+
+    /// Zend emits dedicated temporary-result opcodes for a bounded set of
+    /// global built-in call shapes. PHP rejects those results as mutable roots
+    /// even though ordinary call results remain valid discarded temporaries
+    /// (or preserve a returned reference cell).
+    fn is_zend_special_builtin_write_result(&self, expression: &Expr) -> bool {
+        let Expr::FunctionCall {
+            name,
+            args,
+            generic_args,
+            ..
+        } = expression
+        else {
+            return false;
+        };
+        if !generic_args.is_empty() {
+            return false;
+        }
+        let Some(name) = self.unambiguous_global_function_name(name) else {
+            return false;
+        };
+        let Some(rule) = crate::builtin_metadata::zend_special_write_rule(name) else {
+            return false;
+        };
+
+        use crate::builtin_metadata::ZendSpecialWriteRule;
+        match rule {
+            ZendSpecialWriteRule::Unary => {
+                matches!(args.as_slice(), [CallArg::Positional(_)])
+            }
+            ZendSpecialWriteRule::Binary => matches!(
+                args.as_slice(),
+                [CallArg::Positional(_), CallArg::Positional(_)]
+            ),
+            ZendSpecialWriteRule::Zero => args.is_empty(),
+            ZendSpecialWriteRule::ZeroOrUnary => {
+                args.is_empty() || matches!(args.as_slice(), [CallArg::Positional(_)])
+            }
+            ZendSpecialWriteRule::FunctionContextZero => {
+                args.is_empty() && !self.current_function_name.is_empty()
+            }
+            ZendSpecialWriteRule::DefinedLiteral => matches!(
+                args.as_slice(),
+                [CallArg::Positional(argument)]
+                    if Self::zend_defined_literal_without_scope_separator(argument)
+            ),
+            ZendSpecialWriteRule::InArrayLiteral => matches!(
+                args.as_slice(),
+                [
+                    CallArg::Positional(_),
+                    CallArg::Positional(haystack),
+                    CallArg::Positional(strict),
+                ] if Self::zend_in_array_strict_literal(strict)
+                    && Self::zend_in_array_literal_haystack(haystack)
+            ),
+            ZendSpecialWriteRule::FuncGetArgsSlice => self.is_func_get_args_slice_write(args),
+        }
+    }
+
+    fn validate_zend_special_builtin_write_result(&self, expression: &Expr) -> Result<(), String> {
+        if self.is_zend_special_builtin_write_result(expression) {
+            return Err(self.goto_error(
+                "Cannot use result of built-in function in write context",
+                expression_source_line(expression),
+            ));
+        }
+        Ok(())
+    }
+
     fn mark_trailing_mutable_dimension_fetches(&mut self) {
         for instruction in self
             .instructions
@@ -10541,6 +10676,11 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::AssignReference { var, target } => {
+                if let Err(error) = self.validate_zend_special_builtin_write_result(target) {
+                    self.deferred_error = Some(error);
+                    let null = self.add_literal(Value::null());
+                    return (null, OpType::Const);
+                }
                 if let Expr::Globals { line } = target.as_ref() {
                     self.deferred_error =
                         Some(self.goto_error("Cannot acquire reference to $GLOBALS", *line));

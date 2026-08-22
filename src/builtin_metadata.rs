@@ -28,6 +28,74 @@ pub enum DirectInternalLowering {
     Strlen,
 }
 
+/// Source-call shapes that Zend lowers without a normal function result.
+///
+/// PHP rejects these optimized results when the surrounding expression needs
+/// a mutable write root. This table deliberately stays separate from RPHP's
+/// direct-call execution metadata: the two runtimes optimize different sets
+/// of built-ins, while the source-level diagnostic must follow PHP's set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ZendSpecialWriteRule {
+    Unary,
+    Binary,
+    Zero,
+    ZeroOrUnary,
+    FunctionContextZero,
+    DefinedLiteral,
+    InArrayLiteral,
+    FuncGetArgsSlice,
+}
+
+/// Return the PHP compiler-special write-context rule for a global built-in.
+/// Argument form and lexical function context are checked by the compiler,
+/// where the source AST and namespace imports are available.
+pub(crate) fn zend_special_write_rule(name: &str) -> Option<ZendSpecialWriteRule> {
+    use ZendSpecialWriteRule::*;
+
+    if name.eq_ignore_ascii_case("strlen")
+        || name.eq_ignore_ascii_case("is_null")
+        || name.eq_ignore_ascii_case("is_bool")
+        || name.eq_ignore_ascii_case("is_int")
+        || name.eq_ignore_ascii_case("is_integer")
+        || name.eq_ignore_ascii_case("is_long")
+        || name.eq_ignore_ascii_case("is_float")
+        || name.eq_ignore_ascii_case("is_double")
+        || name.eq_ignore_ascii_case("is_string")
+        || name.eq_ignore_ascii_case("is_array")
+        || name.eq_ignore_ascii_case("is_object")
+        || name.eq_ignore_ascii_case("is_resource")
+        || name.eq_ignore_ascii_case("is_scalar")
+        || name.eq_ignore_ascii_case("intval")
+        || name.eq_ignore_ascii_case("boolval")
+        || name.eq_ignore_ascii_case("floatval")
+        || name.eq_ignore_ascii_case("doubleval")
+        || name.eq_ignore_ascii_case("strval")
+        || name.eq_ignore_ascii_case("count")
+        || name.eq_ignore_ascii_case("sizeof")
+        || name.eq_ignore_ascii_case("gettype")
+    {
+        Some(Unary)
+    } else if name.eq_ignore_ascii_case("array_key_exists") {
+        Some(Binary)
+    } else if name.eq_ignore_ascii_case("get_called_class") {
+        Some(Zero)
+    } else if name.eq_ignore_ascii_case("get_class") {
+        Some(ZeroOrUnary)
+    } else if name.eq_ignore_ascii_case("func_num_args")
+        || name.eq_ignore_ascii_case("func_get_args")
+    {
+        Some(FunctionContextZero)
+    } else if name.eq_ignore_ascii_case("defined") {
+        Some(DefinedLiteral)
+    } else if name.eq_ignore_ascii_case("in_array") {
+        Some(InArrayLiteral)
+    } else if name.eq_ignore_ascii_case("array_slice") {
+        Some(FuncGetArgsSlice)
+    } else {
+        None
+    }
+}
+
 impl DirectInternalKind {
     #[inline(always)]
     pub fn from_id(id: u32) -> Option<Self> {
@@ -250,5 +318,29 @@ mod tests {
             DirectInternalLowering::Generic2
         );
         assert!(DirectInternalKind::JsonDecode.result_may_need_cleanup());
+    }
+
+    #[test]
+    fn zend_special_write_metadata_is_distinct_from_direct_calls() {
+        assert_eq!(
+            zend_special_write_rule("STRLEN"),
+            Some(ZendSpecialWriteRule::Unary)
+        );
+        assert_eq!(
+            zend_special_write_rule("array_key_exists"),
+            Some(ZendSpecialWriteRule::Binary)
+        );
+        assert_eq!(
+            zend_special_write_rule("func_get_args"),
+            Some(ZendSpecialWriteRule::FunctionContextZero)
+        );
+        assert_eq!(
+            zend_special_write_rule("array_slice"),
+            Some(ZendSpecialWriteRule::FuncGetArgsSlice)
+        );
+        assert_eq!(zend_special_write_rule("preg_match"), None);
+        assert_eq!(zend_special_write_rule("is_callable"), None);
+        assert_eq!(zend_special_write_rule("array_values"), None);
+        assert_eq!(zend_special_write_rule("strtolower"), None);
     }
 }

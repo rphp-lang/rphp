@@ -418,6 +418,7 @@ impl Compiler {
         silent_fetch: bool,
         warn_undefined_root: bool,
     ) -> Result<(u16, OpType, ForeachArrayWriteback), String> {
+        self.validate_zend_special_builtin_write_result(source)?;
         match source {
             Expr::ArrayAppendArgument { target, .. } => {
                 let (current, current_type) =
@@ -1594,6 +1595,7 @@ impl Compiler {
         if indices.is_empty() {
             return Err("Array mutation requires at least one dimension".into());
         }
+        self.validate_zend_special_builtin_write_result(root)?;
         let (root, writeback, path_indices) = match root {
             Expr::Variable { name: var, line } => {
                 let cv = self.resolve_cv(var);
