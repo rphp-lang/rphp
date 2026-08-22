@@ -76,6 +76,19 @@ fn unicode_escape_parse_errors_report_the_escape_line() {
 }
 
 #[test]
+fn invalid_legacy_octal_digits_use_php_numeric_literal_diagnostic() {
+    for literal in ["08", "-09", "0_8"] {
+        let (status, stderr) = run_stdin(&format!("<?php\n{literal};\n"));
+
+        assert_eq!(status, 255, "literal {literal}");
+        assert_eq!(
+            stderr, "Parse error: Invalid numeric literal in Standard input code on line 2\n",
+            "literal {literal}"
+        );
+    }
+}
+
+#[test]
 fn void_cast_is_a_discard_statement_not_an_assignment_value() {
     let (status, stderr) = run_stdin("<?php\n$result = (void)$value;\n");
 

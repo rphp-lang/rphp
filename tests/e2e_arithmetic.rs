@@ -127,9 +127,15 @@ fn test_e2e_nested_paren() {
 }
 
 #[test]
-fn test_e2e_integer_overflow_error() {
-    let result = rphp::lexer::Lexer::new("<?php echo 99999999999999999999;").tokenize();
-    assert!(result.is_err());
+fn overflowing_decimal_integer_literal_becomes_float() {
+    let tokens = rphp::lexer::Lexer::new("<?php echo 99999999999999999999;")
+        .tokenize()
+        .unwrap();
+    assert!(
+        tokens
+            .iter()
+            .any(|token| matches!(token, rphp::lexer::Token::Float(value) if *value == 1.0e20))
+    );
 }
 
 // ========== Float literals ==========

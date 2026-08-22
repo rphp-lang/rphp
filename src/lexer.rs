@@ -247,6 +247,45 @@ fn decode_numeric_literal(bytes: &[u8]) -> String {
         .collect()
 }
 
+#[inline]
+fn integer_literal_token(bytes: &[u8], radix: u32) -> Result<Token, String> {
+    let literal = decode_numeric_literal(bytes);
+    if let Ok(number) = i64::from_str_radix(&literal, radix) {
+        return Ok(Token::Integer(number));
+    }
+
+    let number = if radix == 10 {
+        literal
+            .parse::<f64>()
+            .map_err(|_| "Invalid decimal integer literal".to_string())?
+    } else {
+        overflowing_radix_literal_to_float(literal.as_bytes(), radix)
+    };
+    Ok(Token::Float(number))
+}
+
+/// PHP promotes a non-decimal integer literal to a double after it outgrows a
+/// signed machine integer. Keep that cold conversion separate from the common
+/// `i64` path. Binary and octal conversion retain PHP 8.5's observable legacy
+/// rounding order; for example, the 64-one binary literal is the double just
+/// below 2^64 rather than the correctly rounded 2^64.
+#[cold]
+fn overflowing_radix_literal_to_float(digits: &[u8], radix: u32) -> f64 {
+    digits.iter().copied().fold(0.0, |value, byte| {
+        if matches!(radix, 2 | 8) {
+            ((value * f64::from(radix)) + f64::from(byte)) - f64::from(b'0')
+        } else {
+            let digit = match byte {
+                b'0'..=b'9' => byte - b'0',
+                b'a'..=b'f' => byte - b'a' + 10,
+                b'A'..=b'F' => byte - b'A' + 10,
+                _ => unreachable!("lexer passed an invalid radix digit"),
+            };
+            value * f64::from(radix) + f64::from(digit)
+        }
+    })
+}
+
 impl<'a> Lexer<'a> {
     pub fn new(source: &'a str) -> Self {
         Self {
@@ -533,7 +572,7 @@ impl<'a> Lexer<'a> {
                         match self.read_number()? {
                             Token::Integer(n) => tokens.push(Token::Integer(-n)),
                             Token::Float(f) => tokens.push(Token::Float(-f)),
-                            _ => unreachable!(),
+                            token => tokens.push(token),
                         }
                     } else {
                         tokens.push(Token::Minus);
@@ -858,10 +897,8 @@ impl<'a> Lexer<'a> {
                     self.pos += 2; // skip 0x
                     let hex_start = self.pos;
                     self.consume_numeric_digits(|byte| byte.is_ascii_hexdigit());
-                    let s = decode_numeric_literal(&self.src[hex_start..self.pos]);
-                    let n = i64::from_str_radix(&s, 16)
-                        .map_err(|_| format!("Invalid hex literal at position {}", start))?;
-                    return Ok(Token::Integer(n));
+                    return integer_literal_token(&self.src[hex_start..self.pos], 16)
+                        .map_err(|error| format!("{error} at position {start}"));
                 }
                 b'b' | b'B'
                     if self
@@ -872,10 +909,8 @@ impl<'a> Lexer<'a> {
                     self.pos += 2; // skip 0b
                     let bin_start = self.pos;
                     self.consume_numeric_digits(|byte| matches!(byte, b'0' | b'1'));
-                    let s = decode_numeric_literal(&self.src[bin_start..self.pos]);
-                    let n = i64::from_str_radix(&s, 2)
-                        .map_err(|_| format!("Invalid binary literal at position {}", start))?;
-                    return Ok(Token::Integer(n));
+                    return integer_literal_token(&self.src[bin_start..self.pos], 2)
+                        .map_err(|error| format!("{error} at position {start}"));
                 }
                 b'o' | b'O'
                     if self
@@ -886,10 +921,8 @@ impl<'a> Lexer<'a> {
                     self.pos += 2; // skip 0o
                     let octal_start = self.pos;
                     self.consume_numeric_digits(|byte| matches!(byte, b'0'..=b'7'));
-                    let literal = decode_numeric_literal(&self.src[octal_start..self.pos]);
-                    let number = i64::from_str_radix(&literal, 8)
-                        .map_err(|_| format!("Invalid octal literal at position {}", start))?;
-                    return Ok(Token::Integer(number));
+                    return integer_literal_token(&self.src[octal_start..self.pos], 8)
+                        .map_err(|error| format!("{error} at position {start}"));
                 }
                 _ => {}
             }
@@ -922,11 +955,20 @@ impl<'a> Lexer<'a> {
                 .map_err(|_| format!("Invalid float literal at position {}", start))?;
             Ok(Token::Float(f))
         } else {
-            let s = decode_numeric_literal(&self.src[start..self.pos]);
-            let n: i64 = s
-                .parse()
-                .map_err(|_| format!("Integer literal too large at position {}", start))?;
-            Ok(Token::Integer(n))
+            let literal = &self.src[start..self.pos];
+            if literal.len() > 1 && literal[0] == b'0' {
+                if literal.iter().any(|byte| matches!(byte, b'8' | b'9')) {
+                    return Ok(Token::ParseError(
+                        "Invalid numeric literal".into(),
+                        self.source_line_at(start),
+                    ));
+                }
+                integer_literal_token(literal, 8)
+                    .map_err(|error| format!("{error} at position {start}"))
+            } else {
+                integer_literal_token(literal, 10)
+                    .map_err(|error| format!("{error} at position {start}"))
+            }
         }
     }
 
@@ -1719,6 +1761,76 @@ mod tests {
 
         assert!(tokens.contains(&Token::Integer(511)));
         assert!(tokens.contains(&Token::Integer(16)));
+    }
+
+    #[test]
+    fn overflowing_integer_literals_promote_to_php_85_floats() {
+        let tokens = Lexer::new(
+            "<?php
+            9223372036854775808;
+            0x8000000000000000;
+            0b1111111111111111111111111111111111111111111111111111111111111111;
+            0o1000000000000000000000;
+            01000000000000000000000;",
+        )
+        .tokenize()
+        .unwrap();
+        let floats: Vec<_> = tokens
+            .iter()
+            .filter_map(|token| match token {
+                Token::Float(value) => Some(value.to_bits()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            floats,
+            vec![
+                0x43e0_0000_0000_0000,
+                0x43e0_0000_0000_0000,
+                0x43ef_ffff_ffff_ffff,
+                0x43e0_0000_0000_0000,
+                0x43e0_0000_0000_0000,
+            ]
+        );
+    }
+
+    #[test]
+    fn very_large_non_decimal_integer_literals_reach_infinity() {
+        let source = format!(
+            "<?php 0b{}; 0o{}; 0x{};",
+            "1".repeat(1100),
+            "7".repeat(370),
+            "f".repeat(280),
+        );
+        let tokens = Lexer::new(&source).tokenize().unwrap();
+
+        assert_eq!(
+            tokens
+                .iter()
+                .filter(|token| matches!(token, Token::Float(value) if value.is_infinite()))
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn legacy_octal_literals_validate_digits_and_retain_source_lines() {
+        let tokens = Lexer::new("<?php\n0123; 01_6;\n08; -09;")
+            .tokenize()
+            .unwrap();
+
+        assert!(tokens.contains(&Token::Integer(83)));
+        assert!(tokens.contains(&Token::Integer(14)));
+        assert_eq!(
+            tokens
+                .iter()
+                .filter(|token| {
+                    **token == Token::ParseError("Invalid numeric literal".into(), 3)
+                })
+                .count(),
+            2
+        );
     }
 
     #[test]
