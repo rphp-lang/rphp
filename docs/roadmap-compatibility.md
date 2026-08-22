@@ -1588,6 +1588,37 @@ other random APIs, the two later blockers, reentrant tokenizer mutation, the
 complete string/random suites and broader compatibility remain separate
 checkpoints.
 
+The `unix-process-helper-batch` checkpoint reaches 4,088 exact passes with
+1,211 failures, 115 skips, no XFAIL, 185 unsupported cases and zero timeouts
+or crashes. On AMD64 Unix in C/POSIX locale, `escapeshellarg()` and
+`escapeshellcmd()` implement PHP's byte quoting, quote-state, invalid-byte,
+null-byte and length contracts; `exec()` and `shell_exec()` synchronously use
+`/bin/sh -c` with binary stdout and PHP-compatible last-line, output-array,
+status and no-output behavior. Positional/named by-reference metadata,
+weak/strict command conversion, the one-array-argument `implode()`/`join()`
+overload and the supplying `-n`/`--no-php-ini`/`-e`/truthful `-a` CLI paths are
+included. The exact full-corpus delta from `80eaec31` is +7/-0: `bug40236`,
+`bug80811`, the three named/statement/value exit cases plus `bug60978`, and
+`gh21504` become exact with every previous pass preserved. Five old failures
+advance from runtime to their independent output mismatches without changing
+status; two final manifests and summaries are byte-identical. Fourteen focused
+upstream PHPTs pass, including both 64 MiB escape limits, while three stop at
+the independent `.5` literal, `uniqid()` and `system()` surfaces. A 510-case
+byte oracle and 74,898-case clean-room quote/control/non-ASCII sweep are byte-
+identical to PHP 8.5.9. All five feature configurations, all-feature/all-
+target, formatting, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. One documented production unsafe block raises the
+inventory to 1,620/289/332, and the fixed function-table envelope moves from
+896 to 1,792 slots; no opcode definition, call-frame, PHP Value/object layout
+or dependency change is made. CPU-pinned 32-pair release controls put
+independent/paired median changes at +0.665%/+0.745% for 100 empty requests and
++2.300%/+2.048% for two million existing two-argument `implode()` calls, below
+the +5% gate.
+Windows/locales beyond C, untrusted-input safety, async/timeout/stream process
+APIs, `system()`/`passthru()`/`proc_open()`/backticks, real `-e` extended info,
+readline `-a`, internal Reflection arginfo, the three later blockers and
+broader compatibility remain separate checkpoints.
+
 ## Measurement system
 
 ### Contract baseline

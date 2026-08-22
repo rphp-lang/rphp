@@ -7,7 +7,100 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`unix-process-helper-batch`, pinned to php-src 8.5.6 commit `fcc29c8` and
+candidate commit `cd161267`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 4,088 pass, 1,211 fail, 115 skip, none remain XFAIL, 185
+are unsupported, and none time out or crash. The headline pass rate is
+77.147% and the whole-corpus rate is 73.013%; 4,805 of 5,299 attempted cases
+reach runtime (90.677%). Relative to exact integration baseline `80eaec31`,
+the pass-set delta is +7/-0.
+
+The exact additions are `Zend/tests/bug40236.phpt`, `bug80811.phpt`,
+`exit/bug60978.phpt`, `exit/exit_named_arg.phpt`,
+`exit/exit_statements.phpt`, `exit/exit_values.phpt` and `gh21504.phpt`.
+Every previous pass is preserved. The new one-argument `implode()` overload
+also advances five existing failures from missing-function runtime failures to
+their independent output mismatches: `bug70898.phpt` and the ArrayObject,
+array, false and null container offset-behaviour cases. Their status remains
+fail, so none contributes to the pass delta. Two sequential final candidate
+runs have byte-identical manifests and summaries. Their SHA-256 values are
+`3bc3248ce87c831b96228d95a75ad7b44dd38a3ebd6ba8bab7a2422328bfd052`
+and `57bf384519ed9195eee3bc9ee9a78c278f509f5dc9479018d14bd2a6b191c6a7`.
+
+On AMD64 Unix in the admitted C/POSIX locale, `escapeshellarg()` now emits the
+single-quoted shell representation with PHP's embedded-quote sequence and
+`escapeshellcmd()` tracks paired quote regions while escaping the PHP Unix
+metacharacter set. Both operate on PHP bytes, reproduce null-byte and maximum-
+length ValueErrors, filter non-locale bytes as php-src does in C locale, and
+enforce PHP 8.5 weak/strict string conversion including Stringable objects and
+null deprecations. A 510-case single-byte differential oracle and a 74,898-case
+clean-room sweep over quote, slash, metacharacter, control and non-ASCII byte
+combinations are byte-identical to PHP 8.5.9, with respective output digests
+`fe4f5ee09bbc0b06f2a3946d713642451b7e568b89a61758854d8def630f1176`
+and `08d6f661f205da430f061c894e907e58df75e90618f40212d24dd4ba555aaa86`.
+
+`exec()` and `shell_exec()` synchronously invoke `/bin/sh -c` with inherited
+environment, working directory, stdin and stderr while capturing binary
+stdout. `exec()` returns the whitespace-trimmed last line, appends all output
+lines to its by-reference array, writes the exit status and preserves
+positional, named and overlapping-reference behavior. `shell_exec()` returns
+the complete stdout byte string or null when there is no output. Empty and
+null-byte commands, weak/strict command conversion and diagnostics match the
+PHP 8.5 oracle. CLI parsing now admits `-n`, `--no-php-ini` and `-e`; `-a`
+truthfully reports that the unavailable interactive shell requires readline.
+The supplying path also adds the PHP one-array-argument forms of `implode()`
+and `join()` with their exact overload diagnostics, while retaining a direct
+string-plus-array hot path.
+
+Fourteen of seventeen focused upstream PHPTs pass: all seven supplying Zend
+tests, both adjacent command regressions, the direct null and basic escape
+tests and both 64 MiB length-boundary tests. The remaining three stop at
+independent surfaces: `escapeshellarg_variation1.phpt` uses the unsupported
+`.5` literal grammar, `bug70018.phpt` first calls missing `uniqid()`, and
+`exec_basic1.phpt` validates the new exec null-byte error before calling
+missing `system()`. Original unit, E2E and CLI regressions cover quoting state,
+binary output, line splitting, status and array references, no-output returns,
+strict diagnostics and CLI option ordering. All five Cargo feature
+configurations, all-feature/all-target, formatting, PHPT-runner and unsafe-
+policy self-tests, the exact unsafe ratchet, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The
+production inventory is 1,620 unsafe blocks, 289 unsafe functions and 332
+SAFETY annotations; the one new block documents the live-frame by-reference
+destination invariant. No opcode definition, call-frame, PHP Value/object
+layout or dependency changes are made; compiler metadata changes only
+`exec()` argument reference preservation. Four fixed registrations move the
+default function-table envelope from 896 to 1,792 slots and reserve it before
+registration, avoiding a startup rehash.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used performance-governor CPU 2, four warmup pairs and no
+excluded samples. Batches of 100 empty `-r` requests measured baseline/
+candidate p10/median/p90 0.147754/0.148796/0.149713 and
+0.148510/0.149786/0.151467 seconds, +0.665% independently and +0.745% paired.
+One request executing two million existing two-argument `implode()` calls
+measured 0.380636/0.386104/0.407098 and 0.388705/0.394986/0.403490 seconds,
++2.300% independently and +2.048% paired, with checksum `30000000`. Both
+controls remain below the +5% gate; paired p10/p90 changes are
++0.220%/+1.246% and -0.919%/+4.681%. As absolute changed-path sanity checks,
+fifteen candidate runs measured one million `escapeshellarg()` calls at
+p10/median/p90 0.173890/0.174946/0.175746 seconds with checksum `8000000`, and
+25 `exec('printf x')` calls at 0.010857/0.010995/0.011233 seconds with checksum
+`25`. No A/B claim is possible for the new functions. The baseline and
+candidate binary SHA-256 values are
+`9943bbd87d9a56989ee712857007d1a63058c702c0631d7a9325e0d7d0302f50`
+and `041b2b6ec5f60e6410b0a78b4f167a239470fba401f00cf5002e736ccc0f99f3`.
+
+This checkpoint does not claim Windows command quoting or execution, locales
+beyond C/POSIX, sandboxing or safety for untrusted shell input, process
+timeouts/cancellation, asynchronous or background execution, `system()`,
+`passthru()`, `proc_open()`, backticks or streaming process APIs. It does not
+implement extended-info/tick behavior for the accepted `-e` flag, a readline
+interactive shell, internal Reflection arginfo/return metadata, `uniqid()`,
+the `.5` literal grammar, the complete process/standard suites or broader PHP
+compatibility.
+
+The preceding `strtok-shuffle-batch` checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `0952d95e`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 4,081 pass, 1,218 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
