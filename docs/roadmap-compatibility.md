@@ -1365,6 +1365,24 @@ short-circuited exit expressions, below the +5% gate. Process helpers, CLI INI,
 output-buffer chunk callbacks and broader compatibility remain separate
 checkpoints.
 
+The `floating-classification-contract` checkpoint reaches 4,069 exact passes
+with 1,230 failures, 115 skips, no XFAIL, 185 unsupported cases and zero
+timeouts or crashes. `is_nan()`, `is_finite()` and `is_infinite()` share PHP
+8.5's strict and weak internal `float $num` conversion boundary, including
+integer widening, complete numeric strings, null deprecations and exact invalid
+type diagnostics; `M_PI` shares the `pi()` value. The exact full-corpus delta
+from `f80af9ae` is +2/-0: `bug42143.phpt` and `bug73954.phpt` become exact with
+every prior pass preserved. Three other runtime failures advance to independent
+string-offset and precision-zero comparison output boundaries; no other
+non-pass movement occurs, and two final manifests/summaries are byte-identical.
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+CPU-pinned 32-pair release controls put independent/paired median changes at
+-0.442%/-0.345% for 100 empty requests, -3.516%/-3.440% for two million
+existing `is_float()` classifications and -0.905%/-0.821% for 500,000 existing
+constant lookups, below the +5% gate. `base_convert()`, the later output gaps
+and broader compatibility remain separate checkpoints.
+
 ## Measurement system
 
 ### Contract baseline

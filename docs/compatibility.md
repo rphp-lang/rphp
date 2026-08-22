@@ -8,6 +8,72 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `8520c67e`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 4,069 pass, 1,230 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 76.788% and the whole-corpus rate is 72.674%; 4,805 of
+5,299 attempted cases reach runtime (90.677%). Relative to exact integration
+baseline `f80af9ae`, the pass-set delta is +2/-0.
+
+The exact additions are `Zend/tests/bug42143.phpt` and
+`Zend/tests/bug73954.phpt`, both previously runtime failures. Every previous
+pass is preserved. `Zend/tests/empty_str_offset.phpt`,
+`Zend/tests/isset/isset_str_offset.phpt` and
+`Zend/tests/string_to_number_comparison.phpt` advance from missing-builtin or
+missing-constant runtime failures to their independent string-offset and
+precision-zero float/string comparison output boundaries. They remain visible
+failures, and there are no other non-pass status or category movements. Two
+sequential final candidate runs have byte-identical manifests and summaries.
+Their SHA-256 values are
+`446ac9922bb0b6060c979df31191270843da7724b2e5aea3156b6cc9d5a53ac6`
+and `05b1ee6bb715d7f43ffd25e0698c67949cc9da614c26f8251b6ec45dfa63e4c5`.
+
+`is_nan()`, `is_finite()` and `is_infinite()` now share PHP 8.5's internal
+`float $num` boundary. Floats and widening integers work in strict and weak
+callers; weak calls additionally accept booleans and complete PHP numeric
+strings, including decimal overflow to infinity. Textual Rust spellings such
+as `NAN` and `INF` remain invalid strings. Weak null conversion emits PHP's
+parameter-specific deprecation before classifying zero, while strict scalar
+mismatches and invalid arrays or objects produce the exact `TypeError`,
+including concrete class and `true`/`false` diagnostics. Ordinary,
+namespaced-fallback, dynamic and first-class calls use the same path. The
+`M_PI` constant exposes the same double as `pi()`.
+
+The focused three-case upstream slice moves from zero passes to two; its one
+remaining case is the independent precision-zero comparison boundary above.
+Its final manifest/summary hashes are
+`501bd5638aabf3b108fce19547341ae444277a96123b2eabc616aad09820596a`
+and `7a11cd3d956cc99c6752241f8ba56012cfd17bcdea9fe8c0d9c16e08e4e1a073`.
+Five original CLI regressions cover finite/infinite/NaN classification,
+`M_PI`, weak scalar and null behavior, numeric overflow, strict widening,
+invalid-type diagnostics, namespaced fallback and first-class calls.
+
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, the exact unsafe ratchet, Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass. The production inventory remains 1,618 unsafe blocks, 289
+unsafe functions and 330 SAFETY annotations. No opcode, frame, value/object
+layout, dependency or production-unsafe change is made.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used CPU 2 with the performance governor, four warmups and no
+excluded samples. Batches of 100 empty requests measured baseline/candidate
+p10/median/p90 0.152417/0.153287/0.156623 and
+0.151788/0.152610/0.157642 seconds, -0.442% independently and -0.345% paired.
+Two million existing `is_float()` classifications measured
+0.191234/0.192143/0.192963 and 0.184926/0.185388/0.186633 seconds, -3.516%
+independently and -3.440% paired. Five hundred thousand existing
+`defined('PHP_FLOAT_NAN')` lookups measured 0.067530/0.068004/0.069110 and
+0.066951/0.067389/0.068143 seconds, -0.905% independently and -0.821% paired.
+All remain below the +5% gate with exact output and status. The baseline and
+candidate binary SHA-256 values are
+`2e050fbacd9afec5bc8e3ab9fa5618bde3ce006711898aa4c29dfe2eebc91b64`
+and `a21843f3af976472e435dbd0e20288fc6ce6b95c03371943a814346b9b5fb788`.
+
+This checkpoint does not claim `base_convert()`, the independent string-offset
+or precision-zero comparison behavior above, or broader PHP compatibility.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `b6910daa`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 4,067 pass, 1,232 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
