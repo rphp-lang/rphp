@@ -1383,6 +1383,25 @@ existing `is_float()` classifications and -0.905%/-0.821% for 500,000 existing
 constant lookups, below the +5% gate. `base_convert()`, the later output gaps
 and broader compatibility remain separate checkpoints.
 
+The `float-string-comparison-precision` checkpoint reaches 4,070 exact passes
+with 1,229 failures, 115 skips, no XFAIL, 185 unsupported cases and zero
+timeouts or crashes. Dynamic float-to-nonnumeric-string equality and ordering,
+including reversed and nested compound operands, now use request-local PHP
+`precision`; numeric strings retain numeric comparison. Scalar constant
+comparisons snapshot precision at source-unit compilation, preserving startup,
+runtime `ini_set()`, main, include and eval boundaries. The exact full-corpus
+delta from `cb3941a3` is +1/-0: `string_to_number_comparison.phpt` moves from
+output failure to exact pass with every prior pass preserved, no other non-pass
+movement, and two byte-identical final manifests/summaries. All five feature
+configurations, all-feature/all-target, formatting, PHPT runner, unsafe,
+Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. CPU-pinned 32-pair
+release controls put independent/paired median changes at +0.509%/+0.433% for
+100 empty requests, -0.323%/-0.923% for five million existing integer
+comparisons, +0.022%/-0.033% for one million changed-path comparisons and
++0.477%/+0.192% for compiling and executing 5,000 dynamic comparisons, below
+the +5% gate. String offsets, `base_convert()`, deferred Reflection snapshots
+and broader compatibility remain separate checkpoints.
+
 ## Measurement system
 
 ### Contract baseline

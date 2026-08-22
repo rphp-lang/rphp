@@ -8,6 +8,72 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `b1c3757b`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 4,070 pass, 1,229 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 76.807% and the whole-corpus rate is 72.692%; 4,805 of
+5,299 attempted cases reach runtime (90.677%). Relative to exact integration
+baseline `cb3941a3`, the pass-set delta is +1/-0.
+
+The exact addition is `Zend/tests/string_to_number_comparison.phpt`, which
+moves from output failure to pass. Every previous pass is preserved, there is
+no other non-pass status or category movement, and two sequential final
+candidate runs have byte-identical manifests and summaries. Their SHA-256
+values are
+`1248fb5b91d224ff0ad903f3f58301ffe5dac0869291c4e6f51dcc744b55af31`
+and `7ba8788af97b62ce4905c9649a491dc5a8439fa4e92ba911f06ee8ef6d8bb999`.
+
+Dynamic float-to-nonnumeric-string equality and ordering now render the number
+with the request-local `precision` before PHP's lexical comparison. Reversed
+operands and scalar leaves nested in arrays or same-class objects use the same
+rule. Complete numeric strings retain numeric comparison, non-finite values
+retain their separate PHP ordering, and ordinary number/number or string/string
+fast paths remain unchanged. The compiler snapshots precision for scalar
+constant comparisons: a startup `-d precision` setting controls the main unit,
+runtime `ini_set()` affects dynamic expressions, and a later `include` or
+`eval` snapshots the value active when that source unit is compiled. This also
+preserves PHP's observable distinction between a previously compiled literal
+comparison and an otherwise equivalent comparison through a variable.
+
+The focused upstream case moves from zero passes to one. Its final
+manifest/summary hashes are
+`6110877824c85d83d9bd9cab47c0d12512f5c1611a603e8fb9622fe38f4c2410`
+and `30b274ef5ffe1031805f1fea8f7d7cae255daae580d676f26ae3715c001bd18c`.
+Five original CLI regressions cover all loose relational operators, reversed
+operands, nested array/object leaves, numeric strings, infinity, startup
+constant folding and runtime `ini_set()` across the main, include and eval
+compiler boundaries.
+
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, the exact unsafe ratchet, Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass. The production inventory remains 1,618 unsafe blocks, 289
+unsafe functions and 330 SAFETY annotations. No opcode, frame, value/object,
+executor-globals or dependency layout changes and no production-unsafe change
+are made; the cold compiler gains one precision snapshot field.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used CPU 2 with the performance governor, four warmups and no
+excluded samples. Batches of 100 empty requests measured baseline/candidate
+p10/median/p90 0.150914/0.151812/0.152886 and
+0.151215/0.152585/0.153744 seconds, +0.509% independently and +0.433% paired.
+Five million existing integer comparisons measured
+0.177918/0.179786/0.182280 and 0.174730/0.179206/0.182192 seconds, -0.323%
+independently and -0.923% paired. One million changed-path float/string
+comparisons measured 0.143272/0.144055/0.144983 and
+0.142676/0.144088/0.145009 seconds, +0.022% independently and -0.033% paired.
+Compiling and executing 5,000 dynamic float/string comparisons measured
+0.289647/0.290564/0.292832 and 0.289360/0.291949/0.293786 seconds, +0.477%
+independently and +0.192% paired. All remain below the +5% gate with exact
+output and status. The baseline and candidate binary SHA-256 values are
+`a21843f3af976472e435dbd0e20288fc6ce6b95c03371943a814346b9b5fb788`
+and `a2b1a032f970a747ca4e7ad484546b7d5a6f29c93c4989b2026bc5704effc8fd`.
+
+This checkpoint does not claim the independent string-offset output behavior,
+`base_convert()`, deferred Reflection-attribute comparison snapshots or broader
+PHP compatibility.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `8520c67e`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 4,069 pass, 1,230 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
