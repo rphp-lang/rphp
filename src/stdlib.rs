@@ -11918,6 +11918,369 @@ fn fn_hypot(
     );
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum BaseConvertNumber {
+    Integer(i64),
+    Float(f64),
+}
+
+fn base_convert_digit(byte: u8) -> Option<u32> {
+    match byte {
+        b'0'..=b'9' => Some(u32::from(byte - b'0')),
+        b'a'..=b'z' => Some(u32::from(byte - b'a') + 10),
+        b'A'..=b'Z' => Some(u32::from(byte - b'A') + 10),
+        _ => None,
+    }
+}
+
+/// Parse PHP's deliberately permissive base-conversion input. Leading and
+/// trailing ASCII whitespace and a matching 0b/0o/0x prefix are admitted;
+/// every other invalid byte is ignored and reported once by the caller.
+fn parse_base_convert_number(bytes: &[u8], base: u32) -> (BaseConvertNumber, bool) {
+    let start = bytes
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .rposition(|byte| !byte.is_ascii_whitespace())
+        .map_or(start, |index| index + 1);
+    let bytes = &bytes[start..end];
+    let prefix = match base {
+        2 => [b'0', b'b'],
+        8 => [b'0', b'o'],
+        16 => [b'0', b'x'],
+        _ => [0, 0],
+    };
+    let offset = usize::from(
+        prefix[0] != 0
+            && bytes.len() >= 2
+            && bytes[0] == prefix[0]
+            && bytes[1].eq_ignore_ascii_case(&prefix[1]),
+    ) * 2;
+
+    let mut integer = 0_i64;
+    let mut float = None;
+    let mut invalid = false;
+    for &byte in &bytes[offset..] {
+        let Some(digit) = base_convert_digit(byte).filter(|digit| *digit < base) else {
+            invalid = true;
+            continue;
+        };
+        if let Some(number) = &mut float {
+            *number = *number * f64::from(base) + f64::from(digit);
+        } else if let Some(number) = integer
+            .checked_mul(i64::from(base))
+            .and_then(|number| number.checked_add(i64::from(digit)))
+        {
+            integer = number;
+        } else {
+            float = Some(integer as f64 * f64::from(base) + f64::from(digit));
+        }
+    }
+    (
+        float.map_or(
+            BaseConvertNumber::Integer(integer),
+            BaseConvertNumber::Float,
+        ),
+        invalid,
+    )
+}
+
+fn format_base_convert_number(number: BaseConvertNumber, base: u32) -> Option<String> {
+    const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut output = Vec::new();
+    match number {
+        BaseConvertNumber::Integer(mut number) => {
+            while number >= 1 {
+                output.push(DIGITS[(number % i64::from(base)) as usize]);
+                number /= i64::from(base);
+            }
+        }
+        BaseConvertNumber::Float(mut number) => {
+            if !number.is_finite() {
+                return None;
+            }
+            while number >= 1.0 {
+                let digit = (number % f64::from(base)) as usize;
+                output.push(DIGITS[digit]);
+                number = (number / f64::from(base)).floor();
+            }
+        }
+    }
+    if output.is_empty() {
+        output.push(b'0');
+    } else {
+        output.reverse();
+    }
+    Some(String::from_utf8(output).expect("base conversion digits are ASCII"))
+}
+
+fn base_convert_type_error(
+    eg: &mut ExecutorGlobals,
+    argument: &Value,
+    position: usize,
+    parameter: &str,
+    expected: &str,
+) {
+    let actual = match argument.value_type() {
+        ValueType::True => "true".to_string(),
+        ValueType::False => "false".to_string(),
+        _ => argument.diagnostic_type_name().into_owned(),
+    };
+    eg.exception = Some(crate::value::make_error_value(
+        "TypeError",
+        &format!(
+            "base_convert(): Argument #{position} (${parameter}) must be of type {expected}, {actual} given"
+        ),
+    ));
+}
+
+fn base_convert_string_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+) -> Result<Option<String>, VmError> {
+    let argument = owned_argument(ed, 0);
+    let argument = argument.dereferenced();
+    let strict = internal_call_is_strict(ed);
+    let converted = match argument.value_type() {
+        ValueType::String => Some(argument.as_str().unwrap_or("").to_string()),
+        ValueType::Null if !strict => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                "base_convert(): Passing null to parameter #1 ($num) of type string is deprecated",
+            )?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            Some(String::new())
+        }
+        ValueType::False if !strict => Some(String::new()),
+        ValueType::True if !strict => Some("1".to_string()),
+        ValueType::Long | ValueType::Double if !strict => {
+            if argument.as_double().is_some_and(f64::is_nan) {
+                report_internal_diagnostic(
+                    eg,
+                    ed,
+                    2,
+                    "Warning",
+                    "unexpected NAN value was coerced to string",
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(None);
+                }
+            }
+            Some(argument.echo_to_string_with_precision(eg.precision))
+        }
+        ValueType::Object if !strict => {
+            let rendered = crate::vm::execute::call_object_string_conversion(eg, argument)?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            let Some(rendered) = rendered else {
+                base_convert_type_error(eg, argument, 1, "num", "string");
+                return Ok(None);
+            };
+            let Some(rendered) = rendered.as_str() else {
+                let class_name = argument.diagnostic_type_name();
+                eg.exception = Some(crate::value::make_error_value(
+                    "TypeError",
+                    &format!("{class_name}::__toString(): Return value must be of type string"),
+                ));
+                return Ok(None);
+            };
+            Some(rendered.to_string())
+        }
+        _ => {
+            base_convert_type_error(eg, argument, 1, "num", "string");
+            None
+        }
+    };
+    Ok(converted)
+}
+
+fn base_convert_int_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    index: u32,
+    parameter: &str,
+) -> Result<Option<i64>, VmError> {
+    let argument = owned_argument(ed, index);
+    let argument = argument.dereferenced();
+    let strict = internal_call_is_strict(ed);
+    let converted = match argument.value_type() {
+        ValueType::Long => argument.as_long(),
+        ValueType::Null if !strict => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                &format!(
+                    "base_convert(): Passing null to parameter #{} (${parameter}) of type int is deprecated",
+                    index + 1
+                ),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            Some(0)
+        }
+        ValueType::True | ValueType::False if !strict => Some(i64::from(argument.is_truthy())),
+        ValueType::Double if !strict => {
+            let number = argument.as_double().unwrap_or(f64::NAN);
+            let upper_exclusive = -(i64::MIN as f64);
+            if !number.is_finite() || number < i64::MIN as f64 || number >= upper_exclusive {
+                None
+            } else {
+                let integer = number as i64;
+                if integer as f64 != number {
+                    report_internal_deprecation(
+                        eg,
+                        ed,
+                        &format!(
+                            "Implicit conversion from float {} to int loses precision",
+                            argument.echo_to_string_with_precision(-1)
+                        ),
+                    )?;
+                    if eg.exception.is_some() {
+                        return Ok(None);
+                    }
+                }
+                Some(integer)
+            }
+        }
+        ValueType::String if !strict => {
+            let source = argument.as_str().unwrap_or("");
+            let Some(number) = php_numeric_string_to_float(source) else {
+                base_convert_type_error(eg, argument, index as usize + 1, parameter, "int");
+                return Ok(None);
+            };
+            let upper_exclusive = -(i64::MIN as f64);
+            if !number.is_finite() || number < i64::MIN as f64 || number >= upper_exclusive {
+                None
+            } else {
+                let integer = number as i64;
+                if integer as f64 != number {
+                    report_internal_deprecation(
+                        eg,
+                        ed,
+                        &format!(
+                            "Implicit conversion from float-string \"{source}\" to int loses precision"
+                        ),
+                    )?;
+                    if eg.exception.is_some() {
+                        return Ok(None);
+                    }
+                }
+                Some(integer)
+            }
+        }
+        _ => None,
+    };
+    if converted.is_none() && eg.exception.is_none() {
+        base_convert_type_error(eg, argument, index as usize + 1, parameter, "int");
+    }
+    Ok(converted)
+}
+
+fn fn_base_convert(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(number) = base_convert_string_argument(ed, eg)? else {
+        return Ok(());
+    };
+    let Some(from_base) = base_convert_int_argument(ed, eg, 1, "from_base")? else {
+        return Ok(());
+    };
+    let Some(to_base) = base_convert_int_argument(ed, eg, 2, "to_base")? else {
+        return Ok(());
+    };
+    if !(2..=36).contains(&from_base) {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "base_convert(): Argument #2 ($from_base) must be between 2 and 36 (inclusive)",
+        ));
+        return Ok(());
+    }
+    if !(2..=36).contains(&to_base) {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "base_convert(): Argument #3 ($to_base) must be between 2 and 36 (inclusive)",
+        ));
+        return Ok(());
+    }
+
+    let (number, invalid) = parse_base_convert_number(
+        &php_string_to_bytes(&number),
+        u32::try_from(from_base).unwrap(),
+    );
+    if invalid {
+        report_internal_deprecation(
+            eg,
+            ed,
+            "Invalid characters passed for attempted conversion, these have been ignored",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    let to_base = u32::try_from(to_base).unwrap();
+    let Some(output) = format_base_convert_number(number, to_base) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            &format!("An infinite value cannot be converted to base {to_base}"),
+        ));
+        return Ok(());
+    };
+    ret!(rv, Value::string(output));
+}
+
+#[cfg(test)]
+mod base_convert_tests {
+    use super::{BaseConvertNumber, format_base_convert_number, parse_base_convert_number};
+
+    fn convert(input: &str, from: u32, to: u32) -> (String, bool) {
+        let (number, invalid) = parse_base_convert_number(input.as_bytes(), from);
+        (format_base_convert_number(number, to).unwrap(), invalid)
+    }
+
+    #[test]
+    fn supports_bases_prefixes_whitespace_and_ignored_bytes() {
+        assert_eq!(
+            convert("a37334", 16, 2),
+            ("101000110111001100110100".into(), false)
+        );
+        assert_eq!(convert("\t0Xff\n", 16, 10), ("255".into(), false));
+        assert_eq!(convert("0b101", 2, 10), ("5".into(), false));
+        assert_eq!(convert("0o77", 8, 10), ("63".into(), false));
+        assert_eq!(convert("&4#2", 10, 10), ("42".into(), true));
+        assert_eq!(convert("12304560", 2, 10), ("4".into(), true));
+        assert_eq!(convert("", 36, 2), ("0".into(), false));
+    }
+
+    #[test]
+    fn preserves_php_integer_and_float_conversion_boundaries() {
+        assert_eq!(
+            convert("9223372036854775807", 10, 16),
+            ("7fffffffffffffff".into(), false)
+        );
+        assert_eq!(
+            convert("9223372036854775808", 10, 10),
+            ("9223372036854776028".into(), false)
+        );
+        assert_eq!(
+            convert("ffffffffffffffff", 16, 10),
+            ("18446744073709552046".into(), false)
+        );
+        assert_eq!(
+            parse_base_convert_number(&vec![b'1'; 2000], 2).0,
+            BaseConvertNumber::Float(f64::INFINITY)
+        );
+    }
+}
+
 // ============================================================================
 // Date/Time functions
 // ============================================================================

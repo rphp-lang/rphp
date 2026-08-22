@@ -1689,6 +1689,126 @@ var_dump(ini_parse_quantity('1K'));
 }
 
 #[test]
+fn base_convert_matches_php_bases_precision_diagnostics_and_call_boundary() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($level, $message) {
+    echo $level, ':', $message, "\n";
+    return true;
+});
+
+foreach ([['a37334', 16, 2], ["\t0Xff\n", 16, 10], ['0b101', 2, 10], ['0o77', 8, 10], ['zz', 36, 10]] as $case) {
+    var_dump(base_convert($case[0], $case[1], $case[2]));
+}
+foreach ([['-10', 10, 2], ['&4#2', 10, 10], ['12304560', 2, 10]] as $case) {
+    var_dump(base_convert($case[0], $case[1], $case[2]));
+}
+var_dump(base_convert('9223372036854775807', 10, 16));
+var_dump(base_convert('9223372036854775808', 10, 10));
+var_dump(base_convert('ffffffffffffffff', 16, 10));
+
+class BaseText {
+    public function __toString(): string { return '0Xff'; }
+}
+var_dump(base_convert(null, 10, 2));
+var_dump(base_convert(10.9, 10, 2));
+var_dump(base_convert(new BaseText(), 16, 10));
+var_dump(base_convert('10', 2.9, 10));
+var_dump(base_convert('10', 10, '2.9'));
+
+foreach ([["10", 1, 10], ["10", 10, 37]] as $case) {
+    try {
+        base_convert($case[0], $case[1], $case[2]);
+    } catch (ValueError $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+try {
+    base_convert([], 10, 2);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+class BaseCallTarget {}
+try {
+    basecalltarget::missing();
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+
+set_error_handler(function ($level, $message) {
+    throw new Exception("handled:$level:$message");
+});
+try {
+    base_convert('-10', 10, 2);
+} catch (Exception $error) {
+    echo $error->getMessage(), "\n";
+}
+restore_error_handler();
+try {
+    base_convert(str_repeat('1', 2000), 2, 10);
+} catch (ValueError $error) {
+    echo $error->getMessage(), "\n";
+}
+"#
+        ),
+        concat!(
+            "string(24) \"101000110111001100110100\"\n",
+            "string(3) \"255\"\nstring(1) \"5\"\nstring(2) \"63\"\nstring(4) \"1295\"\n",
+            "8192:Invalid characters passed for attempted conversion, these have been ignored\nstring(4) \"1010\"\n",
+            "8192:Invalid characters passed for attempted conversion, these have been ignored\nstring(2) \"42\"\n",
+            "8192:Invalid characters passed for attempted conversion, these have been ignored\nstring(1) \"4\"\n",
+            "string(16) \"7fffffffffffffff\"\n",
+            "string(19) \"9223372036854776028\"\n",
+            "string(20) \"18446744073709552046\"\n",
+            "8192:base_convert(): Passing null to parameter #1 ($num) of type string is deprecated\nstring(1) \"0\"\n",
+            "8192:Invalid characters passed for attempted conversion, these have been ignored\nstring(7) \"1101101\"\n",
+            "string(3) \"255\"\n",
+            "8192:Implicit conversion from float 2.9 to int loses precision\nstring(1) \"2\"\n",
+            "8192:Implicit conversion from float-string \"2.9\" to int loses precision\nstring(4) \"1010\"\n",
+            "base_convert(): Argument #2 ($from_base) must be between 2 and 36 (inclusive)\n",
+            "base_convert(): Argument #3 ($to_base) must be between 2 and 36 (inclusive)\n",
+            "base_convert(): Argument #1 ($num) must be of type string, array given\n",
+            "Call to undefined method BaseCallTarget::missing()\n",
+            "handled:8192:Invalid characters passed for attempted conversion, these have been ignored\n",
+            "An infinite value cannot be converted to base 10\n"
+        )
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+declare(strict_types=1);
+foreach ([false, true, 12, 1.5] as $value) {
+    try {
+        base_convert($value, 10, 2);
+    } catch (TypeError $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+foreach ([2.0, '2'] as $value) {
+    try {
+        base_convert('10', $value, 10);
+    } catch (TypeError $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+var_dump(base_convert('10', 10, 2));
+"#
+        ),
+        concat!(
+            "base_convert(): Argument #1 ($num) must be of type string, false given\n",
+            "base_convert(): Argument #1 ($num) must be of type string, true given\n",
+            "base_convert(): Argument #1 ($num) must be of type string, int given\n",
+            "base_convert(): Argument #1 ($num) must be of type string, float given\n",
+            "base_convert(): Argument #2 ($from_base) must be of type int, float given\n",
+            "base_convert(): Argument #2 ($from_base) must be of type int, string given\n",
+            "string(4) \"1010\"\n"
+        )
+    );
+}
+
+#[test]
 fn extract_updates_the_caller_scope_with_flags_references_and_atomic_errors() {
     assert_eq!(
         run_php(

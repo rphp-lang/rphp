@@ -1139,6 +1139,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("deg2rad", fn_deg2rad, 1, 1, "num");
     reg!("rad2deg", fn_rad2deg, 1, 1, "num");
     reg!("hypot", fn_hypot, 2, 2, "x", "y");
+    reg!(
+        "base_convert",
+        fn_base_convert,
+        3,
+        3,
+        "num",
+        "from_base",
+        "to_base"
+    );
 
     // --- Environment / system ---
     reg!("getenv", fn_getenv, 1, 1, "name");

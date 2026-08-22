@@ -4035,7 +4035,13 @@ fn op_init_static_call<'a>(
                 if let Some(magic) = magic {
                     (magic, Some(Value::string(&method)), false)
                 } else {
-                    let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", raw_class, method));
+                    let diagnostic_class = eg
+                        .find_public_class(&class)
+                        .map_or(class.as_str(), |definition| definition.name.as_str());
+                    let err = make_error_value(
+                        "Error",
+                        &format!("Call to undefined method {diagnostic_class}::{method}()"),
+                    );
                     match throw_in_frame(eg, frame, err)? {
                         ThrowResult::Handled(new_frame, new_op_array) => {
                             return Ok(ColdResult::NewFrame(new_frame, new_op_array));
