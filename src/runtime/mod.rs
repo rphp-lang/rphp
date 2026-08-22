@@ -1045,16 +1045,12 @@ impl ExecutorGlobals {
     /// normal executors avoid repeated hash-table growth while installing the
     /// fixed built-in class and function set.
     pub(crate) fn reserve_stdlib_capacity(&mut self) {
-        // The all-features registry includes the complete Reflection and
-        // generic runtime surfaces. Reserve the next hash-table envelope so
-        // installing that fixed set never rehashes stored function pointers.
-        // The combined optional I/O/resource surface reaches the next hash
-        // envelope once the weak-object methods are installed. Keep ordinary
-        // default requests on the established 896-slot allocation.
-        #[cfg(all(feature = "resource-lifetime", feature = "include-path"))]
+        // The fixed PHP 8.5 surface, including the synchronous process helper
+        // batch, occupies the next hash-table envelope even under default
+        // features. Reserve it up front so registration never rehashes stored
+        // function pointers; optional I/O/resource functions still fit inside
+        // the same envelope.
         self.function_table.reserve(900);
-        #[cfg(not(all(feature = "resource-lifetime", feature = "include-path")))]
-        self.function_table.reserve(512);
         self.class_table.reserve(66);
         self.method_declaring_class.reserve(512);
         self.class_by_id.reserve(80);

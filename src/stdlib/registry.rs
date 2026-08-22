@@ -5,6 +5,7 @@
 //! reference metadata.
 
 use super::filesystem::*;
+use super::process::*;
 use super::strings::*;
 use super::*;
 
@@ -339,8 +340,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("rtrim", fn_rtrim, 2, 1, "string", "characters");
     reg!("ltrim", fn_ltrim, 2, 1, "string", "characters");
     reg!("explode", fn_explode, 3, 2, "separator", "string", "limit");
-    reg!("implode", fn_implode, 2, 2, "separator", "array");
-    reg!("join", fn_implode, 2, 2, "separator", "array");
+    reg!("implode", fn_implode, 2, 1, "separator", "array");
+    reg!("join", fn_join, 2, 1, "separator", "array");
     reg!("str_repeat", fn_str_repeat, 2, 2, "string", "times");
     reg!("substr_count", fn_substr_count, 2, 2, "haystack", "needle");
     reg!(
@@ -444,6 +445,21 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("vsprintf", fn_vsprintf, 2, 2, "format", "values");
     reg_var!("printf", fn_printf, 1, "format");
     reg!("vprintf", fn_vprintf, 2, 2, "format", "values");
+
+    // --- Unix process helpers ---
+    reg!("escapeshellarg", fn_escapeshellarg, 1, 1, "arg");
+    reg!("escapeshellcmd", fn_escapeshellcmd, 1, 1, "command");
+    reg_ref!(
+        "exec",
+        fn_exec,
+        3,
+        1,
+        0b110,
+        "command",
+        "output",
+        "result_code"
+    );
+    reg!("shell_exec", fn_shell_exec, 1, 1, "command");
 
     // --- Regex functions ---
     reg_ref!(

@@ -177,6 +177,7 @@ macro_rules! ret {
 mod builtin_classes;
 mod fiber;
 mod filesystem;
+mod process;
 mod strings;
 mod weak;
 
@@ -3281,22 +3282,103 @@ fn fn_implode(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let glue = arg_str!(ed, 0);
-    let pieces = arg!(ed, 1);
-    if let Some(arr) = pieces.as_array() {
-        let glue_bytes = glue.len().saturating_mul(arr.len().saturating_sub(1));
-        let value_bytes = arr.values().map(Value::echo_len_hint).sum::<usize>();
-        let mut result = String::with_capacity(glue_bytes.saturating_add(value_bytes));
-        for (index, value) in arr.values().enumerate() {
-            if index > 0 {
-                result.push_str(glue.as_ref());
-            }
-            value.append_echo_to_with_precision(&mut result, eg.precision);
-        }
-        ret!(rv, Value::string(result));
-    } else {
-        ret!(rv, Value::string(""));
+    implode_or_join(ed, rv, eg, "implode")
+}
+
+fn fn_join(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    implode_or_join(ed, rv, eg, "join")
+}
+
+#[inline]
+fn implode_or_join(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+) -> Result<(), VmError> {
+    let first = arg!(ed, 0);
+    let second = arg!(ed, 1);
+    if let (Some(glue), Some(pieces)) = (first.as_str(), second.as_array()) {
+        return implode_array(rv, eg, glue, pieces);
     }
+
+    if second.value_type() == ValueType::Undef {
+        if let Some(pieces) = first.as_array() {
+            return implode_array(rv, eg, "", pieces);
+        }
+        if first.value_type() != ValueType::Null {
+            let converted = typed_internal_string_argument_expected(
+                ed,
+                eg,
+                function,
+                0,
+                "separator",
+                "array|string",
+            )?;
+            if converted.is_none() {
+                return Ok(());
+            }
+        }
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "{function}(): If argument #1 ($separator) is of type string, argument #2 ($array) must be of type array, null given"
+            ),
+        ));
+        return Ok(());
+    }
+
+    let glue = if first.value_type() == ValueType::Null && !internal_call_is_strict(ed) {
+        report_internal_deprecation(
+            eg,
+            ed,
+            &format!(
+                "{function}(): Passing null to parameter #1 ($separator) of type array|string is deprecated"
+            ),
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        String::new()
+    } else {
+        let Some(glue) = typed_internal_string_argument(ed, eg, function, 0, "separator")? else {
+            return Ok(());
+        };
+        glue
+    };
+    let Some(array) = second.as_array() else {
+        if second.value_type() == ValueType::Null {
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                &format!(
+                    "{function}(): If argument #1 ($separator) is of type string, argument #2 ($array) must be of type array, null given"
+                ),
+            ));
+        } else {
+            typed_internal_argument_error(eg, function, second, 2, "array", "?array");
+        }
+        return Ok(());
+    };
+    implode_array(rv, eg, &glue, array)
+}
+
+#[inline]
+fn implode_array(
+    rv: *mut Value,
+    eg: &ExecutorGlobals,
+    glue: &str,
+    pieces: &PhpArray,
+) -> Result<(), VmError> {
+    let glue_bytes = glue.len().saturating_mul(pieces.len().saturating_sub(1));
+    let value_bytes = pieces.values().map(Value::echo_len_hint).sum::<usize>();
+    let mut result = String::with_capacity(glue_bytes.saturating_add(value_bytes));
+    for (index, value) in pieces.values().enumerate() {
+        if index > 0 {
+            result.push_str(glue);
+        }
+        value.append_echo_to_with_precision(&mut result, eg.precision);
+    }
+    ret!(rv, Value::string(result));
 }
 
 fn fn_str_repeat(

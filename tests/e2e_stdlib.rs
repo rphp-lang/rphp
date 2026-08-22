@@ -2566,3 +2566,92 @@ fn pathinfo_supports_component_flags_used_by_source_loaders() {
         "15:/a:archive.tar.gz:gz:archive.tar"
     );
 }
+
+#[test]
+fn unix_process_helpers_match_php_85_quoting_output_and_reference_contracts() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+setlocale(LC_CTYPE, 'C');
+set_error_handler(function ($level, $message) {
+    echo $level, ':', $message, "\n";
+    return true;
+});
+
+foreach (["a'b", "'paired'", '"paired"', "&;|*?~<>^()[]{}$`\\\n", "\x7f\x80\xff"] as $value) {
+    echo bin2hex(escapeshellarg($value)), ':', bin2hex(escapeshellcmd($value)), "\n";
+}
+
+$output = ['prefix'];
+$code = 99;
+$last = exec("printf ' one  \\n\\nlast\\t \\n'; exit 7", $output, $code);
+echo bin2hex($last), ':', $code, ':', implode(',', array_map('bin2hex', $output)), "\n";
+
+$output = false;
+exec("printf 'a\\0b\\n'", $output);
+echo get_debug_type($output), ':', bin2hex($output[0]), "\n";
+
+$same = [];
+exec('printf x', $same, $same);
+var_dump($same);
+echo bin2hex(shell_exec("printf 'whole\\noutput\\n'")), ':';
+var_dump(shell_exec('exit 3'));
+
+foreach (['', "a\0b"] as $command) {
+    foreach (['exec', 'shell_exec'] as $function) {
+        try { $function($command); }
+        catch (ValueError $error) { echo $error->getMessage(), "\n"; }
+    }
+}
+
+var_dump(join(['a', 'b']), implode(['c', 'd']));
+try { join('invalid'); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+"#,
+        ),
+        concat!(
+            "2761275c27276227:615c2762\n",
+            "27275c2727706169726564275c272727:2770616972656427\n",
+            "27227061697265642227:2270616972656422\n",
+            "27263b7c2a3f7e3c3e5e28295b5d7b7d24605c0a27:",
+            "5c265c3b5c7c5c2a5c3f5c7e5c3c5c3e5c5e5c285c295c5b5c5d5c7b5c7d5c245c605c5c5c0a\n",
+            "277f27:7f\n",
+            "6c617374:7:707265666978,206f6e65,,6c617374\n",
+            "array:610062\n",
+            "int(0)\n",
+            "77686f6c650a6f75747075740a:NULL\n",
+            "exec(): Argument #1 ($command) must not be empty\n",
+            "shell_exec(): Argument #1 ($command) must not be empty\n",
+            "exec(): Argument #1 ($command) must not contain any null bytes\n",
+            "shell_exec(): Argument #1 ($command) must not contain any null bytes\n",
+            "string(2) \"ab\"\nstring(2) \"cd\"\n",
+            "join(): If argument #1 ($separator) is of type string, argument #2 ($array) must be of type array, null given\n",
+        )
+    );
+}
+
+#[test]
+fn unix_process_helpers_enforce_strict_php_85_command_strings() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+declare(strict_types=1);
+foreach ([
+    fn() => escapeshellarg(1),
+    fn() => escapeshellcmd(false),
+    fn() => exec(1),
+    fn() => shell_exec(1.5),
+] as $probe) {
+    try { $probe(); }
+    catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+"#,
+        ),
+        concat!(
+            "escapeshellarg(): Argument #1 ($arg) must be of type string, int given\n",
+            "escapeshellcmd(): Argument #1 ($command) must be of type string, false given\n",
+            "exec(): Argument #1 ($command) must be of type string, int given\n",
+            "shell_exec(): Argument #1 ($command) must be of type string, float given\n",
+        )
+    );
+}

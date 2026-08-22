@@ -20,6 +20,10 @@ Arguments:
 
 Options:
   -r <CODE>    Execute PHP code without requiring an opening tag
+  -n, --no-php-ini
+               Ignore php.ini (RPHP does not load one yet)
+  -e           Generate extended information (accepted compatibility no-op)
+  -a           Start an interactive shell (requires an admitted readline extension)
   -d <NAME[=VALUE]>
                Define a per-process INI setting
   -h, --help   Print help
@@ -37,6 +41,7 @@ enum CliAction {
     Inline(String),
     File(String),
     Stdin,
+    InteractiveUnavailable,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -59,6 +64,7 @@ fn parse_ini_definition(definition: &str) -> Result<(String, String), String> {
 fn parse_cli_args(args: &[String]) -> Result<CliInvocation, String> {
     let mut action_args = Vec::new();
     let mut ini_settings = Vec::new();
+    let mut interactive = false;
     let mut index = 0usize;
     while index < args.len() {
         let argument = &args[index];
@@ -74,6 +80,15 @@ fn parse_cli_args(args: &[String]) -> Result<CliInvocation, String> {
             index += 2;
             continue;
         }
+        if argument == "-n" || argument == "--no-php-ini" || argument == "-e" {
+            index += 1;
+            continue;
+        }
+        if argument == "-a" {
+            interactive = true;
+            index += 1;
+            continue;
+        }
         if let Some(definition) = argument.strip_prefix("-d")
             && !definition.is_empty()
         {
@@ -87,24 +102,28 @@ fn parse_cli_args(args: &[String]) -> Result<CliInvocation, String> {
         break;
     }
 
-    let action = match action_args.as_slice() {
-        [] => CliAction::Stdin,
-        [flag] if flag == "-h" || flag == "--help" => CliAction::Help,
-        [flag] if flag == "-v" || flag == "--version" => CliAction::Version,
-        [flag] if flag == "-r" => {
-            return Err("option '-r' requires a code argument".to_string());
+    let action = if interactive {
+        CliAction::InteractiveUnavailable
+    } else {
+        match action_args.as_slice() {
+            [] => CliAction::Stdin,
+            [flag] if flag == "-h" || flag == "--help" => CliAction::Help,
+            [flag] if flag == "-v" || flag == "--version" => CliAction::Version,
+            [flag] if flag == "-r" => {
+                return Err("option '-r' requires a code argument".to_string());
+            }
+            [flag, code] if flag == "-r" => CliAction::Inline(code.clone()),
+            [separator, file] if separator == "--" => CliAction::File(file.clone()),
+            [arg] if arg.starts_with('-') => return Err(format!("unsupported option '{arg}'")),
+            [file] => CliAction::File(file.clone()),
+            [first, ..] if first == "-r" => {
+                return Err("script arguments after '-r' are not supported yet".to_string());
+            }
+            [first, ..] if first.starts_with('-') => {
+                return Err(format!("unsupported option '{first}'"));
+            }
+            _ => return Err("script arguments are not supported yet".to_string()),
         }
-        [flag, code] if flag == "-r" => CliAction::Inline(code.clone()),
-        [separator, file] if separator == "--" => CliAction::File(file.clone()),
-        [arg] if arg.starts_with('-') => return Err(format!("unsupported option '{arg}'")),
-        [file] => CliAction::File(file.clone()),
-        [first, ..] if first == "-r" => {
-            return Err("script arguments after '-r' are not supported yet".to_string());
-        }
-        [first, ..] if first.starts_with('-') => {
-            return Err(format!("unsupported option '{first}'"));
-        }
-        _ => return Err("script arguments are not supported yet".to_string()),
     };
     Ok(CliInvocation {
         action,
@@ -141,7 +160,9 @@ fn read_source(action: CliAction) -> Result<String, String> {
             .map(|bytes| rphp::lexer::decode_php_source(&bytes))
             .map_err(|error| format!("could not read file '{file}': {error}")),
         CliAction::Stdin => read_stdin(),
-        CliAction::Help | CliAction::Version => unreachable!("handled before reading input"),
+        CliAction::Help | CliAction::Version | CliAction::InteractiveUnavailable => {
+            unreachable!("handled before reading input")
+        }
     }
 }
 
@@ -173,6 +194,10 @@ fn main() {
             println!("rphp {} (pre-alpha)", env!("CARGO_PKG_VERSION"));
             return;
         }
+        CliAction::InteractiveUnavailable => {
+            println!("Interactive shell (-a) requires the readline extension.");
+            return;
+        }
         _ => {}
     }
 
@@ -192,7 +217,9 @@ fn main() {
         }
         CliAction::Inline(_) => ("Command line code".to_string(), source_directory),
         CliAction::Stdin => ("Standard input code".to_string(), source_directory),
-        CliAction::Help | CliAction::Version => unreachable!("handled above"),
+        CliAction::Help | CliAction::Version | CliAction::InteractiveUnavailable => {
+            unreachable!("handled above")
+        }
     };
     let executed_file = matches!(action, CliAction::File(_)).then(|| source_file.clone());
     let source_offset_base = match &action {
@@ -399,6 +426,26 @@ mod tests {
             Ok(CliInvocation {
                 action: CliAction::Inline("echo 1;".to_string()),
                 ini_settings: vec![("display_errors".to_string(), "1".to_string())],
+            })
+        );
+    }
+
+    #[test]
+    fn parses_php_ini_extended_info_and_unavailable_interactive_flags() {
+        assert_eq!(
+            parse_cli_args(&args(&["-n", "--no-php-ini", "-e", "example.php",])),
+            Ok(CliInvocation {
+                action: CliAction::File("example.php".to_string()),
+                ini_settings: Vec::new(),
+            })
+        );
+        assert_eq!(
+            parse_cli_args(&args(
+                &["-n", "-d", "memory_limit=4M", "-a", "ignored.php",]
+            )),
+            Ok(CliInvocation {
+                action: CliAction::InteractiveUnavailable,
+                ini_settings: vec![("memory_limit".to_string(), "4M".to_string())],
             })
         );
     }
