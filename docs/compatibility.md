@@ -8,6 +8,78 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`array-traversal-batch`, pinned to php-src 8.5 commit `fcc29c8` and candidate
+commit `90a2e0a8`. Across all 5,599 unmodified `Zend/tests` and `tests/lang`
+cases, 4,098 pass, 1,205 fail, 115 skip, none remain XFAIL, 181 are
+unsupported, and none time out or crash. The headline pass rate remains
+77.277%, the whole-corpus rate remains 73.192%, and 4,809 of 5,303 attempted
+cases reach runtime (90.685%). The selected functions are exercised by the
+separate `ext/standard` focused cluster, so the exact main-corpus pass-set delta
+from `8d038d4a` is intentionally +0/-0 with no status or category movement.
+
+Two independently executed final main-corpus runs have byte-identical
+manifests and summaries. Their SHA-256 values are
+`dff002f63754267cbc2969e38fd8d60f691d5ede1dc2b7aea14209ce352d3224`
+and `1be7e7084980583a4543b9f8f9be7f7a2646140815eb0a5f9fca6277d9da22dc`.
+The manifest is also byte-identical to the preceding exact baseline, proving
+that every previous pass and failure classification is preserved.
+
+`array_find()`, `array_find_key()`, `array_any()` and `array_all()` now invoke
+callbacks with dereferenced value/key pairs in PHP array insertion order and
+stop at the first decisive result. Find returns the matching value or key and
+null on no match; any/all retain their false/true empty-array identities.
+`array_first()` and `array_last()` return dereferenced endpoint values or null
+for an empty array. Callback exceptions propagate without visiting later
+elements, invalid arrays and callbacks use the exercised PHP 8.5 TypeErrors,
+and traversal snapshots array structure while retaining live reference cells.
+Returned scalars and arrays detach normally, while returned objects preserve
+object identity.
+
+All nine supplying unmodified PHP 8.5 `ext/standard` PHPTs move from 0/9 to
+9/9 in both debug and release builds. The cluster covers basic find/find-key,
+any/all, callback value/key types, references, short-circuiting, first/last and
+argument errors. The first/last fixture also exposed a prerequisite JSON
+projection gap: `json_encode()` now dereferences referenced elements and
+preserves insertion order for object-shaped PHP arrays without adding a
+dependency. Existing deterministic object-property projection remains
+unchanged. A 240-case clean-room matrix across 20 array shapes and 12
+predicates is byte-identical to PHP 8.5.9, producing 55,490 result bytes and
+aggregate MD5 `36f18b01d03bcc51f29d546ccce9124d`. Original E2E regressions
+cover ordering, short-circuit identities, structural mutation, live aliases,
+copy-on-write, object identity, exception propagation, diagnostics and the
+JSON prerequisite.
+
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, the unchanged 1,620/289/332 unsafe
+ratchet, Composer 2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-
+kernel S2 and cold-build S3 pass. The implementation adds one cold stdlib
+module and six registrations; it changes no compiler or opcode definition,
+call frame, PHP Value/object layout, dependency or production unsafe code.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used performance-governor CPU 2, three warmups per binary
+and no excluded samples. Batches of 100 empty `-n -r` requests measured
+baseline/candidate p10/median/p90 255.533/256.983/267.507 and
+256.222/257.611/260.603 milliseconds, +0.244% independently and +0.168%
+paired. One request executing 500,000 existing eight-element `array_filter()`
+callback calls measured 503.351/506.771/520.502 and
+510.466/517.355/526.055 milliseconds, +2.088% independently and +2.045%
+paired. The directly affected 500,000-call ordered `json_encode()` control
+measured 215.407/217.048/221.321 and 160.885/162.801/169.711 milliseconds,
+-24.993% independently and -25.284% paired while changing the old sorted
+output to the exact PHP insertion order. All regression controls remain below
+the +5% gate; the faster JSON sample is not a broader runtime performance
+claim. The baseline and candidate binary SHA-256 values are
+`bf71f266c625fad48f9bcc08cc5ee854b00eeca33c37e02d516ba60c1cc0e7aa`
+and `09cad365473ce0e90d209b5b2f64773590ba260dec740d7813033e7b62bafda7`.
+
+This checkpoint does not claim PHP object-property insertion order beyond the
+retained projection, every JSON flag/error/cycle contract, the remaining array
+function inventory, complete `ext/standard` array compatibility or broader PHP
+compatibility. The unchanged main-corpus count is not presented as a Zend/lang
+pass gain; the measured addition is the named nine-case extension cluster.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `recursive-array-combiner-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 candidate commit `ad8e4b12`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 4,098 pass, 1,205 fail, 115 skip, none remain XFAIL, 181

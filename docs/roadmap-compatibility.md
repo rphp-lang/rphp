@@ -1662,6 +1662,32 @@ pinned 32-pair release controls put independent/paired median changes at
 escape blockers, missing array-intersection family, adversarial recursion,
 the complete array suite and broader compatibility remain separate work.
 
+The `array-traversal-batch` checkpoint adds the six PHP 8.4+/8.5 array
+traversal functions `array_find()`, `array_find_key()`, `array_any()`,
+`array_all()`, `array_first()` and `array_last()`. The callback functions
+preserve insertion-order value/key dispatch, exact short-circuiting, structural
+snapshot semantics, live referenced elements, copy-on-write and exception/
+diagnostic behavior; first/last return dereferenced endpoint values. The
+supplying nine unmodified `ext/standard` PHPTs move from 0/9 to 9/9 in debug
+and release, and a 240-case clean-room matrix is byte-identical to PHP 8.5.9.
+The first/last fixture additionally closes the directly reached JSON
+prerequisite by dereferencing elements and retaining PHP array insertion order.
+Because these extension tests are outside the pinned `Zend/tests` plus
+`tests/lang` corpus, two byte-identical full manifests intentionally remain at
+4,098 pass, 1,205 fail, 115 skip and 181 unsupported with zero timeouts or
+crashes and an exact +0/-0 pass-set delta from `8d038d4a`.
+
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, the unchanged 1,620/289/332 unsafe ratchet, Composer S0, four Symfony
+S1 gates and PHP 8.5.9 S2/S3 pass. No compiler/opcode, call-frame, PHP
+Value/object layout, dependency or unsafe change is made. CPU-pinned 32-pair
+release controls put independent/paired median changes at +0.244%/+0.168% for
+100 empty requests, +2.088%/+2.045% for 500,000 existing `array_filter()`
+callback calls and -24.993%/-25.284% for 500,000 directly affected ordered
+`json_encode()` calls, below the +5% gate. Complete array/JSON suites, object-
+property ordering beyond the retained projection and broader compatibility
+remain separate work.
+
 ## Measurement system
 
 ### Contract baseline
