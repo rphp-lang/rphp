@@ -35,6 +35,13 @@ pub struct Parser {
     preserve_empty_dimension_suffix: bool,
     /// Source line of the primary currently entering its postfix chain.
     last_primary_line: Option<usize>,
+    /// Whether the current statement is parsed in the source unit's outermost
+    /// scope, the only context where __halt_compiler() is legal.
+    outermost_scope: bool,
+    /// A recognized halt directive intentionally removes every following
+    /// token. Nested grammar may therefore unwind through synthetic closers
+    /// while the deferred compile error remains authoritative.
+    halted: bool,
 }
 
 include!("parser/generics.rs");

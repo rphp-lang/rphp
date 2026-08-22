@@ -4958,7 +4958,7 @@ fn fn_define(
     }
     let name = arg_str!(ed, 0);
     let val = arg!(ed, 1).clone();
-    if eg.find_constant(&name).is_some() {
+    if name == "__COMPILER_HALT_OFFSET__" || eg.find_constant(&name).is_some() {
         report_internal_diagnostic(
             eg,
             ed,
@@ -5009,6 +5009,12 @@ fn fn_constant(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let name = arg_str!(ed, 0);
+    if name == "__COMPILER_HALT_OFFSET__" {
+        let (file, _) = internal_call_source(ed);
+        if let Some(offset) = eg.compiler_halt_offset(&file) {
+            ret!(rv, Value::long(offset));
+        }
+    }
     if let Some(value) = eg.find_constant(&name) {
         let (file, line) = internal_call_source(ed);
         let use_site = reflection::DeprecatedUseSite {

@@ -3896,8 +3896,13 @@ fn op_fetch_const(
             let fallback = fallback.as_str().unwrap_or("");
             value = eg.find_constant(fallback);
         }
-        let value =
-            value.ok_or_else(|| VmError::Fatal(format!("Undefined constant \"{}\"", name)))?;
+        let Some(value) = value else {
+            eg.exception = Some(crate::value::make_error_value(
+                "Error",
+                &format!("Undefined constant \"{}\"", name),
+            ));
+            return Ok(());
+        };
         if eg.constant_deprecation_metadata_present {
             // SAFETY: `opline` belongs to this op-array and its same-index
             // cache entry remains stable for single-threaded opcode execution.

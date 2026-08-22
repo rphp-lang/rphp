@@ -99,6 +99,10 @@ pub enum Token {
         name: String,
         line: usize,
     }, // __FILE__, __LINE__, ...
+    HaltCompiler {
+        offset: usize,
+        line: usize,
+    },
     // Operators
     Assign,                 // =
     Plus,                   // +
@@ -198,6 +202,10 @@ enum StringPart {
 pub struct Lexer<'a> {
     src: &'a [u8],
     pos: usize,
+    /// Bytes injected ahead of user source by an embedding entry point.
+    /// PHP reports the halt offset in the original source unit, excluding
+    /// RPHP's synthetic `<?php ` prefix for `-r` and eval().
+    source_offset_base: usize,
     punctuation_scan_pos: usize,
     punctuation_scan_line: usize,
     deferred_compile_errors: Vec<(String, usize)>,
@@ -291,11 +299,17 @@ impl<'a> Lexer<'a> {
         Self {
             src: source.as_bytes(),
             pos: 0,
+            source_offset_base: 0,
             punctuation_scan_pos: 0,
             punctuation_scan_line: 1,
             deferred_compile_errors: Vec::new(),
             deferred_compile_diagnostics: Vec::new(),
         }
+    }
+
+    pub fn with_source_offset_base(mut self, base: usize) -> Self {
+        self.source_offset_base = base;
+        self
     }
 
     pub fn tokenize(&mut self) -> Result<Vec<Token>, String> {
@@ -695,19 +709,36 @@ impl<'a> Lexer<'a> {
                     {
                         continue;
                     }
+                    if !is_member_name && ident.eq_ignore_ascii_case("__halt_compiler") {
+                        match self.scan_halt_compiler_end(self.pos) {
+                            Ok(end) => {
+                                tokens.push(Token::HaltCompiler {
+                                    offset: end.saturating_sub(self.source_offset_base),
+                                    line,
+                                });
+                                self.pos = self.src.len();
+                            }
+                            Err(message) => {
+                                tokens.push(Token::ParseError(message, line));
+                                self.pos = self.src.len();
+                            }
+                        }
+                        continue;
+                    }
                     if !is_member_name
-                        && matches!(
-                            ident.to_ascii_uppercase().as_str(),
-                            "__LINE__"
-                                | "__FILE__"
-                                | "__DIR__"
-                                | "__FUNCTION__"
-                                | "__METHOD__"
-                                | "__CLASS__"
-                                | "__TRAIT__"
-                                | "__PROPERTY__"
-                                | "__NAMESPACE__"
-                        )
+                        && (ident == "__COMPILER_HALT_OFFSET__"
+                            || matches!(
+                                ident.to_ascii_uppercase().as_str(),
+                                "__LINE__"
+                                    | "__FILE__"
+                                    | "__DIR__"
+                                    | "__FUNCTION__"
+                                    | "__METHOD__"
+                                    | "__CLASS__"
+                                    | "__TRAIT__"
+                                    | "__PROPERTY__"
+                                    | "__NAMESPACE__"
+                            ))
                     {
                         tokens.push(Token::MagicConstant { name: ident, line });
                         continue;
@@ -998,6 +1029,63 @@ impl<'a> Lexer<'a> {
             self.pos += 1;
         }
         decode_php_source(&self.src[start..self.pos])
+    }
+
+    fn scan_halt_compiler_end(&self, start: usize) -> Result<usize, String> {
+        let mut pos = self.skip_halt_trivia(start)?;
+        if self.src.get(pos) != Some(&b'(') {
+            return Err("syntax error, unexpected token, expecting \"(\"".to_string());
+        }
+        pos = self.skip_halt_trivia(pos + 1)?;
+        if self.src.get(pos) != Some(&b')') {
+            return Err("syntax error, unexpected token, expecting \")\"".to_string());
+        }
+        pos = self.skip_halt_trivia(pos + 1)?;
+        if self.src.get(pos) != Some(&b';') {
+            return Err("syntax error, unexpected end of file, expecting \";\"".to_string());
+        }
+        Ok(pos + 1)
+    }
+
+    fn skip_halt_trivia(&self, mut pos: usize) -> Result<usize, String> {
+        loop {
+            while self.src.get(pos).is_some_and(u8::is_ascii_whitespace) {
+                pos += 1;
+            }
+            if self.src.get(pos..pos + 2) == Some(b"//") {
+                pos += 2;
+                while self
+                    .src
+                    .get(pos)
+                    .is_some_and(|byte| *byte != b'\n' && *byte != b'\r')
+                {
+                    pos += 1;
+                }
+                continue;
+            }
+            if self.src.get(pos) == Some(&b'#') {
+                pos += 1;
+                while self
+                    .src
+                    .get(pos)
+                    .is_some_and(|byte| *byte != b'\n' && *byte != b'\r')
+                {
+                    pos += 1;
+                }
+                continue;
+            }
+            if self.src.get(pos..pos + 2) == Some(b"/*") {
+                let Some(relative_end) = self.src[pos + 2..]
+                    .windows(2)
+                    .position(|window| window == b"*/")
+                else {
+                    return Err("Unterminated comment".to_string());
+                };
+                pos += relative_end + 4;
+                continue;
+            }
+            return Ok(pos);
+        }
     }
 
     fn is_value_token(tok: Option<&Token>) -> bool {
@@ -1877,6 +1965,51 @@ mod tests {
             tokens
                 .iter()
                 .any(|token| matches!(token, Token::DotDotDot(2)))
+        );
+    }
+
+    #[test]
+    fn halt_compiler_records_the_exact_semicolon_offset_and_discards_the_tail() {
+        let source = "<?php echo __COMPILER_HALT_OFFSET__; __HaLt_CoMpIlEr /* gap */ (// line\n) ; invalid {{{";
+        let expected_offset = source.find("; invalid").unwrap() + 1;
+        let tokens = Lexer::new(source).tokenize().unwrap();
+
+        assert!(tokens.iter().any(|token| matches!(
+            token,
+            Token::MagicConstant { name, .. } if name == "__COMPILER_HALT_OFFSET__"
+        )));
+        assert!(tokens.iter().any(|token| matches!(
+            token,
+            Token::HaltCompiler { offset, .. } if *offset == expected_offset
+        )));
+        assert_eq!(tokens.last(), Some(&Token::Eof));
+    }
+
+    #[test]
+    fn halt_compiler_offset_excludes_an_embedding_prefix() {
+        let source = "<?php echo 1; __halt_compiler(); payload";
+        let raw_offset = source.find("; payload").unwrap() + 1;
+        let tokens = Lexer::new(source)
+            .with_source_offset_base(6)
+            .tokenize()
+            .unwrap();
+
+        assert!(tokens.iter().any(|token| matches!(
+            token,
+            Token::HaltCompiler { offset, .. } if *offset == raw_offset - 6
+        )));
+    }
+
+    #[test]
+    fn qualified_halt_compiler_name_remains_an_ordinary_function_name() {
+        let tokens = Lexer::new("<?php \\__halt_compiler(); NamespaceName\\__halt_compiler();")
+            .tokenize()
+            .unwrap();
+
+        assert!(
+            !tokens
+                .iter()
+                .any(|token| matches!(token, Token::HaltCompiler { .. }))
         );
     }
 }

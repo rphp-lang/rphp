@@ -195,6 +195,10 @@ fn main() {
         CliAction::Help | CliAction::Version => unreachable!("handled above"),
     };
     let executed_file = matches!(action, CliAction::File(_)).then(|| source_file.clone());
+    let source_offset_base = match &action {
+        CliAction::Inline(code) if !code.starts_with("<?php") && !code.starts_with("<?") => 6,
+        _ => 0,
+    };
 
     let source = read_source(action).unwrap_or_else(|error| {
         eprintln!("error: {error}");
@@ -205,10 +209,13 @@ fn main() {
         stats::reset();
     }
 
-    let tokens = Lexer::new(&source).tokenize().unwrap_or_else(|e| {
-        eprintln!("Parse error: {}", e);
-        std::process::exit(255);
-    });
+    let tokens = Lexer::new(&source)
+        .with_source_offset_base(source_offset_base)
+        .tokenize()
+        .unwrap_or_else(|e| {
+            eprintln!("Parse error: {}", e);
+            std::process::exit(255);
+        });
 
     let stmts = Parser::new(tokens)
         .with_source_name(source_file.clone())
@@ -241,8 +248,13 @@ fn main() {
             }
             std::process::exit(255);
         });
+    let compiler_halt_source = result.main.source_file.to_string();
+    let compiler_halt_offset = result.compiler_halt_offset;
     let main_func = make_user_function(result.main);
     let mut eg = ExecutorGlobals::new();
+    if let Some(offset) = compiler_halt_offset {
+        eg.register_compiler_halt_offset(compiler_halt_source, offset);
+    }
     stdlib::apply_startup_ini_settings(&mut eg, &ini_settings);
     eg.generic_metadata = result.generic_metadata;
     eg.constant_attributes = result.constant_attributes;

@@ -39,6 +39,8 @@ impl Parser {
             empty_dimension_unset_context: false,
             preserve_empty_dimension_suffix: false,
             last_primary_line: None,
+            outermost_scope: true,
+            halted: false,
         }
     }
 
@@ -77,7 +79,7 @@ impl Parser {
         let mut stmts = Vec::new();
 
         while !self.at_eof() {
-            stmts.push(self.parse_stmt()?);
+            stmts.push(self.parse_stmt_in_scope(true)?);
         }
 
         stmts.extend(self.deferred_compile_deprecations.drain(..).map(
@@ -104,6 +106,9 @@ impl Parser {
                 | Token::LBracket(token_line)
                 | Token::ParseError(_, token_line)
                 | Token::MagicConstant {
+                    line: token_line, ..
+                }
+                | Token::HaltCompiler {
                     line: token_line, ..
                 }
                 | Token::Goto {
@@ -189,11 +194,22 @@ impl Parser {
             return Ok(Stmt::Goto { name, line });
         }
         match self.peek() {
+            Token::HaltCompiler { offset, line } => {
+                self.advance();
+                self.halted = true;
+                if !self.outermost_scope {
+                    let _ = self.compile_error(
+                        "__HALT_COMPILER() can only be used from the outermost scope",
+                        line,
+                    );
+                }
+                Ok(Stmt::HaltCompiler { offset, line })
+            }
             Token::LBrace => {
                 self.advance();
                 let mut body = Vec::new();
                 while self.peek() != Token::RBrace && !self.at_eof() {
-                    body.push(self.parse_stmt()?);
+                    body.push(self.parse_stmt_in_scope(false)?);
                 }
                 self.expect(&Token::RBrace)?;
                 Ok(Stmt::Block(body))
@@ -265,7 +281,7 @@ impl Parser {
                 {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
-                        let _ = self.parse_stmt()?;
+                        let _ = self.parse_stmt_in_scope(false)?;
                     }
                     self.expect(&Token::RBrace)?;
                     return Ok(Stmt::Noop);
@@ -292,7 +308,10 @@ impl Parser {
                     self.advance(); // consume '{'
                     let mut body = Vec::new();
                     while self.peek() != Token::RBrace && self.peek() != Token::Eof {
-                        body.push(self.parse_stmt()?);
+                        body.push(self.parse_stmt_in_scope(false)?);
+                    }
+                    if self.halted && self.at_eof() {
+                        return Err(self.source_error("Unclosed '{'", 1));
                     }
                     self.expect(&Token::RBrace)?;
                     Ok(Stmt::Namespace { name, body })
@@ -301,7 +320,7 @@ impl Parser {
                     self.expect(&Token::Semicolon(0))?;
                     let mut body = Vec::new();
                     while self.peek() != Token::Eof && self.peek() != Token::Namespace {
-                        body.push(self.parse_stmt()?);
+                        body.push(self.parse_stmt_in_scope(true)?);
                     }
                     Ok(Stmt::Namespace { name, body })
                 }
@@ -774,6 +793,12 @@ impl Parser {
             Token::Do => {
                 self.advance(); // consume 'do'
                 let body = self.parse_block_or_stmt()?;
+                if self.halted {
+                    return Ok(Stmt::DoWhile {
+                        condition: Expr::Bool(false),
+                        body,
+                    });
+                }
                 self.expect(&Token::While)?;
                 self.expect_lparen()?;
                 let condition = self.parse_expr()?;
@@ -826,7 +851,7 @@ impl Parser {
                                     | Token::EndSwitch
                             ) && !self.at_eof()
                             {
-                                body.push(self.parse_stmt()?);
+                                body.push(self.parse_stmt_in_scope(false)?);
                             }
                             cases.push(SwitchCase {
                                 value: Some(value),
@@ -851,7 +876,7 @@ impl Parser {
                                     | Token::EndSwitch
                             ) && !self.at_eof()
                             {
-                                body.push(self.parse_stmt()?);
+                                body.push(self.parse_stmt_in_scope(false)?);
                             }
                             cases.push(SwitchCase { value: None, body });
                         }
@@ -1032,7 +1057,7 @@ impl Parser {
                 self.expect(&Token::LBrace)?;
                 let mut body = Vec::new();
                 while self.peek() != Token::RBrace && !self.at_eof() {
-                    body.push(self.parse_stmt()?);
+                    body.push(self.parse_stmt_in_scope(false)?);
                 }
                 self.expect(&Token::RBrace)?;
                 self.pop_generic_scope();
@@ -1574,13 +1599,13 @@ impl Parser {
             self.advance(); // consume {
             let mut stmts = Vec::new();
             while self.peek() != Token::RBrace && !self.at_eof() {
-                stmts.push(self.parse_stmt()?);
+                stmts.push(self.parse_stmt_in_scope(false)?);
             }
             self.expect(&Token::RBrace)?;
             Ok(stmts)
         } else {
             // Single statement (no braces)
-            let stmt = self.parse_stmt()?;
+            let stmt = self.parse_stmt_in_scope(false)?;
             Ok(vec![stmt])
         }
     }
@@ -1595,7 +1620,7 @@ impl Parser {
             if is_terminator(&token) {
                 break;
             }
-            statements.push(self.parse_stmt()?);
+            statements.push(self.parse_stmt_in_scope(false)?);
         }
         Ok(statements)
     }
@@ -1609,6 +1634,14 @@ impl Parser {
         self.expect(&end_token)?;
         self.expect(&Token::Semicolon(0))?;
         Ok(body)
+    }
+
+    fn parse_stmt_in_scope(&mut self, outermost: bool) -> Result<Stmt, String> {
+        let previous = self.outermost_scope;
+        self.outermost_scope = outermost;
+        let result = self.parse_stmt();
+        self.outermost_scope = previous;
+        result
     }
 
     fn consume_switch_label_separator(&mut self) -> Result<(), String> {

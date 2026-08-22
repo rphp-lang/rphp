@@ -362,6 +362,10 @@ pub struct ExecutorGlobals {
     /// Constant table — name → Value (case-sensitive, like PHP)
     /// Uses RefCell to allow define() from internal functions (which receive &self).
     pub constant_table: std::cell::RefCell<HashMap<String, crate::value::Value>>,
+    /// First __halt_compiler offset compiled for each PHP source name. Zend
+    /// uses that source-name identity for dynamic constant() resolution,
+    /// including repeated eval() calls from the same location.
+    compiler_halt_offsets: Option<Box<HashMap<String, i64>>>,
     /// Reflection-only metadata for source-level global constants.
     pub constant_attributes: HashMap<String, Vec<crate::vm::function::AttributeDefinition>>,
     /// Cold dependency expressions used only when one constant read may need
@@ -1086,6 +1090,7 @@ impl ExecutorGlobals {
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             generic_property_contract_cache: std::cell::RefCell::new(None),
             constant_table: std::cell::RefCell::new(HashMap::new()),
+            compiler_halt_offsets: None,
             constant_attributes: HashMap::new(),
             constant_expressions: HashMap::new(),
             constant_deprecation_generation: 1,
@@ -1197,6 +1202,7 @@ impl ExecutorGlobals {
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             generic_property_contract_cache: std::cell::RefCell::new(None),
             constant_table: std::cell::RefCell::new(HashMap::new()),
+            compiler_halt_offsets: None,
             constant_attributes: HashMap::new(),
             constant_expressions: HashMap::new(),
             constant_deprecation_generation: 1,
@@ -6174,6 +6180,20 @@ impl ExecutorGlobals {
         }
         // Built-in PHP constants (shared source of truth)
         crate::builtin_constant(name)
+    }
+
+    pub fn register_compiler_halt_offset(&mut self, source_file: String, offset: i64) {
+        self.compiler_halt_offsets
+            .get_or_insert_with(|| Box::new(HashMap::new()))
+            .entry(source_file)
+            .or_insert(offset);
+    }
+
+    pub fn compiler_halt_offset(&self, source_file: &str) -> Option<i64> {
+        self.compiler_halt_offsets
+            .as_deref()
+            .and_then(|offsets| offsets.get(source_file))
+            .copied()
     }
 
     /// Whether reading this source constant can emit a Deprecated diagnostic.

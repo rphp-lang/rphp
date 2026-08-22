@@ -1258,7 +1258,18 @@ impl Parser {
                         line,
                     })
                 } else {
-                    Ok(Expr::Constant(name))
+                    if name
+                        .rsplit('\\')
+                        .next()
+                        .is_some_and(|part| part == "__COMPILER_HALT_OFFSET__")
+                    {
+                        Ok(Expr::CompilerHaltOffsetConstant {
+                            name,
+                            line: named_line.unwrap_or(1),
+                        })
+                    } else {
+                        Ok(Expr::Constant(name))
+                    }
                 }
             }
             Token::MagicConstant { .. } => match self.advance() {
@@ -1285,7 +1296,18 @@ impl Parser {
                         line,
                     })
                 } else {
-                    Ok(Expr::Constant(name))
+                    if name
+                        .rsplit('\\')
+                        .next()
+                        .is_some_and(|part| part == "__COMPILER_HALT_OFFSET__")
+                    {
+                        Ok(Expr::CompilerHaltOffsetConstant {
+                            name,
+                            line: named_line.unwrap_or(1),
+                        })
+                    } else {
+                        Ok(Expr::Constant(name))
+                    }
                 }
             }
             Token::Identifier(_, _) | Token::From => {
@@ -1375,7 +1397,18 @@ impl Parser {
                     }
                 } else {
                     // Bare identifier — constant reference (e.g., PHP_INT_MAX, FOO)
-                    Ok(Expr::Constant(name))
+                    if name
+                        .rsplit('\\')
+                        .next()
+                        .is_some_and(|part| part == "__COMPILER_HALT_OFFSET__")
+                    {
+                        Ok(Expr::CompilerHaltOffsetConstant {
+                            name,
+                            line: named_line.unwrap_or(1),
+                        })
+                    } else {
+                        Ok(Expr::Constant(name))
+                    }
                 }
             }
             Token::Static(line) => {

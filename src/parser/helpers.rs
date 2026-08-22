@@ -456,6 +456,8 @@ impl Parser {
         let tok = self.advance();
         if std::mem::discriminant(&tok) == std::mem::discriminant(expected) {
             Ok(())
+        } else if self.halted && tok == Token::Eof {
+            Ok(())
         } else if let Token::ParseError(message, line) = &tok {
             Err(self.source_error(message, *line))
         } else if let Token::Identifier(name, line) = &tok

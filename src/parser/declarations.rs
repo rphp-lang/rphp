@@ -184,7 +184,7 @@ impl Parser {
                 self.expect(&Token::LBrace)?;
                 let mut body = Vec::new();
                 while self.peek() != Token::RBrace && !self.at_eof() {
-                    body.push(self.parse_stmt()?);
+                    body.push(self.parse_stmt_in_scope(false)?);
                 }
                 self.expect(&Token::RBrace)?;
                 (body, false)
@@ -394,7 +394,7 @@ impl Parser {
                     self.expect(&Token::LBrace)?;
                     let mut body = Vec::new();
                     while self.peek() != Token::RBrace && !self.at_eof() {
-                        body.push(self.parse_stmt()?);
+                        body.push(self.parse_stmt_in_scope(false)?);
                     }
                     self.expect(&Token::RBrace)?;
                     (body, false)
@@ -572,9 +572,16 @@ impl Parser {
         self.expect(&Token::LBrace)?;
         let mut try_body = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
-            try_body.push(self.parse_stmt()?);
+            try_body.push(self.parse_stmt_in_scope(false)?);
         }
         self.expect(&Token::RBrace)?;
+        if self.halted {
+            return Ok(Stmt::TryCatch {
+                try_body,
+                catches: Vec::new(),
+                finally_body: None,
+            });
+        }
 
         let mut catches = Vec::new();
         while self.peek() == Token::Catch {
@@ -617,7 +624,7 @@ impl Parser {
             self.expect(&Token::LBrace)?;
             let mut body = Vec::new();
             while self.peek() != Token::RBrace && !self.at_eof() {
-                body.push(self.parse_stmt()?);
+                body.push(self.parse_stmt_in_scope(false)?);
             }
             self.expect(&Token::RBrace)?;
             catches.push(CatchClause { types, var, body });
@@ -628,7 +635,7 @@ impl Parser {
             self.expect(&Token::LBrace)?;
             let mut body = Vec::new();
             while self.peek() != Token::RBrace && !self.at_eof() {
-                body.push(self.parse_stmt()?);
+                body.push(self.parse_stmt_in_scope(false)?);
             }
             self.expect(&Token::RBrace)?;
             Some(body)
@@ -1300,7 +1307,7 @@ impl Parser {
                     self.expect(&Token::LBrace)?;
                     let mut body = Vec::new();
                     while self.peek() != Token::RBrace && !self.at_eof() {
-                        body.push(self.parse_stmt()?);
+                        body.push(self.parse_stmt_in_scope(false)?);
                     }
                     self.expect(&Token::RBrace)?;
                     self.pop_generic_scope();
@@ -1571,7 +1578,7 @@ impl Parser {
             self.expect(&Token::LBrace)?;
             let mut body = Vec::new();
             while self.peek() != Token::RBrace && !self.at_eof() {
-                body.push(self.parse_stmt()?);
+                body.push(self.parse_stmt_in_scope(false)?);
             }
             self.expect(&Token::RBrace)?;
             return Ok(body);
@@ -1595,7 +1602,7 @@ impl Parser {
         self.expect(&Token::LBrace)?;
         let mut body = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
-            body.push(self.parse_stmt()?);
+            body.push(self.parse_stmt_in_scope(false)?);
         }
         self.expect(&Token::RBrace)?;
         Ok(body)
@@ -1946,6 +1953,7 @@ impl Parser {
             | Expr::CompileWarning { .. }
             | Expr::CompileDeprecation { .. }
             | Expr::Constant(_)
+            | Expr::CompilerHaltOffsetConstant { .. }
             | Expr::MagicConstant { .. } => {}
             // Yield — collect vars from value/key expressions
             Expr::Yield { value, key } => {
@@ -2067,7 +2075,7 @@ impl Parser {
         self.expect(&Token::LBrace)?;
         let mut body = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
-            body.push(self.parse_stmt()?);
+            body.push(self.parse_stmt_in_scope(false)?);
         }
         self.expect(&Token::RBrace)?;
         self.pop_generic_scope();

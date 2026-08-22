@@ -425,6 +425,7 @@ fn assertion_expression_source(expr: &Expr) -> Option<String> {
                 ("\\exit()".to_string(), 100)
             }
             Expr::Constant(name) => (name.clone(), 100),
+            Expr::CompilerHaltOffsetConstant { name, .. } => (name.clone(), 100),
             Expr::Not(value) => (format!("!{}", render(value, 80, false)?), 80),
             Expr::Cast {
                 cast_type: CastType::Void,
@@ -734,6 +735,7 @@ impl std::ops::Deref for CompileFailure {
 /// Result of compiling a script — main OpArray + declared functions + class defs.
 pub struct CompileResult {
     pub main: OpArray,
+    pub compiler_halt_offset: Option<i64>,
     pub functions: Vec<(String, UserFunction)>,
     pub class_defs: Vec<ClassDef>,
     /// Named classes whose trait composition must happen at their executable
@@ -2294,6 +2296,7 @@ fn invalid_typed_declaration_default_message(
 fn constant_expression_references_symbol(expression: &Expr) -> bool {
     match expression {
         Expr::Constant(_)
+        | Expr::CompilerHaltOffsetConstant { .. }
         | Expr::ClassConstant { .. }
         | Expr::DynamicClassConstant { .. }
         | Expr::DynamicNamedClassConstant { .. } => true,
@@ -2410,6 +2413,7 @@ fn deferred_constant_expression_is_supported(expression: &Expr) -> bool {
         | Expr::Bool(_)
         | Expr::Null
         | Expr::Constant(_)
+        | Expr::CompilerHaltOffsetConstant { .. }
         | Expr::ClassConstant { .. } => true,
         Expr::MagicConstant { name, .. } => [
             "__LINE__",
@@ -3021,6 +3025,7 @@ pub struct Compiler {
     /// Constants known at compile time (from `const FOO = 42;` in the same file).
     /// Used by eval_const_expr to resolve Expr::Constant in property defaults.
     known_constants: HashMap<String, Value>,
+    compiler_halt_offset: Option<i64>,
     /// Runtime materialization still belongs to a PHP constant-expression
     /// context. Nested compilers use this only while lowering a default or
     /// initializer whose value could not be fully folded.
@@ -3224,6 +3229,7 @@ impl Compiler {
             source_directory: String::new(),
             implicit_return_value: Value::null(),
             known_constants: HashMap::new(),
+            compiler_halt_offset: None,
             compiling_constant_expression: false,
             nullsafe_receiver_patches: HashMap::new(),
         }
@@ -3407,6 +3413,7 @@ impl Compiler {
         child.source_file = self.source_file.clone();
         child.source_directory = self.source_directory.clone();
         child.known_constants = self.known_constants.clone();
+        child.compiler_halt_offset = self.compiler_halt_offset;
         child
     }
 
@@ -3419,6 +3426,11 @@ impl Compiler {
     }
 
     fn magic_constant_value(&self, name: &str, line: usize) -> Value {
+        if name == "__COMPILER_HALT_OFFSET__" {
+            return self
+                .compiler_halt_offset
+                .map_or_else(Value::null, Value::long);
+        }
         match name.to_ascii_uppercase().as_str() {
             "__LINE__" => Value::long(line as i64),
             "__FILE__" => Value::string(self.source_file.clone()),
@@ -4513,6 +4525,14 @@ impl Compiler {
             return Err(self.goto_error(message, line));
         }
 
+        self.compiler_halt_offset = self.compiler_halt_offset.or_else(|| {
+            Self::find_compiler_halt_offset(stmts).and_then(|offset| i64::try_from(offset).ok())
+        });
+        if let Some(offset) = self.compiler_halt_offset {
+            self.known_constants
+                .insert("__COMPILER_HALT_OFFSET__".to_string(), Value::long(offset));
+        }
+
         // Pre-scan: collect compile-time constants from the entire file so that
         // property defaults can reference constants declared later (forward refs).
         self.prescan_constants(stmts);
@@ -4689,6 +4709,7 @@ impl Compiler {
                 block_plans: Vec::new(),
                 ip_to_block: Vec::new(),
             },
+            compiler_halt_offset: self.compiler_halt_offset,
             functions: self.functions,
             class_defs,
             runtime_class_defs,
@@ -4725,6 +4746,14 @@ impl Compiler {
                 }),
             _ => false,
         }
+    }
+
+    fn find_compiler_halt_offset(statements: &[Stmt]) -> Option<usize> {
+        statements.iter().find_map(|statement| match statement {
+            Stmt::HaltCompiler { offset, .. } => Some(*offset),
+            Stmt::Namespace { body, .. } => Self::find_compiler_halt_offset(body),
+            _ => None,
+        })
     }
 }
 
@@ -4873,6 +4902,7 @@ impl Compiler {
             Expr::Constant(name) if name.eq_ignore_ascii_case("true") => "true".to_string(),
             Expr::Constant(name) if name.eq_ignore_ascii_case("false") => "false".to_string(),
             Expr::Constant(name) => self.resolve_constant_name(name).0,
+            Expr::CompilerHaltOffsetConstant { name, .. } => self.resolve_constant_name(name).0,
             Expr::ClassConstant {
                 class_name,
                 constant,
@@ -5651,7 +5681,7 @@ impl Compiler {
             Expr::StringLiteral(s) => Ok(Value::string(s.clone())),
             Expr::Bool(b) => Ok(Value::bool(*b)),
             Expr::Null => Ok(Value::null()),
-            Expr::Constant(name) => {
+            Expr::Constant(name) | Expr::CompilerHaltOffsetConstant { name, .. } => {
                 let name = name.strip_prefix('\\').unwrap_or(name);
                 // Check user-defined constants from the same compilation unit
                 if let Some(val) = known.get(name) {
@@ -5673,7 +5703,12 @@ impl Compiler {
                 }
             }
             Expr::MagicConstant { name, line } => {
-                if name.eq_ignore_ascii_case("__LINE__") {
+                if name == "__COMPILER_HALT_OFFSET__" {
+                    known.get(name).cloned().ok_or_else(|| {
+                        "magic constant __COMPILER_HALT_OFFSET__ requires __halt_compiler()"
+                            .to_string()
+                    })
+                } else if name.eq_ignore_ascii_case("__LINE__") {
                     Ok(Value::long(*line as i64))
                 } else if name.eq_ignore_ascii_case("__FILE__") {
                     file_context
@@ -11018,6 +11053,11 @@ impl Compiler {
                 (result, OpType::Tmp)
             }
             Expr::Constant(name) => {
+                if name == "\\__COMPILER_HALT_OFFSET__"
+                    && let Some(offset) = self.compiler_halt_offset
+                {
+                    return (self.add_literal(Value::long(offset)), OpType::Const);
+                }
                 // Fetch a named constant at runtime
                 let (runtime_name, fallback) = self.resolve_constant_name(name);
                 let name_idx = self.add_literal(Value::string(runtime_name));
@@ -11037,7 +11077,46 @@ impl Compiler {
                 self.instructions.push(instr);
                 (tmp, OpType::Tmp)
             }
+            Expr::CompilerHaltOffsetConstant { name, line } => {
+                if name == "\\__COMPILER_HALT_OFFSET__"
+                    && let Some(offset) = self.compiler_halt_offset
+                {
+                    return (self.add_literal(Value::long(offset)), OpType::Const);
+                }
+                let (runtime_name, fallback) = self.resolve_constant_name(name);
+                let name_idx = self.add_literal(Value::string(runtime_name));
+                let tmp = self.alloc_tmp();
+                let mut instr = Instruction::new(OpCode::FetchConst);
+                instr.op1 = name_idx;
+                instr.op1_type = OpType::Const;
+                if let Some(fallback) = fallback {
+                    instr.op2 = self.add_literal(Value::string(fallback));
+                    instr.op2_type = OpType::Const;
+                    instr.extended_value = 2;
+                }
+                instr.result = tmp;
+                instr.result_type = OpType::Tmp;
+                self.push_instruction_at_line(instr, *line);
+                (tmp, OpType::Tmp)
+            }
             Expr::MagicConstant { name, line } => {
+                if name == "__COMPILER_HALT_OFFSET__" && self.compiler_halt_offset.is_none() {
+                    let (runtime_name, fallback) = self.resolve_constant_name(name);
+                    let name_idx = self.add_literal(Value::string(runtime_name));
+                    let tmp = self.alloc_tmp();
+                    let mut instr = Instruction::new(OpCode::FetchConst);
+                    instr.op1 = name_idx;
+                    instr.op1_type = OpType::Const;
+                    if let Some(fallback) = fallback {
+                        instr.op2 = self.add_literal(Value::string(fallback));
+                        instr.op2_type = OpType::Const;
+                        instr.extended_value = 2;
+                    }
+                    instr.result = tmp;
+                    instr.result_type = OpType::Tmp;
+                    self.push_instruction_at_line(instr, *line);
+                    return (tmp, OpType::Tmp);
+                }
                 if self.dynamic_static_scope && name.eq_ignore_ascii_case("__CLASS__") {
                     let tmp = if let Some(tmp) = self.trait_class_scope_tmp {
                         tmp

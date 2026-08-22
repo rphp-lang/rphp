@@ -456,6 +456,10 @@ pub enum Expr {
         class: Box<Expr>,
     },
     Constant(String), // FOO, PHP_INT_MAX — named constant reference
+    CompilerHaltOffsetConstant {
+        name: String,
+        line: usize,
+    },
     MagicConstant {
         name: String,
         line: usize,
@@ -627,6 +631,7 @@ impl Expr {
             | Expr::ClassConstant { .. }
             | Expr::FirstClassFunctionCallable { .. }
             | Expr::Constant(_)
+            | Expr::CompilerHaltOffsetConstant { .. }
             | Expr::MagicConstant { .. } => false,
             Expr::DynamicClassConstant {
                 class, constant, ..
@@ -783,6 +788,10 @@ pub struct TraitPrecedence {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Noop,
+    HaltCompiler {
+        offset: usize,
+        line: usize,
+    },
     Block(Vec<Stmt>),
     Label(String),
     Goto {
@@ -1137,6 +1146,7 @@ impl Stmt {
             }),
             Stmt::Block(body) => body.iter().any(Stmt::contains_yield),
             Stmt::Noop
+            | Stmt::HaltCompiler { .. }
             | Stmt::Label(_)
             | Stmt::Goto { .. }
             | Stmt::Break { .. }

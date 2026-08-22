@@ -397,7 +397,11 @@ fn execute_source_unit(
     caller: Option<(*mut ExecuteData, &crate::compiler::OpArray)>,
     synthetic_trace_origin: Option<(String, usize)>,
 ) -> Result<IncludeFileOutcome, VmError> {
-    let tokens = match crate::lexer::Lexer::new(&source).tokenize() {
+    let source_offset_base = if synthetic_trace_origin.is_some() { 6 } else { 0 };
+    let tokens = match crate::lexer::Lexer::new(&source)
+        .with_source_offset_base(source_offset_base)
+        .tokenize()
+    {
         Ok(tokens) => tokens,
         Err(error) => {
             return Ok(include_parse_error(
@@ -492,6 +496,9 @@ fn execute_source_unit(
     }
     eg.refresh_constant_deprecation_metadata_presence();
     eg.bump_constant_deprecation_generation();
+    if let Some(offset) = compile_result.compiler_halt_offset {
+        eg.register_compiler_halt_offset(canonical.clone(), offset);
+    }
 
     // Includes are separate compilation units, but both generic runtimes and
     // Reflection consume one executor-wide interned metadata graph. Merge the

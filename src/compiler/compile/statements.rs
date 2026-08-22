@@ -2017,6 +2017,7 @@ impl Compiler {
         }
         match stmt {
             Stmt::Noop => {}
+            Stmt::HaltCompiler { .. } => {}
             Stmt::Block(body) => {
                 for statement in body {
                     self.compile_stmt(statement)?;
@@ -3722,6 +3723,19 @@ impl Compiler {
                     .current_namespace
                     .as_ref()
                     .map_or_else(|| name.clone(), |namespace| format!("{namespace}\\{name}"));
+                if declaration_name == "__COMPILER_HALT_OFFSET__" {
+                    self.compile_deprecations
+                        .borrow_mut()
+                        .push(CompileDeprecation {
+                            message: crate::runtime::constant_redefinition_message(
+                                &declaration_name,
+                            ),
+                            file: self.source_file.clone(),
+                            line: *line,
+                            warning: true,
+                        });
+                    continue;
+                }
                 self.validate_declaration_import(
                     UseKind::Const,
                     name,
