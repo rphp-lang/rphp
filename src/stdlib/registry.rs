@@ -230,6 +230,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- String functions ---
     reg!("strlen", fn_strlen, 1, 1, "string");
+    reg!("strtok", fn_strtok, 2, 1, "string", "token");
+    reg!("str_shuffle", fn_str_shuffle, 1, 1, "string");
     reg!("random_bytes", fn_random_bytes, 1, 1, "length");
     reg!("bin2hex", fn_bin2hex, 1, 1, "string");
     reg!("hex2bin", fn_hex2bin, 1, 1, "string");

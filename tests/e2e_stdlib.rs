@@ -2427,6 +2427,137 @@ probeExtractScope();
 }
 
 #[test]
+fn strtok_and_shuffle_match_php_85_state_bytes_randomness_and_typed_boundaries() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($level, $message) {
+    echo $level, ':', $message, "\n";
+    return true;
+});
+
+var_dump(strtok('a,b;c d', ','));
+var_dump(strtok(';'));
+var_dump(strtok(' '));
+var_dump(strtok(','));
+var_dump(strtok(','));
+
+var_dump(strtok(',,,', ','));
+var_dump(strtok(','));
+var_dump(strtok('', ','));
+var_dump(strtok(','));
+
+echo bin2hex(strtok("\x80\0\x81,tail", "\0,")), ':';
+echo bin2hex(strtok("\0,")), ':';
+echo bin2hex(strtok("\0,")), "\n";
+
+class UtilityText {
+    public function __construct(private mixed $value) {}
+    public function __toString(): string { echo "toString\n"; return $this->value; }
+}
+
+var_dump(strtok(new UtilityText('left,right'), new UtilityText(',')));
+try {
+    strtok([], ',');
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+var_dump(strtok(','));
+try {
+    strtok('new,next', []);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+var_dump(strtok(','));
+var_dump(strtok(null, ','));
+
+$source = "a\0\x80b";
+$shuffled = str_shuffle($source);
+echo strlen(bin2hex($shuffled)) / 2, ':', substr_count($shuffled, 'a'), ':',
+    substr_count($shuffled, "\0"), ':', substr_count($shuffled, "\x80"), ':',
+    substr_count($shuffled, 'b'), ':', bin2hex($source), "\n";
+$seen = [];
+for ($index = 0; $index < 1000; $index++) {
+    $seen[str_shuffle('abcd')] = true;
+}
+echo count($seen), "\n";
+var_dump(str_shuffle(new UtilityText('x')));
+var_dump(str_shuffle(null));
+try {
+    str_shuffle([]);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+
+$values = ['left' => 1, 9 => 2, 'right' => 3, 12 => 4];
+var_dump(shuffle($values));
+echo array_is_list($values) ? 'list:' : 'keys:', count($values), ':', array_sum($values), "\n";
+$invalid = 42;
+try {
+    shuffle($invalid);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+        ),
+        concat!(
+            "string(1) \"a\"\nstring(1) \"b\"\nstring(1) \"c\"\nstring(1) \"d\"\n",
+            "bool(false)\nbool(false)\n",
+            "2:strtok(): Both arguments must be provided when starting tokenization\n",
+            "bool(false)\nbool(false)\nbool(false)\n",
+            "80:81:7461696c\n",
+            "toString\ntoString\nstring(4) \"left\"\n",
+            "strtok(): Argument #1 ($string) must be of type string, array given\n",
+            "string(5) \"right\"\n",
+            "strtok(): Argument #2 ($token) must be of type ?string, array given\n",
+            "bool(false)\n",
+            "8192:strtok(): Passing null to parameter #1 ($string) of type string is deprecated\n",
+            "bool(false)\n",
+            "4:1:1:1:1:61008062\n24\n",
+            "toString\nstring(1) \"x\"\n",
+            "8192:str_shuffle(): Passing null to parameter #1 ($string) of type string is deprecated\n",
+            "string(0) \"\"\n",
+            "str_shuffle(): Argument #1 ($string) must be of type string, array given\n",
+            "bool(true)\nlist:4:10\n",
+            "shuffle(): Argument #1 ($array) must be of type array, int given\n"
+        )
+    );
+}
+
+#[test]
+fn strtok_and_str_shuffle_enforce_strict_php_85_string_arguments() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+declare(strict_types=1);
+
+foreach ([
+    fn() => strtok(1, ','),
+    fn() => strtok('a,b', true),
+    fn() => strtok(1),
+    fn() => str_shuffle(false),
+] as $callback) {
+    try {
+        $callback();
+    } catch (TypeError $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+var_dump(strtok('a,b', ','), strtok(','));
+echo strlen(str_shuffle('abcd')), "\n";
+"#,
+        ),
+        concat!(
+            "strtok(): Argument #1 ($string) must be of type string, int given\n",
+            "strtok(): Argument #2 ($token) must be of type ?string, true given\n",
+            "strtok(): Argument #1 ($string) must be of type string, int given\n",
+            "str_shuffle(): Argument #1 ($string) must be of type string, false given\n",
+            "string(1) \"a\"\nstring(1) \"b\"\n4\n"
+        )
+    );
+}
+
+#[test]
 fn pathinfo_supports_component_flags_used_by_source_loaders() {
     assert_eq!(
         run_php(

@@ -1557,24 +1557,75 @@ fn fn_array_rand(
     }
 }
 
+fn initial_shuffle_random_state() -> u64 {
+    let mut bytes = [0u8; 8];
+    let system_seed = std::fs::File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut bytes))
+        .ok()
+        .map(|()| u64::from_ne_bytes(bytes));
+    let fallback = || {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        nanos ^ (u64::from(std::process::id()) << 32)
+    };
+    let seed = system_seed.unwrap_or_else(fallback);
+    if seed == 0 {
+        0x9e37_79b9_7f4a_7c15
+    } else {
+        seed
+    }
+}
+
+#[inline]
+fn next_shuffle_random(eg: &mut ExecutorGlobals) -> u64 {
+    let state = &mut eg
+        .string_utility_state
+        .get_or_insert_with(|| Box::new(crate::runtime::StringUtilityState::default()))
+        .shuffle_random;
+    if *state == 0 {
+        *state = initial_shuffle_random_state();
+    }
+    // xorshift64* retains compact request-local state and a 2^64-1 period.
+    // Range reduction below rejects the modulo-biased numerical prefix.
+    let mut value = *state;
+    value ^= value >> 12;
+    value ^= value << 25;
+    value ^= value >> 27;
+    *state = value;
+    value.wrapping_mul(0x2545_f491_4f6c_dd1d)
+}
+
+#[inline]
+fn shuffle_index(eg: &mut ExecutorGlobals, upper_exclusive: usize) -> usize {
+    debug_assert!(upper_exclusive > 0);
+    let upper = upper_exclusive as u64;
+    let rejection_threshold = upper.wrapping_neg() % upper;
+    loop {
+        let sample = next_shuffle_random(eg);
+        if sample >= rejection_threshold {
+            return (sample % upper) as usize;
+        }
+    }
+}
+
+fn shuffle_slice<T>(eg: &mut ExecutorGlobals, values: &mut [T]) {
+    for index in (1..values.len()).rev() {
+        let replacement = shuffle_index(eg, index + 1);
+        values.swap(index, replacement);
+    }
+}
+
 fn fn_shuffle(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(a) = arr.as_array_mut() {
         let mut entries: Vec<Value> = a.values().cloned().collect();
-        // Fisher-Yates with simple PRNG
-        let mut seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos() as usize;
-        for i in (1..entries.len()).rev() {
-            seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-            let j = seed % (i + 1);
-            entries.swap(i, j);
-        }
+        shuffle_slice(eg, &mut entries);
         let mut new = PhpArray::new();
         for v in entries {
             new.push(v);
@@ -1582,7 +1633,8 @@ fn fn_shuffle(
         *arr = Value::array(new);
         ret!(rv, Value::bool(true));
     } else {
-        ret!(rv, Value::bool(false));
+        typed_internal_argument_error(eg, "shuffle", arr, 1, "array", "array");
+        Ok(())
     }
 }
 
@@ -2498,6 +2550,17 @@ fn typed_internal_string_argument(
     index: u32,
     parameter: &str,
 ) -> Result<Option<String>, VmError> {
+    typed_internal_string_argument_expected(ed, eg, function, index, parameter, "string")
+}
+
+fn typed_internal_string_argument_expected(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    index: u32,
+    parameter: &str,
+    expected: &str,
+) -> Result<Option<String>, VmError> {
     let argument = owned_argument(ed, index);
     let argument = argument.dereferenced();
     let strict = internal_call_is_strict(ed);
@@ -2546,7 +2609,7 @@ fn typed_internal_string_argument(
                     argument,
                     index as usize + 1,
                     parameter,
-                    "string",
+                    expected,
                 );
                 return Ok(None);
             };
@@ -2588,7 +2651,7 @@ fn typed_internal_string_argument(
                 argument,
                 index as usize + 1,
                 parameter,
-                "string",
+                expected,
             );
             None
         }
@@ -3512,6 +3575,110 @@ fn fn_similar_text(
     ret!(rv, Value::long(score as i64));
 }
 
+enum StrtokStep {
+    Token(Vec<u8>),
+    Exhausted,
+    Invalidated,
+}
+
+fn strtok_step(state: &mut crate::runtime::StrtokState, delimiters: &[u8]) -> StrtokStep {
+    if state.position >= state.input.len() {
+        return StrtokStep::Exhausted;
+    }
+
+    let mut delimiter = [false; 256];
+    for byte in delimiters {
+        delimiter[*byte as usize] = true;
+    }
+    while state.position < state.input.len() && delimiter[state.input[state.position] as usize] {
+        state.position += 1;
+    }
+    if state.position == state.input.len() {
+        return StrtokStep::Invalidated;
+    }
+
+    let start = state.position;
+    while state.position < state.input.len() && !delimiter[state.input[state.position] as usize] {
+        state.position += 1;
+    }
+    let token = state.input[start..state.position].to_vec();
+    if state.position < state.input.len() {
+        state.position += 1;
+    }
+    StrtokStep::Token(token)
+}
+
+fn fn_strtok(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(first) = typed_internal_string_argument(ed, eg, "strtok", 0, "string")? else {
+        return Ok(());
+    };
+    let second = arg_opt!(ed, 1);
+    let starts_tokenization = second.is_some_and(|value| value.value_type() != ValueType::Null);
+    let delimiters = if starts_tokenization {
+        let Some(token) =
+            typed_internal_string_argument_expected(ed, eg, "strtok", 1, "token", "?string")?
+        else {
+            return Ok(());
+        };
+        eg.string_utility_state
+            .get_or_insert_with(|| Box::new(crate::runtime::StringUtilityState::default()))
+            .strtok = Some(crate::runtime::StrtokState {
+            input: php_string_to_bytes(&first),
+            position: 0,
+        });
+        php_string_to_bytes(&token)
+    } else {
+        php_string_to_bytes(&first)
+    };
+
+    let step = eg
+        .string_utility_state
+        .as_mut()
+        .and_then(|state| state.strtok.as_mut())
+        .map(|state| strtok_step(state, &delimiters));
+    let Some(step) = step else {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            "strtok(): Both arguments must be provided when starting tokenization",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        ret!(rv, Value::bool(false));
+    };
+
+    match step {
+        StrtokStep::Token(token) => ret!(rv, Value::string(bytes_to_php_string(&token))),
+        StrtokStep::Exhausted => ret!(rv, Value::bool(false)),
+        StrtokStep::Invalidated => {
+            if let Some(state) = eg.string_utility_state.as_mut() {
+                state.strtok = None;
+            }
+            ret!(rv, Value::bool(false));
+        }
+    }
+}
+
+fn fn_str_shuffle(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(string) = typed_internal_string_argument(ed, eg, "str_shuffle", 0, "string")? else {
+        return Ok(());
+    };
+    let mut bytes = php_string_to_bytes(&string);
+    shuffle_slice(eg, &mut bytes);
+    ret!(rv, Value::string(bytes_to_php_string(&bytes)));
+}
+
 #[cfg(test)]
 mod similar_text_tests {
     use super::similar_text_score;
@@ -3532,6 +3699,95 @@ mod similar_text_tests {
         assert_eq!(similar_text_score(&[0xc4], &[0xe4]), 0);
         assert_eq!(similar_text_score(b"", b""), 0);
         assert_eq!(similar_text_score(b"same", b"same"), 4);
+    }
+}
+
+#[cfg(test)]
+mod strtok_shuffle_tests {
+    use std::collections::HashSet;
+
+    use super::{StrtokStep, shuffle_slice, strtok_step};
+    use crate::runtime::{ExecutorGlobals, StringUtilityState, StrtokState};
+
+    fn token(step: StrtokStep) -> Option<Vec<u8>> {
+        match step {
+            StrtokStep::Token(value) => Some(value),
+            StrtokStep::Exhausted | StrtokStep::Invalidated => None,
+        }
+    }
+
+    #[test]
+    fn tokenizer_uses_current_byte_delimiters_and_preserves_end_state() {
+        let mut state = StrtokState {
+            input: b",a,,b;c d".to_vec(),
+            position: 0,
+        };
+        assert_eq!(token(strtok_step(&mut state, b",")), Some(b"a".to_vec()));
+        assert_eq!(
+            token(strtok_step(&mut state, b",")),
+            Some(b"b;c d".to_vec())
+        );
+        assert!(matches!(
+            strtok_step(&mut state, b","),
+            StrtokStep::Exhausted
+        ));
+
+        let mut state = StrtokState {
+            input: b"a,b;c d".to_vec(),
+            position: 0,
+        };
+        assert_eq!(token(strtok_step(&mut state, b",")), Some(b"a".to_vec()));
+        assert_eq!(token(strtok_step(&mut state, b";")), Some(b"b".to_vec()));
+        assert_eq!(token(strtok_step(&mut state, b" ")), Some(b"c".to_vec()));
+        assert_eq!(token(strtok_step(&mut state, b",")), Some(b"d".to_vec()));
+    }
+
+    #[test]
+    fn tokenizer_distinguishes_exhausted_and_delimiter_only_suffixes() {
+        let mut empty = StrtokState {
+            input: Vec::new(),
+            position: 0,
+        };
+        assert!(matches!(
+            strtok_step(&mut empty, b","),
+            StrtokStep::Exhausted
+        ));
+
+        let mut delimiters = StrtokState {
+            input: b",,,".to_vec(),
+            position: 0,
+        };
+        assert!(matches!(
+            strtok_step(&mut delimiters, b","),
+            StrtokStep::Invalidated
+        ));
+
+        let mut binary = StrtokState {
+            input: vec![0x80, 0, 0x81, b',', b't', b'a', b'i', b'l'],
+            position: 0,
+        };
+        assert_eq!(token(strtok_step(&mut binary, b"\0,")), Some(vec![0x80]));
+        assert_eq!(token(strtok_step(&mut binary, b"\0,")), Some(vec![0x81]));
+        assert_eq!(
+            token(strtok_step(&mut binary, b"\0,")),
+            Some(b"tail".to_vec())
+        );
+    }
+
+    #[test]
+    fn request_local_shuffle_reaches_every_four_byte_permutation() {
+        let mut eg = ExecutorGlobals::new();
+        eg.string_utility_state = Some(Box::new(StringUtilityState {
+            strtok: None,
+            shuffle_random: 1,
+        }));
+        let mut permutations = HashSet::new();
+        for _ in 0..1_000 {
+            let mut value = *b"abcd";
+            shuffle_slice(&mut eg, &mut value);
+            permutations.insert(value);
+        }
+        assert_eq!(permutations.len(), 24);
     }
 }
 

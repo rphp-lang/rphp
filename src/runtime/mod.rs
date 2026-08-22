@@ -322,6 +322,20 @@ pub(crate) struct ReflectionParameterState {
     pub(crate) attribute_scope_class: String,
 }
 
+/// Mutable cursor for PHP's request-local `strtok()` continuation form.
+pub(crate) struct StrtokState {
+    pub(crate) input: Vec<u8>,
+    pub(crate) position: usize,
+}
+
+/// Cold state shared by string utilities that retain request-local state.
+/// Ordinary requests keep only the null sidecar word.
+#[derive(Default)]
+pub(crate) struct StringUtilityState {
+    pub(crate) strtok: Option<StrtokState>,
+    pub(crate) shuffle_random: u64,
+}
+
 pub struct ExecutorGlobals {
     pub vm_stack: VmStack,
     /// Compact argument-only activations for deferred pure-scalar calls.
@@ -589,6 +603,9 @@ pub struct ExecutorGlobals {
     /// RPHP does not yet maintain a separate cycle queue, so this flag affects
     /// the control API without changing reference-counted value reclamation.
     pub(crate) gc_enabled: bool,
+    /// Stateful tokenization and shuffle PRNG data are allocated only after
+    /// the corresponding standard-library function is first called.
+    pub(crate) string_utility_state: Option<Box<StringUtilityState>>,
     /// Lazily allocated request-local overrides for the admitted mutable INI
     /// subset. Requests that never call `ini_set()` retain only this null word.
     pub(crate) ini_overrides: Option<Box<HashMap<String, String>>>,
@@ -1152,6 +1169,7 @@ impl ExecutorGlobals {
             #[cfg(feature = "php-generics-reified")]
             static_generic_property_contracts: Vec::new(),
             gc_enabled: true,
+            string_utility_state: None,
             ini_overrides: None,
             reflection_attributes: None,
             reflection_parameters: None,
@@ -1264,6 +1282,7 @@ impl ExecutorGlobals {
             #[cfg(feature = "php-generics-reified")]
             static_generic_property_contracts: Vec::new(),
             gc_enabled: true,
+            string_utility_state: None,
             ini_overrides: None,
             reflection_attributes: None,
             reflection_parameters: None,
