@@ -8,6 +8,89 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`array-user-value-set-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+candidate commit `828b4407`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 4,098 pass, 1,205 fail, 115 skip, none remain XFAIL, 181
+are unsupported, and none time out or crash. The headline pass rate remains
+77.277%, the whole-corpus rate remains 73.192%, and 4,809 of 5,303 attempted
+cases reach runtime (90.685%). The selected functions are exercised by a
+separate `ext/standard` cluster, so the exact main-corpus pass-set delta from
+`c8c43701` is intentionally +0/-0 with no status or category movement.
+
+Two independently executed final main-corpus runs have byte-identical
+manifests and, after recording the implementation commit, byte-identical
+summaries. Their SHA-256 values are
+`dff002f63754267cbc2969e38fd8d60f691d5ede1dc2b7aea14209ce352d3224`
+and `094a9238f083724cce82d6240ef79ac0b71bbffef06b9242acb11e9d48b24a07`.
+The manifest is also byte-identical to the preceding exact baseline, proving
+that every prior pass and failure classification is preserved.
+
+`array_udiff()`, `array_udiff_assoc()` and `array_udiff_uassoc()` now perform
+PHP 8.5 user-value difference, while `array_uintersect()`,
+`array_uintersect_assoc()` and `array_uintersect_uassoc()` provide the matching
+intersection family. Value-only variants compare values through the final
+callback; `*_assoc()` requires an exact key as well; `*_uassoc()` uses the
+penultimate callback for values and the final callback for keys. All six
+preserve the first array's keys, insertion order, duplicate behavior and
+PHP-visible reference lifetime. Callback validation precedes array validation
+in the exercised PHP order, exceptions stop further comparisons, and
+structural inputs are snapshotted before callback re-entry while referenced
+cells remain live. Reflection names, variadic shapes and minimum arity match
+PHP 8.5. `array_diff_key()` and `array_intersect_key()` were also corrected to
+their one-required-array variadic PHP 8.5 signatures and one-array identities.
+
+The 33 supplying unmodified PHP 8.5 `ext/standard` PHPTs move from 0/33 to
+17/33 in both debug and release builds. Twelve remaining cases stop at
+independent leading-dot numeric or binary-string-literal parser gaps, three
+reach pre-existing `var_export()`/`print_r()` formatting gaps, and one reaches
+a later independent three-array `array_intersect()` call after validating the
+new user-comparator behavior. The PHP 8.5.9 oracle passes 33/33. A 300-result
+clean-room matrix across all six functions, comparison-array counts, key/value
+types and callback forms is byte-identical to PHP 8.5.9: 15,065 output bytes
+with aggregate SHA-256
+`9e242c156802e333aadbc111d39b86d45d1f786a8f4e72a31ddfc80921c070c9`.
+Original E2E regressions cover comparison modes and duplicates, PHP's
+small-array callback schedule, structural mutation and live aliases,
+exceptions, validation precedence, Reflection metadata and runtime arity.
+
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, the unchanged 1,620/289/332 unsafe
+ratchet, Composer 2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-
+kernel S2 and cold-build S3 pass. The implementation extends one existing cold
+stdlib module and changes registrations and tests; it changes no compiler or
+opcode definition, call frame, PHP Value/object layout, dependency or
+production unsafe code.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used performance-governor CPU 2, three warmups per binary
+and no excluded samples. Batches of 100 empty requests measured baseline/
+candidate medians of 214.357/214.104 milliseconds, -0.118% independently and
++0.137% paired, with paired p10/p90 changes of -1.626% and +2.183%. One
+500,000-entry `array_diff_key()` request measured 664.627/661.021
+milliseconds, -0.543% independently and +0.072% paired, with paired p10/p90
+changes of -2.900% and +1.571%. The unchanged 500,000-call
+`array_intersect()` control measured 447.269/436.872 milliseconds, -2.325%
+independently and -2.046% paired, with paired p10/p90 changes of -3.729% and
+-0.577%. Outputs were checksummed and every control remains below the +5%
+gate. The baseline and candidate binary SHA-256 values are
+`1c93db15a866e6101db3eeeea07e700030cda05ac295161b2d84f8369a021788`
+and `6f6138cec707dd6f9d7f804560a4f16511dd1100864508c3e196f3e98b2d426a`.
+
+An attempted prerequisite migration of ordinary `array_intersect()` to its
+PHP 8.5 variadic signature was rejected and reverted: variadic argument
+packing first regressed the 500,000-call control by about 154%, and a scalar
+fast path still regressed it by about 20%. This checkpoint therefore makes no
+claim for three-or-more-array ordinary `array_intersect()`. For six or more
+entries, user comparison uses a deterministic stable O(n log n) merge
+baseline whose results match the exercised oracle; exact PHP comparator call
+traces are claimed only for the exercised two-to-five-entry schedules, not for
+arbitrarily large or inconsistent-comparator inputs. The 16 independent PHPT
+blockers, `array_change_key_case()`, ordinary variadic `array_intersect()`, the
+complete `ext/standard` array suite and broader PHP compatibility remain
+separate work. The unchanged main-corpus count is not presented as a Zend/lang
+pass gain.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is the
 `array-assoc-set-batch`, pinned to php-src 8.5 commit `fcc29c8` and candidate
 commit `eedc9a9e`. Across all 5,599 unmodified `Zend/tests` and `tests/lang`
 cases, 4,098 pass, 1,205 fail, 115 skip, none remain XFAIL, 181 are

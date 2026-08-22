@@ -1715,6 +1715,37 @@ parser forms, `array_change_key_case()`, six `array_udiff*`/`array_uintersect*`
 functions, the complete array suite and broader compatibility remain separate
 work.
 
+The `array-user-value-set-batch` checkpoint adds `array_udiff()`,
+`array_udiff_assoc()`, `array_udiff_uassoc()`, `array_uintersect()`,
+`array_uintersect_assoc()` and `array_uintersect_uassoc()`. The variants cover
+user-value, exact-key plus user-value, and user-key plus user-value comparison
+while preserving PHP 8.5 duplicates, first-array order, callback validation,
+exceptions, structural snapshots and live reference cells. It also corrects
+`array_diff_key()` and `array_intersect_key()` to their one-required-array
+variadic signatures and identities. A 300-result clean-room matrix is byte-
+identical to PHP 8.5.9. Of 33 supplying unmodified `ext/standard` PHPTs, 17
+pass in both debug and release; 12 stop at independent parser gaps, three at
+pre-existing output formatting, and one at a later ordinary three-array
+`array_intersect()` call. The PHP oracle passes 33/33. Because this cluster is
+outside the pinned Zend/lang corpus, two byte-identical full manifests remain
+at 4,098 pass, 1,205 fail, 115 skip and 181 unsupported with zero timeouts or
+crashes and an exact +0/-0 delta from `c8c43701`.
+
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, the unchanged 1,620/289/332 unsafe ratchet, Composer S0, four Symfony
+S1 gates and PHP 8.5.9 S2/S3 pass. No compiler/opcode, call-frame, PHP
+Value/object layout, dependency or unsafe change is made. CPU-pinned 32-pair
+release controls put independent/paired median changes at -0.118%/+0.137% for
+100 empty requests, -0.543%/+0.072% for one 500,000-entry
+`array_diff_key()` request and -2.325%/-2.046% for 500,000 unchanged
+`array_intersect()` calls, below the +5% gate. An attempted ordinary variadic
+`array_intersect()` prerequisite was reverted after approximately +154% and,
+with a scalar fast path, approximately +20% regressions. The stable O(n log n)
+large-array baseline does not claim PHP's exact arbitrary-large comparator
+trace. The 16 independent focused blockers, `array_change_key_case()`, ordinary
+variadic `array_intersect()`, the complete array suite and broader compatibility
+remain separate work.
+
 ## Measurement system
 
 ### Contract baseline
