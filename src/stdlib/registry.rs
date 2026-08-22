@@ -6,6 +6,7 @@
 
 use super::filesystem::*;
 use super::process::*;
+use super::source_filters::*;
 use super::strings::*;
 use super::*;
 
@@ -1058,6 +1059,31 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "string",
         "flags",
         "encoding"
+    );
+    reg!("strip_tags", fn_strip_tags, 2, 1, "string", "allowed_tags");
+    reg!(
+        "highlight_string",
+        fn_highlight_string,
+        2,
+        1,
+        "string",
+        "return"
+    );
+    reg!(
+        "highlight_file",
+        fn_highlight_file,
+        2,
+        1,
+        "filename",
+        "return"
+    );
+    reg!("show_source", fn_show_source, 2, 1, "filename", "return");
+    reg!(
+        "php_strip_whitespace",
+        fn_php_strip_whitespace,
+        1,
+        1,
+        "filename"
     );
     reg!("urlencode", fn_urlencode, 1, 1, "string");
     reg!("urldecode", fn_urldecode, 1, 1, "string");

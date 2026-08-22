@@ -3,6 +3,60 @@ mod common;
 use common::{run_php, run_php_with_source_context};
 
 #[test]
+fn source_highlighter_uses_php_colors_and_preserves_invalid_numeric_text() {
+    assert_eq!(
+        run_php(
+            r##"<?php
+var_dump(ini_set('highlight.default', '#123456'));
+echo highlight_string("<?php \n 09 09;", true);
+"##,
+        ),
+        concat!(
+            "string(7) \"#0000BB\"\n",
+            "<pre><code style=\"color: #000000\">",
+            "<span style=\"color: #123456\">&lt;?php \n 09 09</span>",
+            "<span style=\"color: #007700\">;</span>",
+            "</code></pre>",
+        )
+    );
+}
+
+#[test]
+fn strip_tags_honors_allowed_names_nuls_and_stringable_arguments() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class FilterText {
+    public function __toString(): string {
+        echo "cast\n";
+        return '<p>A <b title=">">B</b></p>';
+    }
+}
+echo strip_tags(new FilterText(), ['b']), "\n";
+echo strip_tags("\0<a href='x'>A</a><br>B", '<a>'), "\n";
+"#,
+        ),
+        "cast\nA <b title=\">\">B</b>\n<a href='x'>A</a>B\n"
+    );
+}
+
+#[test]
+fn highlight_file_validates_return_flag_before_filesystem_access() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+try {
+    highlight_file('/rphp/definitely/missing/source.php', []);
+} catch (TypeError $error) {
+    echo $error->getMessage();
+}
+"#,
+        ),
+        "highlight_file(): Argument #2 ($return) must be of type bool, array given"
+    );
+}
+
+#[test]
 fn last_error_tracks_unhandled_diagnostics_even_when_suppressed() {
     assert_eq!(
         run_php(

@@ -178,6 +178,7 @@ mod builtin_classes;
 mod fiber;
 mod filesystem;
 mod process;
+mod source_filters;
 mod strings;
 mod weak;
 
@@ -13901,6 +13902,12 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
                     .insert(normalized, published);
             }
+            "highlight.string" | "highlight.comment" | "highlight.keyword"
+            | "highlight.default" | "highlight.html" => {
+                eg.ini_overrides
+                    .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                    .insert(normalized, value.clone());
+            }
             _ => {}
         }
     }
@@ -14011,6 +14018,11 @@ pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> 
         "memory_limit" => "-1".to_string(),
         "zend.exception_string_param_max_len" => "15".to_string(),
         "fiber.stack_size" => "2097152".to_string(),
+        "highlight.string" => "#DD0000".to_string(),
+        "highlight.comment" => "#FF8000".to_string(),
+        "highlight.keyword" => "#007700".to_string(),
+        "highlight.default" => "#0000BB".to_string(),
+        "highlight.html" => "#000000".to_string(),
         _ => return None,
     })
 }

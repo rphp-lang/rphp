@@ -8,6 +8,11 @@ function unsupported_rphp_ini_directives(string $section): array
     $supported = [
         'assert.exception' => true,
         'error_reporting' => true,
+        'highlight.comment' => true,
+        'highlight.default' => true,
+        'highlight.html' => true,
+        'highlight.keyword' => true,
+        'highlight.string' => true,
         'precision' => true,
         'serialize_precision' => true,
         'zend.assertions' => true,
