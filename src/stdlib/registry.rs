@@ -292,6 +292,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "needle",
         "before_needle"
     );
+    reg!(
+        "stristr",
+        fn_stristr,
+        3,
+        2,
+        "haystack",
+        "needle",
+        "before_needle"
+    );
     reg!("strrpos", fn_strrpos, 2, 2, "haystack", "needle");
     reg!("strrchr", fn_strrchr, 2, 2, "haystack", "needle");
     reg!("strtr", fn_strtr, 3, 2, "string", "from", "to");

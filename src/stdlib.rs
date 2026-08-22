@@ -2274,6 +2274,210 @@ fn fn_strstr(
     ret!(rv, Value::string(bytes_to_php_string(bytes)));
 }
 
+fn stristr_type_error(
+    eg: &mut ExecutorGlobals,
+    argument: &Value,
+    position: usize,
+    parameter: &str,
+    expected: &str,
+) {
+    let actual = match argument.value_type() {
+        ValueType::True => "true".to_string(),
+        ValueType::False => "false".to_string(),
+        _ => argument.diagnostic_type_name().into_owned(),
+    };
+    eg.exception = Some(crate::value::make_error_value(
+        "TypeError",
+        &format!(
+            "stristr(): Argument #{position} (${parameter}) must be of type {expected}, {actual} given"
+        ),
+    ));
+}
+
+fn stristr_string_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    index: u32,
+    parameter: &str,
+) -> Result<Option<String>, VmError> {
+    let argument = owned_argument(ed, index);
+    let argument = argument.dereferenced();
+    let strict = internal_call_is_strict(ed);
+    let converted = match argument.value_type() {
+        ValueType::String => Some(argument.as_str().unwrap_or("").to_string()),
+        ValueType::Null if !strict => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                &format!(
+                    "stristr(): Passing null to parameter #{} (${parameter}) of type string is deprecated",
+                    index + 1
+                ),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            Some(String::new())
+        }
+        ValueType::False if !strict => Some(String::new()),
+        ValueType::True if !strict => Some("1".to_string()),
+        ValueType::Long | ValueType::Double if !strict => {
+            if argument.as_double().is_some_and(f64::is_nan) {
+                report_internal_diagnostic(
+                    eg,
+                    ed,
+                    2,
+                    "Warning",
+                    "unexpected NAN value was coerced to string",
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(None);
+                }
+            }
+            Some(argument.echo_to_string_with_precision(eg.precision))
+        }
+        ValueType::Object if !strict => {
+            let rendered = crate::vm::execute::call_object_string_conversion(eg, argument)?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            let Some(rendered) = rendered else {
+                stristr_type_error(eg, argument, index as usize + 1, parameter, "string");
+                return Ok(None);
+            };
+            let rendered = rendered.dereferenced();
+            match rendered.value_type() {
+                ValueType::String => Some(rendered.as_str().unwrap_or("").to_string()),
+                ValueType::Long | ValueType::Double | ValueType::True | ValueType::False => {
+                    if rendered.as_double().is_some_and(f64::is_nan) {
+                        report_internal_diagnostic(
+                            eg,
+                            ed,
+                            2,
+                            "Warning",
+                            "unexpected NAN value was coerced to string",
+                        )?;
+                        if eg.exception.is_some() {
+                            return Ok(None);
+                        }
+                    }
+                    Some(rendered.echo_to_string_with_precision(eg.precision))
+                }
+                _ => {
+                    let class_name = argument.diagnostic_type_name();
+                    let actual = rendered.diagnostic_type_name();
+                    eg.exception = Some(crate::value::make_error_value(
+                        "TypeError",
+                        &format!(
+                            "{class_name}::__toString(): Return value must be of type string, {actual} returned"
+                        ),
+                    ));
+                    return Ok(None);
+                }
+            }
+        }
+        _ => {
+            stristr_type_error(eg, argument, index as usize + 1, parameter, "string");
+            None
+        }
+    };
+    Ok(converted)
+}
+
+fn stristr_bool_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    index: u32,
+    parameter: &str,
+) -> Result<Option<bool>, VmError> {
+    let argument = owned_argument(ed, index);
+    let argument = argument.dereferenced();
+    let strict = internal_call_is_strict(ed);
+    let converted = match argument.value_type() {
+        ValueType::True => Some(true),
+        ValueType::False => Some(false),
+        ValueType::Null if !strict => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                &format!(
+                    "stristr(): Passing null to parameter #{} (${parameter}) of type bool is deprecated",
+                    index + 1
+                ),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            Some(false)
+        }
+        ValueType::Long | ValueType::Double | ValueType::String if !strict => {
+            if argument.as_double().is_some_and(f64::is_nan) {
+                report_internal_diagnostic(
+                    eg,
+                    ed,
+                    2,
+                    "Warning",
+                    "unexpected NAN value was coerced to bool",
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(None);
+                }
+            }
+            Some(argument.is_truthy())
+        }
+        _ => {
+            stristr_type_error(eg, argument, index as usize + 1, parameter, "bool");
+            None
+        }
+    };
+    Ok(converted)
+}
+
+fn ascii_case_insensitive_position(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    haystack.windows(needle.len()).position(|candidate| {
+        candidate
+            .iter()
+            .zip(needle)
+            .all(|(left, right)| left.eq_ignore_ascii_case(right))
+    })
+}
+
+fn fn_stristr(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(haystack) = stristr_string_argument(ed, eg, 0, "haystack")? else {
+        return Ok(());
+    };
+    let Some(needle) = stristr_string_argument(ed, eg, 1, "needle")? else {
+        return Ok(());
+    };
+    let before_needle = if arg_opt!(ed, 2).is_some() {
+        let Some(before_needle) = stristr_bool_argument(ed, eg, 2, "before_needle")? else {
+            return Ok(());
+        };
+        before_needle
+    } else {
+        false
+    };
+
+    let haystack = php_string_to_bytes(&haystack);
+    let needle = php_string_to_bytes(&needle);
+    let Some(position) = ascii_case_insensitive_position(&haystack, &needle) else {
+        ret!(rv, Value::bool(false));
+    };
+    let bytes = if before_needle {
+        &haystack[..position]
+    } else {
+        &haystack[position..]
+    };
+    ret!(rv, Value::string(bytes_to_php_string(bytes)));
+}
+
 fn fn_strrpos(
     ed: *mut ExecuteData,
     rv: *mut Value,

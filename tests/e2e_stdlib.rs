@@ -46,6 +46,129 @@ foreach ([
 }
 
 #[test]
+fn stristr_matches_php_85_ascii_bytes_and_typed_call_boundaries() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($level, $message) {
+    echo "diag:$level:$message\n";
+    return true;
+});
+class StristrText {
+    public function __toString(): string { echo "toString\n"; return "AbC"; }
+}
+class StristrScalarText {
+    public function __toString() { return 1; }
+}
+class StristrBadText {
+    public function __toString() { return []; }
+}
+
+var_dump(stristr("xxAbCyy", "aB"));
+var_dump(stristr("xxAbCyy", "aB", true));
+var_dump(stristr("AbC", ""));
+var_dump(stristr("AbC", "", true));
+var_dump(bin2hex(stristr("x\0Ab", "\0a")));
+var_dump(stristr("\xC4", "\xE4"));
+var_dump(bin2hex(stristr("x\xC4z", "\xC4")));
+var_dump(stristr("x97Y", 97));
+var_dump(stristr("AbC", false));
+var_dump(stristr("AbC", null));
+var_dump(stristr(NAN, "n"));
+var_dump(stristr(new StristrText, "b"));
+var_dump(stristr(new StristrScalarText, "1"));
+try { stristr(new StristrBadText, "x"); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+var_dump(stristr("AbC", "b", null));
+var_dump(stristr("AbC", "b", "1"));
+var_dump(stristr("AbC", "b", NAN));
+
+$resource = fopen("php://memory", "r+");
+foreach ([
+    [[], "a", false],
+    ["abc", [], false],
+    ["abc", $resource, false],
+    [new stdClass, "a", false],
+    [static fn() => null, "a", false],
+    ["abc", "b", []],
+    ["abc", "b", new stdClass],
+] as $arguments) {
+    try { var_dump(stristr(...$arguments)); }
+    catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+
+set_error_handler(function ($level, $message) {
+    throw new RuntimeException("stop:$message");
+});
+class StristrLaterText {
+    public function __toString(): string { echo "late conversion\n"; return "x"; }
+}
+try { stristr(null, new StristrLaterText); }
+catch (RuntimeException $error) { echo $error->getMessage(), "\n"; }
+"#,
+        ),
+        concat!(
+            "string(5) \"AbCyy\"\n",
+            "string(2) \"xx\"\n",
+            "string(3) \"AbC\"\n",
+            "string(0) \"\"\n",
+            "string(6) \"004162\"\n",
+            "bool(false)\n",
+            "string(4) \"c47a\"\n",
+            "string(3) \"97Y\"\n",
+            "string(3) \"AbC\"\n",
+            "diag:8192:stristr(): Passing null to parameter #2 ($needle) of type string is deprecated\n",
+            "string(3) \"AbC\"\n",
+            "diag:2:unexpected NAN value was coerced to string\n",
+            "string(3) \"NAN\"\n",
+            "toString\n",
+            "string(2) \"bC\"\n",
+            "string(1) \"1\"\n",
+            "StristrBadText::__toString(): Return value must be of type string, array returned\n",
+            "diag:8192:stristr(): Passing null to parameter #3 ($before_needle) of type bool is deprecated\n",
+            "string(2) \"bC\"\n",
+            "string(1) \"A\"\n",
+            "diag:2:unexpected NAN value was coerced to bool\n",
+            "string(1) \"A\"\n",
+            "stristr(): Argument #1 ($haystack) must be of type string, array given\n",
+            "stristr(): Argument #2 ($needle) must be of type string, array given\n",
+            "stristr(): Argument #2 ($needle) must be of type string, resource given\n",
+            "stristr(): Argument #1 ($haystack) must be of type string, stdClass given\n",
+            "stristr(): Argument #1 ($haystack) must be of type string, Closure given\n",
+            "stristr(): Argument #3 ($before_needle) must be of type bool, array given\n",
+            "stristr(): Argument #3 ($before_needle) must be of type bool, stdClass given\n",
+            "stop:stristr(): Passing null to parameter #1 ($haystack) of type string is deprecated\n",
+        )
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php declare(strict_types=1);
+class StrictStristrText {
+    public function __toString(): string { echo "unexpected\n"; return "AbC"; }
+}
+var_dump(stristr("AbC", "b", true));
+try { var_dump(stristr(123, "2", false)); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { var_dump(stristr("123", 2, false)); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { var_dump(stristr("AbC", new StrictStristrText, false)); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { var_dump(stristr("AbC", "b", 1)); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+"#,
+        ),
+        concat!(
+            "string(1) \"A\"\n",
+            "stristr(): Argument #1 ($haystack) must be of type string, int given\n",
+            "stristr(): Argument #2 ($needle) must be of type string, int given\n",
+            "stristr(): Argument #2 ($needle) must be of type string, StrictStristrText given\n",
+            "stristr(): Argument #3 ($before_needle) must be of type bool, int given\n",
+        )
+    );
+}
+
+#[test]
 fn json_preserve_zero_fraction_constant_matches_php_85() {
     assert_eq!(run_php("<?php echo JSON_PRESERVE_ZERO_FRACTION;"), "1024");
 }
