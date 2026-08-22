@@ -1,8 +1,9 @@
-//! Associative and user-key-comparator array set operations.
+//! Associative and user-comparator array set operations.
 //!
-//! All six functions preserve the first array's keys and insertion order. The
-//! inputs are snapshotted before a user comparator can re-enter PHP; referenced
-//! element cells stay live, while structural mutation detaches normally.
+//! All functions preserve the first array's keys and insertion order. The
+//! inputs are snapshotted before a user comparator can re-enter PHP;
+//! referenced element cells stay live, while structural mutation detaches
+//! normally.
 
 use crate::runtime::ExecutorGlobals;
 use crate::value::{ArrayKey, PhpArray, Value};
@@ -20,6 +21,7 @@ enum SetKind {
 enum ValueMode {
     Ignore,
     CompareAsString,
+    User,
 }
 
 struct Entry {
@@ -110,22 +112,56 @@ fn key_value(key: &ArrayKey) -> Value {
     }
 }
 
-fn value_matches(
+fn user_order(
+    eg: &mut ExecutorGlobals,
+    callback: &super::ResolvedCallback,
+    left: Value,
+    right: Value,
+) -> Result<Option<Ordering>, VmError> {
+    let comparison = super::call_resolved_with_values(eg, callback, &[left, right])?;
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    let comparison = comparison.dereferenced();
+    let comparison = comparison.as_array().map_or_else(
+        || comparison.to_long_val(),
+        |array| i64::from(!array.is_empty()),
+    );
+    Ok(Some(comparison.cmp(&0)))
+}
+
+fn value_order(
     execute_data: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
     left: &Value,
     right: &Value,
-) -> Result<bool, VmError> {
-    let Some(left) = super::internal_value_to_string(execute_data, eg, left)? else {
-        return Ok(false);
-    };
-    if eg.exception.is_some() {
-        return Ok(false);
+    callback: Option<&super::ResolvedCallback>,
+    mode: ValueMode,
+) -> Result<Option<Ordering>, VmError> {
+    match mode {
+        ValueMode::Ignore => Ok(Some(Ordering::Equal)),
+        ValueMode::User => user_order(
+            eg,
+            callback.expect("user value comparison retains its callback"),
+            left.clone(),
+            right.clone(),
+        ),
+        ValueMode::CompareAsString => {
+            let Some(left) = super::internal_value_to_string(execute_data, eg, left)? else {
+                return Ok(None);
+            };
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            let Some(right) = super::internal_value_to_string(execute_data, eg, right)? else {
+                return Ok(None);
+            };
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            Ok(Some(left.as_bytes().cmp(right.as_bytes())))
+        }
     }
-    let Some(right) = super::internal_value_to_string(execute_data, eg, right)? else {
-        return Ok(false);
-    };
-    Ok(eg.exception.is_none() && left == right)
 }
 
 fn entry_matches(
@@ -133,33 +169,27 @@ fn entry_matches(
     eg: &mut ExecutorGlobals,
     entry: &Entry,
     candidates: &[Entry],
-    callback: Option<&super::ResolvedCallback>,
+    exact_keys: bool,
+    value_callback: Option<&super::ResolvedCallback>,
     value_mode: ValueMode,
 ) -> Result<bool, VmError> {
     for candidate in candidates {
-        let keys_equal = if let Some(callback) = callback {
-            let comparison = super::call_resolved_with_values(
-                eg,
-                callback,
-                &[key_value(&entry.key), key_value(&candidate.key)],
-            )?;
-            if eg.exception.is_some() {
-                return Ok(false);
-            }
-            comparison.to_long_val() == 0
-        } else {
-            entry.key == candidate.key
-        };
-        if !keys_equal {
+        if exact_keys && entry.key != candidate.key {
             continue;
         }
-        if matches!(value_mode, ValueMode::Ignore)
-            || value_matches(execute_data, eg, &entry.value, &candidate.value)?
-        {
-            return Ok(true);
-        }
-        if eg.exception.is_some() {
+        let Some(ordering) = value_order(
+            execute_data,
+            eg,
+            &entry.value,
+            &candidate.value,
+            value_callback,
+            value_mode,
+        )?
+        else {
             return Ok(false);
+        };
+        if ordering == Ordering::Equal {
+            return Ok(true);
         }
     }
     Ok(false)
@@ -170,38 +200,27 @@ fn user_entry_order(
     eg: &mut ExecutorGlobals,
     left: &Entry,
     right: &Entry,
-    callback: &super::ResolvedCallback,
+    key_callback: Option<&super::ResolvedCallback>,
+    value_callback: Option<&super::ResolvedCallback>,
     value_mode: ValueMode,
 ) -> Result<Option<Ordering>, VmError> {
-    let comparison = super::call_resolved_with_values(
+    if let Some(callback) = key_callback {
+        let Some(ordering) = user_order(eg, callback, key_value(&left.key), key_value(&right.key))?
+        else {
+            return Ok(None);
+        };
+        if ordering != Ordering::Equal {
+            return Ok(Some(ordering));
+        }
+    }
+    value_order(
+        execute_data,
         eg,
-        callback,
-        &[key_value(&left.key), key_value(&right.key)],
-    )?;
-    if eg.exception.is_some() {
-        return Ok(None);
-    }
-    let comparison = comparison.to_long_val();
-    if comparison != 0 {
-        return Ok(Some(comparison.cmp(&0)));
-    }
-    if matches!(value_mode, ValueMode::Ignore) {
-        return Ok(Some(Ordering::Equal));
-    }
-
-    let Some(left) = super::internal_value_to_string(execute_data, eg, &left.value)? else {
-        return Ok(None);
-    };
-    if eg.exception.is_some() {
-        return Ok(None);
-    }
-    let Some(right) = super::internal_value_to_string(execute_data, eg, &right.value)? else {
-        return Ok(None);
-    };
-    if eg.exception.is_some() {
-        return Ok(None);
-    }
-    Ok(Some(left.as_bytes().cmp(right.as_bytes())))
+        &left.value,
+        &right.value,
+        value_callback,
+        value_mode,
+    )
 }
 
 /// Use the PHP 8.5 small-input comparison schedule for the common two-to-five
@@ -211,7 +230,8 @@ fn sort_user_entries(
     execute_data: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
     entries: &mut Vec<Entry>,
-    callback: &super::ResolvedCallback,
+    key_callback: Option<&super::ResolvedCallback>,
+    value_callback: Option<&super::ResolvedCallback>,
     value_mode: ValueMode,
 ) -> Result<bool, VmError> {
     fn compare_at(
@@ -220,7 +240,8 @@ fn sort_user_entries(
         entries: &[Entry],
         left: usize,
         right: usize,
-        callback: &super::ResolvedCallback,
+        key_callback: Option<&super::ResolvedCallback>,
+        value_callback: Option<&super::ResolvedCallback>,
         value_mode: ValueMode,
     ) -> Result<Option<Ordering>, VmError> {
         user_entry_order(
@@ -228,7 +249,8 @@ fn sort_user_entries(
             eg,
             &entries[left],
             &entries[right],
-            callback,
+            key_callback,
+            value_callback,
             value_mode,
         )
     }
@@ -254,7 +276,8 @@ fn sort_user_entries(
                         entries,
                         order[left],
                         order[right],
-                        callback,
+                        key_callback,
+                        value_callback,
                         value_mode,
                     )?
                     else {
@@ -297,7 +320,17 @@ fn sort_user_entries(
         }
         return Ok(true);
     }
-    let Some(first) = compare_at(execute_data, eg, entries, 0, 1, callback, value_mode)? else {
+    let Some(first) = compare_at(
+        execute_data,
+        eg,
+        entries,
+        0,
+        1,
+        key_callback,
+        value_callback,
+        value_mode,
+    )?
+    else {
         return Ok(false);
     };
     if first == Ordering::Greater {
@@ -308,8 +341,16 @@ fn sort_user_entries(
     }
 
     if first == Ordering::Greater {
-        let Some(third_to_first) =
-            compare_at(execute_data, eg, entries, 2, 0, callback, value_mode)?
+        let Some(third_to_first) = compare_at(
+            execute_data,
+            eg,
+            entries,
+            2,
+            0,
+            key_callback,
+            value_callback,
+            value_mode,
+        )?
         else {
             return Ok(false);
         };
@@ -317,8 +358,16 @@ fn sort_user_entries(
             entries.swap(1, 2);
             entries.swap(0, 1);
         } else {
-            let Some(second_to_third) =
-                compare_at(execute_data, eg, entries, 1, 2, callback, value_mode)?
+            let Some(second_to_third) = compare_at(
+                execute_data,
+                eg,
+                entries,
+                1,
+                2,
+                key_callback,
+                value_callback,
+                value_mode,
+            )?
             else {
                 return Ok(false);
             };
@@ -327,15 +376,31 @@ fn sort_user_entries(
             }
         }
     } else {
-        let Some(second_to_third) =
-            compare_at(execute_data, eg, entries, 1, 2, callback, value_mode)?
+        let Some(second_to_third) = compare_at(
+            execute_data,
+            eg,
+            entries,
+            1,
+            2,
+            key_callback,
+            value_callback,
+            value_mode,
+        )?
         else {
             return Ok(false);
         };
         if second_to_third == Ordering::Greater {
             entries.swap(1, 2);
-            let Some(first_to_second) =
-                compare_at(execute_data, eg, entries, 0, 1, callback, value_mode)?
+            let Some(first_to_second) = compare_at(
+                execute_data,
+                eg,
+                entries,
+                0,
+                1,
+                key_callback,
+                value_callback,
+                value_mode,
+            )?
             else {
                 return Ok(false);
             };
@@ -354,7 +419,8 @@ fn sort_user_entries(
                 entries,
                 current - 1,
                 current,
-                callback,
+                key_callback,
+                value_callback,
                 value_mode,
             )?
             else {
@@ -375,15 +441,31 @@ fn user_operation_keep_set(
     eg: &mut ExecutorGlobals,
     source: &mut Vec<Entry>,
     comparisons: &mut [Vec<Entry>],
-    callback: &super::ResolvedCallback,
+    key_callback: Option<&super::ResolvedCallback>,
+    value_callback: Option<&super::ResolvedCallback>,
     kind: SetKind,
     value_mode: ValueMode,
+    consume_equal: bool,
 ) -> Result<Option<Vec<bool>>, VmError> {
-    if !sort_user_entries(execute_data, eg, source, callback, value_mode)? {
+    if !sort_user_entries(
+        execute_data,
+        eg,
+        source,
+        key_callback,
+        value_callback,
+        value_mode,
+    )? {
         return Ok(None);
     }
     for comparison in comparisons.iter_mut() {
-        if !sort_user_entries(execute_data, eg, comparison, callback, value_mode)? {
+        if !sort_user_entries(
+            execute_data,
+            eg,
+            comparison,
+            key_callback,
+            value_callback,
+            value_mode,
+        )? {
             return Ok(None);
         }
     }
@@ -402,7 +484,8 @@ fn user_operation_keep_set(
                             eg,
                             entry,
                             &candidates[position],
-                            callback,
+                            key_callback,
+                            value_callback,
                             value_mode,
                         )?
                         else {
@@ -433,7 +516,8 @@ fn user_operation_keep_set(
                             eg,
                             entry,
                             &candidates[positions[index]],
-                            callback,
+                            key_callback,
+                            value_callback,
                             value_mode,
                         )?
                         else {
@@ -442,7 +526,9 @@ fn user_operation_keep_set(
                         match ordering {
                             Ordering::Less => break,
                             Ordering::Equal => {
-                                positions[index] += 1;
+                                if consume_equal {
+                                    positions[index] += 1;
+                                }
                                 found = true;
                                 break;
                             }
@@ -462,6 +548,166 @@ fn user_operation_keep_set(
     Ok(Some(keep))
 }
 
+/// Value-only user comparisons apply one difference decision to an entire
+/// equal-value source group. Intersections group only a successful match;
+/// unmatched values advance independently. This preserves both duplicate
+/// multiplicity and PHP's observable small-array callback schedule.
+fn user_value_operation_keep_set(
+    execute_data: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    source: &mut Vec<Entry>,
+    comparisons: &mut [Vec<Entry>],
+    callback: &super::ResolvedCallback,
+    kind: SetKind,
+) -> Result<Option<Vec<bool>>, VmError> {
+    if !sort_user_entries(
+        execute_data,
+        eg,
+        source,
+        None,
+        Some(callback),
+        ValueMode::User,
+    )? {
+        return Ok(None);
+    }
+    for comparison in comparisons.iter_mut() {
+        if !sort_user_entries(
+            execute_data,
+            eg,
+            comparison,
+            None,
+            Some(callback),
+            ValueMode::User,
+        )? {
+            return Ok(None);
+        }
+    }
+
+    let mut keep = vec![false; source.len()];
+    let mut positions = vec![0usize; comparisons.len()];
+    let mut retry_non_less = vec![false; comparisons.len()];
+    let mut source_position = 0;
+    while source_position < source.len() {
+        let retained = match kind {
+            SetKind::Difference => {
+                let mut found = false;
+                for (index, candidates) in comparisons.iter().enumerate() {
+                    while positions[index] < candidates.len() {
+                        let Some(ordering) = user_entry_order(
+                            execute_data,
+                            eg,
+                            &source[source_position],
+                            &candidates[positions[index]],
+                            None,
+                            Some(callback),
+                            ValueMode::User,
+                        )?
+                        else {
+                            return Ok(None);
+                        };
+                        match ordering {
+                            Ordering::Less => break,
+                            Ordering::Equal => {
+                                positions[index] += 1;
+                                found = true;
+                                break;
+                            }
+                            Ordering::Greater => positions[index] += 1,
+                        }
+                    }
+                    if found {
+                        break;
+                    }
+                }
+                !found
+            }
+            SetKind::Intersection => {
+                let mut found_everywhere = true;
+                for (index, candidates) in comparisons.iter().enumerate() {
+                    let mut found = false;
+                    while positions[index] < candidates.len() {
+                        let Some(mut ordering) = user_entry_order(
+                            execute_data,
+                            eg,
+                            &source[source_position],
+                            &candidates[positions[index]],
+                            None,
+                            Some(callback),
+                            ValueMode::User,
+                        )?
+                        else {
+                            return Ok(None);
+                        };
+                        if retry_non_less[index] && ordering != Ordering::Less {
+                            let Some(retried) = user_entry_order(
+                                execute_data,
+                                eg,
+                                &source[source_position],
+                                &candidates[positions[index]],
+                                None,
+                                Some(callback),
+                                ValueMode::User,
+                            )?
+                            else {
+                                return Ok(None);
+                            };
+                            ordering = retried;
+                        }
+                        retry_non_less[index] = false;
+                        match ordering {
+                            Ordering::Less => {
+                                retry_non_less[index] = true;
+                                break;
+                            }
+                            Ordering::Equal => {
+                                positions[index] += 1;
+                                found = true;
+                                break;
+                            }
+                            Ordering::Greater => positions[index] += 1,
+                        }
+                    }
+                    if !found {
+                        found_everywhere = false;
+                        break;
+                    }
+                }
+                found_everywhere
+            }
+        };
+
+        keep[source[source_position].ordinal] = retained;
+        let group_equal_values = matches!(kind, SetKind::Difference) || retained;
+        if !group_equal_values {
+            source_position += 1;
+            continue;
+        }
+
+        let group_start = source_position;
+        source_position += 1;
+        while source_position < source.len() {
+            let Some(ordering) = user_entry_order(
+                execute_data,
+                eg,
+                &source[group_start],
+                &source[source_position],
+                None,
+                Some(callback),
+                ValueMode::User,
+            )?
+            else {
+                return Ok(None);
+            };
+            if ordering != Ordering::Equal {
+                break;
+            }
+            keep[source[source_position].ordinal] = retained;
+            source_position += 1;
+        }
+    }
+    Ok(Some(keep))
+}
+
 fn execute_set_operation(
     execute_data: *mut ExecuteData,
     return_pointer: *mut Value,
@@ -469,9 +715,14 @@ fn execute_set_operation(
     function: &str,
     kind: SetKind,
     value_mode: ValueMode,
+    exact_keys: bool,
     first: Value,
     comparison_values: Vec<Value>,
-    callback: Option<super::ResolvedCallback>,
+    key_callback: Option<super::ResolvedCallback>,
+    value_callback: Option<super::ResolvedCallback>,
+    sorted_callbacks: bool,
+    consume_equal: bool,
+    group_user_values: bool,
 ) -> Result<(), VmError> {
     let Some((mut source, mut comparisons)) =
         validated_snapshots(&first, &comparison_values, eg, function)
@@ -479,17 +730,32 @@ fn execute_set_operation(
         return Ok(());
     };
 
-    if let Some(callback) = callback.as_ref() {
-        let Some(keep) = user_operation_keep_set(
-            execute_data,
-            eg,
-            &mut source,
-            &mut comparisons,
-            callback,
-            kind,
-            value_mode,
-        )?
-        else {
+    if sorted_callbacks {
+        let keep = if group_user_values {
+            user_value_operation_keep_set(
+                execute_data,
+                eg,
+                &mut source,
+                &mut comparisons,
+                value_callback
+                    .as_ref()
+                    .expect("grouped user-value operation retains its callback"),
+                kind,
+            )?
+        } else {
+            user_operation_keep_set(
+                execute_data,
+                eg,
+                &mut source,
+                &mut comparisons,
+                key_callback.as_ref(),
+                value_callback.as_ref(),
+                kind,
+                value_mode,
+                consume_equal,
+            )?
+        };
+        let Some(keep) = keep else {
             return Ok(());
         };
         source.sort_by_key(|entry| entry.ordinal);
@@ -509,7 +775,15 @@ fn execute_set_operation(
             SetKind::Difference => {
                 let mut found = false;
                 for candidates in &comparisons {
-                    if entry_matches(execute_data, eg, &entry, candidates, None, value_mode)? {
+                    if entry_matches(
+                        execute_data,
+                        eg,
+                        &entry,
+                        candidates,
+                        exact_keys,
+                        value_callback.as_ref(),
+                        value_mode,
+                    )? {
                         found = true;
                         break;
                     }
@@ -522,7 +796,15 @@ fn execute_set_operation(
             SetKind::Intersection => {
                 let mut present_everywhere = true;
                 for candidates in &comparisons {
-                    if !entry_matches(execute_data, eg, &entry, candidates, None, value_mode)? {
+                    if !entry_matches(
+                        execute_data,
+                        eg,
+                        &entry,
+                        candidates,
+                        exact_keys,
+                        value_callback.as_ref(),
+                        value_mode,
+                    )? {
                         present_everywhere = false;
                         break;
                     }
@@ -560,10 +842,80 @@ fn ordinary_operation(
         function,
         kind,
         ValueMode::CompareAsString,
+        true,
         first,
         variadic_values(&rest),
         None,
+        None,
+        false,
+        false,
+        false,
     )
+}
+
+fn ordinary_key_operation(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    kind: SetKind,
+) -> Result<(), VmError> {
+    let first = arg!(execute_data, 0);
+    let comparison_values = arg!(execute_data, 1)
+        .as_array()
+        .into_iter()
+        .flat_map(|array| array.values())
+        .collect::<Vec<_>>();
+    let Some(first_array) = first.as_array() else {
+        array_type_error(eg, function, 1, first);
+        return Ok(());
+    };
+    let mut comparisons = Vec::with_capacity(comparison_values.len());
+    for (index, value) in comparison_values.iter().enumerate() {
+        let Some(array) = value.dereferenced().as_array() else {
+            array_type_error(eg, function, index + 2, value);
+            return Ok(());
+        };
+        comparisons.push(array);
+    }
+
+    let contains = |array: &PhpArray, key: &ArrayKey| match key {
+        ArrayKey::Int(index) => array.get_int(*index).is_some(),
+        ArrayKey::String(name) => array.get_str(name).is_some(),
+    };
+    let mut result = PhpArray::new();
+    for (key, value) in first_array.iter() {
+        let keep = match kind {
+            SetKind::Difference => !comparisons.iter().any(|array| contains(array, &key)),
+            SetKind::Intersection => comparisons.iter().all(|array| contains(array, &key)),
+        };
+        if keep {
+            result.set(key, result_entry_value(value));
+        }
+    }
+    super::write_return_value(return_pointer, Value::array(result));
+    Ok(())
+}
+
+fn resolve_user_callback(
+    execute_data: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    position: usize,
+    callback: &Value,
+) -> Result<Option<super::ResolvedCallback>, VmError> {
+    let Some(resolved) = super::resolve_callback_at_callsite_checked(callback, eg, execute_data)?
+    else {
+        if eg.exception.is_none() {
+            let reason = super::ordinary_callback_invalid_reason(callback, eg);
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                &format!("{function}(): Argument #{position} must be a valid callback, {reason}"),
+            ));
+        }
+        return Ok(None);
+    };
+    Ok(Some(resolved))
 }
 
 fn user_key_operation(
@@ -589,17 +941,9 @@ fn user_key_operation(
         .expect("variadic user-key operation retains its required callback")
         .dereferenced()
         .clone();
-    let Some(resolved) = super::resolve_callback_at_callsite_checked(&callback, eg, execute_data)?
+    let Some(resolved) =
+        resolve_user_callback(execute_data, eg, function, callback_position, &callback)?
     else {
-        if eg.exception.is_none() {
-            let reason = super::ordinary_callback_invalid_reason(&callback, eg);
-            eg.exception = Some(crate::value::make_error_value(
-                "TypeError",
-                &format!(
-                    "{function}(): Argument #{callback_position} must be a valid callback, {reason}"
-                ),
-            ));
-        }
         return Ok(());
     };
 
@@ -611,9 +955,132 @@ fn user_key_operation(
         function,
         kind,
         value_mode,
+        false,
         first,
         values,
         Some(resolved),
+        None,
+        true,
+        true,
+        false,
+    )
+}
+
+fn user_value_operation(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    kind: SetKind,
+    exact_keys: bool,
+) -> Result<(), VmError> {
+    let rest = super::owned_argument(execute_data, 1);
+    let mut values = variadic_values(&rest);
+    if values.is_empty() {
+        eg.exception = Some(crate::value::make_error_value(
+            "ArgumentCountError",
+            &format!("{function}() expects at least 2 arguments, 1 given"),
+        ));
+        return Ok(());
+    }
+    let callback_position = values.len() + 1;
+    let callback = values
+        .pop()
+        .expect("variadic user-value operation retains its required callback")
+        .dereferenced()
+        .clone();
+    let Some(resolved) =
+        resolve_user_callback(execute_data, eg, function, callback_position, &callback)?
+    else {
+        return Ok(());
+    };
+
+    let first = super::owned_argument(execute_data, 0);
+    execute_set_operation(
+        execute_data,
+        return_pointer,
+        eg,
+        function,
+        kind,
+        ValueMode::User,
+        exact_keys,
+        first,
+        values,
+        None,
+        Some(resolved),
+        !exact_keys,
+        false,
+        !exact_keys,
+    )
+}
+
+fn user_value_key_operation(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    kind: SetKind,
+) -> Result<(), VmError> {
+    let rest = super::owned_argument(execute_data, 1);
+    let mut values = variadic_values(&rest);
+    if values.len() < 2 {
+        let given = values.len() + 1;
+        eg.exception = Some(crate::value::make_error_value(
+            "ArgumentCountError",
+            &format!("{function}() expects at least 3 arguments, {given} given"),
+        ));
+        return Ok(());
+    }
+
+    let key_callback_position = values.len() + 1;
+    let value_callback_position = values.len();
+    let key_callback = values
+        .pop()
+        .expect("user value/key operation retains its key callback")
+        .dereferenced()
+        .clone();
+    let value_callback = values
+        .pop()
+        .expect("user value/key operation retains its value callback")
+        .dereferenced()
+        .clone();
+    let Some(resolved_value) = resolve_user_callback(
+        execute_data,
+        eg,
+        function,
+        value_callback_position,
+        &value_callback,
+    )?
+    else {
+        return Ok(());
+    };
+    let Some(resolved_key) = resolve_user_callback(
+        execute_data,
+        eg,
+        function,
+        key_callback_position,
+        &key_callback,
+    )?
+    else {
+        return Ok(());
+    };
+
+    let first = super::owned_argument(execute_data, 0);
+    execute_set_operation(
+        execute_data,
+        return_pointer,
+        eg,
+        function,
+        kind,
+        ValueMode::User,
+        false,
+        first,
+        values,
+        Some(resolved_key),
+        Some(resolved_value),
+        true,
+        true,
+        false,
     )
 }
 
@@ -708,5 +1175,129 @@ pub(super) fn fn_array_intersect_ukey(
         "array_intersect_ukey",
         SetKind::Intersection,
         ValueMode::Ignore,
+    )
+}
+
+#[cold]
+pub(super) fn fn_array_diff_key_variadic(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ordinary_key_operation(
+        execute_data,
+        return_pointer,
+        eg,
+        "array_diff_key",
+        SetKind::Difference,
+    )
+}
+
+#[cold]
+pub(super) fn fn_array_intersect_key_variadic(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ordinary_key_operation(
+        execute_data,
+        return_pointer,
+        eg,
+        "array_intersect_key",
+        SetKind::Intersection,
+    )
+}
+
+#[cold]
+pub(super) fn fn_array_udiff(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    user_value_operation(
+        execute_data,
+        return_pointer,
+        eg,
+        "array_udiff",
+        SetKind::Difference,
+        false,
+    )
+}
+
+#[cold]
+pub(super) fn fn_array_uintersect(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    user_value_operation(
+        execute_data,
+        return_pointer,
+        eg,
+        "array_uintersect",
+        SetKind::Intersection,
+        false,
+    )
+}
+
+#[cold]
+pub(super) fn fn_array_udiff_assoc(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    user_value_operation(
+        execute_data,
+        return_pointer,
+        eg,
+        "array_udiff_assoc",
+        SetKind::Difference,
+        true,
+    )
+}
+
+#[cold]
+pub(super) fn fn_array_uintersect_assoc(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    user_value_operation(
+        execute_data,
+        return_pointer,
+        eg,
+        "array_uintersect_assoc",
+        SetKind::Intersection,
+        true,
+    )
+}
+
+#[cold]
+pub(super) fn fn_array_udiff_uassoc(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    user_value_key_operation(
+        execute_data,
+        return_pointer,
+        eg,
+        "array_udiff_uassoc",
+        SetKind::Difference,
+    )
+}
+
+#[cold]
+pub(super) fn fn_array_uintersect_uassoc(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    user_value_key_operation(
+        execute_data,
+        return_pointer,
+        eg,
+        "array_uintersect_uassoc",
+        SetKind::Intersection,
     )
 }

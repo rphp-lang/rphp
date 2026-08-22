@@ -12429,59 +12429,6 @@ fn fn_array_diff(
     ret!(rv, Value::array(result));
 }
 
-fn fn_array_diff_key(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    fn_array_key_membership(ed, rv, false)
-}
-
-fn fn_array_intersect_key(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    fn_array_key_membership(ed, rv, true)
-}
-
-fn array_contains_key(array: &PhpArray, key: &ArrayKey) -> bool {
-    match key {
-        ArrayKey::Int(index) => array.get_int(*index).is_some(),
-        ArrayKey::String(name) => array.get_str(name).is_some(),
-    }
-}
-
-fn fn_array_key_membership(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    intersect: bool,
-) -> Result<(), VmError> {
-    let (Some(left), Some(second)) = (arg!(ed, 0).as_array(), arg!(ed, 1).as_array()) else {
-        ret!(rv, Value::array(PhpArray::new()));
-    };
-    let trailing = arg!(ed, 2).as_array();
-    let mut result = PhpArray::new();
-    for (key, value) in left.iter() {
-        let mut matches = array_contains_key(&second, &key) == intersect;
-        if matches && let Some(trailing) = trailing.as_deref() {
-            for candidate in trailing.values() {
-                let Some(candidate) = candidate.as_array() else {
-                    ret!(rv, Value::array(PhpArray::new()));
-                };
-                if array_contains_key(&candidate, &key) != intersect {
-                    matches = false;
-                    break;
-                }
-            }
-        }
-        if matches {
-            result.set(key, value.clone());
-        };
-    }
-    ret!(rv, Value::array(result));
-}
-
 /// array_intersect($array1, $array2): array
 fn fn_array_intersect(
     ed: *mut ExecuteData,

@@ -1200,7 +1200,28 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "rest"
     );
     reg_var!("array_diff_ukey", fn_array_diff_ukey, 1, "array", "rest");
-    reg_var!("array_diff_key", fn_array_diff_key, 2, "array", "arrays");
+    reg_var!(
+        "array_diff_key",
+        fn_array_diff_key_variadic,
+        1,
+        "array",
+        "arrays"
+    );
+    reg_var!("array_udiff", fn_array_udiff, 1, "array", "rest");
+    reg_var!(
+        "array_udiff_assoc",
+        fn_array_udiff_assoc,
+        1,
+        "array",
+        "rest"
+    );
+    reg_var!(
+        "array_udiff_uassoc",
+        fn_array_udiff_uassoc,
+        1,
+        "array",
+        "rest"
+    );
     reg_var!(
         "array_intersect_assoc",
         fn_array_intersect_assoc,
@@ -1222,10 +1243,25 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "array",
         "rest"
     );
+    reg_var!("array_uintersect", fn_array_uintersect, 1, "array", "rest");
+    reg_var!(
+        "array_uintersect_assoc",
+        fn_array_uintersect_assoc,
+        1,
+        "array",
+        "rest"
+    );
+    reg_var!(
+        "array_uintersect_uassoc",
+        fn_array_uintersect_uassoc,
+        1,
+        "array",
+        "rest"
+    );
     reg_var!(
         "array_intersect_key",
-        fn_array_intersect_key,
-        2,
+        fn_array_intersect_key_variadic,
+        1,
         "array",
         "arrays"
     );
