@@ -178,6 +178,7 @@ mod builtin_classes;
 mod fiber;
 mod filesystem;
 mod process;
+mod recursive_arrays;
 mod source_filters;
 mod strings;
 mod weak;

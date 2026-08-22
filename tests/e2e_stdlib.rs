@@ -1670,6 +1670,110 @@ fn test_e2e_array_merge() {
     );
 }
 
+#[test]
+fn recursive_array_combiners_distinguish_merge_append_from_replace_keys() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$first = ['id' => 1, 'nested' => [2 => 'a'], 9 => 'tail'];
+$second = ['id' => 2, 'nested' => [7 => 'b'], 4 => 'next'];
+$third = ['id' => ['z' => 3], 'nested' => ['s' => 'c']];
+
+$merged = array_merge_recursive($first, $second, $third);
+echo implode(',', array_keys($merged['id'])), ':',
+    $merged['id'][0], $merged['id'][1], $merged['id']['z'], '|',
+    implode(',', array_keys($merged['nested'])), ':', implode('', $merged['nested']), '|',
+    $merged[0], ',', $merged[1], "\n";
+
+$replaced = array_replace_recursive($first, $second, $third);
+echo implode(',', array_keys($replaced['id'])), ':', $replaced['id']['z'], '|',
+    implode(',', array_keys($replaced['nested'])), ':', implode('', $replaced['nested']), '|',
+    $replaced[9], ',', $replaced[4], "\n";
+"#,
+        ),
+        "0,1,z:123|2,3,s:abc|tail,next\nz:3|2,7,s:abc|tail,next\n"
+    );
+}
+
+#[test]
+fn recursive_array_combiners_preserve_live_aliases_and_unwrap_lone_references() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$shared = 5;
+$input = ['k' => &$shared];
+$copy = array_replace_recursive($input, []);
+$copy['k'] = 7;
+echo $shared, ':', $input['k'], '|';
+
+$merged = array_merge_recursive($input, ['k' => 9]);
+$merged['k'][0] = 8;
+echo $shared, ':', $input['k'], ':', $merged['k'][0], ':', $merged['k'][1], '|';
+
+$solo = 20;
+$source = [[&$solo]];
+unset($solo);
+$detached = array_merge_recursive([[1]], $source);
+$source[0][0] = 30;
+echo $detached[1][0], ':', $source[0][0], "\n";
+"#,
+        ),
+        "7:7|7:7:8:9|20:30\n"
+    );
+}
+
+#[test]
+fn recursive_array_combiners_match_type_recursion_and_next_index_errors() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach ([
+    fn() => array_merge_recursive(1),
+    fn() => array_merge_recursive([], 1),
+    fn() => array_replace_recursive(1),
+    fn() => array_replace_recursive([], 1),
+] as $probe) {
+    try { $probe(); }
+    catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+
+try {
+    array_merge_recursive(['edge' => [PHP_INT_MAX => null]], ['edge' => [null]]);
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+
+$mergeCycle = [];
+$mergeCycle['again'] =& $mergeCycle;
+try {
+    array_merge_recursive(['node' => $mergeCycle], ['node' => ['again' => ['again' => 1]]]);
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+$mergeCycle['again'] = null;
+
+$replaceCycle = [];
+$replaceCycle['next'] =& $replaceCycle;
+try {
+    array_replace_recursive(['root' => ['next' => ['next' => 0]]], ['root' => $replaceCycle]);
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+$replaceCycle['next'] = null;
+"#,
+        ),
+        concat!(
+            "array_merge_recursive(): Argument #1 must be of type array, int given\n",
+            "array_merge_recursive(): Argument #2 must be of type array, int given\n",
+            "array_replace_recursive(): Argument #1 ($array) must be of type array, int given\n",
+            "array_replace_recursive(): Argument #2 must be of type array, int given\n",
+            "Cannot add element to the array as the next element is already occupied\n",
+            "Recursion detected\n",
+            "Recursion detected\n",
+        )
+    );
+}
+
 // === Type functions ===
 
 #[test]

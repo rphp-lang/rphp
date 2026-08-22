@@ -6,6 +6,7 @@
 
 use super::filesystem::*;
 use super::process::*;
+use super::recursive_arrays::*;
 use super::source_filters::*;
 use super::strings::*;
 use super::*;
@@ -161,7 +162,19 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("array_reverse", fn_array_reverse, 1, 1, "array");
     reg!("array_is_list", fn_array_is_list, 1, 1, "array");
     reg_var!("array_merge", fn_array_merge, 0, "arrays");
+    reg_var!(
+        "array_merge_recursive",
+        fn_array_merge_recursive,
+        0,
+        "arrays"
+    );
     reg_var!("array_replace", fn_array_replace, 1, "array");
+    reg_var!(
+        "array_replace_recursive",
+        fn_array_replace_recursive,
+        1,
+        "array"
+    );
     reg!("array_keys", fn_array_keys, 1, 1, "array");
     reg!("array_values", fn_array_values, 1, 1, "array");
     reg!(
