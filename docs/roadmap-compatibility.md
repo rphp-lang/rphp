@@ -1688,6 +1688,33 @@ callback calls and -24.993%/-25.284% for 500,000 directly affected ordered
 property ordering beyond the retained projection and broader compatibility
 remain separate work.
 
+The `array-assoc-set-batch` checkpoint adds `array_diff_assoc()`,
+`array_diff_uassoc()`, `array_diff_ukey()`, `array_intersect_assoc()`,
+`array_intersect_uassoc()` and `array_intersect_ukey()`. The ordinary variants
+compare exact keys and PHP string-converted values; the user variants preserve
+the exercised callback-validation precedence, small-array comparator schedule,
+short-circuiting, exception propagation, structural snapshots, live reference
+cells and first-array insertion order. A 300-result clean-room matrix is byte-
+identical to PHP 8.5.9. Of 55 supplying unmodified `ext/standard` PHPTs, all
+42 runtime-reachable cases pass in debug and release; 13 stop at independent
+leading-dot numeric or binary-string parser gaps, while the PHP oracle passes
+55/55. Because this cluster is outside the pinned Zend/lang corpus, two byte-
+identical full manifests remain at 4,098 pass, 1,205 fail, 115 skip and 181
+unsupported with zero timeouts or crashes and an exact +0/-0 delta from
+`78846be8`.
+
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, the unchanged 1,620/289/332 unsafe ratchet, Composer S0, four Symfony
+S1 gates and PHP 8.5.9 S2/S3 pass. No compiler/opcode, call-frame, PHP
+Value/object layout, dependency or unsafe change is made. CPU-pinned 32-pair
+release controls put independent/paired median changes at +0.077%/+0.094% for
+100 empty requests and -0.675%/-0.830% for 500,000 existing
+`array_diff_key()` calls, below the +5% gate. The stable O(n log n) large-array
+baseline does not claim PHP's exact arbitrary-large comparator trace. The 13
+parser forms, `array_change_key_case()`, six `array_udiff*`/`array_uintersect*`
+functions, the complete array suite and broader compatibility remain separate
+work.
+
 ## Measurement system
 
 ### Contract baseline
