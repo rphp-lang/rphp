@@ -19,6 +19,7 @@ impl Parser {
                 | Token::DotDotDot(line)
                 | Token::PipeGreater(line)
                 | Token::Function(line)
+                | Token::Exit { line, .. }
                 | Token::Match(line)
                 | Token::Yield(line)
                 | Token::Clone(line)
@@ -247,6 +248,7 @@ impl Parser {
             Token::IncludeOnce => Some("include_once".to_string()),
             Token::Require => Some("require".to_string()),
             Token::RequireOnce => Some("require_once".to_string()),
+            Token::Exit { name, .. } => Some(name.clone()),
             Token::Goto { name, .. } => Some(name.clone()),
             Token::MagicConstant { name, .. } => Some(name.clone()),
             Token::LogicalAnd => Some("and".to_string()),
@@ -685,6 +687,12 @@ impl Parser {
         };
         let mut parts = match self.advance() {
             Token::Identifier(name, _) => vec![name],
+            Token::Exit { line, .. } => {
+                return Err(self.source_error(
+                    "syntax error, unexpected token \"exit\", expecting identifier or fully qualified name or namespaced name",
+                    line,
+                ));
+            }
             other => {
                 return Err(format!(
                     "Expected identifier in use declaration, got {:?}",

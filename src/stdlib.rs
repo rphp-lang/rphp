@@ -10758,24 +10758,108 @@ fn fn_time(
 // ============================================================================
 
 /// exit($status = 0) / die($status = 0)
-/// If $status is int → exit with that code.  If string → print it, exit 0.
+/// PHP 8.4+ exposes this language construct through an ordinary `string|int`
+/// internal-call contract while retaining exit's process-level result.
 fn fn_exit(ed: *mut ExecuteData, _rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let status = arg_opt!(ed, 0);
-    match status {
-        None => Err(VmError::Exit(0)),
-        Some(v) if v.value_type() == ValueType::Long => {
-            Err(VmError::Exit(v.as_long().unwrap_or(0) as i32))
+    let Some(status) = arg_opt!(ed, 0) else {
+        return Err(VmError::Exit(0));
+    };
+    let status = status.dereferenced();
+    let function = crate::vm::execute::displayed_frame_function_name(eg, ed);
+    let strict = internal_call_is_strict(ed);
+
+    let reject = |eg: &mut ExecutorGlobals| {
+        let actual = match status.value_type() {
+            ValueType::True => "true".to_string(),
+            ValueType::False => "false".to_string(),
+            _ => status.diagnostic_type_name().into_owned(),
+        };
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "{function}(): Argument #1 ($status) must be of type string|int, {actual} given"
+            ),
+        ));
+        Ok(())
+    };
+
+    match status.value_type() {
+        ValueType::Long => Err(VmError::Exit(status.as_long().unwrap_or(0) as i32)),
+        ValueType::String => {
+            print!("{}", status.as_str().unwrap_or(""));
+            Err(VmError::Exit(0))
         }
-        Some(v) => {
-            let Some(rendered) = internal_value_to_string(ed, eg, v)? else {
-                return Ok(());
-            };
+        ValueType::Null if !strict => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                &format!(
+                    "{function}(): Passing null to parameter #1 ($status) of type string|int is deprecated"
+                ),
+            )?;
             if eg.exception.is_some() {
                 return Ok(());
             }
+            Err(VmError::Exit(0))
+        }
+        ValueType::True | ValueType::False if !strict => {
+            Err(VmError::Exit(i32::from(status.is_truthy())))
+        }
+        ValueType::Double if !strict => {
+            let number = status.as_double().unwrap();
+            let upper_exclusive = -(i64::MIN as f64);
+            if number.is_finite() && number >= i64::MIN as f64 && number < upper_exclusive {
+                let integer = number as i64;
+                if integer as f64 != number {
+                    report_internal_deprecation(
+                        eg,
+                        ed,
+                        &format!(
+                            "Implicit conversion from float {} to int loses precision",
+                            status.echo_to_string_with_precision(-1)
+                        ),
+                    )?;
+                    if eg.exception.is_some() {
+                        return Ok(());
+                    }
+                }
+                return Err(VmError::Exit(integer as i32));
+            }
+            if number.is_nan() {
+                report_internal_diagnostic(
+                    eg,
+                    ed,
+                    2,
+                    "Warning",
+                    "unexpected NAN value was coerced to string",
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+            }
+            print!("{}", status.echo_to_string_with_precision(eg.precision));
+            Err(VmError::Exit(0))
+        }
+        ValueType::Object if !strict => {
+            let converted = crate::vm::execute::call_object_string_conversion(eg, status)?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            let Some(converted) = converted else {
+                return reject(eg);
+            };
+            let Some(rendered) = converted.as_str() else {
+                let class_name = status.diagnostic_type_name();
+                eg.exception = Some(crate::value::make_error_value(
+                    "TypeError",
+                    &format!("{class_name}::__toString(): Return value must be of type string"),
+                ));
+                return Ok(());
+            };
             print!("{rendered}");
             Err(VmError::Exit(0))
         }
+        _ => reject(eg),
     }
 }
 

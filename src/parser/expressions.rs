@@ -1313,6 +1313,34 @@ impl Parser {
                     }
                 }
             }
+            Token::Exit { line, .. } => {
+                self.advance();
+                self.last_primary_line = Some(line);
+                if matches!(self.peek(), Token::LParen(_)) {
+                    self.expect_lparen()?;
+                    if self.consume_first_class_callable_placeholder() {
+                        Ok(Expr::FirstClassFunctionCallable {
+                            name: "exit".to_string(),
+                            line,
+                        })
+                    } else {
+                        let args = self.parse_call_args()?;
+                        Ok(Expr::FunctionCall {
+                            name: "exit".to_string(),
+                            args,
+                            generic_args: Vec::new(),
+                            line,
+                        })
+                    }
+                } else {
+                    Ok(Expr::FunctionCall {
+                        name: "exit".to_string(),
+                        args: Vec::new(),
+                        generic_args: Vec::new(),
+                        line,
+                    })
+                }
+            }
             Token::Identifier(_, _) | Token::From => {
                 let name = if matches!(self.peek(), Token::Identifier(_, _))
                     && self.peek_at(1) == Token::Backslash

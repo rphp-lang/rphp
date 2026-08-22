@@ -112,6 +112,9 @@ impl Parser {
                 | Token::HaltCompiler {
                     line: token_line, ..
                 }
+                | Token::Exit {
+                    line: token_line, ..
+                }
                 | Token::Goto {
                     line: token_line, ..
                 }
@@ -185,10 +188,21 @@ impl Parser {
                 return Ok(Stmt::Label(name));
             }
         }
+        if let Token::Exit { line, .. } = self.peek()
+            && self.peek_at(1) == Token::Colon
+        {
+            return Err(self.source_error("syntax error, unexpected token \":\"", line));
+        }
         if let Token::Goto { line, .. } = self.peek() {
             self.advance();
             let name = match self.advance() {
                 Token::Identifier(label, _) => label,
+                Token::Exit { .. } => {
+                    return Err(self.source_error(
+                        "syntax error, unexpected token \"exit\", expecting identifier",
+                        line,
+                    ));
+                }
                 token => return Err(format!("Expected label after goto, got {token:?}")),
             };
             self.expect(&Token::Semicolon(0))?;
@@ -466,6 +480,12 @@ impl Parser {
                         Token::Identifier(name, line)
                         | Token::MagicConstant { name, line }
                         | Token::Goto { name, line } => (name, line),
+                        Token::Exit { line, .. } => {
+                            return Err(self.source_error(
+                                "syntax error, unexpected token \"exit\", expecting identifier",
+                                line,
+                            ));
+                        }
                         other => {
                             return Err(format!(
                                 "Expected constant name after 'const', got {:?}",
@@ -1030,9 +1050,15 @@ impl Parser {
                 })
             }
             Token::Function(line)
-                if matches!(self.peek_at(1), Token::Identifier(_, _) | Token::From)
+                if matches!(
+                    self.peek_at(1),
+                    Token::Identifier(_, _) | Token::From | Token::Exit { .. }
+                )
                     || (self.peek_at(1) == Token::Ampersand
-                        && matches!(self.peek_at(2), Token::Identifier(_, _) | Token::From)) =>
+                        && matches!(
+                            self.peek_at(2),
+                            Token::Identifier(_, _) | Token::From | Token::Exit { .. }
+                        )) =>
             {
                 self.advance(); // consume 'function'
                 // Accept the PHP reference-return declaration marker. Return
@@ -1043,6 +1069,12 @@ impl Parser {
                 let name = match self.advance() {
                     Token::Identifier(n, _) => n,
                     Token::From => "from".to_string(),
+                    Token::Exit { .. } => {
+                        return Err(self.source_error(
+                            "syntax error, unexpected token \"exit\", expecting \"(\"",
+                            line,
+                        ));
+                    }
                     other => return Err(format!("Expected function name, got {:?}", other)),
                 };
                 if name.eq_ignore_ascii_case("assert") {
@@ -1160,6 +1192,7 @@ impl Parser {
             }
             Token::Isset
             | Token::Empty
+            | Token::Exit { .. }
             | Token::Match(_)
             | Token::New(_)
             | Token::Yield(_)

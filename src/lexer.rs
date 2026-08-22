@@ -79,6 +79,13 @@ pub enum Token {
     IncludeOnce, // include_once
     Require,     // require
     RequireOnce, // require_once
+    /// PHP tokenizes both spellings as the same case-insensitive exit keyword.
+    /// Preserve the lexeme only for class-member and named-argument contexts,
+    /// where relaxed keyword identifiers remain observably distinct.
+    Exit {
+        name: String,
+        line: usize,
+    },
     Goto {
         /// Preserve the lexeme because `goto` is also legal as a contextual
         /// identifier whose spelling can remain observably case-sensitive.
@@ -747,6 +754,12 @@ impl<'a> Lexer<'a> {
                         tokens.push(Token::Goto { name: ident, line });
                         continue;
                     }
+                    if !is_member_name
+                        && (ident.eq_ignore_ascii_case("exit") || ident.eq_ignore_ascii_case("die"))
+                    {
+                        tokens.push(Token::Exit { name: ident, line });
+                        continue;
+                    }
                     if !is_member_name && ident.eq_ignore_ascii_case("array") {
                         let next_non_whitespace = self.src[self.pos..]
                             .iter()
@@ -1404,6 +1417,57 @@ mod tests {
                 Token::Semicolon(2),
                 Token::Identifier("finish".into(), 2),
                 Token::Colon,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn exit_and_die_share_a_keyword_but_qualified_and_member_names_do_not() {
+        let tokens = Lexer::new(
+            "<?php\nEXIT; Die(); \\exit(); namespace\\die(); $object->exit(); Type::die();",
+        )
+        .tokenize()
+        .unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                Token::Exit {
+                    name: "EXIT".into(),
+                    line: 2,
+                },
+                Token::Semicolon(2),
+                Token::Exit {
+                    name: "Die".into(),
+                    line: 2,
+                },
+                Token::LParen(2),
+                Token::RParen,
+                Token::Semicolon(2),
+                Token::Backslash,
+                Token::Identifier("exit".into(), 2),
+                Token::LParen(2),
+                Token::RParen,
+                Token::Semicolon(2),
+                Token::Namespace,
+                Token::Backslash,
+                Token::Identifier("die".into(), 2),
+                Token::LParen(2),
+                Token::RParen,
+                Token::Semicolon(2),
+                Token::Variable("object".into(), 2),
+                Token::Arrow,
+                Token::Identifier("exit".into(), 2),
+                Token::LParen(2),
+                Token::RParen,
+                Token::Semicolon(2),
+                Token::Identifier("Type".into(), 2),
+                Token::DoubleColon,
+                Token::Identifier("die".into(), 2),
+                Token::LParen(2),
+                Token::RParen,
+                Token::Semicolon(2),
                 Token::Eof,
             ]
         );

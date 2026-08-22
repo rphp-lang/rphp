@@ -30,6 +30,10 @@ impl Parser {
                 "syntax error, unexpected token \"static\", expecting identifier",
                 line,
             )),
+            Token::Exit { line, .. } => Err(self.source_error(
+                "syntax error, unexpected token \"exit\", expecting identifier",
+                line,
+            )),
             token => Err(format!("Expected {expected_kind} name, got {token:?}")),
         }
     }

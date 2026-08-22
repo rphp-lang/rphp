@@ -1261,6 +1261,7 @@ impl Parser {
                 self.advance(); // consume 'case'
                 let (case_name, case_line) = match self.advance() {
                     Token::Identifier(n, line) => (n, line),
+                    Token::Exit { name, line } => (name, line),
                     other => return Err(format!("Expected enum case name, got {:?}", other)),
                 };
                 let value = if self.peek() == Token::Assign {
@@ -1512,6 +1513,7 @@ impl Parser {
                 Token::Identifier(name, line)
                 | Token::MagicConstant { name, line }
                 | Token::Goto { name, line } => (name, line),
+                Token::Exit { name, line } => (name, line),
                 other => return Err(format!("Expected class constant name, got {:?}", other)),
             };
             self.expect(&Token::Assign)?;
