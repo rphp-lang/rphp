@@ -8,6 +8,84 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`array-case-natural-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+candidate commit `86ae8c89`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 4,098 pass, 1,205 fail, 115 skip, none remain XFAIL, 181
+are unsupported, and none time out or crash. The headline pass rate remains
+77.277%, the whole-corpus rate remains 73.192%, and 4,809 of 5,303 attempted
+cases reach runtime (90.685%). Two independently executed final runs have the
+same manifest SHA-256,
+`dff002f63754267cbc2969e38fd8d60f691d5ede1dc2b7aea14209ce352d3224`,
+and the same summary SHA-256,
+`2d267e9f5bc65d7304cad81523d48d82f2455f7bdfcb79cd63101a78bf592e35`.
+The exact main-corpus delta from `291b9987` is intentionally +0/-0 because the
+supplying tests live in `ext/standard`.
+
+`array_change_key_case()` now implements PHP 8.5 integer and string-key
+handling, ASCII case conversion, collision replacement, insertion order,
+copy-on-write and retained reference cells; `CASE_UPPER` is available beside
+`CASE_LOWER`. `key_exists()` exposes the existing `array_key_exists()`
+contract under its PHP alias while retaining alias-specific diagnostics.
+`strnatcasecmp()` and the corrected `strnatcmp()` share one byte-oriented
+natural comparator covering PHP's initial-zero, embedded-zero, whitespace and
+ASCII case-folding rules plus weak scalar and object-string conversion.
+`natsort()` and `natcasesort()` provide stable key-preserving natural ordering,
+the PHP by-reference signature, structural snapshots, live reference cells,
+object string conversion and exception propagation. Direct-call compiler
+metadata now passes their first argument by reference; no opcode, call-frame
+or PHP Value/object layout changes.
+
+The adjacent 39-case unmodified PHP 8.5 `ext/standard` cluster moves from
+6 pass, 32 fail and one architecture skip to 30 pass, eight fail and one skip,
+an exact +24/-0 pass-set delta in release; PHP 8.5.9 records 38 pass and one
+skip. The complete recursive 842-case `ext/standard/tests/array` audit moves
+from 355 to 378 passes with no lost pass: failures fall from 466 to 443 while
+13 skips, one unsupported case, the same seven pre-existing timeout paths and
+zero crashes remain. The exact gains comprise seven key-case tests, three
+alias tests and thirteen natural-sort tests. A clean-room differential matrix
+covering 1,444 string pairs, 80 natural sorts, 160 key-case transformations and
+alias checks is byte-identical to PHP 8.5.9: 52,332 output bytes with SHA-256
+`3cb2f1f3310163f4d3a9069114ea54ed5cb714233695cd9ee7841dcc202062bd`.
+Original E2E tests cover signatures, constants, key collisions, non-ASCII key
+preservation, references, stable mixed-key order, leading zeros, whitespace,
+case folding, object conversion, exceptions and typed diagnostics.
+
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, the unchanged 1,620/289/332 unsafe
+ratchet, Composer 2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-
+kernel S2 and cold-build S3 pass. The implementation changes registrations,
+one existing stdlib source, direct-call reference metadata, constants and
+tests; it adds no dependency or production unsafe code.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used performance-governor CPU 2, three warmups per binary
+and no excluded samples. Batches of 100 empty requests measured baseline/
+candidate medians of 212.415/212.870 milliseconds, +0.214% independently and
++0.222% paired. One request executing 500,000 existing `strnatcmp()` calls
+measured 197.475/192.505 milliseconds, -2.517% independently and -2.638%
+paired. One request executing 100,000 existing
+`asort(..., SORT_NATURAL | SORT_FLAG_CASE)` calls measured 260.828/267.490
+milliseconds, +2.554% independently and +2.629% paired. The paired p10/p90
+ranges are -0.624%/+1.706%, -3.758%/-1.224% and +1.405%/+3.672%; output is
+checksummed and every workload remains below the +5% gate. Baseline and
+candidate binary SHA-256 values are
+`6f6138cec707dd6f9d7f804560a4f16511dd1100864508c3e196f3e98b2d426a`
+and `1bcf9954ec35f90c456ccf2c2681121a61f4b4483f215bb476cac07bda277dc5`.
+
+The eight remaining adjacent-cluster failures stay explicit: four are older
+`array_key_exists()` edge contracts outside the alias slice, two require the
+missing double-quoted `\e`/`\f`/`\v` escape behavior, one requires a
+leading-dot numeric parser form, and `natsort_basic.phpt` fails in its earlier
+ordinary `sort()` prelude even though its `natsort()` section is exact. The
+stable O(n log n) natural-sort baseline claims exercised result order and
+exception propagation, not PHP's exact arbitrary-large comparator or magic
+`__toString()` call trace, nor PHP's partially permuted array state when a
+comparison throws. The inherited seven array-suite timeouts, complete ordinary
+sort behavior, remaining array-suite failures and broader PHP compatibility
+remain separate work; the unchanged main-corpus count is not presented as a
+Zend/lang pass gain.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `array-user-value-set-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 candidate commit `828b4407`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 4,098 pass, 1,205 fail, 115 skip, none remain XFAIL, 181

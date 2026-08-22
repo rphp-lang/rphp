@@ -1746,6 +1746,44 @@ trace. The 16 independent focused blockers, `array_change_key_case()`, ordinary
 variadic `array_intersect()`, the complete array suite and broader compatibility
 remain separate work.
 
+The `array-case-natural-batch` checkpoint adds `array_change_key_case()`, the
+`key_exists()` alias, `strnatcasecmp()`, `natsort()` and `natcasesort()`, and
+corrects the shared `strnatcmp()`/natural-sort comparison rule. The admitted
+contract covers signatures, weak string/int conversion, ASCII key case,
+collisions, mixed keys, stable key-preserving order, structural snapshots,
+live reference cells, object string conversion, exceptions and direct-call
+by-reference metadata. A clean-room matrix of 1,444 string pairs, 80 natural
+sorts and 160 key transformations is byte-identical to PHP 8.5.9 with SHA-256
+`3cb2f1f3310163f4d3a9069114ea54ed5cb714233695cd9ee7841dcc202062bd`.
+
+The adjacent 39-case unmodified `ext/standard` cluster moves from 6 to 30
+passes, an exact +24/-0 release delta; PHP 8.5.9 records 38 passes and one
+architecture skip. The complete 842-case recursive array audit moves from 355
+to 378 passes with no lost pass, reducing failures from 466 to 443 while the
+same 13 skips, one unsupported case, seven inherited timeouts and zero crashes
+remain. Because these supplying cases are outside the pinned Zend/lang corpus,
+two byte-identical full manifests intentionally remain at 4,098 pass, 1,205
+fail, 115 skip and 181 unsupported with zero timeouts or crashes and exact
++0/-0 pass-set movement from `291b9987`.
+
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, the unchanged 1,620/289/332 unsafe ratchet, Composer S0, four Symfony
+S1 gates and PHP 8.5.9 S2/S3 pass. The only compiler change is existing
+direct-call reference metadata; no opcode, frame, value/object layout,
+dependency or production unsafe change is made. CPU-pinned 32-pair release
+controls put independent/paired median changes at +0.214%/+0.222% for 100
+empty requests, -2.517%/-2.638% for 500,000 existing `strnatcmp()` calls and
++2.554%/+2.629% for 100,000 existing natural case-insensitive `asort()` calls,
+below the +5% gate.
+
+The remaining adjacent failures stay separate: four older
+`array_key_exists()` edges, two missing string-escape forms, one leading-dot
+numeric parser form and the ordinary `sort()` prelude in `natsort_basic.phpt`.
+The stable O(n log n) sort does not claim PHP's exact arbitrary-large
+comparator/`__toString()` trace or partial permutation after a thrown
+comparison. The inherited array-suite timeouts, complete ordinary sorting,
+remaining array-suite failures and broader compatibility remain work.
+
 ## Measurement system
 
 ### Contract baseline
