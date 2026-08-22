@@ -9908,16 +9908,20 @@ impl Compiler {
                 line,
                 call_line,
             } => {
+                // PHP resolves the dynamic class expression before it evaluates
+                // constructor arguments. Keep the class operand live across
+                // argument suspension/unpacking so neither side effect can be
+                // repeated or observed in the opposite order.
+                let (class_operand, class_type) = self.compile_expr(class);
                 if args
                     .iter()
                     .any(|argument| matches!(argument, CallArg::Unpack(_)))
                 {
                     let (arguments, arguments_type) =
                         self.compile_mixed_unpacked_call_arguments(args, 0);
-                    let (class, class_type) = self.compile_expr(class);
                     let tmp = self.alloc_tmp();
                     let mut new_obj = Instruction::new(OpCode::NewObj);
-                    new_obj.op1 = class;
+                    new_obj.op1 = class_operand;
                     new_obj.op1_type = class_type;
                     new_obj.op2 = arguments;
                     new_obj.op2_type = arguments_type;
@@ -9945,10 +9949,9 @@ impl Compiler {
                             })
                             .collect()
                     };
-                let (class, class_type) = self.compile_expr(class);
                 let tmp = self.alloc_tmp();
                 let mut new_obj = Instruction::new(OpCode::NewObj);
-                new_obj.op1 = class;
+                new_obj.op1 = class_operand;
                 new_obj.op1_type = class_type;
                 new_obj.result = tmp;
                 new_obj.result_type = OpType::Tmp;

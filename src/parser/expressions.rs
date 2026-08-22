@@ -1173,7 +1173,10 @@ impl Parser {
             }
             Token::LParen(_) => {
                 self.advance();
-                let mut expr = self.parse_expr()?;
+                let mut expr = self.with_new_postfix_error_suffix(
+                    Some(", expecting \")\""),
+                    |parser| parser.parse_expr(),
+                )?;
                 self.expect(&Token::RParen)?;
                 if let Expr::StaticProperty { parenthesized, .. } = &mut expr {
                     *parenthesized = true;
@@ -1542,21 +1545,7 @@ impl Parser {
                             allow_dynamic_properties_line,
                         );
                     }
-                    let args = if matches!(self.peek(), Token::LParen(_)) {
-                        self.expect_lparen()?;
-                        if matches!(self.peek(), Token::DotDotDot(_))
-                            && self.peek_at(1) == Token::RParen
-                        {
-                            self.advance();
-                            self.advance();
-                            self.compile_error("Cannot create Closure for new expression", line);
-                            Vec::new()
-                        } else {
-                            self.parse_call_args()?
-                        }
-                    } else {
-                        Vec::new()
-                    };
+                    let (args, _) = self.parse_new_arguments(line)?;
                     let parent = if self.peek() == Token::Extends {
                         self.advance();
                         Some(self.parse_generic_ancestor_with_reserved_static(
@@ -1587,7 +1576,7 @@ impl Parser {
                     self.expect(&Token::LBrace)?;
                     let (properties, constants, methods, uses, trait_aliases) =
                         self.parse_anonymous_class_body()?;
-                    return Ok(Expr::AnonymousNew {
+                    let expression = Expr::AnonymousNew {
                         attributes,
                         args,
                         is_readonly: anonymous_readonly,
@@ -1601,7 +1590,31 @@ impl Parser {
                         trait_aliases,
                         line,
                         call_line: line,
-                    });
+                    };
+                    self.validate_new_expression_suffix(true, false, line)?;
+                    return Ok(expression);
+                }
+                if matches!(self.peek(), Token::LParen(_)) {
+                    self.expect_lparen()?;
+                    let class = self.with_new_postfix_error_suffix(
+                        Some(", expecting \")\""),
+                        |parser| parser.parse_expr(),
+                    )?;
+                    self.expect(&Token::RParen)?;
+                    let (args, has_constructor_parentheses) =
+                        self.parse_new_arguments(line)?;
+                    let expression = Expr::DynamicNew {
+                        class: Box::new(class),
+                        args,
+                        line,
+                        call_line: line,
+                    };
+                    self.validate_new_expression_suffix(
+                        has_constructor_parentheses,
+                        false,
+                        line,
+                    )?;
+                    return Ok(expression);
                 }
                 if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
                     let (class, call_line) = match self.advance() {
@@ -1620,23 +1633,20 @@ impl Parser {
                         _ => unreachable!(),
                     };
                     let class = self.parse_dynamic_new_class_expression(class)?;
-                    let args = if matches!(self.peek(), Token::LParen(_)) {
-                        self.expect_lparen()?;
-                        if self.consume_first_class_callable_placeholder() {
-                            self.compile_error("Cannot create Closure for new expression", line);
-                            Vec::new()
-                        } else {
-                            self.parse_call_args()?
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                    return Ok(Expr::DynamicNew {
+                    let (args, has_constructor_parentheses) =
+                        self.parse_new_arguments(line)?;
+                    let expression = Expr::DynamicNew {
                         class: Box::new(class),
                         args,
                         line,
                         call_line,
-                    });
+                    };
+                    self.validate_new_expression_suffix(
+                        has_constructor_parentheses,
+                        true,
+                        line,
+                    )?;
+                    return Ok(expression);
                 }
                 let (class_name, call_line) = match self.peek() {
                     Token::Backslash | Token::Identifier(_, _) | Token::Namespace => {
@@ -1655,25 +1665,38 @@ impl Parser {
                         return Err(format!("Expected class name after 'new', got {token:?}"));
                     }
                 };
+                if let Some(class) = self.parse_named_new_class_expression(class_name.clone())? {
+                    let (args, has_constructor_parentheses) =
+                        self.parse_new_arguments(line)?;
+                    let expression = Expr::DynamicNew {
+                        class: Box::new(class),
+                        args,
+                        line,
+                        call_line,
+                    };
+                    self.validate_new_expression_suffix(
+                        has_constructor_parentheses,
+                        true,
+                        line,
+                    )?;
+                    return Ok(expression);
+                }
                 let generic_args = self.parse_optional_turbofish()?;
-                let args = if matches!(self.peek(), Token::LParen(_)) {
-                    self.expect_lparen()?;
-                    if self.consume_first_class_callable_placeholder() {
-                        self.compile_error("Cannot create Closure for new expression", line);
-                        Vec::new()
-                    } else {
-                        self.parse_call_args()?
-                    }
-                } else {
-                    Vec::new()
-                };
-                Ok(Expr::New {
+                let (args, has_constructor_parentheses) =
+                    self.parse_new_arguments(line)?;
+                let expression = Expr::New {
                     class_name,
                     args,
                     generic_args,
                     line,
                     call_line,
-                })
+                };
+                self.validate_new_expression_suffix(
+                    has_constructor_parentheses,
+                    true,
+                    line,
+                )?;
+                Ok(expression)
             }
             Token::Throw(line) => {
                 let line = line as usize;

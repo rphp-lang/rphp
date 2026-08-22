@@ -33,6 +33,11 @@ pub struct Parser {
     /// Some write/reference grammars parse the target prefix first and consume
     /// the trailing [] in their caller.
     preserve_empty_dimension_suffix: bool,
+    /// Suffix appended to invalid postfix diagnostics for an unparenthesized
+    /// named `new` expression. The surrounding grammar supplies the token it
+    /// is currently waiting for (for example echo's comma/semicolon or a call
+    /// argument's closing parenthesis).
+    new_postfix_error_suffix: Option<&'static str>,
     /// Source line of the primary currently entering its postfix chain.
     last_primary_line: Option<usize>,
     /// Whether the current statement is parsed in the source unit's outermost

@@ -123,10 +123,118 @@ impl Parser {
                         line: self.last_primary_line.unwrap_or(0),
                     };
                 }
+                Token::DoubleColon
+                    if matches!(self.peek_at(1), Token::Dollar(_) | Token::Variable(_, _)) =>
+                {
+                    self.advance();
+                    let (property, property_line) = if matches!(self.peek(), Token::Dollar(_)) {
+                        self.parse_indirect_static_member_name()?
+                    } else {
+                        match self.advance() {
+                            Token::Variable(name, line) => (Expr::StringLiteral(name), line),
+                            _ => unreachable!(),
+                        }
+                    };
+                    expr = Expr::DynamicStaticProperty {
+                        class: Box::new(expr),
+                        property: Box::new(property),
+                        line: property_line,
+                    };
+                }
                 _ => break,
             }
         }
         Ok(expr)
+    }
+
+    /// A static property following an unparenthesized class name belongs to
+    /// the class-name expression: `new A::$selected` means
+    /// `new (A::$selected)`, not `(new A)::$selected`.
+    fn parse_named_new_class_expression(
+        &mut self,
+        class_name: String,
+    ) -> Result<Option<Expr>, String> {
+        if self.peek() != Token::DoubleColon
+            || !matches!(self.peek_at(1), Token::Dollar(_) | Token::Variable(_, _))
+        {
+            return Ok(None);
+        }
+        self.advance();
+        let expr = if matches!(self.peek(), Token::Dollar(_)) {
+            let (property, line) = self.parse_indirect_static_member_name()?;
+            Expr::DynamicNamedStaticProperty {
+                class_name,
+                property: Box::new(property),
+                line,
+            }
+        } else {
+            match self.advance() {
+                Token::Variable(property, line) => Expr::StaticProperty {
+                    class_name,
+                    property,
+                    parenthesized: false,
+                    line,
+                },
+                _ => unreachable!(),
+            }
+        };
+        self.parse_dynamic_new_class_expression(expr).map(Some)
+    }
+
+    fn validate_new_expression_suffix(
+        &self,
+        postfix_allowed: bool,
+        named_class_syntax: bool,
+        line: usize,
+    ) -> Result<(), String> {
+        if self.peek() == Token::Assign {
+            return Err(self.source_error("syntax error, unexpected token \"=\"", line));
+        }
+        if self.empty_dimension_unset_context && self.peek() == Token::RParen {
+            return Err(self.source_error(
+                "syntax error, unexpected token \")\", expecting \"->\" or \"?->\" or \"[\"",
+                line,
+            ));
+        }
+        if postfix_allowed {
+            return Ok(());
+        }
+
+        let suffix = self.new_postfix_error_suffix.unwrap_or("");
+        match self.peek() {
+            Token::Arrow => Err(self.source_error(
+                &format!("syntax error, unexpected token \"->\"{suffix}"),
+                line,
+            )),
+            Token::NullSafe => Err(self.source_error(
+                &format!("syntax error, unexpected token \"?->\"{suffix}"),
+                line,
+            )),
+            Token::LBracket(bracket_line) => Err(self.source_error(
+                &format!("syntax error, unexpected token \"[\"{suffix}"),
+                bracket_line,
+            )),
+            Token::DoubleColon if named_class_syntax => {
+                if let Token::Identifier(name, member_line) = self.peek_at(1) {
+                    Err(self.source_error(
+                        &format!(
+                            "syntax error, unexpected identifier \"{name}\", expecting variable or \"$\""
+                        ),
+                        member_line,
+                    ))
+                } else {
+                    Err(self.source_error(
+                        &format!("syntax error, unexpected token \"::\"{suffix}"),
+                        line,
+                    ))
+                }
+            }
+            Token::DoubleColon => Err(self.source_error(
+                &format!("syntax error, unexpected token \"::\"{suffix}"),
+                line,
+            )),
+            _ => Ok(()),
+        }
     }
 
     /// Parse a statically named member after a class-like owner. The shared

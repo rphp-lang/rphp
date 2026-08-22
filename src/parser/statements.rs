@@ -38,6 +38,7 @@ impl Parser {
             strict_types_allowed: true,
             empty_dimension_unset_context: false,
             preserve_empty_dimension_suffix: false,
+            new_postfix_error_suffix: None,
             last_primary_line: None,
             outermost_scope: true,
             halted: false,
@@ -491,10 +492,16 @@ impl Parser {
             }
             Token::Echo { line } => {
                 self.advance();
-                let mut expressions = vec![self.parse_expr()?];
+                let mut expressions = vec![self.with_new_postfix_error_suffix(
+                    Some(", expecting \",\" or \";\""),
+                    |parser| parser.parse_expr(),
+                )?];
                 while matches!(self.peek(), Token::Comma(_)) {
                     self.advance();
-                    expressions.push(self.parse_expr()?);
+                    expressions.push(self.with_new_postfix_error_suffix(
+                        Some(", expecting \",\" or \";\""),
+                        |parser| parser.parse_expr(),
+                    )?);
                 }
                 self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::Echo { expressions, line })
@@ -1079,7 +1086,10 @@ impl Parser {
                     self.advance();
                     Ok(Stmt::Return { expr: None, line })
                 } else {
-                    let expr = self.parse_expr()?;
+                    let expr = self.with_new_postfix_error_suffix(
+                        Some(", expecting \";\""),
+                        |parser| parser.parse_expr(),
+                    )?;
                     self.expect(&Token::Semicolon(0))?;
                     Ok(Stmt::Return {
                         expr: Some(expr),

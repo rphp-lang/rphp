@@ -78,6 +78,30 @@ impl Parser {
         result
     }
 
+    fn with_new_postfix_error_suffix<T>(
+        &mut self,
+        suffix: Option<&'static str>,
+        parse: impl FnOnce(&mut Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let previous = std::mem::replace(&mut self.new_postfix_error_suffix, suffix);
+        let result = parse(self);
+        self.new_postfix_error_suffix = previous;
+        result
+    }
+
+    fn parse_new_arguments(&mut self, line: usize) -> Result<(Vec<CallArg>, bool), String> {
+        if !matches!(self.peek(), Token::LParen(_)) {
+            return Ok((Vec::new(), false));
+        }
+        self.expect_lparen()?;
+        if self.consume_first_class_callable_placeholder() {
+            self.compile_error("Cannot create Closure for new expression", line);
+            Ok((Vec::new(), true))
+        } else {
+            Ok((self.parse_call_args()?, true))
+        }
+    }
+
     fn parse_empty_dimension_target_prefix(&mut self) -> Result<Expr, String> {
         let previous = self.preserve_empty_dimension_suffix;
         self.preserve_empty_dimension_suffix = true;
@@ -248,7 +272,10 @@ impl Parser {
                     if self.peek_at(1) == Token::Colon {
                         let name = Self::token_as_named_arg_label(&self.advance()).unwrap();
                         self.advance(); // consume ':'
-                        let value = self.parse_expr()?;
+                        let value = self.with_new_postfix_error_suffix(
+                            Some(", expecting \")\""),
+                            |parser| parser.parse_expr(),
+                        )?;
                         if let Expr::FunctionCall { name, line, .. } = &value
                             && name.eq_ignore_ascii_case("list")
                         {
@@ -274,7 +301,10 @@ impl Parser {
                         );
                     }
                     self.advance();
-                    let expr = self.parse_expr()?;
+                    let expr = self.with_new_postfix_error_suffix(
+                        Some(", expecting \")\""),
+                        |parser| parser.parse_expr(),
+                    )?;
                     if let Expr::FunctionCall { name, line, .. } = &expr
                         && name.eq_ignore_ascii_case("list")
                     {
@@ -302,7 +332,10 @@ impl Parser {
                         "Cannot use positional argument after argument unpacking".to_string()
                     );
                 }
-                let expr = self.parse_positional_call_argument()?;
+                let expr = self.with_new_postfix_error_suffix(
+                    Some(", expecting \")\""),
+                    |parser| parser.parse_positional_call_argument(),
+                )?;
                 if let Expr::FunctionCall { name, line, .. } = &expr
                     && name.eq_ignore_ascii_case("list")
                 {
