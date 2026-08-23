@@ -8,6 +8,79 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`stdlib-option-contract-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+implementation commit `c603eb9f`. Across all 5,599 unmodified `Zend/tests`
+and `tests/lang` cases, 4,157 pass, 1,146 fail, 115 skip, none remain XFAIL,
+181 are unsupported, and none time out or crash. The exact pass-set delta from
+`f33bdcc5` is +4/-0: both `enum/gh9775` cases and the named-parameter
+`bug80096.phpt` and `internal.phpt` cases. Two serial final runs have the same
+manifest SHA-256,
+`8ae6510dfa47af1db4d91ea0145e22414ffb1318181f39e3381d77bd56f108ed`,
+and summary SHA-256,
+`34f21bdccc325ac680cb4db1fb16520943bb83a029aa535b4e6b2f6bd2e94e10`.
+
+`array_unique()` now exposes PHP 8.5's `flags` boundary, preserves the first
+key and live reference, distinguishes enum objects under `SORT_REGULAR`, and
+uses the existing runtime comparison semantics for regular and numeric modes.
+Its default packed-string path changes from quadratic duplicate scans to an
+adaptive small-vector/hash-set algorithm without copying the retained strings.
+`str_pad()` now implements the optional pad type, left/right/both distribution,
+byte-string length and padding, early-return validation order, typed arguments
+and the PHP 8.5 empty-pad and invalid-type `ValueError` contracts without
+casting negative lengths to huge allocations.
+
+`htmlspecialchars()` and `htmlentities()` now accept their four reflected
+arguments, including the nullable encoding boundary and `double_encode`.
+The admitted UTF-8 special-character slice honors `ENT_NOQUOTES`,
+`ENT_COMPAT`, `ENT_QUOTES`, the HTML/XML document flags, document-specific
+apostrophe spelling, numeric entities and the common named entities exercised
+by the checkpoint. The corresponding public `ENT_*` constants are registered,
+and default calls retain a dedicated allocation-bounded fast path.
+
+The four-case unmodified PHP 8.5 focus moves from zero to four passes, matching
+PHP 8.5.9, with final manifest SHA-256
+`9bfc4cc61762bca4a8c11b6004a72a25b31d299823bf9403f53c587eedcd46d1`.
+A separate 12-case adjacent `ext/standard` sample moves from three passes,
+eight failures and one crash to eight passes and four failures with no crash;
+its final manifest SHA-256 is
+`977aec8f1b2def6436ce45084c9f1c7bc8f07b05cf754ee373c922470ae3d597`.
+Four original E2E programs cover keys and references, enum identity, scalar
+strictness, 200 distinct packed strings, binary padding, validation order,
+HTML flags, entity preservation and named arguments.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy self-tests, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+The production unsafe inventory remains at 1,623 blocks and 289 functions with
+346 SAFETY annotations. The implementation adds no dependency, opcode, VM
+frame or PHP value/object/array layout change.
+
+On an AMD Ryzen 9 7950X AMD64 host pinned to performance-governor CPU 2, a
+balanced alternating release comparison used 32 pairs per lane, three warmups
+per binary and no excluded samples. Independent/paired median changes are
+-1.782%/-1.842% for 100 empty requests, -35.535%/-35.432% for 50,000 default
+packed-string `array_unique()` calls, -84.726%/-84.789% for one
+`array_unique()` call over 5,000 distinct strings, -14.434%/-14.533% for one
+million right-padding calls and
+-0.374%/-0.398% for 500,000 default `htmlspecialchars()` calls. Paired
+p10/p90 ranges are -2.626%/-1.232%, -36.089%/-34.888%,
+-85.121%/-84.402%, -18.158%/-12.422% and -5.066%/+6.206%, respectively.
+Every lane preserves exact output and stays below the +5% median gate.
+Baseline/candidate binary SHA-256 values are
+`292c137ede9a9e6d7cfe8ac24c4e0fdc79c2f81defc903e3c54105c1a42b281f` /
+`fd088f136c91d5be99f1df72675f9f84f75f4687fcbd1ccc29aef286a2665723`;
+the benchmark harness/log pair is
+`28bed683597d141daa4c35fb93c3f8ea48fa03c94fd9b50e6889a46a397d18e0` /
+`026bf86b97cd624a5b443f10749f11470a242ca9596f28f9dfa1633f0d2b1649`.
+
+This checkpoint does not claim complete HTML named-entity tables, legacy
+character sets or invalid-byte policies, locale collation, exact arbitrary
+object/non-transitive `array_unique()` comparison traces, or PHP's exact fatal
+diagnostic for infeasibly large `str_pad()` allocations. The four remaining
+adjacent failures depend on separate parser/output gaps; broader standard-
+library and PHP compatibility remain separate work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `reflection-surface-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 implementation commit `5f9172e9`. Across all 5,599 unmodified `Zend/tests`
 and `tests/lang` cases, 4,153 pass, 1,150 fail, 115 skip, none remain XFAIL,
