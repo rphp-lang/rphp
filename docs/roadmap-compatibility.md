@@ -1746,6 +1746,42 @@ trace. The 16 independent focused blockers, `array_change_key_case()`, ordinary
 variadic `array_intersect()`, the complete array suite and broader compatibility
 remain separate work.
 
+The `array-mutation-batch` checkpoint advances `array_push()`, `array_pop()`,
+`array_shift()`, `array_unshift()` and `array_splice()` together and corrects
+the first-negative-key append sequence. The admitted contract covers zero,
+one and many variadic values; typed by-reference targets; return values;
+integer reindexing and preserved string keys; nullable/extreme splice bounds;
+scalar, array and object replacement; references and COW; cursor reset; safe
+size and next-key errors; discarded-result destructors; reentrant mutation;
+and live iterator-position translation for outer and nested by-reference
+`foreach` loops. No php-src implementation or test is copied or translated.
+
+The 59-case unmodified PHP 8.5 focused cluster moves from 22 to 50 passes, an
+exact +28/-0 delta; PHP 8.5.9 passes all 59. The complete recursive 842-case
+array audit moves from 496 to 525 passes with no lost pass, reducing failures
+from 332 to 303 while 13 skips, one unsupported case and zero timeouts or
+crashes remain. The pinned Zend/lang corpus moves from 4,103 to 4,107 passes,
+an exact +4/-0 delta, with 1,196 failures, 115 skips, 181 unsupported cases and
+zero timeouts or crashes. Two serial focused, array and main runs are
+respectively byte-identical. Five original E2E tests and a 48-line clean-room
+transcript match PHP 8.5.9 exactly.
+
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, the unchanged 1,623/289 unsafe ratchet, Composer S0, four Symfony S1
+gates and PHP 8.5.9 S2/S3 pass. The general internal positional-variadic ABI
+keeps named and multi-value packing canonical; the existing four-byte call-plan
+flag and a spare array-cursor metadata bit avoid opcode, frame and `PhpArray`
+layout growth. CPU-pinned 32-pair release controls put paired median changes at
++1.300% for empty requests, +0.010% for ordinary append, +2.926% for
+`array_push()`/`array_pop()`, -4.857% for `array_unshift()`/`array_shift()` and
+-0.446% for `array_splice()`, below the +5% gate with exact output.
+
+Nine focused leading-dot parser, temporary-write notice, escape/resource output
+and restricted-`$GLOBALS` fatal-envelope failures remain separate. General
+by-reference write-context enforcement, complete internal Reflection metadata,
+successful near-limit allocation, the remaining array suite and broader
+compatibility are not claimed.
+
 The `array-construction-batch` checkpoint advances `range()`, `array_fill()`,
 `array_combine()` and `array_merge()` together and corrects ordinary
 `$array[]` next-key exhaustion. The admitted contract covers integer,

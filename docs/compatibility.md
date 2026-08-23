@@ -8,6 +8,84 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`array-mutation-batch`, pinned to php-src 8.5 commit `fcc29c8` and candidate
+implementation commit `32bb8130`. Across all 5,599 unmodified `Zend/tests`
+and `tests/lang` cases, 4,107 pass, 1,196 fail, 115 skip, none remain XFAIL,
+181 are unsupported, and none time out or crash. The headline pass rate is
+77.447%, the whole-corpus rate is 73.352%, and 4,809 of 5,303 attempted cases
+reach runtime (90.685%). The exact delta from the preceding checkpoint is
++4/-0. Two independently executed final runs have the same manifest SHA-256,
+`21387aa43874e027a6f518b0aab3c2475ded4d51575eb07ff9cfe6d8dd133857`,
+and the same summary SHA-256,
+`333ff070ef3e20d24e28b1ac6d9d36c5d594a4cba1b54dcbe2bcd8fa4735f359`.
+
+`array_push()`, `array_pop()`, `array_shift()`, `array_unshift()` and
+`array_splice()` now share PHP 8.5 mutation semantics for variadic arity,
+typed by-reference targets, return values, integer reindexing, preserved
+string keys, nullable and extreme splice bounds, scalar/array/object
+replacement, copy-on-write snapshots, live reference cells, internal cursor
+reset and size/next-key errors. Discarded removed values run destructors at the
+mutation boundary and detect reentrant replacement. Structural changes made
+inside an active by-reference `foreach` translate every matching live iterator
+position across caller frames, including nested loops. The first explicit
+negative integer key now also establishes PHP 8.5's following append key after
+pop, unset or an empty transition. The implementation is independent and does
+not copy or mechanically translate php-src code.
+
+The 59-case unmodified PHP 8.5 focused cluster moves from 22 to 50 passes, an
+exact +28/-0 pass-set delta; PHP 8.5.9 passes all 59. The complete recursive
+842-case `ext/standard/tests/array` audit moves from 496 to 525 passes with no
+lost pass: failures fall from 332 to 303 while 13 skips, one unsupported case,
+zero timeouts and zero crashes remain. The extra adjacent gain is
+`negative_index_empty_array.phpt`. Two final focused and full-array runs are
+byte-identical. Their manifest/summary SHA-256 pairs are respectively
+`d847350df530b6581766dabd867ca57ac9587a1a754a42237b650f7378bfee26` /
+`15a1ae718952c108c07260708fa2438477e91126484d6c025407b66bd0e96c91`
+and
+`a7699db98d1e24bb38ed281d7f907ba61978281a76397f0e2bc99cb584d38694` /
+`6bbbd5409318321cb1498225b6479b0b7336bccf5e88ab0c0391acd3e2d1050c`.
+
+Five original E2E tests cover signatures, zero/one/many variadic values,
+mixed keys, bounds, scalar/array/object replacements, references, nested COW,
+cursor state, overflow, discarded-result destructors, reentrant mutation and
+structural changes in outer and nested by-reference `foreach` loops. A 48-line,
+2,355-byte clean-room transcript is byte-identical to PHP 8.5.9 with SHA-256
+`ba15af611ffbd0db9c96480e10f37fdbeb48fe5e020f6df7a78e810e914c29e7`.
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, the unchanged 1,623-block/289-function
+unsafe ratchet with 337 SAFETY annotations, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The
+compiler adds a general optional positional variadic ABI for internal handlers;
+named or multi-value variadics retain canonical packing. A flag in the existing
+four-byte call plan avoids scanning functions that cannot own a reference
+iterator, and a spare array-cursor metadata bit avoids enlarging `PhpArray`.
+No opcode, call-frame, PHP Value/object layout or dependency changes.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on
+an AMD Ryzen 9 7950X used performance-governor CPU 2, three warmups per binary
+and no excluded samples. Paired median changes are +1.300% for batches of 100
+empty requests, +0.010% for two million ordinary appends, +2.926% for one
+million `array_push()`/`array_pop()` cycles, -4.857% for 400,000
+`array_unshift()`/`array_shift()` cycles and -0.446% for 300,000 bounded
+`array_splice()` replacements. The corresponding paired p10/p90 ranges are
++0.743%/+2.182%, -3.472%/+2.484%, +2.344%/+4.256%, -8.544%/-2.040% and
+-6.148%/+3.008%. Exact outputs match, and every comparable workload remains
+below the +5% gate. Baseline and candidate binary SHA-256 values are
+`41903d58d7cc4228c49cb23ad41b43a24961de0fbd37b95669790d88125ef168`
+and `bd34a1fa0bdc524f8390961f69464956dab755330f67fc1b1d388147e1533819`;
+the benchmark log SHA-256 is
+`c54c876372f22be7056575f3b08b3703d9a24476420217ecf7d6225371c0d1dc`.
+
+Nine focused failures remain explicit. Three leading-dot numeric literal cases
+stop at an independent parser gap; `array_shift_variation5.phpt` reaches the
+general temporary-write notice gap; four `array_unshift()` variations reach
+older escape/resource output behavior; and `bug31158.phpt` reaches the
+restricted-`$GLOBALS` uncaught-fatal envelope. General enforcement that only
+writable variables may be passed to by-reference internal parameters, complete
+internal Reflection types/defaults, successful near-limit allocation, the
+remaining array suite and broader PHP compatibility remain separate work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `array-construction-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 candidate implementation commit `7ead4eb2`. Across all 5,599 unmodified
 `Zend/tests` and `tests/lang` cases, 4,103 pass, 1,200 fail, 115 skip, none
