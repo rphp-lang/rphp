@@ -7435,6 +7435,67 @@ fn fn_get_declared_classes(
     ret!(rv, declared_names_value(eg.declared_class_names()));
 }
 
+fn builtin_constants_value(eg: &ExecutorGlobals) -> PhpArray {
+    let mut constants = PhpArray::new();
+    for name in crate::BUILTIN_CONSTANT_NAMES {
+        if let Some(value) = crate::builtin_constant(name) {
+            constants.set_str(name, value);
+        }
+    }
+    for name in ["STDIN", "STDOUT", "STDERR"] {
+        if let Some(value) = eg.constant_table.borrow().get(name).cloned() {
+            constants.set_str(name, value);
+        }
+    }
+    constants
+}
+
+fn user_constants_value(eg: &ExecutorGlobals) -> PhpArray {
+    let mut result = PhpArray::new();
+    for (name, value) in eg.defined_dynamic_constants() {
+        if name.starts_with('\0') || matches!(name.as_str(), "STDIN" | "STDOUT" | "STDERR") {
+            continue;
+        }
+        result.set_str(&name, value);
+    }
+    result
+}
+
+/// get_defined_constants($categorize = false): array
+fn fn_get_defined_constants(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let categorize = if arg_opt!(ed, 0).is_some() {
+        let Some(categorize) =
+            typed_internal_bool_argument(ed, eg, "get_defined_constants", 0, "categorize")?
+        else {
+            return Ok(());
+        };
+        categorize
+    } else {
+        false
+    };
+    let builtins = builtin_constants_value(eg);
+    let user = user_constants_value(eg);
+    if categorize {
+        let mut result = PhpArray::new();
+        result.set_str("Core", Value::array(builtins));
+        if !user.is_empty() {
+            result.set_str("user", Value::array(user));
+        }
+        ret!(rv, Value::array(result));
+    }
+    let mut result = builtins;
+    for (key, value) in user.iter() {
+        if let ArrayKey::String(name) = key {
+            result.set_str(&name, value.clone());
+        }
+    }
+    ret!(rv, Value::array(result));
+}
+
 fn get_defined_functions_argument(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
@@ -16804,6 +16865,22 @@ fn fn_php_sapi_name(
     ret!(rv, Value::string("cli".to_string()));
 }
 
+/// zend_version(): string
+fn fn_zend_version(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        Value::string(format!(
+            "4.{}.{}",
+            crate::PHP_COMPAT_MINOR_VERSION,
+            crate::PHP_COMPAT_RELEASE_VERSION
+        ))
+    );
+}
+
 /// phpversion(): string
 fn fn_phpversion(
     ed: *mut ExecuteData,
@@ -17343,6 +17420,37 @@ fn fn_gc_collect_cycles(
 ) -> Result<(), VmError> {
     let collected = eg.collect_cycles()?;
     ret!(rv, Value::long(collected as i64));
+}
+
+fn fn_gc_status(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let status = crate::value::cycle_collection_status();
+    let mut result = PhpArray::new();
+    result.set_str("running", Value::bool(status.running));
+    result.set_str("protected", Value::bool(false));
+    result.set_str("full", Value::bool(false));
+    result.set_str(
+        "runs",
+        Value::long(i64::try_from(status.runs).unwrap_or(i64::MAX)),
+    );
+    result.set_str(
+        "collected",
+        Value::long(i64::try_from(status.collected).unwrap_or(i64::MAX)),
+    );
+    result.set_str("threshold", Value::long(10_001));
+    result.set_str("buffer_size", Value::long(16_384));
+    result.set_str(
+        "roots",
+        Value::long(i64::try_from(status.roots).unwrap_or(i64::MAX)),
+    );
+    result.set_str("application_time", Value::double(status.application_time));
+    result.set_str("collector_time", Value::double(status.collector_time));
+    result.set_str("destructor_time", Value::double(status.destructor_time));
+    result.set_str("free_time", Value::double(status.free_time));
+    ret!(rv, Value::array(result));
 }
 
 /// PHP_INT_SIZE, PHP_INT_MAX etc. are handled as constants.

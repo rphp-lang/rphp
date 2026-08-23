@@ -7,6 +7,7 @@
 //! strong edges.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::{Duration, Instant};
 
 use crate::value::{CycleNodeKind, Value, begin_cycle_collection, cycle_root_snapshot};
 use crate::vm::execute::{VmError, run_cycle_object_destructor};
@@ -326,7 +327,12 @@ impl ExecutorGlobals {
             return Ok(0);
         };
 
+        let collector_started = Instant::now();
         let mut initial = self.build_cycle_graph();
+        let ran = !initial.nodes.is_empty();
+        if ran {
+            guard.mark_ran();
+        }
         let initially_live = initial.live_identities();
         let garbage: Vec<(usize, CycleNodeKind)> = initial
             .nodes
@@ -338,16 +344,30 @@ impl ExecutorGlobals {
             garbage.iter().map(|(identity, _)| *identity).collect();
         let cyclic = initial.cyclic_identities(&garbage_identities);
 
-        for index in initial.destructor_order(&garbage_identities) {
-            let node = &initial.nodes[index];
-            if node.kind == CycleNodeKind::Object {
-                run_cycle_object_destructor(self, &node.value)?;
-                if self.exception.is_some() {
-                    return Ok(0);
+        let destructor_order = initial.destructor_order(&garbage_identities);
+        let has_destructors = destructor_order
+            .iter()
+            .any(|index| initial.nodes[*index].kind == CycleNodeKind::Object);
+        let mut collector_time = Duration::ZERO;
+        let mut destructor_time = Duration::ZERO;
+        let collector_resumed = if has_destructors {
+            let destructor_started = Instant::now();
+            collector_time = destructor_started.duration_since(collector_started);
+            for index in destructor_order {
+                let node = &initial.nodes[index];
+                if node.kind == CycleNodeKind::Object {
+                    run_cycle_object_destructor(self, &node.value)?;
+                    if self.exception.is_some() {
+                        return Ok(0);
+                    }
                 }
             }
-        }
-
+            let resumed = Instant::now();
+            destructor_time = resumed.duration_since(destructor_started);
+            resumed
+        } else {
+            collector_started
+        };
         let mut stale = std::mem::take(&mut initial.stale_weak_identities);
         drop(initial);
 
@@ -364,6 +384,9 @@ impl ExecutorGlobals {
         stale.extend(collected.iter().copied());
         stale.sort_unstable();
         stale.dedup();
+        let free_started = Instant::now();
+        collector_time =
+            collector_time.saturating_add(free_started.duration_since(collector_resumed));
         let mut released = Vec::new();
         for identity in stale {
             released.extend(self.release_weak_object(identity));
@@ -387,7 +410,14 @@ impl ExecutorGlobals {
                     )
             })
             .count();
-        guard.complete();
+        drop(current);
+        let free_time = Instant::now().duration_since(free_started);
+        guard.complete(
+            count,
+            if ran { collector_time } else { Duration::ZERO },
+            if ran { destructor_time } else { Duration::ZERO },
+            if ran { free_time } else { Duration::ZERO },
+        );
         Ok(count)
     }
 }

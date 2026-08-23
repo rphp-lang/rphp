@@ -2196,3 +2196,88 @@ echo method_exists($h, 'greet') ? 'yes' : 'no';
     );
     assert_eq!(out, "yes");
 }
+
+#[test]
+fn legacy_parameter_types_factories_and_trait_aliases_match_php_85() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReflectedBase {}
+class ReflectedFoo {}
+class ReflectedBar {}
+class ReflectedChild extends ReflectedBase {
+    public function inspect(
+        self $self,
+        parent $parent,
+        array $array,
+        callable $callable,
+        iterable $iterable,
+        ReflectedFoo|array $mixed,
+        ReflectedFoo|ReflectedBar $union
+    ) {}
+}
+class ReflectedCallableParameter {
+    public function __invoke(ReflectedFoo $value) {}
+}
+class ReflectedMethodFactory extends ReflectionMethod {}
+$deprecations = 0;
+set_error_handler(function() use (&$deprecations) { $deprecations++; return true; });
+$parameters = (new ReflectionMethod(ReflectedChild::class, 'inspect'))->getParameters();
+$rendered = [];
+foreach ($parameters as $parameter) {
+    $class = $parameter->getClass();
+    $rendered[] = $parameter->getName() . '=' . ($class ? $class->getName() : 'null')
+        . ':' . (int) $parameter->isArray() . ':' . (int) $parameter->isCallable();
+}
+$direct = new ReflectionParameter([ReflectedChild::class, 'inspect'], 'parent');
+$directClass = $direct->getClass();
+$callable = new ReflectionParameter(new ReflectedCallableParameter, 'value');
+$callableClass = $callable->getClass();
+restore_error_handler();
+echo implode('|', $rendered), '|direct=', $directClass->getName(),
+    '|callable=', $callableClass->getName(), '|deprecated=', $deprecations, "\n";
+
+$factory = ReflectionMethod::createFromMethodName('reflectedchild::INSPECT');
+echo 'factory=', $factory->getDeclaringClass()->getName(), '::', $factory->getName(), "\n";
+echo 'subclass=', ReflectedMethodFactory::createFromMethodName('ReflectedChild::inspect')::class, "\n";
+try { ReflectionMethod::createFromMethodName('invalid'); }
+catch (ReflectionException $error) { echo $error->getMessage(), "\n"; }
+foreach ([
+    fn() => new ReflectionParameter('ReflectedChild::inspect', 0),
+    fn() => new ReflectionParameter('strlen', -1),
+] as $invalidParameter) {
+    try { $invalidParameter(); }
+    catch (Throwable $error) { echo get_class($error), ': ', $error->getMessage(), "\n"; }
+}
+
+trait ReflectedAliasOne { public function first() {} public function retained() {} }
+trait ReflectedAliasTwo { public function second() {} }
+class ReflectedAliasUser {
+    use ReflectedAliasOne, ReflectedAliasTwo {
+        ReflectedAliasOne::first as renamed;
+        ReflectedAliasTwo::second as private hidden;
+        ReflectedAliasOne::retained as protected;
+    }
+}
+foreach ((new ReflectionClass(ReflectedAliasUser::class))->getTraitAliases() as $alias => $source) {
+    echo "$alias=$source|";
+}
+$closure = function(ReflectedFoo $value): ReflectedFoo { return $value; };
+$closureMethod = (string) new ReflectionMethod($closure, '__invoke');
+echo "\n", strtok($closureMethod, "\n"), ':', (int) !str_contains($closureMethod, '@@');
+"#,
+        ),
+        concat!(
+            "self=ReflectedChild:0:0|parent=ReflectedBase:0:0|array=null:1:0|",
+            "callable=null:0:1|iterable=Traversable:0:0|mixed=ReflectedFoo:1:0|",
+            "union=null:0:0|direct=ReflectedBase|callable=ReflectedFoo|deprecated=23\n",
+            "factory=ReflectedChild::inspect\n",
+            "subclass=ReflectedMethodFactory\n",
+            "ReflectionMethod::createFromMethodName(): Argument #1 ($method) must be a valid method name\n",
+            "ReflectionException: Function ReflectedChild::inspect() does not exist\n",
+            "ValueError: ReflectionParameter::__construct(): Argument #2 ($param) must be greater than or equal to 0\n",
+            "renamed=ReflectedAliasOne::first|hidden=ReflectedAliasTwo::second|",
+            "\nMethod [ <internal> public method __invoke ] {:1",
+        )
+    );
+}

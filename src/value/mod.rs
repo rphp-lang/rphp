@@ -1037,6 +1037,12 @@ impl CycleCandidate {
 struct CycleRootState {
     active: bool,
     collecting: bool,
+    runs: usize,
+    collected: usize,
+    request_started_at: Option<std::time::Instant>,
+    collector_time: std::time::Duration,
+    destructor_time: std::time::Duration,
+    free_time: std::time::Duration,
     candidates: Vec<CycleCandidate>,
     indices: HashMap<usize, usize>,
 }
@@ -1063,14 +1069,37 @@ fn register_cycle_candidate(candidate: CycleCandidate) {
 /// Guards one explicit collector pass against recursive collection and keeps
 /// temporary graph-handle drops out of the possible-root buffer.
 pub(crate) struct CycleCollectionGuard {
-    completed: bool,
+    ran: bool,
+    completed: Option<(
+        usize,
+        std::time::Duration,
+        std::time::Duration,
+        std::time::Duration,
+    )>,
 }
 
 impl CycleCollectionGuard {
+    pub(crate) fn mark_ran(&mut self) {
+        if self.ran {
+            return;
+        }
+        self.ran = true;
+        CYCLE_ROOTS.with(|state| {
+            let mut state = state.borrow_mut();
+            state.runs = state.runs.saturating_add(1);
+        });
+    }
+
     /// Retire the possible-root buffer after a completed Zend-style pass.
     /// A later refcount decrement will enqueue a still-live component again.
-    pub(crate) fn complete(&mut self) {
-        self.completed = true;
+    pub(crate) fn complete(
+        &mut self,
+        collected: usize,
+        collector_time: std::time::Duration,
+        destructor_time: std::time::Duration,
+        free_time: std::time::Duration,
+    ) {
+        self.completed = Some((collected, collector_time, destructor_time, free_time));
     }
 }
 
@@ -1079,7 +1108,11 @@ impl Drop for CycleCollectionGuard {
         let _ = CYCLE_ROOTS.try_with(|state| {
             let mut state = state.borrow_mut();
             state.collecting = false;
-            if self.completed {
+            if let Some((collected, collector_time, destructor_time, free_time)) = self.completed {
+                state.collected = state.collected.saturating_add(collected);
+                state.collector_time = state.collector_time.saturating_add(collector_time);
+                state.destructor_time = state.destructor_time.saturating_add(destructor_time);
+                state.free_time = state.free_time.saturating_add(free_time);
                 state.candidates.clear();
                 state.indices.clear();
             }
@@ -1094,7 +1127,58 @@ pub(crate) fn begin_cycle_collection() -> Option<CycleCollectionGuard> {
             return None;
         }
         state.collecting = true;
-        Some(CycleCollectionGuard { completed: false })
+        Some(CycleCollectionGuard {
+            ran: false,
+            completed: None,
+        })
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct CycleCollectionStatus {
+    pub(crate) running: bool,
+    pub(crate) runs: usize,
+    pub(crate) collected: usize,
+    pub(crate) roots: usize,
+    pub(crate) application_time: f64,
+    pub(crate) collector_time: f64,
+    pub(crate) destructor_time: f64,
+    pub(crate) free_time: f64,
+}
+
+pub(crate) fn cycle_collection_status() -> CycleCollectionStatus {
+    CYCLE_ROOTS.with(|state| {
+        let mut state = state.borrow_mut();
+        state
+            .candidates
+            .retain(|candidate| candidate.strong_count() != 0);
+        state.indices = state
+            .candidates
+            .iter()
+            .enumerate()
+            .map(|(index, candidate)| (candidate.identity(), index))
+            .collect();
+        let collector_time = state.collector_time.as_secs_f64();
+        let destructor_time = state.destructor_time.as_secs_f64();
+        let free_time = state.free_time.as_secs_f64();
+        let accounted = state
+            .collector_time
+            .saturating_add(state.destructor_time)
+            .saturating_add(state.free_time);
+        let application_time = state
+            .request_started_at
+            .map(|started| started.elapsed().saturating_sub(accounted).as_secs_f64())
+            .unwrap_or(0.0);
+        CycleCollectionStatus {
+            running: state.collecting,
+            runs: state.runs,
+            collected: state.collected,
+            roots: state.candidates.len(),
+            application_time,
+            collector_time,
+            destructor_time,
+            free_time,
+        }
     })
 }
 
@@ -1194,7 +1278,19 @@ pub(crate) fn begin_object_handle_request() {
         state.released.clear();
         state.in_request = true;
     });
-    CYCLE_ROOTS.with(|state| state.borrow_mut().active = true);
+    CYCLE_ROOTS.with(|state| {
+        let mut state = state.borrow_mut();
+        state.active = true;
+        state.collecting = false;
+        state.runs = 0;
+        state.collected = 0;
+        state.request_started_at = Some(std::time::Instant::now());
+        state.collector_time = std::time::Duration::ZERO;
+        state.destructor_time = std::time::Duration::ZERO;
+        state.free_time = std::time::Duration::ZERO;
+        state.candidates.clear();
+        state.indices.clear();
+    });
 }
 
 pub(crate) fn end_object_handle_request() {
@@ -1202,6 +1298,13 @@ pub(crate) fn end_object_handle_request() {
     CYCLE_ROOTS.with(|state| {
         let mut state = state.borrow_mut();
         state.active = false;
+        state.collecting = false;
+        state.runs = 0;
+        state.collected = 0;
+        state.request_started_at = None;
+        state.collector_time = std::time::Duration::ZERO;
+        state.destructor_time = std::time::Duration::ZERO;
+        state.free_time = std::time::Duration::ZERO;
         // Collector candidates never cross a PHP request boundary. Retaining
         // them would let a later ExecutorGlobals inspect objects whose class
         // and destructor metadata belonged to an already-finished request.

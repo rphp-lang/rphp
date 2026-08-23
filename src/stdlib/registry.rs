@@ -323,14 +323,25 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg_ref!("shuffle", fn_shuffle, 1, 1, 0b1, "array");
     reg_var!("array_map", fn_array_map, 2, "callback", "array");
     reg!("array_filter", fn_array_filter, 2, 1, "array", "callback");
-    reg!(
-        "iterator_to_array",
-        fn_iterator_to_array,
-        2,
-        1,
-        "iterator",
-        "preserve_keys"
-    );
+    {
+        let mut function = Box::new(make_internal_function(
+            fn_iterator_to_array,
+            2,
+            1,
+            pn!["iterator", "preserve_keys"],
+        ));
+        function.common.sig.param_type_hints = vec![
+            ParamTypeHint::Union(vec![
+                ParamTypeHint::ClassName("Traversable".to_string()),
+                ParamTypeHint::Array,
+            ]),
+            ParamTypeHint::Bool,
+        ];
+        function.common.sig.return_type_hint = ParamTypeHint::Array;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("iterator_to_array", pointer).unwrap();
+        funcs.push(function);
+    }
     // compact() requires caller scope access (not yet implemented) — intentionally not registered
 
     // --- String functions ---
@@ -680,6 +691,25 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         0,
         "exclude_disabled"
     );
+    reg!(
+        "get_defined_constants",
+        fn_get_defined_constants,
+        1,
+        0,
+        "categorize"
+    );
+    funcs
+        .last_mut()
+        .expect("get_defined_constants was just registered")
+        .common
+        .sig
+        .param_type_hints = vec![ParamTypeHint::Bool];
+    funcs
+        .last_mut()
+        .expect("get_defined_constants was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::Array;
     reg!("get_declared_classes", fn_get_declared_classes, 0, 0);
     reg!("get_declared_interfaces", fn_get_declared_interfaces, 0, 0);
     reg!("get_declared_traits", fn_get_declared_traits, 0, 0);
@@ -1475,6 +1505,13 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("putenv", fn_putenv, 1, 1, "assignment");
     reg!("php_uname", fn_php_uname, 1, 0, "mode");
     reg!("php_sapi_name", fn_php_sapi_name, 0, 0);
+    reg!("zend_version", fn_zend_version, 0, 0);
+    funcs
+        .last_mut()
+        .expect("zend_version was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::String;
     reg!("phpversion", fn_phpversion, 1, 0, "extension");
     reg!(
         "version_compare",
@@ -1525,6 +1562,13 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "scanner_mode"
     );
     reg!("gc_collect_cycles", fn_gc_collect_cycles, 0, 0);
+    reg!("gc_status", fn_gc_status, 0, 0);
+    funcs
+        .last_mut()
+        .expect("gc_status was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::Array;
     reg!("gc_enabled", fn_gc_enabled, 0, 0);
     reg!("gc_enable", fn_gc_enable, 0, 0);
     reg!("gc_disable", fn_gc_disable, 0, 0);

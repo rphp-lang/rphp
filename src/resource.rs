@@ -273,10 +273,9 @@ pub(crate) fn insert_for_request<T: 'static>(
     let mut scope = request_scope(eg);
     if scope == 0 {
         scope = allocate_scope();
-        eg.constant_table.borrow_mut().insert(
-            RESOURCE_SCOPE_CONSTANT.to_string(),
-            Value::long(scope as i64),
-        );
+        eg.constant_table
+            .borrow_mut()
+            .insert(RESOURCE_SCOPE_CONSTANT.into(), Value::long(scope as i64));
     }
     insert(scope, resource_type, payload)
 }

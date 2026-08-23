@@ -349,7 +349,12 @@ fn unavailable_class_constant_owner(error: &str) -> Option<&str> {
 }
 
 fn compilation_constants(eg: &ExecutorGlobals) -> HashMap<String, Value> {
-    let mut known = eg.constant_table.borrow().clone();
+    let mut known: HashMap<String, Value> = eg
+        .constant_table
+        .borrow()
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.clone()))
+        .collect();
     for (registered_name, class) in &eg.class_table {
         for constant in &class.constants {
             if constant.evaluation_error.is_some() {

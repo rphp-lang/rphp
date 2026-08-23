@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::io::Write;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::compiler::compile::{
@@ -375,7 +376,10 @@ pub struct ExecutorGlobals {
     pub generic_metadata: GenericMetadata,
     /// Constant table — name → Value (case-sensitive, like PHP)
     /// Uses RefCell to allow define() from internal functions (which receive &self).
-    pub constant_table: std::cell::RefCell<HashMap<String, crate::value::Value>>,
+    pub constant_table: std::cell::RefCell<HashMap<Rc<str>, crate::value::Value>>,
+    /// Successful dynamic-definition order exposed by get_defined_constants().
+    /// Lookup remains hash-based; only the cold inventory API walks this list.
+    constant_definition_order: std::cell::RefCell<Vec<Rc<str>>>,
     /// First __halt_compiler offset compiled for each PHP source name. Zend
     /// uses that source-name identity for dynamic constant() resolution,
     /// including repeated eval() calls from the same location.
@@ -1103,6 +1107,7 @@ impl ExecutorGlobals {
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             generic_property_contract_cache: std::cell::RefCell::new(None),
             constant_table: std::cell::RefCell::new(HashMap::new()),
+            constant_definition_order: std::cell::RefCell::new(Vec::new()),
             compiler_halt_offsets: None,
             constant_attributes: HashMap::new(),
             constant_expressions: HashMap::new(),
@@ -1216,6 +1221,7 @@ impl ExecutorGlobals {
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             generic_property_contract_cache: std::cell::RefCell::new(None),
             constant_table: std::cell::RefCell::new(HashMap::new()),
+            constant_definition_order: std::cell::RefCell::new(Vec::new()),
             compiler_halt_offsets: None,
             constant_attributes: HashMap::new(),
             constant_expressions: HashMap::new(),
@@ -6157,6 +6163,26 @@ impl ExecutorGlobals {
         }
     }
 
+    /// Recover immutable metadata for a pointer retained by the function
+    /// table. Reflection uses this checked cold boundary instead of
+    /// dereferencing raw lookup results at each call site.
+    pub(crate) fn registered_function_common(
+        &self,
+        function: *const FunctionCommon,
+    ) -> Option<&FunctionCommon> {
+        if function.is_null()
+            || !self
+                .function_table
+                .values()
+                .any(|candidate| std::ptr::eq(*candidate, function))
+        {
+            return None;
+        }
+        // SAFETY: membership above proves that this is a non-null pointer
+        // retained by ExecutorGlobals for at least the returned borrow.
+        Some(unsafe { &*function })
+    }
+
     /// Eager top-level registration can observe a parent name before a
     /// preceding runtime `class_alias()` publishes it. Ordinary inheritance
     /// is flattened into `function_table`; on that rare miss, follow the now
@@ -6181,11 +6207,27 @@ impl ExecutorGlobals {
     /// Define a constant. Returns error if already defined.
     pub fn define_constant(&self, name: &str, value: crate::value::Value) -> Result<(), String> {
         let mut table = self.constant_table.borrow_mut();
-        if table.contains_key(name) {
+        if table.contains_key(name) || crate::builtin_constant(name).is_some() {
             return Err(constant_redefinition_message(name));
         }
-        table.insert(name.to_string(), value);
+        let name: Rc<str> = Rc::from(name);
+        table.insert(name.clone(), value);
+        self.constant_definition_order.borrow_mut().push(name);
         Ok(())
+    }
+
+    pub(crate) fn defined_dynamic_constants(&self) -> Vec<(String, crate::value::Value)> {
+        let table = self.constant_table.borrow();
+        self.constant_definition_order
+            .borrow()
+            .iter()
+            .filter_map(|name| {
+                table
+                    .get(name)
+                    .cloned()
+                    .map(|value| (name.to_string(), value))
+            })
+            .collect()
     }
 
     /// Look up a constant by name (case-sensitive).

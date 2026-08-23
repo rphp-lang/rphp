@@ -1995,3 +1995,41 @@ fn relative_static_constant_expressions_use_php_specific_diagnostics() {
         );
     }
 }
+
+#[test]
+fn defined_constant_inventory_separates_core_and_user_values_without_shadowing_builtins() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$initial = get_defined_constants(true);
+echo 'initial:', implode(',', array_keys($initial)), ':',
+    (int) isset($initial['Core']['STDIN']), ':',
+    (int) !isset($initial['user']), "\n";
+define('INTROSPECTION_SECOND', 2);
+define('INTROSPECTION_FIRST', 1);
+$flat = get_defined_constants();
+$grouped = get_defined_constants(true);
+echo 'flat:', (int) isset($flat['PHP_VERSION']), ':',
+    $flat['INTROSPECTION_FIRST'], $flat['INTROSPECTION_SECOND'], "\n";
+echo 'groups:', implode(',', array_keys($grouped)), ':',
+    (int) isset($grouped['Core']['PHP_VERSION']), ':',
+    $grouped['user']['INTROSPECTION_FIRST'],
+    $grouped['user']['INTROSPECTION_SECOND'], "\n";
+echo 'user-order:', implode(',', array_keys($grouped['user'])), "\n";
+set_error_handler(function($level, $message) { echo "$level:$message\n"; });
+var_dump(define('PHP_VERSION', 'forged'));
+restore_error_handler();
+echo 'version:', PHP_VERSION, ':', zend_version(), "\n";
+"#,
+        ),
+        concat!(
+            "initial:Core:1:1\n",
+            "flat:1:12\n",
+            "groups:Core,user:1:12\n",
+            "user-order:INTROSPECTION_SECOND,INTROSPECTION_FIRST\n",
+            "2:Constant PHP_VERSION already defined, this will be an error in PHP 9\n",
+            "bool(false)\n",
+            "version:8.5.0:4.5.0\n",
+        )
+    );
+}

@@ -330,6 +330,15 @@ pub(crate) fn called_class_name_for_internal_call<'a>(
     eg: &'a ExecutorGlobals,
     internal_frame: *mut ExecuteData,
 ) -> Option<&'a str> {
+    let embedded = frame_embedded_late_static_class_id(internal_frame);
+    let local_class_id = if embedded != 0 {
+        embedded
+    } else {
+        eg.late_static_scope_class_id(internal_frame as usize)
+    };
+    if let Some(class) = eg.class_by_id(local_class_id) {
+        return Some(class.name.as_str());
+    }
     let caller = caller_frame_for_internal_call(internal_frame)?;
     let class_id = late_static_call_class_id(eg, caller);
     eg.class_by_id(class_id).map(|class| class.name.as_str())

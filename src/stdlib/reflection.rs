@@ -2260,6 +2260,7 @@ fn function_invoke_args(
 
 fn hint_metadata(hint: &ParamTypeHint) -> (&'static str, String, bool) {
     match hint {
+        ParamTypeHint::None => ("named", String::new(), true),
         ParamTypeHint::Nullable(inner) => ("named", inner.display_name(), true),
         ParamTypeHint::Union(parts) => (
             "union",
@@ -2575,6 +2576,195 @@ fn parameter_property_bool(ed: *mut ExecuteData, name: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn populate_reflection_parameter(
+    receiver: &Value,
+    function: &FunctionCommon,
+    index: u32,
+    declaring_class: Option<&str>,
+) {
+    let fixed = function.sig.public_arity();
+    let name = function
+        .sig
+        .param_names
+        .get(index as usize)
+        .cloned()
+        .unwrap_or_else(|| format!("arg{}", index + 1));
+    let hint = function
+        .sig
+        .param_type_hints
+        .get(index as usize)
+        .unwrap_or(&ParamTypeHint::None);
+    let (type_kind, type_name, allows_null) = hint_metadata(hint);
+    let is_variadic = function.sig.is_variadic && index == fixed;
+    if let Some(mut object) = receiver.as_object_mut() {
+        object.set_property("name", Value::string(name));
+        object.set_property(
+            "__reflection_function_pointer",
+            Value::long(function as *const FunctionCommon as usize as i64),
+        );
+        object.set_property("__reflection_position", Value::long(index as i64));
+        object.set_property(
+            "__reflection_has_type",
+            Value::bool(!matches!(hint, ParamTypeHint::None)),
+        );
+        object.set_property("__reflection_type_kind", Value::string(type_kind));
+        object.set_property("__reflection_type_name", Value::string(type_name));
+        object.set_property("__reflection_allows_null", Value::bool(allows_null));
+        object.set_property("__reflection_variadic", Value::bool(is_variadic));
+        object.set_property(
+            "__reflection_passed_by_reference",
+            Value::bool(function.sig.is_param_by_ref(index)),
+        );
+        object.set_property(
+            "__reflection_has_default",
+            Value::bool(!is_variadic && index >= function.sig.required_num_args),
+        );
+        object.set_property(
+            "__reflection_declaring_class",
+            declaring_class.map_or_else(Value::null, Value::string),
+        );
+    }
+}
+
+fn parameter_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let target = with_argument(ed, 1, Clone::clone);
+    let mut declaring_class = None;
+    let mut type_scope_class = None;
+    let function = if let Some(closure) = target.as_closure() {
+        type_scope_class = (closure.called_scope_class_id != 0)
+            .then(|| eg.class_by_id(closure.called_scope_class_id))
+            .flatten()
+            .map(|class| class.name.clone())
+            .or_else(|| eg.declaring_class_of(closure.func).map(str::to_owned));
+        closure.func
+    } else {
+        let method_target = if let Some(array) = target.as_array() {
+            if array.len() != 2 {
+                reflection_exception(
+                    eg,
+                    "Expected array($object, $method) or array($classname, $method)",
+                );
+                return Ok(());
+            }
+            let owner = array.get_value_at(0).map(Value::dereferenced);
+            let method = array
+                .get_value_at(1)
+                .map(Value::dereferenced)
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let target = owner.zip(method).and_then(|(owner, method)| {
+                let class = owner
+                    .as_object()
+                    .map(|object| object.class_name.to_string())
+                    .or_else(|| owner.as_str().map(str::to_owned))?;
+                Some((class, method))
+            });
+            if target.is_none() {
+                reflection_exception(
+                    eg,
+                    "Expected array($object, $method) or array($classname, $method)",
+                );
+                return Ok(());
+            }
+            target
+        } else if let Some(object) = target.as_object() {
+            Some((object.class_name.to_string(), "__invoke".to_string()))
+        } else {
+            None
+        };
+        if let Some((class, method)) = method_target {
+            if eg.find_class(&class).is_none()
+                && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &class)?
+            {
+                reflection_exception(eg, format!("Class \"{class}\" does not exist"));
+                return Ok(());
+            }
+            let Some((_, _, _, _, function, declared)) = find_reflected_method(eg, &class, &method)
+            else {
+                reflection_exception(eg, format!("Method {class}::{method}() does not exist"));
+                return Ok(());
+            };
+            declaring_class = Some(declared.clone());
+            type_scope_class = Some(declared);
+            function
+        } else {
+            let Some(name) = target.as_str().map(str::to_owned) else {
+                reflection_exception(
+                    eg,
+                    format!(
+                        "ReflectionParameter::__construct(): Argument #1 ($function) must be a string, an array(class, method), or a callable object, {} given",
+                        reflection_argument_type_name(&target)
+                    ),
+                );
+                return Ok(());
+            };
+            let function = (!name.contains("::"))
+                .then(|| eg.find_function(name.trim_start_matches('\\')))
+                .flatten();
+            let Some(function) = function else {
+                reflection_exception(eg, format!("Function {name}() does not exist"));
+                return Ok(());
+            };
+            function
+        }
+    };
+    if function.is_null() {
+        reflection_exception(eg, "ReflectionParameter has no resolved function");
+        return Ok(());
+    }
+    let common = target
+        .as_closure()
+        .and_then(crate::value::PhpClosure::common)
+        .or_else(|| eg.registered_function_common(function));
+    let Some(common) = common else {
+        reflection_exception(eg, "ReflectionParameter has no resolved function");
+        return Ok(());
+    };
+    let signature = &common.sig;
+    let count = signature.public_arity() + u32::from(signature.is_variadic);
+    let parameter = with_argument(ed, 2, Clone::clone);
+    let index = if let Some(index) = parameter.as_long() {
+        if index < 0 {
+            eg.exception = Some(make_error_value(
+                "ValueError",
+                "ReflectionParameter::__construct(): Argument #2 ($param) must be greater than or equal to 0",
+            ));
+            return Ok(());
+        }
+        u32::try_from(index).ok().filter(|index| *index < count)
+    } else if let Some(name) = parameter.as_str() {
+        signature
+            .param_names
+            .iter()
+            .position(|parameter| parameter == name)
+            .and_then(|index| u32::try_from(index).ok())
+    } else {
+        None
+    };
+    let Some(index) = index else {
+        let selector = if parameter.as_str().is_some() {
+            "name"
+        } else {
+            "offset"
+        };
+        reflection_exception(
+            eg,
+            format!("The parameter specified by its {selector} could not be found"),
+        );
+        return Ok(());
+    };
+    let receiver = with_argument(ed, 0, Clone::clone);
+    populate_reflection_parameter(&receiver, common, index, declaring_class.as_deref());
+    if let Some(scope) = type_scope_class {
+        eg.register_reflection_parameter_scope(&receiver, scope);
+    }
+    Ok(())
+}
+
 fn parameter_get_name(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -2583,6 +2773,205 @@ fn parameter_get_name(
     return_value(
         rv,
         reflected_property(ed, "name").unwrap_or_else(|| Value::string("")),
+    )
+}
+
+fn report_legacy_parameter_type_deprecation(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    method: &str,
+) -> Result<bool, VmError> {
+    super::report_internal_deprecation(
+        eg,
+        ed,
+        &format!(
+            "Method ReflectionParameter::{method}() is deprecated since 8.0, use ReflectionParameter::getType() instead"
+        ),
+    )?;
+    Ok(eg.exception.is_none())
+}
+
+fn parameter_is_legacy_named_type(ed: *mut ExecuteData, expected: &str) -> bool {
+    reflected_property(ed, "__reflection_type_kind")
+        .and_then(|value| value.as_str().map(|kind| kind == "named"))
+        .unwrap_or(false)
+        && reflected_property(ed, "__reflection_type_name")
+            .and_then(|value| {
+                value
+                    .as_str()
+                    .map(|name| name.eq_ignore_ascii_case(expected))
+            })
+            .unwrap_or(false)
+}
+
+fn parameter_is_array(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if !report_legacy_parameter_type_deprecation(ed, eg, "isArray")? {
+        return Ok(());
+    }
+    let legacy_array_union = reflected_property(ed, "__reflection_type_kind")
+        .and_then(|value| value.as_str().map(|kind| kind == "union"))
+        .unwrap_or(false)
+        && reflected_property(ed, "__reflection_type_name")
+            .and_then(|value| {
+                value.as_str().map(|name| {
+                    let parts = name.split('|').map(str::trim).collect::<Vec<_>>();
+                    parts.iter().any(|part| part.eq_ignore_ascii_case("array"))
+                        && parts.iter().all(|part| {
+                            matches!(part.to_ascii_lowercase().as_str(), "array" | "null")
+                                || (!part.contains('&')
+                                    && !part.contains('(')
+                                    && !part.contains(')')
+                                    && !matches!(
+                                        part.to_ascii_lowercase().as_str(),
+                                        "bool"
+                                            | "callable"
+                                            | "false"
+                                            | "float"
+                                            | "int"
+                                            | "iterable"
+                                            | "mixed"
+                                            | "never"
+                                            | "object"
+                                            | "string"
+                                            | "true"
+                                            | "void"
+                                    ))
+                        })
+                })
+            })
+            .unwrap_or(false);
+    let is_array = parameter_is_legacy_named_type(ed, "array") || legacy_array_union;
+    return_value(rv, Value::bool(is_array))
+}
+
+fn parameter_is_callable(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if !report_legacy_parameter_type_deprecation(ed, eg, "isCallable")? {
+        return Ok(());
+    }
+    return_value(
+        rv,
+        Value::bool(parameter_is_legacy_named_type(ed, "callable")),
+    )
+}
+
+fn parameter_get_class(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if !report_legacy_parameter_type_deprecation(ed, eg, "getClass")? {
+        return Ok(());
+    }
+    if !parameter_property_bool(ed, "__reflection_has_type") {
+        return return_value(rv, Value::null());
+    }
+    let kind = reflected_property(ed, "__reflection_type_kind")
+        .and_then(|value| value.as_str().map(str::to_owned));
+    let type_name = reflected_property(ed, "__reflection_type_name")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let is_builtin = |name: &str| {
+        matches!(
+            name.to_ascii_lowercase().as_str(),
+            "array"
+                | "bool"
+                | "callable"
+                | "false"
+                | "float"
+                | "int"
+                | "iterable"
+                | "mixed"
+                | "never"
+                | "null"
+                | "object"
+                | "string"
+                | "true"
+                | "void"
+        )
+    };
+    let mut class_names = match kind.as_deref() {
+        Some("named") if type_name.eq_ignore_ascii_case("iterable") => {
+            vec!["Traversable".to_string()]
+        }
+        Some("named") => vec![type_name],
+        Some("union") => type_name
+            .split('|')
+            .map(str::trim)
+            .filter(|part| !part.contains('&') && !part.contains('(') && !part.contains(')'))
+            .map(str::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    };
+    class_names.retain(|name| !is_builtin(name));
+    if class_names.len() != 1 {
+        return return_value(rv, Value::null());
+    }
+    let mut name = class_names.pop().unwrap();
+
+    let scope = reflected_property(ed, "__reflection_declaring_class")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .or_else(|| {
+            with_argument(ed, 0, |receiver| {
+                eg.reflection_parameter_scope(receiver).map(str::to_owned)
+            })
+        });
+    if name.eq_ignore_ascii_case("self") {
+        let Some(scope) = scope else {
+            reflection_exception(
+                eg,
+                "Parameter uses \"self\" as type but function is not a class member",
+            );
+            return Ok(());
+        };
+        name = scope;
+    } else if name.eq_ignore_ascii_case("parent") {
+        let Some(scope) = scope else {
+            reflection_exception(
+                eg,
+                "Parameter uses \"parent\" as type but function is not a class member",
+            );
+            return Ok(());
+        };
+        let Some(parent) = eg.find_class(&scope).and_then(|class| class.parent.clone()) else {
+            reflection_exception(
+                eg,
+                "Parameter uses \"parent\" as type although class does not have a parent",
+            );
+            return Ok(());
+        };
+        name = parent;
+    }
+
+    if eg.find_public_class(&name).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &name)?
+    {
+        if eg.exception.is_none() {
+            reflection_exception(eg, format!("Class \"{name}\" does not exist"));
+        }
+        return Ok(());
+    }
+    let canonical = eg
+        .find_public_class(&name)
+        .map(|class| class.name.clone())
+        .unwrap_or(name);
+    return_value(
+        rv,
+        object_value(
+            "ReflectionClass",
+            [
+                ("__generic_kind", Value::string("class")),
+                ("__generic_owner", Value::string(canonical.clone())),
+                ("name", Value::string(canonical)),
+            ],
+        ),
     )
 }
 
@@ -3415,7 +3804,8 @@ fn method_to_string(
     if parameter_property_bool(ed, "__reflection_method_static") {
         modifiers.push_str("static ");
     }
-    let provenance = if function.fn_type == FunctionType::User {
+    let closure_method = parameter_property_bool(ed, "__reflection_closure_method");
+    let provenance = if function.fn_type == FunctionType::User && !closure_method {
         "user"
     } else {
         "internal"
@@ -3426,8 +3816,11 @@ fn method_to_string(
         provenance.to_string()
     };
     let mut rendered = format!("Method [ <{callable_kind}> {modifiers}method {name} ] {{\n");
+    if closure_method {
+        rendered.push('\n');
+    }
 
-    if let Some(user) = reflected_user_function(ed) {
+    if !closure_method && let Some(user) = reflected_user_function(ed) {
         let start = user.op_array.declaration_line().or_else(|| {
             user.op_array
                 .source_lines
@@ -3981,6 +4374,56 @@ fn class_get_traits(
     return_value(rv, reflected_class_map(names))
 }
 
+fn class_get_trait_aliases(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::array(PhpArray::new()));
+    };
+    if eg.find_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        return return_value(rv, Value::array(PhpArray::new()));
+    }
+    let Some(class) = eg.find_class(&owner) else {
+        return return_value(rv, Value::array(PhpArray::new()));
+    };
+    let mut result = PhpArray::new();
+    for adaptation in &class.trait_aliases {
+        let Some(alias) = adaptation.alias.as_deref() else {
+            continue;
+        };
+        let source_trait = adaptation
+            .trait_name
+            .as_ref()
+            .and_then(|name| {
+                class
+                    .uses
+                    .iter()
+                    .find(|used| used.eq_ignore_ascii_case(name))
+            })
+            .or_else(|| {
+                class.uses.iter().find(|used| {
+                    eg.find_class(used).is_some_and(|definition| {
+                        definition
+                            .methods
+                            .iter()
+                            .any(|(name, _, _, _, _)| name.eq_ignore_ascii_case(&adaptation.method))
+                    })
+                })
+            });
+        if let Some(source_trait) = source_trait {
+            result.set_str(
+                alias,
+                Value::string(format!("{source_trait}::{}", adaptation.method)),
+            );
+        }
+    }
+    return_value(rv, Value::array(result))
+}
+
 fn enum_case_value(eg: &ExecutorGlobals, class_id: u32, case_index: usize) -> Option<Value> {
     eg.static_property_storage_slot(class_id, case_index)
         .and_then(|slot| eg.static_property_value(slot))
@@ -4389,12 +4832,10 @@ fn find_reflected_method(
             Some((
                 method_name.to_string(),
                 Visibility::Public,
-                is_implicit_enum_static || {
-                    // SAFETY: find_function() returns a registered
-                    // FunctionCommon owned by ExecutorGlobals for the full
-                    // request lifetime.
-                    unsafe { (*function).sig.this_offset == 0 }
-                },
+                is_implicit_enum_static
+                    || eg
+                        .registered_function_common(function)
+                        .is_some_and(|function| function.sig.this_offset == 0),
                 false,
                 function,
                 declaring_class,
@@ -6749,6 +7190,57 @@ fn method_construct(
         }
     });
     Ok(())
+}
+
+fn method_create_from_method_name(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let method = argument_string(ed, 1);
+    let Some((class_name, method_name)) = method.split_once("::") else {
+        reflection_exception(
+            eg,
+            "ReflectionMethod::createFromMethodName(): Argument #1 ($method) must be a valid method name",
+        );
+        return Ok(());
+    };
+    if eg.find_class(class_name).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, class_name)?
+    {
+        reflection_exception(eg, format!("Class \"{class_name}\" does not exist"));
+        return Ok(());
+    }
+    let Some((name, visibility, is_static, is_final, function, declaring_class)) =
+        find_reflected_method(eg, class_name, method_name)
+    else {
+        reflection_exception(
+            eg,
+            format!("Method {class_name}::{method_name}() does not exist"),
+        );
+        return Ok(());
+    };
+    let value = reflected_method_value(
+        name,
+        visibility,
+        is_static,
+        is_final,
+        function,
+        declaring_class,
+    );
+    let reflection_class = crate::vm::execute::called_class_name_for_internal_call(eg, ed)
+        .unwrap_or("ReflectionMethod");
+    if !reflection_class.eq_ignore_ascii_case("ReflectionMethod")
+        && eg.class_is_a(reflection_class, "ReflectionMethod")
+        && let Some(mut object) = value.as_object_mut()
+    {
+        object.class_name = Rc::from(reflection_class);
+        object.class_id = eg
+            .find_class(reflection_class)
+            .map(|class| class.class_id)
+            .unwrap_or(0);
+    }
+    return_value(rv, value)
 }
 
 fn method_get_closure(

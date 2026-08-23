@@ -197,3 +197,50 @@ echo 'again:', gc_collect_cycles(), '|';
         "ready|rooted:0|replaced|bound|direct|released|again:0|"
     );
 }
+
+#[test]
+fn gc_status_reports_php_85_fields_and_updates_collection_counters() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$initial = gc_status();
+echo implode(',', array_keys($initial)), "\n";
+class StatusCycleNode { public $peer; }
+$first = new StatusCycleNode;
+$second = new StatusCycleNode;
+$first->peer = $second;
+$second->peer = $first;
+unset($first, $second);
+$queued = gc_status();
+$collected = gc_collect_cycles();
+$after = gc_status();
+echo $initial['runs'], ':', (int) ($queued['roots'] > 0), ':',
+    $collected, ':', $after['runs'], ':', $after['collected'], ':',
+    $after['roots'], ':', (int) $after['running'], "\n";
+echo get_debug_type($after['application_time']), ':',
+    get_debug_type($after['collector_time']), ':',
+    (int) ($after['application_time'] >= $initial['application_time']), ':',
+    (int) ($after['collector_time'] > 0), "\n";
+class StatusObservedDestructor {
+    public $self;
+    public function __destruct() {
+        $status = gc_status();
+        echo 'inside:', (int) $status['running'], ':', $status['runs'], ':',
+            $status['collected'], "\n";
+    }
+}
+$observed = new StatusObservedDestructor;
+$observed->self = $observed;
+unset($observed);
+gc_collect_cycles();
+"#,
+        ),
+        concat!(
+            "running,protected,full,runs,collected,threshold,buffer_size,roots,",
+            "application_time,collector_time,destructor_time,free_time\n",
+            "0:1:2:1:2:0:0\n",
+            "float:float:1:1\n",
+            "inside:1:2:2\n",
+        )
+    );
+}

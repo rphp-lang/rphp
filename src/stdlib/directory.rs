@@ -89,7 +89,7 @@ fn remember_initial_cwd(eg: &mut ExecutorGlobals) {
         return;
     };
     eg.constant_table.borrow_mut().insert(
-        INITIAL_WORKING_DIRECTORY.to_string(),
+        INITIAL_WORKING_DIRECTORY.into(),
         Value::string(initial.to_string_lossy().into_owned()),
     );
 }
@@ -158,7 +158,7 @@ fn remember_last_directory(eg: &mut ExecutorGlobals, value: &Value) {
     let retained = Value::long(value.as_resource_id().unwrap());
     eg.constant_table
         .borrow_mut()
-        .insert(LAST_DIRECTORY_RESOURCE.to_string(), retained);
+        .insert(LAST_DIRECTORY_RESOURCE.into(), retained);
 }
 
 fn last_directory_id(eg: &ExecutorGlobals) -> Option<i64> {
