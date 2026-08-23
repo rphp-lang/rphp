@@ -1816,6 +1816,43 @@ baseline lacks those contracts. Missing `opendir()`, complete internal
 Reflection type/default/return metadata, the remaining array suite and broader
 compatibility are not claimed.
 
+The `directory-stream-functions-batch` checkpoint advances `chdir()`,
+`opendir()`, `readdir()`, `rewinddir()`, `closedir()` and `scandir()` together.
+The admitted PHP 8.5 contract covers reflected arity and parameter names,
+strict/weak inputs, the three scan-order constants and modes, stream-context
+validation, warning re-entry and exceptions, request-owned resources with the
+public `stream` type, EOF/rewind/close behavior and the deprecated implicit
+last-directory handle. A request-local initial-CWD guard restores the process
+working directory at shutdown without consuming a PHP resource id. The work is
+independent and does not copy or mechanically translate php-src source/tests or
+an external named algorithm.
+
+The 39-case focused cluster moves from 0 to 30 passes (+30/-0); PHP 8.5.9
+records 38 passes and one local filesystem-order output mismatch. The complete
+49-case non-Windows directory audit moves from no passes, 44 failures and five
+skips to 27 passes, 17 failures and five skips (+27/-0). The complete recursive
+842-case array audit moves from 585 to 590 passes (+5/-0), closing five fixture
+setup failures. The pinned Zend/lang corpus retains exactly 4,109 passes with
+no lost pass, timeout or crash; one still-failing test moves from its former
+missing-function runtime stop to a later independent output mismatch. Two
+focused, directory, array and main runs have byte-identical manifests and
+summaries. Three original regressions pass, and an 881-byte clean-room
+transcript is byte-identical to PHP 8.5.9.
+
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, the unchanged 1,623/289 unsafe ratchet, Composer S0, four Symfony S1
+gates and PHP 8.5.9 S2/S3 pass. No opcode, frame, PHP value/object/array
+layout, dependency or production unsafe change is made. CPU-pinned 32-pair
+balanced A/B controls put paired medians at -0.032% for startup, -1.751% for
+unchanged `getcwd()` and +1.542% for unchanged `file_exists()`, below the +5%
+gate. New-only `scandir()` and `opendir()`/`readdir()` workloads match PHP
+output and are disclosed without baseline ratios.
+
+Native enumeration order remains filesystem-dependent. The `dir()` object,
+default-build stream-context creation, reverse `fclose()` validation, remaining
+`SKIPIF`/parser prerequisites and broader directory/array compatibility remain
+separate work.
+
 The `array-key-value-batch` checkpoint advances `array_keys()`,
 `array_values()`, `array_flip()`, `array_count_values()` and `array_rand()`
 together. The admitted contract covers reflected arity and parameter names,

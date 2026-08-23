@@ -8,6 +8,86 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`directory-stream-functions-batch`, pinned to php-src 8.5 commit `fcc29c8`
+and candidate implementation commit `01bc3597`. Across all 5,599 unmodified
+`Zend/tests` and `tests/lang` cases, 4,109 pass, 1,194 fail, 115 skip, none
+remain XFAIL, 181 are unsupported, and none time out or crash. The exact pass-
+set delta from `2258db1c` is +0/-0. One still-failing comprehensive unset test
+advances from its former missing-`opendir()` runtime stop to its independent
+output mismatch. Two final runs have the same manifest SHA-256,
+`9099d5d2a3f296df91268353240943121fd4f2cedc4b30e0da2805d80180fa9d`,
+and summary SHA-256,
+`54e5b2e42f10cc43f9141bf0e22a2eca7d8b0e024870ba8bfc5521eb6711a09a`.
+
+`chdir()`, `opendir()`, `readdir()`, `rewinddir()`, `closedir()` and
+`scandir()` now cover their exercised PHP 8.5 signatures, parameter names,
+strict and weak arguments, stream-context validation, warnings and throwing
+handlers. Directory handles use the request resource registry while retaining
+PHP's public `stream` type, open/closed and wrong-resource diagnostics,
+rewinding, end-of-directory `false`, and the deprecated implicit last-handle
+calls. The three `SCANDIR_SORT_*` constants and ascending, descending and
+native-order modes are present. `chdir()` affects relative filesystem calls
+within the request and request shutdown restores the process working directory.
+The implementation was written independently from differential PHP behavior
+and the existing RPHP resource model; no php-src source or tests and no external
+named algorithm were copied or mechanically translated.
+
+The 39-case focused unmodified cluster moves from 0 to 30 passes, an exact
++30/-0 pass-set delta; PHP 8.5.9 records 38 passes and one local filesystem-
+order output mismatch. Its two final manifest/summary SHA-256 values are
+`cc78ac03de356eee622483cc058cb8c40636f8f2d4d598fed03263736dce5add` /
+`3ec3d2a94012b8742ce5bd9feeb344fac126454fc702a5a3e12372e4aac7216d`.
+The complete 49-case non-Windows `ext/standard/tests/dir` audit moves from no
+passes, 44 failures and five skips to 27 passes, 17 failures and five skips,
+an exact +27/-0 delta. Its final hash pair is
+`a1798a0e9d48747ac9e65bad9a62d89f76828bfb2b12e90a0de9b26eb5bcc1e2` /
+`9599be3fda2916886b9734a5c12ac8c692dcdb031fe7fcc087c2567482686ad9`;
+PHP 8.5.9 records 43 passes, one local output mismatch and five skips.
+The complete recursive 842-case array audit also moves from 585 to 590 passes
+(+5/-0), because five previously compatible array cases can now create their
+directory fixtures. Its final hash pair is
+`806d1e1eae702b1ecd359f8d0a6c4df6eaef62446ac9543f5559fdd2bf0472fc` /
+`208cb34854c6f7b28363616c6d76bb16d3529afb0a15a6d2eb714cddd53927f5`.
+All paired final runs are byte-identical.
+
+Three original regressions exercise request CWD restoration plus reflected
+metadata, constants, sort modes, resource aliases and closing, rewind/EOF,
+implicit handles, strict/context errors, warning re-entry and throwing handlers.
+A separate 881-byte clean-room transcript is byte-identical to PHP 8.5.9 with
+SHA-256
+`ee34ba0caa3f9b3f5b92aad1403bf471a57cb33d9cf150af7db32991c131afc1`.
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, the unchanged 1,623-block/289-
+function unsafe ratchet with 337 SAFETY annotations, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+No opcode, call-frame, PHP value/object/array layout, dependency or production
+unsafe change is made.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison used
+performance-governor CPU 2, three warmups per binary and no excluded samples.
+Independent/paired median changes are -0.086%/-0.032% for batches of 100 empty
+requests, -1.879%/-1.751% for 500,000 unchanged `getcwd()` calls and
++1.561%/+1.542% for 500,000 unchanged `file_exists()` calls. Every comparable
+lane remains below the +5% gate with exact baseline, candidate and PHP output.
+New-only 10,000-iteration disclosure lanes have exact candidate/PHP 8.5.9
+output and medians of 0.135274/0.114160 seconds for `scandir()` and
+0.199419/0.103625 seconds for `opendir()`/`readdir()`; no A/B ratio is claimed
+because the baseline lacks those functions. Baseline and candidate binary
+SHA-256 values are
+`7cf5bf057a375c10df6c6c59355f32492e869212c8fffe55c9f912449234191c`
+and
+`f2c38c85ae8d226e6eae7434c9a45aa1d224a99112326bfebcfd132addf9fa81`;
+the benchmark harness/log hash pair is
+`050dbda88d27e50e75eb0c44794d4d9213df082f5e2448d0564bcd4e5d09bc0d` /
+`eb9e3984d9e0040f527b1bc6d2ce99d2fd4317c92c8287c7955031e07af6c5fc`.
+
+Native `readdir()` and `SCANDIR_SORT_NONE` order remains filesystem-dependent;
+only membership and rewind consistency are claimed. The `dir()` object API,
+default-build `stream_context_create()`, reverse `fclose()` validation for a
+directory handle, five focused `SKIPIF` prerequisites, three parser gaps and
+the remaining directory/array suite are separate work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `cardinality-extrema-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 candidate implementation commit `befb4d41`. Across all 5,599 unmodified
 `Zend/tests` and `tests/lang` cases, 4,109 pass, 1,194 fail, 115 skip, none
