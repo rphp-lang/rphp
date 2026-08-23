@@ -1746,6 +1746,42 @@ trace. The 16 independent focused blockers, `array_change_key_case()`, ordinary
 variadic `array_intersect()`, the complete array suite and broader compatibility
 remain separate work.
 
+The `array-lookup-aggregate-batch` checkpoint advances `in_array()`,
+`array_search()`, `array_key_exists()`/`key_exists()`, `array_sum()` and
+`array_product()` together. The admitted contract covers reflected arity and
+parameter names, typed arguments, weak and strict conversion, canonical keys,
+ordered loose/strict search, exact large numeric-string comparison, recursive
+array errors, references/COW, reentrant warnings and throwing handlers,
+sequential numeric-kind transitions and integer-overflow promotion. Adjacent
+checked comparison also covers recursive `array_keys()` filtering and PHP's
+source-dependent CV/CV commutative operator diagnostic order. No php-src or
+third-party implementation or test is copied or mechanically translated.
+
+The 42-case focused cluster moves from 15 to 31 passes, an exact +16/-0 delta;
+PHP 8.5.9 records 37 passes, one local FFI configuration failure and four
+extension skips. The complete recursive 842-case array audit moves from 546
+to 564 passes (+18/-0), with 264 failures, 13 skips, one unsupported case and
+zero timeouts or crashes. The pinned Zend/lang corpus moves from 4,108 to
+4,109 passes (+1/-0), with 1,194 failures, 115 skips, 181 unsupported cases
+and zero timeouts or crashes. Two serial focused, array and main manifests and
+summaries are respectively byte-identical. Five original E2E programs produce
+the same 3,503 bytes under RPHP and PHP 8.5.9.
+
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, the unchanged 1,623/289 unsafe ratchet, Composer S0, four Symfony S1
+gates and PHP 8.5.9 S2/S3 pass. No opcode, frame, PHP value/object/array
+layout, dependency or production unsafe change is made. CPU-pinned 32-pair
+balanced release controls put paired medians between -51.410% and +0.313% for
+startup, lookup, key existence, homogeneous sums/products and scalar
+comparison, below the +5% gate with exact output. A mixed integer/double sum
+lane is separately disclosed at +249.168% because the baseline violates the
+newly proven sequential numeric-kind contract; optimizing that correct path
+is handed to the execution/performance workstream.
+
+Three focused parser failures and two missing-`opendir()` failures remain.
+Complete internal Reflection type/default/return metadata, the remaining
+array suite and broader compatibility are not claimed.
+
 The `array-key-value-batch` checkpoint advances `array_keys()`,
 `array_values()`, `array_flip()`, `array_count_values()` and `array_rand()`
 together. The admitted contract covers reflected arity and parameter names,
