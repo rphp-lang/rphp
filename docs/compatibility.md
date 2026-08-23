@@ -8,6 +8,73 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`named-internal-option-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+implementation commit `07f5b1bb`. Across all 5,599 unmodified `Zend/tests`
+and `tests/lang` cases, 4,160 pass, 1,143 fail, 115 skip, none remain XFAIL,
+181 are unsupported, and none time out or crash. The exact pass-set delta from
+`c603eb9f` is +3/-0:
+`named_params/call_user_func_array_variadic.phpt`,
+`named_params/internal_variadics.phpt` and
+`named_params/missing_param.phpt`. Two serial final runs have the same
+manifest SHA-256,
+`eb1b09efd659dabbf7ad01cb0e85558ec5975304cd007532c7ca11049a544de3`,
+and summary SHA-256,
+`ef5d48a0bfcc1d96a3e9eacc822de584b6683befaf687e945c1905b7d7db3b9b`.
+
+Ordinary internal variadic calls now reject unknown named arguments with
+PHP 8.5's `ArgumentCountError`, while the small set of internal forwarding
+wrappers continues to carry names to the eventual user callable. The rule is
+shared by direct named calls and detached callbacks rather than keyed to a
+particular array function. For compiler-lowered `call_user_func_array()`, a
+pre-entry arity or unknown-name error retains the callback source boundary and
+named variadic arguments in its Throwable trace. Missing required positional
+arguments take precedence over the unknown-name error, matching PHP for calls
+such as `array_multisort(: 1)`. Successful callback dispatch keeps its existing
+detached entry path.
+
+`array_keys()` now rejects `strict:` when the omitted `filter_value:` default
+cannot be recovered, while an explicitly supplied filter and strict flag keep
+their normal typed behavior. Three original E2E tests cover direct
+`array_merge()`/`array_diff_key()` diagnostics, callback-dispatched `sprintf()`,
+the `array_keys()` default hole and valid filtered call, and the exact caught
+`array_multisort(: 1)` trace. The three-case upstream focus passes 3/3, and a
+four-case focus including the retained `backtrace/bug70547.phpt` regression has
+manifest SHA-256
+`e62f590f366692bda07f1801b4247d456a205dbc15677979c4a0554c77cd60dc`.
+The complete 33-case `Zend/tests/named_params` cluster moves from 23 passes and
+10 failures to 26 passes and seven failures with manifest SHA-256
+`5e25107ce47ab573cf48203a41843cff3665da36291bcbc46a75fa4ce1699fd4`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy self-tests, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+The production unsafe inventory remains at 1,623 blocks and 289 functions with
+346 SAFETY annotations. The implementation adds no dependency, opcode, VM
+frame or PHP value/object/array layout change.
+
+On an AMD Ryzen 9 7950X AMD64 host pinned to performance-governor CPU 2, a
+balanced alternating release comparison used 32 pairs per lane, three warmups
+per binary and no excluded samples. Independent/paired median changes are
++1.110%/+1.176% for 100 empty requests, -2.407%/-1.977% for one million
+default `array_keys()` calls, -0.163%/+0.770% for one million positional
+`array_merge()` calls and -8.028%/-7.977% for 500,000 compiler-lowered
+`call_user_func_array('strlen', ...)` calls. Paired p10/p90 ranges are
+-0.293%/+1.886%, -4.084%/+1.062%, -3.340%/+5.370% and
+-9.014%/-5.865%, respectively. Every lane preserves exact output and stays
+below the +5% median gate. Baseline/candidate binary SHA-256 values are
+`fd088f136c91d5be99f1df72675f9f84f75f4687fcbd1ccc29aef286a2665723` /
+`5832f8b34e682ea02cfa3e7891fa60ed4c0819b636c60f355db57d43e59408d0`;
+the benchmark harness/log pair is
+`257fb1e50ece24a4c442570a00a6c5cd0f5ec38bc7841ec66ab934e0b0e43ea5` /
+`e76a2299d1e42ce1f217081e15c2df122bc78341cecfa92fa91e2f3e4f265e34`.
+
+This checkpoint does not claim every optional-default hole in the standard
+library, complete named-argument compatibility for all internal signatures or
+all synthetic callback diagnostics. Those remaining surfaces and the seven
+visible failures in the adjacent named-parameter cluster remain independent
+follow-up work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `stdlib-option-contract-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 implementation commit `c603eb9f`. Across all 5,599 unmodified `Zend/tests`
 and `tests/lang` cases, 4,157 pass, 1,146 fail, 115 skip, none remain XFAIL,
