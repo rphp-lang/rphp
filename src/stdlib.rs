@@ -32,7 +32,8 @@ use crate::vm::execute::{
     call_function_owned_iter_readback_arg0_with_context, call_function_owned_iter_with_context,
     call_function_owned_iter_with_context_and_named, check_type_hint, explicit_float_conversion,
     explicit_long_conversion, explicit_numeric_cast_warning, php_numeric_string_to_float,
-    prepare_scalar_long_callback, try_execute_scalar_long_callback, values_identical,
+    prepare_scalar_long_callback, try_execute_scalar_long_callback,
+    values_equal_checked_with_precision, values_identical,
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
@@ -1185,41 +1186,76 @@ fn fn_array_replace(
     ret!(rv, Value::array(result));
 }
 
+#[inline(never)]
+fn collect_array_keys(array: &PhpArray) -> PhpArray {
+    let mut result = PhpArray::new();
+    for (key, _) in array.iter() {
+        match key {
+            ArrayKey::Int(key) => result.push(Value::long(key)),
+            ArrayKey::String(key) => result.push(Value::string(key)),
+        }
+    }
+    result
+}
+
 fn fn_array_keys(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let v = arg!(ed, 0);
-    if let Some(arr) = v.as_array() {
-        let mut result = PhpArray::new();
-        for (key, _) in arr.iter() {
-            match key {
-                ArrayKey::Int(k) => result.push(Value::long(k)),
-                ArrayKey::String(k) => result.push(Value::string(k)),
-            }
-        }
-        ret!(rv, Value::array(result));
-    } else {
-        ret!(rv, Value::null());
+    let source = arg!(ed, 0);
+    if source.as_array().is_none() {
+        typed_internal_argument_error(eg, "array_keys", source, 1, "array", "array");
+        return Ok(());
     }
+    let has_filter = arg_opt!(ed, 1).is_some();
+    let strict = if has_filter && arg_opt!(ed, 2).is_some() {
+        let Some(strict) = typed_internal_bool_argument(ed, eg, "array_keys", 2, "strict")? else {
+            return Ok(());
+        };
+        strict
+    } else {
+        false
+    };
+
+    // Reacquire frame arguments after optional bool conversion, which may
+    // dispatch a deprecation handler for a supplied null.
+    let array = arg!(ed, 0).as_array().unwrap();
+    if !has_filter {
+        ret!(rv, Value::array(collect_array_keys(array)));
+    }
+    let filter = arg!(ed, 1);
+    let mut result = PhpArray::with_packed_capacity(array.len());
+    for (key, value) in array.iter() {
+        let matches = if strict {
+            values_identical(value, filter)
+        } else {
+            match values_equal_checked_with_precision(value, filter, eg.precision) {
+                Ok(matches) => matches,
+                Err(()) => {
+                    report_recursive_sort_comparison(eg);
+                    return Ok(());
+                }
+            }
+        };
+        if matches {
+            result.push(array_key_into_value(key));
+        }
+    }
+    ret!(rv, Value::array(result));
 }
 
 fn fn_array_values(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let v = arg!(ed, 0);
-    if let Some(arr) = v.as_array() {
-        let mut result = PhpArray::new();
-        for val in arr.values() {
-            result.push(val.clone());
-        }
-        ret!(rv, Value::array(result));
-    } else {
-        ret!(rv, Value::null());
-    }
+    let source = arg!(ed, 0);
+    let Some(array) = source.as_array() else {
+        typed_internal_argument_error(eg, "array_values", source, 1, "array", "array");
+        return Ok(());
+    };
+    ret!(rv, Value::array(array.project_values()));
 }
 
 fn fn_array_slice(
@@ -1327,27 +1363,44 @@ fn fn_array_unique(
 fn fn_array_flip(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let v = arg!(ed, 0);
-    if let Some(arr) = v.as_array() {
-        let mut result = PhpArray::new();
-        for (key, val) in arr.iter() {
-            let new_key = match val.value_type() {
-                ValueType::Long => ArrayKey::Int(val.as_long().unwrap()),
-                ValueType::String => ArrayKey::String(val.as_str().unwrap().to_string()),
-                _ => continue,
-            };
-            let new_val = match key {
-                ArrayKey::Int(k) => Value::long(k),
-                ArrayKey::String(k) => Value::string(k),
-            };
-            result.set(new_key, new_val);
+    let source = owned_argument(ed, 0);
+    let Some(array) = source.dereferenced().as_array() else {
+        typed_internal_argument_error(eg, "array_flip", source.dereferenced(), 1, "array", "array");
+        return Ok(());
+    };
+    let mut result = PhpArray::with_packed_capacity(array.len());
+    for (key, value) in array.iter() {
+        let flipped_value = array_key_into_value(key);
+        let value = value.dereferenced();
+        match value.value_type() {
+            ValueType::Long => result.set_int(value.as_long().unwrap(), flipped_value),
+            ValueType::String => {
+                if let Some(key) = value
+                    .as_str()
+                    .and_then(crate::value::canonical_decimal_array_key)
+                {
+                    result.set_int(key, flipped_value);
+                } else {
+                    result.set_str_value(value, flipped_value);
+                }
+            }
+            _ => {
+                report_internal_diagnostic(
+                    eg,
+                    ed,
+                    2,
+                    "Warning",
+                    "array_flip(): Can only flip string and integer values, entry skipped",
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+            }
         }
-        ret!(rv, Value::array(result));
-    } else {
-        ret!(rv, Value::null());
     }
+    ret!(rv, Value::array(result));
 }
 
 fn fn_array_combine(
@@ -1501,27 +1554,61 @@ fn fn_array_product(
 fn fn_array_count_values(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let v = arg!(ed, 0);
-    if let Some(arr) = v.as_array() {
-        let mut counts: Vec<(String, i64)> = Vec::new();
-        for val in arr.values() {
-            let s = val.echo_to_string();
-            if let Some(entry) = counts.iter_mut().find(|(k, _)| k == &s) {
-                entry.1 += 1;
-            } else {
-                counts.push((s, 1));
+    let source = owned_argument(ed, 0);
+    let Some(array) = source.dereferenced().as_array() else {
+        typed_internal_argument_error(
+            eg,
+            "array_count_values",
+            source.dereferenced(),
+            1,
+            "array",
+            "array",
+        );
+        return Ok(());
+    };
+    let mut result = PhpArray::with_packed_capacity(array.len());
+    for value in array.values() {
+        let value = value.dereferenced();
+        match value.value_type() {
+            ValueType::Long => {
+                let key = value.as_long().unwrap();
+                if let Some(count) = result.get_int_mut(key) {
+                    *count = Value::long(count.as_long().unwrap().saturating_add(1));
+                } else {
+                    result.set_int(key, Value::long(1));
+                }
+            }
+            ValueType::String => {
+                let key = value.as_str().unwrap();
+                if let Some(key) = crate::value::canonical_decimal_array_key(key) {
+                    if let Some(count) = result.get_int_mut(key) {
+                        *count = Value::long(count.as_long().unwrap().saturating_add(1));
+                    } else {
+                        result.set_int(key, Value::long(1));
+                    }
+                } else if let Some(count) = result.get_str_mut(key) {
+                    *count = Value::long(count.as_long().unwrap().saturating_add(1));
+                } else {
+                    result.set_str_value(value, Value::long(1));
+                }
+            }
+            _ => {
+                report_internal_diagnostic(
+                    eg,
+                    ed,
+                    2,
+                    "Warning",
+                    "array_count_values(): Can only count string and integer values, entry skipped",
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
             }
         }
-        let mut result = PhpArray::new();
-        for (k, cnt) in counts {
-            result.set_str(&k, Value::long(cnt));
-        }
-        ret!(rv, Value::array(result));
-    } else {
-        ret!(rv, Value::null());
     }
+    ret!(rv, Value::array(result));
 }
 
 fn array_constructor_key(
@@ -2953,29 +3040,65 @@ fn fn_array_splice(
 fn fn_array_rand(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let v = arg!(ed, 0);
-    if let Some(arr) = v.as_array() {
-        if arr.is_empty() {
-            ret!(rv, Value::null());
-        } else {
-            // Simple pseudo-random using wrapping arithmetic
-            let idx = (std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .subsec_nanos() as usize)
-                % arr.len();
-            let (_, key) = arr.get_at(idx).unwrap();
-            let result = match key {
-                ArrayKey::Int(k) => Value::long(k),
-                ArrayKey::String(k) => Value::string(k),
-            };
-            ret!(rv, result);
-        }
+    let source = owned_argument(ed, 0);
+    let Some(array) = source.dereferenced().as_array() else {
+        typed_internal_argument_error(eg, "array_rand", source.dereferenced(), 1, "array", "array");
+        return Ok(());
+    };
+    let num = if arg_opt!(ed, 1).is_some() {
+        let Some(num) = typed_internal_int_argument(ed, eg, "array_rand", 1, "num")? else {
+            return Ok(());
+        };
+        num
     } else {
-        ret!(rv, Value::null());
+        1
+    };
+    if array.is_empty() {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "array_rand(): Argument #1 ($array) must not be empty",
+        ));
+        return Ok(());
     }
+    if num < 1
+        || usize::try_from(num)
+            .ok()
+            .is_none_or(|num| num > array.len())
+    {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "array_rand(): Argument #2 ($num) must be between 1 and the number of elements in argument #1 ($array)",
+        ));
+        return Ok(());
+    }
+
+    let num = num as usize;
+    if num == 1 {
+        let (_, key) = array
+            .get_at(shuffle_index(eg, array.len()))
+            .expect("non-empty array random position must exist");
+        ret!(rv, array_key_into_value(key));
+    }
+
+    // Sequential sampling selects every k-subset uniformly without a second
+    // key buffer or a post-selection sort. Selected keys therefore retain the
+    // insertion order required by PHP.
+    let mut result = PhpArray::with_packed_capacity(num);
+    let mut needed = num;
+    let mut remaining = array.len();
+    for (key, _) in array.iter() {
+        if needed == remaining || shuffle_index(eg, remaining) < needed {
+            result.push(array_key_into_value(key));
+            needed -= 1;
+        }
+        remaining -= 1;
+        if needed == 0 {
+            break;
+        }
+    }
+    ret!(rv, Value::array(result));
 }
 
 fn initial_shuffle_random_state() -> u64 {
@@ -14146,6 +14269,14 @@ fn array_key_value(key: &ArrayKey) -> Value {
     match key {
         ArrayKey::Int(value) => Value::long(*value),
         ArrayKey::String(value) => Value::string(value.clone()),
+    }
+}
+
+#[inline(always)]
+fn array_key_into_value(key: ArrayKey) -> Value {
+    match key {
+        ArrayKey::Int(value) => Value::long(value),
+        ArrayKey::String(value) => Value::string(value),
     }
 }
 

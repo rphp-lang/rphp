@@ -4020,6 +4020,43 @@ impl PhpArray {
         }
     }
 
+    /// Materialize the insertion-ordered values as a fresh packed array.
+    /// PHP-visible reference cells remain aliases only while another storage
+    /// location still owns them; ordinary nested values keep their COW owners.
+    pub(crate) fn project_values(&self) -> Self {
+        #[inline(always)]
+        fn projected(value: &Value) -> Value {
+            if value.is_owned_reference() && value.owned_reference_is_aliased() {
+                value.clone_owned_reference_alias()
+            } else {
+                value.clone()
+            }
+        }
+
+        let values = match &self.storage {
+            ArrayStorage::Packed(values) => values.iter().map(projected).collect::<Vec<_>>(),
+            ArrayStorage::SmallHash(small) => small
+                .entries
+                .iter()
+                .flatten()
+                .map(|(_, value)| projected(value))
+                .collect(),
+            ArrayStorage::LinearHash(linear) => linear
+                .entries
+                .iter()
+                .map(|(_, value)| projected(value))
+                .collect(),
+            ArrayStorage::Hash { entries, .. } => {
+                entries.iter().map(|(_, value)| projected(value)).collect()
+            }
+        };
+        Self {
+            next_int_key: values.len() as i64,
+            storage: ArrayStorage::Packed(values),
+            cursor: Cell::new(ARRAY_CURSOR_PRISTINE),
+        }
+    }
+
     /// Describe the ordered hash value layout without exposing its private key.
     /// Guarded quick regions use the stable base address and stride for
     /// positional reads after proving that their closed body cannot mutate it.

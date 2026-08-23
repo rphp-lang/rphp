@@ -229,7 +229,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         1,
         "array"
     );
-    reg!("array_keys", fn_array_keys, 1, 1, "array");
+    reg!(
+        "array_keys",
+        fn_array_keys,
+        3,
+        1,
+        "array",
+        "filter_value",
+        "strict"
+    );
     reg!("array_values", fn_array_values, 1, 1, "array");
     reg!(
         "array_slice",
@@ -292,7 +300,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "length",
         "replacement"
     );
-    reg!("array_rand", fn_array_rand, 1, 1, "array");
+    reg!("array_rand", fn_array_rand, 2, 1, "array", "num");
     reg_ref!("shuffle", fn_shuffle, 1, 1, 0b1, "array");
     reg_var!("array_map", fn_array_map, 2, "callback", "array");
     reg!("array_filter", fn_array_filter, 2, 1, "array", "callback");

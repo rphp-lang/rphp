@@ -3915,16 +3915,33 @@ pub(crate) fn values_equal_checked_with_precision(
     ) -> Result<bool, ()> {
         let a = a.dereferenced();
         let b = b.dereferenced();
+        let a_type = a.value_type();
+        let b_type = b.value_type();
 
-        if matches!(a.value_type(), ValueType::True | ValueType::False)
-            || matches!(b.value_type(), ValueType::True | ValueType::False)
-            || matches!(a.value_type(), ValueType::Null | ValueType::Undef)
-            || matches!(b.value_type(), ValueType::Null | ValueType::Undef)
+        if matches!(a_type, ValueType::True | ValueType::False)
+            || matches!(b_type, ValueType::True | ValueType::False)
         {
             return Ok(a.is_truthy() == b.is_truthy());
         }
+        if matches!(a_type, ValueType::Null | ValueType::Undef)
+            || matches!(b_type, ValueType::Null | ValueType::Undef)
+        {
+            // Null compares to a string as an empty string. In particular,
+            // modern PHP does not treat the special falsey string "0" as
+            // equal to null. Other null comparisons retain scalar/container
+            // truthiness conversion.
+            return Ok(match (a_type, b_type) {
+                (ValueType::Null | ValueType::Undef, ValueType::String) => {
+                    b.as_str().is_some_and(str::is_empty)
+                }
+                (ValueType::String, ValueType::Null | ValueType::Undef) => {
+                    a.as_str().is_some_and(str::is_empty)
+                }
+                _ => a.is_truthy() == b.is_truthy(),
+            });
+        }
 
-        Ok(match (a.value_type(), b.value_type()) {
+        Ok(match (a_type, b_type) {
             (ValueType::Long, ValueType::Long) => a.as_long() == b.as_long(),
             (ValueType::Resource, ValueType::Resource) => a.as_resource_id() == b.as_resource_id(),
             (
