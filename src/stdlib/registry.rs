@@ -322,7 +322,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("array_rand", fn_array_rand, 2, 1, "array", "num");
     reg_ref!("shuffle", fn_shuffle, 1, 1, 0b1, "array");
     reg_var!("array_map", fn_array_map, 2, "callback", "array");
-    reg!("array_filter", fn_array_filter, 2, 1, "array", "callback");
+    reg!(
+        "array_filter",
+        fn_array_filter,
+        3,
+        1,
+        "array",
+        "callback",
+        "mode"
+    );
     {
         let mut function = Box::new(make_internal_function(
             fn_iterator_to_array,
@@ -1452,7 +1460,16 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "array1",
         "array2"
     );
-    reg_ref!("array_walk", fn_array_walk, 2, 2, 0b1, "array", "callback");
+    reg_ref!(
+        "array_walk",
+        fn_array_walk,
+        3,
+        2,
+        0b1,
+        "array",
+        "callback",
+        "arg"
+    );
     reg_ref!(
         "array_walk_recursive",
         fn_array_walk_recursive,

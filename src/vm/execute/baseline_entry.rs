@@ -727,6 +727,7 @@ pub(crate) fn call_function_owned_iter_readback_arg0_with_context<I>(
     args: I,
     called_scope_class_id: u32,
     bound_this: Option<Value>,
+    capture_count: usize,
     closure_static_vars: Option<crate::value::ClosureStaticVars>,
 ) -> Result<(Value, Value), VmError>
 where
@@ -739,7 +740,7 @@ where
         args,
         called_scope_class_id,
         bound_this,
-        0,
+        capture_count,
         closure_static_vars,
         None,
         std::ptr::null_mut(),
