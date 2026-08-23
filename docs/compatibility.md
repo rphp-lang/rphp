@@ -8,6 +8,99 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`stream-operations-default-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+candidate implementation commit `65b4d843`. Across all 5,599 unmodified
+`Zend/tests` and `tests/lang` cases, 4,109 pass, 1,194 fail, 115 skip, none
+remain XFAIL, 181 are unsupported, and none time out or crash. The exact pass-
+set delta from `68069c79` is +0/-0. Two final runs have the same manifest
+SHA-256, `9099d5d2a3f296df91268353240943121fd4f2cedc4b30e0da2805d80180fa9d`,
+and summary SHA-256,
+`89c71ccb5d143cf7c2a92e22dd24bbc3104921769a7adfe612f3ef332004f90b`.
+
+The default build now also exposes `stream_get_filters()`,
+`stream_get_transports()`, `stream_get_wrappers()`, `stream_is_local()`,
+`stream_get_contents()`, `stream_copy_to_stream()`, `stream_get_line()` and
+`ftruncate()`. These were independently implemented and tested behind five
+pay-for-use Cargo features before this promotion. Their exercised contract
+covers reflected arity and parameter names, named arguments, truthful wrapper/
+transport/filter discovery, URL and resource locality, bounded and offset
+reads, fixed-chunk copying, arbitrary byte endings, stream cursor/EOF behavior,
+memory/temp/file truncation and the covered PHP 8.5 argument diagnostics. The
+public `stream_is_local()` parameter is now correctly named `$stream` rather
+than `$stream_or_url`.
+
+The 93-case unmodified focus moves from zero passes, 80 failures, seven skips
+and six unsupported cases to 17 passes, 58 failures, 12 skips and six
+unsupported cases. The exact pass-set delta is +17/-0: five gains are in
+`ext/standard/tests/streams` and 12 in `ext/standard/tests/file`. Five other
+stream cases move from a failed `SKIPIF` prerequisite to a truthful skip after
+registry discovery; they are not counted as passes. PHP 8.5.9 records 78
+passes, ten failures, four skips and one unsupported case in the same focus.
+The final focus manifest/summary hash pair is
+`6b167c7b7d17df466e23110ebbc94572b4bef901cbea4d956e15442f4a06f107` /
+`a62a468a2a5fc7b7899a769bb67ef8a6ad434e8242cd61a97511c62581b3ceb9`.
+
+The complete 158-case `ext/standard/tests/streams` audit moves from 17 to 22
+passes (+5/-0), with 104 failures, 20 skips and 12 unsupported cases. The
+complete 897-case file audit moves from 92 to 104 passes (+12/-0), with 505
+failures, 146 skips and 142 unsupported cases. Their final manifest/summary
+hash pairs are
+`6d0abbf0b197de433190293d56e92dad31eeaa67332f8277fbadbb6a8ec803f9` /
+`4b6a2c4854cad4ccc77688763b30a4a6218c7a2fe50ca079d60380da4a53d230`
+and
+`4a6c849a4d0425af6ef6d9a495049e7bab323505b560cbd65f89620ae10bf7bd` /
+`b53f32481c4954f0bcb41cda31e1da499642402639f4fa55736eee9ab044f104`.
+The 842-case array audit remains byte-identical at 590 passes, 238 failures,
+13 skips and one unsupported case. The 49-case non-Windows directory audit
+remains byte-identical at 28 passes, 16 failures and five skips. Their final
+hash pairs are
+`806d1e1eae702b1ecd359f8d0a6c4df6eaef62446ac9543f5559fdd2bf0472fc` /
+`87508bca947e719d770bb0f1d86103371865d7697ae3d211a1b340e198f68bbb`
+and
+`2cda6c5e82cb572384385491470ba049487b1de91cb9fbc97a7ffce937b82d66` /
+`6a113c48c572e906b10e0472d6a310083b0d9bd9303a431ea5305ef0561a9253`.
+
+The original stream E2E suite now runs 33 cases in the default build and
+includes a combined signature/named-argument regression for all eight
+functions. A separate 698-byte clean-room transcript covering discovery,
+ordinary operations and diagnostics is byte-identical to PHP 8.5.9 with
+SHA-256
+`9538be5509d232cfc9841015176ca3410bb66984df6e35b7c5d792a1253ca19f`.
+The implementation uses the existing RPHP stream/resource backends and adds no
+dependency, lockfile change, unsafe block or copied php-src source/test. This
+promotion introduces no new external algorithm; `stream_get_line()` retains
+its previously admitted local matcher.
+
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, the unchanged 1,623-block/289-
+function unsafe ratchet with 339 SAFETY annotations, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+A local CPU-pinned balanced alternating AMD64 release comparison used 32 pairs
+per comparable lane, three warmups per binary, performance-governor CPU 2 and
+no excluded samples. Independent/paired median changes are -0.517%/-0.400%
+for batches of 100 empty requests, -0.981%/-0.927% for 100,000
+`php://memory` open/write/close iterations, -0.224%/-0.151% for 50,000
+ordinary file open/close iterations, +0.990%/+1.088% for 500,000 unchanged
+`file_exists()` calls and +0.332%/+0.577% for 20,000 unchanged stream-context
+API iterations. Every comparable lane stays below the +5% gate with exact
+output. New-only 20,000-iteration stream-operation and registry lanes have
+candidate/PHP 8.5.9 medians of 0.056421/0.015749 and 0.036237/0.013983
+seconds; no A/B claim is made because the baseline lacks these functions.
+Baseline/candidate binary SHA-256 values are
+`fcc01601815ac0d1668a6c9d1fb86e043391d4cc82f213e873b4bd28f2d065cb`
+and `d5fe05f1800392f40683aebe8164c5ba9d974166d9191e19e4026cf594ffa82c`.
+The benchmark harness/log hash pair is
+`8529af0c21ce8f2736779dd69790d9d2109c09e4d0c03bdd7fc20459e468dfa3` /
+`4297309947e74992abbf7c13d104159b2a7d4377c1bb20332193d0d6a8331fb0`.
+
+Network stream wrappers/transports, filter pipelines, custom wrapper
+registration, sockets and nonblocking I/O remain unavailable. Several
+remaining `ftruncate()` cases need independent filesystem helpers; the main
+copy case needs stream filters, and later registry/line cases need custom
+wrappers or sockets. Complete internal-function return-type metadata and the
+remaining stream/file failures are not claimed.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `stream-context-default-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 candidate implementation commit `efafb69d`. Across all 5,599 unmodified
 `Zend/tests` and `tests/lang` cases, 4,109 pass, 1,194 fail, 115 skip, none
@@ -12385,7 +12478,7 @@ being run.
 | `php-generics-erased` | Experimental generic syntax with bound-erased runtime behavior |
 | `php-generics-reified` | Experimental generic syntax with reified runtime sidecars and checks |
 | `file-contents`, `file-write`, `file-lines`, `include-path` | Incremental file/include functionality |
-| remaining `stream-*`, `csv-*`, `resource-lifetime` | Incremental stream and resource behavior; `stream-context` is in the default build |
+| `csv-*`, `resource-lifetime` | Incremental CSV and resource-lifetime behavior |
 | `vm-stats` | Internal execution and JIT diagnostics |
 
 The generic syntax is an RPHP experiment, not part of the default PHP

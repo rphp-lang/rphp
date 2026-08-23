@@ -1891,6 +1891,40 @@ TCP/UDP/socket wrappers and their three focused cases remain unavailable.
 `proc_open()`, and broader stream/file/directory/array compatibility is not
 claimed.
 
+The `stream-operations-default-batch` checkpoint promotes
+`stream_get_filters()`, `stream_get_transports()`, `stream_get_wrappers()`,
+`stream_is_local()`, `stream_get_contents()`, `stream_copy_to_stream()`,
+`stream_get_line()` and `ftruncate()` together. The admitted PHP 8.5 contract
+covers reflected arity/names, named arguments, truthful registry/locality
+policy, bounded and offset reads, fixed-chunk copies, arbitrary byte endings,
+cursor/EOF behavior, memory/temp/file truncation and covered diagnostics. The
+`stream_is_local()` parameter metadata is corrected to `$stream`. The existing
+implementations remain independently selectable under `--no-default-features`;
+the promotion adds no dependency, lockfile or unsafe change and introduces no
+new external algorithm.
+
+The 93-case focus moves from 0 to 17 passes (+17/-0); five additional cases
+truthfully move from failed prerequisites to skips. The complete 158-case
+streams audit moves from 17 to 22 passes (+5/-0), and the complete 897-case
+file audit moves from 92 to 104 passes (+12/-0). The 842-case array and 49-case
+non-Windows directory manifests remain byte-identical at 590 and 28 passes.
+The pinned Zend/lang corpus also remains byte-identical at 4,109 passes, 1,194
+failures, 115 skips and 181 unsupported cases, with zero timeout or crash; two
+final full runs are byte-identical. The original default stream suite runs 33
+cases, and a 698-byte clean-room transcript is byte-identical to PHP 8.5.9.
+
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, the unchanged 1,623/289 unsafe ratchet, Composer S0, four Symfony S1
+gates and PHP 8.5.9 S2/S3 pass. CPU-pinned 32-pair release controls put paired
+medians at -0.400% for startup, -0.927% for `php://memory`, -0.151% for
+ordinary file streams, +1.088% for unchanged `file_exists()` and +0.577% for
+the unchanged stream-context API, below the +5% gate. New-only operation and
+registry workloads match PHP output and are disclosed without baseline ratios.
+
+Network wrappers/transports, filters, custom wrappers, sockets/nonblocking I/O,
+complete internal return-type metadata and helper-blocked remaining stream/file
+cases stay separate work.
+
 The `array-key-value-batch` checkpoint advances `array_keys()`,
 `array_values()`, `array_flip()`, `array_count_values()` and `array_rand()`
 together. The admitted contract covers reflected arity and parameter names,
