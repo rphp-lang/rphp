@@ -8,6 +8,77 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`callback-dispatch-introspection-batch`, pinned to php-src 8.5 commit `fcc29c8`
+and implementation commit `16b93209`. Across all 5,599 unmodified `Zend/tests`
+and `tests/lang` cases, 4,140 pass, 1,163 fail, 115 skip, none remain XFAIL,
+181 are unsupported, and none time out or crash. The exact pass-set delta from
+`aaaecfe1` is +23/-0: 21 `Zend/tests` callback, closure, dynamic-call, named-
+argument, trait and callable cases plus `bug72598_2.phpt` and `bug79979.phpt`.
+Two final runs have the same manifest SHA-256,
+`4b85c16828f2cc8a7e301314c871dd1acbcc523781be687d98505a2d5f81531f`,
+and summary SHA-256,
+`e9275213dac6b36614c03e3914ede5908f12d417a9dfad1477272e93899a6e1f`.
+
+The default callback surface now forwards positional, named and variadic
+arguments through `call_user_func()`, reports hard-reference warnings with the
+resolved callback signature, autoloads callback classes, and uses canonical
+visibility diagnostics. `call_user_func_array()` warns for ordinary values but
+preserves explicit array-element aliases. `forward_static_call()` and
+`forward_static_call_array()` retain a compatible late-static called scope,
+and three-argument `is_callable()` implements syntax-only checks and canonical
+callable names. Explicit case-insensitive `Closure::__invoke()` and
+`Closure::call()` forward names and real references, while
+`ReflectionClass::newInstance()` and `newInstanceArgs()` now cover named,
+variadic, visibility and constructor-reference behavior.
+
+The 36-case unmodified PHP 8.5 focus moves from 16 to 33 passes, an exact
++17/-0 delta with no timeout or crash; PHP 8.5.9 passes all 36. The final RPHP
+manifest/summary hash pair is
+`bd1a91f26c66ae4e44ea8065c6f7c4142b20991983074977a9f42e8e5d390d9f` /
+`5c023a34dd4aa3426629674fc0379ab4742860a1d9ff45a1d41168040b54fd73`;
+the oracle pair is
+`e9d133692ca412ef616d2598ac8b633e67528a37f9504d227429c6d84bcad26f` /
+`1ecd4685506bcfc8ba832fff94071066e04abaf75a701fb8eed9fab9d04f04a7`.
+Original E2E coverage exercises callback lowering, named/variadic forwarding,
+autoload and visibility, explicit versus missing reference aliases, callable
+introspection, late-static forwarding, Closure invocation and reflected class
+construction.
+
+One appended `SendUserChecked` opcode isolates runtime signature and warning
+work in a cold helper while a compiler-proven literal callback with no
+reference parameters retains the existing branch-free `SendUser` handler.
+Opcode discriminants stay stable, and Closure forwarding wrappers consult the
+wrapped target before retaining an alias. The implementation adds no
+dependency, lockfile, `ExecuteData`, PHP value/object/array layout or unsafe
+block/function. The production unsafe inventory remains at 1,623 blocks and
+289 functions, with 346 SAFETY annotations.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy self-tests, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. A
+local CPU-pinned balanced alternating AMD64 release comparison used 32 pairs
+per lane, three warmups per binary, performance-governor CPU 2 and no excluded
+samples. Independent/paired median changes are -0.773%/-0.600% for batches of
+100 empty requests, -0.745%/-0.420% for direct calls, +3.155%/+3.369% for
+`call_user_func()`, +4.558%/+4.562% for `call_user_func_array()`,
++2.524%/+2.512% for Closure invocation, +0.159%/-0.035% for Closure binding
+and +0.227%/+0.096% for unchanged Reflection method invocation. Every lane
+stays below the +5% gate with exact output. Baseline/candidate binary SHA-256
+values are
+`13fa22c7aa8d032f1858cd86279c70a5d5ed59760b5a9c1bb70a474e43a3da8c`
+and `8bc2ea8c5da94517f97378c8c84828b7d33b94db76285d87a1e7797950d3fc39`.
+The benchmark harness/log hash pair is
+`b58140a85402596fba57d34805aeec3128bc4d5718d096d90ae994c68a7c6305` /
+`89e0c973bbdcb027b24262691870acfc83ab726ec8c39277a56f6d4dc28b4f22`.
+
+Three focused failures remain explicit. Named variadic forwarding through
+`call_user_func_array()` still needs the corresponding runtime stack-frame
+shape; `function NULL()` and the leading-dot numeric literal `.567` are
+independent parser gaps reached by two `is_callable()` cases. Complete
+Reflection metadata, callback edge behavior and broader standard-library
+compatibility remain separate work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `reflection-invocation-metadata-batch`, pinned to php-src 8.5 commit `fcc29c8`
 and implementation commit `77a536cb`. Across all 5,599 unmodified `Zend/tests`
 and `tests/lang` cases, 4,117 pass, 1,186 fail, 115 skip, none remain XFAIL,
@@ -19,8 +90,8 @@ runs have the same manifest SHA-256,
 and summary SHA-256,
 `19a31be850671f363951f99fdb81f7448721926ced4effe59c9f4ab2690cb820`.
 
-The default Reflection surface now implements `ReflectionFunction::invoke()`
-and `invokeArgs()`, `ReflectionMethod::invokeArgs()`, and the PHP 8.5 receiver,
+The default Reflection surface now implements `ReflectionFunction::invoke()` and
+`invokeArgs()`, `ReflectionMethod::invokeArgs()`, and the PHP 8.5 receiver,
 named-argument and true variadic behavior of `ReflectionMethod::invoke()`.
 `ReflectionFunctionAbstract` also exposes `getShortName()`,
 `getNamespaceName()` and `inNamespace()`, while closure reflection reports the
