@@ -1993,6 +1993,42 @@ and older `printf()` conversion gaps. Complete printf/scanf edge behavior,
 internal Reflection return types and broader standard-library compatibility
 remain separate work.
 
+The `reflection-invocation-metadata-batch` checkpoint advances
+`ReflectionFunction::invoke()` and `invokeArgs()`,
+`ReflectionMethod::invokeArgs()`, and the receiver, named-argument and true
+variadic behavior of `ReflectionMethod::invoke()` together. Function metadata
+adds short and namespace names, namespace membership, original closure names
+and closure scope classes, including PHP's dummy `Closure` scope after
+object-only binding. Public `ReflectionClass` debug projection completes the
+admitted metadata slice.
+
+The 14-case PHP 8.5 focus moves from one to 12 passes (+11/-0), the complete
+493-case Reflection audit from 78 to 89 (+11/-0), and the adjacent 163-case
+closure/dynamic-call audit from 95 to 100 (+5/-0), without a timeout, crash or
+lost pass. The pinned 5,599-case Zend/lang corpus moves from 4,111 to 4,117
+passes (+6/-0), with 1,186 failures, 115 skips and 181 unsupported cases; two
+final full manifests and summaries are byte-identical. Five original E2E tests
+cover the admitted function, method and closure behavior without copying
+php-src source or tests.
+
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, the unchanged 1,623/289 unsafe ratchet with 341 SAFETY annotations,
+Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. No dependency,
+lockfile, opcode, frame or PHP value/object/array layout is added; `PhpClosure`
+uses existing AMD64 padding and the four-byte `CallPlan` uses its final spare
+flag for static-method metadata.
+
+The first generic invocation implementation was rejected after regressing the
+unchanged Reflection method control by about 96%. The accepted narrow raw
+internal-variadic path preserves the packed ABI for wider and named calls.
+CPU-pinned 32-pair release controls put paired medians at -0.006% for startup,
+-0.258% for closure calls, +0.472% for closure binding and +1.162% for
+unchanged Reflection method invocation, below the +5% gate with exact output.
+
+General unknown named forwarding in `call_user_func()`, `DateTime`, complete
+Reflection type/default/return metadata, closure serialization and broader
+compatibility remain separate work.
+
 The `array-key-value-batch` checkpoint advances `array_keys()`,
 `array_values()`, `array_flip()`, `array_count_values()` and `array_rand()`
 together. The admitted contract covers reflected arity and parameter names,
