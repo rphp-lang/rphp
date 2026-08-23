@@ -1746,6 +1746,41 @@ trace. The 16 independent focused blockers, `array_change_key_case()`, ordinary
 variadic `array_intersect()`, the complete array suite and broader compatibility
 remain separate work.
 
+The `array-structural-projection-batch` checkpoint advances `array_chunk()`,
+`array_slice()`, `array_reverse()` and `array_pad()` together. The shared
+projection layer covers each API's string- and integer-key policy, positive,
+negative and extreme slice bounds, nullable length, left/right/no-op padding,
+the PHP maximum pad length, packed and mixed arrays, structural snapshots,
+live reference cells, nested copy-on-write values, weak/strict integer
+conversion, diagnostics, exceptions, arity, parameter names and named
+arguments. Packed-array fast paths preserve the contract while avoiding
+per-entry generic key construction. The implementation is independent and
+does not copy or translate php-src code.
+
+The 55-case unmodified PHP 8.5 focused cluster moves from 6 to 50 passes and
+from one timeout to none, an exact +44/-0 delta; PHP 8.5.9 passes all 55. The
+complete recursive 842-case array audit moves from 418 to 463 passes with no
+lost pass, reducing failures from 403 to 359 and inherited timeouts from seven
+to six while 13 skips, one unsupported case and zero crashes remain. Two
+serial focused manifests and two serial full-array manifests are respectively
+byte-identical. The pinned Zend/lang corpus moves from 4,098 to 4,100 passes,
+an exact +2/-0 delta, with 1,203 failures, 115 skips, 181 unsupported cases
+and zero timeouts or crashes in two byte-identical final manifests.
+
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, the unchanged 1,620/289/332 unsafe ratchet, Composer S0, four Symfony
+S1 gates and PHP 8.5.9 S2/S3 pass. No compiler/opcode, frame, Value/object
+layout, dependency or production unsafe change is made. CPU-pinned 32-pair
+release controls put paired median changes at +0.308% for 100 empty requests,
+-1.797% for `array_chunk()`, -0.087% for `array_slice()`, -66.441% for
+`array_reverse()` and +1.506% for `array_pad()`, below the +5% gate.
+
+Five focused literal/parser and later output/resource failures and six
+inherited array-suite timeouts remain separate. Complete reflected internal
+type/default/return metadata, successful near-limit allocation, mutating
+`array_splice()`, the complete array suite and broader compatibility are not
+claimed.
+
 The `array-ordinary-sort-batch` checkpoint advances `sort()`, `rsort()`,
 `asort()`, `arsort()`, `ksort()`, `krsort()` and `array_multisort()` together.
 The shared PHP-aware comparison layer covers regular, numeric, string,

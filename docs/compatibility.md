@@ -8,6 +8,77 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`array-structural-projection-batch`, pinned to php-src 8.5 commit `fcc29c8`
+and candidate implementation commit `90030c24`. Across all 5,599 unmodified
+`Zend/tests` and `tests/lang` cases, 4,100 pass, 1,203 fail, 115 skip, none
+remain XFAIL, 181 are unsupported, and none time out or crash. The headline
+pass rate is 77.315%, the whole-corpus rate is 73.227%, and 4,809 of 5,303
+attempted cases reach runtime (90.685%). The exact delta from `3495503d` is
++2/-0. Two independently executed final runs have the same manifest SHA-256,
+`70a389bfa1c28998e468bf7a5dbb32eec8744ea3e2f59d93db9644ae97486a18`,
+and the same summary SHA-256,
+`3e9aba1713a5c13341643b4d32da4a148e5899c2a4b1756885ab72e299342d80`.
+
+`array_chunk()`, `array_slice()`, `array_reverse()` and `array_pad()` now
+share structural projection rules that preserve string keys, preserve or
+reindex integer keys as each API requires, retain live reference cells and
+copy ordinary nested values on write. The contract covers positive, negative
+and extreme slice bounds, nullable length, left and right padding, no-op
+padding, the PHP 1,073,741,824-element limit, packed and mixed arrays, weak and
+strict integer conversion, conversion deprecations, TypeError/ValueError
+precedence, throwing error handlers, arity, parameter names and named
+arguments. Packed-array fast paths preallocate the result while preserving
+those semantics. The implementation is independent and does not copy or
+translate php-src code.
+
+The 55-case unmodified PHP 8.5 focused cluster moves from 6 passes, 48
+failures and one timeout to 50 passes and five failures, an exact +44/-0
+pass-set delta that removes the timeout; PHP 8.5.9 passes all 55. Two final
+focused manifests are byte-identical with SHA-256
+`5cabbb2b162831185b072deb80f0ba7f3333d34e1ad72a937153643883204497`.
+The complete recursive 842-case `ext/standard/tests/array` audit moves from
+418 to 463 passes with no lost pass: failures fall from 403 to 359, while 13
+skips, one unsupported case and zero crashes remain, and inherited timeouts
+fall from seven to six. The extra adjacent gain is `array/bug41686.phpt`,
+which exercises omitted `array_slice()` length. Two final full-array manifests
+are byte-identical with SHA-256
+`1c798cfd6abaea78bd0bb894ca0759a7a8a4906317bfeccde7fa28a5cf3ecc66`.
+
+Four original E2E tests cover key policies, boundaries, large arrays,
+references, nested copy-on-write values, reentrant diagnostics, weak and
+strict conversions, exceptions and reflected parameter metadata. All five
+Cargo feature configurations, all-feature/all-target, formatting, PHPT-runner
+and unsafe-policy self-tests, the unchanged 1,620/289/332 unsafe ratchet,
+Composer 2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2
+and cold-build S3 pass. The implementation changes stdlib registration and
+one existing stdlib source and adds one test module; it changes no compiler,
+opcode, call frame, PHP Value/object layout, dependency or production unsafe
+code.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on
+an AMD Ryzen 9 7950X used performance-governor CPU 2, three warmups per binary
+and no excluded samples. The paired median changes are +0.308% for batches of
+100 empty requests, -1.797% for 20 `array_chunk()` calls over 200,000 entries,
+-0.087% for 50 `array_slice()` calls over 250,000 entries, -66.441% for 40
+`array_reverse()` calls over 250,000 entries and +1.506% for 30
+`array_pad()` calls from 150,000 to 250,000 entries. The corresponding paired
+p10/p90 ranges are -1.409%/+0.647%, -2.176%/-1.352%, -1.589%/+1.523%,
+-67.002%/-65.976% and +0.254%/+3.580%; exact output matches PHP 8.5.9 and
+every workload remains below the +5% gate. Baseline and candidate binary
+SHA-256 values are
+`128bfda79812f084d66026e589ca9e56b94f82a3573054882ded43c7cda922a0`
+and `21910f5aa4f134d858558caa65e67942258cc27478359a1f8baed18bfdc0bc68`.
+
+Five focused failures remain explicit. `array_pad_variation3.phpt` and
+`array_pad_variation4.phpt` stop at independent literal or escape parser gaps;
+`array_pad_variation6.phpt`, `array_reverse_variation4.phpt` and
+`array_reverse_variation5.phpt` reach pre-existing output, escape or resource
+behavior gaps. The six inherited array-suite timeouts, complete reflected
+internal type/default/return metadata, successful allocation near the maximum
+admitted pad length, mutating `array_splice()` semantics, the remaining array
+suite and broader PHP compatibility remain separate work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `array-ordinary-sort-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 candidate commit `eb18683c`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 4,098 pass, 1,205 fail, 115 skip, none remain XFAIL, 181
