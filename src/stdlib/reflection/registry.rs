@@ -16,8 +16,8 @@ use super::generic_parameters::{
 };
 use super::{
     attribute_construct, attribute_get_arguments, attribute_get_name, attribute_get_target,
-    attribute_is_repeated, attribute_new_instance, class_constant_construct, class_construct,
-    class_debug_info, class_file_name, class_get_attributes, class_get_constant,
+    attribute_is_repeated, attribute_new_instance, attribute_to_string, class_constant_construct,
+    class_construct, class_debug_info, class_file_name, class_get_attributes, class_get_constant,
     class_get_constants, class_get_constructor, class_get_default_properties,
     class_get_interface_names, class_get_interfaces, class_get_lazy_initializer, class_get_method,
     class_get_methods, class_get_name, class_get_parent, class_get_properties, class_get_property,
@@ -29,33 +29,38 @@ use super::{
     class_mark_lazy_object_as_initialized, class_new_instance, class_new_instance_args,
     class_new_instance_without_constructor, class_new_lazy_ghost, class_new_lazy_proxy,
     class_reset_as_lazy_ghost, class_reset_as_lazy_proxy, class_to_string, constant_construct,
-    constant_get_value, deprecated_construct, function_construct, function_get_closure,
+    constant_get_value, deprecated_construct, enum_backed_case_construct,
+    enum_case_get_backing_value, enum_case_get_enum, enum_case_get_value, enum_construct,
+    enum_get_backing_type, enum_get_case, enum_get_cases, enum_has_case, enum_is_backed_reflection,
+    enum_unit_case_construct, function_construct, function_get_closure,
     function_get_closure_called_class, function_get_closure_scope_class, function_get_closure_this,
     function_get_namespace_name, function_get_number_of_parameters,
     function_get_number_of_required_parameters, function_get_parameters, function_get_return_type,
     function_get_short_name, function_get_tentative_return_type, function_has_return_type,
     function_has_tentative_return_type, function_in_namespace, function_invoke,
     function_invoke_args, function_is_anonymous, function_is_closure, function_is_deprecated,
-    function_returns_reference, generic_arguments, generic_runtime_modes, method_construct,
-    method_create_from_method_name, method_file_name, method_get_closure, method_get_modifiers,
-    method_get_prototype, method_has_prototype, method_invoke, method_invoke_args,
-    method_invoke_raw, method_is_abstract, method_is_constructor, method_is_destructor,
-    method_is_final, method_is_private, method_is_protected, method_is_public, method_is_static,
-    method_to_string, no_discard_construct, object_construct, override_construct,
-    parameter_allows_null, parameter_construct, parameter_get_attributes, parameter_get_class,
-    parameter_get_declaring_class, parameter_get_default_value, parameter_get_name,
-    parameter_get_type, parameter_has_type, parameter_is_array, parameter_is_callable,
-    parameter_is_default_available, parameter_is_optional, parameter_is_passed_by_reference,
-    parameter_is_variadic, parameter_to_string, property_construct, property_get_default_value,
-    property_get_hook, property_get_hooks, property_get_modifiers, property_get_raw_value,
-    property_get_value, property_has_default_value, property_has_hook, property_hook_type_cases,
-    property_hook_type_from, property_hook_type_try_from, property_is_abstract,
-    property_is_default, property_is_final, property_is_initialized, property_is_lazy,
-    property_is_private, property_is_protected, property_is_public, property_is_readonly,
-    property_is_static, property_is_virtual, property_set_raw_value,
-    property_set_raw_value_without_lazy_initialization, property_set_value,
+    function_returns_reference, function_to_string, generic_arguments, generic_runtime_modes,
+    method_construct, method_create_from_method_name, method_file_name, method_get_closure,
+    method_get_modifiers, method_get_prototype, method_has_prototype, method_invoke,
+    method_invoke_args, method_invoke_raw, method_is_abstract, method_is_constructor,
+    method_is_destructor, method_is_final, method_is_private, method_is_protected,
+    method_is_public, method_is_static, method_to_string, no_discard_construct, object_construct,
+    override_construct, parameter_allows_null, parameter_construct, parameter_get_attributes,
+    parameter_get_class, parameter_get_declaring_class, parameter_get_default_value,
+    parameter_get_name, parameter_get_type, parameter_has_type, parameter_is_array,
+    parameter_is_callable, parameter_is_default_available, parameter_is_optional,
+    parameter_is_passed_by_reference, parameter_is_variadic, parameter_to_string,
+    property_construct, property_get_default_value, property_get_hook, property_get_hooks,
+    property_get_modifiers, property_get_raw_value, property_get_value, property_has_default_value,
+    property_has_hook, property_hook_type_cases, property_hook_type_from,
+    property_hook_type_try_from, property_is_abstract, property_is_default, property_is_final,
+    property_is_initialized, property_is_lazy, property_is_private, property_is_protected,
+    property_is_public, property_is_readonly, property_is_static, property_is_virtual,
+    property_set_raw_value, property_set_raw_value_without_lazy_initialization, property_set_value,
     property_skip_lazy_initialization, property_to_string, reflection_compound_types,
-    reflection_get_doc_comment, reflection_type_allows_null, reflection_type_generic_arguments,
+    reflection_get_doc_comment, reflection_reference_construct, reflection_reference_debug_info,
+    reflection_reference_from_array_element, reflection_reference_get_id,
+    reflection_type_allows_null, reflection_type_generic_arguments,
     reflection_type_has_generic_arguments, reflection_type_is_builtin, reflection_type_name,
     reflection_type_to_string, sensitive_parameter_construct,
 };
@@ -69,7 +74,7 @@ use crate::value::{PhpObject, Value};
 use crate::vm::function::{
     AttributeArgument, AttributeDefinition, AttributeEvaluationScope, ParamTypeHint,
 };
-use crate::vm::function::{FunctionCommon, InternalFunction};
+use crate::vm::function::{FunctionCommon, InternalFunction, InternalFunctionHandler};
 
 fn register_reflection_class(
     eg: &mut ExecutorGlobals,
@@ -188,7 +193,7 @@ fn register_reflection_interface(eg: &mut ExecutorGlobals, name: &str) {
         source_file: None,
         declaration_line: 0,
         parent: None,
-        implements: vec![],
+        implements: vec!["Stringable".to_string()],
         is_interface: true,
         is_abstract: false,
         is_final: false,
@@ -816,10 +821,10 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         source_file: None,
         declaration_line: 0,
         parent: None,
-        implements: vec![],
+        implements: vec!["Reflector".to_string()],
         is_interface: false,
         is_abstract: false,
-        is_final: true,
+        is_final: false,
         is_trait: false,
         is_enum: false,
         is_readonly: false,
@@ -889,6 +894,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         "ReflectionAttribute",
         "newInstance",
         attribute_new_instance,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionAttribute",
+        "__tostring",
+        attribute_to_string,
         1,
         0,
         []
@@ -1001,6 +1014,22 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         false,
         &["Reflector"],
     );
+    register_reflection_class(eg, "ReflectionReference", None, false, true);
+    register_reflection_class(eg, "ReflectionEnum", Some("ReflectionClass"), false, false);
+    register_reflection_class(
+        eg,
+        "ReflectionEnumUnitCase",
+        Some("ReflectionClassConstant"),
+        false,
+        false,
+    );
+    register_reflection_class(
+        eg,
+        "ReflectionEnumBackedCase",
+        Some("ReflectionEnumUnitCase"),
+        false,
+        false,
+    );
     register_reflection_class(eg, "ReflectionType", None, true, false);
     register_reflection_class_with_interfaces(
         eg,
@@ -1028,6 +1057,209 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         1,
         ["name"]
     );
+    register_method!(
+        "ReflectionFunction",
+        "__tostring",
+        function_to_string,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionReference",
+        "__construct",
+        reflection_reference_construct,
+        1,
+        0,
+        []
+    );
+    register_static_method!(
+        "ReflectionReference",
+        "fromArrayElement",
+        reflection_reference_from_array_element,
+        2,
+        2,
+        ["array", "key"]
+    );
+    functions
+        .last_mut()
+        .expect("ReflectionReference::fromArrayElement was just registered")
+        .common
+        .sig
+        .param_type_hints = vec![
+        ParamTypeHint::Array,
+        ParamTypeHint::Union(vec![ParamTypeHint::Int, ParamTypeHint::String]),
+    ];
+    functions
+        .last_mut()
+        .expect("ReflectionReference::fromArrayElement was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+        "ReflectionReference".to_string(),
+    )));
+    register_method!(
+        "ReflectionReference",
+        "getId",
+        reflection_reference_get_id,
+        1,
+        0,
+        []
+    );
+    functions
+        .last_mut()
+        .expect("ReflectionReference::getId was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::String;
+    register_method!(
+        "ReflectionReference",
+        "__debugInfo",
+        reflection_reference_debug_info,
+        1,
+        0,
+        []
+    );
+    functions
+        .last_mut()
+        .expect("ReflectionReference::__debugInfo was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::Array;
+
+    register_method!(
+        "ReflectionEnum",
+        "__construct",
+        enum_construct,
+        2,
+        1,
+        ["objectOrClass"]
+    );
+    register_method!("ReflectionEnum", "hasCase", enum_has_case, 2, 1, ["name"]);
+    functions
+        .last_mut()
+        .expect("ReflectionEnum::hasCase was just registered")
+        .common
+        .sig
+        .param_type_hints = vec![ParamTypeHint::String];
+    functions
+        .last_mut()
+        .expect("ReflectionEnum::hasCase was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::Bool;
+    register_method!("ReflectionEnum", "getCase", enum_get_case, 2, 1, ["name"]);
+    functions
+        .last_mut()
+        .expect("ReflectionEnum::getCase was just registered")
+        .common
+        .sig
+        .param_type_hints = vec![ParamTypeHint::String];
+    functions
+        .last_mut()
+        .expect("ReflectionEnum::getCase was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::ClassName("ReflectionEnumUnitCase".to_string());
+    register_method!("ReflectionEnum", "getCases", enum_get_cases, 1, 0, []);
+    functions
+        .last_mut()
+        .expect("ReflectionEnum::getCases was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::Array;
+    register_method!(
+        "ReflectionEnum",
+        "isBacked",
+        enum_is_backed_reflection,
+        1,
+        0,
+        []
+    );
+    functions
+        .last_mut()
+        .expect("ReflectionEnum::isBacked was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::Bool;
+    register_method!(
+        "ReflectionEnum",
+        "getBackingType",
+        enum_get_backing_type,
+        1,
+        0,
+        []
+    );
+    functions
+        .last_mut()
+        .expect("ReflectionEnum::getBackingType was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+        "ReflectionNamedType".to_string(),
+    )));
+
+    for (class, constructor) in [
+        (
+            "ReflectionEnumUnitCase",
+            enum_unit_case_construct as InternalFunctionHandler,
+        ),
+        (
+            "ReflectionEnumBackedCase",
+            enum_backed_case_construct as InternalFunctionHandler,
+        ),
+    ] {
+        register_method!(
+            class,
+            "__construct",
+            constructor,
+            3,
+            2,
+            ["class", "constant"]
+        );
+    }
+    register_method!(
+        "ReflectionEnumUnitCase",
+        "getEnum",
+        enum_case_get_enum,
+        1,
+        0,
+        []
+    );
+    functions
+        .last_mut()
+        .expect("ReflectionEnumUnitCase::getEnum was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::ClassName("ReflectionEnum".to_string());
+    register_method!(
+        "ReflectionEnumUnitCase",
+        "getValue",
+        enum_case_get_value,
+        1,
+        0,
+        []
+    );
+    functions
+        .last_mut()
+        .expect("ReflectionEnumUnitCase::getValue was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::ClassName("UnitEnum".to_string());
+    register_method!(
+        "ReflectionEnumBackedCase",
+        "getBackingValue",
+        enum_case_get_backing_value,
+        1,
+        0,
+        []
+    );
+    functions
+        .last_mut()
+        .expect("ReflectionEnumBackedCase::getBackingValue was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::Union(vec![ParamTypeHint::Int, ParamTypeHint::String]);
     register_method!(
         "ReflectionFunction",
         "isanonymous",
@@ -1814,6 +2046,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         3,
         2,
         ["class", "constant"]
+    );
+    register_method!(
+        "ReflectionClassConstant",
+        "getname",
+        parameter_get_name,
+        1,
+        0,
+        []
     );
     register_method!(
         "ReflectionClassConstant",

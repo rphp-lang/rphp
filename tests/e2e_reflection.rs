@@ -2281,3 +2281,167 @@ echo "\n", strtok($closureMethod, "\n"), ':', (int) !str_contains($closureMethod
         )
     );
 }
+
+#[test]
+fn reflection_function_and_attribute_strings_render_callable_metadata() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReflectionSignatureType {}
+function reflect_signature(int $a, string &$b, ReflectionSignatureType ...$rest): ?int {}
+$closure = (string) new ReflectionFunction(reflect_signature(...));
+$function = (string) new ReflectionFunction('reflect_signature');
+echo (int) is_subclass_of(Reflector::class, Stringable::class, true), ':';
+foreach ([
+    'Closure [ <user> function reflect_signature ]',
+    '- Parameters [3]',
+    'Parameter #0 [ <required> int $a ]',
+    'Parameter #1 [ <required> string &$b ]',
+    'Parameter #2 [ <optional> ReflectionSignatureType ...$rest ]',
+    '- Return [ ?int ]',
+] as $needle) echo (int) str_contains($closure, $needle);
+echo ':', (int) str_contains($function, 'Function [ <user> function reflect_signature ]');
+"#,
+        ),
+        "1:111111:1"
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php namespace Probe;
+class Handler {
+    #[Meta(strrev(...), \strrev(...), Handler::run(...), self::run(...), named: ['k' => 7])]
+    public function run() {}
+}
+echo (new \ReflectionMethod(Handler::class, 'run'))->getAttributes()[0];
+"#,
+        ),
+        concat!(
+            "Attribute [ Probe\\Meta ] {\n",
+            "  - Arguments [5] {\n",
+            "    Argument #0 [ Probe\\strrev(...) ]\n",
+            "    Argument #1 [ \\strrev(...) ]\n",
+            "    Argument #2 [ \\Probe\\Handler::run(...) ]\n",
+            "    Argument #3 [ self::run(...) ]\n",
+            "    Argument #4 [ named = ['k' => 7] ]\n",
+            "  }\n}\n",
+        )
+    );
+
+    assert_eq!(
+        run_php(
+            "<?php #[Meta(static function ($x) { return $x; })] function plain() {} echo (new ReflectionFunction('plain'))->getAttributes()[0];"
+        ),
+        concat!(
+            "Attribute [ Meta ] {\n",
+            "  - Arguments [1] {\n",
+            "    Argument #0 [ Closure({closure:plain():1}) ]\n",
+            "  }\n}\n",
+        )
+    );
+}
+
+#[test]
+fn reflection_reference_exposes_only_stable_opaque_alias_identity() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$first = 1;
+$other = 2;
+$values = [
+    'first' => &$first,
+    'same' => &$first,
+    'other' => &$other,
+    'plain' => $first,
+];
+$firstReference = ReflectionReference::fromArrayElement($values, 'first');
+$sameReference = ReflectionReference::fromArrayElement($values, 'same');
+$otherReference = ReflectionReference::fromArrayElement($values, 'other');
+echo get_class($firstReference), ':', strlen($firstReference->getId()), ':',
+    (int) ($firstReference->getId() === $sameReference->getId()),
+    (int) ($firstReference->getId() !== $otherReference->getId()), "\n";
+var_dump(ReflectionReference::fromArrayElement($values, 'plain'));
+var_dump($firstReference);
+try { ReflectionReference::fromArrayElement($values, 'missing'); }
+catch (ReflectionException $error) { echo $error->getMessage(), "\n"; }
+"#,
+        ),
+        concat!(
+            "ReflectionReference:20:11\n",
+            "NULL\n",
+            "object(ReflectionReference)#1 (0) {\n}\n",
+            "Array key not found\n",
+        )
+    );
+}
+
+#[test]
+fn reflection_enum_projects_unit_and_backed_cases_and_errors() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+enum UnitState { case Ready; case Done; }
+enum ExitCode: int { case Good = 0; case Bad = 7; }
+foreach ([UnitState::class, ExitCode::class] as $name) {
+    $reflection = new ReflectionEnum($name);
+    echo $reflection->getName(), ':', (int) $reflection->isBacked(), ':',
+        ($reflection->getBackingType()?->getName() ?? 'none'), ':',
+        (int) $reflection->hasCase('Ready'), (int) $reflection->hasCase('Good'), "\n";
+    foreach ($reflection->getCases() as $case) {
+        echo get_class($case), ':', $case->getEnum()->getName(), ':',
+            $case->getName(), ':', $case->getValue()->name;
+        if ($case instanceof ReflectionEnumBackedCase) {
+            echo ':', $case->getBackingValue();
+        }
+        echo "\n";
+    }
+}
+foreach ([
+    [ReflectionEnumUnitCase::class, UnitState::class, 'Ready'],
+    [ReflectionEnumUnitCase::class, ExitCode::class, 'Good'],
+    [ReflectionEnumBackedCase::class, ExitCode::class, 'Good'],
+] as [$reflectionClass, $enum, $caseName]) {
+    $case = new $reflectionClass($enum, $caseName);
+    echo get_class($case), ':', $case->getName(), ':', $case->getEnum()->getName(),
+        ':', $case->getValue()->name;
+    if ($case instanceof ReflectionEnumBackedCase) echo ':', $case->getBackingValue();
+    echo "\n";
+}
+foreach ([UnitState::class, ExitCode::class] as $enum) {
+    foreach ((new ReflectionEnum($enum))->getReflectionConstants() as $constant) {
+        echo get_class($constant), '|';
+    }
+    echo "\n";
+}
+try { (new ReflectionEnum(UnitState::class))->getCase('ready'); }
+catch (ReflectionException $error) { echo $error->getMessage(), "\n"; }
+try { new ReflectionEnum(stdClass::class); }
+catch (ReflectionException $error) { echo $error->getMessage(), "\n"; }
+foreach ([
+    fn() => new ReflectionEnumBackedCase(UnitState::class, 'Ready'),
+    fn() => new ReflectionEnumUnitCase(UnitState::class, 'missing'),
+] as $invalidCase) {
+    try { $invalidCase(); }
+    catch (ReflectionException $error) { echo $error->getMessage(), "\n"; }
+}
+"#,
+        ),
+        concat!(
+            "UnitState:0:none:10\n",
+            "ReflectionEnumUnitCase:UnitState:Ready:Ready\n",
+            "ReflectionEnumUnitCase:UnitState:Done:Done\n",
+            "ExitCode:1:int:01\n",
+            "ReflectionEnumBackedCase:ExitCode:Good:Good:0\n",
+            "ReflectionEnumBackedCase:ExitCode:Bad:Bad:7\n",
+            "ReflectionEnumUnitCase:Ready:UnitState:Ready\n",
+            "ReflectionEnumUnitCase:Good:ExitCode:Good\n",
+            "ReflectionEnumBackedCase:Good:ExitCode:Good:0\n",
+            "ReflectionClassConstant|ReflectionClassConstant|\n",
+            "ReflectionClassConstant|ReflectionClassConstant|\n",
+            "Case UnitState::ready does not exist\n",
+            "Class \"stdClass\" is not an enum\n",
+            "Enum case UnitState::Ready is not a backed case\n",
+            "Constant UnitState::missing does not exist\n",
+        )
+    );
+}

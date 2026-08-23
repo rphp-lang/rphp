@@ -146,7 +146,7 @@ fn expression_source_line(expression: &Expr) -> usize {
     }
 }
 
-fn assertion_expression_source(expr: &Expr) -> Option<String> {
+pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
     fn quote_string(value: &str) -> String {
         format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
     }
@@ -5572,6 +5572,7 @@ impl Compiler {
         let evaluation_scope = Rc::new(AttributeEvaluationScope {
             namespace: self.current_namespace.clone(),
             class_imports: self.use_map.clone(),
+            function_imports: self.function_use_map.clone(),
             constant_imports: self.constant_use_map.clone(),
             lexical_class: lexical_class.map(str::to_owned),
             lexical_parent: lexical_parent.map(str::to_owned),

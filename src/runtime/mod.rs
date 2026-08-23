@@ -309,10 +309,36 @@ pub(crate) struct LazyObjectState {
 /// Cold request-local payload for one engine-created ReflectionAttribute.
 /// Keeping this state outside PhpObject preserves the ordinary object layout
 /// and exposes only Zend's public `name` property to PHP code.
+#[derive(Clone, Copy)]
+pub(crate) enum ReflectionAttributeDeclarationKind {
+    Plain,
+    Method,
+    Property,
+    ClassConstant,
+}
+
+#[derive(Clone)]
+pub(crate) struct ReflectionAttributeDeclaration {
+    pub(crate) name: crate::value::Value,
+    pub(crate) class_name: Option<crate::value::Value>,
+    pub(crate) kind: ReflectionAttributeDeclarationKind,
+}
+
 pub(crate) struct ReflectionAttributeState {
     pub(crate) owner: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
     pub(crate) definition: crate::vm::function::AttributeDefinition,
     pub(crate) repeated: bool,
+    /// Shared reflected property handles used to build Zend's AST-style
+    /// Closure declaration name only when `__toString()` is actually called.
+    pub(crate) declaration: ReflectionAttributeDeclaration,
+}
+
+/// Cold request-local identity carried by one engine-created
+/// ReflectionReference. The reference target itself remains owned by the
+/// inspected array; ReflectionReference exposes only an opaque stable ID.
+pub(crate) struct ReflectionReferenceState {
+    pub(crate) owner: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    pub(crate) reference_identity: usize,
 }
 
 /// Cold request-local scope for one engine-created ReflectionParameter.
@@ -616,6 +642,9 @@ pub struct ExecutorGlobals {
     /// Engine-created ReflectionAttribute payloads are rare and must not
     /// appear as user-visible dynamic properties.
     pub(crate) reflection_attributes: Option<Box<HashMap<usize, ReflectionAttributeState>>>,
+    /// Engine-created ReflectionReference identities are equally sparse and
+    /// must not leak as ordinary object properties.
+    reflection_references: Option<Box<HashMap<usize, ReflectionReferenceState>>>,
     /// Effective attribute scopes for reflected parameters are equally rare;
     /// keeping them here preserves ReflectionParameter's observable shape.
     reflection_parameters: Option<Box<HashMap<usize, ReflectionParameterState>>>,
@@ -635,6 +664,7 @@ impl ExecutorGlobals {
         object: &crate::value::Value,
         definition: crate::vm::function::AttributeDefinition,
         repeated: bool,
+        declaration: ReflectionAttributeDeclaration,
     ) {
         let (Some(identity), Some(owner)) = (object.object_identity(), object.object_weak()) else {
             return;
@@ -647,6 +677,7 @@ impl ExecutorGlobals {
                     owner,
                     definition,
                     repeated,
+                    declaration,
                 },
             );
     }
@@ -659,6 +690,36 @@ impl ExecutorGlobals {
         let identity = object.object_identity()?;
         let state = self.reflection_attributes.as_ref()?.get(&identity)?;
         (state.owner.strong_count() != 0).then_some(state)
+    }
+
+    #[cold]
+    pub(crate) fn register_reflection_reference(
+        &mut self,
+        object: &crate::value::Value,
+        reference_identity: usize,
+    ) {
+        let (Some(identity), Some(owner)) = (object.object_identity(), object.object_weak()) else {
+            return;
+        };
+        self.reflection_references
+            .get_or_insert_with(|| Box::new(HashMap::new()))
+            .insert(
+                identity,
+                ReflectionReferenceState {
+                    owner,
+                    reference_identity,
+                },
+            );
+    }
+
+    #[inline]
+    pub(crate) fn reflection_reference_identity(
+        &self,
+        object: &crate::value::Value,
+    ) -> Option<usize> {
+        let identity = object.object_identity()?;
+        let state = self.reflection_references.as_ref()?.get(&identity)?;
+        (state.owner.strong_count() != 0).then_some(state.reference_identity)
     }
 
     #[cold]
@@ -1057,8 +1118,12 @@ impl ExecutorGlobals {
         self.function_table.reserve(900);
         self.class_table.reserve(66);
         self.method_declaring_class.reserve(512);
-        self.class_by_id.reserve(80);
-        self.static_property_slots_by_class.reserve(80);
+        // The ordinary ReflectionEnum/ReflectionReference family brings the
+        // fixed class/interface inventory above the prior 80-entry vector
+        // envelope. Keep modest headroom so registration remains allocation-
+        // free without relying on Vec's growth doubling at the boundary.
+        self.class_by_id.reserve(96);
+        self.static_property_slots_by_class.reserve(96);
         self.static_property_values.reserve(16);
         #[cfg(feature = "php-generics-reified")]
         self.static_generic_property_contracts.reserve(4);
@@ -1173,6 +1238,7 @@ impl ExecutorGlobals {
             string_utility_state: None,
             ini_overrides: None,
             reflection_attributes: None,
+            reflection_references: None,
             reflection_parameters: None,
         }
     }
@@ -1287,6 +1353,7 @@ impl ExecutorGlobals {
             string_utility_state: None,
             ini_overrides: None,
             reflection_attributes: None,
+            reflection_references: None,
             reflection_parameters: None,
         }
     }

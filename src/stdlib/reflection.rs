@@ -18,7 +18,10 @@ use functions::reflection_function_target;
 use crate::compiler::compile::{ClassConstantDefinition, Compiler, PropertyDefinition};
 use crate::generics::{GenericDeclarationKind, GenericRuntimeCapabilities};
 use crate::parser::{Expr, Visibility};
-use crate::runtime::{ExecutorGlobals, LazyObjectStrategy};
+use crate::runtime::{
+    ExecutorGlobals, LazyObjectStrategy, ReflectionAttributeDeclaration,
+    ReflectionAttributeDeclarationKind,
+};
 use crate::value::{
     ArrayKey, DynamicPropertyMap, PhpArray, PhpClosure, PhpObject, ReferencePropertyConstraint,
     Value, ValueType, make_error_value,
@@ -399,7 +402,7 @@ fn reflected_attribute_definitions(
             rebind_attribute_evaluation_scope(&mut definitions, called_class.as_deref(), eg);
             definitions
         }
-        Some("ReflectionClass" | "ReflectionObject") => {
+        Some("ReflectionClass" | "ReflectionObject" | "ReflectionEnum") => {
             let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
                 return Vec::new();
             };
@@ -426,7 +429,7 @@ fn reflected_attribute_definitions(
                 .map(|property| property.attributes.clone())
                 .unwrap_or_default()
         }
-        Some("ReflectionClassConstant") => {
+        Some("ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase") => {
             let owner =
                 reflected_property(ed, "class").and_then(|value| value.as_str().map(str::to_owned));
             let name =
@@ -565,6 +568,45 @@ fn resolve_attribute_constant_name(
         );
     }
     (name.to_string(), None)
+}
+
+fn render_attribute_function_name(name: &str, scope: &AttributeEvaluationScope) -> String {
+    if let Some(fully_qualified) = name.strip_prefix('\\') {
+        return format!("\\{fully_qualified}");
+    }
+    if let Some(relative) = name.strip_prefix("namespace\\") {
+        return scope.namespace.as_ref().map_or_else(
+            || format!("\\{relative}"),
+            |namespace| format!("\\{namespace}\\{relative}"),
+        );
+    }
+    let first_segment = name.split('\\').next().unwrap_or(name);
+    if let Some(imported) = scope
+        .function_imports
+        .iter()
+        .find(|(alias, _)| alias.eq_ignore_ascii_case(first_segment))
+        .map(|(_, target)| target)
+    {
+        return if name.contains('\\') {
+            format!("\\{}{}", imported, &name[first_segment.len()..])
+        } else {
+            format!("\\{imported}")
+        };
+    }
+    scope.namespace.as_ref().map_or_else(
+        || name.to_string(),
+        |namespace| format!("{namespace}\\{name}"),
+    )
+}
+
+fn render_attribute_static_class_name(name: &str, scope: &AttributeEvaluationScope) -> String {
+    if matches!(
+        name.to_ascii_lowercase().as_str(),
+        "self" | "parent" | "static"
+    ) {
+        return name.to_string();
+    }
+    format!("\\{}", resolve_attribute_class_name(name, scope))
 }
 
 fn deferred_class_constant(
@@ -734,6 +776,7 @@ fn evaluate_deferred_attribute_expression(
             let dynamic_scope = AttributeEvaluationScope {
                 namespace: None,
                 class_imports: HashMap::new(),
+                function_imports: HashMap::new(),
                 constant_imports: HashMap::new(),
                 lexical_class: scope.lexical_class.clone(),
                 lexical_parent: scope.lexical_parent.clone(),
@@ -1382,6 +1425,7 @@ fn report_deprecated_expression_references(
                 let dynamic_scope = AttributeEvaluationScope {
                     namespace: None,
                     class_imports: HashMap::new(),
+                    function_imports: HashMap::new(),
                     constant_imports: HashMap::new(),
                     lexical_class: scope.lexical_class.clone(),
                     lexical_parent: scope.lexical_parent.clone(),
@@ -1557,14 +1601,61 @@ fn evaluate_attribute_arguments(
 fn reflection_attribute_value(
     definition: &AttributeDefinition,
     repeated: bool,
+    declaration: &ReflectionAttributeDeclaration,
     eg: &mut ExecutorGlobals,
 ) -> Value {
     let object = object_value(
         "ReflectionAttribute",
         [("name", Value::string(definition.name.clone()))],
     );
-    eg.register_reflection_attribute(&object, definition.clone(), repeated);
+    eg.register_reflection_attribute(&object, definition.clone(), repeated, declaration.clone());
     object
+}
+
+fn reflected_attribute_declaration(ed: *mut ExecuteData) -> ReflectionAttributeDeclaration {
+    with_argument(ed, 0, |receiver| {
+        let Some(object) = receiver.as_object() else {
+            return ReflectionAttributeDeclaration {
+                name: Value::null(),
+                class_name: None,
+                kind: ReflectionAttributeDeclarationKind::Plain,
+            };
+        };
+        let name = object
+            .get_property("name")
+            .cloned()
+            .unwrap_or_else(Value::null);
+        let (class_property, kind) = match object.class_name.as_ref() {
+            "ReflectionMethod" => (
+                Some("__reflection_method_class"),
+                ReflectionAttributeDeclarationKind::Method,
+            ),
+            "ReflectionProperty" => (Some("class"), ReflectionAttributeDeclarationKind::Property),
+            "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase" => (
+                Some("class"),
+                ReflectionAttributeDeclarationKind::ClassConstant,
+            ),
+            _ => (None, ReflectionAttributeDeclarationKind::Plain),
+        };
+        ReflectionAttributeDeclaration {
+            name,
+            class_name: class_property.and_then(|property| object.get_property(property).cloned()),
+            kind,
+        }
+    })
+}
+
+fn reflected_attribute_declaration_name(declaration: &ReflectionAttributeDeclaration) -> String {
+    let name = declaration.name.as_str().unwrap_or_default();
+    let Some(class) = declaration.class_name.as_ref().and_then(Value::as_str) else {
+        return name.to_string();
+    };
+    match declaration.kind {
+        ReflectionAttributeDeclarationKind::Plain => name.to_string(),
+        ReflectionAttributeDeclarationKind::Method
+        | ReflectionAttributeDeclarationKind::ClassConstant => format!("{class}::{name}"),
+        ReflectionAttributeDeclarationKind::Property => format!("{class}::${name}"),
+    }
 }
 
 fn reflection_attributes(
@@ -1616,6 +1707,7 @@ fn reflection_attributes(
             .entry(definition.name.to_ascii_lowercase())
             .or_default() += 1;
     }
+    let declaration = reflected_attribute_declaration(ed);
     let mut result = PhpArray::with_packed_capacity(definitions.len());
     for definition in &definitions {
         let matches = match filter.as_deref() {
@@ -1631,7 +1723,12 @@ fn reflection_attributes(
             .copied()
             .unwrap_or(0)
             > 1;
-        result.push(reflection_attribute_value(definition, repeated, eg));
+        result.push(reflection_attribute_value(
+            definition,
+            repeated,
+            &declaration,
+            eg,
+        ));
     }
     return_value(rv, Value::array(result))
 }
@@ -1753,6 +1850,209 @@ fn attribute_get_name(
             |state| Value::string(state.definition.name.clone()),
         ),
     )
+}
+
+fn attribute_argument_expression_string(
+    expression: &Expr,
+    definition: &AttributeDefinition,
+    declaration_name: &str,
+) -> Option<String> {
+    match expression {
+        Expr::Closure { line, .. } => {
+            Some(format!("Closure({{closure:{declaration_name}():{line}}})"))
+        }
+        Expr::FirstClassFunctionCallable { name, .. } => Some(format!(
+            "{}(...)",
+            render_attribute_function_name(name, &definition.evaluation_scope)
+        )),
+        Expr::FirstClassCallable { callable, .. } => {
+            let Expr::ArrayLiteral(elements) = callable.as_ref() else {
+                return None;
+            };
+            let [owner, method] = elements.as_slice() else {
+                return None;
+            };
+            let Expr::ClassConstant {
+                class_name,
+                constant,
+                ..
+            } = &owner.value
+            else {
+                return None;
+            };
+            let Expr::StringLiteral(method) = &method.value else {
+                return None;
+            };
+            if !constant.eq_ignore_ascii_case("class") {
+                return None;
+            }
+            Some(format!(
+                "{}::{method}(...)",
+                render_attribute_static_class_name(class_name, &definition.evaluation_scope)
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn attribute_to_string(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = with_argument(ed, 0, Value::clone);
+    let Some(state) = eg.reflection_attribute_state(&receiver) else {
+        let name = reflected_property(ed, "name")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_default();
+        return return_value(rv, Value::string(format!("Attribute [ {name} ]\n")));
+    };
+    let definition = state.definition.clone();
+    let declaration_name = reflected_attribute_declaration_name(&state.declaration);
+    if definition.arguments.is_empty() {
+        return return_value(
+            rv,
+            Value::string(format!("Attribute [ {} ]\n", definition.name)),
+        );
+    }
+
+    let mut rendered = format!(
+        "Attribute [ {} ] {{\n  - Arguments [{}] {{\n",
+        definition.name,
+        definition.arguments.len()
+    );
+    for (index, argument) in definition.arguments.iter().enumerate() {
+        let value = argument
+            .deferred_expression
+            .as_deref()
+            .and_then(|expression| {
+                attribute_argument_expression_string(expression, &definition, &declaration_name)
+            })
+            .or_else(|| {
+                argument
+                    .value
+                    .as_ref()
+                    .ok()
+                    .map(|value| reflection_value_name(value, eg))
+            })
+            .or_else(|| {
+                argument
+                    .deferred_expression
+                    .as_deref()
+                    .and_then(|expression| {
+                        crate::compiler::compile::assertion_expression_source(expression).and_then(
+                            |source| {
+                                source
+                                    .strip_prefix("assert(")
+                                    .and_then(|source| source.strip_suffix(')'))
+                                    .map(str::to_owned)
+                            },
+                        )
+                    })
+            })
+            .unwrap_or_else(|| "NULL".to_string());
+        let name = argument
+            .name
+            .as_ref()
+            .map_or_else(String::new, |name| format!("{name} = "));
+        rendered.push_str(&format!("    Argument #{index} [ {name}{value} ]\n"));
+    }
+    rendered.push_str("  }\n}\n");
+    return_value(rv, Value::string(rendered))
+}
+
+fn reflection_reference_construct(
+    _ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    eg.exception = Some(make_error_value(
+        "Error",
+        "Call to private ReflectionReference::__construct() from global scope",
+    ));
+    Ok(())
+}
+
+fn reflection_reference_from_array_element(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let key = with_argument(ed, 2, |value| {
+        value.as_long().map(ArrayKey::Int).or_else(|| {
+            value
+                .as_str()
+                .map(|value| ArrayKey::String(value.to_string()))
+        })
+    });
+    let Some(key) = key else {
+        return return_value(rv, Value::null());
+    };
+    let reference_identity = with_argument(ed, 1, |value| {
+        let array = value.as_array()?;
+        let entry = match &key {
+            ArrayKey::Int(key) => array.get_int(*key),
+            ArrayKey::String(key) => array.get_str(key),
+        }?;
+        Some(entry.reference_identity())
+    });
+    let Some(reference_identity) = reference_identity else {
+        reflection_exception(eg, "Array key not found");
+        return Ok(());
+    };
+    let Some(reference_identity) = reference_identity else {
+        return return_value(rv, Value::null());
+    };
+
+    let reflection = object_value("ReflectionReference", []);
+    eg.register_reflection_reference(&reflection, reference_identity);
+    return_value(rv, reflection)
+}
+
+fn reflection_reference_id(reference_identity: usize) -> [u8; 20] {
+    // Zend deliberately exposes an opaque 20-byte token. SplitMix-style
+    // diffusion prevents the backing allocation address from being published
+    // while retaining stable same-reference equality for this request.
+    let mut state = (reference_identity as u64) ^ 0x9e37_79b9_7f4a_7c15;
+    let mut output = [0_u8; 20];
+    for chunk in output.chunks_mut(8) {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut mixed = state;
+        mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        mixed ^= mixed >> 31;
+        let bytes = mixed.to_ne_bytes();
+        for (output, byte) in chunk.iter_mut().zip(bytes) {
+            const OPAQUE_ALPHABET: &[u8; 64] =
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+            *output = OPAQUE_ALPHABET[usize::from(byte & 63)];
+        }
+    }
+    output
+}
+
+fn reflection_reference_get_id(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = with_argument(ed, 0, Value::clone);
+    let Some(identity) = eg.reflection_reference_identity(&receiver) else {
+        return return_value(rv, Value::string(""));
+    };
+    let id = reflection_reference_id(identity);
+    return_value(
+        rv,
+        Value::string(super::filesystem::bytes_to_php_string(&id)),
+    )
+}
+
+fn reflection_reference_debug_info(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(rv, Value::array(PhpArray::new()))
 }
 
 fn attribute_get_arguments(
@@ -3775,6 +4075,85 @@ fn render_reflection_signature_parameter(
     )
 }
 
+fn reflection_user_source_span(user: &UserFunction) -> Option<(usize, usize)> {
+    let start = user.op_array.declaration_line().or_else(|| {
+        user.op_array
+            .source_lines
+            .iter()
+            .find_map(|(index, line)| (*index != u32::MAX).then_some(*line as usize))
+    })?;
+    let end = user
+        .op_array
+        .source_lines
+        .iter()
+        .filter_map(|(index, line)| (*index != u32::MAX).then_some(*line as usize))
+        .max()
+        .unwrap_or(start);
+    Some((start, end))
+}
+
+fn function_to_string(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(function) = reflected_function(ed) else {
+        return return_value(rv, Value::string(""));
+    };
+    let name = reflected_property(ed, "name")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let is_closure = reflected_property(ed, "__reflection_closure")
+        .is_some_and(|value| value.value_type() == ValueType::Closure);
+    let kind = if is_closure { "Closure" } else { "Function" };
+    let provenance = if function.fn_type == FunctionType::User {
+        "user"
+    } else {
+        "internal:Core"
+    };
+    let reference = if function.sig.returns_reference {
+        "&"
+    } else {
+        ""
+    };
+    let mut rendered = format!("{kind} [ <{provenance}> function {reference}{name} ] {{\n");
+
+    if let Some(user) = reflected_user_function(ed)
+        && !user.op_array.source_file.is_empty()
+        && let Some((start, end)) = reflection_user_source_span(user)
+    {
+        rendered.push_str(&format!(
+            "  @@ {} {start} - {end}\n\n",
+            user.op_array.source_file
+        ));
+    } else {
+        rendered.push('\n');
+    }
+
+    let fixed = function.sig.public_arity();
+    let parameter_count = fixed + u32::from(function.sig.is_variadic);
+    if parameter_count != 0 {
+        rendered.push_str(&format!("  - Parameters [{parameter_count}] {{\n"));
+        for index in 0..parameter_count {
+            let variadic = function.sig.is_variadic && index == fixed;
+            rendered.push_str("    ");
+            rendered.push_str(&render_reflection_signature_parameter(
+                function, index, variadic,
+            ));
+            rendered.push('\n');
+        }
+        rendered.push_str("  }\n");
+    }
+    if !matches!(function.sig.return_type_hint, ParamTypeHint::None) {
+        rendered.push_str(&format!(
+            "  - Return [ {} ]\n",
+            function.sig.return_type_hint.display_name()
+        ));
+    }
+    rendered.push_str("}\n");
+    return_value(rv, Value::string(rendered))
+}
+
 fn method_to_string(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -3821,21 +4200,8 @@ fn method_to_string(
     }
 
     if !closure_method && let Some(user) = reflected_user_function(ed) {
-        let start = user.op_array.declaration_line().or_else(|| {
-            user.op_array
-                .source_lines
-                .iter()
-                .find_map(|(index, line)| (*index != u32::MAX).then_some(*line as usize))
-        });
-        let end = user
-            .op_array
-            .source_lines
-            .iter()
-            .filter_map(|(index, line)| (*index != u32::MAX).then_some(*line as usize))
-            .max()
-            .or(start);
         if !user.op_array.source_file.is_empty()
-            && let (Some(start), Some(end)) = (start, end)
+            && let Some((start, end)) = reflection_user_source_span(user)
         {
             rendered.push_str(&format!(
                 "  @@ {} {start} - {end}\n\n",
@@ -4428,6 +4794,245 @@ fn enum_case_value(eg: &ExecutorGlobals, class_id: u32, case_index: usize) -> Op
     eg.static_property_storage_slot(class_id, case_index)
         .and_then(|slot| eg.static_property_value(slot))
         .cloned()
+}
+
+fn enum_is_backed(owner: &str, eg: &ExecutorGlobals) -> bool {
+    eg.find_class(owner).is_some_and(|class| {
+        class
+            .implements
+            .iter()
+            .any(|interface| interface.eq_ignore_ascii_case("BackedEnum"))
+    })
+}
+
+fn reflected_enum_case(owner: &str, name: &str, eg: &ExecutorGlobals) -> Option<Value> {
+    let class = eg.find_class(owner)?;
+    if !class.is_enum {
+        return None;
+    }
+    let index = class
+        .static_properties
+        .iter()
+        .position(|case| case.name == name)?;
+    let value = enum_case_value(eg, class.class_id, index)?;
+    let reflection_class = if enum_is_backed(owner, eg) {
+        "ReflectionEnumBackedCase"
+    } else {
+        "ReflectionEnumUnitCase"
+    };
+    Some(object_value(
+        reflection_class,
+        [
+            ("name", Value::string(name)),
+            ("class", Value::string(owner)),
+            ("__reflection_declaring_class", Value::string(owner)),
+            ("__reflection_modifiers", Value::long(1)),
+            ("__reflection_value", value),
+        ],
+    ))
+}
+
+fn enum_construct(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    class_construct(ed, rv, eg)?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return Ok(());
+    };
+    if !eg.find_class(&owner).is_some_and(|class| class.is_enum) {
+        reflection_exception(eg, format!("Class \"{owner}\" is not an enum"));
+    }
+    Ok(())
+}
+
+fn enum_has_case(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::bool(false));
+    };
+    let name = argument_string(ed, 1);
+    return_value(
+        rv,
+        Value::bool(reflected_enum_case(&owner, &name, eg).is_some()),
+    )
+}
+
+fn enum_get_case(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        reflection_exception(eg, "ReflectionEnum has no resolved enum");
+        return Ok(());
+    };
+    let name = argument_string(ed, 1);
+    let Some(case) = reflected_enum_case(&owner, &name, eg) else {
+        reflection_exception(eg, format!("Case {owner}::{name} does not exist"));
+        return Ok(());
+    };
+    return_value(rv, case)
+}
+
+fn enum_get_cases(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::array(PhpArray::new()));
+    };
+    let names = eg.find_class(&owner).map_or_else(Vec::new, |class| {
+        class
+            .static_properties
+            .iter()
+            .map(|case| case.name.clone())
+            .collect::<Vec<_>>()
+    });
+    let mut cases = PhpArray::with_packed_capacity(names.len());
+    for name in names {
+        if let Some(case) = reflected_enum_case(&owner, &name, eg) {
+            cases.push(case);
+        }
+    }
+    return_value(rv, Value::array(cases))
+}
+
+fn enum_is_backed_reflection(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let backed = generic_target(ed).is_some_and(|(kind, owner)| {
+        kind == GenericDeclarationKind::Class && enum_is_backed(&owner, eg)
+    });
+    return_value(rv, Value::bool(backed))
+}
+
+fn enum_get_backing_type(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::null());
+    };
+    if !enum_is_backed(&owner, eg) {
+        return return_value(rv, Value::null());
+    }
+    let backing_type = eg.find_class(&owner).and_then(|class| {
+        class
+            .properties
+            .iter()
+            .find(|property| property.name == "value")
+            .map(|property| property.type_hint.display_name())
+    });
+    return_value(
+        rv,
+        backing_type.map_or_else(Value::null, |name| named_reflected_type(&name)),
+    )
+}
+
+fn enum_case_construct_common(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    require_backed: bool,
+) -> Result<(), VmError> {
+    let owner = with_argument(ed, 1, |value| {
+        value
+            .as_object()
+            .map(|object| object.class_name.to_string())
+            .unwrap_or_else(|| argument_string(ed, 1))
+    });
+    let name = argument_string(ed, 2);
+    class_constant_construct(ed, rv, eg)?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    let is_case = eg.find_class(&owner).is_some_and(|class| {
+        class.is_enum && class.static_properties.iter().any(|case| case.name == name)
+    });
+    if !is_case {
+        reflection_exception(eg, format!("Constant {owner}::{name} is not a case"));
+    } else if require_backed && !enum_is_backed(&owner, eg) {
+        reflection_exception(
+            eg,
+            format!("Enum case {owner}::{name} is not a backed case"),
+        );
+    }
+    Ok(())
+}
+
+fn enum_unit_case_construct(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    enum_case_construct_common(ed, rv, eg, false)
+}
+
+fn enum_backed_case_construct(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    enum_case_construct_common(ed, rv, eg, true)
+}
+
+fn enum_case_get_enum(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let owner = reflected_property(ed, "class")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    return_value(
+        rv,
+        object_value(
+            "ReflectionEnum",
+            [
+                ("__generic_kind", Value::string("class")),
+                ("__generic_owner", Value::string(owner.clone())),
+                ("name", Value::string(owner)),
+            ],
+        ),
+    )
+}
+
+fn enum_case_get_value(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(
+        rv,
+        reflected_property(ed, "__reflection_value").unwrap_or_else(Value::null),
+    )
+}
+
+fn enum_case_get_backing_value(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = reflected_property(ed, "__reflection_value").unwrap_or_else(Value::null);
+    return_value(
+        rv,
+        value
+            .as_object()
+            .and_then(|object| object.get_property("value").cloned())
+            .unwrap_or_else(Value::null),
+    )
 }
 
 fn reflected_class_constant(

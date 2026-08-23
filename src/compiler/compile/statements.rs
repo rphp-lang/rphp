@@ -3761,6 +3761,7 @@ impl Compiler {
                             evaluation_scope: std::rc::Rc::new(AttributeEvaluationScope {
                                 namespace: self.current_namespace.clone(),
                                 class_imports: self.use_map.clone(),
+                                function_imports: self.function_use_map.clone(),
                                 constant_imports: self.constant_use_map.clone(),
                                 lexical_class: None,
                                 lexical_parent: None,
@@ -4575,6 +4576,7 @@ impl Compiler {
                                         AttributeEvaluationScope {
                                             namespace: self.current_namespace.clone(),
                                             class_imports: self.use_map.clone(),
+                                            function_imports: self.function_use_map.clone(),
                                             constant_imports: self.constant_use_map.clone(),
                                             lexical_class: Some(resolved_class.clone()),
                                             lexical_parent: resolved_parent.clone(),
@@ -5498,6 +5500,7 @@ impl Compiler {
                                         AttributeEvaluationScope {
                                             namespace: self.current_namespace.clone(),
                                             class_imports: self.use_map.clone(),
+                                            function_imports: self.function_use_map.clone(),
                                             constant_imports: self.constant_use_map.clone(),
                                             lexical_class: Some(resolved_trait.clone()),
                                             lexical_parent: None,
@@ -5604,6 +5607,7 @@ impl Compiler {
                                     AttributeEvaluationScope {
                                         namespace: self.current_namespace.clone(),
                                         class_imports: self.use_map.clone(),
+                                        function_imports: self.function_use_map.clone(),
                                         constant_imports: self.constant_use_map.clone(),
                                         lexical_class: Some(resolved_trait.clone()),
                                         lexical_parent: None,
@@ -6688,6 +6692,7 @@ impl Compiler {
                     std::rc::Rc::new(AttributeEvaluationScope {
                         namespace: self.current_namespace.clone(),
                         class_imports: self.use_map.clone(),
+                        function_imports: self.function_use_map.clone(),
                         constant_imports: self.constant_use_map.clone(),
                         lexical_class: Some(owner.to_string()),
                         lexical_parent: parent.map(str::to_owned),
