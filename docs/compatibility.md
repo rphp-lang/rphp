@@ -8,6 +8,103 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`stream-context-default-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+candidate implementation commit `efafb69d`. Across all 5,599 unmodified
+`Zend/tests` and `tests/lang` cases, 4,109 pass, 1,194 fail, 115 skip, none
+remain XFAIL, 181 are unsupported, and none time out or crash. The exact pass-
+set delta from `946b7fa7` is +0/-0. Two final runs have the same manifest
+SHA-256, `9099d5d2a3f296df91268353240943121fd4f2cedc4b30e0da2805d80180fa9d`,
+and summary SHA-256,
+`8a5923f093f4bfa78239a1e5e9954ebbe4285efa4a97f6d808b1356c217d594a`.
+
+The default build now exposes `stream_context_create()`,
+`stream_context_get_default()`, `stream_context_get_options()`,
+`stream_context_get_params()`, `stream_context_set_default()`,
+`stream_context_set_option()`, `stream_context_set_options()` and
+`stream_context_set_params()`. Their exercised PHP 8.5 contract includes
+reflected arity and parameter names, request-owned context resources, wrapper-
+option normalization and merging, request-local default-context identity,
+stream-owned option/parameter mutation, callback validation and diagnostics,
+and PHP 8.5's two-argument `stream_context_set_option()` deprecation. `fopen()`
+validates its third and fourth arguments and stream-context resources while
+retaining the established two-argument implementation for its common path.
+
+The initial direct promotion was rejected: storing two `PhpArray`s inline in
+every stream made the 100,000-iteration `php://memory` control 7.338% to 9.420%
+slower across diagnostic variants. The admitted representation lazily boxes
+the context only when a stream is mutated, and dispatches extended `fopen()`
+from the supplied-argument count. This keeps the ordinary stream payload small
+and avoids two empty-slot probes. The existing two unsafe frame accesses are
+unchanged in number and now carry local safety proofs; no opcode, call-frame,
+PHP Value/object/array layout or dependency changes are made.
+
+The 12-case focused unmodified cluster moves from zero passes, nine failures
+and three skips to eight passes, one failure and three skips, an exact +8/-0
+pass-set delta. PHP 8.5.9 records ten passes and two local failures caused by
+its unavailable `socket_import_stream()`. The complete 158-case
+`ext/standard/tests/streams` audit moves from 7 to 17 passes (+10/-0), with 114
+failures, 15 skips and 12 unsupported cases. Its gains are `bug44712.phpt`,
+`bug71245.phpt`, `bug71884.phpt` and seven stream-context diagnostic/mutation
+cases. `bug61115.phpt` advances from the missing context function to a later
+independent `preg_replace()` type-diagnostic gap. The final focused and streams
+manifest/summary hash pairs are respectively
+`02dba5140ebd97c2e311ad90f7ddb9508d25378757ef0b8e41922ef7570aba7e` /
+`c89b35742bed78e1785737ca62ab61e6f905a688b364328543775cdab6013994`
+and
+`da91cd98fac037dc5062c0607b664cf56c3ca0a94dd34b6711f24d1085e9630d` /
+`14f813e43fe5dcf1c459fdf003fcefa84c08bec60fb0f6b59db77a76ede01efa`.
+
+The 49-case non-Windows directory audit gains `scandir_basic.phpt` and reaches
+28 passes, 16 failures and five skips (+1/-0); its final hash pair is
+`2cda6c5e82cb572384385491470ba049487b1de91cb9fbc97a7ffce937b82d66` /
+`63a1810ded430461107a80abe3e04ee2986d9a4c42acb7a11402b226e33a341a`.
+The complete 842-case array audit retains its exact 590-pass set, and the
+serial 897-case file audit retains its exact 92-pass set. `unlink_error.phpt`
+only advances from the former missing context function to its later independent
+warning-output gap. Their final hash pairs are
+`806d1e1eae702b1ecd359f8d0a6c4df6eaef62446ac9543f5559fdd2bf0472fc` /
+`1d9aa625715f80e9765283e835fa3e3433726236267f006dbcb008b3350ec013`
+and
+`dc1bb37b6220f160073805e44e0acc6db7b02f420d72eb5388243ce18e84fcaf` /
+`f1c487da1bf82e083abd76c8a7888b084be3ca859a92a81d2adb97a098645833`.
+Both final runs of every named corpus are byte-identical.
+
+An original regression covers all eight reflected signatures, the legacy
+deprecation and missing-class callback diagnostic. A separate 631-byte clean-
+room output is byte-identical to PHP 8.5.9 with SHA-256
+`80d5e4087a180dac6e8d11d846157b3011ee67974b6aeaa8d6f50862796599ef`.
+The implementation was written independently from differential PHP behavior
+and the existing RPHP stream/resource model; no php-src implementation/tests
+or external named algorithm were copied or mechanically translated.
+
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, the unchanged 1,623-block/289-
+function unsafe ratchet with 339 SAFETY annotations, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+A local CPU-pinned balanced alternating AMD64 release comparison used 32 pairs
+per comparable lane, three warmups per binary, performance-governor CPU 2 and
+no excluded samples. The two final paired medians are +0.764%/+0.852% for
+batches of 100 empty requests, -0.077%/+0.673% for 100,000 `php://memory`
+open/write/close iterations, +0.348%/+0.495% for 50,000 ordinary file
+open/write/close iterations and -3.026%/-2.890% for 500,000 unchanged
+`file_exists()` calls. Every lane stays below the +5% gate with exact output.
+The new-only 20,000-iteration context-API lane has candidate/PHP 8.5.9 medians
+of 0.044451/0.010757 and 0.044615/0.010957 seconds; no A/B claim is made because
+the baseline lacks those functions. Baseline/candidate binary SHA-256 values
+are `f2c38c85ae8d226e6eae7434c9a45aa1d224a99112326bfebcfd132addf9fa81`
+and `fcc01601815ac0d1668a6c9d1fb86e043391d4cc82f213e873b4bd28f2d065cb`.
+The benchmark harness hash is
+`06f12870d147b2cc449a955bb3eaf78f03089df909d008e02179599bcb130b4c`;
+the two log hashes are
+`aaf7a5de7e7848ef7f7c4834df76f8df913fc1bf9a553cfdd78ebb688a814c65`
+and `6d44e3ea989aab96614cf1dcc0df3e73b1aeac0b3de9ed19add3cb537e221504`.
+
+TCP/UDP/socket wrappers remain unavailable, so the three focused network
+cases remain skips. `stream_context_set_options_error.phpt` remains blocked by
+the independent missing `proc_open()` contract. The remaining stream, file,
+directory and array failures and broader PHP compatibility are not claimed.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `directory-stream-functions-batch`, pinned to php-src 8.5 commit `fcc29c8`
 and candidate implementation commit `01bc3597`. Across all 5,599 unmodified
 `Zend/tests` and `tests/lang` cases, 4,109 pass, 1,194 fail, 115 skip, none
@@ -83,9 +180,9 @@ the benchmark harness/log hash pair is
 
 Native `readdir()` and `SCANDIR_SORT_NONE` order remains filesystem-dependent;
 only membership and rewind consistency are claimed. The `dir()` object API,
-default-build `stream_context_create()`, reverse `fclose()` validation for a
-directory handle, five focused `SKIPIF` prerequisites, three parser gaps and
-the remaining directory/array suite are separate work.
+reverse `fclose()` validation for a directory handle, five focused `SKIPIF`
+prerequisites, three parser gaps and the remaining directory/array suite are
+separate work.
 
 The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `cardinality-extrema-batch`, pinned to php-src 8.5 commit `fcc29c8` and
@@ -12288,7 +12385,7 @@ being run.
 | `php-generics-erased` | Experimental generic syntax with bound-erased runtime behavior |
 | `php-generics-reified` | Experimental generic syntax with reified runtime sidecars and checks |
 | `file-contents`, `file-write`, `file-lines`, `include-path` | Incremental file/include functionality |
-| `stream-*`, `csv-*`, `resource-lifetime`, `value-errors` | Incremental stream, resource, and error behavior |
+| remaining `stream-*`, `csv-*`, `resource-lifetime` | Incremental stream and resource behavior; `stream-context` is in the default build |
 | `vm-stats` | Internal execution and JIT diagnostics |
 
 The generic syntax is an RPHP experiment, not part of the default PHP

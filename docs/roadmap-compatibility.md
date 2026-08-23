@@ -1849,9 +1849,47 @@ gate. New-only `scandir()` and `opendir()`/`readdir()` workloads match PHP
 output and are disclosed without baseline ratios.
 
 Native enumeration order remains filesystem-dependent. The `dir()` object,
-default-build stream-context creation, reverse `fclose()` validation, remaining
-`SKIPIF`/parser prerequisites and broader directory/array compatibility remain
-separate work.
+reverse `fclose()` validation, remaining `SKIPIF`/parser prerequisites and
+broader directory/array compatibility remain separate work.
+
+The `stream-context-default-batch` checkpoint promotes
+`stream_context_create()`, `stream_context_get_default()`,
+`stream_context_get_options()`, `stream_context_get_params()`,
+`stream_context_set_default()`, `stream_context_set_option()`,
+`stream_context_set_options()` and `stream_context_set_params()` together. The
+admitted PHP 8.5 contract covers reflected arity/names, request-local resource
+identity, option/parameter merging and mutation, callback diagnostics, the
+legacy two-argument deprecation and extended `fopen()` validation. The ordinary
+two-argument `fopen()` body remains its established path; stream contexts are
+lazily boxed only when stream-local state is first mutated. The implementation
+is independent and does not copy or mechanically translate php-src source/tests
+or an external named algorithm.
+
+The 12-case focus moves from zero to eight passes (+8/-0). The complete
+158-case streams audit moves from 7 to 17 passes (+10/-0), while the 49-case
+non-Windows directory audit gains `scandir_basic.phpt` and reaches 28 passes
+(+1/-0). The 842-case array and serial 897-case file audits retain exact pass
+sets of 590 and 92 respectively, and the pinned Zend/lang corpus remains byte-
+identical at 4,109 passes, 1,194 failures, 115 skips and 181 unsupported cases.
+No corpus has a lost pass, timeout or crash; two remaining failures advance to
+later explained `preg_replace()` and `unlink()` gaps. Two final runs of every
+corpus are byte-identical. An original regression and a 631-byte clean-room
+PHP/RPHP transcript cover the promoted surface and diagnostics.
+
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, the unchanged 1,623/289 unsafe ratchet, Composer S0, four Symfony S1
+gates and PHP 8.5.9 S2/S3 pass. The initial inline context representation was
+rejected after a +7.338% to +9.420% `php://memory` regression. With lazy boxed
+state, two final CPU-pinned 32-pair runs put paired medians at
++0.764%/+0.852% for startup, -0.077%/+0.673% for `php://memory`,
++0.348%/+0.495% for ordinary file streams and -3.026%/-2.890% for unchanged
+`file_exists()`, below the +5% gate. The new-only context API is disclosed
+without a baseline ratio.
+
+TCP/UDP/socket wrappers and their three focused cases remain unavailable.
+`stream_context_set_options_error.phpt` remains blocked by missing
+`proc_open()`, and broader stream/file/directory/array compatibility is not
+claimed.
 
 The `array-key-value-batch` checkpoint advances `array_keys()`,
 `array_values()`, `array_flip()`, `array_count_values()` and `array_rand()`
