@@ -8,6 +8,83 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`cardinality-extrema-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+candidate implementation commit `befb4d41`. Across all 5,599 unmodified
+`Zend/tests` and `tests/lang` cases, 4,109 pass, 1,194 fail, 115 skip, none
+remain XFAIL, 181 are unsupported, and none time out or crash. The headline
+pass rate is 77.484%, the whole-corpus rate is 73.388%, and 4,809 of 5,303
+attempted cases reach runtime (90.685%). The exact delta from `fa4b2510` is
++0/-0 because the supplying extension cases are outside this pinned corpus.
+Two independently executed final runs have the same manifest SHA-256,
+`f5dcfce168946156c41386bae89610bc8eff74387027c549665489610d9d0934`,
+and the same summary SHA-256,
+`b4729b7a931595319246b26e6b68360c9e45eec6af95c2fcd40e6ca19a438b0d`.
+
+`count()`/`sizeof()` and `min()`/`max()` now cover their exercised PHP 8.5
+signatures, aliases, constants, typed and weak mode conversion, error
+precedence, Countable dispatch and exception propagation. Recursive count is
+iterative over structural snapshots and live reference cells, distinguishes
+shared subarrays from active cycles, preserves reentrant diagnostics and
+handles a tested depth of 600 without using the host call stack. Extrema cover
+one-array and variadic calls, empty and typed errors, exact large numeric
+strings, arrays, objects, recursive comparison errors, references, ties and
+NaN. Checked null/string ordering and the observable PHP 8.5 distinction
+between statically lowered binary extrema and dynamic internal calls are also
+preserved. The binary fast path reuses the existing direct-internal ABI; no
+opcode is added. The implementation is independent and does not copy or
+mechanically translate php-src code, tests, or an external named algorithm.
+
+The 23-case unmodified PHP 8.5 focused cluster moves from 1 to 22 passes, an
+exact +21/-0 pass-set delta; PHP 8.5.9 passes all 23. The sole remaining RPHP
+failure executes the recursive-count behavior and then reaches the independent
+missing `opendir()` prerequisite. The complete recursive 842-case
+`ext/standard/tests/array` audit moves from 564 to 585 passes with no lost
+pass: 243 fail, 13 skip, one is unsupported, and none time out or crash. Two
+serial focused and full-array runs are byte-identical. Their manifest/summary
+SHA-256 pairs are respectively
+`f9778826954f70631651841805138468ed623ef7a8c0b4e8a7c72f2d0a6b2df5` /
+`60a646f508a795d10e4d4f9e0ca310c3feb021bfffd9863de022a1cf95c8a8c0`
+and
+`508d860d758f9acdf19768feb9ca1735e3be742ba0604d801f1c08f0eb97b557` /
+`a59d378382d2727377cc9bc59ca24cb7923b82dd95eeba23665d6fe330384386`.
+
+Five original E2E programs cover Reflection signatures, aliases and constants;
+ordinary, recursive, reentrant, throwing, strict and deep count paths; extrema
+array/variadic forms, references, comparisons, recursion, static lowering,
+dynamic ties and NaN. Their combined 2,401 output bytes are byte-identical to
+PHP 8.5.9 with SHA-256
+`87b8b6631fae6c962b364c56fe207d87ef8e96989bef9677d500b757cde45cdb`.
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, the unchanged 1,623-block/289-
+function unsafe ratchet with 337 SAFETY annotations, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+No call-frame, PHP value/object/array layout, dependency or production unsafe
+change is made.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on
+an AMD Ryzen 9 7950X used performance-governor CPU 2, three warmups per binary
+and no excluded samples. Independent/paired median changes are
++0.271%/+0.141% for batches of 100 empty requests, +2.149%/+1.892% for
+500,000 flat `count()` calls, -57.782%/-57.694% for 500,000 direct binary
+`min()` plus `max()` pairs and +0.746%/+0.801% for one million unchanged scalar
+comparisons. Every comparable lane remains below the +5% gate and baseline,
+candidate and PHP 8.5.9 outputs match. Baseline and candidate binary SHA-256
+values are
+`5d1ec9dac7653a58bec98bcd12e40846636bc8dfeeb0f00cf6308f7f23101620`
+and
+`7cf5bf057a375c10df6c6c59355f32492e869212c8fffe55c9f912449234191c`;
+the benchmark harness/log SHA-256 pair is
+`27f49bf85009bae8e9530f81137819d9b67435e3c09d9c6aad9231fb90f0d459` /
+`3b81e05115c375e05a8114bc5a19de22981cba88888282741841880d28ede147`.
+Recursive count, array-form extrema and variadic extrema have exact candidate/
+PHP outputs, but the baseline lacks each admitted contract, so no A/B ratio is
+claimed for those three disclosure lanes.
+
+The missing `opendir()` prerequisite, complete reflected internal type,
+default and return metadata, the remaining array suite and broader PHP
+compatibility remain separate work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `array-lookup-aggregate-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 candidate implementation commit `fa78e285`. Across all 5,599 unmodified
 `Zend/tests` and `tests/lang` cases, 4,109 pass, 1,194 fail, 115 skip, none

@@ -1782,6 +1782,40 @@ Three focused parser failures and two missing-`opendir()` failures remain.
 Complete internal Reflection type/default/return metadata, the remaining
 array suite and broader compatibility are not claimed.
 
+The `cardinality-extrema-batch` checkpoint advances `count()`/`sizeof()` and
+`min()`/`max()` together. The admitted PHP 8.5 contract covers reflected
+signatures and constants, typed and weak modes, validation precedence,
+Countable dispatch, iterative recursive counting with structural snapshots,
+shared-array identity, active-cycle warnings, reentrant handlers and deep
+inputs. Extrema cover one-array and variadic forms, errors, references, exact
+numeric strings, arrays, objects, recursive comparisons, ties and NaN.
+Checked null/string ordering and the observable distinction between direct
+binary and dynamic extrema calls are preserved. The direct case reuses the
+existing binary internal-call ABI; no opcode is added, and no php-src or
+third-party implementation or test is copied or translated.
+
+The 23-case focused cluster moves from 1 to 22 passes (+21/-0); PHP 8.5.9
+passes 23/23, while RPHP's remaining case proceeds through recursive count and
+then stops at missing `opendir()`. The complete 842-case recursive array audit
+moves from 564 to 585 passes (+21/-0), with 243 failures, 13 skips, one
+unsupported case and zero timeouts or crashes. The pinned Zend/lang corpus is
+byte-identical at 4,109 passes, 1,194 failures, 115 skips and 181 unsupported
+cases with zero timeouts or crashes. Two serial focused, array and main
+manifests and summaries are respectively byte-identical. Five original E2E
+programs produce the same 2,401 bytes under RPHP and PHP 8.5.9.
+
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, the unchanged 1,623/289 unsafe ratchet, Composer S0, four Symfony S1
+gates and PHP 8.5.9 S2/S3 pass. No frame, PHP value/object/array layout,
+dependency or production unsafe change is made. CPU-pinned 32-pair balanced
+release controls put paired medians at +0.141% for startup, +1.892% for flat
+count, -57.694% for direct binary extrema and +0.801% for unchanged scalar
+comparison, below the +5% gate with exact output. Recursive count, array-form
+extrema and variadic extrema are disclosed without A/B ratios because the
+baseline lacks those contracts. Missing `opendir()`, complete internal
+Reflection type/default/return metadata, the remaining array suite and broader
+compatibility are not claimed.
+
 The `array-key-value-batch` checkpoint advances `array_keys()`,
 `array_values()`, `array_flip()`, `array_count_values()` and `array_rand()`
 together. The admitted contract covers reflected arity and parameter names,
