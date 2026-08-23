@@ -4767,8 +4767,22 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     && eg.pending_closure_captures.is_empty()
                 {
                     let num_args_fast = unsafe { (*call).num_args };
+                    // SAFETY: the FunctionType guard proves that the live
+                    // descriptor has the repr(C) InternalFunction tail.
+                    let internal = unsafe {
+                        &*((*call).func as *const super::function::InternalFunction)
+                    };
+                    let raw_variadic_handler = (func_common_fast.sig.is_variadic
+                        && num_args_fast
+                            <= func_common_fast.sig.public_arity().saturating_add(1))
+                    .then_some(internal.raw_variadic_handler)
+                    .flatten();
                     let arity_ok = num_args_fast >= func_common_fast.sig.required_num_args
-                        && num_args_fast <= func_common_fast.sig.public_arity();
+                        && if func_common_fast.sig.is_variadic {
+                            raw_variadic_handler.is_some()
+                        } else {
+                            num_args_fast <= func_common_fast.sig.public_arity()
+                        };
                     let required_args_present = !unsafe { (*call).named_args_used } || {
                         let mut all_present = true;
                         for i in 0..func_common_fast.sig.required_num_args {
@@ -4794,9 +4808,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         };
                         unsafe { (*call).return_value = return_value_ptr };
 
-                        let internal = unsafe {
-                            &*((*call).func as *const super::function::InternalFunction)
-                        };
                         if !return_value_ptr.is_null() {
                             unsafe {
                                 frame_result_prepare_external_write(
@@ -4806,7 +4817,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 )
                             };
                         }
-                        let handler_result = (internal.handler)(call, return_value_ptr, eg);
+                        let handler_result = if let Some(handler) = raw_variadic_handler {
+                            handler(call, return_value_ptr, eg, num_args_fast)
+                        } else {
+                            (internal.handler)(call, return_value_ptr, eg)
+                        };
                         if !return_value_ptr.is_null() {
                             unsafe {
                                 frame_result_finish_external_write(

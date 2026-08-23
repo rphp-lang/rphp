@@ -32,14 +32,22 @@ use crate::vm::function::{
 
 pub(super) use registry::register;
 
-fn with_argument<R>(ed: *mut ExecuteData, index: u32, visit: impl FnOnce(&Value) -> R) -> R {
+fn with_raw_argument<R>(ed: *mut ExecuteData, index: u32, visit: impl FnOnce(&Value) -> R) -> R {
+    // SAFETY: every reflection handler receives a live internal ExecuteData
+    // frame, and its registered fixed/variadic arity guarantees this CV slot.
     let value = unsafe { (*ed).cv(index) };
-    let value = if value.is_reference() {
-        unsafe { &*value.as_ref_ptr() }
-    } else {
-        value
-    };
     visit(value)
+}
+
+fn with_argument<R>(ed: *mut ExecuteData, index: u32, visit: impl FnOnce(&Value) -> R) -> R {
+    with_raw_argument(ed, index, |value| {
+        let value = if value.is_reference() {
+            unsafe { &*value.as_ref_ptr() }
+        } else {
+            value
+        };
+        visit(value)
+    })
 }
 
 fn argument_string(ed: *mut ExecuteData, index: u32) -> String {
@@ -49,6 +57,14 @@ fn argument_string(ed: *mut ExecuteData, index: u32) -> String {
             .map(str::to_owned)
             .unwrap_or_else(|| value.echo_to_string())
     })
+}
+
+fn reflection_argument_type_name(value: &Value) -> String {
+    match value.dereferenced().value_type() {
+        ValueType::True => "true".to_string(),
+        ValueType::False => "false".to_string(),
+        _ => value.dereferenced().diagnostic_type_name().into_owned(),
+    }
 }
 
 fn return_value(rv: *mut Value, value: Value) -> Result<(), VmError> {
@@ -124,6 +140,17 @@ fn reflected_signature_type(hint: &ParamTypeHint) -> Value {
 fn reflected_property(ed: *mut ExecuteData, name: &str) -> Option<Value> {
     with_argument(ed, 0, |value| {
         value.as_object()?.get_property(name).cloned()
+    })
+}
+
+fn with_reflected_property<R>(
+    ed: *mut ExecuteData,
+    name: &str,
+    visit: impl FnOnce(Option<&Value>) -> R,
+) -> R {
+    with_argument(ed, 0, |value| {
+        let object = value.as_object();
+        visit(object.as_ref().and_then(|object| object.get_property(name)))
     })
 }
 
@@ -207,6 +234,16 @@ fn function_construct(
         .as_closure()
         .map(|closure| closure.func)
         .or_else(|| eg.find_function(&owner));
+    let public_name = function.map_or_else(
+        || owner.trim_start_matches('\\').to_string(),
+        |function| {
+            crate::vm::execute::displayed_function_name(eg, function as *const FunctionCommon)
+        },
+    );
+    let is_anonymous = target
+        .as_closure()
+        .and_then(PhpClosure::user_function)
+        .is_some_and(|function| function.op_array.name.starts_with("__closure_"));
     let closure_this = target
         .as_closure()
         .and_then(|closure| closure.bound_this.clone())
@@ -224,17 +261,21 @@ fn function_construct(
                     .map(|object| object.class_name.to_string())
             })
     });
+    let closure_scope_class = target.as_closure().and_then(|closure| {
+        if closure.scope_is_dummy {
+            Some("Closure".to_string())
+        } else if closure.called_scope_class_id != 0 {
+            eg.class_by_id(closure.called_scope_class_id)
+                .map(|class| class.name.clone())
+        } else {
+            None
+        }
+    });
     set_target(ed, kind, owner.clone());
     with_argument(ed, 0, |value| {
         if let Some(mut object) = value.as_object_mut() {
-            object.set_property(
-                "name",
-                Value::string(
-                    owner
-                        .rsplit_once("::")
-                        .map_or(owner.as_str(), |(_, name)| name),
-                ),
-            );
+            object.set_property("name", Value::string(public_name));
+            object.set_property("__reflection_is_anonymous", Value::bool(is_anonymous));
             object.set_property("__reflection_closure_this", closure_this);
             object.set_property(
                 "__reflection_closure",
@@ -245,6 +286,10 @@ fn function_construct(
             object.set_property(
                 "__reflection_closure_called_class",
                 called_class.map_or_else(Value::null, Value::string),
+            );
+            object.set_property(
+                "__reflection_closure_scope_class",
+                closure_scope_class.map_or_else(Value::null, Value::string),
             );
             object.set_property(
                 "__reflection_function_pointer",
@@ -265,11 +310,35 @@ fn reflected_function(ed: *mut ExecuteData) -> Option<&'static FunctionCommon> {
 
 fn reflected_user_function(ed: *mut ExecuteData) -> Option<&'static UserFunction> {
     let function = reflected_function(ed)?;
-    (function.fn_type == FunctionType::User).then(|| {
-        // SAFETY: FunctionCommon is the first field of every repr(C)
-        // UserFunction and the discriminant above proves this allocation kind.
-        unsafe { &*(function as *const FunctionCommon as *const UserFunction) }
-    })
+    reflected_user_function_from_common(function)
+}
+
+fn reflected_user_function_from_common(
+    function: &'static FunctionCommon,
+) -> Option<&'static UserFunction> {
+    reflected_invocation_metadata(function, None).0
+}
+
+fn reflected_invocation_metadata<'a>(
+    function: &'static FunctionCommon,
+    receiver: Option<&'a Value>,
+) -> (Option<&'static UserFunction>, Option<(u32, &'a str)>) {
+    let user = function.fn_type == FunctionType::User;
+    let object = receiver.filter(|value| value.value_type() == ValueType::Object);
+    // SAFETY: FunctionCommon is the first field of every repr(C) UserFunction
+    // and the discriminant proves that allocation kind. The checked Object
+    // tag similarly proves its stable request-owned PhpObject payload.
+    unsafe {
+        (
+            user.then(|| &*(function as *const FunctionCommon as *const UserFunction)),
+            object.map(|object| {
+                (
+                    object.object_class_id_unchecked(),
+                    object.object_class_name_unchecked(),
+                )
+            }),
+        )
+    }
 }
 
 fn receiver_class_name(ed: *mut ExecuteData) -> Option<String> {
@@ -2118,8 +2187,75 @@ fn function_get_closure(
             captures: vec![],
             static_vars: None,
             has_heap_captures: false,
+            scope_is_dummy: false,
         }),
     )
+}
+
+fn reflected_function_callback(
+    ed: *mut ExecuteData,
+    eg: &ExecutorGlobals,
+) -> Option<super::ResolvedCallback> {
+    if let Some(closure) = reflected_property(ed, "__reflection_closure")
+        .filter(|value| value.value_type() == ValueType::Closure)
+    {
+        return super::resolve_callback(&closure, eg, None);
+    }
+    let function = reflected_function(ed)?;
+    Some(super::ResolvedCallback {
+        func_ptr: function as *const FunctionCommon,
+        prepend_args: Vec::new(),
+        use_vars: Vec::new(),
+        called_scope_class_id: 0,
+        bound_this: None,
+        closure_static_vars: None,
+        is_magic_call: false,
+    })
+}
+
+fn invoke_reflected_function(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let arguments =
+        with_argument(ed, 1, |value| value.as_array().cloned()).unwrap_or_else(PhpArray::new);
+    let Some(callback) = reflected_function_callback(ed, eg) else {
+        reflection_exception(eg, "ReflectionFunction has no resolved function");
+        return Ok(());
+    };
+    let result = super::call_resolved_with_php_array(eg, callback, &arguments)?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    return_value(rv, result)
+}
+
+fn function_invoke(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    invoke_reflected_function(ed, rv, eg)
+}
+
+fn function_invoke_args(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let valid = with_argument(ed, 1, |value| value.value_type() == ValueType::Array);
+    if !valid {
+        let given = with_argument(ed, 1, reflection_argument_type_name);
+        eg.exception = Some(make_error_value(
+            "TypeError",
+            &format!(
+                "ReflectionFunction::invokeArgs(): Argument #1 ($args) must be of type array, {given} given"
+            ),
+        ));
+        return Ok(());
+    }
+    invoke_reflected_function(ed, rv, eg)
 }
 
 fn hint_metadata(hint: &ParamTypeHint) -> (&'static str, String, bool) {
@@ -2319,13 +2455,61 @@ fn function_is_anonymous(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let anonymous = reflected_property(ed, "__generic_kind")
-        .and_then(|kind| kind.as_str().map(|kind| kind == "closure"))
-        .unwrap_or(false)
-        && reflected_property(ed, "__generic_owner")
-            .and_then(|owner| owner.as_str().map(|owner| owner.starts_with("__closure_")))
-            .unwrap_or(false);
+    let anonymous =
+        reflected_property(ed, "__reflection_is_anonymous").is_some_and(|value| value.is_truthy());
     return_value(rv, Value::bool(anonymous))
+}
+
+fn function_get_short_name(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let name = reflected_property(ed, "name")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let short = if reflected_property(ed, "__reflection_is_anonymous")
+        .is_some_and(|value| value.is_truthy())
+    {
+        name
+    } else {
+        name.rsplit_once('\\')
+            .map_or(name.clone(), |(_, short)| short.to_string())
+    };
+    return_value(rv, Value::string(short))
+}
+
+fn function_get_namespace_name(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let anonymous =
+        reflected_property(ed, "__reflection_is_anonymous").is_some_and(|value| value.is_truthy());
+    let namespace = (!anonymous)
+        .then(|| reflected_property(ed, "name"))
+        .flatten()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .and_then(|name| {
+            name.rsplit_once('\\')
+                .map(|(namespace, _)| namespace.to_string())
+        })
+        .unwrap_or_default();
+    return_value(rv, Value::string(namespace))
+}
+
+fn function_in_namespace(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let anonymous =
+        reflected_property(ed, "__reflection_is_anonymous").is_some_and(|value| value.is_truthy());
+    let namespaced = !anonymous
+        && reflected_property(ed, "name")
+            .and_then(|value| value.as_str().map(|name| name.contains('\\')))
+            .unwrap_or(false);
+    return_value(rv, Value::bool(namespaced))
 }
 
 fn function_get_closure_this(
@@ -2345,6 +2529,29 @@ fn function_get_closure_called_class(
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let Some(name) = reflected_property(ed, "__reflection_closure_called_class")
+        .and_then(|name| name.as_str().map(str::to_owned))
+    else {
+        return return_value(rv, Value::null());
+    };
+    return_value(
+        rv,
+        object_value(
+            "ReflectionClass",
+            [
+                ("__generic_kind", Value::string("class")),
+                ("__generic_owner", Value::string(name.clone())),
+                ("name", Value::string(name)),
+            ],
+        ),
+    )
+}
+
+fn function_get_closure_scope_class(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(name) = reflected_property(ed, "__reflection_closure_scope_class")
         .and_then(|name| name.as_str().map(str::to_owned))
     else {
         return return_value(rv, Value::null());
@@ -3520,6 +3727,19 @@ fn class_get_name(
     )
 }
 
+fn class_debug_info(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let mut properties = PhpArray::with_hash_capacity(1);
+    properties.set_str(
+        "name",
+        reflected_property(ed, "name").unwrap_or_else(|| Value::string("")),
+    );
+    return_value(rv, Value::array(properties))
+}
+
 fn class_get_attributes(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -4543,26 +4763,248 @@ fn method_invoke(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    invoke_reflected_method(ed, rv, eg, "invoke", ReflectedMethodArguments::Packed)
+}
+
+fn method_invoke_raw(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    supplied_num_args: u32,
+) -> Result<(), VmError> {
+    invoke_reflected_method(
+        ed,
+        rv,
+        eg,
+        "invoke",
+        ReflectedMethodArguments::Raw(supplied_num_args),
+    )
+}
+
+fn method_invoke_args(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let valid = with_argument(ed, 2, |value| value.value_type() == ValueType::Array);
+    if !valid {
+        let given = with_argument(ed, 2, reflection_argument_type_name);
+        eg.exception = Some(make_error_value(
+            "TypeError",
+            &format!(
+                "ReflectionMethod::invokeArgs(): Argument #2 ($args) must be of type array, {given} given"
+            ),
+        ));
+        return Ok(());
+    }
+    invoke_reflected_method(ed, rv, eg, "invokeArgs", ReflectedMethodArguments::Packed)
+}
+
+#[derive(Clone, Copy)]
+enum ReflectedMethodArguments {
+    Packed,
+    Raw(u32),
+}
+
+fn invoke_reflected_method(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    api: &str,
+    arguments_source: ReflectedMethodArguments,
+) -> Result<(), VmError> {
     let Some(function) = reflected_function(ed) else {
         reflection_exception(eg, "ReflectionMethod has no resolved method");
         return Ok(());
     };
     let receiver = with_argument(ed, 1, Clone::clone);
-    let arguments = with_argument(ed, 2, |value| {
-        if let Some(values) = value.as_array() {
-            values.values().cloned().collect::<Vec<_>>()
-        } else if matches!(value.value_type(), ValueType::Undef) {
-            Vec::new()
-        } else {
-            vec![value.clone()]
-        }
-    });
-    let mut call_arguments = Vec::with_capacity(arguments.len() + 1);
-    if function.sig.this_offset == 1 {
-        call_arguments.push(receiver);
+    if !matches!(receiver.value_type(), ValueType::Null | ValueType::Object) {
+        eg.exception = Some(make_error_value(
+            "TypeError",
+            &format!(
+                "ReflectionMethod::{api}(): Argument #1 ($object) must be of type ?object, {} given",
+                reflection_argument_type_name(&receiver)
+            ),
+        ));
+        return Ok(());
     }
-    call_arguments.extend(arguments);
-    let result = crate::vm::execute::call_function(eg, function, &call_arguments)?;
+    let (user, receiver_class) = reflected_invocation_metadata(function, Some(&receiver));
+    let is_static = if let Some(user) = user {
+        user.common.plan.is_static_method()
+    } else {
+        parameter_property_bool(ed, "__reflection_method_static")
+    };
+    if !is_static {
+        let Some((receiver_class_id, receiver_class_name)) = receiver_class else {
+            let reflected_class = reflected_property(ed, "__reflection_method_class")
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_default();
+            let name = reflected_property(ed, "name")
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_default();
+            eg.exception = Some(make_error_value(
+                "ReflectionException",
+                &format!(
+                    "Trying to invoke non static method {reflected_class}::{name}() without an object"
+                ),
+            ));
+            return Ok(());
+        };
+        const REFLECTION_RECEIVER_GUARD: u64 = 1 << 63;
+        let receiver_guard = REFLECTION_RECEIVER_GUARD | u64::from(receiver_class_id);
+        let cached_receiver = receiver_class_id != 0
+            && user.is_some_and(|user| user.compact_class_guard.get() == receiver_guard);
+        let cacheable_receiver = !cached_receiver
+            && user.is_some()
+            && receiver_class_id != 0
+            && !function
+                .sig
+                .param_type_hints
+                .iter()
+                .any(|hint| matches!(hint, ParamTypeHint::ClassName(_)));
+        let valid_receiver = cached_receiver
+            || with_reflected_property(ed, "__reflection_declaring_class", |value| {
+                value
+                    .and_then(Value::as_str)
+                    .is_some_and(|declaring_class| {
+                        receiver_class_name.eq_ignore_ascii_case(declaring_class)
+                            || eg.class_is_a(receiver_class_name, declaring_class)
+                    })
+            });
+        if !valid_receiver {
+            eg.exception = Some(make_error_value(
+                "ReflectionException",
+                "Given object is not an instance of the class this method was declared in",
+            ));
+            return Ok(());
+        }
+        if cacheable_receiver && !cached_receiver {
+            user.expect("cacheable Reflection receiver belongs to a user method")
+                .compact_class_guard
+                .set(receiver_guard);
+        }
+    }
+
+    if let ReflectedMethodArguments::Raw(supplied_num_args) = arguments_source
+        && function.sig.ref_args == 0
+    {
+        let public_arguments = supplied_num_args.saturating_sub(1).min(1) as usize;
+        let mut arguments = [Value::undef(), Value::undef()];
+        let mut length = 0;
+        if function.sig.this_offset == 1 {
+            arguments[length] = receiver.clone();
+            length += 1;
+        }
+        if public_arguments != 0 {
+            arguments[length] = with_argument(ed, 2, Clone::clone);
+            length += 1;
+        }
+        let result = crate::vm::execute::call_function(eg, function, &arguments[..length])?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        return return_value(rv, result);
+    }
+
+    let called_scope_class_id = receiver_class
+        .map(|(class_id, _)| class_id)
+        .or_else(|| {
+            with_reflected_property(ed, "__reflection_method_class", |value| {
+                value
+                    .and_then(Value::as_str)
+                    .and_then(|class| eg.find_class(class).map(|class| class.class_id))
+            })
+        })
+        .unwrap_or(0);
+
+    let call_receiver = if is_static {
+        Value::null()
+    } else {
+        receiver.clone()
+    };
+
+    if let ReflectedMethodArguments::Raw(supplied_num_args) = arguments_source {
+        let public_arguments = supplied_num_args.saturating_sub(1).min(1) as usize;
+        let argument = (public_arguments != 0).then(|| {
+            with_raw_argument(ed, 2, |value| {
+                if function.sig.is_param_by_ref(0) {
+                    value.clone_closure_capture()
+                } else {
+                    value.clone()
+                }
+            })
+        });
+        let prepended = (function.sig.this_offset == 1).then_some(call_receiver);
+        let num_args = prepended.iter().count() + public_arguments;
+        let result = crate::vm::execute::call_function_owned_iter_with_context(
+            eg,
+            function,
+            num_args,
+            prepended.into_iter().chain(argument),
+            called_scope_class_id,
+            (!is_static).then_some(receiver),
+            0,
+            None,
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        return return_value(rv, result);
+    }
+
+    // The ordinary positional, by-value form is the established hot shape for
+    // ReflectionMethod::invoke(). Enter it directly from the live variadic
+    // bucket: allocating a normalized array/vector and a ResolvedCallback on
+    // every call nearly doubles the cost of this existing API. Named and
+    // by-reference arguments still take the canonical normalizer below.
+    let packed_by_value = function.sig.ref_args == 0
+        && with_argument(ed, 2, |value| {
+            value
+                .as_array()
+                .is_some_and(|arguments| !arguments.has_string_keys())
+        });
+    if packed_by_value {
+        let result = with_argument(ed, 2, |value| {
+            let arguments = value
+                .as_array()
+                .expect("ReflectionMethod variadic arguments must be an array");
+            let prepended = (function.sig.this_offset == 1).then_some(&call_receiver);
+            crate::vm::execute::call_function_iter_with_context(
+                eg,
+                function,
+                prepended.iter().count() + arguments.len(),
+                prepended.into_iter().chain(arguments.values()),
+                called_scope_class_id,
+                (!is_static).then_some(&receiver),
+                0,
+                None,
+            )
+        });
+        let result = result?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        return return_value(rv, result);
+    }
+
+    let arguments =
+        with_argument(ed, 2, |value| value.as_array().cloned()).unwrap_or_else(PhpArray::new);
+    let callback = super::ResolvedCallback {
+        func_ptr: function as *const FunctionCommon,
+        prepend_args: (function.sig.this_offset == 1)
+            .then_some(call_receiver)
+            .into_iter()
+            .collect(),
+        use_vars: Vec::new(),
+        called_scope_class_id,
+        bound_this: (!is_static).then_some(receiver),
+        closure_static_vars: None,
+        is_magic_call: false,
+    };
+    let result = super::call_resolved_with_php_array(eg, callback, &arguments)?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     return_value(rv, result)
 }
 
@@ -6253,6 +6695,7 @@ fn method_get_closure(
             captures: vec![],
             static_vars: None,
             has_heap_captures: false,
+            scope_is_dummy: false,
         }),
     )
 }

@@ -1713,6 +1713,117 @@ echo (int) $parameters[0]->hasType(), (int) $functionParameters[0]->hasType();
 }
 
 #[test]
+fn reflection_function_reports_namespaces_short_names_and_closure_names() {
+    let out = run_php(
+        r#"<?php
+namespace ReflectedNames;
+function target() {}
+class Owner {
+    public function make() { return function () {}; }
+}
+
+$named = new \ReflectionFunction(__NAMESPACE__ . '\\target');
+echo (int) $named->inNamespace(), ':', $named->getNamespaceName(), ':', $named->getShortName(), ':', $named->getName(), '|';
+$closure = new \ReflectionFunction((new Owner())->make());
+echo (int) !$closure->inNamespace(), ':', (int) ($closure->getNamespaceName() === ''), ':';
+echo (int) ($closure->getShortName() === $closure->getName()), ':';
+echo (int) str_starts_with($closure->getName(), '{closure:ReflectedNames\\Owner::make():'), '|';
+$callable = new \ReflectionFunction(target(...));
+echo (int) $callable->inNamespace(), ':', $callable->getNamespaceName(), ':', $callable->getShortName();
+"#,
+    );
+    assert_eq!(
+        out,
+        "1:ReflectedNames:target:ReflectedNames\\target|1:1:1:1|1:ReflectedNames:target"
+    );
+}
+
+#[test]
+fn reflection_function_reports_closure_scope_classes() {
+    let out = run_php(
+        r#"<?php
+class ReflectedScope {
+    public static function make() { return function () {}; }
+}
+
+$global = function () {};
+var_dump((new ReflectionFunction($global))->getClosureScopeClass());
+echo (new ReflectionFunction(ReflectedScope::make()))->getClosureScopeClass()->getName(), '|';
+echo (new ReflectionFunction($global->bindTo(new stdClass())))->getClosureScopeClass()->getName(), '|';
+echo (new ReflectionFunction($global->bindTo(new ReflectedScope(), ReflectedScope::class)))->getClosureScopeClass()->getName(), '|';
+echo (new ReflectionFunction($global->bindTo(null, ReflectedScope::class)))->getClosureScopeClass()->getName();
+"#,
+    );
+    assert_eq!(
+        out,
+        "NULL\nReflectedScope|Closure|ReflectedScope|ReflectedScope"
+    );
+}
+
+#[test]
+fn reflection_function_invoke_preserves_closure_context_and_arguments() {
+    let out = run_php(
+        r#"<?php
+function reflectedJoin($first, $second = 'b') { return $first . ':' . $second; }
+echo (new ReflectionFunction('reflectedJoin'))->invoke('a'), '|';
+$captured = 'kept';
+$closure = function ($suffix) use ($captured) { return $captured . ':' . $suffix; };
+echo (new ReflectionFunction($closure))->invoke('value'), '|';
+class ReflectedInvokeOwner {
+    public string $prefix = 'bound';
+    public function make() { return function ($value) { return $this->prefix . ':' . $value; }; }
+}
+$owner = new ReflectedInvokeOwner();
+echo (new ReflectionFunction($owner->make()))->invoke('value');
+"#,
+    );
+    assert_eq!(out, "a:b|kept:value|bound:value");
+}
+
+#[test]
+fn reflection_function_invoke_args_preserves_named_and_reference_arguments() {
+    let out = run_php(
+        r#"<?php
+function reflectedNamed($first = 'a', $second = 'b', $third = 'c') {
+    return $first . ':' . $second . ':' . $third;
+}
+function reflectedIncrement(&$value) { $value++; }
+
+echo (new ReflectionFunction('reflectedNamed'))->invokeArgs(['third' => 'C', 'first' => 'A']), '|';
+$value = 4;
+$arguments = [&$value];
+(new ReflectionFunction('reflectedIncrement'))->invokeArgs($arguments);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "A:b:C|5");
+}
+
+#[test]
+fn reflection_method_invoke_and_invoke_args_share_php_argument_semantics() {
+    let out = run_php(
+        r#"<?php
+class ReflectedInvocation {
+    private function join($first = 'a', $second = 'b', $third = 'c') {
+        return $first . ':' . $second . ':' . $third;
+    }
+    public static function statically($value) { return 'static:' . $value; }
+}
+
+$object = new ReflectedInvocation();
+$method = new ReflectionMethod(ReflectedInvocation::class, 'join');
+echo $method->getShortName(), ':', $method->getNamespaceName(), ':', (int) $method->inNamespace(), ':';
+var_dump($method->getClosureScopeClass());
+echo $method->invoke($object, 'A', third: 'C'), '|';
+echo $method->invokeArgs($object, ['third' => 'C', 'first' => 'A']), '|';
+$static = new ReflectionMethod(ReflectedInvocation::class, 'statically');
+echo $static->invokeArgs(null, ['value' => 'ok']);
+"#,
+    );
+    assert_eq!(out, "join::0:NULL\nA:b:C|A:b:C|static:ok");
+}
+
+#[test]
 fn reflection_method_get_closure_binds_instance_and_late_static_scope() {
     let out = run_php(
         r#"<?php

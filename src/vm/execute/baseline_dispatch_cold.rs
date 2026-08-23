@@ -4449,6 +4449,7 @@ fn op_create_closure(
         captures: Vec::with_capacity(opline.extended_value as usize),
         static_vars,
         has_heap_captures: false,
+        scope_is_dummy: false,
     };
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
     unsafe { frame_tmp_set(frame, result_ptr, Value::closure(closure)) };

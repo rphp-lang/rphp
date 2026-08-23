@@ -17,10 +17,10 @@ use super::generic_parameters::{
 use super::{
     attribute_construct, attribute_get_arguments, attribute_get_name, attribute_get_target,
     attribute_is_repeated, attribute_new_instance, class_constant_construct, class_construct,
-    class_file_name, class_get_attributes, class_get_constant, class_get_constants,
-    class_get_constructor, class_get_default_properties, class_get_interface_names,
-    class_get_interfaces, class_get_lazy_initializer, class_get_method, class_get_methods,
-    class_get_name, class_get_parent, class_get_properties, class_get_property,
+    class_debug_info, class_file_name, class_get_attributes, class_get_constant,
+    class_get_constants, class_get_constructor, class_get_default_properties,
+    class_get_interface_names, class_get_interfaces, class_get_lazy_initializer, class_get_method,
+    class_get_methods, class_get_name, class_get_parent, class_get_properties, class_get_property,
     class_get_reflection_constant, class_get_reflection_constants, class_get_trait_names,
     class_get_traits, class_has_method, class_implements_interface, class_initialize_lazy_object,
     class_is_abstract, class_is_final, class_is_instantiable, class_is_interface,
@@ -30,15 +30,17 @@ use super::{
     class_new_lazy_ghost, class_new_lazy_proxy, class_reset_as_lazy_ghost,
     class_reset_as_lazy_proxy, class_to_string, constant_construct, constant_get_value,
     deprecated_construct, function_construct, function_get_closure,
-    function_get_closure_called_class, function_get_closure_this,
-    function_get_number_of_parameters, function_get_number_of_required_parameters,
-    function_get_parameters, function_get_return_type, function_get_tentative_return_type,
-    function_has_return_type, function_has_tentative_return_type, function_is_anonymous,
-    function_is_closure, function_is_deprecated, function_returns_reference, generic_arguments,
-    generic_runtime_modes, method_construct, method_file_name, method_get_closure,
-    method_get_modifiers, method_get_prototype, method_has_prototype, method_invoke,
-    method_is_abstract, method_is_constructor, method_is_destructor, method_is_final,
-    method_is_private, method_is_protected, method_is_public, method_is_static, method_to_string,
+    function_get_closure_called_class, function_get_closure_scope_class, function_get_closure_this,
+    function_get_namespace_name, function_get_number_of_parameters,
+    function_get_number_of_required_parameters, function_get_parameters, function_get_return_type,
+    function_get_short_name, function_get_tentative_return_type, function_has_return_type,
+    function_has_tentative_return_type, function_in_namespace, function_invoke,
+    function_invoke_args, function_is_anonymous, function_is_closure, function_is_deprecated,
+    function_returns_reference, generic_arguments, generic_runtime_modes, method_construct,
+    method_file_name, method_get_closure, method_get_modifiers, method_get_prototype,
+    method_has_prototype, method_invoke, method_invoke_args, method_invoke_raw, method_is_abstract,
+    method_is_constructor, method_is_destructor, method_is_final, method_is_private,
+    method_is_protected, method_is_public, method_is_static, method_to_string,
     no_discard_construct, object_construct, override_construct, parameter_allows_null,
     parameter_get_attributes, parameter_get_declaring_class, parameter_get_default_value,
     parameter_get_name, parameter_get_type, parameter_has_type, parameter_is_default_available,
@@ -57,7 +59,9 @@ use super::{
     reflection_type_to_string, sensitive_parameter_construct,
 };
 use crate::compiler::compile::{ClassConstantDefinition, ClassDef, PropertyDefinition};
-use crate::compiler::make_internal_method;
+use crate::compiler::{
+    make_internal_method, make_internal_method_variadic, make_internal_method_variadic_raw,
+};
 use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
 use crate::value::{PhpObject, Value};
@@ -370,6 +374,43 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
             eg.function_table.insert(registered_name.to_ascii_lowercase(), pointer);
             eg.register_internal_function_display_name(pointer, registered_name);
             eg.method_declaring_class.insert(pointer, $class.to_string());
+            functions.push(function);
+        }};
+    }
+
+    macro_rules! register_variadic_method {
+        ($class:expr, $method:expr, $handler:expr, $required:expr, [$($name:expr),*]) => {{
+            let function = Box::new(make_internal_method_variadic(
+                $handler,
+                $required,
+                vec![$($name.to_string()),*],
+            ));
+            let pointer = &function.common as *const FunctionCommon;
+            let registered_name = format!("{}::{}", $class, $method);
+            eg.function_table
+                .insert(registered_name.to_ascii_lowercase(), pointer);
+            eg.register_internal_function_display_name(pointer, registered_name);
+            eg.method_declaring_class
+                .insert(pointer, $class.to_string());
+            functions.push(function);
+        }};
+    }
+
+    macro_rules! register_variadic_method_raw {
+        ($class:expr, $method:expr, $handler:expr, $raw_handler:expr, $required:expr, [$($name:expr),*]) => {{
+            let function = Box::new(make_internal_method_variadic_raw(
+                $handler,
+                $raw_handler,
+                $required,
+                vec![$($name.to_string()),*],
+            ));
+            let pointer = &function.common as *const FunctionCommon;
+            let registered_name = format!("{}::{}", $class, $method);
+            eg.function_table
+                .insert(registered_name.to_ascii_lowercase(), pointer);
+            eg.register_internal_function_display_name(pointer, registered_name);
+            eg.method_declaring_class
+                .insert(pointer, $class.to_string());
             functions.push(function);
         }};
     }
@@ -878,6 +919,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         false,
         false,
     );
+    register_method!("ReflectionClass", "__debugInfo", class_debug_info, 1, 0, []);
     eg.register_class(ClassDef {
         attributes: Vec::new(),
         name: "ReflectionProperty".to_string(),
@@ -1009,6 +1051,53 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         0,
         []
     );
+    register_method!(
+        "ReflectionFunctionAbstract",
+        "getClosureScopeClass",
+        function_get_closure_scope_class,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionFunctionAbstract",
+        "getShortName",
+        function_get_short_name,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionFunctionAbstract",
+        "getNamespaceName",
+        function_get_namespace_name,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionFunctionAbstract",
+        "inNamespace",
+        function_in_namespace,
+        1,
+        0,
+        []
+    );
+    register_variadic_method!("ReflectionFunction", "invoke", function_invoke, 0, ["args"]);
+    register_method!(
+        "ReflectionFunction",
+        "invokeArgs",
+        function_invoke_args,
+        2,
+        1,
+        ["args"]
+    );
+    functions
+        .last_mut()
+        .expect("ReflectionFunction::invokeArgs was just registered")
+        .common
+        .sig
+        .param_type_hints = vec![ParamTypeHint::Array];
     register_method!(
         "ReflectionFunction",
         "getclosure",
@@ -1552,14 +1641,39 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         0,
         []
     );
-    register_method!(
+    register_variadic_method_raw!(
         "ReflectionMethod",
         "invoke",
         method_invoke,
-        3,
+        method_invoke_raw,
         1,
         ["object", "args"]
     );
+    functions
+        .last_mut()
+        .expect("ReflectionMethod::invoke was just registered")
+        .common
+        .sig
+        .param_type_hints = vec![ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+        "object".to_string(),
+    )))];
+    register_method!(
+        "ReflectionMethod",
+        "invokeArgs",
+        method_invoke_args,
+        3,
+        2,
+        ["object", "args"]
+    );
+    functions
+        .last_mut()
+        .expect("ReflectionMethod::invokeArgs was just registered")
+        .common
+        .sig
+        .param_type_hints = vec![
+        ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName("object".to_string()))),
+        ParamTypeHint::Array,
+    ];
     register_method!(
         "ReflectionMethod",
         "getclosure",

@@ -268,8 +268,15 @@ fn bind_closure_value(
 
     if let Some(scope) = scope {
         rebound.called_scope_class_id = match scope.value_type() {
-            ValueType::Null => 0,
-            ValueType::String if scope.as_str() == Some("static") => source.called_scope_class_id,
+            ValueType::Null => {
+                rebound.scope_is_dummy = rebound.bound_this.is_some();
+                0
+            }
+            ValueType::String if scope.as_str() == Some("static") => {
+                rebound.scope_is_dummy = rebound.bound_this.is_some()
+                    && (source.scope_is_dummy || source.called_scope_class_id == 0);
+                source.called_scope_class_id
+            }
             ValueType::String => {
                 let name = scope.as_str().unwrap_or_default();
                 let Some(class) = eg.find_class(name) else {
@@ -278,10 +285,12 @@ fn bind_closure_value(
                     );
                     ret!(rv, Value::null());
                 };
+                rebound.scope_is_dummy = false;
                 class.class_id
             }
             ValueType::Object => {
                 let object = scope.as_object().expect("object value lost its payload");
+                rebound.scope_is_dummy = false;
                 eg.find_class(object.class_name.as_ref())
                     .map_or(0, |class| class.class_id)
             }
@@ -299,6 +308,7 @@ fn bind_closure_value(
         // With the default scope argument, a previously unscoped closure uses
         // the newly bound receiver as its late-static class. This is distinct
         // from an explicit null scope, which deliberately clears the class.
+        rebound.scope_is_dummy = source.scope_is_dummy || source.called_scope_class_id == 0;
         rebound.called_scope_class_id = object.class_id;
     }
 

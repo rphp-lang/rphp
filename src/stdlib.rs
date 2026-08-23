@@ -12527,6 +12527,7 @@ pub(crate) fn resolved_callback_into_closure(
         captures: resolved.use_vars,
         static_vars,
         has_heap_captures,
+        scope_is_dummy: false,
     })
 }
 

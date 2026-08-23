@@ -5825,6 +5825,7 @@ pub fn finalize_user_method(
     is_static: bool,
 ) -> UserFunction {
     function.common.sig.this_offset = 1;
+    function.common.plan.set_static_method(is_static);
     function.op_array.specialize_foreach_target_writes(
         function.common.sig.ref_args,
         function.common.sig.this_offset,
@@ -6134,6 +6135,21 @@ pub fn make_internal_method_variadic(
         raw_variadic_handler: None,
         raw_variadic_all_positional: false,
     }
+}
+
+/// Create a variadic internal instance method with a raw positional handler.
+/// Calls with at most one variadic value can consume their original flat call
+/// slots, while wider or named calls retain the canonical packed-array ABI.
+pub fn make_internal_method_variadic_raw(
+    handler: InternalFunctionHandler,
+    raw_variadic_handler: RawVariadicInternalFunctionHandler,
+    required_num_args: u32,
+    param_names: Vec<String>,
+) -> InternalFunction {
+    let mut function = make_internal_method_variadic(handler, required_num_args, param_names);
+    function.raw_variadic_handler = Some(raw_variadic_handler);
+    function.common.plan.call = CallStrategy::Fast;
+    function
 }
 
 /// Create an InternalFunction with by-ref parameter bitmask.

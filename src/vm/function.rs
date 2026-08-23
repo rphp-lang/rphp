@@ -1358,6 +1358,7 @@ impl CallPlan {
     const NO_DISCARD_ATTRIBUTE: u8 = 1 << 4;
     const TRAIT_CLASS_SCOPE: u8 = 1 << 5;
     const REFERENCE_FOREACH: u8 = 1 << 6;
+    const STATIC_METHOD: u8 = 1 << 7;
 
     /// `$this` may be copied into a nested method frame without incrementing
     /// its Rc. The caller owns the object for the entire synchronous call and
@@ -1370,6 +1371,19 @@ impl CallPlan {
     #[inline]
     pub fn set_borrow_this(&mut self, enabled: bool) {
         self.flags = (self.flags & !Self::BORROW_THIS) | u8::from(enabled) * Self::BORROW_THIS;
+    }
+
+    /// The function was declared as a static method. This shares the final
+    /// spare CallPlan flag, preserving every function and frame layout while
+    /// allowing detached Reflection calls to avoid dynamic metadata lookup.
+    #[inline(always)]
+    pub fn is_static_method(&self) -> bool {
+        self.flags & Self::STATIC_METHOD != 0
+    }
+
+    #[inline]
+    pub fn set_static_method(&mut self, enabled: bool) {
+        self.flags = (self.flags & !Self::STATIC_METHOD) | u8::from(enabled) * Self::STATIC_METHOD;
     }
 
     #[inline(always)]
@@ -1654,8 +1668,10 @@ pub struct UserFunction {
     pub composed_scalar_long_plan: Option<Box<ComposedScalarLongFunctionPlan>>,
     pub composed_typed_long_plan: Option<Box<ComposedTypedLongFunctionPlan>>,
     /// Last one- or two-class argument tuple that satisfied this declaration.
-    /// Stable class IDs make repeated monomorphic DTO/service calls a single
-    /// integer guard while new subclasses retain the canonical hierarchy check.
+    /// Declarations without class parameters may use the high-bit-tagged form
+    /// for a validated monomorphic Reflection receiver. Stable class IDs make
+    /// either repeated case a single integer guard while new classes retain
+    /// the canonical hierarchy check.
     pub compact_class_guard: Cell<u64>,
     /// Public by-value parameters that may borrow an immutable heap Value from
     /// their synchronous caller. Indexed by public parameter position.

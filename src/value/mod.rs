@@ -4307,6 +4307,7 @@ mod closure_ownership_tests {
             captures: vec![capture],
             static_vars: None,
             has_heap_captures: true,
+            scope_is_dummy: false,
         })
     }
 
@@ -4381,6 +4382,9 @@ pub struct PhpClosure {
     /// True if any captured value needs cleanup (owned heap values/resources).
     /// When false, captures are all scalars — clone is a cheap memcpy.
     pub has_heap_captures: bool,
+    /// PHP exposes `Closure` as a dummy scope when an otherwise unscoped
+    /// closure is bound to an object without an explicit class scope.
+    pub(crate) scope_is_dummy: bool,
 }
 
 /// Type-erased weak ownership for PHP objects. Closures use a distinct compact
@@ -4443,6 +4447,7 @@ impl Clone for PhpClosure {
             captures: self.clone_captures(),
             static_vars,
             has_heap_captures: self.has_heap_captures,
+            scope_is_dummy: self.scope_is_dummy,
         }
     }
 }

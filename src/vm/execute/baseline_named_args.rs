@@ -37,8 +37,17 @@ fn op_send_named<'a>(
     };
 
     if is_variadic_target {
+        let forwards_named_arguments = func_common.fn_type
+            == crate::vm::function::FunctionType::Internal
+            && eg
+                .internal_function_display_name(func_common as *const FunctionCommon)
+                .is_some_and(|name| {
+                    name.eq_ignore_ascii_case("ReflectionFunction::invoke")
+                        || name.eq_ignore_ascii_case("ReflectionMethod::invoke")
+                });
         if !func_common.sig.is_variadic
-            || func_common.fn_type == crate::vm::function::FunctionType::Internal
+            || (func_common.fn_type == crate::vm::function::FunctionType::Internal
+                && !forwards_named_arguments)
         {
             let err = make_error_value("Error", &format!(
                 "Unknown named parameter ${}", name
