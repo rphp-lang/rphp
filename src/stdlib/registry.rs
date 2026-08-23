@@ -145,8 +145,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     }
 
     // --- Array functions (by-ref: arg 0) ---
-    reg!("count", fn_count, 1, 1, "value");
-    reg!("sizeof", fn_count, 1, 1, "value");
+    reg!("count", fn_count, 2, 1, "value", "mode");
+    reg!("sizeof", fn_sizeof, 2, 1, "value", "mode");
     reg_var_ref!(
         "array_push",
         fn_array_push,
@@ -785,8 +785,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- Math functions ---
     reg_direct!("abs", fn_abs, direct_abs, 1, 1, "num");
-    reg!("max", fn_max, 2, 2, "value1", "value2");
-    reg!("min", fn_min, 2, 2, "value1", "value2");
+    reg_var_ref!("max", fn_max, fn_max_raw_variadic, 1, 0, "value", "values");
+    reg_var_ref!("min", fn_min, fn_min_raw_variadic, 1, 0, "value", "values");
     reg_direct!("floor", fn_floor, direct_floor, 1, 1, "num");
     reg!("ceil", fn_ceil, 1, 1, "num");
     reg!("round", fn_round, 2, 1, "num", "precision");

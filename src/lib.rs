@@ -154,6 +154,8 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "SORT_DESC" => Some(value::Value::long(3)),
 
         // Array
+        "COUNT_NORMAL" => Some(value::Value::long(0)),
+        "COUNT_RECURSIVE" => Some(value::Value::long(1)),
         "ARRAY_FILTER_USE_BOTH" => Some(value::Value::long(1)),
         "ARRAY_FILTER_USE_KEY" => Some(value::Value::long(2)),
 

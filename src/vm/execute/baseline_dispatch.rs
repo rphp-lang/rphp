@@ -3783,7 +3783,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         "Invalid direct internal handler ID".into(),
                     ));
                 };
-                let result = crate::stdlib::invoke_direct_internal2(kind, first, second)?;
+                let result = crate::stdlib::invoke_direct_internal2(kind, first, second, eg)?;
+                resume_pending_exception!();
 
                 if opline.result_type != OpType::Unused {
                     let result_ptr = unsafe {

@@ -4197,10 +4197,21 @@ pub(crate) fn values_compare_checked_with_precision(
 
         if matches!(a.value_type(), ValueType::True | ValueType::False)
             || matches!(b.value_type(), ValueType::True | ValueType::False)
-            || matches!(a.value_type(), ValueType::Null | ValueType::Undef)
-            || matches!(b.value_type(), ValueType::Null | ValueType::Undef)
         {
             return Ok(ordering(a.is_truthy().cmp(&b.is_truthy())));
+        }
+        if matches!(a.value_type(), ValueType::Null | ValueType::Undef)
+            || matches!(b.value_type(), ValueType::Null | ValueType::Undef)
+        {
+            return Ok(match (a.value_type(), b.value_type()) {
+                (ValueType::Null | ValueType::Undef, ValueType::String) => {
+                    ordering("".cmp(b.as_str().unwrap()))
+                }
+                (ValueType::String, ValueType::Null | ValueType::Undef) => {
+                    ordering(a.as_str().unwrap().cmp(""))
+                }
+                _ => ordering(a.is_truthy().cmp(&b.is_truthy())),
+            });
         }
 
         match (a.value_type(), b.value_type()) {

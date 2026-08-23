@@ -379,7 +379,10 @@ pub(crate) fn invoke_direct_internal1(
         DirectInternalKind::Acos => direct_acos(args),
         DirectInternalKind::Atan => direct_atan(args),
         DirectInternalKind::Exp => direct_exp(args),
-        DirectInternalKind::Intdiv | DirectInternalKind::JsonDecode => Err(VmError::Fatal(
+        DirectInternalKind::Intdiv
+        | DirectInternalKind::JsonDecode
+        | DirectInternalKind::Min2
+        | DirectInternalKind::Max2 => Err(VmError::Fatal(
             "Invalid unary invocation of binary direct builtin".into(),
         )),
     }
@@ -391,12 +394,15 @@ pub(crate) fn invoke_direct_internal2(
     kind: crate::builtin_metadata::DirectInternalKind,
     first: &Value,
     second: &Value,
+    eg: &mut ExecutorGlobals,
 ) -> Result<Value, VmError> {
     use crate::builtin_metadata::DirectInternalKind;
 
     match kind {
         DirectInternalKind::Intdiv => direct_intdiv_values(first, second),
         DirectInternalKind::JsonDecode => Ok(json_decode_values(first, Some(second))),
+        DirectInternalKind::Min2 => direct_extrema2::<false>(first, second, eg),
+        DirectInternalKind::Max2 => direct_extrema2::<true>(first, second, eg),
         _ => Err(VmError::Fatal(
             "Invalid binary direct internal handler ID".into(),
         )),
@@ -581,32 +587,136 @@ fn fn_assert_options(
 // Array functions
 // ============================================================================
 
-fn fn_count(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let v = arg!(ed, 0);
-    let n = match v.as_array() {
-        Some(arr) => arr.len() as i64,
-        None => {
-            if let Some(object) = v.as_object() {
-                let class_name = object.class_name.to_string();
-                drop(object);
-                if eg.class_is_a(&class_name, "Countable") {
-                    let receiver = v.clone();
-                    if let Some(result) = call_object_public_method(eg, &receiver, "count", &[])? {
-                        ret!(rv, Value::long(result.to_long_val()));
-                    }
+fn recursive_array_count(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    source: Value,
+) -> Result<Option<i64>, VmError> {
+    struct CountFrame {
+        _owner: Value,
+        identity: usize,
+        values: Vec<Value>,
+        next: usize,
+    }
+
+    fn frame(value: Value) -> CountFrame {
+        let value = value.dereferenced().clone();
+        let identity = value
+            .array_identity()
+            .expect("recursive count frame must retain an array");
+        let values = value.as_array().unwrap().values().cloned().collect();
+        CountFrame {
+            _owner: value,
+            identity,
+            values,
+            next: 0,
+        }
+    }
+
+    let mut frames = vec![frame(source)];
+    let mut active = std::collections::HashSet::new();
+    active.insert(frames[0].identity);
+    let mut count = frames[0].values.len() as i64;
+
+    while let Some(current) = frames.last_mut() {
+        if current.next == current.values.len() {
+            active.remove(&current.identity);
+            frames.pop();
+            continue;
+        }
+        let child = current.values[current.next].clone();
+        current.next += 1;
+        let child = child.dereferenced();
+        let Some(array) = child.as_array() else {
+            continue;
+        };
+        let identity = child.array_identity().unwrap();
+        if active.contains(&identity) {
+            report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("{function}(): Recursion detected"),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            continue;
+        }
+        count = count.saturating_add(array.len() as i64);
+        active.insert(identity);
+        frames.push(frame(child.clone()));
+    }
+    Ok(Some(count))
+}
+
+fn fn_count_named(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+) -> Result<(), VmError> {
+    let mode = if arg_opt!(ed, 1).is_some() {
+        let Some(mode) = typed_internal_int_argument(ed, eg, function, 1, "mode")? else {
+            return Ok(());
+        };
+        mode
+    } else {
+        0
+    };
+    if !matches!(mode, 0 | 1) {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            &format!(
+                "{function}(): Argument #2 ($mode) must be either COUNT_NORMAL or COUNT_RECURSIVE"
+            ),
+        ));
+        return Ok(());
+    }
+
+    let value = arg!(ed, 0);
+    if let Some(array) = value.as_array() {
+        if mode == 0 {
+            ret!(rv, Value::long(array.len() as i64));
+        }
+        let Some(count) = recursive_array_count(ed, eg, function, owned_argument(ed, 0))? else {
+            return Ok(());
+        };
+        ret!(rv, Value::long(count));
+    }
+
+    if let Some(object) = value.as_object() {
+        let class_name = object.class_name.to_string();
+        drop(object);
+        if eg.class_is_a(&class_name, "Countable") {
+            let receiver = value.clone();
+            if let Some(result) = call_object_public_method(eg, &receiver, "count", &[])? {
+                if eg.exception.is_none() {
+                    ret!(rv, Value::long(result.to_long_val()));
                 }
             }
-            eg.exception = Some(crate::value::make_error_value(
-                "TypeError",
-                &format!(
-                    "count(): Argument #1 ($value) must be of type Countable|array, {} given",
-                    v.diagnostic_type_name()
-                ),
-            ));
-            ret!(rv, Value::null());
+            if eg.exception.is_some() {
+                return Ok(());
+            }
         }
-    };
-    ret!(rv, Value::long(n));
+    }
+
+    typed_internal_argument_error(eg, function, value, 1, "value", "Countable|array");
+    Ok(())
+}
+
+fn fn_count(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    fn_count_named(ed, rv, eg, "count")
+}
+
+fn fn_sizeof(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    fn_count_named(ed, rv, eg, "sizeof")
 }
 
 fn fn_array_push(
@@ -7703,30 +7813,203 @@ fn fn_abs(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Re
     ret!(rv, result);
 }
 
-fn fn_max(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let a = arg!(ed, 0);
-    let b = arg!(ed, 1);
-    ret!(
-        rv,
-        if compare_values(a, b) >= 0 {
-            a.clone()
-        } else {
-            b.clone()
+#[inline]
+fn extrema_comparison(candidate: &Value, current: &Value, precision: i32) -> Result<i32, ()> {
+    let candidate = candidate.dereferenced();
+    let current = current.dereferenced();
+    match (candidate.value_type(), current.value_type()) {
+        (ValueType::Long, ValueType::Long) => Ok(
+            match candidate
+                .as_long()
+                .unwrap()
+                .cmp(&current.as_long().unwrap())
+            {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            },
+        ),
+        (ValueType::Double, ValueType::Double) => Ok(candidate
+            .as_double()
+            .unwrap()
+            .partial_cmp(&current.as_double().unwrap())
+            .map_or(
+                crate::vm::execute::PHP_COMPARISON_UNORDERED,
+                |ordering| match ordering {
+                    std::cmp::Ordering::Less => -1,
+                    std::cmp::Ordering::Equal => 0,
+                    std::cmp::Ordering::Greater => 1,
+                },
+            )),
+        _ => {
+            crate::vm::execute::values_compare_checked_with_precision(candidate, current, precision)
         }
-    );
+    }
 }
 
-fn fn_min(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let a = arg!(ed, 0);
-    let b = arg!(ed, 1);
-    ret!(
-        rv,
-        if compare_values(a, b) <= 0 {
-            a.clone()
-        } else {
-            b.clone()
+#[inline(always)]
+fn direct_extrema2<const MAXIMUM: bool>(
+    first: &Value,
+    second: &Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<Value, VmError> {
+    let comparison = match extrema_comparison(first, second, eg.precision) {
+        Ok(comparison) => comparison,
+        Err(()) => {
+            report_recursive_sort_comparison(eg);
+            return Ok(Value::undef());
         }
-    );
+    };
+    let use_first = if MAXIMUM {
+        matches!(comparison, 0 | 1)
+    } else {
+        comparison == -1
+    };
+    Ok(if use_first {
+        first.dereferenced().clone()
+    } else {
+        second.dereferenced().clone()
+    })
+}
+
+fn fn_extrema<const MAXIMUM: bool>(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let function = if MAXIMUM { "max" } else { "min" };
+    let extras = arg!(ed, 1)
+        .as_array()
+        .expect("variadic extrema arguments must be packed into an array");
+
+    let mut best = if extras.is_empty() {
+        let source = arg!(ed, 0);
+        let Some(array) = source.as_array() else {
+            typed_internal_argument_error(eg, function, source, 1, "value", "array");
+            return Ok(());
+        };
+        let Some(first) = array.values().next() else {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                &format!("{function}(): Argument #1 ($value) must contain at least one element"),
+            ));
+            return Ok(());
+        };
+        first.dereferenced().clone()
+    } else {
+        owned_argument(ed, 0)
+    };
+
+    let mut consider = |candidate: &Value| -> Result<(), ()> {
+        let comparison = extrema_comparison(candidate, &best, eg.precision)?;
+        let replace = if MAXIMUM {
+            comparison == 1
+        } else {
+            comparison == -1
+        };
+        if replace {
+            best = candidate.dereferenced().clone();
+        }
+        Ok(())
+    };
+
+    if extras.is_empty() {
+        let array = arg!(ed, 0).as_array().unwrap();
+        for candidate in array.values().skip(1) {
+            if consider(candidate).is_err() {
+                report_recursive_sort_comparison(eg);
+                return Ok(());
+            }
+        }
+    } else {
+        for candidate in extras.values() {
+            if consider(candidate).is_err() {
+                report_recursive_sort_comparison(eg);
+                return Ok(());
+            }
+        }
+    }
+    ret!(rv, best);
+}
+
+fn fn_extrema_raw_variadic<const MAXIMUM: bool>(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    supplied_num_args: u32,
+) -> Result<(), VmError> {
+    let function = if MAXIMUM { "max" } else { "min" };
+    if supplied_num_args == 1 {
+        let source = arg!(ed, 0);
+        let Some(array) = source.as_array() else {
+            typed_internal_argument_error(eg, function, source, 1, "value", "array");
+            return Ok(());
+        };
+        let mut values = array.values();
+        let Some(first) = values.next() else {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                &format!("{function}(): Argument #1 ($value) must contain at least one element"),
+            ));
+            return Ok(());
+        };
+        let mut best = first.dereferenced().clone();
+        for candidate in values {
+            let comparison = match extrema_comparison(candidate, &best, eg.precision) {
+                Ok(comparison) => comparison,
+                Err(()) => {
+                    report_recursive_sort_comparison(eg);
+                    return Ok(());
+                }
+            };
+            if (MAXIMUM && comparison == 1) || (!MAXIMUM && comparison == -1) {
+                best = candidate.dereferenced().clone();
+            }
+        }
+        ret!(rv, best);
+    }
+
+    let mut best = owned_argument(ed, 0);
+    for index in 1..supplied_num_args {
+        let candidate = arg!(ed, index);
+        let comparison = match extrema_comparison(candidate, &best, eg.precision) {
+            Ok(comparison) => comparison,
+            Err(()) => {
+                report_recursive_sort_comparison(eg);
+                return Ok(());
+            }
+        };
+        if (MAXIMUM && comparison == 1) || (!MAXIMUM && comparison == -1) {
+            best = candidate.dereferenced().clone();
+        }
+    }
+    ret!(rv, best);
+}
+
+fn fn_max(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    fn_extrema::<true>(ed, rv, eg)
+}
+
+fn fn_min(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    fn_extrema::<false>(ed, rv, eg)
+}
+
+fn fn_max_raw_variadic(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    supplied_num_args: u32,
+) -> Result<(), VmError> {
+    fn_extrema_raw_variadic::<true>(ed, rv, eg, supplied_num_args)
+}
+
+fn fn_min_raw_variadic(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    supplied_num_args: u32,
+) -> Result<(), VmError> {
+    fn_extrema_raw_variadic::<false>(ed, rv, eg, supplied_num_args)
 }
 
 #[inline(always)]
@@ -9727,18 +10010,6 @@ fn cmp_val(cmp: i32) -> std::cmp::Ordering {
         std::cmp::Ordering::Greater
     } else {
         std::cmp::Ordering::Equal
-    }
-}
-
-fn compare_values(a: &Value, b: &Value) -> i32 {
-    let ad = a.to_float_val();
-    let bd = b.to_float_val();
-    if ad < bd {
-        -1
-    } else if ad > bd {
-        1
-    } else {
-        0
     }
 }
 

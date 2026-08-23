@@ -19,6 +19,8 @@ pub enum DirectInternalKind {
     Exp,
     Intdiv,
     JsonDecode,
+    Min2,
+    Max2,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,6 +118,8 @@ impl DirectInternalKind {
             13 => Some(Self::Exp),
             14 => Some(Self::Intdiv),
             15 => Some(Self::JsonDecode),
+            16 => Some(Self::Min2),
+            17 => Some(Self::Max2),
             _ => None,
         }
     }
@@ -124,7 +128,12 @@ impl DirectInternalKind {
     pub fn result_may_need_cleanup(self) -> bool {
         matches!(
             self,
-            Self::Strtolower | Self::Strtoupper | Self::ChunkSplit | Self::JsonDecode
+            Self::Strtolower
+                | Self::Strtoupper
+                | Self::ChunkSplit
+                | Self::JsonDecode
+                | Self::Min2
+                | Self::Max2
         )
     }
 
@@ -132,7 +141,9 @@ impl DirectInternalKind {
     pub fn lowering(self) -> DirectInternalLowering {
         match self {
             Self::Strlen => DirectInternalLowering::Strlen,
-            Self::Intdiv | Self::JsonDecode => DirectInternalLowering::Generic2,
+            Self::Intdiv | Self::JsonDecode | Self::Min2 | Self::Max2 => {
+                DirectInternalLowering::Generic2
+            }
             _ => DirectInternalLowering::Generic,
         }
     }
@@ -243,6 +254,18 @@ pub const DIRECT_INTERNAL_SPECS: &[DirectInternalSpec] = &[
         max_args: 2,
         required_args: 1,
     },
+    DirectInternalSpec {
+        name: "min",
+        kind: DirectInternalKind::Min2,
+        max_args: 2,
+        required_args: 2,
+    },
+    DirectInternalSpec {
+        name: "max",
+        kind: DirectInternalKind::Max2,
+        max_args: 2,
+        required_args: 2,
+    },
 ];
 
 #[inline]
@@ -256,6 +279,8 @@ pub fn direct_internal_spec(name: &str) -> Option<DirectInternalSpec> {
         3 if name.eq_ignore_ascii_case("sin") => 8,
         3 if name.eq_ignore_ascii_case("tan") => 9,
         3 if name.eq_ignore_ascii_case("exp") => 13,
+        3 if name.eq_ignore_ascii_case("min") => 16,
+        3 if name.eq_ignore_ascii_case("max") => 17,
         4 if name.eq_ignore_ascii_case("sqrt") => 6,
         4 if name.eq_ignore_ascii_case("asin") => 10,
         4 if name.eq_ignore_ascii_case("acos") => 11,
@@ -318,6 +343,20 @@ mod tests {
             DirectInternalLowering::Generic2
         );
         assert!(DirectInternalKind::JsonDecode.result_may_need_cleanup());
+        assert!(supports_direct_internal_call("min", 2));
+        assert!(!supports_direct_internal_call("min", 1));
+        assert!(supports_direct_internal_call("MAX", 2));
+        assert!(!supports_direct_internal_call("max", 3));
+        assert_eq!(
+            direct_internal_spec("MIN").map(|spec| spec.kind),
+            Some(DirectInternalKind::Min2),
+        );
+        assert_eq!(
+            DirectInternalKind::Max2.lowering(),
+            DirectInternalLowering::Generic2
+        );
+        assert!(DirectInternalKind::Min2.result_may_need_cleanup());
+        assert!(DirectInternalKind::Max2.result_may_need_cleanup());
     }
 
     #[test]
