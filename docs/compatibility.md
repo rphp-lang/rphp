@@ -8,6 +8,78 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`runtime-introspection-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+implementation commit `55c2b1d2`. Across all 5,599 unmodified `Zend/tests`
+and `tests/lang` cases, 4,148 pass, 1,155 fail, 115 skip, none remain XFAIL,
+181 are unsupported, and none time out or crash. The exact pass-set delta from
+`16b93209` is +8/-0: `constants/bug65291.phpt`, both constructor-promotion
+Reflection cases, all three `gh13670` cases, `traits/bug62892.phpt` and
+`type_declarations/callable/callable_002.phpt`. Two final runs have the same
+manifest SHA-256,
+`cdff570ea3897afa0aaa8f1dc7cea744dd8c34b95758d112355d40bbcbc37631`,
+and summary SHA-256,
+`6db472e5f4fa250ab1366a1a8df5ce3675b08b8d0b38ac4a5342a0983ccd7f2e`.
+
+`get_defined_constants()` now inventories the admitted built-in constants and
+standard streams, keeps successful user definitions in PHP order, supports the
+Core/user categorized form and prevents `define()` from shadowing a built-in.
+`zend_version()` derives `4.5.0` from the same public PHP 8.5 identity.
+`gc_status()` exposes the PHP 8.5 field order and request-local possible-root,
+run, collected and phase-time state of RPHP's explicit cycle collector,
+including `running=true` during destructors. This does not claim Zend's
+automatic threshold collection, adaptive buffer policy or complete reentrant
+destructor scanning.
+
+`ReflectionParameter` can now be constructed from named functions, closures,
+class/object method arrays and invokable objects and implements the deprecated
+PHP 8.5 `getClass()`, `isArray()` and `isCallable()` contracts exercised by the
+focus. `ReflectionMethod::createFromMethodName()` preserves case-insensitive
+lookup, autoload and late-static subclasses; `ReflectionClass::getTraitAliases()`
+reports method aliases while omitting visibility-only adaptations. Closure
+`__invoke` method rendering and the public `iterator_to_array()` signature also
+match the reached PHP 8.5 metadata.
+
+The 18-case unmodified PHP 8.5 focus moves from zero to 13 passes, an exact
++13/-0 delta with no timeout or crash; PHP 8.5.9 passes all 18. Its final
+manifest/summary hash pair is
+`7fa743849d42ab0a4c8078af80a59e13b095aa24705b0c78d2aad6697fe0b423` /
+`77c1363bf2cc7375ec9edb9abcd61934a76f1c9b1aa9af77313e3d1ede909915`.
+The three affected E2E modules pass 198/198 and include original inventory,
+collision, GC state/timing/destructor, parameter type/factory/error, trait
+alias and closure-rendering coverage.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy self-tests, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+The production unsafe inventory remains at 1,623 blocks and 289 functions with
+346 SAFETY annotations. The implementation adds no dependency, lockfile,
+opcode or PHP value/object/array layout change; dynamic constant keys use one
+shared `Rc<str>` allocation so ordered introspection does not duplicate names.
+
+On an AMD Ryzen 9 7950X AMD64 host pinned to performance-governor CPU 2, a
+balanced alternating release comparison used 32 pairs per lane, three warmups
+per binary and no excluded samples. Independent/paired median changes are
++0.136%/+0.352% for 100 empty requests, -0.476%/-0.442% for 50,000 dynamic
+constant definitions, +2.844%/+3.041% for 100,000 explicit array-cycle
+collections and +1.011%/+0.689% for 200,000 Reflection parameter inventories.
+Paired p10/p90 ranges are -1.581%/+1.329%, -2.750%/+1.470%,
++0.812%/+4.419% and -1.117%/+6.327%, respectively; the Reflection upper tail
+is retained rather than filtered. Every lane retains exact output and stays
+below the +5% median gate. The
+baseline/candidate binary SHA-256 values are
+`8bc2ea8c5da94517f97378c8c84828b7d33b94db76285d87a1e7797950d3fc39` /
+`6a084f86c2e252c89ace4710e4e74b7a6f0712119be7a6ee0dcae145d2854ee3`;
+the harness/log pair is
+`010506288fecf10d9ce4bb201f072488af97b14aeecbe312dc3fa92d5b8b5f2b` /
+`025613656aed79772175acb2332c838ad094c327fe325be7cc22aabc6fccea9f`.
+
+Five focused failures remain explicit: closure object-handle reuse, reentrant
+objects created during GC destructors, nested Reflection object projection in
+`print_r()`, default-value/collector metadata in `parameters_002.phpt`, and
+static-reference semantics in `tests/lang/bug20175.phpt`. Complete automatic
+GC, Reflection metadata and object debug projection remain separate work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `callback-dispatch-introspection-batch`, pinned to php-src 8.5 commit `fcc29c8`
 and implementation commit `16b93209`. Across all 5,599 unmodified `Zend/tests`
 and `tests/lang` cases, 4,140 pass, 1,163 fail, 115 skip, none remain XFAIL,
