@@ -93,7 +93,7 @@ echo call_user_func('add', 3, 7);
 fn test_call_user_func_is_lowered_without_wrapper_call() {
     let opcodes = main_opcodes("<?php call_user_func('strlen', 'abc');");
     assert!(opcodes.contains(&OpCode::InitUserCall));
-    assert!(opcodes.contains(&OpCode::SendUser));
+    assert!(opcodes.contains(&OpCode::SendUserChecked));
 }
 
 #[test]

@@ -84,6 +84,129 @@ fn report_php_warning(
     report_php_diagnostic(eg, frame, op_array, opline, message, 2, "Warning", suppressed)
 }
 
+/// Report the PHP warning emitted when call_user_func() forwards a value to a
+/// hard-reference parameter. Keeping callback rendering and message assembly
+/// out of the dispatch loop lets the overwhelmingly common by-value SendUser
+/// path stay compact while SendUserChecked owns this exceptional behavior.
+#[cold]
+#[inline(never)]
+fn report_send_user_reference_warning(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    opline_ptr: *const Instruction,
+    func_common: &FunctionCommon,
+    public_index: usize,
+) -> Result<(), VmError> {
+    let reference_index = if public_index < func_common.sig.public_arity() as usize {
+        public_index
+    } else if func_common.sig.is_variadic {
+        func_common.sig.public_arity() as usize
+    } else {
+        public_index
+    };
+    if !func_common.sig.is_param_by_ref(reference_index as u32)
+        || func_common.sig.is_param_prefer_ref(reference_index as u32)
+    {
+        return Ok(());
+    }
+
+    // SAFETY: SendUserChecked is part of a compiler-emitted
+    // InitUserCall + SendUser* + DoFcall sequence. `public_index` is the
+    // zero-based position in that sequence, so the matching initializer is
+    // exactly `public_index + 1` instructions behind the active opcode.
+    let callback_name = unsafe {
+        let init = &*opline_ptr.sub(public_index + 1);
+        if init.opcode == OpCode::InitUserCall {
+            let callback =
+                &*(*frame).get_op_ptr(init.op1 as u32, init.op1_type, op_array);
+            crate::stdlib::callable_display_name(callback.dereferenced(), eg)
+        } else {
+            displayed_function_name(eg, func_common as *const FunctionCommon)
+        }
+    };
+    let parameter_name = func_common
+        .sig
+        .param_names
+        .get(reference_index)
+        .map(String::as_str)
+        .unwrap_or("unknown");
+    report_php_warning(
+        eg,
+        frame,
+        op_array,
+        opline,
+        &format!(
+            "{callback_name}(): Argument #{} (${parameter_name}) must be passed by reference, value given",
+            reference_index + 1,
+        ),
+        false,
+    )
+}
+
+/// Execute the diagnostic-capable call_user_func argument send. Literal
+/// callbacks proven to have no hard-reference parameters use the branch-free
+/// SendUser handler in the main dispatch loop instead.
+#[cold]
+#[inline(never)]
+fn op_send_user_checked<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    opline_ptr: *const Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    // SAFETY: SendUserChecked follows a live InitUserCall activation owned by
+    // `frame`; its function metadata, source operand and signature-derived
+    // destination stay valid until this synchronous helper either initializes
+    // the slot or consumes the pending activation on the exception path.
+    unsafe {
+        let call = (*frame).call;
+        debug_assert!(!call.is_null());
+        let func_common = &*(*call).func;
+        let public_index = opline.extended_value as usize;
+        if func_common.sig.ref_args != 0
+            && func_common.sig.ref_args != func_common.sig.prefer_ref_args
+        {
+            report_send_user_reference_warning(
+                eg,
+                frame,
+                op_array,
+                opline,
+                opline_ptr,
+                func_common,
+                public_index,
+            )?;
+            if let Some(exception) = eg.exception.take() {
+                cleanup_pending_calls(eg, frame);
+                return Ok(match throw_in_frame(eg, frame, exception)? {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
+        }
+
+        let destination_index = func_common.sig.param_cv_index(opline.extended_value);
+        let value = &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
+        let value = if value.is_reference() {
+            &*value.as_ref_ptr()
+        } else {
+            value
+        };
+        let value = if value.is_undef() {
+            Value::null()
+        } else {
+            value.clone()
+        };
+        let destination = (*call).cv_mut(destination_index);
+        frame_slot_init(call, destination as *mut Value, value);
+        Ok(ColdResult::Done)
+    }
+}
+
 fn report_php_diagnostic(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -594,8 +717,13 @@ fn dynamic_scope_cv(
         return None;
     }
     if name == "this" {
-        let function = unsafe { (*frame).func };
-        if !function.is_null() && unsafe { (*function).sig.this_offset == 1 } {
+        // SAFETY: dynamic-scope owners are live frames and their registered
+        // function metadata outlives execution of the synchronous lookup.
+        let has_this_slot = unsafe {
+            let function = (*frame).func;
+            !function.is_null() && (*function).sig.this_offset == 1
+        };
+        if has_this_slot {
             return Some(0);
         }
     }
@@ -2003,6 +2131,35 @@ fn generic_method_contract_kind(mode: crate::generics::GenericRuntimeMode) -> &'
 }
 
 #[inline(never)]
+fn report_callback_array_reference_warnings(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    resolved: &crate::stdlib::ResolvedCallback,
+    arguments: &Value,
+    display_name: &str,
+) -> Result<(), VmError> {
+    if !crate::stdlib::callback_has_hard_reference_parameters(resolved) {
+        return Ok(());
+    }
+    let Some(arguments) = arguments.as_array() else {
+        return Ok(());
+    };
+    for message in crate::stdlib::callback_reference_warning_messages(
+        resolved,
+        arguments,
+        false,
+        display_name,
+    ) {
+        report_php_warning(eg, frame, op_array, opline, &message, false)?;
+        if eg.exception.is_some() {
+            break;
+        }
+    }
+    Ok(())
+}
+
 fn op_call_user_func_array<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -2119,7 +2276,23 @@ fn op_call_user_func_array<'a>(
                     op_array.strict_types,
                 )?
             } else {
-                crate::stdlib::invoke_resolved_call_user_func_array(resolved, &args, eg)?
+                if crate::stdlib::callback_has_hard_reference_parameters(&resolved) {
+                    let display_name = crate::stdlib::callable_display_name(callback, eg);
+                    report_callback_array_reference_warnings(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        &resolved,
+                        &args,
+                        &display_name,
+                    )?;
+                }
+                if eg.exception.is_some() {
+                    Value::null()
+                } else {
+                    crate::stdlib::invoke_resolved_call_user_func_array(resolved, &args, eg)?
+                }
             }
         } else {
             eg.exception = Some(crate::value::make_error_value(
@@ -2147,13 +2320,38 @@ fn op_call_user_func_array<'a>(
             op_array.strict_types,
         )?
     } else {
-        crate::stdlib::invoke_call_user_func_array(
+        if let Some(resolved) = crate::stdlib::resolve_callback_with_cache(
             callback,
-            args,
             eg,
             caller_class.as_deref(),
             Some(cache_slot),
-        )?
+        ) {
+            if crate::stdlib::callback_has_hard_reference_parameters(&resolved) {
+                let display_name = crate::stdlib::callable_display_name(callback, eg);
+                report_callback_array_reference_warnings(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
+                    &resolved,
+                    args,
+                    &display_name,
+                )?;
+            }
+            if eg.exception.is_some() {
+                Value::null()
+            } else {
+                crate::stdlib::invoke_resolved_call_user_func_array(resolved, args, eg)?
+            }
+        } else {
+            crate::stdlib::invoke_call_user_func_array(
+                callback,
+                args,
+                eg,
+                caller_class.as_deref(),
+                Some(cache_slot),
+            )?
+        }
     };
 
     if let Some(exc) = eg.exception.take() {
@@ -3825,8 +4023,14 @@ fn op_instanceof(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) {
-    let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-    let class_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+    // SAFETY: both operands are compiler-owned slots in the same live frame
+    // and remain immutable for this non-reentrant instanceof check.
+    let (obj_val, class_name) = unsafe {
+        (
+            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
+            &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
+        )
+    };
     // PHP accepts an object on the right side and uses its canonical runtime
     // class. This matters for aliases: the object's layout retains the
     // declared class identity rather than the spelling used at construction.

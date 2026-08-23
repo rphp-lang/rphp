@@ -3892,7 +3892,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let direct_shape = direct_user_calls_enabled()
                     && !op_array.strict_types
                     && opline.extended_value == 1
-                    && next.opcode == OpCode::SendUser
+                    && matches!(next.opcode, OpCode::SendUser | OpCode::SendUserChecked)
                     && next.extended_value == 0
                     && unsafe { (*opline_ptr.add(2)).opcode == OpCode::DoFcall };
                 let mut initialized = false;
@@ -4436,8 +4436,47 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let call = unsafe { (*frame).call };
                 debug_assert!(!call.is_null());
                 let param_idx = opline.extended_value;
-                let func_common = unsafe { &*(*call).func };
-                let is_ref = func_common.sig.is_param_by_ref(param_idx);
+                // SAFETY: call is the live pending frame. Closure's explicit
+                // forwarding methods mark their variadic wrapper parameters
+                // prefer-reference so writable arguments can retain aliases;
+                // consult the wrapped closure signature before materializing
+                // one for an ordinary by-value parameter.
+                let is_ref = unsafe {
+                    let func_common = &*(*call).func;
+                    let forwarded_index = if func_common.fn_type == FunctionType::Internal
+                        && func_common.sig.this_offset == 1
+                        && func_common.sig.ref_args == func_common.sig.prefer_ref_args
+                    {
+                        if func_common.sig.prefer_ref_args == u64::MAX {
+                            Some(param_idx)
+                        } else if func_common.sig.prefer_ref_args == u64::MAX << 1
+                            && param_idx > 0
+                        {
+                            Some(param_idx - 1)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(target_index) = forwarded_index {
+                        let receiver = (*call).cv(0).dereferenced();
+                        receiver.as_closure().is_some_and(|closure| {
+                            let signature = &(*closure.func).sig;
+                            let reference_index =
+                                if target_index < signature.public_arity() {
+                                    target_index
+                                } else if signature.is_variadic {
+                                    signature.public_arity()
+                                } else {
+                                    target_index
+                                };
+                            signature.is_param_by_ref(reference_index)
+                        })
+                    } else {
+                        func_common.sig.is_param_by_ref(param_idx)
+                    }
+                };
 
                 let yield_snapshot =
                     opline._pad & crate::vm::instruction::SEND_FLAG_YIELD_SNAPSHOT != 0;
@@ -4504,6 +4543,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::SendUser => {
+                // The compiler emits this only for a literal callback whose
+                // immutable declaration has no by-reference parameters.
                 let call = unsafe { (*frame).call };
                 debug_assert!(!call.is_null());
                 let func_common = unsafe { &*(*call).func };
@@ -4530,6 +4571,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // SAFETY: destination_index was derived from the selected
                 // callback signature and this pending slot is uninitialized.
                 unsafe { frame_slot_init(call, destination as *mut Value, value) };
+            }
+
+            OpCode::SendUserChecked => {
+                match op_send_user_checked(eg, frame, op_array, opline, opline_ptr)? {
+                    ColdResult::NewFrame(new_frame, new_op_array) => {
+                        frame = new_frame;
+                        op_array = new_op_array;
+                        continue 'vm;
+                    }
+                    ColdResult::Unhandled(thrown) => {
+                        eg.exception = Some(thrown);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
             }
 
             OpCode::SendNamed => {

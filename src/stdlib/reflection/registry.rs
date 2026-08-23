@@ -26,10 +26,10 @@ use super::{
     class_is_abstract, class_is_final, class_is_instantiable, class_is_interface,
     class_is_internal, class_is_readonly, class_is_subclass_of, class_is_trait,
     class_is_uninitialized_lazy_object, class_is_user_defined,
-    class_mark_lazy_object_as_initialized, class_new_instance_without_constructor,
-    class_new_lazy_ghost, class_new_lazy_proxy, class_reset_as_lazy_ghost,
-    class_reset_as_lazy_proxy, class_to_string, constant_construct, constant_get_value,
-    deprecated_construct, function_construct, function_get_closure,
+    class_mark_lazy_object_as_initialized, class_new_instance, class_new_instance_args,
+    class_new_instance_without_constructor, class_new_lazy_ghost, class_new_lazy_proxy,
+    class_reset_as_lazy_ghost, class_reset_as_lazy_proxy, class_to_string, constant_construct,
+    constant_get_value, deprecated_construct, function_construct, function_get_closure,
     function_get_closure_called_class, function_get_closure_scope_class, function_get_closure_this,
     function_get_namespace_name, function_get_number_of_parameters,
     function_get_number_of_required_parameters, function_get_parameters, function_get_return_type,
@@ -1563,6 +1563,21 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         1,
         0,
         []
+    );
+    register_variadic_method!(
+        "ReflectionClass",
+        "newinstance",
+        class_new_instance,
+        0,
+        ["args"]
+    );
+    register_method!(
+        "ReflectionClass",
+        "newinstanceargs",
+        class_new_instance_args,
+        2,
+        0,
+        ["args"]
     );
     register_method!(
         "ReflectionMethod",

@@ -124,9 +124,16 @@ class ExplicitInvokeReceiver {
     private function read(string $tail): string { return $this->value . $tail; }
 }
 echo (new ExplicitInvokeReceiver())->callback()->__invoke('!');
+$references = function (&$first, &...$rest) { $first++; $rest[0]++; };
+$first = 1;
+$second = 2;
+$references->__INVOKE($first, $second);
+echo '|', $first, ':', $second, '|';
+try { $references->__invoke(null, $second); }
+catch (Error $error) { echo $error->getMessage(); }
 "#,
         ),
-        "direct!.|named!?|method!"
+        "direct!.|named!?|method!|2:3|Closure::__invoke(): Argument #1 ($first) could not be passed by reference"
     );
 }
 

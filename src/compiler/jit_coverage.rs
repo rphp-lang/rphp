@@ -82,6 +82,7 @@ pub(super) fn loop_miss_reason(
             OpCode::CallUserFuncArray
             | OpCode::InitUserCall
             | OpCode::SendUser
+            | OpCode::SendUserChecked
             | OpCode::InitDynamicCall
             | OpCode::CreateClosure
             | OpCode::ClosureUseVar => has_callback_or_indirect_call = true,

@@ -842,6 +842,7 @@ fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
                 | OpCode::CallUserFuncArray
                 | OpCode::InitUserCall
                 | OpCode::SendUser
+                | OpCode::SendUserChecked
                 | OpCode::DoFcall
                 | OpCode::Return
                 | OpCode::Jmp

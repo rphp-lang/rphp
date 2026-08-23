@@ -5,6 +5,7 @@
 //! contracts remain shared without introducing a runtime abstraction.
 
 use super::*;
+use crate::value::make_error_value;
 
 // ============================================================================
 // Built-in exception classes (Throwable hierarchy)
@@ -548,10 +549,69 @@ fn fn_closure_call(
         .cloned()
         .unwrap_or_else(PhpArray::new);
     let saved_static_caches = take_closure_static_property_caches(source);
-    let result = call_resolved_with_array(eg, &resolved, &arguments);
+    let requires_reference_handling = super::callback_has_hard_reference_parameters(&resolved);
+    let result = if arguments.has_string_keys() || requires_reference_handling {
+        super::call_resolved_with_php_array(eg, resolved, &arguments, true)
+    } else {
+        call_resolved_with_array(eg, &resolved, &arguments)
+    };
     restore_closure_static_property_caches(source, saved_static_caches);
     let result = result?;
     ret!(rv, result);
+}
+
+#[cold]
+#[inline(never)]
+fn reject_closure_invoke_nonreferenceable_arguments(
+    resolved: &ResolvedCallback,
+    arguments: &PhpArray,
+    eg: &mut ExecutorGlobals,
+) -> bool {
+    let signature = &resolved.common().sig;
+    let public_arity = signature.public_arity() as usize;
+    let mut positional_index = 0usize;
+    for (key, value) in arguments.iter() {
+        let parameter_index = match key {
+            ArrayKey::Int(_) => {
+                let index = positional_index;
+                positional_index += 1;
+                index
+            }
+            ArrayKey::String(name) => signature
+                .param_names
+                .iter()
+                .position(|parameter| parameter == name.as_str())
+                .unwrap_or(public_arity),
+        };
+        let reference_index = if parameter_index < public_arity {
+            parameter_index
+        } else if signature.is_variadic {
+            public_arity
+        } else {
+            parameter_index
+        };
+        if !signature.is_param_by_ref(reference_index as u32)
+            || signature.is_param_prefer_ref(reference_index as u32)
+            || value.is_reference()
+            || value.is_owned_reference()
+        {
+            continue;
+        }
+        let parameter = signature
+            .param_names
+            .get(reference_index)
+            .map(String::as_str)
+            .unwrap_or("unknown");
+        eg.exception = Some(make_error_value(
+            "Error",
+            &format!(
+                "Closure::__invoke(): Argument #{} (${parameter}) could not be passed by reference",
+                reference_index + 1,
+            ),
+        ));
+        return true;
+    }
+    false
 }
 
 #[cold]
@@ -573,7 +633,18 @@ fn fn_closure_invoke(
         .as_array()
         .cloned()
         .unwrap_or_else(PhpArray::new);
-    ret!(rv, call_resolved_with_array(eg, &resolved, &arguments)?);
+    let requires_reference_handling = super::callback_has_hard_reference_parameters(&resolved);
+    if requires_reference_handling
+        && reject_closure_invoke_nonreferenceable_arguments(&resolved, &arguments, eg)
+    {
+        return Ok(());
+    }
+    let result = if arguments.has_string_keys() || requires_reference_handling {
+        super::call_resolved_with_php_array(eg, resolved, &arguments, true)?
+    } else {
+        call_resolved_with_array(eg, &resolved, &arguments)?
+    };
+    ret!(rv, result);
 }
 
 fn fn_array_iterator_construct(
@@ -1902,22 +1973,26 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         1,
         "callback"
     );
-    let closure_call = Box::new(make_internal_method_variadic(
+    let mut closure_call = Box::new(make_internal_method_variadic(
         fn_closure_call,
         1,
         vec!["newThis".to_string(), "args".to_string()],
     ));
+    closure_call.common.sig.ref_args = u64::MAX << 1;
+    closure_call.common.sig.prefer_ref_args = u64::MAX << 1;
     let closure_call_ptr = &closure_call.common as *const FunctionCommon;
     eg.function_table
         .insert("closure::call".to_string(), closure_call_ptr);
     eg.method_declaring_class
         .insert(closure_call_ptr, "Closure".to_string());
     funcs.push(closure_call);
-    let closure_invoke = Box::new(make_internal_method_variadic(
+    let mut closure_invoke = Box::new(make_internal_method_variadic(
         fn_closure_invoke,
         0,
         vec!["args".to_string()],
     ));
+    closure_invoke.common.sig.ref_args = u64::MAX;
+    closure_invoke.common.sig.prefer_ref_args = u64::MAX;
     let closure_invoke_ptr = &closure_invoke.common as *const FunctionCommon;
     eg.function_table
         .insert("closure::__invoke".to_string(), closure_invoke_ptr);

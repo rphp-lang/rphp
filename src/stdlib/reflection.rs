@@ -2224,7 +2224,7 @@ fn invoke_reflected_function(
         reflection_exception(eg, "ReflectionFunction has no resolved function");
         return Ok(());
     };
-    let result = super::call_resolved_with_php_array(eg, callback, &arguments)?;
+    let result = super::call_resolved_with_php_array(eg, callback, &arguments, true)?;
     if eg.exception.is_some() {
         return Ok(());
     }
@@ -5001,7 +5001,7 @@ fn invoke_reflected_method(
         closure_static_vars: None,
         is_magic_call: false,
     };
-    let result = super::call_resolved_with_php_array(eg, callback, &arguments)?;
+    let result = super::call_resolved_with_php_array(eg, callback, &arguments, true)?;
     if eg.exception.is_some() {
         return Ok(());
     }
@@ -5841,14 +5841,13 @@ fn class_reset_as_lazy_proxy(
     class_reset_as_lazy_object(ed, eg, LazyObjectStrategy::Proxy)
 }
 
-fn class_new_instance_without_constructor(
+fn reflected_class_instance(
     ed: *mut ExecuteData,
-    rv: *mut Value,
     eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
+) -> Result<Option<(String, Value)>, VmError> {
     let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
         return Err(VmError::Fatal(
-            "ReflectionClass::newInstanceWithoutConstructor() requires a reflected class".into(),
+            "ReflectionClass instance creation requires a reflected class".into(),
         ));
     };
     if eg.find_class(&owner).is_none()
@@ -5875,7 +5874,7 @@ fn class_new_instance_without_constructor(
         if let Some(exception) = eg.exception.as_ref() {
             crate::vm::execute::attach_internal_constant_expression_trace(exception, ed, eg);
         }
-        return return_value(rv, Value::null());
+        return Ok(None);
     }
     let object = if class_id == 0 {
         PhpObject::dynamic(class_name, 0, HashMap::new())
@@ -5886,7 +5885,114 @@ fn class_new_instance_without_constructor(
             property_defaults.as_ref().to_vec(),
         )
     };
-    return_value(rv, Value::object(object))
+    Ok(Some((owner, Value::object(object))))
+}
+
+fn class_new_instance_without_constructor(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((_, object)) = reflected_class_instance(ed, eg)? else {
+        return return_value(rv, Value::null());
+    };
+    return_value(rv, object)
+}
+
+fn construct_reflected_class_instance(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    arguments: PhpArray,
+    preserve_reference_aliases: bool,
+) -> Result<(), VmError> {
+    let Some((owner, object)) = reflected_class_instance(ed, eg)? else {
+        return return_value(rv, Value::null());
+    };
+    let constructor_info = eg.find_method_info(&owner, "__construct");
+    let Some((visibility, _, _)) = constructor_info else {
+        if !arguments.is_empty() {
+            reflection_exception(
+                eg,
+                format!(
+                    "Class {owner} does not have a constructor, so you cannot pass any constructor arguments"
+                ),
+            );
+            return Ok(());
+        }
+        return return_value(rv, object);
+    };
+    if visibility != Visibility::Public {
+        reflection_exception(
+            eg,
+            format!("Access to non-public constructor of class {owner}"),
+        );
+        return Ok(());
+    }
+    let Some(constructor) = crate::stdlib::resolve_object_public_method(eg, &object, "__construct")
+    else {
+        if constructor_info.is_some() {
+            reflection_exception(
+                eg,
+                format!("Access to non-public constructor of class {owner}"),
+            );
+        }
+        return Ok(());
+    };
+
+    if !super::report_callback_reference_warnings(
+        eg,
+        ed,
+        &constructor,
+        &arguments,
+        !preserve_reference_aliases,
+        &format!("{owner}::__construct"),
+    )? {
+        return Ok(());
+    }
+
+    let _ = super::call_resolved_with_php_array(
+        eg,
+        constructor,
+        &arguments,
+        preserve_reference_aliases,
+    )?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    return_value(rv, object)
+}
+
+fn class_new_instance(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let arguments =
+        with_argument(ed, 1, |value| value.as_array().cloned()).unwrap_or_else(PhpArray::new);
+    construct_reflected_class_instance(ed, rv, eg, arguments, false)
+}
+
+fn class_new_instance_args(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let valid = with_argument(ed, 1, |value| value.value_type() == ValueType::Array);
+    if !valid {
+        let given = with_argument(ed, 1, reflection_argument_type_name);
+        eg.exception = Some(make_error_value(
+            "TypeError",
+            &format!(
+                "ReflectionClass::newInstanceArgs(): Argument #1 ($args) must be of type array, {given} given"
+            ),
+        ));
+        return Ok(());
+    }
+    let arguments = with_argument(ed, 1, |value| {
+        value.as_array().cloned().unwrap_or_else(PhpArray::new)
+    });
+    construct_reflected_class_instance(ed, rv, eg, arguments, true)
 }
 
 fn object_construct(

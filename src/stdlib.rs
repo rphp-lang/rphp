@@ -222,7 +222,7 @@ pub(super) fn write_return_value(rv: *mut Value, value: Value) {
 /// Render the ordinary PHP callable error tail shared by fixed and variadic
 /// internal functions. Legacy relative-scope callbacks take their separate
 /// checked-resolution path before this helper is reached.
-fn ordinary_callback_invalid_reason(callback: &Value, eg: &ExecutorGlobals) -> String {
+pub(crate) fn ordinary_callback_invalid_reason(callback: &Value, eg: &ExecutorGlobals) -> String {
     let callback = callback.dereferenced();
     if let Some(name) = callback.as_str() {
         let Some((class, method)) = name.rsplit_once("::") else {
@@ -269,6 +269,36 @@ fn ordinary_callback_invalid_reason(callback: &Value, eg: &ExecutorGlobals) -> S
     "first array member is not a valid class name or object".to_string()
 }
 
+pub(crate) fn ensure_callback_class_loaded(
+    callback: &Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<bool, VmError> {
+    let callback = callback.dereferenced();
+    let class = if let Some(name) = callback.as_str() {
+        name.rsplit_once("::").map(|(class, _)| class)
+    } else {
+        callback
+            .as_array()
+            .filter(|array| array.len() == 2)
+            .and_then(|array| array.get_value_at(0))
+            .map(Value::dereferenced)
+            .and_then(Value::as_str)
+    };
+    let Some(class) = class.map(|class| class.trim_start_matches('\\')) else {
+        return Ok(false);
+    };
+    if class.is_empty()
+        || matches!(
+            class.to_ascii_lowercase().as_str(),
+            "self" | "parent" | "static"
+        )
+        || find_class_case_insensitive(eg, class).is_some()
+    {
+        return Ok(false);
+    }
+    autoload::ensure_symbol_loaded(eg, class)
+}
+
 fn callback_class_method_invalid_reason(
     eg: &ExecutorGlobals,
     class: &str,
@@ -290,7 +320,7 @@ fn callback_class_method_invalid_reason(
             Visibility::Protected => "protected",
             Visibility::Public => unreachable!(),
         };
-        return format!("cannot access {visibility} method {declaring}::{method}()");
+        return format!("cannot access {visibility} method {canonical}::{method}()");
     }
     if !object_form && !is_static {
         return format!("non-static method {declaring}::{method}() cannot be called statically");
@@ -13714,9 +13744,15 @@ pub(super) fn resolve_callback_at_callsite_checked(
     eg: &mut ExecutorGlobals,
     ed: *mut ExecuteData,
 ) -> Result<Option<ResolvedCallback>, VmError> {
-    let ordinary = resolve_callback_at_callsite(val, eg, ed);
+    let mut ordinary = resolve_callback_at_callsite(val, eg, ed);
+    if ordinary.is_none() && ensure_callback_class_loaded(val, eg)? {
+        ordinary = resolve_callback_at_callsite(val, eg, ed);
+    }
     if ordinary.is_some() {
         return Ok(ordinary);
+    }
+    if eg.exception.is_some() {
+        return Ok(None);
     }
     if !callback_uses_legacy_scope(val) {
         return Ok(ordinary);
@@ -14103,6 +14139,7 @@ fn call_resolved_with_php_array(
     eg: &mut ExecutorGlobals,
     resolved: ResolvedCallback,
     args: &PhpArray,
+    preserve_reference_aliases: bool,
 ) -> Result<Value, VmError> {
     if resolved.is_magic_call {
         return call_magic_resolved_with_array(eg, &resolved, args.clone());
@@ -14118,9 +14155,15 @@ fn call_resolved_with_php_array(
         } else {
             index
         };
-        if sig.is_param_by_ref(reference_index as u32) && value.is_owned_reference() {
+        if preserve_reference_aliases
+            && sig.is_param_by_ref(reference_index as u32)
+            && value.is_owned_reference()
+        {
             value.clone_owned_reference_alias()
-        } else if sig.is_param_by_ref(reference_index as u32) && value.is_reference() {
+        } else if preserve_reference_aliases
+            && sig.is_param_by_ref(reference_index as u32)
+            && value.is_reference()
+        {
             // SAFETY: the source argument array remains live until the
             // synchronous detached callback returns.
             Value::reference(unsafe { value.as_ref_ptr() })
@@ -14213,13 +14256,10 @@ fn call_resolved_with_php_array(
                 continue;
             }
             let name = param_names.get(i).map(|s| s.as_str()).unwrap_or("?");
+            let function = crate::vm::execute::displayed_function_name(eg, resolved.func_ptr);
             eg.exception = Some(crate::value::make_error_value(
                 "ArgumentCountError",
-                &format!(
-                    "call_user_func_array(): Argument #{} (${}): not passed",
-                    i + 1,
-                    name
-                ),
+                &format!("{function}(): Argument #{} (${name}) not passed", i + 1),
             ));
             return Ok(Value::null());
         }
@@ -14593,7 +14633,7 @@ pub(crate) fn invoke_call_user_func_array(
         }
     };
 
-    call_resolved_with_php_array(eg, resolved, args)
+    call_resolved_with_php_array(eg, resolved, args, true)
 }
 
 /// Invoke a callback already resolved at the consuming source boundary. This
@@ -14614,7 +14654,7 @@ pub(crate) fn invoke_resolved_call_user_func_array(
         ));
         return Ok(Value::null());
     };
-    call_resolved_with_php_array(eg, resolved, args)
+    call_resolved_with_php_array(eg, resolved, args, true)
 }
 
 /// call_user_func($callback, ...$args)
@@ -14634,12 +14674,11 @@ fn fn_call_user_func(
             if eg.exception.is_some() {
                 return Ok(());
             }
-            let desc = callback.echo_to_string();
+            let reason = ordinary_callback_invalid_reason(callback, eg);
             eg.exception = Some(crate::value::make_error_value(
                 "TypeError",
                 &format!(
-                    "call_user_func(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found or not callable",
-                    desc
+                    "call_user_func(): Argument #1 ($callback) must be a valid callback, {reason}"
                 ),
             ));
             return Ok(());
@@ -14655,7 +14694,18 @@ fn fn_call_user_func(
     // Stream prepend args (e.g. $this), variadic values and closure captures
     // directly into the callback frame. No intermediate argument vectors.
     let result = if let Some(arr) = variadic_val.as_array() {
-        call_resolved_with_array(eg, &resolved, arr)
+        if callback_has_hard_reference_parameters(&resolved) {
+            let callback_name = callable_display_name(callback, eg);
+            if !report_callback_reference_warnings(eg, ed, &resolved, arr, true, &callback_name)? {
+                eg.replace_detached_return_discarded(previous_discarded);
+                return Ok(());
+            }
+        }
+        if arr.has_string_keys() {
+            call_resolved_with_php_array(eg, resolved.clone(), arr, false)
+        } else {
+            call_resolved_with_array(eg, &resolved, arr)
+        }
     } else if variadic_val.value_type() != ValueType::Undef {
         let num_args = resolved.prepend_args.len() + 1 + resolved.use_vars.len();
         call_resolved_iter(
@@ -14689,18 +14739,268 @@ fn fn_call_user_func(
     ret!(rv, result);
 }
 
-/// is_callable($value) — check if value is callable
+pub(crate) fn callable_display_name(value: &Value, eg: &ExecutorGlobals) -> String {
+    match value.value_type() {
+        ValueType::String => value.as_str().unwrap_or_default().to_string(),
+        ValueType::Closure => value.as_closure().map_or_else(String::new, |closure| {
+            crate::vm::execute::displayed_function_name(eg, closure.func)
+        }),
+        ValueType::Array => {
+            let Some(array) = value.as_array() else {
+                return "Array".to_string();
+            };
+            if array.len() != 2 {
+                return "Array".to_string();
+            }
+            let Some(method) = array.get_value_at(1).and_then(Value::as_str) else {
+                return "Array".to_string();
+            };
+            let Some(owner) = array.get_value_at(0) else {
+                return "Array".to_string();
+            };
+            let class = if owner.value_type() == ValueType::Closure {
+                "Closure".to_string()
+            } else if let Some(object) = owner.as_object() {
+                let internal = object.class_name.to_string();
+                drop(object);
+                eg.find_class(&internal)
+                    .and_then(|definition| definition.anonymous_public_name())
+                    .unwrap_or(internal)
+            } else if let Some(class) = owner.as_str() {
+                class.trim_start_matches('\\').to_string()
+            } else {
+                return "Array".to_string();
+            };
+            format!("{class}::{method}")
+        }
+        ValueType::Object => value.as_object().map_or_else(String::new, |object| {
+            let internal = object.class_name.to_string();
+            drop(object);
+            let class = eg
+                .find_class(&internal)
+                .and_then(|definition| definition.anonymous_public_name())
+                .unwrap_or(internal);
+            format!("{class}::__invoke")
+        }),
+        _ => value.echo_to_string(),
+    }
+}
+
+pub(crate) fn callback_reference_warning_messages(
+    resolved: &ResolvedCallback,
+    arguments: &PhpArray,
+    force_by_value: bool,
+    display_name: &str,
+) -> Vec<String> {
+    let signature = resolved.signature();
+    let public_arity = signature.public_arity() as usize;
+    let mut positional_index = 0usize;
+    let mut warnings = Vec::new();
+    for (key, value) in arguments.iter() {
+        let parameter_index = match key {
+            ArrayKey::Int(_) => {
+                let index = positional_index;
+                positional_index += 1;
+                index
+            }
+            ArrayKey::String(name) => signature
+                .param_names
+                .iter()
+                .position(|parameter| parameter == name.as_str())
+                .unwrap_or(public_arity),
+        };
+        let reference_index = if parameter_index < public_arity {
+            parameter_index
+        } else if signature.is_variadic {
+            public_arity
+        } else {
+            parameter_index
+        };
+        if !signature.is_param_by_ref(reference_index as u32)
+            || signature.is_param_prefer_ref(reference_index as u32)
+            || (!force_by_value && (value.is_reference() || value.is_owned_reference()))
+        {
+            continue;
+        }
+        let parameter = signature
+            .param_names
+            .get(reference_index)
+            .map(String::as_str)
+            .unwrap_or("unknown");
+        warnings.push(format!(
+            "{display_name}(): Argument #{} (${parameter}) must be passed by reference, value given",
+            reference_index + 1,
+        ));
+    }
+    warnings
+}
+
+#[inline]
+pub(crate) fn callback_has_hard_reference_parameters(resolved: &ResolvedCallback) -> bool {
+    let signature = resolved.signature();
+    signature.ref_args != 0 && signature.ref_args != signature.prefer_ref_args
+}
+
+fn report_callback_reference_warnings(
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    resolved: &ResolvedCallback,
+    arguments: &PhpArray,
+    force_by_value: bool,
+    display_name: &str,
+) -> Result<bool, VmError> {
+    if !callback_has_hard_reference_parameters(resolved) {
+        return Ok(true);
+    }
+    for message in
+        callback_reference_warning_messages(resolved, arguments, force_by_value, display_name)
+    {
+        report_internal_diagnostic(eg, ed, 2, "Warning", &message)?;
+        if eg.exception.is_some() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn callable_has_valid_syntax(value: &Value, eg: &ExecutorGlobals) -> bool {
+    match value.value_type() {
+        ValueType::String | ValueType::Closure => true,
+        ValueType::Array => value.as_array().is_some_and(|array| {
+            array.len() == 2
+                && array.get_value_at(0).is_some_and(|owner| {
+                    owner.value_type() == ValueType::Closure
+                        || owner.as_object().is_some()
+                        || owner.as_str().is_some()
+                })
+                && array.get_value_at(1).and_then(Value::as_str).is_some()
+        }),
+        ValueType::Object => value.as_object().is_some_and(|object| {
+            method_declared_in_class_hierarchy(eg, &object.class_name, "__invoke")
+        }),
+        _ => false,
+    }
+}
+
+/// is_callable($value, $syntax_only = false, &$callable_name = null)
 fn fn_is_callable(
     ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let val = arg!(ed, 0);
-    let callable = resolve_callback_at_callsite_checked(val, eg, ed)?.is_some();
+    let name = callable_display_name(val, eg);
+    // Fixed internal frames always own every declared CV. If the optional
+    // output was omitted this writes only the handler-local Undef slot; if it
+    // was supplied, arg_mut! follows the caller's live reference.
+    arg_mut!(ed, 2, Value::string(name));
+    let syntax_only = arg_opt!(ed, 1).is_some_and(Value::is_truthy);
+    let callable = if syntax_only {
+        callable_has_valid_syntax(val, eg)
+    } else {
+        resolve_callback_at_callsite_checked(val, eg, ed)?.is_some()
+    };
     if eg.exception.is_some() {
         return Ok(());
     }
     ret!(rv, Value::bool(callable));
+}
+
+fn forwarded_static_callback(
+    callback: &Value,
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    wrapper: &str,
+) -> Result<Option<ResolvedCallback>, VmError> {
+    let Some(lexical_class) = crate::vm::execute::lexical_class_name_for_internal_call(eg, ed)
+    else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            &format!("Cannot call {wrapper}() when no class scope is active"),
+        ));
+        return Ok(None);
+    };
+    let called_class =
+        crate::vm::execute::called_class_name_for_internal_call(eg, ed).map(str::to_owned);
+    let Some(mut resolved) = resolve_callback_at_callsite_checked(callback, eg, ed)? else {
+        if eg.exception.is_none() {
+            let reason = ordinary_callback_invalid_reason(callback, eg);
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                &format!("{wrapper}(): Argument #1 ($callback) must be a valid callback, {reason}"),
+            ));
+        }
+        return Ok(None);
+    };
+    let target_scope = eg
+        .declaring_class_of(resolved.func_ptr)
+        .or_else(|| {
+            callback
+                .as_array()
+                .and_then(|array| array.get_value_at(0))
+                .and_then(Value::as_str)
+                .map(|class| class.trim_start_matches('\\'))
+        })
+        .unwrap_or(lexical_class.as_str());
+    if let Some(called_class) = called_class
+        && eg.class_is_a(&called_class, target_scope)
+    {
+        resolved.called_scope_class_id = eg.class_id_of(&called_class);
+    }
+    Ok(Some(resolved))
+}
+
+/// forward_static_call($callback, ...$args)
+fn fn_forward_static_call(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let callback = arg!(ed, 0);
+    let Some(resolved) = forwarded_static_callback(callback, eg, ed, "forward_static_call")? else {
+        return Ok(());
+    };
+    let arguments = arg!(ed, 1);
+    let result = if let Some(arguments) = arguments.as_array() {
+        call_resolved_with_array(eg, &resolved, arguments)?
+    } else if arguments.value_type() == ValueType::Undef {
+        call_resolved_with_values(eg, &resolved, &[])?
+    } else {
+        call_resolved_with_values(eg, &resolved, std::slice::from_ref(arguments))?
+    };
+    if eg.exception.is_none() {
+        ret!(rv, result);
+    }
+    Ok(())
+}
+
+/// forward_static_call_array($callback, $args)
+fn fn_forward_static_call_array(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let callback = arg!(ed, 0);
+    let Some(resolved) = forwarded_static_callback(callback, eg, ed, "forward_static_call_array")?
+    else {
+        return Ok(());
+    };
+    let arguments = arg!(ed, 1);
+    let Some(arguments) = arguments.as_array() else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "forward_static_call_array(): Argument #2 ($args) must be of type array, {} given",
+                arguments.dereferenced().type_name()
+            ),
+        ));
+        return Ok(());
+    };
+    let result = call_resolved_with_php_array(eg, resolved, arguments, true)?;
+    if eg.exception.is_none() {
+        ret!(rv, result);
+    }
+    Ok(())
 }
 
 // ============================================================================
@@ -17259,17 +17559,25 @@ fn fn_call_user_func_array(
             if eg.exception.is_some() {
                 return Ok(());
             }
-            let desc = callback.echo_to_string();
+            let reason = ordinary_callback_invalid_reason(callback, eg);
             eg.exception = Some(crate::value::make_error_value(
                 "TypeError",
                 &format!(
-                    "call_user_func_array(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found or not callable",
-                    desc
+                    "call_user_func_array(): Argument #1 ($callback) must be a valid callback, {reason}"
                 ),
             ));
             return Ok(());
         }
     };
+    if callback_has_hard_reference_parameters(&resolved)
+        && let Some(arguments) = args_val.as_array()
+    {
+        let callback_name = callable_display_name(callback, eg);
+        if !report_callback_reference_warnings(eg, ed, &resolved, arguments, false, &callback_name)?
+        {
+            return Ok(());
+        }
+    }
     let discarded = rv.is_null() || eg.detached_return_discarded();
     let previous_discarded = eg.replace_detached_return_discarded(discarded);
     let result = invoke_resolved_call_user_func_array(resolved, args_val, eg);

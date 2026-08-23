@@ -34,6 +34,8 @@ include!("e2e_callable/method_visibility_and_inheritance.rs");
 
 include!("e2e_callable/relative_scope_callbacks.rs");
 
+include!("e2e_callable/callback_dispatch_introspection.rs");
+
 #[test]
 fn void_cast_marks_only_the_explicitly_discarded_call() {
     let compiled = compile_source(

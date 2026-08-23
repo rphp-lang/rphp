@@ -688,6 +688,7 @@ mod inner {
             67 => Some("CallUserFuncArray"),
             68 => Some("InitUserCall"),
             69 => Some("SendUser"),
+            226 => Some("SendUserChecked"),
             70 => Some("InitArray"),
             71 => Some("AddArrayElement"),
             72 => Some("FetchDimR"),

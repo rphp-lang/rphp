@@ -53,7 +53,7 @@ fn test_call_user_func_array_prebuilt_and_literal_use_distinct_lowerings() {
 
     let literal = main_opcodes("<?php call_user_func_array('strlen', ['abc']);");
     assert!(literal.contains(&OpCode::InitUserCall));
-    assert!(literal.contains(&OpCode::SendUser));
+    assert!(literal.contains(&OpCode::SendUserChecked));
     assert!(!literal.contains(&OpCode::CallUserFuncArray));
 }
 
@@ -106,11 +106,16 @@ fn test_lowered_call_user_func_keeps_by_value_semantics() {
         r#"<?php
 function bump_callback(&$value) { $value = $value + 1; }
 $value = 1;
+set_error_handler(function($_severity, $message) { echo "warning:$message|"; });
 call_user_func('bump_callback', $value);
+restore_error_handler();
 echo $value;
 "#,
     );
-    assert_eq!(out, "1");
+    assert_eq!(
+        out,
+        "warning:bump_callback(): Argument #1 ($value) must be passed by reference, value given|1"
+    );
 }
 
 #[test]

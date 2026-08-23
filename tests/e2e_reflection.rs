@@ -2,6 +2,77 @@ mod common;
 use common::{run_php, run_php_expect_error, run_php_with_source_context};
 
 #[test]
+fn reflection_class_constructs_with_named_packed_and_reference_arguments() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReflectionConstructProbe {
+    public array $values;
+    public function __construct($a = 'a', $b = 'b', $c = 'c', ...$rest) {
+        $this->values = [$a, $b, $c, $rest];
+    }
+}
+class ReflectionNoConstructor {}
+class ReflectionPrivateConstructor { private function __construct() {} }
+class ReflectionReferenceConstructor {
+    public function __construct(&$value) { $value = 'changed'; }
+}
+$reflection = new ReflectionClass(ReflectionConstructProbe::class);
+var_dump($reflection->newInstance('A', c: 'C', extra: 'E')->values);
+var_dump($reflection->newInstanceArgs(['b' => 'B', 'tail' => 'T'])->values);
+echo get_class((new ReflectionClass(ReflectionNoConstructor::class))->newInstanceArgs([])), "\n";
+foreach ([
+    fn() => (new ReflectionClass(ReflectionNoConstructor::class))->newInstanceArgs([1]),
+    fn() => (new ReflectionClass(ReflectionPrivateConstructor::class))->newInstance(),
+] as $invoke) {
+    try { $invoke(); }
+    catch (ReflectionException $error) { echo $error->getMessage(), "\n"; }
+}
+$value = 'original';
+$args = [&$value];
+(new ReflectionClass(ReflectionReferenceConstructor::class))->newInstanceArgs($args);
+echo $value, "\n";
+set_error_handler(function($_severity, $message) { echo "warning:$message\n"; });
+(new ReflectionClass(ReflectionReferenceConstructor::class))->newInstance(value: 'literal');
+(new ReflectionClass(ReflectionReferenceConstructor::class))->newInstanceArgs(['literal']);
+restore_error_handler();
+foreach (['newInstance', 'newInstanceArgs'] as $method) {
+    $reflection = new ReflectionMethod(ReflectionClass::class, $method);
+    $parameter = $reflection->getParameters()[0];
+    echo $method, ':', $reflection->getNumberOfParameters(), '/',
+        $reflection->getNumberOfRequiredParameters(), ':', $parameter->getName(), ':',
+        (int) $parameter->isVariadic(), "\n";
+}
+"#,
+        ),
+        concat!(
+            "array(4) {\n",
+            "  [0]=>\n  string(1) \"A\"\n",
+            "  [1]=>\n  string(1) \"b\"\n",
+            "  [2]=>\n  string(1) \"C\"\n",
+            "  [3]=>\n  array(1) {\n",
+            "    [\"extra\"]=>\n    string(1) \"E\"\n",
+            "  }\n}\n",
+            "array(4) {\n",
+            "  [0]=>\n  string(1) \"a\"\n",
+            "  [1]=>\n  string(1) \"B\"\n",
+            "  [2]=>\n  string(1) \"c\"\n",
+            "  [3]=>\n  array(1) {\n",
+            "    [\"tail\"]=>\n    string(1) \"T\"\n",
+            "  }\n}\n",
+            "ReflectionNoConstructor\n",
+            "Class ReflectionNoConstructor does not have a constructor, so you cannot pass any constructor arguments\n",
+            "Access to non-public constructor of class ReflectionPrivateConstructor\n",
+            "changed\n",
+            "warning:ReflectionReferenceConstructor::__construct(): Argument #1 ($value) must be passed by reference, value given\n",
+            "warning:ReflectionReferenceConstructor::__construct(): Argument #1 ($value) must be passed by reference, value given\n",
+            "newInstance:1/0:args:1\n",
+            "newInstanceArgs:1/0:args:0\n",
+        ),
+    );
+}
+
+#[test]
 fn reflection_class_get_name_returns_the_declared_qualified_name() {
     assert_eq!(
         run_php(

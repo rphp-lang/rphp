@@ -4379,26 +4379,6 @@ fn op_init_late_static_call<'a>(
 }
 
 #[inline(never)]
-fn missing_static_callback_method_reason(
-    eg: &ExecutorGlobals,
-    callback: &Value,
-) -> Option<String> {
-    let (class, method) = callback.as_str()?.rsplit_once("::")?;
-    let definition = eg.find_class(class.trim_start_matches('\\'))?;
-    if eg.find_method_info(&definition.name, method).is_some()
-        || eg
-            .find_method_info(&definition.name, "__callStatic")
-            .is_some()
-    {
-        return None;
-    }
-    Some(format!(
-        "class {} does not have a method \"{method}\"",
-        definition.name
-    ))
-}
-
-#[inline(never)]
 fn op_init_user_call<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -4430,29 +4410,15 @@ fn op_init_user_call<'a>(
             } else {
                 callback_raw
             };
-            let description = callback.echo_to_string();
-            let missing_method = missing_static_callback_method_reason(eg, callback);
-            let message = if opline._pad == 1 {
-                if let Some(reason) = missing_method.as_deref() {
-                    format!(
-                        "call_user_func_array(): Argument #1 ($callback) must be a valid callback, {reason}"
-                    )
-                } else if callback.as_str().is_some() {
-                    format!(
-                        "call_user_func_array(): Argument #1 ($callback) must be a valid callback, function \"{description}\" not found or not callable"
-                    )
-                } else {
-                    "call_user_func_array(): Argument #1 ($callback) must be a valid callback, no array or string given".to_string()
-                }
-            } else if let Some(reason) = missing_method.as_deref() {
-                format!(
-                    "call_user_func(): Argument #1 ($callback) must be a valid callback, {reason}"
-                )
+            let function = if opline._pad == 1 {
+                "call_user_func_array"
             } else {
-                format!(
-                    "call_user_func(): Argument #1 ($callback) must be a valid callback, function \"{description}\" not found or not callable"
-                )
+                "call_user_func"
             };
+            let reason = crate::stdlib::ordinary_callback_invalid_reason(callback, eg);
+            let message = format!(
+                "{function}(): Argument #1 ($callback) must be a valid callback, {reason}"
+            );
             let error = make_error_value("TypeError", &message);
             return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
@@ -4584,7 +4550,7 @@ fn resolve_user_call_at_opline_checked(
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
-    ordinary: Option<crate::stdlib::ResolvedCallback>,
+    mut ordinary: Option<crate::stdlib::ResolvedCallback>,
 ) -> Result<Option<crate::stdlib::ResolvedCallback>, VmError> {
     let callback_raw = unsafe {
         &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
@@ -4594,6 +4560,12 @@ fn resolve_user_call_at_opline_checked(
     } else {
         callback_raw
     };
+    if ordinary.is_none() && crate::stdlib::ensure_callback_class_loaded(callback, eg)? {
+        ordinary = resolve_user_call_at_opline(eg, frame, op_array, opline);
+    }
+    if ordinary.is_some() || eg.exception.is_some() {
+        return Ok(ordinary);
+    }
     if !crate::stdlib::callback_uses_legacy_scope(callback) {
         return Ok(ordinary);
     }

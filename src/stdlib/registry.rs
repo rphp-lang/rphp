@@ -988,7 +988,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
 
     // --- Callable functions ---
-    reg_var!("call_user_func", fn_call_user_func, 1, "callback");
+    reg_var!("call_user_func", fn_call_user_func, 1, "callback", "args");
     reg!(
         "call_user_func_array",
         fn_call_user_func_array,
@@ -997,7 +997,31 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "callback",
         "args"
     );
-    reg!("is_callable", fn_is_callable, 1, 1, "value");
+    reg_var!(
+        "forward_static_call",
+        fn_forward_static_call,
+        1,
+        "callback",
+        "args"
+    );
+    reg!(
+        "forward_static_call_array",
+        fn_forward_static_call_array,
+        2,
+        2,
+        "callback",
+        "args"
+    );
+    reg_ref!(
+        "is_callable",
+        fn_is_callable,
+        3,
+        1,
+        0b100,
+        "value",
+        "syntax_only",
+        "callable_name"
+    );
     reg!("is_scalar", fn_is_scalar, 1, 1, "value");
     reg!("function_exists", fn_function_exists, 1, 1, "function");
     reg!("assert", fn_assert, 2, 1, "assertion", "description");

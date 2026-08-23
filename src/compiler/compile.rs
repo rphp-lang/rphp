@@ -1705,7 +1705,7 @@ fn propagate_declared_scalar_types(
             }
         } else if matches!(
             instruction.opcode,
-            OpCode::SendRef | OpCode::SendNamed | OpCode::SendUser
+            OpCode::SendRef | OpCode::SendNamed | OpCode::SendUser | OpCode::SendUserChecked
         ) {
             if let Some(call) = pending_calls.last_mut() {
                 call.arguments_proven = false;
@@ -1732,8 +1732,10 @@ fn propagate_declared_scalar_types(
                 *reference = true;
             }
         }
-        if matches!(instruction.opcode, OpCode::SendNamed | OpCode::SendUser)
-            && instruction.op1_type == OpType::Cv
+        if matches!(
+            instruction.opcode,
+            OpCode::SendNamed | OpCode::SendUser | OpCode::SendUserChecked
+        ) && instruction.op1_type == OpType::Cv
         {
             if let Some(reference) = reference_wrapped_cvs.get_mut(instruction.op1 as usize) {
                 *reference = true;
@@ -3073,6 +3075,7 @@ fn builtin_ref_args(name: &str) -> u64 {
         "preg_replace" | "preg_replace_callback" => 0b1_0000, // arg 4 (&$count)
         "str_replace" => 0b1000,                  // arg 3 (&$count)
         "similar_text" => 0b100,                  // arg 2 (&$percent)
+        "is_callable" => 0b100,                   // arg 2 (&$callable_name)
         "exec" => 0b110,                          // args 1 and 2 (&$output, &$result_code)
         "parse_str" => 0b10,                      // arg 1 (&$result)
         "sscanf" | "fscanf" => u64::MAX << 2,     // variadic arg 2+ (&...$vars)
@@ -4346,6 +4349,24 @@ impl Compiler {
         }
         // Fall back to builtin table
         builtin_ref_args(name)
+    }
+
+    fn literal_callback_has_no_ref_parameters(&self, callback: &Expr) -> bool {
+        let Expr::StringLiteral(name) = callback else {
+            return false;
+        };
+        let name = name.trim_start_matches('\\');
+        self.functions
+            .iter()
+            .find(|(function, _)| function.eq_ignore_ascii_case(name))
+            .map(|(_, function)| function.common.sig.ref_args)
+            .or_else(|| {
+                self.known_ref_args
+                    .iter()
+                    .find(|(function, _)| function.eq_ignore_ascii_case(name))
+                    .map(|(_, reference_args)| *reference_args)
+            })
+            == Some(0)
     }
 
     /// PHP permits function and method results to serve as temporary array
@@ -8828,6 +8849,8 @@ impl Compiler {
                                 .all(|arg| matches!(arg, CallArg::Positional(_)))
                                 && !forwarded.iter().any(CallArg::contains_yield)
                             {
+                                let no_ref_parameters =
+                                    self.literal_callback_has_no_ref_parameters(callback);
                                 let (callback_op, callback_type) = self.compile_expr(callback);
                                 let mut init = Instruction::new(OpCode::InitUserCall);
                                 init.op1 = callback_op;
@@ -8835,7 +8858,7 @@ impl Compiler {
                                 init.extended_value = forwarded.len() as u32;
                                 self.push_instruction_at_line(init, *line);
 
-                                self.emit_user_call_args(forwarded);
+                                self.emit_user_call_args(forwarded, no_ref_parameters);
 
                                 let tmp = self.alloc_tmp();
                                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
@@ -8851,8 +8874,12 @@ impl Compiler {
                         if let [CallArg::Positional(callback), CallArg::Positional(array)] = args {
                             if let Expr::ArrayLiteral(elements) = array {
                                 if elements.iter().all(|element| {
-                                    element.key.is_none() && !element.value.contains_yield()
+                                    element.key.is_none()
+                                        && !element.by_reference
+                                        && !element.value.contains_yield()
                                 }) {
+                                    let no_ref_parameters =
+                                        self.literal_callback_has_no_ref_parameters(callback);
                                     // A temporary packed literal cannot be observed by PHP
                                     // code. Forward its values directly and avoid allocating,
                                     // filling and dropping a PhpArray for every invocation.
@@ -8866,7 +8893,11 @@ impl Compiler {
 
                                     for (index, element) in elements.iter().enumerate() {
                                         let (op, op_type) = self.compile_expr(&element.value);
-                                        let mut send = Instruction::new(OpCode::SendUser);
+                                        let mut send = Instruction::new(if no_ref_parameters {
+                                            OpCode::SendUser
+                                        } else {
+                                            OpCode::SendUserChecked
+                                        });
                                         send.op1 = op;
                                         send.op1_type = op_type;
                                         send.op2 = index as u16;
@@ -12153,13 +12184,17 @@ impl Compiler {
     /// Emit arguments for compiler-lowered call_user_func. Unlike an ordinary
     /// dynamic call, the callback may resolve to a method, so the VM computes
     /// the hidden `$this` CV offset from the resolved signature.
-    fn emit_user_call_args(&mut self, args: &[CallArg]) {
+    fn emit_user_call_args(&mut self, args: &[CallArg], no_ref_parameters: bool) {
         for (index, arg) in args.iter().enumerate() {
             let CallArg::Positional(expr) = arg else {
                 unreachable!("user-call lowering only accepts positional arguments");
             };
             let (op, op_type) = self.compile_expr(expr);
-            let mut send = Instruction::new(OpCode::SendUser);
+            let mut send = Instruction::new(if no_ref_parameters {
+                OpCode::SendUser
+            } else {
+                OpCode::SendUserChecked
+            });
             send.op1 = op;
             send.op1_type = op_type;
             send.op2 = index as u16;

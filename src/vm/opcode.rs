@@ -37,8 +37,9 @@ pub enum OpCode {
     /// Compiler-lowered call_user_func(): resolve callback and create its real
     /// call frame directly, without the variadic stdlib wrapper frame.
     InitUserCall = 68,
-    /// Send a call_user_func argument by value. The target is known only at
-    /// runtime, so a hidden method `$this` offset comes from its signature.
+    /// Send a call_user_func argument by value when the literal target's
+    /// immutable declaration proves there are no by-reference parameters. A
+    /// hidden method `$this` offset still comes from the resolved signature.
     SendUser = 69,
 
     // Comparison
@@ -310,4 +311,8 @@ pub enum OpCode {
     BitwiseXor_LongLong = 223,
     BitwiseAnd_LongLong = 224,
     BitwiseOr_LongLong = 225,
+    /// Send one compiler-lowered call_user_func argument whose target still
+    /// requires runtime by-reference diagnostics. The ordinary SendUser stays
+    /// branch-free when an immutable literal declaration proves by-value use.
+    SendUserChecked = 226,
 }
