@@ -113,7 +113,7 @@ pub struct PhpStream {
     #[cfg(feature = "stream-truncate")]
     memory_append_after_truncate: bool,
     #[cfg(feature = "stream-context")]
-    context: Option<StreamContext>,
+    context: Option<Box<StreamContext>>,
 }
 
 /// Stable metadata exposed by the currently admitted seekable backends.
@@ -264,15 +264,19 @@ impl PhpStream {
 
     #[cfg(feature = "stream-context")]
     pub(crate) fn context_mut(&mut self) -> &mut StreamContext {
-        self.context.get_or_insert_with(|| StreamContext {
-            options: PhpArray::new(),
-            params: PhpArray::new(),
-        })
+        self.context
+            .get_or_insert_with(|| {
+                Box::new(StreamContext {
+                    options: PhpArray::new(),
+                    params: PhpArray::new(),
+                })
+            })
+            .as_mut()
     }
 
     #[cfg(feature = "stream-context")]
     pub(crate) fn context(&self) -> Option<&StreamContext> {
-        self.context.as_ref()
+        self.context.as_deref()
     }
 
     #[inline]

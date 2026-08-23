@@ -12,7 +12,7 @@ categories = ["compilers"]
 publish = false
 
 [features]
-default = ["quick-loops", "jit-prototype"]
+default = ["quick-loops", "jit-prototype", "stream-context"]
 quick-loops = []
 vm-stats = []
 jit-prototype = []

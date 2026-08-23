@@ -597,6 +597,63 @@ fn stream_context_argument_errors_match_php_classes_and_messages() {
 }
 
 #[test]
+#[cfg(feature = "stream-context")]
+fn stream_context_default_surface_deprecation_and_callback_diagnostics_match_php_85() {
+    assert_eq!(
+        run_php(
+            "<?php
+            foreach ([
+                'stream_context_create' => [0, 2],
+                'stream_context_get_default' => [0, 1],
+                'stream_context_get_options' => [1, 1],
+                'stream_context_get_params' => [1, 1],
+                'stream_context_set_default' => [1, 1],
+                'stream_context_set_option' => [2, 4],
+                'stream_context_set_options' => [2, 2],
+                'stream_context_set_params' => [2, 2],
+            ] as $name => [$required, $total]) {
+                $reflection = new ReflectionFunction($name);
+                echo $name, ':', $reflection->getNumberOfRequiredParameters(), '/',
+                    $reflection->getNumberOfParameters(), ':';
+                echo $reflection->getNumberOfRequiredParameters() === $required ? 'r' : 'bad';
+                echo $reflection->getNumberOfParameters() === $total ? 't' : 'bad';
+                echo '|';
+            }
+
+            set_error_handler(function ($level, $message) {
+                echo $level, ':', $message, '|';
+                return true;
+            });
+            $context = stream_context_create();
+            var_dump(stream_context_set_option($context, ['http' => ['method' => 'POST']]));
+            restore_error_handler();
+
+            try {
+                stream_context_set_params($context, [
+                    'notification' => ['missing_stream_context_class', 'notify'],
+                ]);
+            } catch (TypeError $error) {
+                echo get_class($error), ':', $error->getMessage();
+            }
+            "
+        ),
+        concat!(
+            "stream_context_create:0/2:rt|",
+            "stream_context_get_default:0/1:rt|",
+            "stream_context_get_options:1/1:rt|",
+            "stream_context_get_params:1/1:rt|",
+            "stream_context_set_default:1/1:rt|",
+            "stream_context_set_option:2/4:rt|",
+            "stream_context_set_options:2/2:rt|",
+            "stream_context_set_params:2/2:rt|",
+            "8192:Calling stream_context_set_option() with 2 arguments is deprecated, use stream_context_set_options() instead|",
+            "bool(true)\n",
+            "TypeError:stream_context_set_params(): Argument #1 ($context) must be an array with valid callbacks as values, class \"missing_stream_context_class\" not found",
+        )
+    );
+}
+
+#[test]
 #[cfg(feature = "stream-contents")]
 fn stream_contents_preserves_length_offset_cursor_and_eof() {
     assert_eq!(

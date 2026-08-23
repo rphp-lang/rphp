@@ -23,6 +23,17 @@ pub(in crate::stdlib::streams) fn fn_stream_context_set_option(
     else {
         return Ok(());
     };
+    if optional_argument(execute_data, 2).is_none() && optional_argument(execute_data, 3).is_none()
+    {
+        super::super::super::report_internal_deprecation(
+            eg,
+            execute_data,
+            "Calling stream_context_set_option() with 2 arguments is deprecated, use stream_context_set_options() instead",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
 
     let wrapper_or_options = argument(execute_data, 1);
     if let Some(options) = wrapper_or_options.as_array() {

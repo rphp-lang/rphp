@@ -48,18 +48,9 @@ mod truncate;
 pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<InternalFunction>>) {
     register_standard_streams(eg);
     for (name, handler, maximum, required, parameter_names) in [
-        #[cfg(not(feature = "stream-context"))]
         (
             "fopen",
             fn_fopen as InternalFunctionHandler,
-            4,
-            2,
-            &["filename", "mode", "use_include_path", "context"][..],
-        ),
-        #[cfg(feature = "stream-context")]
-        (
-            "fopen",
-            context::fn_fopen as InternalFunctionHandler,
             4,
             2,
             &["filename", "mode", "use_include_path", "context"][..],
@@ -371,13 +362,22 @@ pub(super) fn register_extensions(
 }
 
 #[inline]
-fn argument<'a>(execute_data: *mut ExecuteData, index: u32) -> &'a Value {
-    let value = unsafe { (*execute_data).cv(index) };
+fn argument_with_count<'a>(execute_data: *mut ExecuteData, index: u32) -> (&'a Value, u32) {
+    // SAFETY: Internal-function handlers receive a live ExecuteData frame, and
+    // the registered signature guarantees that `index` is inside its CV area.
+    let (value, supplied) = unsafe { ((*execute_data).cv(index), (*execute_data).num_args) };
     if value.is_reference() {
-        unsafe { &*value.as_ref_ptr() }
+        // SAFETY: is_reference() guarantees that the payload is a live Value
+        // cell for the duration of the current request.
+        (unsafe { &*value.as_ref_ptr() }, supplied)
     } else {
-        value
+        (value, supplied)
     }
+}
+
+#[inline]
+fn argument<'a>(execute_data: *mut ExecuteData, index: u32) -> &'a Value {
+    argument_with_count(execute_data, index).0
 }
 
 #[inline]
@@ -424,13 +424,21 @@ pub(super) fn with_stream<R>(
 }
 
 #[cold]
-#[cfg(not(feature = "stream-context"))]
 fn fn_fopen(
     execute_data: *mut ExecuteData,
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let path = argument_string(execute_data, 0);
+    let (path_argument, _supplied) = argument_with_count(execute_data, 0);
+    #[cfg(feature = "stream-context")]
+    if _supplied > 2 {
+        return context::fn_fopen(execute_data, return_pointer, eg);
+    }
+
+    let path: Cow<'static, str> = match path_argument.as_str() {
+        Some(value) => Cow::Owned(value.to_string()),
+        None => Cow::Owned(path_argument.echo_to_string()),
+    };
     let mode = argument_string(execute_data, 1);
     let value = match PhpStream::open(path.as_ref(), mode.as_ref()) {
         #[cfg(feature = "resource-lifetime")]

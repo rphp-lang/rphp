@@ -301,10 +301,7 @@ pub(super) fn apply_params(
 ) -> bool {
     if let Some(notification) = params.get_str("notification") {
         if super::super::resolve_callback_at_callsite(notification, eg, execute_data).is_none() {
-            let detail = notification.as_str().map_or_else(
-                || "no array or string given".to_string(),
-                |function| format!("function \"{function}\" not found or invalid function name"),
-            );
+            let detail = super::super::ordinary_callback_invalid_reason(notification, eg);
             argument_error(
                 eg,
                 "TypeError",
