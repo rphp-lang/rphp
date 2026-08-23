@@ -839,7 +839,16 @@ fn prepare_integer_operator_operand(
 fn commutative_operator_error_operands<'a>(
     left: &'a Value,
     right: &'a Value,
+    left_type: OpType,
+    right_type: OpType,
 ) -> (&'a Value, &'a Value) {
+    // Zend preserves source order when both operands are runtime CVs (for
+    // example an array_reduce callback's `$carry * $value`). Constant/CV and
+    // temporary forms canonicalize certain internal resource/object operands
+    // for commutative operators before reporting their type error.
+    if left_type == OpType::Cv && right_type == OpType::Cv {
+        return (left, right);
+    }
     let rank = |value: &Value| match value.dereferenced().value_type() {
         ValueType::Object | ValueType::Closure => 2,
         ValueType::Resource => 1,
@@ -2913,7 +2922,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     resume_pending_exception!();
                     let Some((left, right)) = pair else {
                         let (error_left, error_right) = if canonical {
-                            commutative_operator_error_operands(op1, op2)
+                            commutative_operator_error_operands(
+                                op1,
+                                op2,
+                                opline.op1_type,
+                                opline.op2_type,
+                            )
                         } else {
                             (op1, op2)
                         };
@@ -3219,7 +3233,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             (Ok(left), Ok(right)) => (left, right),
                             _ => {
                                 let (error_left, error_right) =
-                                    commutative_operator_error_operands(op1, op2);
+                                    commutative_operator_error_operands(
+                                        op1,
+                                        op2,
+                                        opline.op1_type,
+                                        opline.op2_type,
+                                    );
                                 throw_operator!(
                                     "TypeError",
                                     &format!(

@@ -27,13 +27,14 @@ use crate::value::{
     ArrayKey, ClosureStaticVars, PhpArray, PhpClosure, PhpObject, Value, ValueType,
 };
 use crate::vm::execute::{
-    ExplicitNumericCastTarget, ScalarLongSortOrder, VmError, call_function, call_function_iter,
+    ArrayKeyError, ExplicitNumericCastTarget, ScalarLongSortOrder, VmError,
+    arithmetic_operator_operand, call_function, call_function_iter,
     call_function_iter_with_context, call_function_owned_iter,
     call_function_owned_iter_readback_arg0_with_context, call_function_owned_iter_with_context,
     call_function_owned_iter_with_context_and_named, check_type_hint, explicit_float_conversion,
     explicit_long_conversion, explicit_numeric_cast_warning, php_numeric_string_to_float,
-    prepare_scalar_long_callback, try_execute_scalar_long_callback,
-    values_equal_checked_with_precision, values_identical,
+    prepare_scalar_long_callback, try_execute_scalar_long_callback, value_to_array_key,
+    values_equal_checked_with_precision, values_identical_checked,
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
@@ -801,26 +802,115 @@ fn fn_array_key_exists_named(
     eg: &mut ExecutorGlobals,
     function: &str,
 ) -> Result<(), VmError> {
+    let source = arg!(ed, 1);
+    let Some(array) = source.as_array() else {
+        typed_internal_argument_error(eg, function, source, 2, "array", "array");
+        return Ok(());
+    };
     let key = arg!(ed, 0);
-    let arr = arg!(ed, 1);
-    if arr.as_array().is_none() {
-        eg.exception = Some(crate::value::make_error_value(
-            "TypeError",
-            &format!(
-                "{function}(): Argument #2 ($array) must be of type array, {} given",
-                arr.dereferenced().type_name()
-            ),
-        ));
-        ret!(rv, Value::null());
+    if let Some(key) = key.as_long() {
+        ret!(rv, Value::bool(array.get_int(key).is_some()));
     }
-    let exists = if let Some(a) = arr.as_array() {
-        match key.value_type() {
-            ValueType::Long => a.get_int(key.as_long().unwrap()).is_some(),
-            ValueType::String => a.get_str(key.as_str().unwrap()).is_some(),
-            _ => false,
+    if let Some(key) = key.as_str() {
+        let exists = crate::value::canonical_decimal_array_key(key).map_or_else(
+            || array.get_str(key).is_some(),
+            |key| array.get_int(key).is_some(),
+        );
+        ret!(rv, Value::bool(exists));
+    }
+
+    // A diagnostic handler may mutate the caller's array or key. Retain both
+    // by-value call snapshots before entering the slow conversion path.
+    let source = owned_argument(ed, 1);
+    let array = source.dereferenced().as_array().unwrap();
+
+    // Array keys are normalized through the same scalar conversion used by
+    // ordinary dimensions. The null diagnostic is specific to this API, while
+    // float/resource diagnostics and illegal-key errors retain the shared PHP
+    // array-offset contract.
+    let key_source = owned_argument(ed, 0);
+    let key_value = key_source.dereferenced();
+    let key = match value_to_array_key(key_value) {
+        Ok(key) => key,
+        Err(ArrayKeyError::DeprecatedNull) => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                "Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead",
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            ArrayKey::String(String::new())
         }
-    } else {
-        false
+        Err(ArrayKeyError::DeprecatedFloat(integer)) => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                &format!(
+                    "Implicit conversion from float {} to int loses precision",
+                    key_value.echo_to_string_with_precision(-1)
+                ),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            ArrayKey::Int(integer)
+        }
+        Err(ArrayKeyError::NonRepresentableFloat {
+            integer,
+            also_deprecated,
+        }) => {
+            let rendered = key_value.echo_to_string_with_precision(-1);
+            report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("The float {rendered} is not representable as an int, cast occurred"),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            if also_deprecated {
+                report_internal_deprecation(
+                    eg,
+                    ed,
+                    &format!("Implicit conversion from float {rendered} to int loses precision"),
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+            }
+            ArrayKey::Int(integer)
+        }
+        Err(ArrayKeyError::Resource(resource)) => {
+            report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("Resource ID#{resource} used as offset, casting to integer ({resource})"),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            ArrayKey::Int(resource)
+        }
+        Err(ArrayKeyError::Illegal) => {
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                &format!(
+                    "Cannot access offset of type {} on array",
+                    key_value.diagnostic_type_name()
+                ),
+            ));
+            return Ok(());
+        }
+    };
+    let exists = match key {
+        ArrayKey::Int(key) => array.get_int(key).is_some(),
+        ArrayKey::String(key) => array.get_str(&key).is_some(),
     };
     ret!(rv, Value::bool(exists));
 }
@@ -972,24 +1062,46 @@ fn fn_array_change_key_case(
 fn fn_in_array(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let needle = arg!(ed, 0);
     let haystack = arg!(ed, 1);
-    let strict = arg_opt!(ed, 2).is_some_and(Value::is_truthy);
-    let found = haystack
-        .as_array()
-        .map(|a| {
-            a.values().any(|value| {
-                if strict {
-                    values_identical(needle, value)
-                } else {
-                    values_equal(needle, value)
-                }
-            })
-        })
-        .unwrap_or(false);
-    ret!(rv, Value::bool(found));
+    if haystack.as_array().is_none() {
+        typed_internal_argument_error(eg, "in_array", haystack, 2, "haystack", "array");
+        return Ok(());
+    }
+    let strict = if arg_opt!(ed, 2).is_some() {
+        let Some(strict) = typed_internal_bool_argument(ed, eg, "in_array", 2, "strict")? else {
+            return Ok(());
+        };
+        strict
+    } else {
+        false
+    };
+
+    // Reacquire the call-frame values after optional bool conversion, whose
+    // null deprecation may dispatch user code.
+    let needle = arg!(ed, 0);
+    let haystack = arg!(ed, 1).as_array().unwrap();
+    let numeric_string_needle = array_lookup_numeric_string_needle(needle, strict);
+    for value in haystack.values() {
+        let matches = match array_lookup_values_match(
+            needle,
+            value,
+            strict,
+            numeric_string_needle,
+            eg.precision,
+        ) {
+            Ok(matches) => matches,
+            Err(()) => {
+                report_recursive_sort_comparison(eg);
+                return Ok(());
+            }
+        };
+        if matches {
+            ret!(rv, Value::bool(true));
+        }
+    }
+    ret!(rv, Value::bool(false));
 }
 
 fn fn_array_reverse(
@@ -1227,15 +1339,11 @@ fn fn_array_keys(
     let filter = arg!(ed, 1);
     let mut result = PhpArray::with_packed_capacity(array.len());
     for (key, value) in array.iter() {
-        let matches = if strict {
-            values_identical(value, filter)
-        } else {
-            match values_equal_checked_with_precision(value, filter, eg.precision) {
-                Ok(matches) => matches,
-                Err(()) => {
-                    report_recursive_sort_comparison(eg);
-                    return Ok(());
-                }
+        let matches = match array_values_match(value, filter, strict, eg.precision) {
+            Ok(matches) => matches,
+            Err(()) => {
+                report_recursive_sort_comparison(eg);
+                return Ok(());
             }
         };
         if matches {
@@ -1485,70 +1593,473 @@ fn fn_array_combine(
     ret!(rv, Value::array(result));
 }
 
+#[derive(Clone, Copy)]
+enum ArrayAggregateNumber {
+    Long(i64),
+    Double(f64),
+}
+
+impl ArrayAggregateNumber {
+    #[inline(always)]
+    fn apply_long<const PRODUCT: bool>(&mut self, right: i64) {
+        *self = match *self {
+            Self::Long(left) => {
+                let integer = if PRODUCT {
+                    left.checked_mul(right)
+                } else {
+                    left.checked_add(right)
+                };
+                integer.map_or_else(
+                    || {
+                        Self::Double(if PRODUCT {
+                            left as f64 * right as f64
+                        } else {
+                            left as f64 + right as f64
+                        })
+                    },
+                    Self::Long,
+                )
+            }
+            Self::Double(left) => Self::Double(if PRODUCT {
+                left * right as f64
+            } else {
+                left + right as f64
+            }),
+        };
+    }
+
+    #[inline(always)]
+    fn apply_double<const PRODUCT: bool>(&mut self, right: f64) {
+        let left = match *self {
+            Self::Long(value) => value as f64,
+            Self::Double(value) => value,
+        };
+        *self = Self::Double(if PRODUCT { left * right } else { left + right });
+    }
+
+    #[inline(always)]
+    fn apply_value<const PRODUCT: bool>(&mut self, operand: Value) {
+        if let Some(operand) = operand.as_long() {
+            self.apply_long::<PRODUCT>(operand);
+        } else {
+            self.apply_double::<PRODUCT>(operand.as_double().unwrap());
+        }
+    }
+
+    #[inline(always)]
+    fn into_value(self) -> Value {
+        match self {
+            Self::Long(value) => Value::long(value),
+            Self::Double(value) => Value::double(value),
+        }
+    }
+}
+
+#[inline(never)]
+fn aggregate_add_as_double(left: i64, right: f64) -> f64 {
+    left as f64 + right
+}
+
+#[inline(never)]
+fn aggregate_multiply_as_double(left: i64, right: f64) -> f64 {
+    left as f64 * right
+}
+
+#[inline]
+fn fast_packed_nonnegative_long_sum(values: &[Value]) -> Option<Value> {
+    if values.is_empty() {
+        return Some(Value::long(0));
+    }
+    let per_value_limit = i64::MAX / i64::try_from(values.len()).ok()?;
+    let bit_width = 63 - per_value_limit.leading_zeros();
+    let bitmask_limit = (1_u64 << bit_width) - 1;
+    let mut sum = 0_i64;
+    let mut chunks = values.chunks_exact(4);
+    for chunk in &mut chunks {
+        if chunk[0].value_type() != ValueType::Long
+            || chunk[1].value_type() != ValueType::Long
+            || chunk[2].value_type() != ValueType::Long
+            || chunk[3].value_type() != ValueType::Long
+        {
+            return None;
+        }
+        let first = chunk[0].as_long().unwrap();
+        let second = chunk[1].as_long().unwrap();
+        let third = chunk[2].as_long().unwrap();
+        let fourth = chunk[3].as_long().unwrap();
+        if (first as u64 | second as u64 | third as u64 | fourth as u64) > bitmask_limit {
+            return None;
+        }
+        // The per-value bound proves that the full nonnegative reduction fits
+        // in a PHP integer, so no intermediate addition can overflow.
+        sum = sum
+            .wrapping_add(first)
+            .wrapping_add(second)
+            .wrapping_add(third)
+            .wrapping_add(fourth);
+    }
+    for value in chunks.remainder() {
+        if value.value_type() != ValueType::Long {
+            return None;
+        }
+        let value = value.as_long().unwrap();
+        if value as u64 > bitmask_limit {
+            return None;
+        }
+        sum = sum.wrapping_add(value);
+    }
+    Some(Value::long(sum))
+}
+
+#[inline]
+fn fast_packed_unit_long_product(values: &[Value]) -> Option<Value> {
+    let mut product = 1_i64;
+    for value in values {
+        if value.value_type() != ValueType::Long {
+            return None;
+        }
+        match value.as_long().unwrap() {
+            1 => {}
+            0 => product = 0,
+            -1 => product = -product,
+            _ => return None,
+        }
+    }
+    Some(Value::long(product))
+}
+
+#[inline]
+fn fast_packed_double_sum(values: &[Value]) -> Option<Value> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sum = 0.0_f64;
+    for value in values {
+        if value.value_type() != ValueType::Double {
+            return None;
+        }
+        sum += value.as_double().unwrap();
+    }
+    Some(Value::double(sum))
+}
+
+#[inline]
+fn fast_packed_double_product(values: &[Value]) -> Option<Value> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut product = 1.0_f64;
+    for value in values {
+        if value.value_type() != ValueType::Double {
+            return None;
+        }
+        product *= value.as_double().unwrap();
+    }
+    Some(Value::double(product))
+}
+
+#[inline]
+fn fast_array_sum(array: &PhpArray) -> Option<Value> {
+    if let Some(values) = array.packed_values() {
+        if let Some(result) = fast_packed_nonnegative_long_sum(values) {
+            return Some(result);
+        }
+        if let Some(result) = fast_packed_double_sum(values) {
+            return Some(result);
+        }
+    }
+
+    macro_rules! sum_values {
+        ($values:expr) => {{
+            let mut long = 0_i64;
+            let mut double = 0.0_f64;
+            let mut is_double = false;
+            'values: for source in $values {
+                let mut value = source;
+                let operand = loop {
+                    break match value.value_type() {
+                        ValueType::Long => value.as_long().unwrap(),
+                        ValueType::True => 1,
+                        ValueType::False | ValueType::Null | ValueType::Undef => 0,
+                        ValueType::Double => {
+                            let right = value.as_double().unwrap();
+                            if !is_double {
+                                double = aggregate_add_as_double(long, right);
+                                is_double = true;
+                            } else {
+                                double += right;
+                            }
+                            continue 'values;
+                        }
+                        ValueType::String => {
+                            let operand = arithmetic_operator_operand(value).ok()?;
+                            if operand.leading_numeric {
+                                return None;
+                            }
+                            if let Some(right) = operand.value.as_long() {
+                                right
+                            } else {
+                                let right = operand.value.as_double().unwrap();
+                                if !is_double {
+                                    double = aggregate_add_as_double(long, right);
+                                    is_double = true;
+                                } else {
+                                    double += right;
+                                }
+                                continue 'values;
+                            }
+                        }
+                        ValueType::Reference => {
+                            value = value.dereferenced();
+                            continue;
+                        }
+                        _ => return None,
+                    };
+                };
+                if is_double {
+                    double += operand as f64;
+                } else if operand != 0 {
+                    match long.checked_add(operand) {
+                        Some(value) => long = value,
+                        None => {
+                            double = aggregate_add_as_double(long, operand as f64);
+                            is_double = true;
+                        }
+                    }
+                }
+            }
+            Some(if is_double {
+                Value::double(double)
+            } else {
+                Value::long(long)
+            })
+        }};
+    }
+
+    if let Some(values) = array.packed_values() {
+        sum_values!(values.iter())
+    } else {
+        sum_values!(array.values())
+    }
+}
+
+#[inline]
+fn fast_array_product(array: &PhpArray) -> Option<Value> {
+    if let Some(values) = array.packed_values() {
+        if let Some(result) = fast_packed_unit_long_product(values) {
+            return Some(result);
+        }
+        if let Some(result) = fast_packed_double_product(values) {
+            return Some(result);
+        }
+    }
+
+    macro_rules! product_values {
+        ($values:expr) => {{
+            let mut long = 1_i64;
+            let mut double = 1.0_f64;
+            let mut is_double = false;
+            'values: for source in $values {
+                let mut value = source;
+                let operand = loop {
+                    break match value.value_type() {
+                        ValueType::Long => value.as_long().unwrap(),
+                        ValueType::True => 1,
+                        ValueType::False | ValueType::Null | ValueType::Undef => 0,
+                        ValueType::Double => {
+                            let right = value.as_double().unwrap();
+                            if !is_double {
+                                double = aggregate_multiply_as_double(long, right);
+                                is_double = true;
+                            } else {
+                                double *= right;
+                            }
+                            continue 'values;
+                        }
+                        ValueType::String => {
+                            let operand = arithmetic_operator_operand(value).ok()?;
+                            if operand.leading_numeric {
+                                return None;
+                            }
+                            if let Some(right) = operand.value.as_long() {
+                                right
+                            } else {
+                                let right = operand.value.as_double().unwrap();
+                                if !is_double {
+                                    double = aggregate_multiply_as_double(long, right);
+                                    is_double = true;
+                                } else {
+                                    double *= right;
+                                }
+                                continue 'values;
+                            }
+                        }
+                        ValueType::Reference => {
+                            value = value.dereferenced();
+                            continue;
+                        }
+                        _ => return None,
+                    };
+                };
+                if is_double {
+                    double *= operand as f64;
+                } else if operand != 1 {
+                    match long.checked_mul(operand) {
+                        Some(value) => long = value,
+                        None => {
+                            double = aggregate_multiply_as_double(long, operand as f64);
+                            is_double = true;
+                        }
+                    }
+                }
+            }
+            Some(if is_double {
+                Value::double(double)
+            } else {
+                Value::long(long)
+            })
+        }};
+    }
+
+    if let Some(values) = array.packed_values() {
+        product_values!(values.iter())
+    } else {
+        product_values!(array.values())
+    }
+}
+
+fn fn_array_aggregate_slow<const PRODUCT: bool>(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    source: Value,
+) -> Result<(), VmError> {
+    let function = if PRODUCT {
+        "array_product"
+    } else {
+        "array_sum"
+    };
+    let noun = if PRODUCT {
+        "Multiplication"
+    } else {
+        "Addition"
+    };
+    let array = source.dereferenced().as_array().unwrap();
+    let mut result = if PRODUCT {
+        ArrayAggregateNumber::Long(1)
+    } else {
+        ArrayAggregateNumber::Long(0)
+    };
+
+    macro_rules! aggregate_values {
+        ($values:expr) => {
+            for value in $values {
+                let value = value.dereferenced();
+                match value.value_type() {
+                    ValueType::Long => {
+                        result.apply_long::<PRODUCT>(value.as_long().unwrap());
+                        continue;
+                    }
+                    ValueType::Double => {
+                        result.apply_double::<PRODUCT>(value.as_double().unwrap());
+                        continue;
+                    }
+                    ValueType::True => {
+                        result.apply_long::<PRODUCT>(1);
+                        continue;
+                    }
+                    ValueType::False | ValueType::Null | ValueType::Undef => {
+                        result.apply_long::<PRODUCT>(0);
+                        continue;
+                    }
+                    _ => {}
+                }
+                let operand = match arithmetic_operator_operand(value) {
+                    Ok(operand) => {
+                        if operand.leading_numeric {
+                            report_internal_diagnostic(
+                                eg,
+                                ed,
+                                2,
+                                "Warning",
+                                "A non-numeric value encountered",
+                            )?;
+                            if eg.exception.is_some() {
+                                return Ok(());
+                            }
+                        }
+                        Some(operand.value)
+                    }
+                    Err(()) => {
+                        report_internal_diagnostic(
+                            eg,
+                            ed,
+                            2,
+                            "Warning",
+                            &format!(
+                                "{function}(): {noun} is not supported on type {}",
+                                value.diagnostic_type_name()
+                            ),
+                        )?;
+                        if eg.exception.is_some() {
+                            return Ok(());
+                        }
+                        match value.value_type() {
+                            ValueType::Resource => {
+                                Some(Value::long(value.as_resource_id().unwrap()))
+                            }
+                            // A non-numeric string participates as zero after
+                            // its function-specific warning. Containers and
+                            // objects are skipped, which matters for product.
+                            ValueType::String => Some(Value::long(0)),
+                            _ => None,
+                        }
+                    }
+                };
+                if let Some(operand) = operand {
+                    result.apply_value::<PRODUCT>(operand);
+                }
+            }
+        };
+    }
+    if let Some(values) = array.packed_values() {
+        aggregate_values!(values.iter());
+    } else {
+        aggregate_values!(array.values());
+    }
+    ret!(rv, result.into_value());
+}
+
 fn fn_array_sum(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let v = arg!(ed, 0);
-    if let Some(arr) = v.as_array() {
-        let mut has_float = false;
-        let mut sum_int: i64 = 0;
-        let mut sum_float: f64 = 0.0;
-        for val in arr.values() {
-            match val.value_type() {
-                ValueType::Long => sum_int = sum_int.wrapping_add(val.as_long().unwrap()),
-                ValueType::Double => {
-                    has_float = true;
-                    sum_float += val.as_double().unwrap();
-                }
-                _ => {}
-            }
-        }
-        ret!(
-            rv,
-            if has_float {
-                Value::double(sum_float + sum_int as f64)
-            } else {
-                Value::long(sum_int)
-            }
-        );
-    } else {
-        ret!(rv, Value::long(0));
+    let source = arg!(ed, 0);
+    let Some(array) = source.as_array() else {
+        typed_internal_argument_error(eg, "array_sum", source, 1, "array", "array");
+        return Ok(());
+    };
+    if let Some(result) = fast_array_sum(array) {
+        ret!(rv, result);
     }
+    fn_array_aggregate_slow::<false>(ed, rv, eg, owned_argument(ed, 0))
 }
 
 fn fn_array_product(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let v = arg!(ed, 0);
-    if let Some(arr) = v.as_array() {
-        let mut has_float = false;
-        let mut prod_int: i64 = 1;
-        let mut prod_float: f64 = 1.0;
-        for val in arr.values() {
-            match val.value_type() {
-                ValueType::Long => prod_int = prod_int.wrapping_mul(val.as_long().unwrap()),
-                ValueType::Double => {
-                    has_float = true;
-                    prod_float *= val.as_double().unwrap();
-                }
-                _ => {}
-            }
-        }
-        ret!(
-            rv,
-            if has_float {
-                Value::double(prod_float * prod_int as f64)
-            } else {
-                Value::long(prod_int)
-            }
-        );
-    } else {
-        ret!(rv, Value::long(0));
+    let source = arg!(ed, 0);
+    let Some(array) = source.as_array() else {
+        typed_internal_argument_error(eg, "array_product", source, 1, "array", "array");
+        return Ok(());
+    };
+    if let Some(result) = fast_array_product(array) {
+        ret!(rv, result);
     }
+    fn_array_aggregate_slow::<true>(ed, rv, eg, owned_argument(ed, 0))
 }
 
 fn fn_array_count_values(
@@ -2191,24 +2702,42 @@ fn fn_array_multisort(
 fn fn_array_search(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let needle = arg!(ed, 0);
     let haystack = arg!(ed, 1);
-    let strict = arg_opt!(ed, 2).is_some_and(Value::is_truthy);
-    if let Some(arr) = haystack.as_array() {
-        for (key, val) in arr.iter() {
-            if if strict {
-                values_identical(needle, val)
-            } else {
-                values_equal(needle, val)
-            } {
-                let result = match key {
-                    ArrayKey::Int(k) => Value::long(k),
-                    ArrayKey::String(k) => Value::string(k),
-                };
-                ret!(rv, result);
+    if haystack.as_array().is_none() {
+        typed_internal_argument_error(eg, "array_search", haystack, 2, "haystack", "array");
+        return Ok(());
+    }
+    let strict = if arg_opt!(ed, 2).is_some() {
+        let Some(strict) = typed_internal_bool_argument(ed, eg, "array_search", 2, "strict")?
+        else {
+            return Ok(());
+        };
+        strict
+    } else {
+        false
+    };
+
+    let needle = arg!(ed, 0);
+    let haystack = arg!(ed, 1).as_array().unwrap();
+    let numeric_string_needle = array_lookup_numeric_string_needle(needle, strict);
+    for (key, value) in haystack.iter() {
+        let matches = match array_lookup_values_match(
+            needle,
+            value,
+            strict,
+            numeric_string_needle,
+            eg.precision,
+        ) {
+            Ok(matches) => matches,
+            Err(()) => {
+                report_recursive_sort_comparison(eg);
+                return Ok(());
             }
+        };
+        if matches {
+            ret!(rv, array_key_into_value(key));
         }
     }
     ret!(rv, Value::bool(false));
@@ -9740,26 +10269,54 @@ fn report_recursive_sort_comparison(eg: &mut ExecutorGlobals) {
     ));
 }
 
-fn values_equal(a: &Value, b: &Value) -> bool {
-    match (a.value_type(), b.value_type()) {
-        (ValueType::Long, ValueType::Long) => a.as_long() == b.as_long(),
-        (ValueType::String, ValueType::String) => a.as_str() == b.as_str(),
-        (ValueType::Long, ValueType::Double)
-        | (ValueType::Double, ValueType::Long)
-        | (ValueType::Double, ValueType::Double) => a.to_double() == b.to_double(),
-        (ValueType::Null, ValueType::Null) => true,
-        (ValueType::True, ValueType::True) | (ValueType::False, ValueType::False) => true,
-        (ValueType::Resource, ValueType::Resource) => a.as_resource_id() == b.as_resource_id(),
-        (ValueType::String, ValueType::Long) | (ValueType::Long, ValueType::String) => {
-            let (s_val, i_val) = if a.value_type() == ValueType::String {
-                (a, b)
-            } else {
-                (b, a)
-            };
-            s_val.as_str().unwrap().parse::<i64>().ok() == i_val.as_long()
-        }
-        _ => false,
+#[inline]
+fn array_values_match(
+    left: &Value,
+    right: &Value,
+    strict: bool,
+    precision: i32,
+) -> Result<bool, ()> {
+    if strict {
+        values_identical_checked(left, right)
+    } else {
+        values_equal_checked_with_precision(left, right, precision)
     }
+}
+
+#[inline]
+fn array_lookup_numeric_string_needle(needle: &Value, strict: bool) -> Option<f64> {
+    if strict || needle.value_type() != ValueType::String {
+        return None;
+    }
+    let integer = needle.as_str().unwrap().parse::<i64>().ok()?;
+    // Integers outside the exact f64 range must retain the full integer-aware
+    // PHP numeric-string comparison; otherwise adjacent values may collapse.
+    (integer.unsigned_abs() <= (1_u64 << 53)).then_some(integer as f64)
+}
+
+#[inline]
+fn array_lookup_values_match(
+    needle: &Value,
+    value: &Value,
+    strict: bool,
+    numeric_string_needle: Option<f64>,
+    precision: i32,
+) -> Result<bool, ()> {
+    if let Some(needle_number) = numeric_string_needle {
+        let value = value.dereferenced();
+        return match value.value_type() {
+            ValueType::Long | ValueType::Double | ValueType::Resource => Ok(value
+                .to_double()
+                .is_some_and(|number| number == needle_number)),
+            ValueType::String => Ok(php_numeric_string_to_float(value.as_str().unwrap())
+                .map_or_else(
+                    || needle.as_str() == value.as_str(),
+                    |number| number == needle_number,
+                )),
+            _ => array_values_match(needle, value, strict, precision),
+        };
+    }
+    array_values_match(needle, value, strict, precision)
 }
 
 fn var_dump_output_value(

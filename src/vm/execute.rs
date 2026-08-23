@@ -823,6 +823,36 @@ fn parse_php_numeric_string(value: &str) -> Option<PhpNumericString> {
     complete.then_some(parsed)
 }
 
+#[inline]
+fn compare_php_numeric_strings(
+    left: PhpNumericString,
+    right: PhpNumericString,
+) -> Option<std::cmp::Ordering> {
+    match (left.integer, right.integer) {
+        (Some(left), Some(right)) => Some(left.cmp(&right)),
+        _ => left.number.partial_cmp(&right.number),
+    }
+}
+
+#[inline]
+fn compare_number_to_php_numeric_string(
+    left: &Value,
+    right: PhpNumericString,
+) -> Option<std::cmp::Ordering> {
+    match left.value_type() {
+        ValueType::Long => right
+            .integer
+            .map(|right| left.as_long().unwrap().cmp(&right))
+            .or_else(|| (left.as_long().unwrap() as f64).partial_cmp(&right.number)),
+        ValueType::Resource => right
+            .integer
+            .map(|right| left.as_resource_id().unwrap().cmp(&right))
+            .or_else(|| (left.as_resource_id().unwrap() as f64).partial_cmp(&right.number)),
+        ValueType::Double => left.as_double().unwrap().partial_cmp(&right.number),
+        _ => None,
+    }
+}
+
 /// Parse the complete numeric-string grammar accepted at a weak internal
 /// float parameter. Keep Rust's textual `NaN`/`inf` spellings outside the PHP
 /// grammar while still admitting decimal overflow as an infinity.
@@ -3772,7 +3802,7 @@ enum ArrayKeyRef<'a> {
 }
 
 #[derive(Clone, Copy)]
-enum ArrayKeyError {
+pub(crate) enum ArrayKeyError {
     Illegal,
     DeprecatedNull,
     DeprecatedFloat(i64),
@@ -3860,7 +3890,7 @@ mod array_key_normalization_tests {
 }
 
 /// Convert a Value to an ArrayKey.
-fn value_to_array_key(val: &Value) -> Result<ArrayKey, ArrayKeyError> {
+pub(crate) fn value_to_array_key(val: &Value) -> Result<ArrayKey, ArrayKeyError> {
     match value_to_array_key_ref(val)? {
         ArrayKeyRef::Int(value) => Ok(ArrayKey::Int(value)),
         ArrayKeyRef::String(value) => Ok(ArrayKey::String(value.to_string())),
@@ -3902,8 +3932,73 @@ pub(crate) fn values_equal_checked_with_precision(
     fn scalar_number_string_equal(number: &Value, string: &str, precision: i32) -> bool {
         parse_php_numeric_string(string).map_or_else(
             || number.echo_to_string_with_precision(precision) == string,
-            |right| number.to_double().is_some_and(|left| left == right.number),
+            |right| {
+                compare_number_to_php_numeric_string(number, right)
+                    == Some(std::cmp::Ordering::Equal)
+            },
         )
+    }
+
+    #[inline]
+    fn non_recursive_equal(a: &Value, b: &Value, precision: i32) -> Option<bool> {
+        let a_type = a.value_type();
+        let b_type = b.value_type();
+        if matches!(a_type, ValueType::True | ValueType::False)
+            || matches!(b_type, ValueType::True | ValueType::False)
+        {
+            return Some(a.is_truthy() == b.is_truthy());
+        }
+        if matches!(a_type, ValueType::Null | ValueType::Undef)
+            || matches!(b_type, ValueType::Null | ValueType::Undef)
+        {
+            return Some(match (a_type, b_type) {
+                (ValueType::Null | ValueType::Undef, ValueType::String) => {
+                    b.as_str().is_some_and(str::is_empty)
+                }
+                (ValueType::String, ValueType::Null | ValueType::Undef) => {
+                    a.as_str().is_some_and(str::is_empty)
+                }
+                _ => a.is_truthy() == b.is_truthy(),
+            });
+        }
+        if matches!(
+            (a_type, b_type),
+            (ValueType::Array, ValueType::Array) | (ValueType::Object, ValueType::Object)
+        ) {
+            return None;
+        }
+        Some(match (a_type, b_type) {
+            (ValueType::Long, ValueType::Long) => a.as_long() == b.as_long(),
+            (ValueType::Resource, ValueType::Resource) => a.as_resource_id() == b.as_resource_id(),
+            (
+                ValueType::Long | ValueType::Double | ValueType::Resource,
+                ValueType::Long | ValueType::Double | ValueType::Resource,
+            ) => a.to_double() == b.to_double(),
+            (ValueType::String, ValueType::String) => {
+                let left = a.as_str().unwrap();
+                let right = b.as_str().unwrap();
+                match (
+                    parse_php_numeric_string(left),
+                    parse_php_numeric_string(right),
+                ) {
+                    (Some(left), Some(right)) => {
+                        compare_php_numeric_strings(left, right) == Some(std::cmp::Ordering::Equal)
+                    }
+                    _ => left == right,
+                }
+            }
+            (ValueType::Long | ValueType::Double | ValueType::Resource, ValueType::String) => {
+                scalar_number_string_equal(a, b.as_str().unwrap(), precision)
+            }
+            (ValueType::String, ValueType::Long | ValueType::Double | ValueType::Resource) => {
+                scalar_number_string_equal(b, a.as_str().unwrap(), precision)
+            }
+            (ValueType::Closure, ValueType::Closure) => a
+                .as_closure()
+                .zip(b.as_closure())
+                .is_some_and(|(left, right)| left.same_identity(right)),
+            _ => false,
+        })
     }
 
     fn equal_inner(
@@ -3955,7 +4050,9 @@ pub(crate) fn values_equal_checked_with_precision(
                     parse_php_numeric_string(left),
                     parse_php_numeric_string(right),
                 ) {
-                    (Some(left), Some(right)) => left.number == right.number,
+                    (Some(left), Some(right)) => {
+                        compare_php_numeric_strings(left, right) == Some(std::cmp::Ordering::Equal)
+                    }
                     _ => left == right,
                 }
             }
@@ -4063,6 +4160,11 @@ pub(crate) fn values_equal_checked_with_precision(
         })
     }
 
+    let a = a.dereferenced();
+    let b = b.dereferenced();
+    if let Some(equal) = non_recursive_equal(a, b, precision) {
+        return Ok(equal);
+    }
     equal_inner(a, b, &mut ComparisonContext::default(), 0, precision)
 }
 
@@ -4128,9 +4230,7 @@ pub(crate) fn values_compare_checked_with_precision(
                         parse_php_numeric_string(left),
                         parse_php_numeric_string(right),
                     ) {
-                        (Some(left), Some(right)) => left
-                            .number
-                            .partial_cmp(&right.number)
+                        (Some(left), Some(right)) => compare_php_numeric_strings(left, right)
                             .map_or(PHP_COMPARISON_UNORDERED, ordering),
                         _ => ordering(left.cmp(right)),
                     },
@@ -4151,9 +4251,7 @@ pub(crate) fn values_compare_checked_with_precision(
                         }
                     },
                     |right| {
-                        a.to_double()
-                            .unwrap()
-                            .partial_cmp(&right.number)
+                        compare_number_to_php_numeric_string(a, right)
                             .map_or(PHP_COMPARISON_UNORDERED, ordering)
                     },
                 ))
@@ -4362,6 +4460,35 @@ pub(crate) fn values_identical_checked(a: &Value, b: &Value) -> Result<bool, ()>
         })
     }
 
+    let a = a.dereferenced();
+    let b = b.dereferenced();
+    if !matches!(
+        (a.value_type(), b.value_type()),
+        (ValueType::Array, ValueType::Array)
+    ) {
+        if matches!(a.value_type(), ValueType::Undef | ValueType::Null)
+            && matches!(b.value_type(), ValueType::Undef | ValueType::Null)
+        {
+            return Ok(true);
+        }
+        if a.value_type() != b.value_type() {
+            return Ok(false);
+        }
+        return Ok(match a.value_type() {
+            ValueType::Undef | ValueType::Null => true,
+            ValueType::True | ValueType::False => true,
+            ValueType::Long => a.as_long() == b.as_long(),
+            ValueType::Double => a.as_double() == b.as_double(),
+            ValueType::String => a.as_str() == b.as_str(),
+            ValueType::Object => a.object_identity() == b.object_identity(),
+            ValueType::Closure => a
+                .as_closure()
+                .zip(b.as_closure())
+                .is_some_and(|(left, right)| std::ptr::eq(left, right)),
+            ValueType::Resource => a.as_resource_id() == b.as_resource_id(),
+            _ => false,
+        });
+    }
     identical_inner(a, b, &mut ComparisonContext::default(), 0)
 }
 
