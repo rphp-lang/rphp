@@ -8,6 +8,93 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`array-construction-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+candidate implementation commit `7ead4eb2`. Across all 5,599 unmodified
+`Zend/tests` and `tests/lang` cases, 4,103 pass, 1,200 fail, 115 skip, none
+remain XFAIL, 181 are unsupported, and none time out or crash. The headline
+pass rate is 77.371%, the whole-corpus rate is 73.281%, and 4,809 of 5,303
+attempted cases reach runtime (90.685%). The exact delta from `90030c24` is
++3/-0. Two independently executed final runs have the same manifest SHA-256,
+`c10d4218d446bf24ce8d91f3914eecf32b677a667977103248db6fbebba4ff85`,
+and the same summary SHA-256,
+`4b4ada791abe14d1a238f38051504f0a5bc17b85b5a0eed0f49df3808ba211cb`.
+
+`range()`, `array_fill()`, `array_combine()` and `array_merge()` now share
+safe preflight sizing and PHP 8.5 construction semantics. The admitted
+`range()` contract covers integer, floating, numeric-string and byte-character
+modes, an optional signed step, ascending and descending ranges, finite and
+zero validation, warning and ValueError wording, weak/strict conversion and
+overflow-safe size calculation before allocation. `array_fill()` covers
+negative and extreme starting keys, count limits, COW/object/reference value
+behavior and next-key overflow. `array_combine()` covers canonical numeric
+keys, scalar and Stringable conversion, diagnostics, structural COW snapshots
+and live value references. `array_merge()` validates every variadic argument
+before sizing, guards the total element limit, preserves string keys, reindexes
+integer keys and keeps live reference cells. Ordinary `$array[]` now raises
+PHP's catchable error instead of wrapping after `PHP_INT_MAX`. Preallocation
+and scalar-key fast paths preserve these contracts. The implementation is
+independent and does not copy or translate php-src code.
+
+The 52-case unmodified PHP 8.5 focused cluster moves from 14 passes, 30
+failures, two skips and six timeouts to 43 passes, seven failures, two skips
+and no timeout, an exact +29/-0 pass-set delta; PHP 8.5.9 records 50 passes and
+the same two 32-bit skips. Two final focused manifests are byte-identical with
+SHA-256
+`23eb99780e70af27c70e10b64d0e09c93d681e93e2028e59c8fb7f21b045b74b`
+and summary SHA-256
+`f36b0fdd79936a0344fe7092277b6583561259fa3058126b5c64b58a141a13b9`.
+The complete recursive 842-case `ext/standard/tests/array` audit moves from
+463 to 496 passes with no lost pass: failures fall from 359 to 332, all six
+inherited timeouts are removed, and 13 skips, one unsupported case and zero
+crashes remain. Two final full-array manifests are byte-identical with
+SHA-256
+`6824ffefac641b319ef2afa8721322b7a856dc36200a930217b251ff562650a9`
+and summary SHA-256
+`b9c3a626de9e396eecb5359367ec8619044eefe3b49752b6199c8f75acf2770f`.
+
+Four original E2E tests cover modes, boundaries, warnings, errors, signatures,
+named arguments, strict and weak conversion, throwing handlers, COW values,
+objects, references, reentrant key conversion and safe size failures. A
+53-line, 3,229-byte clean-room oracle transcript is byte-identical to PHP
+8.5.9 with SHA-256
+`acd0af119184b6c80de196f1d4f87693916745ba7f5ee9967d4ba1cdb6caca16`.
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, the unchanged 1,620/289/332 unsafe
+ratchet, Composer 2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-
+kernel S2 and cold-build S3 pass. The implementation changes stdlib
+registration, one stdlib source and the ordinary baseline array-append branch,
+and adds one test module; it changes no parser/compiler, opcode definition,
+call-frame or PHP Value/object layout, dependency or production unsafe code.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on
+an AMD Ryzen 9 7950X used performance-governor CPU 2, three warmups per binary
+and no excluded samples. Paired median changes are -0.824% for batches of 100
+empty requests, +0.008% for integer `range()`, +0.295% for `array_fill()`,
++3.300% for integer-key `array_combine()`, -21.252% for string-key
+`array_combine()`, +4.349% for `array_merge()` and +0.018% for ordinary
+append. The corresponding paired p10/p90 ranges are -1.489%/+0.014%,
+-1.695%/+1.926%, -1.537%/+1.139%, +2.969%/+4.016%,
+-22.335%/-20.013%, +4.203%/+4.541% and -3.650%/+3.918%; exact output matches
+PHP 8.5.9 and every comparable workload remains below the +5% gate. A new-only
+floating-step `range()` smoke has a 27.629 millisecond candidate median and
+exact PHP output; no regression ratio is claimed because the baseline rejects
+the third argument. Baseline and candidate binary SHA-256 values are
+`21910f5aa4f134d858558caa65e67942258cc27478359a1f8baed18bfdc0bc68`
+and `41903d58d7cc4228c49cb23ad41b43a24961de0fbd37b95669790d88125ef168`;
+the benchmark log SHA-256 is
+`a4c8ca84f0154640f0b1862c119d3bf1841c71445a07d884dd2ded0008c34dc6`.
+
+Seven focused failures remain explicit. Three stop at independent binary-
+string or leading-dot literal parser gaps; two combine variations reach
+missing escape/resource output behavior; `array_fill_object.phpt` reaches an
+inherited-property dump-order gap; and `range_inputs_float_NAN_values.phpt`
+reaches an earlier arithmetic prelude that produces `INF` instead of its third
+`NAN`. Successful multi-gibibyte materialization at the admitted maximum,
+complete reflected internal type/default/return metadata, exhaustive
+multibyte character-range behavior, by-reference append overflow, the
+remaining array suite and broader PHP compatibility are separate work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `array-structural-projection-batch`, pinned to php-src 8.5 commit `fcc29c8`
 and candidate implementation commit `90030c24`. Across all 5,599 unmodified
 `Zend/tests` and `tests/lang` cases, 4,100 pass, 1,203 fail, 115 skip, none

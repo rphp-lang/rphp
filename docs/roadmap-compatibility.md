@@ -1746,6 +1746,46 @@ trace. The 16 independent focused blockers, `array_change_key_case()`, ordinary
 variadic `array_intersect()`, the complete array suite and broader compatibility
 remain separate work.
 
+The `array-construction-batch` checkpoint advances `range()`, `array_fill()`,
+`array_combine()` and `array_merge()` together and corrects ordinary
+`$array[]` next-key exhaustion. The admitted contract covers integer,
+floating, numeric-string and byte-character ranges; optional signed steps;
+finite, zero and safe-size validation; fill count/start overflow; canonical
+combine keys; structural COW snapshots; live references; objects; variadic
+merge validation; integer-key reindexing; preserved string keys; weak/strict
+conversion; diagnostics, exceptions, signatures and named arguments. Packed
+and scalar-key fast paths preserve the observable contract. The implementation
+is independent and does not copy or translate php-src code.
+
+The 52-case unmodified PHP 8.5 focused cluster moves from 14 to 43 passes and
+from six timeouts to none, an exact +29/-0 delta; PHP 8.5.9 records 50 passes
+and two 32-bit skips. The complete recursive 842-case array audit moves from
+463 to 496 passes with no lost pass, reducing failures from 359 to 332 and
+timeouts from six to none while 13 skips, one unsupported case and zero crashes
+remain. Two serial focused manifests and two serial full-array manifests are
+respectively byte-identical. The pinned Zend/lang corpus moves from 4,100 to
+4,103 passes, an exact +3/-0 delta, with 1,200 failures, 115 skips, 181
+unsupported cases and zero timeouts or crashes in two byte-identical final
+manifests. A 53-line, 3,229-byte clean-room transcript and four original E2E
+tests match PHP 8.5.9.
+
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, the unchanged 1,620/289/332 unsafe ratchet, Composer S0, four Symfony
+S1 gates and PHP 8.5.9 S2/S3 pass. No parser/compiler, opcode definition,
+frame, Value/object layout, dependency or production unsafe change is made.
+CPU-pinned 32-pair release controls put paired median changes at -0.824% for
+100 empty requests, +0.008% for integer `range()`, +0.295% for
+`array_fill()`, +3.300%/-21.252% for integer/string-key `array_combine()`,
++4.349% for `array_merge()` and +0.018% for append, below the +5% gate. The
+new-only floating-step range smoke matches PHP output; its baseline rejects
+the third argument, so no A/B ratio is claimed.
+
+Seven focused parser, escape/resource output, inherited dump-order and earlier
+arithmetic-prelude failures remain separate. Successful near-limit
+multi-gibibyte allocation, complete reflected internal type/default/return
+metadata, exhaustive multibyte character ranges, by-reference append overflow,
+the remaining array suite and broader compatibility are not claimed.
+
 The `array-structural-projection-batch` checkpoint advances `array_chunk()`,
 `array_slice()`, `array_reverse()` and `array_pad()` together. The shared
 projection layer covers each API's string- and integer-key policy, positive,
