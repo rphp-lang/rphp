@@ -6455,7 +6455,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let arr = unsafe { &mut *arr_ptr };
                     arr.as_array_mut().unwrap().push(cloned_val);
                 } else if let Some(php_arr) = arr.as_array_mut() {
-                    php_arr.push(cloned_val);
+                    if !php_arr.try_push(cloned_val) {
+                        throw_operator!(
+                            "Error",
+                            "Cannot add element to the array as the next element is already occupied"
+                        );
+                    }
                 } else {
                     return Err(VmError::Fatal("[] operator not supported for non-array".into()));
                 }

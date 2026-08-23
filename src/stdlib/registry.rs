@@ -257,7 +257,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "haystack",
         "strict"
     );
-    reg!("range", fn_range, 2, 2, "start", "end");
+    reg!("range", fn_range, 3, 2, "start", "end", "step");
     reg_ref!(
         "array_splice",
         fn_array_splice,

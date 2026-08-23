@@ -979,20 +979,61 @@ fn fn_array_is_list(
 fn fn_array_merge(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let mut merged = PhpArray::new();
+    const MAX_ARRAY_MERGE_INPUT_ELEMENTS: usize = 1 << 30;
+
     let Some(arrays) = arg!(ed, 0).as_array() else {
-        ret!(rv, Value::array(merged));
+        ret!(rv, Value::array(PhpArray::new()));
+    };
+    for (index, value) in arrays.values().enumerate() {
+        if value.as_array().is_some() {
+            continue;
+        }
+        let actual = match value.dereferenced().value_type() {
+            ValueType::True => "true".to_string(),
+            ValueType::False => "false".to_string(),
+            _ => value.dereferenced().diagnostic_type_name().into_owned(),
+        };
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "array_merge(): Argument #{} must be of type array, {actual} given",
+                index + 1
+            ),
+        ));
+        return Ok(());
+    }
+    let mut total = 0usize;
+    let mut has_string_keys = false;
+    for value in arrays.values() {
+        let array = value
+            .as_array()
+            .expect("array_merge arguments were validated before sizing");
+        total = total.saturating_add(array.len());
+        if total >= MAX_ARRAY_MERGE_INPUT_ELEMENTS {
+            eg.exception = Some(crate::value::make_error_value(
+                "Error",
+                "The total number of elements must be lower than 1073741824",
+            ));
+            return Ok(());
+        }
+        has_string_keys |= array.has_string_keys();
+    }
+
+    let mut merged = if has_string_keys {
+        PhpArray::with_deferred_hash_capacity(total)
+    } else {
+        PhpArray::with_packed_capacity(total)
     };
     for value in arrays.values() {
-        let Some(array) = value.as_array() else {
-            ret!(rv, Value::null());
-        };
+        let array = value
+            .as_array()
+            .expect("array_merge arguments were validated before allocation");
         for (key, val) in array.iter() {
             match &key {
-                ArrayKey::Int(_) => merged.push(val.clone()),
-                ArrayKey::String(k) => merged.set_str(k, val.clone()),
+                ArrayKey::Int(_) => merged.push(array_projection_value(val)),
+                ArrayKey::String(k) => merged.set_str(k, array_projection_value(val)),
             }
         }
     }
@@ -1195,25 +1236,83 @@ fn fn_array_flip(
 fn fn_array_combine(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let keys_arg = arg!(ed, 0);
-    let vals_arg = arg!(ed, 1);
-    if let (Some(keys), Some(vals)) = (keys_arg.as_array(), vals_arg.as_array()) {
-        let mut result = PhpArray::new();
-        for (kv, vv) in keys.values().zip(vals.values()) {
-            let key = match kv {
-                val if val.as_str().is_some() => {
-                    ArrayKey::String(val.as_str().unwrap().to_string())
-                }
-                val => ArrayKey::Int(val.as_long().unwrap_or(0)),
-            };
-            result.set(key, vv.clone());
-        }
-        ret!(rv, Value::array(result));
-    } else {
-        ret!(rv, Value::bool(false));
+    let keys_argument = owned_argument(ed, 0);
+    let Some(keys) = keys_argument.dereferenced().as_array() else {
+        typed_internal_argument_error(
+            eg,
+            "array_combine",
+            keys_argument.dereferenced(),
+            1,
+            "keys",
+            "array",
+        );
+        return Ok(());
+    };
+    let values_argument = owned_argument(ed, 1);
+    let Some(values) = values_argument.dereferenced().as_array() else {
+        typed_internal_argument_error(
+            eg,
+            "array_combine",
+            values_argument.dereferenced(),
+            2,
+            "values",
+            "array",
+        );
+        return Ok(());
+    };
+    if keys.len() != values.len() {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "array_combine(): Argument #1 ($keys) and argument #2 ($values) must have the same number of elements",
+        ));
+        return Ok(());
     }
+
+    // owned_argument() gives both inputs their PHP call-boundary COW snapshot.
+    // Clone only the current pair before a key conversion that can reenter
+    // user code instead of materializing two additional full vectors.
+    // Optimistically retain packed storage when the first converted key is 0;
+    // set() transitions safely if a later key proves the result associative.
+    let starts_packed = keys.values().next().is_none_or(|key| {
+        let key = key.dereferenced();
+        key.as_long().or_else(|| {
+            key.as_str()
+                .and_then(crate::value::canonical_decimal_array_key)
+        }) == Some(0)
+    });
+    let mut result = if starts_packed {
+        PhpArray::with_packed_capacity(keys.len())
+    } else {
+        PhpArray::with_deferred_hash_capacity(keys.len())
+    };
+    for (key, value) in keys.values().zip(values.values()) {
+        let scalar_key = {
+            let key = key.dereferenced();
+            key.as_long().map(ArrayKey::Int).or_else(|| {
+                key.as_str().map(|key| {
+                    crate::value::canonical_decimal_array_key(key)
+                        .map_or_else(|| ArrayKey::String(key.to_string()), ArrayKey::Int)
+                })
+            })
+        };
+        if let Some(key) = scalar_key {
+            result.set(key, array_projection_value(value));
+            continue;
+        }
+
+        let key = array_projection_value(key);
+        let value = array_projection_value(value);
+        let Some(key) = array_constructor_key(ed, eg, &key)? else {
+            return Ok(());
+        };
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        result.set(key, value);
+    }
+    ret!(rv, Value::array(result));
 }
 
 fn fn_array_sum(
@@ -1308,7 +1407,7 @@ fn fn_array_count_values(
     }
 }
 
-fn array_fill_key(
+fn array_constructor_key(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
     value: &Value,
@@ -1367,7 +1466,7 @@ fn fn_array_fill_keys(
     let value = arg!(ed, 1).clone();
     let mut result = PhpArray::new();
     for source_key in &keys {
-        let Some(key) = array_fill_key(ed, eg, source_key)? else {
+        let Some(key) = array_constructor_key(ed, eg, source_key)? else {
             return Ok(());
         };
         result.set(key, value.clone());
@@ -1378,14 +1477,64 @@ fn fn_array_fill_keys(
 fn fn_array_fill(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let start = arg_long!(ed, 0) as i64;
-    let count = arg_long!(ed, 1).max(0) as usize;
-    let value = arg!(ed, 2);
-    let mut result = PhpArray::new();
-    for i in 0..count {
-        result.set_int(start + i as i64, value.clone());
+    const MAX_ARRAY_FILL_COUNT: i64 = i32::MAX as i64;
+    const MAX_MATERIALIZED_ARRAY_ELEMENTS: usize = 1 << 30;
+
+    let Some(start) = typed_internal_int_argument(ed, eg, "array_fill", 0, "start_index")? else {
+        return Ok(());
+    };
+    let Some(count) = typed_internal_int_argument(ed, eg, "array_fill", 1, "count")? else {
+        return Ok(());
+    };
+    if count < 0 {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "array_fill(): Argument #2 ($count) must be greater than or equal to 0",
+        ));
+        return Ok(());
+    }
+    if count > MAX_ARRAY_FILL_COUNT {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "array_fill(): Argument #2 ($count) is too large",
+        ));
+        return Ok(());
+    }
+    let count = count as usize;
+    if count == 0 {
+        ret!(rv, Value::array(PhpArray::new()));
+    }
+    if start.checked_add((count - 1) as i64).is_none() {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "Cannot add element to the array as the next element is already occupied",
+        ));
+        return Ok(());
+    }
+    if count >= MAX_MATERIALIZED_ARRAY_ELEMENTS {
+        let (file, line) = internal_call_source(ed);
+        let slot = std::mem::size_of::<Value>();
+        return Err(VmError::Fatal(format!(
+            "Possible integer overflow in memory allocation ({count} * {slot} + {slot}) in {file} on line {line}"
+        )));
+    }
+
+    let value = owned_argument(ed, 2);
+    let mut result = if start == 0 {
+        PhpArray::with_packed_capacity(count)
+    } else {
+        PhpArray::with_deferred_hash_capacity(count)
+    };
+    if start == 0 {
+        for _ in 0..count {
+            result.push(value.clone());
+        }
+    } else {
+        for index in 0..count {
+            result.set_int(start + index as i64, value.clone());
+        }
     }
     ret!(rv, Value::array(result));
 }
@@ -1861,24 +2010,637 @@ fn fn_array_search(
     ret!(rv, Value::bool(false));
 }
 
-fn fn_range(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let start = arg_long!(ed, 0);
-    let end = arg_long!(ed, 1);
-    let mut arr = PhpArray::new();
-    if start <= end {
-        for i in start..=end {
-            arr.push(Value::long(i));
-        }
-    } else {
-        for i in (end..=start).rev() {
-            arr.push(Value::long(i));
+#[derive(Clone, Copy)]
+enum RangeNumber {
+    Int(i64),
+    Float(f64),
+}
+
+struct RangeStringEndpoint {
+    bytes: Vec<u8>,
+    numeric: Option<RangeNumber>,
+}
+
+enum RangeEndpoint {
+    Number(RangeNumber),
+    String(RangeStringEndpoint),
+}
+
+#[derive(Clone, Copy)]
+enum RangeStep {
+    Int(i64),
+    Float(f64),
+}
+
+impl RangeStep {
+    fn number(self) -> f64 {
+        match self {
+            Self::Int(number) => number as f64,
+            Self::Float(number) => number,
         }
     }
-    ret!(rv, Value::array(arr));
+
+    fn is_integral(self) -> bool {
+        match self {
+            Self::Int(_) => true,
+            Self::Float(number) => number.fract() == 0.0,
+        }
+    }
+
+    fn integer_magnitude(self) -> Option<u128> {
+        match self {
+            Self::Int(number) => Some(u128::from(number.unsigned_abs())),
+            Self::Float(number)
+                if number.is_finite()
+                    && number.fract() == 0.0
+                    && number.abs() <= u64::MAX as f64 =>
+            {
+                Some(number.abs() as u128)
+            }
+            Self::Float(_) => None,
+        }
+    }
+}
+
+fn range_numeric_string(value: &str) -> Option<RangeNumber> {
+    let value = value.trim_matches(|character: char| character.is_ascii_whitespace());
+    if let Ok(integer) = value.parse::<i64>() {
+        return Some(RangeNumber::Int(integer));
+    }
+    php_numeric_string_to_float(value).map(RangeNumber::Float)
+}
+
+fn range_endpoint_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    index: u32,
+    parameter: &str,
+) -> Result<Option<RangeEndpoint>, VmError> {
+    let argument = owned_argument(ed, index);
+    let argument = argument.dereferenced();
+    let strict = internal_call_is_strict(ed);
+    let endpoint = match argument.value_type() {
+        ValueType::Long => RangeEndpoint::Number(RangeNumber::Int(
+            argument.as_long().expect("long argument has long payload"),
+        )),
+        ValueType::Double => RangeEndpoint::Number(RangeNumber::Float(
+            argument
+                .as_double()
+                .expect("double argument has double payload"),
+        )),
+        ValueType::String => {
+            let source = argument.as_str().unwrap_or("");
+            RangeEndpoint::String(RangeStringEndpoint {
+                bytes: php_string_to_bytes(source),
+                numeric: range_numeric_string(source),
+            })
+        }
+        ValueType::Null if !strict => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                &format!(
+                    "range(): Passing null to parameter #{} (${parameter}) of type string|int|float is deprecated",
+                    index + 1
+                ),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            RangeEndpoint::Number(RangeNumber::Int(0))
+        }
+        ValueType::True | ValueType::False if !strict => {
+            RangeEndpoint::Number(RangeNumber::Int(i64::from(argument.is_truthy())))
+        }
+        _ => {
+            typed_internal_argument_error(
+                eg,
+                "range",
+                argument,
+                index as usize + 1,
+                parameter,
+                "string|int|float",
+            );
+            return Ok(None);
+        }
+    };
+    Ok(Some(endpoint))
+}
+
+fn range_step_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+) -> Result<Option<RangeStep>, VmError> {
+    let Some(_) = arg_opt!(ed, 2) else {
+        return Ok(Some(RangeStep::Int(1)));
+    };
+    let argument = owned_argument(ed, 2);
+    let argument = argument.dereferenced();
+    let strict = internal_call_is_strict(ed);
+    let step = match argument.value_type() {
+        ValueType::Long => {
+            RangeStep::Int(argument.as_long().expect("long argument has long payload"))
+        }
+        ValueType::Double => RangeStep::Float(
+            argument
+                .as_double()
+                .expect("double argument has double payload"),
+        ),
+        ValueType::Null if !strict => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                "range(): Passing null to parameter #3 ($step) of type int|float is deprecated",
+            )?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            RangeStep::Int(0)
+        }
+        ValueType::True | ValueType::False if !strict => {
+            RangeStep::Int(i64::from(argument.is_truthy()))
+        }
+        ValueType::String if !strict => match range_numeric_string(argument.as_str().unwrap_or(""))
+        {
+            Some(RangeNumber::Int(number)) => RangeStep::Int(number),
+            Some(RangeNumber::Float(number)) => RangeStep::Float(number),
+            None => {
+                typed_internal_argument_error(eg, "range", argument, 3, "step", "int|float");
+                return Ok(None);
+            }
+        },
+        _ => {
+            typed_internal_argument_error(eg, "range", argument, 3, "step", "int|float");
+            return Ok(None);
+        }
+    };
+    Ok(Some(step))
+}
+
+fn range_non_finite_name(number: f64) -> &'static str {
+    if number.is_nan() {
+        "NAN"
+    } else if number.is_sign_negative() {
+        "-INF"
+    } else {
+        "INF"
+    }
+}
+
+fn range_endpoint_finite_error(
+    eg: &mut ExecutorGlobals,
+    endpoint: &RangeEndpoint,
+    position: usize,
+    parameter: &str,
+) -> bool {
+    let number = match endpoint {
+        RangeEndpoint::Number(RangeNumber::Float(number))
+        | RangeEndpoint::String(RangeStringEndpoint {
+            numeric: Some(RangeNumber::Float(number)),
+            ..
+        }) => Some(*number),
+        _ => None,
+    };
+    let Some(number) = number.filter(|number| !number.is_finite()) else {
+        return false;
+    };
+    eg.exception = Some(crate::value::make_error_value(
+        "ValueError",
+        &format!(
+            "range(): Argument #{position} (${parameter}) must be a finite number, {} provided",
+            range_non_finite_name(number)
+        ),
+    ));
+    true
+}
+
+fn range_value_error(eg: &mut ExecutorGlobals, message: &str) {
+    eg.exception = Some(crate::value::make_error_value("ValueError", message));
+}
+
+fn range_character_candidate(start: &RangeEndpoint, end: &RangeEndpoint) -> bool {
+    let (RangeEndpoint::String(start), RangeEndpoint::String(end)) = (start, end) else {
+        return false;
+    };
+    if start.bytes.is_empty() || end.bytes.is_empty() {
+        return false;
+    }
+    (start.bytes.len() == 1 && end.bytes.len() == 1)
+        || (start.numeric.is_none() && end.numeric.is_none())
+}
+
+fn range_warn_empty_strings(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    endpoints: [&RangeEndpoint; 2],
+) -> Result<bool, VmError> {
+    for (index, endpoint) in endpoints.into_iter().enumerate() {
+        let RangeEndpoint::String(endpoint) = endpoint else {
+            continue;
+        };
+        if !endpoint.bytes.is_empty() {
+            continue;
+        }
+        let parameter = if index == 0 { "start" } else { "end" };
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!(
+                "range(): Argument #{} (${parameter}) must not be empty, casted to 0",
+                index + 1
+            ),
+        )?;
+        if eg.exception.is_some() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn range_warn_character_widths(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    endpoints: [&RangeEndpoint; 2],
+) -> Result<bool, VmError> {
+    for (index, endpoint) in endpoints.into_iter().enumerate() {
+        let RangeEndpoint::String(endpoint) = endpoint else {
+            continue;
+        };
+        if endpoint.bytes.len() <= 1 {
+            continue;
+        }
+        let parameter = if index == 0 { "start" } else { "end" };
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!(
+                "range(): Argument #{} (${parameter}) must be a single byte, subsequent bytes are ignored",
+                index + 1
+            ),
+        )?;
+        if eg.exception.is_some() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn range_character_values(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    start: &RangeEndpoint,
+    end: &RangeEndpoint,
+    step: RangeStep,
+) -> Result<Option<PhpArray>, VmError> {
+    if !range_warn_character_widths(ed, eg, [start, end])? {
+        return Ok(None);
+    }
+    let (RangeEndpoint::String(start), RangeEndpoint::String(end)) = (start, end) else {
+        unreachable!("character ranges require two strings")
+    };
+    let start = u16::from(start.bytes[0]);
+    let end = u16::from(end.bytes[0]);
+    let signed_step = step.number();
+    if start < end && signed_step.is_sign_negative() {
+        range_value_error(
+            eg,
+            "range(): Argument #3 ($step) must be greater than 0 for increasing ranges",
+        );
+        return Ok(None);
+    }
+    if start == end {
+        let mut result = PhpArray::with_packed_capacity(1);
+        result.push(Value::string(bytes_to_php_string(&[start as u8])));
+        return Ok(Some(result));
+    }
+    let distance = start.abs_diff(end);
+    let step = step
+        .integer_magnitude()
+        .expect("character range admitted only an integral finite step");
+    if step > u128::from(distance) {
+        range_value_error(
+            eg,
+            "range(): Argument #3 ($step) must be less than the range spanned by argument #1 ($start) and argument #2 ($end)",
+        );
+        return Ok(None);
+    }
+    let count = usize::from(distance) / step as usize + 1;
+    let increasing = start < end;
+    let mut result = PhpArray::with_packed_capacity(count);
+    for index in 0..count {
+        let delta = index * step as usize;
+        let byte = if increasing {
+            start as usize + delta
+        } else {
+            start as usize - delta
+        } as u8;
+        result.push(Value::string(bytes_to_php_string(&[byte])));
+    }
+    Ok(Some(result))
+}
+
+fn range_warn_mixed_character(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    character_position: usize,
+) -> Result<bool, VmError> {
+    let (other_position, other_parameter, character_parameter) = if character_position == 1 {
+        (2, "end", "start")
+    } else {
+        (1, "start", "end")
+    };
+    report_internal_diagnostic(
+        eg,
+        ed,
+        2,
+        "Warning",
+        &format!(
+            "range(): Argument #{other_position} (${other_parameter}) must be a single byte string if argument #{character_position} (${character_parameter}) is a single byte string, argument #{character_position} (${character_parameter}) converted to 0"
+        ),
+    )?;
+    Ok(eg.exception.is_none())
+}
+
+fn range_numeric_endpoint(endpoint: &RangeEndpoint) -> Option<RangeNumber> {
+    match endpoint {
+        RangeEndpoint::Number(number) => Some(*number),
+        RangeEndpoint::String(endpoint) => endpoint.numeric,
+    }
+}
+
+fn range_float_text(number: f64) -> String {
+    let mut rendered = Value::double(number).echo_to_string_with_precision(-1);
+    if !rendered.contains(['.', 'E']) {
+        rendered.push_str(".0");
+    }
+    rendered
+}
+
+fn range_too_large_integer(
+    eg: &mut ExecutorGlobals,
+    start: i64,
+    end: i64,
+    step: u128,
+    increments: u128,
+) {
+    const MAX_RANGE_SIZE: u128 = 1 << 30;
+    let excess = increments.saturating_sub(MAX_RANGE_SIZE - 1);
+    range_value_error(
+        eg,
+        &format!(
+            "The supplied range exceeds the maximum array size by {excess} elements: start={start}, end={end}, step={step}. Calculated size: {increments}. Maximum size: {MAX_RANGE_SIZE}."
+        ),
+    );
+}
+
+fn range_too_large_float(
+    eg: &mut ExecutorGlobals,
+    start: f64,
+    end: f64,
+    step: f64,
+    increments: f64,
+) {
+    const MAX_RANGE_SIZE: f64 = (1_u64 << 30) as f64;
+    let excess = increments - (MAX_RANGE_SIZE - 1.0);
+    range_value_error(
+        eg,
+        &format!(
+            "The supplied range exceeds the maximum array size by {} elements: start={}, end={}, step={}. Max size: {}",
+            range_float_text(excess),
+            range_float_text(start),
+            range_float_text(end),
+            range_float_text(step),
+            MAX_RANGE_SIZE as u64,
+        ),
+    );
+}
+
+fn range_materialization_fatal(ed: *mut ExecuteData, count: usize) -> VmError {
+    let (file, line) = internal_call_source(ed);
+    let bytes = count.saturating_mul(std::mem::size_of::<Value>());
+    VmError::Fatal(format!(
+        "Allowed memory size exhausted while constructing an array of {count} elements (tried to allocate {bytes} bytes) in {file} on line {line}"
+    ))
+}
+
+fn range_integer_values(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    start: i64,
+    end: i64,
+    step: RangeStep,
+) -> Result<Option<PhpArray>, VmError> {
+    const MAX_RANGE_SIZE: u128 = 1 << 30;
+    if start < end && step.number().is_sign_negative() {
+        range_value_error(
+            eg,
+            "range(): Argument #3 ($step) must be greater than 0 for increasing ranges",
+        );
+        return Ok(None);
+    }
+    if start == end {
+        let mut result = PhpArray::with_packed_capacity(1);
+        result.push(Value::long(start));
+        return Ok(Some(result));
+    }
+    let distance = u128::from(start.abs_diff(end));
+    let Some(step_magnitude) = step.integer_magnitude() else {
+        return Ok(None);
+    };
+    if step_magnitude > distance {
+        range_value_error(
+            eg,
+            "range(): Argument #3 ($step) must be less than the range spanned by argument #1 ($start) and argument #2 ($end)",
+        );
+        return Ok(None);
+    }
+    let increments = distance / step_magnitude;
+    if increments >= MAX_RANGE_SIZE {
+        range_too_large_integer(eg, start, end, step_magnitude, increments);
+        return Ok(None);
+    }
+    let count = increments as usize + 1;
+    if count >= MAX_RANGE_SIZE as usize {
+        return Err(range_materialization_fatal(ed, count));
+    }
+    let increasing = start < end;
+    let mut result = PhpArray::with_packed_capacity(count);
+    for index in 0..count {
+        let delta = (step_magnitude * index as u128) as i128;
+        let number = if increasing {
+            i128::from(start) + delta
+        } else {
+            i128::from(start) - delta
+        };
+        result.push(Value::long(number as i64));
+    }
+    Ok(Some(result))
+}
+
+fn range_float_values(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    start: f64,
+    end: f64,
+    step: RangeStep,
+) -> Result<Option<PhpArray>, VmError> {
+    const MAX_RANGE_SIZE: f64 = (1_u64 << 30) as f64;
+    let signed_step = step.number();
+    if start < end && signed_step.is_sign_negative() {
+        range_value_error(
+            eg,
+            "range(): Argument #3 ($step) must be greater than 0 for increasing ranges",
+        );
+        return Ok(None);
+    }
+    if start == end {
+        let mut result = PhpArray::with_packed_capacity(1);
+        result.push(Value::double(start));
+        return Ok(Some(result));
+    }
+    let distance = (end - start).abs();
+    let step_magnitude = signed_step.abs();
+    if step_magnitude > distance {
+        range_value_error(
+            eg,
+            "range(): Argument #3 ($step) must be less than the range spanned by argument #1 ($start) and argument #2 ($end)",
+        );
+        return Ok(None);
+    }
+    let quotient = distance / step_magnitude;
+    let nearest = quotient.round();
+    let tolerance = f64::EPSILON * quotient.abs().max(1.0) * 8.0;
+    let increments = if (quotient - nearest).abs() <= tolerance {
+        nearest
+    } else {
+        quotient.floor()
+    };
+    if increments >= MAX_RANGE_SIZE {
+        range_too_large_float(eg, start, end, step_magnitude, increments);
+        return Ok(None);
+    }
+    let count = increments as usize + 1;
+    if count >= MAX_RANGE_SIZE as usize {
+        return Err(range_materialization_fatal(ed, count));
+    }
+    let increasing = start < end;
+    let mut result = PhpArray::with_packed_capacity(count);
+    for index in 0..count {
+        let delta = step_magnitude * index as f64;
+        let number = if increasing {
+            start + delta
+        } else {
+            start - delta
+        };
+        result.push(Value::double(number));
+    }
+    Ok(Some(result))
+}
+
+fn fn_range(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let Some(start) = range_endpoint_argument(ed, eg, 0, "start")? else {
+        return Ok(());
+    };
+    if range_endpoint_finite_error(eg, &start, 1, "start") {
+        return Ok(());
+    }
+    let Some(end) = range_endpoint_argument(ed, eg, 1, "end")? else {
+        return Ok(());
+    };
+    if range_endpoint_finite_error(eg, &end, 2, "end") {
+        return Ok(());
+    }
+    let Some(step) = range_step_argument(ed, eg)? else {
+        return Ok(());
+    };
+    let step_number = step.number();
+    if !step_number.is_finite() {
+        range_value_error(
+            eg,
+            &format!(
+                "range(): Argument #3 ($step) must be a finite number, {} provided",
+                range_non_finite_name(step_number)
+            ),
+        );
+        return Ok(());
+    }
+    if step_number == 0.0 {
+        range_value_error(eg, "range(): Argument #3 ($step) cannot be 0");
+        return Ok(());
+    }
+    if !range_warn_empty_strings(ed, eg, [&start, &end])? {
+        return Ok(());
+    }
+
+    let character_candidate = range_character_candidate(&start, &end);
+    if character_candidate && step.is_integral() {
+        let Some(result) = range_character_values(ed, eg, &start, &end, step)? else {
+            return Ok(());
+        };
+        ret!(rv, Value::array(result));
+    }
+
+    let mut start_number = range_numeric_endpoint(&start);
+    let mut end_number = range_numeric_endpoint(&end);
+    if character_candidate && start_number.is_none() && end_number.is_none() {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            "range(): Argument #3 ($step) must be of type int when generating an array of characters, inputs converted to 0",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        start_number = Some(RangeNumber::Float(0.0));
+        end_number = Some(RangeNumber::Float(0.0));
+    } else {
+        if start_number.is_none() {
+            if matches!(&start, RangeEndpoint::String(value) if value.bytes.len() == 1)
+                && !range_warn_mixed_character(ed, eg, 1)?
+            {
+                return Ok(());
+            }
+            start_number = Some(RangeNumber::Int(0));
+        }
+        if end_number.is_none() {
+            if matches!(&end, RangeEndpoint::String(value) if value.bytes.len() == 1)
+                && !range_warn_mixed_character(ed, eg, 2)?
+            {
+                return Ok(());
+            }
+            end_number = Some(RangeNumber::Int(0));
+        }
+    }
+
+    let start_number = start_number.expect("range start was normalized");
+    let end_number = end_number.expect("range end was normalized");
+    if let (RangeNumber::Int(start), RangeNumber::Int(end)) = (start_number, end_number)
+        && step.integer_magnitude().is_some()
+    {
+        let Some(result) = range_integer_values(ed, eg, start, end, step)? else {
+            return Ok(());
+        };
+        ret!(rv, Value::array(result));
+    }
+
+    let start = match start_number {
+        RangeNumber::Int(number) => number as f64,
+        RangeNumber::Float(number) => number,
+    };
+    let end = match end_number {
+        RangeNumber::Int(number) => number as f64,
+        RangeNumber::Float(number) => number,
+    };
+    let Some(result) = range_float_values(ed, eg, start, end, step)? else {
+        return Ok(());
+    };
+    ret!(rv, Value::array(result));
 }
 
 fn fn_array_splice(
