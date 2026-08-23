@@ -1674,6 +1674,13 @@ pub struct PhpArray {
 // A live array cannot have enough entries to use the address-width high bit as
 // a cursor position, so the marker does not enlarge `PhpArray`.
 const ARRAY_CURSOR_PRISTINE: usize = 1usize << (usize::BITS - 1);
+// PHP 8.5 lets the first explicit negative integer key establish the following
+// append key. The state survives unset/pop even when the array becomes empty,
+// so `next_int_key == 0` alone cannot distinguish a fresh string-only array
+// from one whose integer sequence was already initialized. Reuse a spare
+// cursor metadata bit instead of enlarging every PhpArray allocation.
+const ARRAY_INT_KEY_INITIALIZED: usize = 1usize << (usize::BITS - 2);
+const ARRAY_CURSOR_METADATA: usize = ARRAY_CURSOR_PRISTINE | ARRAY_INT_KEY_INITIALIZED;
 
 /// Fast deterministic hashing for integer-only PHP array keys.
 ///
@@ -2387,58 +2394,66 @@ impl PhpArray {
 
     #[inline]
     pub(crate) fn cursor_reset(&self) -> Option<&Value> {
-        self.cursor.set(self.cursor.get() & ARRAY_CURSOR_PRISTINE);
+        self.cursor_rewind();
         self.iter().next().map(|(_, value)| value)
+    }
+
+    /// Reset the internal array pointer without materializing the first entry.
+    /// Mutators need only the pointer side effect; `reset()` itself uses
+    /// `cursor_reset()` above when it must also return the first value.
+    #[inline]
+    pub(crate) fn cursor_rewind(&self) {
+        self.cursor.set(self.cursor.get() & ARRAY_CURSOR_METADATA);
     }
 
     #[inline]
     pub(crate) fn cursor_end(&self) -> Option<&Value> {
         let position = self.len().saturating_sub(1);
         self.cursor
-            .set((self.cursor.get() & ARRAY_CURSOR_PRISTINE) | position);
+            .set((self.cursor.get() & ARRAY_CURSOR_METADATA) | position);
         self.iter().nth(position).map(|(_, value)| value)
     }
 
     #[inline]
     pub(crate) fn cursor_current(&self) -> Option<&Value> {
         self.iter()
-            .nth(self.cursor.get() & !ARRAY_CURSOR_PRISTINE)
+            .nth(self.cursor.get() & !ARRAY_CURSOR_METADATA)
             .map(|(_, value)| value)
     }
 
     #[inline]
     pub(crate) fn cursor_key(&self) -> Option<ArrayKey> {
         self.iter()
-            .nth(self.cursor.get() & !ARRAY_CURSOR_PRISTINE)
+            .nth(self.cursor.get() & !ARRAY_CURSOR_METADATA)
             .map(|(key, _)| key)
     }
 
     #[inline]
     pub(crate) fn cursor_next(&self) -> Option<&Value> {
-        let pristine = self.cursor.get() & ARRAY_CURSOR_PRISTINE;
-        let position = (self.cursor.get() & !ARRAY_CURSOR_PRISTINE).saturating_add(1);
-        self.cursor.set(pristine | position);
+        let metadata = self.cursor.get() & ARRAY_CURSOR_METADATA;
+        let position = (self.cursor.get() & !ARRAY_CURSOR_METADATA).saturating_add(1);
+        self.cursor.set(metadata | position);
         self.cursor_current()
     }
 
     #[inline]
     pub(crate) fn cursor_prev(&self) -> Option<&Value> {
-        let pristine = self.cursor.get() & ARRAY_CURSOR_PRISTINE;
-        let current = self.cursor.get() & !ARRAY_CURSOR_PRISTINE;
+        let metadata = self.cursor.get() & ARRAY_CURSOR_METADATA;
+        let current = self.cursor.get() & !ARRAY_CURSOR_METADATA;
         if current == 0 {
-            self.cursor.set(pristine | self.len());
+            self.cursor.set(metadata | self.len());
             return None;
         }
-        self.cursor.set(pristine | (current - 1));
+        self.cursor.set(metadata | (current - 1));
         self.cursor_current()
     }
 
     #[inline]
     fn adjust_cursor_after_remove(&self, removed_position: usize) {
-        let pristine = self.cursor.get() & ARRAY_CURSOR_PRISTINE;
-        let current = self.cursor.get() & !ARRAY_CURSOR_PRISTINE;
+        let metadata = self.cursor.get() & ARRAY_CURSOR_METADATA;
+        let current = self.cursor.get() & !ARRAY_CURSOR_METADATA;
         if removed_position < current {
-            self.cursor.set(pristine | (current - 1));
+            self.cursor.set(metadata | (current - 1));
         }
     }
 
@@ -2664,6 +2679,10 @@ impl PhpArray {
         if key == i64::MAX && self.get_int(key).is_some() {
             return false;
         }
+        if key == 0 && self.cursor.get() & ARRAY_INT_KEY_INITIALIZED == 0 {
+            self.cursor
+                .set(self.cursor.get() | ARRAY_INT_KEY_INITIALIZED);
+        }
         self.next_int_key = key.saturating_add(1);
         if let ArrayStorage::Packed(values) = &mut self.storage {
             values.push(val);
@@ -2806,6 +2825,13 @@ impl PhpArray {
 
     /// Set by integer key
     pub fn set_int(&mut self, key: i64, val: Value) {
+        if self.next_int_key == 0 && self.cursor.get() & ARRAY_INT_KEY_INITIALIZED == 0 {
+            self.cursor
+                .set(self.cursor.get() | ARRAY_INT_KEY_INITIALIZED);
+            if key < 0 {
+                self.next_int_key = key.saturating_add(1);
+            }
+        }
         // Wide associative arrays are a stable hot state. Resolve a new or
         // existing integer key with one hash/probe instead of walking every
         // earlier storage tier and then performing separate get + insert.
@@ -5892,6 +5918,19 @@ impl Value {
             return true;
         }
         strong_count - internal_aliases > 1
+    }
+
+    /// Number of live handles retaining this request-owned reference cell.
+    /// Structural array mutators use the count only as a conservative cold-
+    /// path guard: the caller variable plus its by-reference call argument
+    /// account for two handles, while an active by-reference foreach (or any
+    /// other PHP alias) retains at least one more.
+    #[inline]
+    pub(crate) fn owned_reference_handle_count(&self) -> usize {
+        if !self.is_owned_reference() {
+            return 0;
+        }
+        Rc::strong_count(&self.owned_reference_rc())
     }
 
     /// Clone a lexical capture while retaining explicit PHP reference

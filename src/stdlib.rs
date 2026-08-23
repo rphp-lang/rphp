@@ -19,7 +19,7 @@ use crate::compiler::compile::{ClassConstantDefinition, PropertyDefinition};
 use crate::compiler::{
     make_direct_internal_function, make_internal_function, make_internal_function_ref,
     make_internal_function_variadic, make_internal_function_variadic_prefer_ref,
-    make_internal_method, make_internal_method_variadic,
+    make_internal_function_variadic_ref, make_internal_method, make_internal_method_variadic,
 };
 use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
@@ -610,71 +610,188 @@ fn fn_count(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
 fn fn_array_push(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let values = arg!(ed, 1)
+        .as_array()
+        .expect("variadic array_push values must be packed into an array");
+    array_push_values(
+        ed,
+        rv,
+        eg,
+        values.values().map(|value| value.dereferenced().clone()),
+    )
+}
+
+fn fn_array_push_raw_variadic(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    supplied_num_args: u32,
+) -> Result<(), VmError> {
+    let value = (supplied_num_args > 1).then(|| owned_argument(ed, 1));
+    array_push_values(ed, rv, eg, value)
+}
+
+fn array_push_values(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    values: impl IntoIterator<Item = Value>,
 ) -> Result<(), VmError> {
     let ptr = arg_mut!(ed, 0);
-    let val = arg!(ed, 1).clone();
     let arr = unsafe { &mut *ptr };
-    if let Some(a) = arr.as_array_mut() {
-        a.push(val);
-        ret!(rv, Value::long(a.len() as i64));
-    } else {
-        ret!(rv, Value::null());
+    let Some(array) = arr.as_array_mut() else {
+        typed_internal_argument_error(eg, "array_push", arr.dereferenced(), 1, "array", "array");
+        return Ok(());
+    };
+    for value in values {
+        if !array.try_push(value) {
+            eg.exception = Some(crate::value::make_error_value(
+                "Error",
+                "Cannot add element to the array as the next element is already occupied",
+            ));
+            return Ok(());
+        }
     }
+    ret!(rv, Value::long(array.len() as i64));
 }
 
 fn fn_array_pop(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
-    if let Some(a) = arr.as_array_mut() {
-        ret!(rv, a.pop().unwrap_or(Value::null()));
-    } else {
-        ret!(rv, Value::null());
-    }
+    let Some(array) = arr.as_array_mut() else {
+        typed_internal_argument_error(eg, "array_pop", arr.dereferenced(), 1, "array", "array");
+        return Ok(());
+    };
+    let value = array
+        .pop()
+        .map(|value| value.dereferenced().clone())
+        .unwrap_or_else(Value::null);
+    array.cursor_rewind();
+    write_array_mutator_return(ed, rv, eg, value)
 }
 
 fn fn_array_shift(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
-    if let Some(a) = arr.as_array_mut() {
-        ret!(rv, a.shift().unwrap_or(Value::null()));
-    } else {
-        ret!(rv, Value::null());
+    let Some(array) = arr.as_array_mut() else {
+        typed_internal_argument_error(eg, "array_shift", arr.dereferenced(), 1, "array", "array");
+        return Ok(());
+    };
+    let had_value = !array.is_empty();
+    let value = array
+        .shift()
+        .map(|value| value.dereferenced().clone())
+        .unwrap_or_else(Value::null);
+    if had_value {
+        crate::vm::execute::adjust_live_foreach_reference_positions_for_splice(ed, 0, 0, 1, 0);
     }
+    array.cursor_rewind();
+    write_array_mutator_return(ed, rv, eg, value)
 }
 
 fn fn_array_unshift(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let values = arg!(ed, 1)
+        .as_array()
+        .expect("variadic array_unshift values must be packed into an array");
+    array_unshift_values(
+        ed,
+        rv,
+        eg,
+        values.values().map(|value| value.dereferenced().clone()),
+        values.len(),
+    )
+}
+
+fn fn_array_unshift_raw_variadic(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    supplied_num_args: u32,
+) -> Result<(), VmError> {
+    let value = (supplied_num_args > 1).then(|| owned_argument(ed, 1));
+    let inserted = usize::from(value.is_some());
+    array_unshift_values(ed, rv, eg, value, inserted)
+}
+
+fn array_unshift_values(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    values: impl IntoIterator<Item = Value>,
+    inserted: usize,
 ) -> Result<(), VmError> {
     let ptr = arg_mut!(ed, 0);
-    let val = arg!(ed, 1).clone();
     let arr = unsafe { &mut *ptr };
-    if let Some(a) = arr.as_array_mut() {
-        // Rebuild with val at front
-        let mut new = PhpArray::new();
-        new.push(val);
-        for (key, v) in a.iter() {
-            match &key {
-                ArrayKey::Int(_) => new.push(v.clone()),
-                ArrayKey::String(k) => new.set_str(k, v.clone()),
-            }
-        }
-        *arr = Value::array(new);
-        ret!(
-            rv,
-            Value::long(arr.as_array().map(|a| a.len()).unwrap_or(0) as i64)
-        );
-    } else {
-        ret!(rv, Value::long(0));
+    let Some(array) = arr.as_array() else {
+        typed_internal_argument_error(eg, "array_unshift", arr.dereferenced(), 1, "array", "array");
+        return Ok(());
+    };
+    let Some(total) = array.len().checked_add(inserted) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "The total number of elements must be lower than 1073741824",
+        ));
+        return Ok(());
+    };
+    if total >= 1 << 30 {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "The total number of elements must be lower than 1073741824",
+        ));
+        return Ok(());
     }
+
+    let mut result = if array.has_string_keys() {
+        PhpArray::with_deferred_hash_capacity(total)
+    } else {
+        PhpArray::with_packed_capacity(total)
+    };
+    for value in values {
+        result.push(value);
+    }
+    for (key, value) in array.iter() {
+        let value = array_projection_value(value);
+        match key {
+            ArrayKey::Int(_) => result.push(value),
+            ArrayKey::String(key) => result.set_str(&key, value),
+        }
+    }
+    *arr = Value::array(result);
+    if inserted != 0 {
+        crate::vm::execute::adjust_live_foreach_reference_positions_for_splice(
+            ed, 0, 0, 0, inserted,
+        );
+    }
+    ret!(rv, Value::long(total as i64));
+}
+
+#[inline(always)]
+fn write_array_mutator_return(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    value: Value,
+) -> Result<(), VmError> {
+    if !rv.is_null() {
+        write_return_value(rv, value);
+        return Ok(());
+    }
+    // SAFETY: the internal activation and its synchronous caller remain live
+    // for the complete handler invocation.
+    let caller = unsafe { (*ed).prev_execute_data };
+    crate::vm::execute::run_value_destructors(eg, &[value], caller)
 }
 
 fn fn_array_key_exists_named(
@@ -2648,60 +2765,189 @@ fn fn_array_splice(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let replacement = arg_opt!(ed, 3).map(|value| {
-        if let Some(array) = value.as_array() {
-            array.clone()
-        } else if value.value_type() == ValueType::Object {
-            crate::vm::execute::cast_object_to_array(value, eg)
+    let ptr = arg_mut!(ed, 0);
+    let target = unsafe { &mut *ptr };
+    if target.as_array().is_none() {
+        typed_internal_argument_error(
+            eg,
+            "array_splice",
+            target.dereferenced(),
+            1,
+            "array",
+            "array",
+        );
+        return Ok(());
+    }
+    let Some(offset) = typed_internal_int_argument(ed, eg, "array_splice", 1, "offset")? else {
+        return Ok(());
+    };
+    let length = if arg_opt!(ed, 2)
+        .is_none_or(|value| value.dereferenced().value_type() == ValueType::Null)
+    {
+        None
+    } else {
+        let Some(length) =
+            typed_internal_int_argument_expected(ed, eg, "array_splice", 2, "length", "?int")?
+        else {
+            return Ok(());
+        };
+        Some(length)
+    };
+
+    let replacement = arg_opt!(ed, 3).map(|_| owned_argument(ed, 3));
+    let replacement = match replacement.as_ref().map(Value::dereferenced) {
+        None => Vec::new(),
+        Some(value) if value.value_type() == ValueType::Null => Vec::new(),
+        Some(value) if value.as_array().is_some() => value
+            .as_array()
+            .expect("checked array replacement")
+            .values()
+            .map(array_projection_value)
+            .collect::<Vec<_>>(),
+        Some(value) if value.value_type() == ValueType::Object => {
+            let projected = crate::vm::execute::cast_object_to_array(value, eg);
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            projected
                 .as_array()
                 .expect("object replacement projection must be an array")
-                .clone()
-        } else {
-            let mut replacement = PhpArray::new();
-            replacement.push(value.clone());
-            replacement
+                .values()
+                .map(array_projection_value)
+                .collect::<Vec<_>>()
         }
-    });
-    let ptr = arg_mut!(ed, 0);
-    let offset = arg_long!(ed, 1);
-    let arr = unsafe { &mut *ptr };
-    if let Some(a) = arr.as_array_mut() {
-        let len = a.len() as i64;
-        let start = if offset < 0 {
-            (len + offset).max(0) as usize
-        } else {
-            (offset as usize).min(a.len())
-        };
-        let del_count = match arg_opt!(ed, 2) {
-            Some(v) => v.to_long_val().max(0) as usize,
-            None => a.len() - start,
-        };
-        let entries: Vec<(ArrayKey, Value)> = a.iter().map(|(k, v)| (k, v.clone())).collect();
-        let mut removed = PhpArray::new();
-        let mut new = PhpArray::new();
+        Some(value) => vec![value.clone()],
+    };
 
-        for i in 0..=entries.len() {
-            if i == start
-                && let Some(replacement) = replacement.as_ref()
-            {
-                for value in replacement.values() {
-                    new.push(value.clone());
-                }
-            }
-            let Some((_, value)) = entries.get(i) else {
-                continue;
-            };
-            if i >= start && i < start + del_count {
-                removed.push(value.clone());
-            } else {
-                new.push(value.clone());
+    let target = unsafe { &mut *ptr };
+    let source = target
+        .as_array()
+        .expect("array_splice target was validated before conversion");
+    let entries = source
+        .iter()
+        .map(|(key, value)| (key, array_projection_value(value)))
+        .collect::<Vec<_>>();
+    let source_len = entries.len();
+    let start = if offset < 0 {
+        source_len.saturating_sub(
+            usize::try_from(offset.unsigned_abs())
+                .unwrap_or(usize::MAX)
+                .min(source_len),
+        )
+    } else {
+        usize::try_from(offset)
+            .unwrap_or(usize::MAX)
+            .min(source_len)
+    };
+    let end = match length {
+        None => source_len,
+        Some(length) if length >= 0 => start.saturating_add(
+            usize::try_from(length)
+                .unwrap_or(usize::MAX)
+                .min(source_len - start),
+        ),
+        Some(length) => source_len
+            .saturating_sub(
+                usize::try_from(length.unsigned_abs())
+                    .unwrap_or(usize::MAX)
+                    .min(source_len),
+            )
+            .max(start),
+    };
+    let removed_len = end - start;
+    let Some(result_len) = source_len
+        .checked_sub(removed_len)
+        .and_then(|length| length.checked_add(replacement.len()))
+    else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "The total number of elements must be lower than 1073741824",
+        ));
+        return Ok(());
+    };
+    if result_len >= 1 << 30 {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "The total number of elements must be lower than 1073741824",
+        ));
+        return Ok(());
+    }
+
+    let result_has_strings = entries[..start]
+        .iter()
+        .chain(&entries[end..])
+        .any(|(key, _)| matches!(key, ArrayKey::String(_)));
+    let removed_has_strings = entries[start..end]
+        .iter()
+        .any(|(key, _)| matches!(key, ArrayKey::String(_)));
+    let mut result = if result_has_strings {
+        PhpArray::with_deferred_hash_capacity(result_len)
+    } else {
+        PhpArray::with_packed_capacity(result_len)
+    };
+    let mut removed = if removed_has_strings {
+        PhpArray::with_deferred_hash_capacity(removed_len)
+    } else {
+        PhpArray::with_packed_capacity(removed_len)
+    };
+    let replacement_len = replacement.len();
+    let mut replacement = Some(replacement);
+    for (index, (key, value)) in entries.into_iter().enumerate() {
+        if index == start {
+            for replacement_value in replacement.take().unwrap_or_default() {
+                result.push(replacement_value);
             }
         }
-        *arr = Value::array(new);
-        ret!(rv, Value::array(removed));
-    } else {
-        ret!(rv, Value::null());
+        let destination = if index >= start && index < end {
+            &mut removed
+        } else {
+            &mut result
+        };
+        match key {
+            ArrayKey::Int(_) => destination.push(value),
+            ArrayKey::String(key) => destination.set_str(&key, value),
+        }
     }
+    if start == source_len {
+        for replacement_value in replacement.take().unwrap_or_default() {
+            result.push(replacement_value);
+        }
+    }
+
+    *target = Value::array(result);
+    crate::vm::execute::adjust_live_foreach_reference_positions_for_splice(
+        ed,
+        0,
+        start,
+        removed_len,
+        replacement_len,
+    );
+    let removed = Value::array(removed);
+    if !rv.is_null() {
+        write_return_value(rv, removed);
+        return Ok(());
+    }
+
+    // Keep a COW identity snapshot while discarded removed values run their
+    // destructors. Any reentrant write to the by-reference input detaches or
+    // replaces the target and is therefore detected without a hot-path array
+    // generation counter.
+    let mutation_snapshot = target.clone();
+    let expected_identity = mutation_snapshot.array_identity();
+    // SAFETY: the internal activation and synchronous caller stay live while
+    // discarded return-value destructors execute.
+    let caller = unsafe { (*ed).prev_execute_data };
+    crate::vm::execute::run_value_destructors(eg, &[removed], caller)?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    if target.array_identity() != expected_identity {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "Array was modified during array_splice operation",
+        ));
+    }
+    Ok(())
 }
 
 fn fn_array_rand(

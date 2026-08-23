@@ -3221,8 +3221,26 @@ fn execute_full_call<'a>(
         pack_pending_magic_call(call, method, &mut pending_named);
     }
     // SAFETY: `call` is the live compiler-sized frame linked from `frame`; its
-    // registered function descriptor remains valid for the synchronous call.
-    let (func_common, num_args) = unsafe { (&*(*call).func, (*call).num_args) };
+    // registered common header and optional InternalFunction tail remain valid
+    // for the synchronous call and are selected only by the checked fn_type.
+    // SAFETY: reading num_args and the optional raw handler does not outlive
+    // that frame or cast an unverified user-function descriptor.
+    let (func_common, num_args, raw_variadic_handler) = unsafe {
+        let common = &*(*call).func;
+        let raw_handler = (common.fn_type == FunctionType::Internal
+            && common.sig.is_variadic
+            && pending_named.is_none()
+            // A single positional variadic value is already a stable call
+            // slot. Multiple values must be snapshotted together before a
+            // mutating handler runs, so they retain the packed ABI.
+            && (*call).num_args <= common.sig.public_arity().saturating_add(1))
+        .then(|| {
+            (*(common as *const FunctionCommon as *const super::function::InternalFunction))
+                .raw_variadic_handler
+        })
+        .flatten();
+        (common, (*call).num_args, raw_handler)
+    };
     let public_max = func_common.sig.public_arity();
     if func_common.fn_type != FunctionType::User
         && !func_common.sig.is_variadic
@@ -3513,7 +3531,7 @@ fn execute_full_call<'a>(
             arguments
         });
 
-    if func_common.sig.is_variadic {
+    if func_common.sig.is_variadic && raw_variadic_handler.is_none() {
         let extra_count = num_args.saturating_sub(public_max);
         let mut variadic_arr = PhpArray::new();
         let cv_start = func_common.sig.variadic_cv_index;
@@ -3705,7 +3723,11 @@ fn execute_full_call<'a>(
                     frame_result_prepare_external_write(frame, return_value_ptr, opline.result_type)
                 };
             }
-            let handler_result = (internal.handler)(call, return_value_ptr, eg);
+            let handler_result = if let Some(handler) = raw_variadic_handler {
+                handler(call, return_value_ptr, eg, num_args)
+            } else {
+                (internal.handler)(call, return_value_ptr, eg)
+            };
             if !return_value_ptr.is_null() {
                 unsafe {
                     frame_result_finish_external_write(frame, return_value_ptr, opline.result_type)

@@ -763,6 +763,105 @@ fn set_foreach_iteration_state(
     }
 }
 
+/// Keep the next-position counter of every active by-reference foreach stable
+/// across an array splice. RPHP represents a live Zend HashTable iterator as
+/// an owned reference to the source plus a frame-local numeric position. A
+/// structural mutation keeps the reference live but must translate that
+/// position so entries inserted before the current element are not revisited
+/// and entries removed before it are not skipped.
+pub(crate) fn adjust_live_foreach_reference_positions_for_splice(
+    internal_frame: *mut ExecuteData,
+    argument_index: u32,
+    start: usize,
+    removed: usize,
+    inserted: usize,
+) {
+    if internal_frame.is_null() {
+        return;
+    }
+    // SAFETY: an internal handler and every saved caller frame remain live for
+    // its synchronous invocation. User frame metadata owns the instruction and
+    // slot ranges inspected below; only Long foreach-position TMPs are updated.
+    unsafe {
+        let argument = (*internal_frame).cv(argument_index);
+        if argument.owned_reference_handle_count() < 3 {
+            return;
+        }
+        let target_reference = argument.reference_identity();
+        let Some(target_reference) = target_reference else {
+            return;
+        };
+        let removed_end = start.saturating_add(removed);
+        let mut frame = (*internal_frame).prev_execute_data;
+        while !frame.is_null() {
+            let function = (*frame).func;
+            if !function.is_null() && (*function).fn_type == FunctionType::User {
+                let user = &*(function as *const UserFunction);
+                let op_array = &user.op_array;
+                if !(*function).plan.has_reference_foreach() {
+                    frame = (*frame).prev_execute_data;
+                    continue;
+                }
+                let current = (*frame)
+                    .opline
+                    .offset_from(op_array.instructions.as_ptr()) as usize;
+                for (init_index, init) in op_array.instructions.iter().enumerate() {
+                    if init.opcode != OpCode::ForeachInit {
+                        continue;
+                    }
+                    let Some(next) = op_array.instructions.get(init_index + 1) else {
+                        continue;
+                    };
+                    let Some(exit) = op_array.instructions.get(init_index + 2) else {
+                        continue;
+                    };
+                    if next.opcode != OpCode::ForeachNextRef
+                        || exit.opcode != OpCode::JmpZ
+                        || current <= init_index + 2
+                        || current >= exit.op2 as usize
+                    {
+                        continue;
+                    }
+                    let iteration_state = &*(*frame).get_op_ptr(
+                        next.op1 as u32,
+                        next.op1_type,
+                        op_array,
+                    );
+                    if iteration_state.reference_identity() != Some(target_reference) {
+                        continue;
+                    }
+                    let position = &*(*frame).get_op_ptr(
+                        next.op2 as u32,
+                        next.op2_type,
+                        op_array,
+                    );
+                    let Some(position) = position
+                        .as_long()
+                        .and_then(|position| usize::try_from(position).ok())
+                    else {
+                        continue;
+                    };
+                    if start >= position {
+                        continue;
+                    }
+                    let removed_before_position = removed_end.min(position) - start;
+                    let adjusted = position
+                        .saturating_sub(removed_before_position)
+                        .saturating_add(inserted);
+                    let position_slot =
+                        (*frame).get_op_mut(next.op2 as u32, next.op2_type);
+                    frame_tmp_set_long(
+                        frame,
+                        position_slot,
+                        i64::try_from(adjusted).unwrap_or(i64::MAX),
+                    );
+                }
+            }
+            frame = (*frame).prev_execute_data;
+        }
+    }
+}
+
 #[inline]
 fn take_foreach_protocol_exception<'a>(
     eg: &mut ExecutorGlobals,
@@ -1229,8 +1328,10 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                 }
                 assign_foreach_cv(eg, frame, key_encoded - 1, key.dereferenced().clone())?;
             }
-            let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2 as u32, opline.op2_type) };
+            // SAFETY: the compiler validated the position operand for this
+            // live user frame; the write remains within its TMP/CV storage.
             unsafe {
+                let pos_ptr = (*frame).get_op_mut(opline.op2 as u32, opline.op2_type);
                 frame_result_set(
                     frame,
                     pos_ptr,

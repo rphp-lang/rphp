@@ -1357,6 +1357,7 @@ impl CallPlan {
     const DEPRECATED_ATTRIBUTE: u8 = 1 << 3;
     const NO_DISCARD_ATTRIBUTE: u8 = 1 << 4;
     const TRAIT_CLASS_SCOPE: u8 = 1 << 5;
+    const REFERENCE_FOREACH: u8 = 1 << 6;
 
     /// `$this` may be copied into a nested method frame without incrementing
     /// its Rc. The caller owns the object for the entire synchronous call and
@@ -1391,6 +1392,20 @@ impl CallPlan {
     pub fn set_needs_trait_class_scope(&mut self, enabled: bool) {
         self.flags =
             (self.flags & !Self::TRAIT_CLASS_SCOPE) | u8::from(enabled) * Self::TRAIT_CLASS_SCOPE;
+    }
+
+    /// Whether this user function can own a live by-reference foreach cursor.
+    /// The marker shares the existing CallPlan flag byte and therefore does
+    /// not widen function, opcode, or frame layouts.
+    #[inline(always)]
+    pub fn has_reference_foreach(&self) -> bool {
+        self.flags & Self::REFERENCE_FOREACH != 0
+    }
+
+    #[inline]
+    pub fn set_has_reference_foreach(&mut self, enabled: bool) {
+        self.flags =
+            (self.flags & !Self::REFERENCE_FOREACH) | u8::from(enabled) * Self::REFERENCE_FOREACH;
     }
 
     #[inline(always)]
@@ -1804,6 +1819,18 @@ pub type InternalFunctionHandler = fn(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), crate::vm::execute::VmError>;
 
+/// Optional positional ABI for variadic internal functions. The full call
+/// boundary still validates arity and fixed by-reference parameters, but may
+/// let handlers consume the original argument prefix without allocating a
+/// temporary PHP array. Calls with named variadic arguments retain the
+/// canonical packed handler.
+pub type RawVariadicInternalFunctionHandler = fn(
+    execute_data: *mut ExecuteData,
+    return_value: *mut Value,
+    eg: &mut ExecutorGlobals,
+    supplied_num_args: u32,
+) -> Result<(), crate::vm::execute::VmError>;
+
 /// Frame-free ABI for pure, read-only built-ins.
 ///
 /// A direct handler borrows positional arguments, returns an owned PHP value,
@@ -1818,6 +1845,7 @@ pub struct InternalFunction {
     pub common: FunctionCommon,
     pub handler: InternalFunctionHandler,
     pub direct_handler: Option<DirectInternalFunctionHandler>,
+    pub raw_variadic_handler: Option<RawVariadicInternalFunctionHandler>,
 }
 
 /// Safe wrapper over function pointer — dispatch via fn_type().

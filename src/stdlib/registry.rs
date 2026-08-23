@@ -129,20 +129,43 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         }};
     }
 
+    macro_rules! reg_var_ref {
+        ($name:expr, $handler:expr, $raw_handler:expr, $min_args:expr, $ref_args:expr, $($pnames:expr),*) => {{
+            let f = Box::new(make_internal_function_variadic_ref(
+                $handler,
+                $raw_handler,
+                $min_args,
+                $ref_args,
+                pn![$($pnames),*],
+            ));
+            let ptr = &f.common as *const FunctionCommon;
+            eg.register_function($name, ptr).unwrap();
+            funcs.push(f);
+        }};
+    }
+
     // --- Array functions (by-ref: arg 0) ---
     reg!("count", fn_count, 1, 1, "value");
     reg!("sizeof", fn_count, 1, 1, "value");
-    reg_ref!("array_push", fn_array_push, 2, 2, 0b1, "array", "value");
-    reg_ref!("array_pop", fn_array_pop, 1, 1, 0b1, "array");
-    reg_ref!("array_shift", fn_array_shift, 1, 1, 0b1, "array");
-    reg_ref!(
-        "array_unshift",
-        fn_array_unshift,
-        2,
-        2,
+    reg_var_ref!(
+        "array_push",
+        fn_array_push,
+        fn_array_push_raw_variadic,
+        1,
         0b1,
         "array",
-        "value"
+        "values"
+    );
+    reg_ref!("array_pop", fn_array_pop, 1, 1, 0b1, "array");
+    reg_ref!("array_shift", fn_array_shift, 1, 1, 0b1, "array");
+    reg_var_ref!(
+        "array_unshift",
+        fn_array_unshift,
+        fn_array_unshift_raw_variadic,
+        1,
+        0b1,
+        "array",
+        "values"
     );
     reg!(
         "array_key_exists",

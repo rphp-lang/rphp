@@ -3,6 +3,7 @@ pub mod compile;
 mod jit_coverage;
 
 use crate::value::Value;
+use crate::vm::function::RawVariadicInternalFunctionHandler;
 use crate::vm::function::{
     BinaryLongRecursionPlan, CallPlan, CallStrategy, CleanupMode, ComposedScalarDoubleFunctionPlan,
     ComposedScalarDoubleOp, ComposedScalarLongFunctionPlan, ComposedScalarLongOp,
@@ -990,6 +991,10 @@ pub fn make_user_function_full(
     };
     let num_cvs = op_array.num_cvs;
     let num_temps = op_array.num_temps;
+    let has_reference_foreach = op_array
+        .instructions
+        .iter()
+        .any(|instruction| instruction.opcode == OpCode::ForeachNextRef);
     let has_embedded_late_static_scope = needs_late_static_scope && num_cvs + num_temps <= 32;
     mark_embedded_late_static_properties(&mut op_array, has_embedded_late_static_scope);
     let total_slots = crate::vm::frame::CALL_FRAME_SLOTS as u32 + num_cvs + num_temps;
@@ -1052,6 +1057,10 @@ pub fn make_user_function_full(
         .common
         .plan
         .set_needs_trait_class_scope(needs_trait_class_scope);
+    function
+        .common
+        .plan
+        .set_has_reference_foreach(has_reference_foreach);
     let self_name = function.op_array.name.clone();
     function.binary_long_recursion_plan = build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
@@ -1197,6 +1206,10 @@ pub(crate) fn make_user_function_typed_with_return_mode(
     };
     let num_cvs = op_array.num_cvs;
     let num_temps = op_array.num_temps;
+    let has_reference_foreach = op_array
+        .instructions
+        .iter()
+        .any(|instruction| instruction.opcode == OpCode::ForeachNextRef);
     let has_embedded_late_static_scope = needs_late_static_scope && num_cvs + num_temps <= 32;
     mark_embedded_late_static_properties(&mut op_array, has_embedded_late_static_scope);
     let total_slots = crate::vm::frame::CALL_FRAME_SLOTS as u32 + num_cvs + num_temps;
@@ -1259,6 +1272,10 @@ pub(crate) fn make_user_function_typed_with_return_mode(
         .common
         .plan
         .set_needs_trait_class_scope(needs_trait_class_scope);
+    function
+        .common
+        .plan
+        .set_has_reference_foreach(has_reference_foreach);
     let self_name = function.op_array.name.clone();
     function.binary_long_recursion_plan = build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
@@ -5775,6 +5792,7 @@ pub fn make_internal_function(
         },
         handler,
         direct_handler: None,
+        raw_variadic_handler: None,
     }
 }
 
@@ -5970,6 +5988,7 @@ pub fn clone_trait_method_with_static_storage(
     plan.set_needs_trait_class_scope(source.common.plan.needs_trait_class_scope());
     plan.set_has_deprecated_attribute(source.common.plan.has_deprecated_attribute());
     plan.set_has_no_discard_attribute(source.common.plan.has_no_discard_attribute());
+    plan.set_has_reference_foreach(source.common.plan.has_reference_foreach());
     let function = UserFunction {
         common: FunctionCommon {
             fn_type: FunctionType::User,
@@ -6063,6 +6082,7 @@ pub fn make_internal_method(
         },
         handler,
         direct_handler: None,
+        raw_variadic_handler: None,
     }
 }
 
@@ -6109,6 +6129,7 @@ pub fn make_internal_method_variadic(
         },
         handler,
         direct_handler: None,
+        raw_variadic_handler: None,
     }
 }
 
@@ -6152,6 +6173,7 @@ pub fn make_internal_function_ref(
         },
         handler,
         direct_handler: None,
+        raw_variadic_handler: None,
     }
 }
 
@@ -6194,7 +6216,24 @@ pub fn make_internal_function_variadic(
         },
         handler,
         direct_handler: None,
+        raw_variadic_handler: None,
     }
+}
+
+/// Create a variadic InternalFunction with a by-reference mask for its fixed
+/// parameters. Variadic values remain ordinary by-value arguments unless the
+/// mask explicitly reaches the variadic public position.
+pub fn make_internal_function_variadic_ref(
+    handler: InternalFunctionHandler,
+    raw_variadic_handler: RawVariadicInternalFunctionHandler,
+    required_num_args: u32,
+    ref_args: u64,
+    param_names: Vec<String>,
+) -> InternalFunction {
+    let mut function = make_internal_function_variadic(handler, required_num_args, param_names);
+    function.common.sig.ref_args = ref_args;
+    function.raw_variadic_handler = Some(raw_variadic_handler);
+    function
 }
 
 /// Create a variadic internal function whose fixed and variadic parameters
@@ -6243,5 +6282,6 @@ pub fn make_internal_function_variadic_prefer_ref(
         },
         handler,
         direct_handler: None,
+        raw_variadic_handler: None,
     }
 }

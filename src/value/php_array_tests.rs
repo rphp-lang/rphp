@@ -773,3 +773,29 @@ fn integer_index_remains_valid_after_remove_and_clone() {
     }
     assert!(cloned.get_int(9001).is_none());
 }
+
+#[test]
+fn negative_first_integer_key_initializes_and_retains_the_php_85_append_sequence() {
+    let mut array = PhpArray::new();
+    array.set_str("name", Value::long(1));
+    array.set_int(-5, Value::long(2));
+    assert!(array.try_push(Value::long(3)));
+    assert_eq!(array.get_int(-4).and_then(Value::as_long), Some(3));
+
+    assert!(array.remove(&ArrayKey::Int(-5)));
+    assert!(array.remove(&ArrayKey::Int(-4)));
+    array.set_int(-9, Value::long(4));
+    assert!(array.try_push(Value::long(5)));
+    assert_eq!(array.get_int(-3).and_then(Value::as_long), Some(5));
+
+    let mut popped = PhpArray::new();
+    popped.set_int(-2, Value::long(1));
+    assert_eq!(popped.pop().and_then(|value| value.as_long()), Some(1));
+    assert!(popped.try_push(Value::long(2)));
+    assert!(popped.try_push(Value::long(3)));
+    assert!(popped.try_push(Value::long(4)));
+    assert_eq!(
+        popped.iter().map(|(key, _)| key).collect::<Vec<ArrayKey>>(),
+        vec![ArrayKey::Int(-2), ArrayKey::Int(-1), ArrayKey::Int(0)],
+    );
+}
