@@ -1958,6 +1958,41 @@ resource lifetime, complete internal return-type metadata, the independent
 compiler/reference boundary in later complex CSV cases and remaining file/
 stream compatibility stay separate work.
 
+The `formatted-io-batch` checkpoint advances `fprintf()`, `vfprintf()`,
+`sscanf()` and `fscanf()` together behind an independently selectable feature
+that is also enabled by default. Shared cold parsers cover the admitted output
+flags, widths, precision, padding and conversions, and input literals,
+whitespace, widths, suppression, positions, bases, floating values, scansets,
+`%n`, typed arrays, multiple reference outputs and physical stream-line/EOF
+behavior. A narrowly opt-in raw variadic policy keeps every scanf output alias
+live while readable inputs are snapshotted; other internal variadics retain
+their existing one-extra raw or packed ABI.
+
+The 105-case PHP 8.5 focus moves from 0 to 84 passes (+84/-0), with eight
+failures and 13 skips; PHP 8.5.9 passes all 92 ordinary attempts. The complete
+897-case file audit moves from 135 to 181 passes (+46/-0). The pinned 5,599-case
+Zend/lang corpus moves from 4,110 to 4,111 passes (+1/-0 through
+`Zend/tests/dim_assign_001.phpt`), with 1,192 failures, 115 skips, 181
+unsupported cases and no timeout or crash. Two final main manifests and
+summaries are byte-identical. Five original E2E tests and three scanner/
+formatter unit tests cover the admitted behavior without copying php-src tests.
+
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, the unchanged 1,623/289/339 unsafe ratchet, Composer S0, four Symfony
+S1 gates and PHP 8.5.9 S2/S3 pass. CPU-pinned 32-pair release controls put
+paired median changes at -0.142% for startup, +1.691% for unchanged
+single-value `sprintf()` and +0.925% for unchanged multi-value `sprintf()`,
+below the +5% gate. New-only `sscanf()` and `fprintf()` workloads remain about
+3.8 to 5.1 times slower than PHP 8.5.9 and are disclosed as optimization
+opportunities rather than improvements. No dependency, lockfile, opcode,
+`ExecuteData`, PHP value/object/array layout or unsafe block is added.
+
+Eight focused cases remain blocked by independent `touch()`/`proc_open()`,
+stream warning, `fwrite()` object conversion, parser, array-dimension reference
+and older `printf()` conversion gaps. Complete printf/scanf edge behavior,
+internal Reflection return types and broader standard-library compatibility
+remain separate work.
+
 The `array-key-value-batch` checkpoint advances `array_keys()`,
 `array_values()`, `array_flip()`, `array_count_values()` and `array_rand()`
 together. The admitted contract covers reflected arity and parameter names,

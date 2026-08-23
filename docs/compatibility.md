@@ -8,6 +8,90 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`formatted-io-batch`, pinned to php-src 8.5 commit `fcc29c8` and candidate
+implementation commit `edb2fbcc`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 4,111 pass, 1,192 fail, 115 skip, none remain XFAIL, 181 are
+unsupported, and none time out or crash. The exact pass-set delta from
+`6faeaa47` is +1/-0 through `Zend/tests/dim_assign_001.phpt`. Two final runs
+have the same manifest SHA-256,
+`e8d40dadf3c662577f5f6fe162be2c7c83bbfcd18d7516a19cf7b53592c592d0`,
+and summary SHA-256,
+`a27aa47bec444bdf5b9b9af5043701413fbf7067983fce59480789417b435e53`.
+
+The default build now also exposes `fprintf()`, `vfprintf()`, `sscanf()` and
+`fscanf()` through the independently selectable `formatted-io` feature. The
+two output functions share a cold formatter for positional values, flags,
+width, precision, custom padding and the admitted integer, string, character
+and floating conversions. The two input functions share a compiled scan
+grammar for whitespace and literals, widths, suppression, positional slots,
+integer bases, floats, character/string fields, scansets and `%n`. Array-return
+and multiple by-reference forms retain typed results and partial-match
+writeback; `fscanf()` additionally consumes one physical line, preserves blank
+line and NUL boundaries, and reports EOF without looping.
+
+The 105-case unmodified formatted-I/O focus moves from zero passes, 92
+failures and 13 skips to 84 passes, eight failures and 13 skips, an exact
++84/-0 pass-set delta with no timeout or crash. PHP 8.5.9 records all 92
+ordinary attempts as passes and the same 13 skips. The final RPHP focus
+manifest/summary hash pair is
+`428a153d2d9a7fcec43bd21ea342be5095d6af91c5bf947f6e761ef0a1f724c4` /
+`19287f86ca8f01f8c2343441a0c284cefa5aa378a1f6f3329ebd7ef81c96babe`;
+the oracle pair is
+`1f92edbdbc6187ab0c59b4c5f60bc2c524456c9acceffb69baace25519c6bec2` /
+`e573686a975d6c0ff85d4ba74fd1056a7b9f0ce35089e6d5e986b0f8a67d0aec`.
+
+The complete 897-case file audit moves from 135 to 181 passes (+46/-0),
+with 428 failures, 146 skips and 142 unsupported cases. It has no timeout or
+crash, and its final manifest/summary hash pair is
+`abbb2fcb787f0a8028b1cfa057c732d060b8d804c83222ce8073ed012b9710f6` /
+`da68ee671880ee328c071c84b6a75eea77f80fb4e1f4d355f979e1c1db0312cf`.
+Five original E2E tests cover formatted stream output and lengths, typed
+scansets and positional results, multiple-reference writeback and failed
+conversions, physical-line/blank/EOF behavior, and the PHP class relationship
+between `ArgumentCountError` and `TypeError`. Three focused parser/scanner unit
+tests cover padding, integer boundaries and scanset ranges/negation.
+
+Multiple scanf outputs require every positional variadic argument to remain a
+live reference until the handler has snapshotted its readable inputs. A single
+opt-in internal descriptor policy therefore extends the existing raw variadic
+ABI only for these handlers; all other variadics retain their prior one-extra
+raw or packed behavior. The implementation adds no dependency, lockfile,
+opcode, `ExecuteData`, PHP value/object/array layout or unsafe block, and copies
+no php-src implementation or test. The production unsafe inventory remains at
+1,623 blocks and 289 functions with 339 SAFETY annotations.
+
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, Composer 2.8.12 S0, all four Symfony
+S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. A local
+CPU-pinned balanced alternating AMD64 release comparison used 32 pairs per
+comparable lane, three warmups per binary, performance-governor CPU 2 and no
+excluded samples. Independent/paired median changes are -0.043%/-0.142% for
+batches of 100 empty requests, +1.638%/+1.691% for 500,000 unchanged
+single-value `sprintf()` calls and +0.389%/+0.925% for 300,000 unchanged
+multi-value `sprintf()` calls. Every comparable lane stays below the +5% gate
+with exact output.
+
+New-only 200,000-call workloads have candidate/PHP 8.5.9 medians of
+0.077605/0.020413 seconds for array-return `sscanf()`, 0.085680/0.018307 for
+reference-output `sscanf()` and 0.096609/0.018893 for memory-stream
+`fprintf()`. These are disclosed as initial performance gaps, not A/B
+improvements, because the baseline lacks the functions. Baseline/candidate
+binary SHA-256 values are
+`3b695e5d21cf32291f3b2d7446f083db95b3e5005472652ff67f017b42241477`
+and `cfb3069fe3fd490548acd681af6567177070d1f0ef7754f9cb98a609030d98b7`.
+The benchmark harness/log hash pair is
+`23a3f73a72f37133a3dface4eeee9aa98a1f9bfe45531ddd0d0059df00ec3467` /
+`6c58334f08646ab3d03b6fde35ce0c042345e69e85ca15ea128cfa8d310297b1`.
+
+The eight remaining focused failures stay visible behind independent gaps:
+missing `touch()` or `proc_open()`, low-level read warnings on write-only
+streams, existing `fwrite()` object conversion, one parser concatenation
+shape, by-reference array-dimension call arguments, and the older `printf()`
+`%u`/float-to-integer warning path. Complete printf/scanf edge behavior,
+internal Reflection return types, non-file stream diagnostics and broader
+standard-library compatibility remain separate work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `file-include-csv-default-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 candidate implementation commit `8e7eda3b`. Across all 5,599 unmodified
 `Zend/tests` and `tests/lang` cases, 4,110 pass, 1,193 fail, 115 skip, none
