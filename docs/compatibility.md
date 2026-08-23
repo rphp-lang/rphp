@@ -8,6 +8,83 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`array-callback-arguments-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+implementation commit `d2cffe0b`. Across all 5,599 unmodified `Zend/tests`
+and `tests/lang` cases, 4,168 pass, 1,135 fail, 115 skip, none remain XFAIL,
+181 are unsupported, and none time out or crash. The exact pass-set delta from
+`7d9c5be3` is +3/-0: `bug31720.phpt`, `closures/closure_047.phpt` and
+`closures/closure_048.phpt`. Two final runs have the same manifest SHA-256,
+`d31a295c994f8ada29b5d2d7a652b20c29bcec9a21e755358701075c264045a5`,
+and summary SHA-256,
+`0c71cb5ee0c1f45fc0ada6704fa83dd18d940c3442670aa084fc757f0629545c`.
+
+`array_filter()` now accepts its nullable callback and integer mode, dispatches
+value, key or both arguments with PHP 8.5 validation precedence, and preserves
+reference cells in retained results. Its ordinary one-value loop keeps mode
+selection outside the hot iteration. `array_walk()` and
+`array_walk_recursive()` expose their optional `$arg`, pass it by value while
+retaining object identity, emit the callback's argument-three reference
+warning, and commit each by-reference mutation before a later exception.
+Object inputs use visibility-mangled declared-property keys plus dynamic
+properties; recursive walking descends through array properties and writes
+partial nested results back before propagating an exception.
+
+The shared owned-callback boundary now preserves closure-capture reference
+identity while placing captures after public parameter CVs. Its read-back form
+also carries the capture count into the detached frame. This closes the three
+main-corpus cases above and two additional array cases without changing the
+call-frame layout. Four original E2E tests cover filter modes and null callback,
+retained references, userdata and object identity, partial mutation on throw,
+recursive object properties, closure reference captures, named arguments,
+Reflection names/by-reference flags, and strict type/callback errors.
+
+The complete 56-case `array_filter*` and `array_walk` focus moves from 23 to
+43 passes (+20/-0), with 13 visible failures and no skip, unsupported case,
+timeout or crash; its manifest SHA-256 is
+`e487daf5f8fb8a62a4930b688d2991f0e36d60b172e49ab98b1941948821b28a`.
+The complete recursive 842-case `ext/standard/tests/array` audit moves from
+594 to 616 passes (+22/-0), with 212 failures, 13 skips, one unsupported case
+and no timeout or crash. Its manifest and summary SHA-256 values are
+`341a6b48991c0e2b7c42e32aa1fcbcd2b7990770a3368999e0410d64a602ed71`
+and `e888c574348f73ac231a76cf2d02cc6a9bcd62dfd57a54e01ae27cf9fbb03fb3`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy self-tests, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+The production unsafe inventory remains at 1,623 blocks and 289 functions with
+346 SAFETY annotations. The implementation adds no dependency, opcode, VM
+frame or PHP value/object/array layout change.
+
+On an AMD Ryzen 9 7950X AMD64 host with Linux 7.0, Rust 1.93.1 and 61 GiB RAM,
+a performance-governor CPU 2 ran 32 balanced alternating release pairs per
+lane, three warmups per binary and no excluded samples. Baseline/candidate
+p10/median/p90 seconds and independent/paired median changes are
+0.243753/0.245615/0.251329 versus 0.243892/0.245453/0.251315
+(-0.066%/+0.051%) for 100 empty requests; 0.009307/0.009442/0.009608 versus
+0.009446/0.009533/0.009709 (+0.961%/+1.075%) for 500,000 one-value
+`array_filter()` callbacks; 0.002095/0.002106/0.002140 versus
+0.002087/0.002100/0.002216 (-0.260%/-0.250%) for 500,000 by-value walks;
+0.015277/0.015531/0.015676 versus 0.014891/0.015012/0.015347
+(-3.337%/-2.748%) for 100,000 by-reference walks; and
+0.038716/0.039088/0.039817 versus 0.038290/0.038901/0.039525
+(-0.477%/-0.868%) for 200,000 closure-capture walks. Paired p10/p90 changes
+are -1.318%/+1.116%, +0.062%/+2.111%, -2.117%/+4.911%,
+-4.138%/-1.810% and -2.653%/+1.113%, respectively. Every lane preserves its
+checksum and remains below the +5% median gate. Baseline/candidate binary
+SHA-256 values are
+`cb17ab51db484d29e558bf7cbcb799556e343c0ae1f87ce2edc7701ecb6c387a` /
+`cca9e05e82c701082bf104b841fc76704bf1be0c145f5eea04453b85d279e8ae`;
+the temporary harness/capture-workload SHA-256 pair is
+`75b6342ff348f7a85e6d4f436a7770bf60def7840727c13e0935c2d3f2931ea1` /
+`80811486d6ab158529a0da1848d929c883a3db289a634aa8be889ba23f6b68ce`.
+
+This checkpoint does not claim complete Reflection type/default metadata,
+live structural replacement of the walked root, object property-hook
+iteration, the remaining 13 focused failures, the remaining array suite or
+broader PHP compatibility. Those stay visible as separate parser, trace,
+global-state and mutation-invalidation work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `named-reference-call-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 implementation commit `15b7d977`. Across all 5,599 unmodified `Zend/tests`
 and `tests/lang` cases, 4,165 pass, 1,138 fail, 115 skip, none remain XFAIL,
