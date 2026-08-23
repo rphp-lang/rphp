@@ -170,7 +170,14 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "haystack",
         "strict"
     );
-    reg!("array_reverse", fn_array_reverse, 1, 1, "array");
+    reg!(
+        "array_reverse",
+        fn_array_reverse,
+        2,
+        1,
+        "array",
+        "preserve_keys"
+    );
     reg!("array_is_list", fn_array_is_list, 1, 1, "array");
     reg!("array_find", fn_array_find, 2, 2, "array", "callback");
     reg!(
@@ -204,11 +211,12 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!(
         "array_slice",
         fn_array_slice,
-        3,
+        4,
         2,
         "array",
         "offset",
-        "length"
+        "length",
+        "preserve_keys"
     );
     reg!("array_unique", fn_array_unique, 1, 1, "array");
     reg!("array_flip", fn_array_flip, 1, 1, "array");
@@ -227,7 +235,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
     reg!("array_fill_keys", fn_array_fill_keys, 2, 2, "keys", "value");
     reg!("array_pad", fn_array_pad, 3, 3, "array", "length", "value");
-    reg!("array_chunk", fn_array_chunk, 2, 2, "array", "length");
+    reg!(
+        "array_chunk",
+        fn_array_chunk,
+        3,
+        2,
+        "array",
+        "length",
+        "preserve_keys"
+    );
     reg!("array_column", fn_array_column, 2, 2, "array", "column_key");
     reg_ref!("sort", fn_sort, 2, 1, 0b1, "array", "flags");
     reg_ref!("rsort", fn_rsort, 2, 1, 0b1, "array", "flags");

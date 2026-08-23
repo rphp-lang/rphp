@@ -877,22 +877,52 @@ fn fn_in_array(
 fn fn_array_reverse(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let v = arg!(ed, 0);
-    if let Some(arr) = v.as_array() {
-        let mut new = PhpArray::new();
-        let collected: Vec<(ArrayKey, &Value)> = arr.iter().collect();
-        for (key, val) in collected.into_iter().rev() {
-            match &key {
-                ArrayKey::Int(_) => new.push(val.clone()),
-                ArrayKey::String(k) => new.set_str(k, val.clone()),
-            }
-        }
-        ret!(rv, Value::array(new));
+    let source = owned_argument(ed, 0);
+    let Some(array) = source.dereferenced().as_array() else {
+        typed_internal_argument_error(
+            eg,
+            "array_reverse",
+            source.dereferenced(),
+            1,
+            "array",
+            "array",
+        );
+        return Ok(());
+    };
+    let preserve_keys = if arg_opt!(ed, 1).is_some() {
+        let Some(preserve_keys) =
+            typed_internal_bool_argument(ed, eg, "array_reverse", 1, "preserve_keys")?
+        else {
+            return Ok(());
+        };
+        preserve_keys
     } else {
-        ret!(rv, Value::null());
+        false
+    };
+    let key_policy = if preserve_keys {
+        ArrayProjectionKeys::PreserveAll
+    } else {
+        ArrayProjectionKeys::PreserveStrings
+    };
+
+    if !preserve_keys && let Some(values) = array.packed_values() {
+        let mut result = PhpArray::with_packed_capacity(values.len());
+        append_projected_values(&mut result, values.iter().rev());
+        ret!(rv, Value::array(result));
     }
+
+    let mut result = if preserve_keys || array.has_string_keys() {
+        PhpArray::with_deferred_hash_capacity(array.len())
+    } else {
+        PhpArray::with_packed_capacity(array.len())
+    };
+    let entries = array.iter().collect::<Vec<_>>();
+    for (key, value) in entries.into_iter().rev() {
+        array_projection_insert(&mut result, key, value, key_policy);
+    }
+    ret!(rv, Value::array(result));
 }
 
 fn fn_iterator_to_array(
@@ -1039,48 +1069,79 @@ fn fn_array_slice(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let arr_arg = arg!(ed, 0);
-    if let Some(arr) = arr_arg.as_array() {
-        let len = arr.len() as i64;
-        if arg!(ed, 1).dereferenced().value_type() == ValueType::Null {
-            report_internal_deprecation(
-                eg,
-                ed,
-                "array_slice(): Passing null to parameter #2 ($offset) of type int is deprecated",
-            )?;
-        }
-        let raw_offset = arg_long!(ed, 1);
-        let start = if raw_offset < 0 {
-            (len + raw_offset).max(0) as usize
+    let source = owned_argument(ed, 0);
+    let Some(array) = source.dereferenced().as_array() else {
+        typed_internal_argument_error(
+            eg,
+            "array_slice",
+            source.dereferenced(),
+            1,
+            "array",
+            "array",
+        );
+        return Ok(());
+    };
+    let Some(offset) = typed_internal_int_argument(ed, eg, "array_slice", 1, "offset")? else {
+        return Ok(());
+    };
+    let length = if let Some(argument) = arg_opt!(ed, 2) {
+        if argument.dereferenced().value_type() == ValueType::Null {
+            None
         } else {
-            raw_offset as usize
-        };
-        let end = match arg_opt!(ed, 2) {
-            Some(v) if v.dereferenced().value_type() != ValueType::Null => {
-                let l = v.to_long_val();
-                if l < 0 {
-                    (len + l).max(start as i64) as usize
-                } else {
-                    (start + l as usize).min(arr.len())
-                }
-            }
-            _ => arr.len(),
-        };
-        let mut result = PhpArray::new();
-        for val in arr.values().skip(start).take(end.saturating_sub(start)) {
-            result.push(val.clone());
+            let Some(length) =
+                typed_internal_int_argument_expected(ed, eg, "array_slice", 2, "length", "?int")?
+            else {
+                return Ok(());
+            };
+            Some(length)
         }
-        ret!(rv, Value::array(result));
     } else {
-        eg.exception = Some(crate::value::make_error_value(
-            "TypeError",
-            &format!(
-                "array_slice(): Argument #1 ($array) must be of type array, {} given",
-                arr_arg.dereferenced().type_name()
-            ),
-        ));
-        ret!(rv, Value::null());
+        None
+    };
+    let preserve_keys = if arg_opt!(ed, 3).is_some() {
+        let Some(preserve_keys) =
+            typed_internal_bool_argument(ed, eg, "array_slice", 3, "preserve_keys")?
+        else {
+            return Ok(());
+        };
+        preserve_keys
+    } else {
+        false
+    };
+
+    let array_length = i64::try_from(array.len()).unwrap_or(i64::MAX);
+    let start = if offset < 0 {
+        array_length.saturating_add(offset).max(0)
+    } else {
+        offset.min(array_length)
+    };
+    let end = match length {
+        None => array_length,
+        Some(length) if length < 0 => array_length.saturating_add(length).max(start),
+        Some(length) => start.saturating_add(length).min(array_length),
+    };
+    let key_policy = if preserve_keys {
+        ArrayProjectionKeys::PreserveAll
+    } else {
+        ArrayProjectionKeys::PreserveStrings
+    };
+    let start = start as usize;
+    let result_length = end.saturating_sub(start as i64) as usize;
+    if !preserve_keys && let Some(values) = array.packed_values() {
+        let mut result = PhpArray::with_packed_capacity(result_length);
+        append_projected_values(&mut result, values[start..start + result_length].iter());
+        ret!(rv, Value::array(result));
     }
+
+    let mut result = if preserve_keys || array.has_string_keys() {
+        PhpArray::with_deferred_hash_capacity(result_length)
+    } else {
+        PhpArray::with_packed_capacity(result_length)
+    };
+    for (key, value) in array.iter().skip(start).take(result_length) {
+        array_projection_insert(&mut result, key, value, key_policy);
+    }
+    ret!(rv, Value::array(result));
 }
 
 fn fn_array_unique(
@@ -1332,61 +1393,154 @@ fn fn_array_fill(
 fn fn_array_pad(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let arr_arg = arg!(ed, 0);
-    let size = arg_long!(ed, 1);
-    let value = arg!(ed, 2);
-    if let Some(arr) = arr_arg.as_array() {
-        let mut result = PhpArray::new();
-        let abs_size = size.unsigned_abs() as usize;
-        let pad_count = abs_size.saturating_sub(arr.len());
-        if size < 0 {
+    const MAX_ARRAY_PAD_LENGTH: u64 = 1 << 30;
+
+    let source = owned_argument(ed, 0);
+    let Some(array) = source.dereferenced().as_array() else {
+        typed_internal_argument_error(eg, "array_pad", source.dereferenced(), 1, "array", "array");
+        return Ok(());
+    };
+    let Some(length) = typed_internal_int_argument(ed, eg, "array_pad", 1, "length")? else {
+        return Ok(());
+    };
+    let value = owned_argument(ed, 2);
+    let target_length = length.unsigned_abs();
+    if target_length > MAX_ARRAY_PAD_LENGTH {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "array_pad(): Argument #2 ($length) must not exceed the maximum allowed array size",
+        ));
+        return Ok(());
+    }
+    let target_length = target_length as usize;
+    if target_length <= array.len() {
+        ret!(rv, source.dereferenced().clone());
+    }
+
+    let pad_count = target_length - array.len();
+    if let Some(values) = array.packed_values() {
+        let mut result = PhpArray::with_packed_capacity(target_length);
+        if length < 0 {
             for _ in 0..pad_count {
                 result.push(value.clone());
             }
         }
-        for v in arr.values() {
-            result.push(v.clone());
-        }
-        if size >= 0 {
+        append_projected_values(&mut result, values.iter());
+        if length >= 0 {
             for _ in 0..pad_count {
                 result.push(value.clone());
             }
         }
         ret!(rv, Value::array(result));
-    } else {
-        ret!(rv, Value::null());
     }
+
+    let mut result = if array.has_string_keys() {
+        PhpArray::with_deferred_hash_capacity(target_length)
+    } else {
+        PhpArray::with_packed_capacity(target_length)
+    };
+    if length < 0 {
+        for _ in 0..pad_count {
+            result.push(value.clone());
+        }
+    }
+    for (key, value) in array.iter() {
+        array_projection_insert(
+            &mut result,
+            key,
+            value,
+            ArrayProjectionKeys::PreserveStrings,
+        );
+    }
+    if length >= 0 {
+        for _ in 0..pad_count {
+            result.push(value.clone());
+        }
+    }
+    ret!(rv, Value::array(result));
 }
 
 fn fn_array_chunk(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let arr_arg = arg!(ed, 0);
-    let size = arg_long!(ed, 1).max(1) as usize;
-    if let Some(arr) = arr_arg.as_array() {
-        let mut result = PhpArray::new();
-        let mut chunk = PhpArray::new();
-        let mut i = 0;
-        for v in arr.values() {
-            chunk.push(v.clone());
-            i += 1;
-            if i == size {
-                result.push(Value::array(chunk));
-                chunk = PhpArray::new();
-                i = 0;
-            }
-        }
-        if !chunk.is_empty() {
+    let source = owned_argument(ed, 0);
+    let Some(array) = source.dereferenced().as_array() else {
+        typed_internal_argument_error(
+            eg,
+            "array_chunk",
+            source.dereferenced(),
+            1,
+            "array",
+            "array",
+        );
+        return Ok(());
+    };
+    let Some(length) = typed_internal_int_argument(ed, eg, "array_chunk", 1, "length")? else {
+        return Ok(());
+    };
+    if length < 1 {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "array_chunk(): Argument #2 ($length) must be greater than 0",
+        ));
+        return Ok(());
+    }
+    let preserve_keys = if arg_opt!(ed, 2).is_some() {
+        let Some(preserve_keys) =
+            typed_internal_bool_argument(ed, eg, "array_chunk", 2, "preserve_keys")?
+        else {
+            return Ok(());
+        };
+        preserve_keys
+    } else {
+        false
+    };
+    let key_policy = if preserve_keys {
+        ArrayProjectionKeys::PreserveAll
+    } else {
+        ArrayProjectionKeys::ReindexAll
+    };
+    let length = length as usize;
+    let result_length = array.len().div_ceil(length);
+    let chunk_capacity = length.min(array.len());
+    if !preserve_keys && let Some(values) = array.packed_values() {
+        let mut result = PhpArray::with_packed_capacity(result_length);
+        for values in values.chunks(length) {
+            let mut chunk = PhpArray::with_packed_capacity(values.len());
+            append_projected_values(&mut chunk, values.iter());
             result.push(Value::array(chunk));
         }
         ret!(rv, Value::array(result));
-    } else {
-        ret!(rv, Value::null());
     }
+
+    let mut result = PhpArray::with_packed_capacity(result_length);
+    let mut chunk = if preserve_keys {
+        PhpArray::with_deferred_hash_capacity(chunk_capacity)
+    } else {
+        PhpArray::with_packed_capacity(chunk_capacity)
+    };
+    let mut chunk_length = 0usize;
+    for (key, value) in array.iter() {
+        array_projection_insert(&mut chunk, key, value, key_policy);
+        chunk_length += 1;
+        if chunk_length == length {
+            result.push(Value::array(chunk));
+            chunk = if preserve_keys {
+                PhpArray::with_deferred_hash_capacity(chunk_capacity)
+            } else {
+                PhpArray::with_packed_capacity(chunk_capacity)
+            };
+            chunk_length = 0;
+        }
+    }
+    if chunk_length != 0 {
+        result.push(Value::array(chunk));
+    }
+    ret!(rv, Value::array(result));
 }
 
 fn fn_array_column(
@@ -7975,6 +8129,50 @@ fn array_projection_value(value: &Value) -> Value {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ArrayProjectionKeys {
+    PreserveAll,
+    PreserveStrings,
+    ReindexAll,
+}
+
+fn array_projection_insert(
+    result: &mut PhpArray,
+    key: ArrayKey,
+    value: &Value,
+    key_policy: ArrayProjectionKeys,
+) {
+    let value = array_projection_value(value);
+    match (key_policy, key) {
+        (ArrayProjectionKeys::PreserveAll, key)
+        | (ArrayProjectionKeys::PreserveStrings, key @ ArrayKey::String(_)) => {
+            result.set(key, value);
+        }
+        (ArrayProjectionKeys::PreserveStrings, ArrayKey::Int(_))
+        | (ArrayProjectionKeys::ReindexAll, _) => {
+            result.push(value);
+        }
+    }
+}
+
+fn append_projected_values<'a>(
+    result: &mut PhpArray,
+    values: impl Iterator<Item = &'a Value> + Clone,
+) {
+    let preserve_references = values
+        .clone()
+        .any(|value| value.is_owned_reference() && value.owned_reference_is_aliased());
+    if preserve_references {
+        for value in values {
+            result.push(array_projection_value(value));
+        }
+    } else {
+        for value in values {
+            result.push(value.clone());
+        }
+    }
+}
+
 fn sort_natural_entries(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
@@ -13823,11 +14021,23 @@ fn base_convert_string_argument(
     Ok(converted)
 }
 
-fn base_convert_int_argument(
+fn typed_internal_int_argument(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
+    function: &str,
     index: u32,
     parameter: &str,
+) -> Result<Option<i64>, VmError> {
+    typed_internal_int_argument_expected(ed, eg, function, index, parameter, "int")
+}
+
+fn typed_internal_int_argument_expected(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    index: u32,
+    parameter: &str,
+    expected: &str,
 ) -> Result<Option<i64>, VmError> {
     let argument = owned_argument(ed, index);
     let argument = argument.dereferenced();
@@ -13839,7 +14049,7 @@ fn base_convert_int_argument(
                 eg,
                 ed,
                 &format!(
-                    "base_convert(): Passing null to parameter #{} (${parameter}) of type int is deprecated",
+                    "{function}(): Passing null to parameter #{} (${parameter}) of type int is deprecated",
                     index + 1
                 ),
             )?;
@@ -13875,7 +14085,14 @@ fn base_convert_int_argument(
         ValueType::String if !strict => {
             let source = argument.as_str().unwrap_or("");
             let Some(number) = php_numeric_string_to_float(source) else {
-                base_convert_type_error(eg, argument, index as usize + 1, parameter, "int");
+                typed_internal_argument_error(
+                    eg,
+                    function,
+                    argument,
+                    index as usize + 1,
+                    parameter,
+                    expected,
+                );
                 return Ok(None);
             };
             let upper_exclusive = -(i64::MIN as f64);
@@ -13901,7 +14118,14 @@ fn base_convert_int_argument(
         _ => None,
     };
     if converted.is_none() && eg.exception.is_none() {
-        base_convert_type_error(eg, argument, index as usize + 1, parameter, "int");
+        typed_internal_argument_error(
+            eg,
+            function,
+            argument,
+            index as usize + 1,
+            parameter,
+            expected,
+        );
     }
     Ok(converted)
 }
@@ -13914,10 +14138,11 @@ fn fn_base_convert(
     let Some(number) = base_convert_string_argument(ed, eg)? else {
         return Ok(());
     };
-    let Some(from_base) = base_convert_int_argument(ed, eg, 1, "from_base")? else {
+    let Some(from_base) = typed_internal_int_argument(ed, eg, "base_convert", 1, "from_base")?
+    else {
         return Ok(());
     };
-    let Some(to_base) = base_convert_int_argument(ed, eg, 2, "to_base")? else {
+    let Some(to_base) = typed_internal_int_argument(ed, eg, "base_convert", 2, "to_base")? else {
         return Ok(());
     };
     if !(2..=36).contains(&from_base) {
