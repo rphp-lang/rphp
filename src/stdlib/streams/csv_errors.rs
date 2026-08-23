@@ -17,6 +17,9 @@ pub(super) fn fn_fgetcsv(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if let Some(result) = try_fast_fgetcsv(execute_data, return_pointer, eg) {
+        return result;
+    }
     let Some(resource) = stream_argument(execute_data, eg, "fgetcsv") else {
         return Ok(());
     };
@@ -62,6 +65,16 @@ pub(super) fn fn_fgetcsv(
     let Some(escape) = csv_escape_argument(execute_data, eg, 4, Some(b'\\'), "fgetcsv", 5) else {
         return Ok(());
     };
+    if super::optional_argument(execute_data, 4).is_none() {
+        super::super::report_internal_deprecation(
+            eg,
+            execute_data,
+            "fgetcsv(): the $escape parameter must be provided as its default value will change",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
 
     let result = super::with_stream(eg, resource, |stream| {
         stream.read_csv_record(length, separator, enclosure, escape)
@@ -79,6 +92,44 @@ pub(super) fn fn_fgetcsv(
         }
         _ => super::return_value(return_pointer, Value::bool(false)),
     }
+}
+
+fn try_fast_fgetcsv(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Option<Result<(), VmError>> {
+    let resource = super::argument(execute_data, 0).as_resource_id()?;
+    if super::optional_argument(execute_data, 1).is_some()
+        || super::optional_argument(execute_data, 2).is_some()
+        || super::optional_argument(execute_data, 3).is_some()
+    {
+        return None;
+    }
+    let escape = super::optional_argument(execute_data, 4)?;
+    let escape = escape.as_str()?;
+    let escape = match super::super::php_string_to_bytes(escape).as_slice() {
+        [] => None,
+        [escape] => Some(*escape),
+        _ => return None,
+    };
+
+    let result = super::with_stream(eg, resource, |stream| {
+        stream.read_csv_record(None, b',', b'"', escape)
+    })?;
+    Some(match result {
+        Ok(Some(fields)) => {
+            let mut record = PhpArray::with_packed_capacity(fields.len());
+            for field in fields {
+                record.push(match field {
+                    Some(bytes) => Value::string(super::super::bytes_to_php_string(&bytes)),
+                    None => Value::null(),
+                });
+            }
+            super::return_value(return_pointer, Value::array(record))
+        }
+        _ => super::return_value(return_pointer, Value::bool(false)),
+    })
 }
 
 #[cold]

@@ -106,6 +106,9 @@ pub(in crate::stdlib) fn fn_file(
         argument_error(eg, "ValueError", "Path must not be empty".to_string());
         return Ok(());
     }
+    if flags == 0 && optional_argument(execute_data, 2).is_none() {
+        return super::super::filesystem::return_default_file_lines(&filename, return_pointer);
+    }
 
     #[cfg(feature = "include-path")]
     let filename = super::super::include_path::resolve_for_open(

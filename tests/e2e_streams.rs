@@ -1126,14 +1126,14 @@ fn csv_records_preserve_multiline_quotes_empty_lines_and_eof() {
             $stream = fopen('php://temp/maxmemory:4', 'w+');
             fwrite($stream, "a,\"two\nlines\",\"b\"\"c\"\r\n\r\n");
             rewind($stream);
-            $row = fgetcsv($stream);
+            $row = fgetcsv($stream, escape: '\\');
             echo count($row); echo ':'; echo $row[0]; echo ':';
             echo $row[1]; echo ':'; echo $row[2];
-            $blank = fgetcsv($stream);
+            $blank = fgetcsv($stream, escape: '\\');
             echo ':';
             if ($blank[0] === null) { echo 'null'; }
             echo ':';
-            if (fgetcsv($stream) === false) { echo 'eof'; }
+            if (fgetcsv($stream, escape: '\\') === false) { echo 'eof'; }
             "#,
         ),
         "3:a:two\nlines:b\"c:null:eof"
@@ -1324,7 +1324,7 @@ fn csv_writes_use_array_order_and_reject_unwritable_streams() {
             rewind($stream); echo fread($stream, 1000);
 
             $read_only = fopen('php://memory', 'r');
-            if (fputcsv($read_only, ['no']) === false) { echo ':readonly'; }
+            if (fputcsv($read_only, ['no'], escape: '\\') === false) { echo ':readonly'; }
             try { fputcsv($stream, 'not-an-array'); }
             catch (TypeError $error) { echo ':fields'; }
             "#,
@@ -1365,5 +1365,59 @@ fn csv_write_argument_errors_match_php_classes_and_messages() {
             "|ValueError:fputcsv(): Argument #5 ($escape) must be empty or a single character",
             "|TypeError:fputcsv(): Argument #6 ($eol) must be of type ?string, array given"
         )
+    );
+}
+
+#[test]
+#[cfg(feature = "csv-write")]
+fn csv_default_escape_deprecations_and_array_warning_match_php_85() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            set_error_handler(function ($level, $message) {
+                echo $level; echo ':'; echo $message; echo '|';
+                return true;
+            });
+
+            $read = fopen('php://memory', 'w+');
+            fwrite($read, "one,two\n"); rewind($read);
+            echo implode(':', fgetcsv($read)); echo '|';
+
+            $write = fopen('php://memory', 'w+');
+            echo fputcsv($write, ['one', ['two']]); echo '|';
+            echo fputcsv($write, ['three'], escape: '\\'); echo '|';
+            rewind($write); echo fread($write, 1000);
+            "#,
+        ),
+        concat!(
+            "8192:fgetcsv(): the $escape parameter must be provided as its default value will change|",
+            "one:two|",
+            "8192:fputcsv(): the $escape parameter must be provided as its default value will change|",
+            "2:Array to string conversion|10|6|one,Array\nthree\n"
+        )
+    );
+}
+
+#[test]
+#[cfg(feature = "csv-write")]
+fn csv_diagnostic_exceptions_stop_before_reading_or_writing() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            set_error_handler(function ($level, $message) {
+                throw new Exception($message);
+            });
+
+            $read = fopen('php://memory', 'w+');
+            fwrite($read, "one,two\n"); rewind($read);
+            try { fgetcsv($read); } catch (Exception $error) { echo ftell($read); }
+
+            $write = fopen('php://memory', 'w+');
+            try { fputcsv($write, ['one']); } catch (Exception $error) { echo ':'; echo ftell($write); }
+            try { fputcsv($write, [['two']], escape: '\\'); }
+            catch (Exception $error) { echo ':'; echo ftell($write); }
+            "#,
+        ),
+        "0:0:0"
     );
 }

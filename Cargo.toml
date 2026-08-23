@@ -21,6 +21,8 @@ default = [
     "stream-line",
     "stream-registry",
     "stream-truncate",
+    "include-path",
+    "csv-write",
 ]
 quick-loops = []
 vm-stats = []

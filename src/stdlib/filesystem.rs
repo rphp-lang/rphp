@@ -302,14 +302,11 @@ pub(super) fn fn_getcwd(
 
 /// file($filename): array|false — read file into array of lines
 /// Uses Latin-1 mapping to preserve binary content losslessly.
-#[cfg(not(feature = "file-lines"))]
-pub(super) fn fn_file(
-    ed: *mut ExecuteData,
+pub(in crate::stdlib) fn return_default_file_lines(
+    path: &str,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let path = arg_str!(ed, 0);
-    match std::fs::read(path.as_ref()) {
+    match std::fs::read(path) {
         Ok(bytes) => {
             let contents = bytes_to_php_string(&bytes);
             let mut arr = PhpArray::new();
@@ -330,6 +327,16 @@ pub(super) fn fn_file(
         }
         Err(_) => ret!(rv, Value::bool(false)),
     }
+}
+
+#[cfg(not(feature = "file-lines"))]
+pub(super) fn fn_file(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    return_default_file_lines(path.as_ref(), rv)
 }
 
 /// mkdir($pathname, $mode = 0777, $recursive = false): bool

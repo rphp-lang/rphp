@@ -78,6 +78,17 @@ pub(super) fn fn_fputcsv(
     };
     let eol = super::super::php_string_to_bytes(eol.as_ref());
 
+    if super::optional_argument(execute_data, 4).is_none() {
+        super::super::report_internal_deprecation(
+            eg,
+            execute_data,
+            "fputcsv(): the $escape parameter must be provided as its default value will change",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+
     let mut encoder = CsvEncoder::new(separator, enclosure, escape);
     for field in fields.values() {
         let field = if field.is_reference() {
@@ -85,6 +96,18 @@ pub(super) fn fn_fputcsv(
         } else {
             field
         };
+        if field.value_type() == ValueType::Array {
+            super::super::report_internal_diagnostic(
+                eg,
+                execute_data,
+                2,
+                "Warning",
+                "Array to string conversion",
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+        }
         let string = match field.as_str() {
             Some(string) => Cow::Borrowed(string),
             None => Cow::Owned(field.echo_to_string()),
