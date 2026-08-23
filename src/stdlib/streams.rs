@@ -143,7 +143,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             info::fn_stream_is_local,
             1,
             1,
-            &["stream_or_url"],
+            &["stream"],
         ),
         ("fread", fn_fread, 2, 2, &["stream", "length"]),
         #[cfg(feature = "stream-contents")]

@@ -251,6 +251,53 @@ fn stream_registry_reports_only_integrated_wrappers_transports_and_filters() {
 }
 
 #[test]
+#[cfg(all(
+    feature = "stream-contents",
+    feature = "stream-copy",
+    feature = "stream-line",
+    feature = "stream-registry",
+    feature = "stream-truncate"
+))]
+fn default_stream_operation_signatures_and_named_arguments_match_php_85() {
+    assert_eq!(
+        run_php(
+            "<?php
+            $functions = [
+                'stream_get_filters',
+                'stream_get_transports',
+                'stream_get_wrappers',
+                'stream_is_local',
+                'stream_get_contents',
+                'stream_copy_to_stream',
+                'stream_get_line',
+                'ftruncate',
+            ];
+            foreach ($functions as $name) {
+                $reflection = new ReflectionFunction($name);
+                echo $name, ':', $reflection->getNumberOfRequiredParameters(), '/';
+                echo $reflection->getNumberOfParameters(), ':';
+                foreach ($reflection->getParameters() as $parameter) {
+                    echo $parameter->getName(), ',';
+                }
+                echo '|';
+            }
+            echo stream_is_local(stream: 'php://memory') ? 'local' : 'remote';
+            "
+        ),
+        concat!(
+            "stream_get_filters:0/0:|",
+            "stream_get_transports:0/0:|",
+            "stream_get_wrappers:0/0:|",
+            "stream_is_local:1/1:stream,|",
+            "stream_get_contents:1/3:stream,length,offset,|",
+            "stream_copy_to_stream:2/4:from,to,length,offset,|",
+            "stream_get_line:2/3:stream,length,ending,|",
+            "ftruncate:2/2:stream,size,|local"
+        )
+    );
+}
+
+#[test]
 #[cfg(feature = "stream-registry")]
 fn stream_locality_matches_php_wrappers_resources_and_string_conversion() {
     assert_eq!(
