@@ -8,6 +8,70 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`named-reference-call-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+implementation commit `15b7d977`. Across all 5,599 unmodified `Zend/tests`
+and `tests/lang` cases, 4,165 pass, 1,138 fail, 115 skip, none remain XFAIL,
+181 are unsupported, and none time out or crash. The exact pass-set delta from
+`07f5b1bb` is +5/-0: `bug72038.phpt`,
+`named_params/cannot_pass_by_ref.phpt`, `named_params/references.phpt`,
+`switch/bug71756.phpt` and `switch/bug72508.phpt`. Two final runs have the
+same manifest SHA-256,
+`7985be5b3609f47f977d1b04616478d0b98593094a1c535faec3d1de55ad33d2`,
+and summary SHA-256,
+`9b6d96bf8f1681aadde48eb92a32ed87378eea43afe6e9ff87f71c60e99a6151`.
+
+The compiler now pre-scans signatures of unconditional named functions, as it
+already does other compilation-unit declarations, and carries both by-reference
+positions and parameter names into nested op-array compilers. A direct call
+therefore selects the mutable argument context before or after the textual
+declaration, including an array element mapped by name to reference parameter
+32. By-value named array elements retain ordinary detached reads. The cold
+`SendNamed` boundary now distinguishes CV/reference-returning operands from
+non-lvalues after runtime signature resolution; a literal supplied to a hard
+reference parameter raises PHP's argument `Error` before a later missing-
+argument check, while an actual returned reference remains an alias.
+
+Four original E2E tests cover named array-element aliases on both sides of a
+declaration and beyond parameter 31, reference-error precedence, the by-value
+array-element control and a reference-returning expression. The five newly
+passing upstream cases have focused manifest SHA-256
+`78379bdfa2415f549c7de375a7fff3837e69fa9b70ff17fdbe58244656f6554b`.
+The complete 33-case `Zend/tests/named_params` cluster moves from 26 passes and
+seven failures to 28 passes and five failures with manifest SHA-256
+`95bf8ddd12dba83465bac5e0082a435c834070c0252919f81cdf0442c226f6ab`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy self-tests, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+The production unsafe inventory remains at 1,623 blocks and 289 functions with
+346 SAFETY annotations. The implementation adds no dependency, opcode, VM
+frame or PHP value/object/array layout change.
+
+On an AMD Ryzen 9 7950X AMD64 host pinned to performance-governor CPU 2, a
+balanced alternating release comparison used 32 pairs per lane, three warmups
+per binary and no excluded samples. Independent/paired median changes are
++0.571%/+0.345% for 100 empty requests, +0.840%/+1.011% for 100 runs of a
+multi-signature compilation unit, -3.016%/-3.106% for two million positional
+calls, -3.186%/-3.075% for one million named by-value calls and
+-1.557%/-1.658% for one million named CV-reference calls. Paired p10/p90
+ranges are -0.098%/+0.933%, +0.337%/+1.836%, -4.949%/-1.420%,
+-10.252%/-1.619% and -2.268%/+0.066%, respectively. Every lane preserves
+exact output and stays below the +5% median gate. Baseline/candidate binary
+SHA-256 values are
+`5832f8b34e682ea02cfa3e7891fa60ed4c0819b636c60f355db57d43e59408d0` /
+`cb17ab51db484d29e558bf7cbcb799556e343c0ae1f87ce2edc7701ecb6c387a`;
+the benchmark harness/log pair is
+`7ec694ef4d4e050ec523dc9f065d163e0c835382d1d927cc683f2962cd3b3e7e` /
+`c4d835322b62493a73db2e671837e7ad7941164095858f342eed937179467457`.
+
+This checkpoint does not claim mutable named array/property l-values for
+runtime-resolved methods, dynamic callables or internal functions whose
+parameter names are unavailable to the compiler. The five visible failures in
+the adjacent named-parameter cluster (`__call`, duplicate attribute arguments,
+extra constructor names, defaults and `gh17216`) remain separate follow-up
+work, as do complete named-call compatibility and broader PHP compatibility.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `named-internal-option-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 implementation commit `07f5b1bb`. Across all 5,599 unmodified `Zend/tests`
 and `tests/lang` cases, 4,160 pass, 1,143 fail, 115 skip, none remain XFAIL,
