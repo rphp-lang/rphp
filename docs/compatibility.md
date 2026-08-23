@@ -8,6 +8,81 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`array-key-value-batch`, pinned to php-src 8.5 commit `fcc29c8` and candidate
+implementation commit `494c1d19`. Across all 5,599 unmodified `Zend/tests`
+and `tests/lang` cases, 4,108 pass, 1,195 fail, 115 skip, none remain XFAIL,
+181 are unsupported, and none time out or crash. The headline pass rate is
+77.466%, the whole-corpus rate is 73.370%, and 4,809 of 5,303 attempted cases
+reach runtime (90.685%). The exact delta from `32bb8130` is +1/-0,
+`Zend/tests/foreach/foreach_reference.phpt`. Two independently executed final
+runs have the same manifest SHA-256,
+`f3a3c5b5482fba2bb25d24f86905d48af6f59c54d73727e06d7a2727b4493f0f`,
+and the same summary SHA-256,
+`5bb2727c18becdcabcbccb93182a15e2ea908258123a2a956ad7e62479e6c53f`.
+
+`array_keys()`, `array_values()`, `array_flip()`, `array_count_values()` and
+`array_rand()` now cover their exercised PHP 8.5 signatures, parameter names,
+typed errors, weak scalar conversion, loose and strict filtering, insertion
+order, canonical decimal keys, duplicate replacement, warning-handler
+exceptions, packed value projection, reference/COW behavior, random result
+cardinality and error ordering. Multi-key random selection uses independent
+uniform sampling without replacement and retains the source insertion order.
+The shared loose-comparison rule now treats null as an empty string for
+string/null comparison, rather than treating the special falsey string `"0"`
+as equal to null. The implementation is independent and does not copy or
+mechanically translate php-src code or tests.
+
+The 33-case unmodified PHP 8.5 focused cluster moves from 10 to 26 passes, an
+exact +16/-0 pass-set delta; PHP 8.5.9 records 32 passes and one architecture
+skip. The complete recursive 842-case `ext/standard/tests/array` audit moves
+from 525 to 546 passes with no lost pass: failures fall from 303 to 282 while
+13 skips, one unsupported case, zero timeouts and zero crashes remain. Five
+additional adjacent array cases pass outside the focused cluster. Two final
+focused and full-array runs are byte-identical. Their manifest/summary SHA-256
+pairs are respectively
+`175e8f74e730fe02143f497e665638121f2ddac78812ae92534da7aac662fb58` /
+`d921a2ca5943c28e91302120fc20dcdeba5ee3c63b963559d2a53b0aedee203c`
+and
+`bc5725fd95c63fae4c18dab173ee63df55311e741929361ebcc8e61cf0f75811` /
+`f894a27062ef9775d431fbe68484c48ee1bad4bb873ed980052441cd9c9be9ac`.
+
+Four original E2E tests cover Reflection metadata, loose/strict matches,
+canonical keys, duplicate replacement, warnings and throwing handlers,
+aliased and detached reference cells, nested COW, random subset invariants,
+weak/strict conversion, cardinality and error precedence. All five Cargo
+feature configurations, all-feature/all-target, formatting, PHPT-runner and
+unsafe-policy self-tests, the unchanged 1,623-block/289-function unsafe
+ratchet with 337 SAFETY annotations, Composer 2.8.12 S0, all four Symfony S1
+gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. No opcode,
+call-frame, PHP value/object/array layout, dependency or production unsafe
+change is made.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on
+an AMD Ryzen 9 7950X used performance-governor CPU 2, three warmups per binary
+and no excluded samples. Balanced median changes are -0.392% for batches of
+100 empty requests, -15.653% for array key/value projection, -42.381% for
+count/flip, +3.572% for random selection, +1.648% for the affected loose
+comparison and +0.624% for the unchanged repository array build/read control.
+Every comparable workload remains below the +5% gate and exact outputs match.
+Baseline and candidate binary SHA-256 values are
+`bd34a1fa0bdc524f8390961f69464956dab755330f67fc1b1d388147e1533819`
+and
+`080ef75d0427e1772a2f6771de6fcae1087ba4fcef232fd360b86df6bcf5f145`;
+the benchmark log SHA-256 is
+`ba17d49ac961cdb1a19776e6ce1fc0e3e1789200b73985d9c5363e5b04101046`.
+An initially inlined generic per-entry projection regressed string-key
+projection substantially; outlining the no-filter key collector and directly
+projecting private array storage removed that rejected cost without changing
+the representation.
+
+Six focused failures remain explicit. Two `array_flip()`/`array_values()`
+variations stop at independent binary-string/parser gaps, two
+`array_keys()`/`array_values()` cases require `opendir()`, and two
+`array_rand()` variations require case-insensitive boolean literals. Complete
+reflected internal type/default/return metadata, near-limit allocation, the
+remaining array suite and broader PHP compatibility remain separate work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `array-mutation-batch`, pinned to php-src 8.5 commit `fcc29c8` and candidate
 implementation commit `32bb8130`. Across all 5,599 unmodified `Zend/tests`
 and `tests/lang` cases, 4,107 pass, 1,196 fail, 115 skip, none remain XFAIL,

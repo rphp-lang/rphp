@@ -1746,6 +1746,46 @@ trace. The 16 independent focused blockers, `array_change_key_case()`, ordinary
 variadic `array_intersect()`, the complete array suite and broader compatibility
 remain separate work.
 
+The `array-key-value-batch` checkpoint advances `array_keys()`,
+`array_values()`, `array_flip()`, `array_count_values()` and `array_rand()`
+together. The admitted contract covers reflected arity and parameter names,
+typed errors, weak integer/bool conversion, loose and strict value filtering,
+canonical decimal keys, duplicate replacement and insertion order, skipped-
+value warnings and throwing handlers, reference/COW-preserving packed value
+projection, uniform random selection without replacement, cardinality and
+ValueError precedence. General loose comparison now handles null/string pairs
+as PHP 8.5 does, including null not equalling `"0"`. No php-src implementation
+or test is copied or mechanically translated.
+
+The 33-case unmodified PHP 8.5 focused cluster moves from 10 to 26 passes, an
+exact +16/-0 delta; PHP 8.5.9 records 32 passes and one architecture skip. The
+complete recursive 842-case array audit moves from 525 to 546 passes with no
+lost pass, reducing failures from 303 to 282 while 13 skips, one unsupported
+case and zero timeouts or crashes remain. Five adjacent cases pass outside the
+focused cluster. The pinned Zend/lang corpus moves from 4,107 to 4,108 passes,
+an exact +1/-0 delta, with 1,195 failures, 115 skips, 181 unsupported cases and
+zero timeouts or crashes. Two serial focused, array and main manifests and
+summaries are respectively byte-identical. Four original E2E tests match PHP
+8.5.9 across signatures, filtering, keys, warnings, handler exceptions,
+references/COW, random subset invariants and error paths.
+
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, the unchanged 1,623/289 unsafe ratchet, Composer S0, four Symfony S1
+gates and PHP 8.5.9 S2/S3 pass. No opcode, frame, PHP value/object/array layout,
+dependency or production unsafe change is made. CPU-pinned 32-pair balanced
+release controls put median changes at -0.392% for empty requests, -15.653%
+for key/value projection, -42.381% for count/flip, +3.572% for random
+selection, +1.648% for loose comparison and +0.624% for the unchanged array
+build/read control, below the +5% gate with exact output. An inlined generic
+projection design was rejected after materially regressing string-key
+projection; an outlined no-filter collector and direct private-storage value
+projection preserve both semantics and the hot path.
+
+Six focused binary-string/parser, missing-`opendir()` and case-insensitive
+boolean-literal failures remain separate. Complete internal Reflection
+type/default/return metadata, successful near-limit allocation, the remaining
+array suite and broader compatibility are not claimed.
+
 The `array-mutation-batch` checkpoint advances `array_push()`, `array_pop()`,
 `array_shift()`, `array_unshift()` and `array_splice()` together and corrects
 the first-negative-key append sequence. The admitted contract covers zero,
