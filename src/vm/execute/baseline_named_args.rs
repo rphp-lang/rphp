@@ -37,26 +37,27 @@ fn op_send_named<'a>(
     };
 
     if is_variadic_target {
-        let forwards_named_arguments = func_common.fn_type
-            == crate::vm::function::FunctionType::Internal
-            && matches!(
-                registered_function_name(eg, func_common as *const FunctionCommon)
-                    .to_ascii_lowercase()
-                    .as_str(),
-                "call_user_func"
-                    | "closure::__invoke"
-                    | "closure::call"
-                | "reflectionfunction::invoke"
-                | "reflectionclass::newinstance"
-                | "reflectionmethod::invoke"
-            );
+        let internal_function =
+            func_common.fn_type == crate::vm::function::FunctionType::Internal;
+        let registered_name = internal_function
+            .then(|| registered_function_name(eg, func_common as *const FunctionCommon));
+        let forwards_named_arguments = registered_name
+            .as_deref()
+            .is_some_and(crate::stdlib::internal_variadic_forwards_named_arguments);
         if !func_common.sig.is_variadic
-            || (func_common.fn_type == crate::vm::function::FunctionType::Internal
-                && !forwards_named_arguments)
+            || (internal_function && !forwards_named_arguments)
         {
-            let err = make_error_value("Error", &format!(
-                "Unknown named parameter ${}", name
-            ));
+            let err = if internal_function && func_common.sig.is_variadic {
+                make_error_value(
+                    "ArgumentCountError",
+                    &format!(
+                        "{}() does not accept unknown named parameters",
+                        registered_name.as_deref().unwrap_or("unknown")
+                    ),
+                )
+            } else {
+                make_error_value("Error", &format!("Unknown named parameter ${}", name))
+            };
             // SAFETY: `call` is the non-null pending call owned by this live frame;
             // the error path consumes and retires it exactly once.
             match unsafe { cleanup_call_and_throw(eg, frame, call, err) }? {

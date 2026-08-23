@@ -844,6 +844,17 @@ where
     let positional_public_num_args = num_args.saturating_sub(this_offset + capture_count);
     let public_num_args = positional_public_num_args
         .saturating_add(named_variadic.as_ref().map_or(0, Vec::len));
+    let rejects_internal_named_variadic = function_type == FunctionType::Internal
+        && signature.is_variadic
+        && named_variadic.as_ref().is_some_and(|named| !named.is_empty())
+        && !crate::stdlib::internal_variadic_forwards_named_arguments(
+            &displayed_function_name(eg, func_ptr),
+        );
+    let arity_num_args = if rejects_internal_named_variadic {
+        positional_public_num_args
+    } else {
+        public_num_args
+    };
     let supplied_preentry_error = trace_origin
         .as_ref()
         .and_then(|(_, _, throwable, _)| *throwable);
@@ -852,7 +863,7 @@ where
         .is_some_and(|(_, _, _, capture)| *capture);
     let mut generated_preentry_error = None;
     if supplied_preentry_error.is_none()
-        && public_num_args < signature.required_num_args as usize
+        && arity_num_args < signature.required_num_args as usize
     {
         let common = unsafe { &*func_ptr };
         let required = signature.required_num_args;
@@ -875,14 +886,29 @@ where
                 "arguments"
             };
             format!(
-                "{name}() expects {relation} {required} {noun}, {public_num_args} given"
+                "{name}() expects {relation} {required} {noun}, {arity_num_args} given"
             )
         } else {
             format!(
-                "Too few arguments to function {name}(), {public_num_args} passed and {relation} {required} expected"
+                "Too few arguments to function {name}(), {arity_num_args} passed and {relation} {required} expected"
             )
         };
         let error = make_error_value("ArgumentCountError", &message);
+        eg.exception = Some(error.clone());
+        if !capture_generated_preentry_error {
+            return Ok((Value::null(), None));
+        }
+        generated_preentry_error = Some(error);
+    }
+    if supplied_preentry_error.is_none()
+        && generated_preentry_error.is_none()
+        && rejects_internal_named_variadic
+    {
+        let name = displayed_function_name(eg, func_ptr);
+        let error = make_error_value(
+            "ArgumentCountError",
+            &format!("{name}() does not accept unknown named parameters"),
+        );
         eg.exception = Some(error.clone());
         if !capture_generated_preentry_error {
             return Ok((Value::null(), None));
@@ -979,47 +1005,6 @@ where
         }
         initialize_bound_this_frame(frame, func_ptr, bound_this);
 
-        if let Some(throwable) = pending_argument_error {
-            let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
-                .as_deref()
-                .is_some_and(crate::stdlib::ini_boolean);
-            let trace_options = if ignore_arguments { 2 } else { 0 };
-            let trace = crate::stdlib::collect_debug_backtrace(
-                frame,
-                trace_options,
-                0,
-                eg,
-                true,
-            );
-            let function = Function::from_common_ptr(func_ptr);
-            let location = if function.fn_type() == FunctionType::User {
-                let op_array = &function.as_user().op_array;
-                op_array
-                    .declaration_line()
-                    .filter(|_| !op_array.source_file.is_empty())
-                    .map(|line| (op_array.source_file.to_string(), line))
-            } else {
-                trace_origin.as_ref().map(|(file, line, _, _)| {
-                    if file == "Unknown" && *line == 0 {
-                        ("[no active file]".to_string(), 0)
-                    } else {
-                        (file.clone(), *line)
-                    }
-                })
-            };
-            if let Some((file, line)) = location
-                && let Some(mut object) = throwable.as_object_mut()
-            {
-                object.set_property("file", Value::string(file));
-                object.set_property("line", Value::long(line as i64));
-                object.set_property("trace", Value::array(trace));
-            }
-            eg.discard_detached_trace_caller(frame as usize);
-            cleanup_frame_slots(frame);
-            pop_vm_call_frame(eg, frame);
-            return Ok((Value::null(), None));
-        }
-
         // Detached callback entry bypasses DoFcall, whose full path normally
         // materializes the variadic bucket. Internal handlers use the same ABI in
         // both entry modes, so pack their trailing public arguments here before
@@ -1062,6 +1047,47 @@ where
                 let destination = (*frame).cv_mut((capture_destination + index) as u32);
                 frame_slot_set(frame, destination as *mut Value, capture);
             }
+        }
+
+        if let Some(throwable) = pending_argument_error {
+            let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
+                .as_deref()
+                .is_some_and(crate::stdlib::ini_boolean);
+            let trace_options = if ignore_arguments { 2 } else { 0 };
+            let trace = crate::stdlib::collect_debug_backtrace(
+                frame,
+                trace_options,
+                0,
+                eg,
+                true,
+            );
+            let function = Function::from_common_ptr(func_ptr);
+            let location = if function.fn_type() == FunctionType::User {
+                let op_array = &function.as_user().op_array;
+                op_array
+                    .declaration_line()
+                    .filter(|_| !op_array.source_file.is_empty())
+                    .map(|line| (op_array.source_file.to_string(), line))
+            } else {
+                trace_origin.as_ref().map(|(file, line, _, _)| {
+                    if file == "Unknown" && *line == 0 {
+                        ("[no active file]".to_string(), 0)
+                    } else {
+                        (file.clone(), *line)
+                    }
+                })
+            };
+            if let Some((file, line)) = location
+                && let Some(mut object) = throwable.as_object_mut()
+            {
+                object.set_property("file", Value::string(file));
+                object.set_property("line", Value::long(line as i64));
+                object.set_property("trace", Value::array(trace));
+            }
+            eg.discard_detached_trace_caller(frame as usize);
+            cleanup_frame_slots(frame);
+            pop_vm_call_frame(eg, frame);
+            return Ok((Value::null(), None));
         }
 
         // Generator functions invoked through this detached callback entry do

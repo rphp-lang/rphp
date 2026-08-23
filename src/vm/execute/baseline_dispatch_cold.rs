@@ -2196,12 +2196,21 @@ fn op_call_user_func_array<'a>(
         callback
     };
 
-    // SAFETY: `opline` belongs to this op-array, whose cache has one stable
-    // entry per instruction.
-    let cache_slot = unsafe {
+    // SAFETY: dispatch supplies `opline` from this live op-array. Its offset is
+    // therefore in bounds for the equally sized stable inline-cache table.
+    let (cache_slot, instruction_index) = unsafe {
         let ip = (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
-        op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache
+        (
+            op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache,
+            ip,
+        )
     };
+    let source_file = if op_array.source_file.is_empty() {
+        op_array.name.as_str()
+    } else {
+        op_array.source_file.as_str()
+    };
+    let source_line = op_array.source_line(instruction_index).unwrap_or(0);
     let caller_class = get_caller_class(frame, eg);
     let uses_legacy_scope = crate::stdlib::callback_uses_legacy_scope(callback);
     let receiver = if uses_legacy_scope {
@@ -2291,7 +2300,14 @@ fn op_call_user_func_array<'a>(
                 if eg.exception.is_some() {
                     Value::null()
                 } else {
-                    crate::stdlib::invoke_resolved_call_user_func_array(resolved, &args, eg)?
+                    crate::stdlib::invoke_resolved_call_user_func_array_from(
+                        resolved,
+                        &args,
+                        eg,
+                        frame,
+                        source_file,
+                        source_line,
+                    )?
                 }
             }
         } else {
@@ -2341,7 +2357,14 @@ fn op_call_user_func_array<'a>(
             if eg.exception.is_some() {
                 Value::null()
             } else {
-                crate::stdlib::invoke_resolved_call_user_func_array(resolved, args, eg)?
+                crate::stdlib::invoke_resolved_call_user_func_array_from(
+                    resolved,
+                    args,
+                    eg,
+                    frame,
+                    source_file,
+                    source_line,
+                )?
             }
         } else {
             crate::stdlib::invoke_call_user_func_array(

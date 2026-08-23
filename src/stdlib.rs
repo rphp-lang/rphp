@@ -1465,6 +1465,13 @@ fn fn_array_keys(
         return Ok(());
     }
     let has_filter = arg_opt!(ed, 1).is_some();
+    if !has_filter && arg_opt!(ed, 2).is_some() {
+        eg.exception = Some(crate::value::make_error_value(
+            "ArgumentCountError",
+            "array_keys(): Argument #2 ($filter_value) must be passed explicitly, because the default value is not known",
+        ));
+        return Ok(());
+    }
     let strict = if has_filter && arg_opt!(ed, 2).is_some() {
         let Some(strict) = typed_internal_bool_argument(ed, eg, "array_keys", 2, "strict")? else {
             return Ok(());
@@ -10186,9 +10193,8 @@ pub(crate) unsafe fn collect_debug_backtrace(
                         .and_then(|values| values.get_value_at(offset as usize))
                         .map(live_argument_value)
                 } else {
-                    Some(live_argument_value(
-                        (*frame).cv(common.sig.param_cv_index(index)),
-                    ))
+                    let value = (*frame).cv(common.sig.param_cv_index(index));
+                    (!value.dereferenced().is_undef()).then(|| live_argument_value(value))
                 };
                 if let Some(argument) = argument {
                     arguments.push(redact_trace_argument(user, common, index, argument, eg));
@@ -14192,6 +14198,51 @@ where
     )
 }
 
+fn call_resolved_owned_iter_with_named_from<I>(
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    num_args: usize,
+    args: I,
+    named_variadic: Vec<(String, Value)>,
+    logical_caller: *mut ExecuteData,
+    file: &str,
+    line: usize,
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = Value>,
+{
+    if reject_scope_introspection_callback(eg, resolved) {
+        return Ok(Value::null());
+    }
+    crate::vm::execute::call_function_owned_iter_with_context_and_named_from(
+        eg,
+        logical_caller,
+        resolved.func_ptr,
+        num_args,
+        args,
+        resolved.called_scope_class_id,
+        resolved.bound_this.clone(),
+        resolved.use_vars.len(),
+        resolved.closure_static_vars.clone(),
+        named_variadic,
+        (file.to_string(), line),
+        None,
+        true,
+    )
+}
+
+pub(crate) fn internal_variadic_forwards_named_arguments(function_name: &str) -> bool {
+    matches!(
+        function_name.to_ascii_lowercase().as_str(),
+        "call_user_func"
+            | "closure::__invoke"
+            | "closure::call"
+            | "reflectionfunction::invoke"
+            | "reflectionclass::newinstance"
+            | "reflectionmethod::invoke"
+    )
+}
+
 #[inline]
 pub(super) fn call_resolved_owned_iter_readback_arg0<I>(
     eg: &mut ExecutorGlobals,
@@ -14366,18 +14417,20 @@ fn call_resolved_with_values_from(
 
 /// Invoke an already-resolved callback with PHP 8 call_user_func_array
 /// positional/named argument semantics.
-fn call_resolved_with_php_array(
+fn call_resolved_with_php_array_at(
     eg: &mut ExecutorGlobals,
     resolved: ResolvedCallback,
     args: &PhpArray,
     preserve_reference_aliases: bool,
+    call_origin: Option<(*mut ExecuteData, &str, usize)>,
 ) -> Result<Value, VmError> {
     if resolved.is_magic_call {
         return call_magic_resolved_with_array(eg, &resolved, args.clone());
     }
-    // SAFETY: callback resolution returns a registered immutable descriptor
-    // retained by ExecutorGlobals for the complete detached invocation.
-    let sig = unsafe { &(*resolved.func_ptr).sig };
+    // SAFETY: callback resolution returns `func_ptr` from ExecutorGlobals'
+    // registered immutable function table, which retains the descriptor for
+    // this complete synchronous detached invocation.
+    let (sig, function_type) = unsafe { (&(*resolved.func_ptr).sig, (*resolved.func_ptr).fn_type) };
     let prepare_argument = |index: usize, value: &Value| {
         let reference_index = if index < sig.public_arity() as usize {
             index
@@ -14409,6 +14462,27 @@ fn call_resolved_with_php_array(
             .map(|(index, value)| prepare_argument(index, value))
             .collect::<Vec<_>>();
         let num_args = resolved.prepend_args.len() + normalized.len() + resolved.use_vars.len();
+        let captures_preentry_error = normalized.len() < sig.required_num_args as usize
+            || (function_type == FunctionType::Internal
+                && !sig.is_variadic
+                && normalized.len() > sig.public_arity() as usize);
+        if captures_preentry_error && let Some((logical_caller, file, line)) = call_origin {
+            return call_resolved_owned_iter_with_named_from(
+                eg,
+                &resolved,
+                num_args,
+                resolved
+                    .prepend_args
+                    .iter()
+                    .cloned()
+                    .chain(normalized)
+                    .chain(resolved.use_vars.iter().map(Value::clone_closure_capture)),
+                Vec::new(),
+                logical_caller,
+                file,
+                line,
+            );
+        }
         return call_resolved_owned_iter(
             eg,
             &resolved,
@@ -14503,6 +14577,34 @@ fn call_resolved_with_php_array(
     normalized.extend(extra_positional);
 
     let num_args = resolved.prepend_args.len() + normalized.len() + resolved.use_vars.len();
+    let internal_rejects_named_variadic = function_type == FunctionType::Internal
+        && sig.is_variadic
+        && !named_variadic.is_empty()
+        && !internal_variadic_forwards_named_arguments(
+            &crate::vm::execute::displayed_function_name(eg, resolved.func_ptr),
+        );
+    let captures_preentry_error = internal_rejects_named_variadic
+        || normalized.len() < required
+        || (function_type == FunctionType::Internal
+            && !sig.is_variadic
+            && normalized.len() > num_params);
+    if captures_preentry_error && let Some((logical_caller, file, line)) = call_origin {
+        return call_resolved_owned_iter_with_named_from(
+            eg,
+            &resolved,
+            num_args,
+            resolved
+                .prepend_args
+                .iter()
+                .cloned()
+                .chain(normalized)
+                .chain(resolved.use_vars.iter().map(Value::clone_closure_capture)),
+            named_variadic,
+            logical_caller,
+            file,
+            line,
+        );
+    }
     call_resolved_owned_iter_with_named(
         eg,
         &resolved,
@@ -14515,6 +14617,15 @@ fn call_resolved_with_php_array(
             .chain(resolved.use_vars.iter().cloned()),
         named_variadic,
     )
+}
+
+fn call_resolved_with_php_array(
+    eg: &mut ExecutorGlobals,
+    resolved: ResolvedCallback,
+    args: &PhpArray,
+    preserve_reference_aliases: bool,
+) -> Result<Value, VmError> {
+    call_resolved_with_php_array_at(eg, resolved, args, preserve_reference_aliases, None)
 }
 
 fn source_unpack_function_name<'a>(
@@ -14886,6 +14997,35 @@ pub(crate) fn invoke_resolved_call_user_func_array(
         return Ok(Value::null());
     };
     call_resolved_with_php_array(eg, resolved, args, true)
+}
+
+/// Invoke a compiler-lowered `call_user_func_array()` callback while retaining
+/// its PHP source boundary for pre-entry errors and Throwable stack traces.
+pub(crate) fn invoke_resolved_call_user_func_array_from(
+    resolved: ResolvedCallback,
+    args_value: &Value,
+    eg: &mut ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+    source_file: &str,
+    source_line: usize,
+) -> Result<Value, VmError> {
+    let Some(args) = args_value.as_array() else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "call_user_func_array(): Argument #2 ($args) must be of type array, {} given",
+                args_value.dereferenced().type_name()
+            ),
+        ));
+        return Ok(Value::null());
+    };
+    call_resolved_with_php_array_at(
+        eg,
+        resolved,
+        args,
+        true,
+        Some((logical_caller, source_file, source_line)),
+    )
 }
 
 /// call_user_func($callback, ...$args)
