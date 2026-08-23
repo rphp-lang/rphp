@@ -8,6 +8,91 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`file-include-csv-default-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+candidate implementation commit `8e7eda3b`. Across all 5,599 unmodified
+`Zend/tests` and `tests/lang` cases, 4,110 pass, 1,193 fail, 115 skip, none
+remain XFAIL, 181 are unsupported, and none time out or crash. The exact pass-
+set delta from `ff3e67f0` is +1/-0 through `Zend/tests/gh10232.phpt`. Two final
+runs have the same manifest SHA-256,
+`df98e5054f66d822992327419d68daeee02c9b1f8bd01c150613d3eecd35964e`,
+and summary SHA-256,
+`d333f2ac3b8f65afce792dd345fcea45551ea7c9941ebf4394437335234c3c86`.
+
+The default build now also exposes `get_include_path()`, `set_include_path()`,
+`stream_resolve_include_path()` and `fputcsv()`, and promotes the extended PHP
+8.5 contracts for `file_get_contents()`, `file_put_contents()`, `file()`,
+`fopen()` and `fgetcsv()`. These nine surfaces were independently implemented
+behind `include-path` and `csv-write` plus their dependency features before
+promotion. Their exercised contract covers reflected arity and parameter
+names, named arguments, ordered include-path lookup, canonical resolution,
+local-file include lookup through every admitted reader/writer, offsets and
+lengths, file flags and contexts, CSV quoting and custom record endings,
+argument validation, PHP 8.5's omitted-escape deprecations and array-to-string
+warning, including throwing error handlers before stream mutation.
+
+The 265-case unmodified file/include/CSV focus moves from 53 passes, 122
+failures, 37 skips and 53 unsupported cases to 85 passes, 90 failures, 37
+skips and 53 unsupported cases, an exact +32/-0 pass-set delta. PHP 8.5.9
+records 182 passes, 14 failures, 37 skips and 32 unsupported cases in the same
+focus. The final focus manifest/summary hash pair is
+`e20f10b41682cb0305cf409ce715329b09feef555cd21acbb213bb6525b06445` /
+`424e63d153050943c0a7af79f72a6e4c7737907be873ba4270ffa3dbd0a77f3b`.
+
+The complete 897-case file audit moves from 104 to 135 passes (+31/-0), with
+474 failures, 146 skips and 142 unsupported cases. The complete 158-case
+streams audit moves from 22 to 23 passes (+1/-0), with 103 failures, 20 skips
+and 12 unsupported cases. Neither audit has a timeout or crash. Their final
+manifest/summary hash pairs are
+`caa87de56324374bbe8a22c5cee8afab0a2ca9bfb6a972c1a85e61ed432cb688` /
+`cbe7bbb92d281fe24b1a710624b803a5d3a2b008a5006f4075beb1993a40b2f1`
+and
+`d2fa41bdfe4625a5f4e4c714a4d7a14a6a35ca007b4f3b084b4b73bf4455c7d0` /
+`1b41bc6ac310d204511ba73460648e6db964984d9967e4ab3177ebfa214d9677`.
+
+The original default suites include four include-path, 16 extended-file and
+41 stream E2E cases. A separate 454-byte clean-room transcript covers all nine
+signatures, named arguments and representative include/file/CSV operations;
+it is byte-identical to PHP 8.5.9 with SHA-256
+`a3f158d0af91acb7adb312c0e317ef2b5a4c2cc4b13e452d10f69e4aa3b038f8`.
+The implementation adds no dependency, lockfile, opcode, frame, PHP value/
+object/array layout or unsafe change, and copies no php-src source or test.
+
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, the unchanged 1,623-block/289-
+function unsafe ratchet with 339 SAFETY annotations, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+The first performance candidate was rejected after ordinary `file()` regressed
+by +38.764% and explicit-escape `fgetcsv()` by +11.846%. The accepted paths
+reuse the existing bulk line reader for the ordinary no-flag case and bypass
+diagnostic conversion only after the common explicit CSV arguments and live
+stream have been validated.
+
+A local CPU-pinned balanced alternating AMD64 release comparison used 32 pairs
+per comparable lane, three warmups per binary, performance-governor CPU 2 and
+no excluded samples. Independent/paired median changes are +0.984%/+0.942%
+for batches of 100 empty requests, -0.208%/-0.005% for 50,000 ordinary
+`fopen()` calls, +0.056%/-0.024% for 100,000 `file_get_contents()` calls,
++0.296%/+0.396% for 20,000 `file_put_contents()` calls, +0.771%/+0.725% for
+50,000 `file()` calls, -3.169%/-3.306% for 100,000 explicit-escape
+`fgetcsv()` calls and +1.026%/+0.924% for 500,000 unchanged `file_exists()`
+calls. Every comparable lane stays below the +5% gate with exact output.
+New-only include-path and `fputcsv()` workloads have candidate/PHP 8.5.9
+medians of 0.042322/0.011981 and 0.062776/0.033742 seconds; no A/B claim is
+made because the baseline lacks those functions. Baseline/candidate binary
+SHA-256 values are
+`d5fe05f1800392f40683aebe8164c5ba9d974166d9191e19e4026cf594ffa82c`
+and `3b695e5d21cf32291f3b2d7446f083db95b3e5005472652ff67f017b42241477`.
+The benchmark harness/log hash pair is
+`e6bb38c196cb8649493e952e3536fa38f4034e779f474f5f347530fa73ca6e3a` /
+`9addcc29405b235c71cb795378e168cae5f66efa3323a0028b294b9958e86b4f`.
+
+CLI-INI-driven include-path configuration and restoration, network/custom
+wrappers, filters, sockets/nonblocking I/O, resource-lifetime behavior,
+complete internal-function return-type metadata, the independent compiler/
+reference boundary in later complex `fputcsv()` cases and the remaining
+file/stream failures stay separate work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `stream-operations-default-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 candidate implementation commit `65b4d843`. Across all 5,599 unmodified
 `Zend/tests` and `tests/lang` cases, 4,109 pass, 1,194 fail, 115 skip, none
@@ -12477,8 +12562,7 @@ being run.
 | `coroutines` | Experimental structured cooperative tasks, channels, timers, and readiness APIs |
 | `php-generics-erased` | Experimental generic syntax with bound-erased runtime behavior |
 | `php-generics-reified` | Experimental generic syntax with reified runtime sidecars and checks |
-| `file-contents`, `file-write`, `file-lines`, `include-path` | Incremental file/include functionality |
-| `csv-*`, `resource-lifetime` | Incremental CSV and resource-lifetime behavior |
+| `resource-lifetime` | Incremental resource-lifetime behavior |
 | `vm-stats` | Internal execution and JIT diagnostics |
 
 The generic syntax is an RPHP experiment, not part of the default PHP

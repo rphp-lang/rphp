@@ -1925,6 +1925,39 @@ Network wrappers/transports, filters, custom wrappers, sockets/nonblocking I/O,
 complete internal return-type metadata and helper-blocked remaining stream/file
 cases stay separate work.
 
+The `file-include-csv-default-batch` checkpoint promotes
+`get_include_path()`, `set_include_path()`, `stream_resolve_include_path()` and
+`fputcsv()`, together with the extended `file_get_contents()`,
+`file_put_contents()`, `file()`, `fopen()` and `fgetcsv()` contracts. The
+admitted PHP 8.5 behavior covers signatures/named arguments, ordered and
+canonical local include resolution, offsets/lengths, file flags/contexts, CSV
+quoting/custom endings, argument errors, omitted-escape deprecations and the
+array-field warning with throwing-handler side-effect boundaries. The
+implementations remain separately selectable under `--no-default-features`.
+
+The 265-case focus moves from 53 to 85 passes (+32/-0), the complete 897-case
+file audit from 104 to 135 (+31/-0), and the complete 158-case streams audit
+from 22 to 23 (+1/-0), with no timeout or crash. The pinned Zend/lang corpus
+moves from 4,109 to 4,110 passes (+1/-0 through `gh10232.phpt`), with 1,193
+failures, 115 skips and 181 unsupported cases; two final full manifests and
+summaries are byte-identical. A 454-byte original signature/behavior transcript
+is byte-identical to PHP 8.5.9.
+
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, the unchanged 1,623/289/339 unsafe ratchet, Composer S0, four Symfony
+S1 gates and PHP 8.5.9 S2/S3 pass. The first performance candidate was rejected
+at +38.764% for ordinary `file()` and +11.846% for explicit `fgetcsv()`; the
+accepted bulk-read and validated fast paths put the seven comparable paired
+medians between -3.306% and +0.942%, below the +5% gate. New-only include-path
+and `fputcsv()` workloads match PHP output and are disclosed without baseline
+ratios. No dependency, opcode, frame, value/object/array layout or unsafe
+change is made.
+
+CLI-INI include-path restoration, network/custom wrappers, filters, sockets,
+resource lifetime, complete internal return-type metadata, the independent
+compiler/reference boundary in later complex CSV cases and remaining file/
+stream compatibility stay separate work.
+
 The `array-key-value-batch` checkpoint advances `array_keys()`,
 `array_values()`, `array_flip()`, `array_count_values()` and `array_rand()`
 together. The admitted contract covers reflected arity and parameter names,
