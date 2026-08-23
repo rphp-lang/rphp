@@ -12,33 +12,198 @@ use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 
 use super::{
-    bytes_to_php_string, direct_arg_opt, direct_arg_str, percent_decode_bytes, php_string_to_bytes,
-    push_percent_escape,
+    bytes_to_php_string, direct_arg_opt, direct_arg_str, owned_argument, percent_decode_bytes,
+    php_string_to_bytes, push_percent_escape, typed_internal_bool_argument,
+    typed_internal_int_argument, typed_internal_string_argument,
+    typed_internal_string_argument_expected,
 };
 
 // ============================================================================
 // String encoding functions
 // ============================================================================
 
-/// htmlspecialchars($string, $flags = ENT_QUOTES|ENT_SUBSTITUTE): string
-pub(super) fn fn_htmlspecialchars(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
+const ENT_QUOTES_MASK: i64 = 3;
+const ENT_SUBSTITUTE: i64 = 8;
+const ENT_DOCUMENT_MASK: i64 = 48;
+const ENT_XML1: i64 = 16;
+const ENT_XHTML: i64 = 32;
+const ENT_HTML5: i64 = 48;
+
+fn valid_html_entity(src: &str, document: i64) -> Option<usize> {
+    let bytes = src.as_bytes();
+    if bytes.first() != Some(&b'&') {
+        return None;
+    }
+    // HTML entity names and numeric codepoints are short. Bound the probe so
+    // repeated bare ampersands remain linear instead of rescanning the tail.
+    let probe_length = bytes.len().min(34);
+    let semicolon = bytes[..probe_length]
+        .iter()
+        .position(|byte| *byte == b';')?;
+    if semicolon < 2 {
+        return None;
+    }
+    let body = &src[1..semicolon];
+    let numeric = body
+        .strip_prefix("#x")
+        .or_else(|| body.strip_prefix("#X"))
+        .is_some_and(|digits| {
+            !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+        || body.strip_prefix('#').is_some_and(|digits| {
+            !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+        });
+    let named = match document {
+        ENT_XML1 => matches!(body, "amp" | "lt" | "gt" | "quot" | "apos"),
+        ENT_XHTML | ENT_HTML5 => matches!(
+            body,
+            "amp" | "lt" | "gt" | "quot" | "apos" | "copy" | "nbsp" | "reg"
+        ),
+        _ => matches!(body, "amp" | "lt" | "gt" | "quot" | "copy" | "nbsp" | "reg"),
+    };
+    (numeric || named).then_some(semicolon + 1)
+}
+
+fn encode_html_special_chars(src: &str, flags: i64, double_encode: bool) -> String {
+    let document = flags & ENT_DOCUMENT_MASK;
+    let quote_flags = flags & ENT_QUOTES_MASK;
+    let mut out = String::with_capacity(src.len());
+    if double_encode {
+        for character in src.chars() {
+            match character {
+                '&' => out.push_str("&amp;"),
+                '"' if quote_flags & 2 != 0 => out.push_str("&quot;"),
+                '\'' if quote_flags & 1 != 0 => {
+                    if matches!(document, ENT_XML1 | ENT_XHTML | ENT_HTML5) {
+                        out.push_str("&apos;");
+                    } else {
+                        out.push_str("&#039;");
+                    }
+                }
+                '<' => out.push_str("&lt;"),
+                '>' => out.push_str("&gt;"),
+                _ => out.push(character),
+            }
+        }
+        return out;
+    }
+
+    let mut position = 0;
+    while position < src.len() {
+        if src.as_bytes()[position] == b'&'
+            && let Some(length) = valid_html_entity(&src[position..], document)
+        {
+            out.push_str(&src[position..position + length]);
+            position += length;
+            continue;
+        }
+        let character = src[position..]
+            .chars()
+            .next()
+            .expect("position remains on a character boundary");
+        match character {
+            '&' => out.push_str("&amp;"),
+            '"' if quote_flags & 2 != 0 => out.push_str("&quot;"),
+            '\'' if quote_flags & 1 != 0 => {
+                if matches!(document, ENT_XML1 | ENT_XHTML | ENT_HTML5) {
+                    out.push_str("&apos;");
+                } else {
+                    out.push_str("&#039;");
+                }
+            }
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(character),
+        }
+        position += character.len_utf8();
+    }
+    out
+}
+
+fn encode_html_special_chars_default(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    for character in src.chars() {
+        match character {
             '&' => out.push_str("&amp;"),
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&#039;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
-            _ => out.push(c),
+            _ => out.push(character),
         }
     }
-    ret!(rv, Value::string(out));
+    out
+}
+
+fn html_encoding_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+) -> Result<Option<String>, VmError> {
+    if arg_opt!(ed, 2).is_none() {
+        return Ok(Some("UTF-8".to_string()));
+    }
+    let argument = owned_argument(ed, 2);
+    if matches!(argument.dereferenced().value_type(), ValueType::Null) {
+        return Ok(Some("UTF-8".to_string()));
+    }
+    typed_internal_string_argument_expected(ed, eg, function, 2, "encoding", "?string")
+}
+
+fn html_encode_arguments(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+) -> Result<Option<(String, i64, bool)>, VmError> {
+    let Some(string) = typed_internal_string_argument(ed, eg, function, 0, "string")? else {
+        return Ok(None);
+    };
+    let flags = if arg_opt!(ed, 1).is_some() {
+        let Some(flags) = typed_internal_int_argument(ed, eg, function, 1, "flags")? else {
+            return Ok(None);
+        };
+        flags
+    } else {
+        ENT_QUOTES_MASK | ENT_SUBSTITUTE
+    };
+    if html_encoding_argument(ed, eg, function)?.is_none() {
+        return Ok(None);
+    }
+    let double_encode = if arg_opt!(ed, 3).is_some() {
+        let Some(double_encode) =
+            typed_internal_bool_argument(ed, eg, function, 3, "double_encode")?
+        else {
+            return Ok(None);
+        };
+        double_encode
+    } else {
+        true
+    };
+    Ok(Some((string, flags, double_encode)))
+}
+
+/// htmlspecialchars($string, $flags = ENT_QUOTES|ENT_SUBSTITUTE,
+///     $encoding = null, $double_encode = true): string
+pub(super) fn fn_htmlspecialchars(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if arg_opt!(ed, 1).is_none()
+        && arg_opt!(ed, 2).is_none()
+        && arg_opt!(ed, 3).is_none()
+        && let Some(string) = arg!(ed, 0).as_str()
+    {
+        ret!(rv, Value::string(encode_html_special_chars_default(string)));
+    }
+    let Some((string, flags, double_encode)) = html_encode_arguments(ed, eg, "htmlspecialchars")?
+    else {
+        return Ok(());
+    };
+    ret!(
+        rv,
+        Value::string(encode_html_special_chars(&string, flags, double_encode))
+    );
 }
 
 /// htmlspecialchars_decode($string): string
@@ -236,13 +401,28 @@ pub(super) fn fn_preg_quote(
     ret!(rv, Value::string(quoted));
 }
 
-/// htmlentities($string): string — same as htmlspecialchars for basic usage
+/// htmlentities() shares htmlspecialchars()'s ASCII/UTF-8 special-character
+/// boundary here; the broader named-entity table is intentionally separate.
 pub(super) fn fn_htmlentities(
     ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    fn_htmlspecialchars(ed, rv, eg)
+    if arg_opt!(ed, 1).is_none()
+        && arg_opt!(ed, 2).is_none()
+        && arg_opt!(ed, 3).is_none()
+        && let Some(string) = arg!(ed, 0).as_str()
+    {
+        ret!(rv, Value::string(encode_html_special_chars_default(string)));
+    }
+    let Some((string, flags, double_encode)) = html_encode_arguments(ed, eg, "htmlentities")?
+    else {
+        return Ok(());
+    };
+    ret!(
+        rv,
+        Value::string(encode_html_special_chars(&string, flags, double_encode))
+    );
 }
 
 /// urlencode($string): string

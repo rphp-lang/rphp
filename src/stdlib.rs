@@ -1593,23 +1593,126 @@ fn fn_array_slice(
 fn fn_array_unique(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let v = arg!(ed, 0);
-    if let Some(arr) = v.as_array() {
+    let source = owned_argument(ed, 0);
+    let Some(array) = source.dereferenced().as_array() else {
+        typed_internal_argument_error(
+            eg,
+            "array_unique",
+            source.dereferenced(),
+            1,
+            "array",
+            "array",
+        );
+        return Ok(());
+    };
+    let flags = if arg_opt!(ed, 1).is_some() {
+        let Some(flags) = typed_internal_int_argument(ed, eg, "array_unique", 1, "flags")? else {
+            return Ok(());
+        };
+        flags
+    } else {
+        SORT_STRING
+    };
+    if flags == SORT_STRING
+        && arg_opt!(ed, 1).is_none()
+        && let Some(values) = array.packed_values()
+        && values
+            .iter()
+            .all(|value| value.value_type() == ValueType::String)
+    {
         let mut result = PhpArray::new();
-        let mut seen: Vec<String> = Vec::with_capacity(arr.len());
-        for (key, val) in arr.iter() {
-            let s = val.echo_to_string();
-            if !seen.contains(&s) {
-                seen.push(s);
-                result.set(key, val.clone());
+        let mut linear_seen = Vec::with_capacity(values.len().min(64));
+        let mut hashed_seen = None::<std::collections::HashSet<&str>>;
+        for (index, value) in values.iter().enumerate() {
+            let rendered = value.as_str().unwrap_or("");
+            let unseen = if let Some(seen) = hashed_seen.as_mut() {
+                seen.insert(rendered)
+            } else if linear_seen.contains(&rendered) {
+                false
+            } else if linear_seen.len() < 64 {
+                linear_seen.push(rendered);
+                true
+            } else {
+                let mut seen = std::collections::HashSet::with_capacity(values.len());
+                seen.extend(linear_seen.drain(..));
+                let unseen = seen.insert(rendered);
+                hashed_seen = Some(seen);
+                unseen
+            };
+            if unseen {
+                result.set_int(index as i64, value.clone());
             }
         }
         ret!(rv, Value::array(result));
-    } else {
-        ret!(rv, Value::null());
     }
+    if matches!(flags & !SORT_FLAG_CASE, SORT_STRING | SORT_LOCALE_STRING) {
+        let mut result = PhpArray::new();
+        let mut linear_seen = Vec::with_capacity(array.len().min(64));
+        let mut hashed_seen = None::<std::collections::HashSet<String>>;
+        for (key, value) in array.iter() {
+            let Some(mut rendered) = internal_value_to_string(ed, eg, value)? else {
+                return Ok(());
+            };
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            if flags & SORT_FLAG_CASE != 0 {
+                rendered.make_ascii_lowercase();
+            }
+            let unseen = if let Some(seen) = hashed_seen.as_mut() {
+                seen.insert(rendered)
+            } else if linear_seen.contains(&rendered) {
+                false
+            } else if linear_seen.len() < 64 {
+                linear_seen.push(rendered);
+                true
+            } else {
+                let mut seen = std::collections::HashSet::with_capacity(array.len());
+                seen.extend(linear_seen.drain(..));
+                let unseen = seen.insert(rendered);
+                hashed_seen = Some(seen);
+                unseen
+            };
+            if unseen {
+                array_projection_insert(&mut result, key, value, ArrayProjectionKeys::PreserveAll);
+            }
+        }
+        ret!(rv, Value::array(result));
+    }
+
+    let entries = array
+        .iter()
+        .map(|(key, value)| (key, array_sort_snapshot_value(value)))
+        .collect::<Vec<_>>();
+    let mut result = PhpArray::with_deferred_hash_capacity(entries.len());
+    let mut accepted = Vec::with_capacity(entries.len());
+    for (key, value) in &entries {
+        let mut duplicate = false;
+        for previous in &accepted {
+            if sort_value_order_runtime(ed, eg, previous, value, flags)?.is_eq() {
+                duplicate = true;
+                break;
+            }
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+        }
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        if !duplicate {
+            accepted.push(value.clone());
+            array_projection_insert(
+                &mut result,
+                key.clone(),
+                value,
+                ArrayProjectionKeys::PreserveAll,
+            );
+        }
+    }
+    ret!(rv, Value::array(result));
 }
 
 fn fn_array_flip(
@@ -5739,23 +5842,90 @@ fn fn_str_ends_with(
     ret!(rv, Value::bool(h.ends_with(n.as_ref())));
 }
 
+const STR_PAD_LEFT: i64 = 0;
+const STR_PAD_RIGHT: i64 = 1;
+const STR_PAD_BOTH: i64 = 2;
+
 fn fn_str_pad(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let input = arg_str!(ed, 0);
-    let length = arg_long!(ed, 1) as usize;
-    let pad = match arg_opt!(ed, 2) {
-        Some(v) => v.as_str().unwrap_or(" ").to_string(),
-        None => " ".to_string(),
+    let Some(input) = typed_internal_string_argument(ed, eg, "str_pad", 0, "string")? else {
+        return Ok(());
     };
-    if input.len() >= length {
-        ret!(rv, Value::string(input.into_owned()));
+    let Some(length) = typed_internal_int_argument(ed, eg, "str_pad", 1, "length")? else {
+        return Ok(());
+    };
+    let pad = if arg_opt!(ed, 2).is_some() {
+        let Some(pad) = typed_internal_string_argument(ed, eg, "str_pad", 2, "pad_string")? else {
+            return Ok(());
+        };
+        pad
     } else {
-        let diff = length - input.len();
-        let padding: String = pad.chars().cycle().take(diff).collect();
-        ret!(rv, Value::string(format!("{}{}", input, padding)));
+        " ".to_string()
+    };
+    let pad_type = if arg_opt!(ed, 3).is_some() {
+        let Some(pad_type) = typed_internal_int_argument(ed, eg, "str_pad", 3, "pad_type")? else {
+            return Ok(());
+        };
+        pad_type
+    } else {
+        STR_PAD_RIGHT
+    };
+
+    let input_bytes = php_string_to_bytes(&input);
+    if length <= input_bytes.len() as i64 {
+        ret!(rv, Value::string(input));
+    }
+    let pad_bytes = php_string_to_bytes(&pad);
+    if pad_bytes.is_empty() {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "str_pad(): Argument #3 ($pad_string) must not be empty",
+        ));
+        return Ok(());
+    }
+    if !matches!(pad_type, STR_PAD_LEFT | STR_PAD_RIGHT | STR_PAD_BOTH) {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH",
+        ));
+        return Ok(());
+    }
+
+    let target_length = usize::try_from(length).unwrap_or(usize::MAX);
+    let padding_length = target_length - input_bytes.len();
+    let left_length = match pad_type {
+        STR_PAD_LEFT => padding_length,
+        STR_PAD_BOTH => padding_length / 2,
+        _ => 0,
+    };
+    let right_length = padding_length - left_length;
+    let mut output = Vec::new();
+    if output.try_reserve_exact(target_length).is_err() {
+        return Err(VmError::Fatal(
+            "str_pad(): requested string length is too large".to_string(),
+        ));
+    }
+    append_repeated_padding(&mut output, &pad_bytes, left_length);
+    output.extend_from_slice(&input_bytes);
+    append_repeated_padding(&mut output, &pad_bytes, right_length);
+    ret!(rv, Value::string(bytes_to_php_string(&output)));
+}
+
+fn append_repeated_padding(output: &mut Vec<u8>, padding: &[u8], length: usize) {
+    if length == 0 {
+        return;
+    }
+    let start = output.len();
+    let initial = length.min(padding.len());
+    output.extend_from_slice(&padding[..initial]);
+    let mut produced = initial;
+    while produced < length {
+        let copied = produced.min(length - produced);
+        output.extend_from_within(start..start + copied);
+        produced += copied;
     }
 }
 

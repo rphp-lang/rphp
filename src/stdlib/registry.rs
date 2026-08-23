@@ -268,7 +268,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "length",
         "preserve_keys"
     );
-    reg!("array_unique", fn_array_unique, 1, 1, "array");
+    reg!("array_unique", fn_array_unique, 2, 1, "array", "flags");
     reg!("array_flip", fn_array_flip, 1, 1, "array");
     reg!("array_combine", fn_array_combine, 2, 2, "keys", "values");
     reg!("array_sum", fn_array_sum, 1, 1, "array");
@@ -508,11 +508,12 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!(
         "str_pad",
         fn_str_pad,
-        3,
+        4,
         2,
         "string",
         "length",
-        "pad_string"
+        "pad_string",
+        "pad_type"
     );
     reg!("str_split", fn_str_split, 2, 1, "string", "length");
     reg!("ucfirst", fn_ucfirst, 1, 1, "string");
@@ -1232,11 +1233,12 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!(
         "htmlspecialchars",
         fn_htmlspecialchars,
-        3,
+        4,
         1,
         "string",
         "flags",
-        "encoding"
+        "encoding",
+        "double_encode"
     );
     reg!(
         "htmlspecialchars_decode",
@@ -1249,11 +1251,12 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!(
         "htmlentities",
         fn_htmlentities,
-        3,
+        4,
         1,
         "string",
         "flags",
-        "encoding"
+        "encoding",
+        "double_encode"
     );
     reg!(
         "html_entity_decode",
