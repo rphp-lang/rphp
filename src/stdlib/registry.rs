@@ -8,6 +8,8 @@ use super::array_assoc_sets::*;
 use super::array_traversal::*;
 use super::directory::*;
 use super::filesystem::*;
+#[cfg(feature = "formatted-io")]
+use super::formatted_io::*;
 use super::process::*;
 use super::recursive_arrays::*;
 use super::source_filters::*;
@@ -133,6 +135,22 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     macro_rules! reg_var_ref {
         ($name:expr, $handler:expr, $raw_handler:expr, $min_args:expr, $ref_args:expr, $($pnames:expr),*) => {{
             let f = Box::new(make_internal_function_variadic_ref(
+                $handler,
+                $raw_handler,
+                $min_args,
+                $ref_args,
+                pn![$($pnames),*],
+            ));
+            let ptr = &f.common as *const FunctionCommon;
+            eg.register_function($name, ptr).unwrap();
+            funcs.push(f);
+        }};
+    }
+
+    #[cfg(feature = "formatted-io")]
+    macro_rules! reg_var_ref_raw_all {
+        ($name:expr, $handler:expr, $raw_handler:expr, $min_args:expr, $ref_args:expr, $($pnames:expr),*) => {{
+            let f = Box::new(make_internal_function_variadic_ref_raw_all(
                 $handler,
                 $raw_handler,
                 $min_args,
@@ -539,6 +557,31 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("vsprintf", fn_vsprintf, 2, 2, "format", "values");
     reg_var!("printf", fn_printf, 1, "format");
     reg!("vprintf", fn_vprintf, 2, 2, "format", "values");
+    #[cfg(feature = "formatted-io")]
+    {
+        reg_var!("fprintf", fn_fprintf, 2, "stream", "format", "values");
+        reg!("vfprintf", fn_vfprintf, 3, 3, "stream", "format", "values");
+        reg_var_ref_raw_all!(
+            "sscanf",
+            fn_sscanf,
+            fn_sscanf_raw_variadic,
+            2,
+            u64::MAX << 2,
+            "string",
+            "format",
+            "vars"
+        );
+        reg_var_ref_raw_all!(
+            "fscanf",
+            fn_fscanf,
+            fn_fscanf_raw_variadic,
+            2,
+            u64::MAX << 2,
+            "stream",
+            "format",
+            "vars"
+        );
+    }
 
     // --- Unix process helpers ---
     reg!("escapeshellarg", fn_escapeshellarg, 1, 1, "arg");

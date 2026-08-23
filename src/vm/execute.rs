@@ -3257,18 +3257,23 @@ fn execute_full_call<'a>(
     // that frame or cast an unverified user-function descriptor.
     let (func_common, num_args, raw_variadic_handler) = unsafe {
         let common = &*(*call).func;
-        let raw_handler = (common.fn_type == FunctionType::Internal
+        let raw_handler = if common.fn_type == FunctionType::Internal
             && common.sig.is_variadic
             && pending_named.is_none()
+        {
+            let internal =
+                &*(common as *const FunctionCommon as *const super::function::InternalFunction);
             // A single positional variadic value is already a stable call
-            // slot. Multiple values must be snapshotted together before a
-            // mutating handler runs, so they retain the packed ABI.
-            && (*call).num_args <= common.sig.public_arity().saturating_add(1))
-        .then(|| {
-            (*(common as *const FunctionCommon as *const super::function::InternalFunction))
-                .raw_variadic_handler
-        })
-        .flatten();
+            // slot. Multiple values normally retain the packed ABI; the
+            // explicitly admitted scanf-style handlers snapshot their inputs
+            // and therefore may consume every original by-reference slot.
+            ((*call).num_args <= common.sig.public_arity().saturating_add(1)
+                || internal.raw_variadic_all_positional)
+                .then_some(internal.raw_variadic_handler)
+                .flatten()
+        } else {
+            None
+        };
         (common, (*call).num_args, raw_handler)
     };
     let public_max = func_common.sig.public_arity();

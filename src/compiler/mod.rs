@@ -5793,6 +5793,7 @@ pub fn make_internal_function(
         handler,
         direct_handler: None,
         raw_variadic_handler: None,
+        raw_variadic_all_positional: false,
     }
 }
 
@@ -6083,6 +6084,7 @@ pub fn make_internal_method(
         handler,
         direct_handler: None,
         raw_variadic_handler: None,
+        raw_variadic_all_positional: false,
     }
 }
 
@@ -6130,6 +6132,7 @@ pub fn make_internal_method_variadic(
         handler,
         direct_handler: None,
         raw_variadic_handler: None,
+        raw_variadic_all_positional: false,
     }
 }
 
@@ -6174,6 +6177,7 @@ pub fn make_internal_function_ref(
         handler,
         direct_handler: None,
         raw_variadic_handler: None,
+        raw_variadic_all_positional: false,
     }
 }
 
@@ -6217,6 +6221,7 @@ pub fn make_internal_function_variadic(
         handler,
         direct_handler: None,
         raw_variadic_handler: None,
+        raw_variadic_all_positional: false,
     }
 }
 
@@ -6233,6 +6238,28 @@ pub fn make_internal_function_variadic_ref(
     let mut function = make_internal_function_variadic(handler, required_num_args, param_names);
     function.common.sig.ref_args = ref_args;
     function.raw_variadic_handler = Some(raw_variadic_handler);
+    function
+}
+
+/// Create a variadic by-reference internal whose positional handler consumes
+/// the original flat argument slots for every arity. The handler must snapshot
+/// all readable arguments before its first mutation; named arguments retain
+/// the canonical packed ABI and use `handler`.
+pub fn make_internal_function_variadic_ref_raw_all(
+    handler: InternalFunctionHandler,
+    raw_variadic_handler: RawVariadicInternalFunctionHandler,
+    required_num_args: u32,
+    ref_args: u64,
+    param_names: Vec<String>,
+) -> InternalFunction {
+    let mut function = make_internal_function_variadic_ref(
+        handler,
+        raw_variadic_handler,
+        required_num_args,
+        ref_args,
+        param_names,
+    );
+    function.raw_variadic_all_positional = true;
     function
 }
 
@@ -6283,5 +6310,6 @@ pub fn make_internal_function_variadic_prefer_ref(
         handler,
         direct_handler: None,
         raw_variadic_handler: None,
+        raw_variadic_all_positional: false,
     }
 }

@@ -1611,13 +1611,13 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     })
     .unwrap();
 
-    // ArgumentCountError extends Error
+    // ArgumentCountError extends TypeError
     eg.register_class(ClassDef {
         attributes: Vec::new(),
         name: "ArgumentCountError".to_string(),
         source_file: None,
         declaration_line: 0,
-        parent: Some("Error".to_string()),
+        parent: Some("TypeError".to_string()),
         implements: vec![],
         is_interface: false,
         is_abstract: false,

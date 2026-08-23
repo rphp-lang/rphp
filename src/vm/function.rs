@@ -1846,6 +1846,10 @@ pub struct InternalFunction {
     pub handler: InternalFunctionHandler,
     pub direct_handler: Option<DirectInternalFunctionHandler>,
     pub raw_variadic_handler: Option<RawVariadicInternalFunctionHandler>,
+    /// Keep every positional variadic argument in its original call slot.
+    /// This is reserved for handlers such as scanf whose variadic outputs are
+    /// references and which snapshot all readable inputs before mutating them.
+    pub raw_variadic_all_positional: bool,
 }
 
 /// Safe wrapper over function pointer — dispatch via fn_type().

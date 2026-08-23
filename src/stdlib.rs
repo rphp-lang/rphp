@@ -19,7 +19,8 @@ use crate::compiler::compile::{ClassConstantDefinition, PropertyDefinition};
 use crate::compiler::{
     make_direct_internal_function, make_internal_function, make_internal_function_ref,
     make_internal_function_variadic, make_internal_function_variadic_prefer_ref,
-    make_internal_function_variadic_ref, make_internal_method, make_internal_method_variadic,
+    make_internal_function_variadic_ref, make_internal_function_variadic_ref_raw_all,
+    make_internal_method, make_internal_method_variadic,
 };
 use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
@@ -182,6 +183,8 @@ mod builtin_classes;
 mod directory;
 mod fiber;
 mod filesystem;
+#[cfg(feature = "formatted-io")]
+mod formatted_io;
 mod process;
 mod recursive_arrays;
 mod source_filters;

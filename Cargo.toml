@@ -23,6 +23,7 @@ default = [
     "stream-truncate",
     "include-path",
     "csv-write",
+    "formatted-io",
 ]
 quick-loops = []
 vm-stats = []
@@ -44,6 +45,7 @@ file-contents = ["value-errors"]
 file-write = ["value-errors"]
 file-lines = ["value-errors"]
 include-path = ["stream-context", "file-contents", "file-write", "file-lines"]
+formatted-io = []
 
 [dependencies]
 serde = "1.0.228"
