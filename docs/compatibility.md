@@ -8,6 +8,79 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`reflection-surface-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+implementation commit `5f9172e9`. Across all 5,599 unmodified `Zend/tests`
+and `tests/lang` cases, 4,153 pass, 1,150 fail, 115 skip, none remain XFAIL,
+181 are unsupported, and none time out or crash. The exact pass-set delta from
+`9af6277f` is +5/-0: `bugGH-8655.phpt`, both runtime attribute-AST cases,
+`enum/backed-tryFrom-casing.phpt` and
+`first_class_callable/first_class_callable_signature.phpt`. Two final runs
+have the same manifest SHA-256,
+`b453c50eed542b790e717bfe11fbd23c18f2e47735c769a79e022c2211ceed56`,
+and summary SHA-256,
+`01b2941c998407f1ccedccf851cc2e1ddb39e3e221e4748790c6d50263387cd0`.
+
+`ReflectionFunction::__toString()` now renders user/internal provenance,
+source spans, reference/variadic parameters and return types.
+`ReflectionAttribute::__toString()` renders scalar and retained AST arguments,
+including namespaced, imported and global first-class callables, static-method
+callables and closure declaration names. `Reflector` inherits `Stringable` and
+`ReflectionAttribute` has PHP 8.5's non-final `Reflector` shape. Declaration
+names are assembled lazily from shared PHP string handles so ordinary
+`getAttributes()` does not pay for unused string rendering.
+
+The final `ReflectionReference` surface supplies `fromArrayElement()`, stable
+opaque 20-byte alias identity through `getId()`, PHP's null/missing-key
+distinction and empty debug projection. `ReflectionEnum`,
+`ReflectionEnumUnitCase` and `ReflectionEnumBackedCase` supply construction,
+case lookup/inventory, backing-type/value and enum-value projection while
+preserving ordinary `ReflectionClassConstant` results from inherited APIs.
+Together the batch registers 17 public handlers across those six Reflection
+classes and restores inherited `ReflectionClassConstant::getName()`.
+
+The five-case unmodified PHP 8.5 focus moves from zero to five passes with no
+timeout or crash; PHP 8.5.9 also passes all five, and the final RPHP/oracle
+manifest is byte-identical with SHA-256
+`608942c4808815e5b0808ca72f217a1ae7c91728b98cf10aef47a1e9cbf23ead`.
+The final RPHP focus summary SHA-256 is
+`477554fd1bc47d2309cd125ea120c824c813bd075d949f3ab95303574cd631df`.
+Three original E2E tests cover callable and attribute rendering, reference
+alias identity/debug/errors, unit/backed enum construction, case APIs,
+inherited constant behavior and invalid inputs; the complete Reflection and
+enum E2E modules pass 104/104.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy self-tests, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+The production unsafe inventory remains at 1,623 blocks and 289 functions with
+346 SAFETY annotations. The implementation adds no dependency, opcode, VM
+frame or PHP value/object/array layout change. New object identity stays in
+sparse request-local sidecars; fixed class vectors reserve 96 rather than 80
+entries so the expanded built-in registry remains allocation-free at startup.
+
+On an AMD Ryzen 9 7950X AMD64 host pinned to performance-governor CPU 2, a
+balanced alternating release comparison used 32 pairs per lane, three warmups
+per binary and no excluded samples. Independent/paired median changes are
++1.479%/+1.622% for 100 empty requests, +0.287%/-0.372% for 200,000 existing
+Reflection parameter inventories and +2.722%/+3.560% for 100,000 attribute
+inventories. Paired p10/p90 ranges are -0.336%/+2.534%, -1.441%/+2.317% and
++0.580%/+16.238%; the noisy attribute upper tail is retained rather than
+filtered. Every lane preserves exact output and stays below the +5% median
+gate. Baseline/candidate binary SHA-256 values are
+`6a084f86c2e252c89ace4710e4e74b7a6f0712119be7a6ee0dcae145d2854ee3` /
+`292c137ede9a9e6d7cfe8ac24c4e0fdc79c2f81defc903e3c54105c1a42b281f`;
+the benchmark harness/log pair is
+`8c750935b0b294405f5fbb98af6a0afd661a7254183df184f09fe1bc9a9da1c1` /
+`5c8f88d1d1f6123b21bfe475cd32a1c90d528dddafa9f490bb74150b2bbf88d1`.
+
+This checkpoint does not claim exact optional-default rendering in function
+strings, complete built-in Reflection method/property/debug inventory,
+constructor-visibility introspection for `ReflectionReference`, arbitrary
+closure constant-expression compilation, complete enum/attribute edge
+behavior or broader PHP compatibility. Those remain separate evidence-driven
+work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `runtime-introspection-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 implementation commit `55c2b1d2`. Across all 5,599 unmodified `Zend/tests`
 and `tests/lang` cases, 4,148 pass, 1,155 fail, 115 skip, none remain XFAIL,
