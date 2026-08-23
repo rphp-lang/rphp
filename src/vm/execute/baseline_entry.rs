@@ -1054,6 +1054,10 @@ where
                 .as_deref()
                 .is_some_and(crate::stdlib::ini_boolean);
             let trace_options = if ignore_arguments { 2 } else { 0 };
+            let saved_trace_num_args = (*frame).num_args;
+            if rejects_internal_named_variadic {
+                (*frame).num_args = positional_public_num_args as u32;
+            }
             let trace = crate::stdlib::collect_debug_backtrace(
                 frame,
                 trace_options,
@@ -1061,6 +1065,7 @@ where
                 eg,
                 true,
             );
+            (*frame).num_args = saved_trace_num_args;
             let function = Function::from_common_ptr(func_ptr);
             let location = if function.fn_type() == FunctionType::User {
                 let op_array = &function.as_user().op_array;

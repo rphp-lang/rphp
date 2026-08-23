@@ -10193,8 +10193,9 @@ pub(crate) unsafe fn collect_debug_backtrace(
                         .and_then(|values| values.get_value_at(offset as usize))
                         .map(live_argument_value)
                 } else {
-                    let value = (*frame).cv(common.sig.param_cv_index(index));
-                    (!value.dereferenced().is_undef()).then(|| live_argument_value(value))
+                    Some(live_argument_value(
+                        (*frame).cv(common.sig.param_cv_index(index)),
+                    ))
                 };
                 if let Some(argument) = argument {
                     arguments.push(redact_trace_argument(user, common, index, argument, eg));
