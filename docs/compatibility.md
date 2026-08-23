@@ -8,6 +8,87 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`array-transform-callback-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+implementation commit `1566b3bd`. The complete 39-case `array_column*`,
+`array_map*` and `array_combine*` focus moves from 15 to 31 passes (+16/-0),
+with eight visible failures and no skip, unsupported case, timeout or crash.
+All eight `array_column*` cases and eight object, null/reference, type and
+callback-diagnostic `array_map*` cases become passes. Its manifest and summary
+SHA-256 values are
+`ad84eb51174032894c8e54a0ff52962ab347abf2d9bc95ed8538e3f72b9d898c`
+and `ef642981f289b692895f601a212edf6ab5eeb1a261ae92c7ac44b296624a86fb`.
+
+`array_column()` now implements its three-argument transformation contract:
+nullable whole-row projection, integer and canonical numeric-string selectors,
+stable append or replacement behavior for index keys, weak/strict selector
+coercion and PHP 8.5 diagnostics for null, float, resource and illegal result
+keys. Array rows keep a dedicated fast path. Object rows read public and
+dynamic properties, property getter hooks, initialized lazy objects and the
+guarded `__isset()`/`__get()` sequence, while preserving column-before-index
+exception order. `array_map()` now validates every variadic array and reports
+the shared callable-specific PHP reason. A null callback preserves explicit
+reference cells for one or several arrays; its single-array path and the
+ordinary single-array callback path avoid a per-row tuple allocation.
+
+Six original E2E tests cover whole rows, duplicate and missing index keys,
+named arguments, numeric strings, public, magic and hooked object properties,
+exception order, weak and strict selectors, null-callback reference identity,
+variadic array errors and seven distinct invalid-callback reasons. The complete
+842-case `ext/standard/tests/array` audit moves from 616 to 636 passes (+20/-0),
+with 192 failures, 13 skips, one unsupported case and no timeout or crash. In
+addition to the 16 focused gains, `bug68553.phpt`, `bug69723.phpt`,
+`bug71660.phpt` and `bug72031.phpt` pass. Its manifest and summary SHA-256
+values are
+`750e6a1ad928b9e9fd8cdadebb62a3b7bdf7b8cc4e648d49a71d27c087d9fc59`
+and `53428aad2020068e978800e6758ebca2945627f2785e2acb457229618e1cae82`.
+
+The separate 5,599-case `Zend/tests` and `tests/lang` gate remains exactly
+4,168 pass, 1,135 fail, 115 skip, 181 unsupported and zero XFAIL, timeout or
+crash (+0/-0), as expected because this checkpoint's upstream cases live under
+`ext/standard`. Two final runs have identical manifest SHA-256
+`d31a295c994f8ada29b5d2d7a652b20c29bcec9a21e755358701075c264045a5`
+and summary SHA-256
+`112145b69b3c5cf4abee3bd985d8d0131f83ca65c2ef3d1603ac7a6443b1b260`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy self-tests, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+The production unsafe inventory remains at 1,623 blocks and 289 functions with
+346 SAFETY annotations. The implementation adds no dependency, opcode, VM
+frame or PHP value/object/array layout change.
+
+On an AMD Ryzen 9 7950X AMD64 host with Linux 7.0, Rust 1.93.1 and 61 GiB RAM,
+a performance-governor CPU 2 ran 32 balanced alternating release pairs per
+lane, three warmups per binary and no excluded samples. Baseline/candidate
+p10/median/p90 seconds and independent/paired median changes are
+0.251256/0.253968/0.257072 versus 0.249897/0.253801/0.257252
+(-0.066%/-0.099%) for 100 empty requests; 0.016080/0.016219/0.016450 versus
+0.009744/0.010105/0.010380 (-37.695%/-38.336%) for 500,000 one-array callback
+maps; 0.012648/0.012726/0.012926 versus 0.006095/0.006181/0.006249
+(-51.428%/-51.723%) for 500,000 null-callback maps; and
+0.008218/0.008579/0.008726 versus 0.008298/0.008742/0.008929
+(+1.909%/+1.580%) for 500,000 array-row column projections. Paired p10/p90
+changes are -1.304%/+0.982%, -40.517%/-36.117%, -52.769%/-50.808% and
+-5.017%/+6.823%, respectively. Every lane preserves its checksum and remains
+below the +5% median gate; negative changes are absence-of-regression evidence,
+not a general optimization claim. Baseline/candidate binary SHA-256 values are
+`cca9e05e82c701082bf104b841fc76704bf1be0c145f5eea04453b85d279e8ae` /
+`4b8a48bfaa7f4a44c715c9b05fc4cc85c9c44c61d78d086b8b1008b3a3a0c6cd`.
+The harness and callback/null/column workload SHA-256 values are
+`602fc092303f12bdaca60c655e02865eab3921d16e2a3aa351b31a78e8057e00`,
+`cfb54ab09c9a6d1be77a51e4c7b7e3e87e9f1a9d1b7193bac633f4ea9ea610dc`,
+`c6ef77ea63a054e4b098731f0460730f9f1bacd541388bb8729c830b4f8dcfd1`
+and `5a027f0be26e6952badf93c834041e511e68c8b50adfb2d211f0fe068764809b`.
+An initial generic row-dispatch implementation was rejected after the column
+lane measured +11.216%; the accepted array-row specialization reduced the
+final median change to +1.909%.
+
+This checkpoint does not claim the remaining eight focused failures: three are
+parser limitations and five are `array_combine()` or recursive/resource output
+edges. It also does not claim complete Reflection type/default metadata, the
+remaining 192 array-suite failures or broader PHP compatibility.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `array-callback-arguments-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 implementation commit `d2cffe0b`. Across all 5,599 unmodified `Zend/tests`
 and `tests/lang` cases, 4,168 pass, 1,135 fail, 115 skip, none remain XFAIL,
