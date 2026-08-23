@@ -320,6 +320,7 @@ pub(crate) fn type_for_request(eg: &ExecutorGlobals, id: i64) -> &'static str {
 
 impl Drop for ExecutorGlobals {
     fn drop(&mut self) {
+        super::directory::restore_initial_cwd(self);
         close_scope(request_scope(self));
     }
 }

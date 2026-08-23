@@ -153,6 +153,11 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "SORT_ASC" => Some(value::Value::long(4)),
         "SORT_DESC" => Some(value::Value::long(3)),
 
+        // Directory
+        "SCANDIR_SORT_ASCENDING" => Some(value::Value::long(0)),
+        "SCANDIR_SORT_DESCENDING" => Some(value::Value::long(1)),
+        "SCANDIR_SORT_NONE" => Some(value::Value::long(2)),
+
         // Array
         "COUNT_NORMAL" => Some(value::Value::long(0)),
         "COUNT_RECURSIVE" => Some(value::Value::long(1)),

@@ -179,6 +179,7 @@ macro_rules! ret {
 mod array_assoc_sets;
 mod array_traversal;
 mod builtin_classes;
+mod directory;
 mod fiber;
 mod filesystem;
 mod process;

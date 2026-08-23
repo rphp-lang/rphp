@@ -6,6 +6,7 @@
 
 use super::array_assoc_sets::*;
 use super::array_traversal::*;
+use super::directory::*;
 use super::filesystem::*;
 use super::process::*;
 use super::recursive_arrays::*;
@@ -1044,6 +1045,20 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("realpath", fn_realpath, 1, 1, "path");
     reg!("pathinfo", fn_pathinfo, 2, 1, "path", "flags");
     reg!("getcwd", fn_getcwd, 0, 0);
+    reg!("chdir", fn_chdir, 1, 1, "directory");
+    reg!("opendir", fn_opendir, 2, 1, "directory", "context");
+    reg!("readdir", fn_readdir, 1, 0, "dir_handle");
+    reg!("rewinddir", fn_rewinddir, 1, 0, "dir_handle");
+    reg!("closedir", fn_closedir, 1, 0, "dir_handle");
+    reg!(
+        "scandir",
+        fn_scandir,
+        3,
+        1,
+        "directory",
+        "sorting_order",
+        "context"
+    );
     #[cfg(not(feature = "file-lines"))]
     reg!("file", fn_file, 1, 1, "filename");
     #[cfg(feature = "file-lines")]
