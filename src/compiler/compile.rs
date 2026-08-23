@@ -2949,6 +2949,11 @@ pub struct Compiler {
     deferred_error: Option<String>,
     /// ref_args for functions known from parent scope (inherited by child compilers)
     known_ref_args: HashMap<String, u64>,
+    /// Parameter names for functions whose declarations are visible throughout
+    /// the compilation unit. Together with `known_ref_args`, this lets named
+    /// arguments select the same FUNC_ARG l-value context before or after the
+    /// textual function declaration.
+    known_param_names: HashMap<String, Vec<String>>,
     /// Per-file strict_types flag from `declare(strict_types=1);`
     strict_types: bool,
     /// Request startup mode for PHP's assertion construct. A negative value
@@ -3142,6 +3147,25 @@ impl Compiler {
         })
     }
 
+    fn is_mutable_call_reference_source(expr: &Expr) -> bool {
+        matches!(
+            expr,
+            Expr::DynamicVariable { .. }
+                | Expr::ArrayAccess { .. }
+                | Expr::PropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
+                | Expr::DynamicPropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
+                | Expr::StaticProperty { .. }
+                | Expr::DynamicNamedStaticProperty { .. }
+                | Expr::DynamicStaticProperty { .. }
+        )
+    }
+
     /// PHP treats a braced name produced by a constant expression differently
     /// from a runtime string equal to `class`: the former remains an ordinary
     /// case-sensitive constant lookup, while the latter resolves `::class`.
@@ -3218,6 +3242,7 @@ impl Compiler {
             compile_deprecations: Rc::new(RefCell::new(Vec::new())),
             deferred_error: None,
             known_ref_args: HashMap::new(),
+            known_param_names: HashMap::new(),
             strict_types: false,
             zend_assertions: 1,
             precision: 14,
@@ -3966,6 +3991,66 @@ impl Compiler {
         );
     }
 
+    /// Collect signatures of unconditional named functions before emitting
+    /// the main op-array. PHP publishes these declarations for the whole
+    /// compilation unit, so calls before the source declaration must still
+    /// know which named arguments require an l-value.
+    fn prescan_function_signatures(&mut self, stmts: &[Stmt]) {
+        let namespace = self.current_namespace.clone();
+        Self::prescan_function_signatures_pass(
+            stmts,
+            namespace.as_deref(),
+            &mut self.known_ref_args,
+            &mut self.known_param_names,
+        );
+    }
+
+    fn prescan_function_signatures_pass(
+        stmts: &[Stmt],
+        namespace: Option<&str>,
+        ref_args: &mut HashMap<String, u64>,
+        param_names: &mut HashMap<String, Vec<String>>,
+    ) {
+        for statement in stmts {
+            match statement {
+                Stmt::Function { name, params, .. } => {
+                    let qualified = namespace
+                        .filter(|namespace| !namespace.is_empty())
+                        .map_or_else(|| name.clone(), |namespace| format!("{namespace}\\{name}"));
+                    let key = qualified.to_ascii_lowercase();
+                    let references =
+                        params
+                            .iter()
+                            .enumerate()
+                            .fold(0_u64, |mask, (index, param)| {
+                                if param.is_ref && index < u64::BITS as usize {
+                                    mask | (1_u64 << index)
+                                } else {
+                                    mask
+                                }
+                            });
+                    ref_args.entry(key.clone()).or_insert(references);
+                    param_names
+                        .entry(key)
+                        .or_insert_with(|| params.iter().map(|param| param.name.clone()).collect());
+                }
+                Stmt::Namespace { name, body } => Self::prescan_function_signatures_pass(
+                    body,
+                    (!name.is_empty()).then_some(name.as_str()),
+                    ref_args,
+                    param_names,
+                ),
+                // A plain block has no runtime condition of its own. Do not
+                // recurse through if/loop/switch bodies, whose declarations
+                // remain conditional in PHP.
+                Stmt::Block(body) => {
+                    Self::prescan_function_signatures_pass(body, namespace, ref_args, param_names)
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Single pass over statements, recursing into namespace bodies.
     /// `ns` is the current namespace prefix (None = top-level).
     fn prescan_constants_pass(
@@ -4344,11 +4429,38 @@ impl Compiler {
             }
         }
         // Check inherited known functions (from parent scope)
-        if let Some(&ra) = self.known_ref_args.get(name) {
+        if let Some((_, &ra)) = self
+            .known_ref_args
+            .iter()
+            .find(|(function, _)| function.eq_ignore_ascii_case(name))
+        {
             return ra;
         }
         // Fall back to builtin table
         builtin_ref_args(name)
+    }
+
+    fn lookup_param_names(&self, name: &str) -> Option<&[String]> {
+        self.functions
+            .iter()
+            .find(|(function, _)| function.eq_ignore_ascii_case(name))
+            .map(|(_, function)| function.common.sig.param_names.as_slice())
+            .or_else(|| {
+                self.known_param_names
+                    .iter()
+                    .find(|(function, _)| function.eq_ignore_ascii_case(name))
+                    .map(|(_, names)| names.as_slice())
+            })
+    }
+
+    fn named_argument_is_known_reference(&self, function: &str, parameter: &str) -> bool {
+        let Some(index) = self
+            .lookup_param_names(function)
+            .and_then(|names| names.iter().position(|name| name == parameter))
+        else {
+            return false;
+        };
+        index < u64::BITS as usize && self.lookup_ref_args(function) & (1_u64 << index) != 0
     }
 
     fn literal_callback_has_no_ref_parameters(&self, callback: &Expr) -> bool {
@@ -4545,6 +4657,14 @@ impl Compiler {
         map
     }
 
+    fn build_known_param_names(&self) -> HashMap<String, Vec<String>> {
+        let mut map = self.known_param_names.clone();
+        for (name, function) in &self.functions {
+            map.insert(name.clone(), function.common.sig.param_names.clone());
+        }
+        map
+    }
+
     pub fn compile(self, stmts: &[Stmt]) -> Result<CompileResult, CompileFailure> {
         let compile_deprecations = Rc::clone(&self.compile_deprecations);
         self.compile_inner(stmts).map_err(|message| CompileFailure {
@@ -4595,6 +4715,7 @@ impl Compiler {
         // Pre-scan: collect compile-time constants from the entire file so that
         // property defaults can reference constants declared later (forward refs).
         self.prescan_constants(stmts);
+        self.prescan_function_signatures(stmts);
 
         let mut runtime_reachable = true;
         for stmt in stmts {
@@ -8970,8 +9091,18 @@ impl Compiler {
                     0 // no fallback
                 };
 
+                let named_reference_args: Vec<bool> = args
+                    .iter()
+                    .map(|argument| match argument {
+                        CallArg::Named { name, .. } => {
+                            self.named_argument_is_known_reference(&resolved, name)
+                        }
+                        _ => false,
+                    })
+                    .collect();
+
                 let has_reference_lvalue = args.iter().enumerate().any(|(index, arg)| {
-                    index < 64
+                    (index < 64
                         && ref_args & (1u64 << index) != 0
                         && matches!(
                             arg,
@@ -8986,7 +9117,9 @@ impl Compiler {
                                     | Expr::DynamicNamedStaticProperty { .. }
                                     | Expr::DynamicStaticProperty { .. }
                             )
-                        )
+                        ))
+                        || (named_reference_args[index]
+                            && matches!(arg, CallArg::Named { value, .. } if Self::is_mutable_call_reference_source(value)))
                 });
                 let contains_yield = args.iter().any(CallArg::contains_yield);
                 let mut reference_writebacks = Vec::new();
@@ -9036,6 +9169,22 @@ impl Compiler {
                                         (op, op_type)
                                     };
                                     (op, op_type, None, None)
+                                }
+                                CallArg::Named { name, value }
+                                    if named_reference_args[index]
+                                        && Self::is_mutable_call_reference_source(value) =>
+                                {
+                                    match self.compile_array_element_reference_source(value) {
+                                        Ok(op) => {
+                                            let name =
+                                                self.add_literal(Value::string(name.clone()));
+                                            (op, OpType::Cv, Some(name), None)
+                                        }
+                                        Err(error) => {
+                                            self.deferred_error = Some(error);
+                                            (0, OpType::Unused, None, None)
+                                        }
+                                    }
                                 }
                                 CallArg::Named { name, value } => {
                                     let (op, op_type) = self.compile_expr(value);
@@ -9714,6 +9863,7 @@ impl Compiler {
                 func_compiler.bindable_closure_scope =
                     self.lexical_static_class.is_none() || self.bindable_closure_scope;
                 func_compiler.known_ref_args = self.build_known_ref_args();
+                func_compiler.known_param_names = self.build_known_param_names();
                 func_compiler.current_function_name = closure_name.clone();
                 func_compiler.returns_reference_context = *returns_by_ref;
                 func_compiler.contains_yield = body.iter().any(Stmt::contains_yield);

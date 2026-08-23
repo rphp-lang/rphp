@@ -1,5 +1,29 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
+#[cold]
+fn named_argument_reference_error(
+    eg: &ExecutorGlobals,
+    func_common: &FunctionCommon,
+    parameter_index: u32,
+) -> Value {
+    let parameter_name = func_common
+        .sig
+        .param_names
+        .get(parameter_index as usize)
+        .map(String::as_str)
+        .unwrap_or("unknown");
+    let function_name = registered_function_name(eg, func_common as *const FunctionCommon);
+    make_error_value(
+        "Error",
+        &format!(
+            "{}(): Argument #{} (${}) could not be passed by reference",
+            function_name,
+            parameter_index + 1,
+            parameter_name
+        ),
+    )
+}
+
 #[inline(never)]
 fn op_send_named<'a>(
     eg: &mut ExecutorGlobals,
@@ -89,38 +113,35 @@ fn op_send_named<'a>(
                 if opline._pad & SEND_FLAG_NONREFERENCEABLE != 0
                     && !func_common.sig.is_param_prefer_ref(variadic_index)
                 {
-                    let parameter_name = func_common
-                        .sig
-                        .param_names
-                        .get(variadic_index as usize)
-                        .map(String::as_str)
-                        .unwrap_or("unknown");
-                    let function_name =
-                        registered_function_name(eg, func_common as *const FunctionCommon);
-                    let error = make_error_value(
-                        "Error",
-                        &format!(
-                            "{}(): Argument #{} (${}) could not be passed by reference",
-                            function_name,
-                            variadic_index + 1,
-                            parameter_name
-                        ),
-                    );
+                    let error = named_argument_reference_error(eg, func_common, variadic_index);
                     return Ok(match cleanup_call_and_throw(eg, frame, call, error)? {
                         ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
                         ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                     });
                 }
-                if yield_snapshot {
+                let reference_source = if yield_snapshot {
                     debug_assert_eq!(opline.result_type, OpType::Unused);
                     let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
-                    materialize_reference_alias(frame, base.add(opline.result as usize))
-                } else if opline.op1_type != OpType::Cv {
-                    snapshot_runtime_send_rvalue(eg, frame, op_array, opline)?
-                } else {
+                    Some(base.add(opline.result as usize))
+                } else if opline.op1_type == OpType::Cv {
                     let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
-                    let raw_ptr = base.add(opline.op1 as usize);
-                    materialize_reference_alias(frame, raw_ptr)
+                    Some(base.add(opline.op1 as usize))
+                } else if matches!(opline.op1_type, OpType::Tmp | OpType::Var) {
+                    let source = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                    (*source).is_reference().then_some(source)
+                } else {
+                    None
+                };
+                if let Some(source) = reference_source {
+                    materialize_reference_alias(frame, source)
+                } else if !func_common.sig.is_param_prefer_ref(variadic_index) {
+                    let error = named_argument_reference_error(eg, func_common, variadic_index);
+                    return Ok(match cleanup_call_and_throw(eg, frame, call, error)? {
+                        ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+                        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                    });
+                } else {
+                    snapshot_runtime_send_rvalue(eg, frame, op_array, opline)?
                 }
             }
         } else {
@@ -167,48 +188,43 @@ fn op_send_named<'a>(
 
                 let is_ref = func_common.sig.is_param_by_ref(idx);
 
-                if is_ref
-                    && (opline.op1_type == OpType::Cv
-                        || yield_snapshot
-                        || (opline._pad & SEND_FLAG_NONREFERENCEABLE != 0
-                            && !func_common.sig.is_param_prefer_ref(idx)))
-                {
+                if is_ref {
                     // By-reference: same logic as SendRef
                     let argument = unsafe {
-                        if opline._pad & SEND_FLAG_NONREFERENCEABLE != 0 {
-                            let parameter_name = func_common
-                                .sig
-                                .param_names
-                                .get(idx as usize)
-                                .map(String::as_str)
-                                .unwrap_or("unknown");
-                            let function_name = registered_function_name(
-                                eg,
-                                func_common as *const FunctionCommon,
-                            );
-                            let error = make_error_value(
-                                "Error",
-                                &format!(
-                                    "{}(): Argument #{} (${}) could not be passed by reference",
-                                    function_name,
-                                    idx + 1,
-                                    parameter_name
-                                ),
-                            );
+                        if opline._pad & SEND_FLAG_NONREFERENCEABLE != 0
+                            && !func_common.sig.is_param_prefer_ref(idx)
+                        {
+                            let error = named_argument_reference_error(eg, func_common, idx);
                             return Ok(match cleanup_call_and_throw(eg, frame, call, error)? {
                                 ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
                                 ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                             });
                         }
-                        let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
-                        let source_cv = if yield_snapshot {
+                        let reference_source = if yield_snapshot {
                             debug_assert_eq!(opline.result_type, OpType::Unused);
-                            opline.result
+                            let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+                            Some(base.add(opline.result as usize))
+                        } else if opline.op1_type == OpType::Cv {
+                            let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+                            Some(base.add(opline.op1 as usize))
+                        } else if matches!(opline.op1_type, OpType::Tmp | OpType::Var) {
+                            let source =
+                                (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                            (*source).is_reference().then_some(source)
                         } else {
-                            opline.op1
+                            None
                         };
-                        let raw_ptr = base.add(source_cv as usize);
-                        materialize_reference_alias(frame, raw_ptr)
+                        if let Some(source) = reference_source {
+                            materialize_reference_alias(frame, source)
+                        } else if !func_common.sig.is_param_prefer_ref(idx) {
+                            let error = named_argument_reference_error(eg, func_common, idx);
+                            return Ok(match cleanup_call_and_throw(eg, frame, call, error)? {
+                                ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+                                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                            });
+                        } else {
+                            snapshot_runtime_send_rvalue(eg, frame, op_array, opline)?
+                        }
                     };
                     let arg_slot = unsafe { (*call).cv_mut(cv_idx) };
                     unsafe { frame_slot_init(call, arg_slot as *mut Value, argument) };

@@ -2342,6 +2342,7 @@ impl Compiler {
                 func_compiler.dynamic_static_scope = false;
                 func_compiler.bindable_closure_scope = false;
                 func_compiler.known_ref_args = self.build_known_ref_args();
+                func_compiler.known_param_names = self.build_known_param_names();
                 let resolved_name = self.resolve_declaration_name(name);
                 self.validate_declaration_import(
                     UseKind::Function,
@@ -4211,6 +4212,7 @@ impl Compiler {
                     func_compiler.returns_reference_context = method.returns_by_ref;
                     func_compiler.contains_yield = method.body.iter().any(Stmt::contains_yield);
                     func_compiler.known_ref_args = self.build_known_ref_args();
+                    func_compiler.known_param_names = self.build_known_param_names();
                     // $this is always CV 0 in methods
                     let this_cv = func_compiler.resolve_cv("this");
                     func_compiler.definitely_defined_cvs.insert(this_cv);
@@ -4940,6 +4942,7 @@ impl Compiler {
                     func_compiler.returns_reference_context = method.returns_by_ref;
                     func_compiler.contains_yield = method.body.iter().any(Stmt::contains_yield);
                     func_compiler.known_ref_args = self.build_known_ref_args();
+                    func_compiler.known_param_names = self.build_known_param_names();
                     let this_cv = func_compiler.resolve_cv("this");
                     func_compiler.definitely_defined_cvs.insert(this_cv);
                     let context = format!("interface method {}::{}", name, method.name);
@@ -5261,6 +5264,7 @@ impl Compiler {
                     func_compiler.returns_reference_context = method.returns_by_ref;
                     func_compiler.contains_yield = method.body.iter().any(Stmt::contains_yield);
                     func_compiler.known_ref_args = self.build_known_ref_args();
+                    func_compiler.known_param_names = self.build_known_param_names();
                     let this_cv = func_compiler.resolve_cv("this");
                     func_compiler.definitely_defined_cvs.insert(this_cv);
                     let context = format!("trait method {}::{}", name, method.name);
@@ -6176,6 +6180,7 @@ impl Compiler {
                     func_compiler.returns_reference_context = method.returns_by_ref;
                     func_compiler.contains_yield = method.body.iter().any(Stmt::contains_yield);
                     func_compiler.known_ref_args = self.build_known_ref_args();
+                    func_compiler.known_param_names = self.build_known_param_names();
                     let this_cv = func_compiler.resolve_cv("this");
                     func_compiler.definitely_defined_cvs.insert(this_cv);
                     let context = format!("enum method {}::{}", name, method.name);
