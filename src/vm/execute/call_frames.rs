@@ -1778,6 +1778,42 @@ pub(crate) fn call_object_property_get_hook(
     )
 }
 
+/// Reuse PHP's guarded magic-property presence check from internal object
+/// projections.  A missing `__isset()` is reported as `None`; a declared
+/// method returning false remains an observable `Some(false)` result.
+pub(crate) fn call_object_property_magic_isset(
+    eg: &mut ExecutorGlobals,
+    object: &Value,
+    name: &str,
+) -> Result<Option<Value>, VmError> {
+    call_guarded_property_magic_method(
+        eg,
+        object,
+        name,
+        PROPERTY_GUARD_ISSET,
+        "__isset",
+        &[Value::string(name.to_string())],
+    )
+}
+
+/// Reuse PHP's guarded magic-property read from internal object projections.
+/// Keeping this beside the ordinary opcode helper ensures recursive `__get()`
+/// access observes the same per-object guard instead of re-entering forever.
+pub(crate) fn call_object_property_magic_get(
+    eg: &mut ExecutorGlobals,
+    object: &Value,
+    name: &str,
+) -> Result<Option<Value>, VmError> {
+    call_guarded_property_magic_method(
+        eg,
+        object,
+        name,
+        PROPERTY_GUARD_GET,
+        "__get",
+        &[Value::string(name.to_string())],
+    )
+}
+
 /// Reuse PHP object string conversion from internal handlers.
 pub(crate) fn call_object_string_conversion(
     eg: &mut ExecutorGlobals,

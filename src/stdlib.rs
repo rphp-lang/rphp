@@ -32,10 +32,11 @@ use crate::vm::execute::{
     arithmetic_operator_operand, call_function, call_function_iter,
     call_function_iter_with_context, call_function_owned_iter,
     call_function_owned_iter_readback_arg0_with_context, call_function_owned_iter_with_context,
-    call_function_owned_iter_with_context_and_named, check_type_hint, explicit_float_conversion,
-    explicit_long_conversion, explicit_numeric_cast_warning, php_numeric_string_to_float,
-    prepare_scalar_long_callback, try_execute_scalar_long_callback, value_to_array_key,
-    values_equal_checked_with_precision, values_identical_checked,
+    call_function_owned_iter_with_context_and_named, call_object_property_get_hook,
+    call_object_property_magic_get, call_object_property_magic_isset, check_type_hint,
+    explicit_float_conversion, explicit_long_conversion, explicit_numeric_cast_warning,
+    php_numeric_string_to_float, prepare_scalar_long_callback, try_execute_scalar_long_callback,
+    value_to_array_key, values_equal_checked_with_precision, values_identical_checked,
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
@@ -2661,31 +2662,358 @@ fn fn_array_chunk(
     ret!(rv, Value::array(result));
 }
 
+#[derive(Clone)]
+enum ArrayColumnSelector {
+    WholeRow,
+    Key(ArrayKey),
+}
+
+fn typed_array_column_selector(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    index: u32,
+    parameter: &str,
+) -> Result<Option<ArrayColumnSelector>, VmError> {
+    let argument = owned_argument(ed, index);
+    let argument = argument.dereferenced();
+    let strict = internal_call_is_strict(ed);
+    let selector = match argument.value_type() {
+        ValueType::Null => Some(ArrayColumnSelector::WholeRow),
+        ValueType::Long => Some(ArrayColumnSelector::Key(ArrayKey::Int(
+            argument.as_long().unwrap(),
+        ))),
+        ValueType::String => {
+            let key = argument.as_str().unwrap_or("");
+            Some(ArrayColumnSelector::Key(
+                crate::value::canonical_decimal_array_key(key)
+                    .map_or_else(|| ArrayKey::String(key.to_string()), ArrayKey::Int),
+            ))
+        }
+        ValueType::True | ValueType::False if !strict => Some(ArrayColumnSelector::Key(
+            ArrayKey::Int(i64::from(argument.is_truthy())),
+        )),
+        ValueType::Double if !strict => {
+            let number = argument.as_double().unwrap_or(f64::NAN);
+            let upper_exclusive = -(i64::MIN as f64);
+            if !number.is_finite() || number < i64::MIN as f64 || number >= upper_exclusive {
+                None
+            } else {
+                let integer = number as i64;
+                if integer as f64 != number {
+                    report_internal_deprecation(
+                        eg,
+                        ed,
+                        &format!(
+                            "Implicit conversion from float {} to int loses precision",
+                            argument.echo_to_string_with_precision(-1)
+                        ),
+                    )?;
+                    if eg.exception.is_some() {
+                        return Ok(None);
+                    }
+                }
+                Some(ArrayColumnSelector::Key(ArrayKey::Int(integer)))
+            }
+        }
+        ValueType::Object if !strict => {
+            let rendered = crate::vm::execute::call_object_string_conversion(eg, argument)?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            rendered.and_then(|rendered| {
+                let rendered = rendered.dereferenced();
+                rendered.as_str().map(|key| {
+                    ArrayColumnSelector::Key(
+                        crate::value::canonical_decimal_array_key(key)
+                            .map_or_else(|| ArrayKey::String(key.to_string()), ArrayKey::Int),
+                    )
+                })
+            })
+        }
+        _ => None,
+    };
+    if selector.is_none() && eg.exception.is_none() {
+        typed_internal_argument_error(
+            eg,
+            "array_column",
+            argument,
+            index as usize + 1,
+            parameter,
+            "string|int|null",
+        );
+    }
+    Ok(selector)
+}
+
+#[inline]
+fn array_column_array_value(array: &PhpArray, key: &ArrayKey) -> Option<Value> {
+    let value = match key {
+        ArrayKey::Int(key) => array.get_int(*key),
+        ArrayKey::String(key) => array.get_str(key),
+    }?;
+    Some(value.dereferenced().clone())
+}
+
+fn array_column_object_value(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    object_value: &Value,
+    key: &ArrayKey,
+) -> Result<Option<Value>, VmError> {
+    let name = match key {
+        ArrayKey::Int(key) => key.to_string(),
+        ArrayKey::String(key) => key.clone(),
+    };
+    let object = object_value
+        .as_object()
+        .expect("array_column object projection requires an object");
+    let class_name = object.class_name.to_string();
+    let class_id = object.class_id;
+
+    let visibility = eg.find_property_visibility(&class_name, &name);
+    if visibility
+        .as_ref()
+        .is_some_and(|(visibility, _)| *visibility == Visibility::Public)
+    {
+        if let Some(slot) = object.property_slot(&name) {
+            let definition = eg.instance_property_definition(class_id, slot);
+            if definition.is_some_and(|definition| definition.has_get_hook) {
+                drop(object);
+                return call_object_property_get_hook(eg, object_value, &name)
+                    .map(|value| value.map(|value| value.dereferenced().clone()));
+            }
+            if let Some(value) = object.get_property_slot(slot)
+                && !value.is_undef()
+            {
+                return Ok(Some(value.dereferenced().clone()));
+            }
+        }
+    } else if visibility.is_none()
+        && let Some((value, _)) = object.get_dynamic_property_with_position(&name)
+        && !value.is_undef()
+    {
+        return Ok(Some(value.dereferenced().clone()));
+    }
+    drop(object);
+
+    let Some(isset) = call_object_property_magic_isset(eg, object_value, &name)? else {
+        return Ok(None);
+    };
+    if eg.exception.is_some() || !isset.is_truthy() {
+        return Ok(None);
+    }
+    if let Some(value) = call_object_property_magic_get(eg, object_value, &name)? {
+        return Ok(Some(value.dereferenced().clone()));
+    }
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    report_internal_diagnostic(
+        eg,
+        ed,
+        2,
+        "Warning",
+        &format!("Undefined property: {class_name}::${name}"),
+    )?;
+    Ok(eg.exception.is_none().then(Value::null))
+}
+
+fn array_column_row_value(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    row: &Value,
+    selector: &ArrayColumnSelector,
+) -> Result<Option<Value>, VmError> {
+    if matches!(selector, ArrayColumnSelector::WholeRow) {
+        return Ok(Some(array_projection_value(row)));
+    }
+    let ArrayColumnSelector::Key(key) = selector else {
+        unreachable!();
+    };
+    let row = row.dereferenced();
+    if let Some(array) = row.as_array() {
+        return Ok(array_column_array_value(array, key));
+    }
+    if row.as_object().is_none() {
+        return Ok(None);
+    }
+    let initialized = if eg.is_uninitialized_lazy_object(row) {
+        Some(reflection::initialize_lazy_object(eg, row)?)
+    } else {
+        eg.lazy_proxy_instance(row)
+    };
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    array_column_object_value(ed, eg, initialized.as_ref().unwrap_or(row), key)
+}
+
+fn array_column_result_key(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    value: &Value,
+) -> Result<Option<ArrayKey>, VmError> {
+    let value = value.dereferenced();
+    let key = match value_to_array_key(value) {
+        Ok(key) => key,
+        Err(ArrayKeyError::DeprecatedNull) => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                "Using null as an array offset is deprecated, use an empty string instead",
+            )?;
+            ArrayKey::String(String::new())
+        }
+        Err(ArrayKeyError::DeprecatedFloat(integer)) => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                &format!(
+                    "Implicit conversion from float {} to int loses precision",
+                    value.echo_to_string_with_precision(-1)
+                ),
+            )?;
+            ArrayKey::Int(integer)
+        }
+        Err(ArrayKeyError::NonRepresentableFloat {
+            integer,
+            also_deprecated,
+        }) => {
+            let rendered = value.echo_to_string_with_precision(-1);
+            report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("The float {rendered} is not representable as an int, cast occurred"),
+            )?;
+            if eg.exception.is_none() && also_deprecated {
+                report_internal_deprecation(
+                    eg,
+                    ed,
+                    &format!("Implicit conversion from float {rendered} to int loses precision"),
+                )?;
+            }
+            ArrayKey::Int(integer)
+        }
+        Err(ArrayKeyError::Resource(resource)) => {
+            report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("Resource ID#{resource} used as offset, casting to integer ({resource})"),
+            )?;
+            ArrayKey::Int(resource)
+        }
+        Err(ArrayKeyError::Illegal) => {
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                &format!(
+                    "Cannot access offset of type {} on array",
+                    value.diagnostic_type_name()
+                ),
+            ));
+            return Ok(None);
+        }
+    };
+    Ok(eg.exception.is_none().then_some(key))
+}
+
 fn fn_array_column(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let arr_arg = arg!(ed, 0);
-    let col_key = arg!(ed, 1);
-    if let Some(arr) = arr_arg.as_array() {
-        let mut result = PhpArray::new();
-        let key_str = col_key.echo_to_string();
-        for row in arr.values() {
-            if let Some(inner) = row.as_array() {
-                // Try string key first, then integer
-                let val = inner
-                    .get_str(&key_str)
-                    .or_else(|| col_key.as_long().and_then(|k| inner.get_int(k)));
-                if let Some(v) = val {
-                    result.push(v.clone());
+    let source = owned_argument(ed, 0);
+    let Some(array) = source.dereferenced().as_array() else {
+        typed_internal_argument_error(
+            eg,
+            "array_column",
+            source.dereferenced(),
+            1,
+            "array",
+            "array",
+        );
+        return Ok(());
+    };
+    let Some(column) = typed_array_column_selector(ed, eg, 1, "column_key")? else {
+        return Ok(());
+    };
+    let index = if arg_opt!(ed, 2).is_some() {
+        let Some(index) = typed_array_column_selector(ed, eg, 2, "index_key")? else {
+            return Ok(());
+        };
+        (!matches!(index, ArrayColumnSelector::WholeRow)).then_some(index)
+    } else {
+        None
+    };
+
+    let mut result = PhpArray::with_packed_capacity(array.len());
+    if index.is_none() {
+        match &column {
+            ArrayColumnSelector::WholeRow => {
+                for row in array.values() {
+                    result.push(array_projection_value(row));
                 }
+                ret!(rv, Value::array(result));
+            }
+            ArrayColumnSelector::Key(key) => {
+                for row in array.values() {
+                    let row = row.dereferenced();
+                    if let Some(inner) = row.as_array() {
+                        if let Some(value) = array_column_array_value(inner, key) {
+                            result.push(value);
+                        }
+                        continue;
+                    }
+                    if row.as_object().is_none() {
+                        continue;
+                    }
+                    let Some(value) = array_column_row_value(ed, eg, row, &column)? else {
+                        if eg.exception.is_some() {
+                            return Ok(());
+                        }
+                        continue;
+                    };
+                    if eg.exception.is_some() {
+                        return Ok(());
+                    }
+                    result.push(value);
+                }
+                ret!(rv, Value::array(result));
             }
         }
-        ret!(rv, Value::array(result));
-    } else {
-        ret!(rv, Value::null());
     }
+
+    for row in array.values() {
+        let Some(value) = array_column_row_value(ed, eg, row, &column)? else {
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            continue;
+        };
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        let key = if let Some(index) = index.as_ref() {
+            array_column_row_value(ed, eg, row, index)?
+        } else {
+            None
+        };
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        if let Some(key) = key {
+            let Some(key) = array_column_result_key(ed, eg, &key)? else {
+                return Ok(());
+            };
+            result.set(key, value);
+        } else {
+            result.push(value);
+        }
+    }
+    ret!(rv, Value::array(result));
 }
 
 fn fn_sort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -3974,13 +4302,22 @@ fn fn_array_map(
     let callback = arg!(ed, 0);
     let first = arg!(ed, 1);
     let Some(first_array) = first.as_array() else {
-        ret!(rv, Value::null());
+        typed_internal_argument_error(eg, "array_map", first, 2, "array", "array");
+        return Ok(());
     };
     let mut arrays = vec![first_array];
     if let Some(extra) = arg_opt!(ed, 2).and_then(Value::as_array) {
-        for value in extra.values() {
+        for (index, value) in extra.values().enumerate() {
             let Some(array) = value.dereferenced().as_array() else {
-                ret!(rv, Value::null());
+                typed_internal_argument_error(
+                    eg,
+                    "array_map",
+                    value.dereferenced(),
+                    index + 3,
+                    "arrays",
+                    "array",
+                );
+                return Ok(());
             };
             arrays.push(array);
         }
@@ -3995,28 +4332,11 @@ fn fn_array_map(
                 if eg.exception.is_some() {
                     return Ok(());
                 }
-                if callback
-                    .as_array()
-                    .and_then(|parts| parts.get_value_at(0))
-                    .is_some_and(|receiver| {
-                        !matches!(
-                            receiver.dereferenced().value_type(),
-                            ValueType::String | ValueType::Object
-                        )
-                    })
-                {
-                    eg.exception = Some(crate::value::make_error_value(
-                        "TypeError",
-                        "array_map(): Argument #1 ($callback) must be a valid callback or null, first array member is not a valid class name or object",
-                    ));
-                    return Ok(());
-                }
-                let description = callback.echo_to_string();
+                let reason = ordinary_callback_invalid_reason(callback, eg);
                 eg.exception = Some(crate::value::make_error_value(
                     "TypeError",
                     &format!(
-                        "array_map(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found",
-                        description
+                        "array_map(): Argument #1 ($callback) must be a valid callback or null, {reason}"
                     ),
                 ));
                 return Ok(());
@@ -4030,36 +4350,56 @@ fn fn_array_map(
     } else {
         PhpArray::with_packed_capacity(length)
     };
-    for position in 0..length {
-        let row = arrays
-            .iter()
-            .map(|array| {
-                array
-                    .get_value_at(position)
-                    .map(|value| value.dereferenced().clone())
-                    .unwrap_or_else(Value::null)
-            })
-            .collect::<Vec<_>>();
-        let mapped = if let Some(resolved) = resolved.as_ref() {
-            call_resolved_with_values(eg, resolved, &row)?
-        } else if arrays.len() == 1 {
-            row.into_iter().next().unwrap_or_else(Value::null)
-        } else {
-            let mut tuple = PhpArray::with_packed_capacity(row.len());
-            for value in row {
-                tuple.push(value);
-            }
-            Value::array(tuple)
-        };
-        if eg.exception.is_some() {
-            return Ok(());
+    if resolved.is_none() && arrays.len() == 1 {
+        for (key, value) in first_array.iter() {
+            result.set(key, array_projection_value(value));
         }
+        ret!(rv, Value::array(result));
+    }
+
+    if let Some(resolved) = resolved.as_ref() {
         if arrays.len() == 1 {
-            let (_, key) = first_array.get_at(position).unwrap();
-            result.set(key, mapped);
-        } else {
+            for (key, value) in first_array.iter() {
+                let argument = value.dereferenced().clone();
+                let mapped =
+                    call_resolved_with_values(eg, resolved, std::slice::from_ref(&argument))?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+                result.set(key, mapped);
+            }
+            ret!(rv, Value::array(result));
+        }
+
+        for position in 0..length {
+            let row = arrays
+                .iter()
+                .map(|array| {
+                    array
+                        .get_value_at(position)
+                        .map(|value| value.dereferenced().clone())
+                        .unwrap_or_else(Value::null)
+                })
+                .collect::<Vec<_>>();
+            let mapped = call_resolved_with_values(eg, resolved, &row)?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
             result.push(mapped);
         }
+        ret!(rv, Value::array(result));
+    }
+
+    for position in 0..length {
+        let mut tuple = PhpArray::with_packed_capacity(arrays.len());
+        for array in &arrays {
+            let value = array
+                .get_value_at(position)
+                .map(array_projection_value)
+                .unwrap_or_else(Value::null);
+            tuple.push(value);
+        }
+        result.push(Value::array(tuple));
     }
     ret!(rv, Value::array(result));
 }

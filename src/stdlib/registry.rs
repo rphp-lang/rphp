@@ -294,7 +294,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "length",
         "preserve_keys"
     );
-    reg!("array_column", fn_array_column, 2, 2, "array", "column_key");
+    reg!(
+        "array_column",
+        fn_array_column,
+        3,
+        2,
+        "array",
+        "column_key",
+        "index_key"
+    );
     reg_ref!("sort", fn_sort, 2, 1, 0b1, "array", "flags");
     reg_ref!("rsort", fn_rsort, 2, 1, 0b1, "array", "flags");
     reg_var_prefer_ref!("array_multisort", fn_array_multisort, 1, "array", "rest");
@@ -321,7 +329,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
     reg!("array_rand", fn_array_rand, 2, 1, "array", "num");
     reg_ref!("shuffle", fn_shuffle, 1, 1, 0b1, "array");
-    reg_var!("array_map", fn_array_map, 2, "callback", "array");
+    reg_var!("array_map", fn_array_map, 2, "callback", "array", "arrays");
     reg!(
         "array_filter",
         fn_array_filter,
