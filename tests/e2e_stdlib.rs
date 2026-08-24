@@ -1435,6 +1435,16 @@ fn output_buffer_level_starts_at_zero() {
 }
 
 #[test]
+fn flush_returns_null_without_draining_a_user_buffer() {
+    assert_eq!(
+        run_php(
+            "<?php ob_start(); echo 'A'; $result = flush(); $buffer = ob_get_clean(); echo get_debug_type($result), '|', $buffer;"
+        ),
+        "null|A"
+    );
+}
+
+#[test]
 fn output_buffers_nest_and_return_raw_contents() {
     assert_eq!(
         run_php(

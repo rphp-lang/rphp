@@ -29,14 +29,15 @@ use crate::value::{
     ArrayKey, ClosureStaticVars, PhpArray, PhpClosure, PhpObject, Value, ValueType,
 };
 use crate::vm::execute::{
-    ArrayKeyError, ExplicitNumericCastTarget, ScalarLongSortOrder, VmError,
-    arithmetic_operator_operand, call_function, call_function_iter,
+    ArrayKeyError, ExplicitNumericCastTarget, ScalarLongReferenceMutationCallback,
+    ScalarLongSortOrder, VmError, arithmetic_operator_operand, call_function, call_function_iter,
     call_function_iter_with_context, call_function_owned_iter,
     call_function_owned_iter_readback_arg0_with_context, call_function_owned_iter_with_context,
     call_function_owned_iter_with_context_and_named, call_object_property_get_hook,
     call_object_property_magic_get, call_object_property_magic_isset, check_type_hint,
     explicit_float_conversion, explicit_long_conversion, explicit_numeric_cast_warning,
-    php_numeric_string_to_float, prepare_scalar_long_callback, try_execute_scalar_long_callback,
+    php_numeric_string_to_float, prepare_scalar_long_callback,
+    prepare_scalar_long_reference_mutation_callback, try_execute_scalar_long_callback,
     value_to_array_key, values_equal_checked_with_precision, values_identical_checked,
 };
 use crate::vm::frame::ExecuteData;
@@ -10056,6 +10057,15 @@ fn fn_error_log(
     ret!(rv, Value::bool(true));
 }
 
+fn fn_flush(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    eg.flush_output();
+    ret!(rv, Value::null());
+}
+
 const OUTPUT_HANDLER_START: i64 = 1;
 const OUTPUT_HANDLER_CLEAN: i64 = 2;
 const OUTPUT_HANDLER_FLUSH: i64 = 4;
@@ -15128,6 +15138,44 @@ where
     }
 }
 
+#[inline]
+fn call_array_walk_resolved_owned_iter<I>(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    num_args: usize,
+    args: I,
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = Value>,
+{
+    if resolved.is_magic_call
+        || resolved.common().fn_type != FunctionType::User
+        || reject_scope_introspection_callback(eg, resolved)
+    {
+        return call_resolved_owned_iter(eg, resolved, num_args, args);
+    }
+    let capture_start = num_args.saturating_sub(resolved.use_vars.len());
+    let args = args.enumerate().map(|(index, value)| {
+        if index >= capture_start {
+            resolved.use_vars[index - capture_start].clone_closure_capture()
+        } else {
+            value
+        }
+    });
+    crate::vm::execute::call_function_owned_iter_with_context_from(
+        eg,
+        ed,
+        resolved.func_ptr,
+        num_args,
+        args,
+        resolved.called_scope_class_id,
+        resolved.bound_this.clone(),
+        resolved.use_vars.len(),
+        resolved.closure_static_vars.clone(),
+    )
+}
+
 fn call_resolved_owned_iter_with_named<I>(
     eg: &mut ExecutorGlobals,
     resolved: &ResolvedCallback,
@@ -16896,6 +16944,253 @@ fn replace_array_walk_property_value(property: &mut Value, replacement: Value) {
     property.assign_dereferenced(replacement);
 }
 
+/// Locate the reference cell used as the live array-walk cursor. The common
+/// no-mutation path validates the previous ordered position in O(1); only a
+/// callback that structurally edits the array pays for the linear recovery.
+#[inline]
+fn array_walk_reference_position(
+    array: &PhpArray,
+    reference_identity: usize,
+    position_hint: usize,
+) -> Option<usize> {
+    if array
+        .get_value_at(position_hint)
+        .and_then(Value::reference_identity)
+        == Some(reference_identity)
+    {
+        return Some(position_hint);
+    }
+    array
+        .values()
+        .position(|value| value.reference_identity() == Some(reference_identity))
+}
+
+#[inline]
+fn array_walk_key_position(array: &PhpArray, key: &ArrayKey) -> Option<usize> {
+    array.iter().position(|(candidate, _)| candidate == *key)
+}
+
+/// Promote the current member to a stable reference cell for the duration of
+/// one callback. This mirrors Zend's live HashTable cursor: deleting the
+/// current member can be distinguished from replacing a value under the same
+/// key, while an array replacement is detected through its COW identity.
+fn array_walk_live_entry(
+    owner: &mut Value,
+    position: usize,
+    reusable_reference: &mut Option<Value>,
+) -> Option<(usize, ArrayKey, usize, Value, bool)> {
+    let (_, key) = owner.as_array()?.get_at(position)?;
+    let was_reference = owner
+        .as_array()?
+        .get_value_at(position)
+        .is_some_and(Value::is_reference);
+    let mut binding = if !was_reference {
+        if let Some(mut binding) = reusable_reference.take() {
+            let alias = binding.clone_owned_reference_alias();
+            let value = owner.as_array_mut()?.replace_value_at(position, alias)?;
+            drop(binding.replace_dereferenced(value));
+            binding
+        } else {
+            owner
+                .as_array_mut()?
+                .argument_unpack_reference_at(position)?
+        }
+    } else {
+        owner
+            .as_array_mut()?
+            .argument_unpack_reference_at(position)?
+    };
+    let reference_identity = binding.reference_identity()?;
+    if binding.is_owned_reference() {
+        binding.mark_internal_reference_alias();
+    }
+    Some((
+        owner.array_identity()?,
+        key,
+        reference_identity,
+        binding,
+        was_reference,
+    ))
+}
+
+/// Advance a live array-walk cursor after arbitrary callback-side structural
+/// mutation. `None` means the walked variable ceased to be an array.
+fn advance_array_walk_cursor(
+    owner: &Value,
+    walked_identity: usize,
+    position_hint: usize,
+    key: ArrayKey,
+    reference_identity: usize,
+    anchors: &mut Vec<ArrayKey>,
+) -> Option<(usize, usize, Option<usize>)> {
+    let array = owner.as_array()?;
+    let current_identity = owner.array_identity()?;
+    if current_identity != walked_identity {
+        anchors.clear();
+        return Some((current_identity, 0, None));
+    }
+
+    if let Some(position) = array_walk_reference_position(array, reference_identity, position_hint)
+    {
+        anchors.push(key);
+        return Some((current_identity, position + 1, Some(position)));
+    }
+
+    while let Some(anchor) = anchors.last() {
+        if let Some(position) = array_walk_key_position(array, anchor) {
+            return Some((current_identity, position + 1, None));
+        }
+        anchors.pop();
+    }
+    Some((current_identity, 0, None))
+}
+
+/// By-value callbacks must not leave implementation-only reference wrappers
+/// behind (PHP bug #42850). Preserve a wrapper only when it predated the walk
+/// or another PHP-visible alias was retained during the callback.
+fn release_array_walk_cursor_reference(
+    owner: &mut Value,
+    walked_identity: usize,
+    position: Option<usize>,
+    mut binding: Value,
+    was_reference: bool,
+    reusable_reference: &mut Option<Value>,
+) -> usize {
+    if was_reference || binding.owned_reference_is_aliased() {
+        return owner.array_identity().unwrap_or(walked_identity);
+    }
+    // Detaching here is an internal cleanup, not a user-visible replacement;
+    // return the possibly new COW identity so iteration does not restart.
+    let replacement = binding.replace_dereferenced(Value::null());
+    if let Some(position) = position
+        && owner.array_identity() == Some(walked_identity)
+        && let Some(array) = owner.as_array_mut()
+        && array
+            .get_value_at(position)
+            .and_then(Value::reference_identity)
+            == binding.reference_identity()
+    {
+        let _ = array.set_value_at(position, replacement);
+    }
+    let identity = owner.array_identity().unwrap_or(walked_identity);
+    *reusable_reference = Some(binding);
+    identity
+}
+
+/// Detach an implementation-only cursor wrapper after a callback exception
+/// without clearing its target. The retained exception trace may own a COW
+/// snapshot of the internal-call arguments; preserving the reference target
+/// keeps that snapshot observationally equal to the array at throw time.
+fn release_array_walk_cursor_reference_after_exception(
+    owner: &mut Value,
+    walked_identity: usize,
+    position: Option<usize>,
+    binding: Value,
+    was_reference: bool,
+) {
+    if was_reference || binding.owned_reference_is_aliased() {
+        return;
+    }
+    let replacement = binding.dereferenced().clone();
+    if let Some(position) = position
+        && owner.array_identity() == Some(walked_identity)
+        && let Some(array) = owner.as_array_mut()
+        && array
+            .get_value_at(position)
+            .and_then(Value::reference_identity)
+            == binding.reference_identity()
+    {
+        let _ = array.set_value_at(position, replacement);
+    }
+}
+
+#[inline]
+fn report_invalidated_array_walk_owner(eg: &mut ExecutorGlobals) {
+    eg.exception = Some(crate::value::make_error_value(
+        "TypeError",
+        "Iterated value is no longer an array or object",
+    ));
+}
+
+/// Execute the proven scalar prefix of a by-reference walk without temporary
+/// reference cells or callback frames. The returned position is the first
+/// untouched member that needs canonical replay; `array.len()` means the
+/// complete stable array was handled.
+fn execute_array_walk_scalar_long_reference_mutations(
+    owner: &mut Value,
+    callback: &ScalarLongReferenceMutationCallback,
+    captures: &[Value],
+) -> Option<usize> {
+    let array = owner.as_array_mut()?;
+    let len = array.len();
+    for position in 0..len {
+        let mut arguments = [0i64; 8];
+        match array.get_at(position) {
+            Some((value, ArrayKey::Int(key)))
+                if value.dereferenced().value_type() == ValueType::Long =>
+            {
+                arguments[0] = value
+                    .dereferenced()
+                    .as_long()
+                    .expect("guarded scalar walk member must remain Long");
+                arguments[1] = key;
+            }
+            _ => {
+                callback.record_calls(position as u64);
+                return Some(position);
+            }
+        }
+        for (index, capture) in captures.iter().enumerate() {
+            let Some(capture) = capture.dereferenced().as_long() else {
+                callback.record_calls(position as u64);
+                return Some(position);
+            };
+            arguments[index + 2] = capture;
+        }
+        let Some(result) = callback.evaluate_longs(&arguments[..captures.len() + 2]) else {
+            callback.record_calls(position as u64);
+            return Some(position);
+        };
+        if !array.assign_dereferenced_at(position, Value::long(result)) {
+            callback.record_calls(position as u64);
+            return Some(position);
+        }
+    }
+    callback.record_calls(len as u64);
+    Some(len)
+}
+
+fn execute_array_walk_scalar_long_reference_mutation_at(
+    owner: &mut Value,
+    position: usize,
+    callback: &ScalarLongReferenceMutationCallback,
+    captures: &[Value],
+) -> bool {
+    let mut arguments = [0i64; 8];
+    let Some((value, ArrayKey::Int(key))) =
+        owner.as_array().and_then(|array| array.get_at(position))
+    else {
+        return false;
+    };
+    let Some(value) = value.dereferenced().as_long() else {
+        return false;
+    };
+    arguments[0] = value;
+    arguments[1] = key;
+    for (index, capture) in captures.iter().enumerate() {
+        let Some(capture) = capture.dereferenced().as_long() else {
+            return false;
+        };
+        arguments[index + 2] = capture;
+    }
+    let Some(result) = callback.evaluate_longs(&arguments[..captures.len() + 2]) else {
+        return false;
+    };
+    owner
+        .as_array_mut()
+        .is_some_and(|array| array.assign_dereferenced_at(position, Value::long(result)))
+}
+
 /// array_walk(&$array, $callback, $arg = null): true
 /// Supports by-ref callbacks: function (&$val, $key) { $val *= 2; }
 #[inline(never)]
@@ -17109,124 +17404,174 @@ fn fn_array_walk(
         ret!(rv, Value::bool(true));
     }
 
-    let arr = match unsafe { &*arr_ptr }.as_array() {
-        Some(arr) => arr,
-        None => {
-            typed_internal_argument_error(eg, "array_walk", &source_owner, 1, "array", "array");
-            return Ok(());
-        }
-    };
+    // The validation snapshot is needed only by the object/lazy-object path.
+    // Releasing it before an array walk preserves callback-time destructor
+    // order when a live member is removed.
+    drop(initialized_object);
+    drop(source_owner);
 
-    let resolved = match resolve_callback_at_callsite_checked(&callback, eg, ed)? {
-        Some(r) => r,
-        None => {
-            if eg.exception.is_none() {
-                let reason = ordinary_callback_invalid_reason(&callback, eg);
-                eg.exception = Some(crate::value::make_error_value(
-                    "TypeError",
-                    &format!(
-                        "array_walk(): Argument #2 ($callback) must be a valid callback, {reason}"
-                    ),
-                ));
+    // SAFETY: `arr_ptr` targets the caller's by-reference argument cell. The
+    // caller frame outlives this internal call; no Rust reference to the cell
+    // is retained across a PHP callback, which may replace its contained
+    // Value. Each temporary borrow ends before callback dispatch.
+    unsafe {
+        let arr = (&*arr_ptr)
+            .as_array()
+            .expect("validated array_walk source must remain an array before callbacks");
+
+        let resolved = match resolve_callback_at_callsite_checked(&callback, eg, ed)? {
+            Some(r) => r,
+            None => {
+                if eg.exception.is_none() {
+                    let reason = ordinary_callback_invalid_reason(&callback, eg);
+                    eg.exception = Some(crate::value::make_error_value(
+                        "TypeError",
+                        &format!(
+                            "array_walk(): Argument #2 ($callback) must be a valid callback, {reason}"
+                        ),
+                    ));
+                }
+                return Ok(());
             }
-            return Ok(());
-        }
-    };
+        };
 
-    // A pure by-value callback cannot observe the discarded return values or
-    // mutate the walked array. Packed Long members and integer keys can use
-    // the shared scalar callback ABI without cloning a snapshot or frames.
-    if userdata.is_none() && unsafe { try_array_walk_scalar_long(arr, &resolved) }.is_some() {
+        // A pure by-value callback cannot observe the discarded return values or
+        // mutate the walked array. Packed Long members and integer keys can use
+        // the shared scalar callback ABI without cloning a snapshot or frames.
+        if userdata.is_none() && try_array_walk_scalar_long(arr, &resolved).is_some() {
+            ret!(rv, Value::bool(true));
+        }
+
+        // Check if callback's first parameter is declared by-reference.
+        let cb_arg0_by_ref = resolved.signature().is_param_by_ref(0);
+        let mut position = if cb_arg0_by_ref
+            && userdata.is_none()
+            && resolved.prepend_args.is_empty()
+            && !resolved.has_context()
+            && resolved.closure_static_vars.is_none()
+            && !resolved.is_magic_call
+            && !reject_scope_introspection_callback(eg, &resolved)
+            && let Some(callback) = prepare_scalar_long_reference_mutation_callback(
+                resolved.func_ptr,
+                resolved.use_vars.len(),
+            ) {
+            let position = execute_array_walk_scalar_long_reference_mutations(
+                &mut *arr_ptr,
+                &callback,
+                &resolved.use_vars,
+            )
+            .unwrap_or(0);
+            if (&*arr_ptr)
+                .as_array()
+                .is_some_and(|array| position == array.len())
+            {
+                ret!(rv, Value::bool(true));
+            }
+            position
+        } else {
+            0
+        };
+        let mut expected_identity = (&*arr_ptr)
+            .array_identity()
+            .expect("validated array_walk source must remain an array before callbacks");
+        let mut anchors = Vec::new();
+        let mut reusable_reference = None;
+        loop {
+            let Some(current_identity) = (&*arr_ptr).array_identity() else {
+                report_invalidated_array_walk_owner(eg);
+                return Ok(());
+            };
+            if current_identity != expected_identity {
+                position = 0;
+                anchors.clear();
+            }
+            let Some((walked_identity, key, reference_identity, binding, was_reference)) =
+                array_walk_live_entry(&mut *arr_ptr, position, &mut reusable_reference)
+            else {
+                break;
+            };
+            let key_value = match &key {
+                ArrayKey::Int(key) => Value::long(*key),
+                ArrayKey::String(key) => Value::string(key.clone()),
+            };
+            if !report_array_walk_userdata_reference_warning(
+                ed,
+                eg,
+                &resolved,
+                &callback,
+                userdata.is_some(),
+            )? {
+                return Ok(());
+            }
+            let public_args = 2 + usize::from(userdata.is_some());
+            let num_args = resolved.prepend_args.len() + public_args + resolved.use_vars.len();
+            let argument = if cb_arg0_by_ref {
+                binding.clone_closure_capture()
+            } else {
+                binding.dereferenced().clone()
+            };
+            call_array_walk_resolved_owned_iter(
+                ed,
+                eg,
+                &resolved,
+                num_args,
+                resolved
+                    .prepend_args
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(argument))
+                    .chain(std::iter::once(key_value))
+                    .chain(userdata.iter().cloned())
+                    .chain(resolved.use_vars.iter().cloned()),
+            )?;
+
+            if eg.exception.is_some() {
+                if (&*arr_ptr).array_identity() == Some(walked_identity) {
+                    let member_position = (&*arr_ptr).as_array().and_then(|array| {
+                        array_walk_reference_position(array, reference_identity, position)
+                    });
+                    release_array_walk_cursor_reference_after_exception(
+                        &mut *arr_ptr,
+                        walked_identity,
+                        member_position,
+                        binding,
+                        was_reference,
+                    );
+                }
+                return Ok(());
+            }
+
+            let Some((mut next_identity, next_position, member_position)) =
+                advance_array_walk_cursor(
+                    &*arr_ptr,
+                    walked_identity,
+                    position,
+                    key,
+                    reference_identity,
+                    &mut anchors,
+                )
+            else {
+                report_invalidated_array_walk_owner(eg);
+                return Ok(());
+            };
+            if next_identity == walked_identity {
+                next_identity = release_array_walk_cursor_reference(
+                    &mut *arr_ptr,
+                    walked_identity,
+                    member_position,
+                    binding,
+                    was_reference,
+                    &mut reusable_reference,
+                );
+            }
+            expected_identity = next_identity;
+            position = next_position;
+        }
         ret!(rv, Value::bool(true));
     }
-
-    let pairs = arr
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect::<Vec<_>>();
-
-    // Check if callback's first parameter is declared by-reference.
-    let cb_arg0_by_ref = resolved.signature().is_param_by_ref(0);
-
-    if cb_arg0_by_ref {
-        // Commit each read-back before the next callback. If a later callback
-        // throws, PHP keeps all mutations performed through the current one.
-        for (k, v) in pairs {
-            let key_val = match &k {
-                ArrayKey::Int(i) => Value::long(*i),
-                ArrayKey::String(s) => Value::string(s.clone()),
-            };
-            if !report_array_walk_userdata_reference_warning(
-                ed,
-                eg,
-                &resolved,
-                &callback,
-                userdata.is_some(),
-            )? {
-                return Ok(());
-            }
-            let public_args = 2 + usize::from(userdata.is_some());
-            let num_args = resolved.prepend_args.len() + public_args + resolved.use_vars.len();
-            let (_ret, modified_val) = call_resolved_owned_iter_readback_arg0(
-                eg,
-                &resolved,
-                num_args,
-                resolved
-                    .prepend_args
-                    .iter()
-                    .cloned()
-                    .chain(std::iter::once(v))
-                    .chain(std::iter::once(key_val))
-                    .chain(userdata.iter().cloned())
-                    .chain(resolved.use_vars.iter().cloned()),
-            )?;
-            if let Some(array) = unsafe { &mut *arr_ptr }.as_array_mut() {
-                array.set(k, modified_val);
-            }
-            if eg.exception.is_some() {
-                return Ok(());
-            }
-        }
-    } else {
-        // By-value callback: call without readback, array stays unchanged.
-        for (k, v) in pairs {
-            let key_val = match &k {
-                ArrayKey::Int(i) => Value::long(*i),
-                ArrayKey::String(s) => Value::string(s.clone()),
-            };
-            if !report_array_walk_userdata_reference_warning(
-                ed,
-                eg,
-                &resolved,
-                &callback,
-                userdata.is_some(),
-            )? {
-                return Ok(());
-            }
-            let public_args = 2 + usize::from(userdata.is_some());
-            let num_args = resolved.prepend_args.len() + public_args + resolved.use_vars.len();
-            call_resolved_owned_iter(
-                eg,
-                &resolved,
-                num_args,
-                resolved
-                    .prepend_args
-                    .iter()
-                    .cloned()
-                    .chain(std::iter::once(v))
-                    .chain(std::iter::once(key_val))
-                    .chain(userdata.iter().cloned())
-                    .chain(resolved.use_vars.iter().cloned()),
-            )?;
-            if eg.exception.is_some() {
-                return Ok(());
-            }
-        }
-    }
-    ret!(rv, Value::bool(true));
 }
 
-fn walk_array_recursive(
+fn walk_array_recursive_snapshot(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
     resolved: &ResolvedCallback,
@@ -17244,7 +17589,7 @@ fn walk_array_recursive(
     let mut result = array.clone();
     for (key, value) in pairs {
         let value = if let Some(nested) = value.as_array() {
-            Value::array(walk_array_recursive(
+            Value::array(walk_array_recursive_snapshot(
                 ed,
                 eg,
                 resolved,
@@ -17292,6 +17637,158 @@ fn walk_array_recursive(
         }
     }
     Ok(result)
+}
+
+fn walk_array_recursive_live(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    callback: &Value,
+    owner: *mut Value,
+    userdata: Option<&Value>,
+    callback_arg0_by_ref: bool,
+    scalar_callback: Option<&ScalarLongReferenceMutationCallback>,
+    scalar_completed: &mut u64,
+) -> Result<(), VmError> {
+    // SAFETY: `owner` is either the live by-reference argument cell or a
+    // target kept alive by an owned PHP reference in the parent invocation.
+    // Temporary Rust borrows end before callback dispatch, which may mutate
+    // or detach any ancestor array while the owned reference preserves this
+    // recursive target.
+    unsafe {
+        let Some(mut expected_identity) = (&*owner).array_identity() else {
+            report_invalidated_array_walk_owner(eg);
+            return Ok(());
+        };
+        let mut position = 0usize;
+        let mut anchors = Vec::new();
+        let mut reusable_reference = None;
+        loop {
+            let Some(current_identity) = (&*owner).array_identity() else {
+                report_invalidated_array_walk_owner(eg);
+                return Ok(());
+            };
+            if current_identity != expected_identity {
+                position = 0;
+                anchors.clear();
+            }
+            if let Some(scalar_callback) = scalar_callback
+                && execute_array_walk_scalar_long_reference_mutation_at(
+                    &mut *owner,
+                    position,
+                    scalar_callback,
+                    &resolved.use_vars,
+                )
+            {
+                *scalar_completed = scalar_completed.saturating_add(1);
+                expected_identity = (&*owner)
+                    .array_identity()
+                    .expect("scalar recursive mutation must retain its array owner");
+                position += 1;
+                continue;
+            }
+            let Some((walked_identity, key, reference_identity, binding, was_reference)) =
+                array_walk_live_entry(&mut *owner, position, &mut reusable_reference)
+            else {
+                break;
+            };
+            let nested = binding.dereferenced().as_array().is_some();
+            if nested {
+                // The owned cursor alias keeps the nested member live even when a
+                // callback removes its parent from an ancestor array.
+                let nested_owner = binding.as_ref_ptr();
+                walk_array_recursive_live(
+                    ed,
+                    eg,
+                    resolved,
+                    callback,
+                    nested_owner,
+                    userdata,
+                    callback_arg0_by_ref,
+                    scalar_callback,
+                    scalar_completed,
+                )?;
+            } else {
+                let key_value = match &key {
+                    ArrayKey::Int(key) => Value::long(*key),
+                    ArrayKey::String(key) => Value::string(key.clone()),
+                };
+                if !report_array_walk_userdata_reference_warning(
+                    ed,
+                    eg,
+                    resolved,
+                    callback,
+                    userdata.is_some(),
+                )? {
+                    return Ok(());
+                }
+                let public_args = 2 + usize::from(userdata.is_some());
+                let num_args = resolved.prepend_args.len() + public_args + resolved.use_vars.len();
+                let argument = if callback_arg0_by_ref {
+                    binding.clone_closure_capture()
+                } else {
+                    binding.dereferenced().clone()
+                };
+                call_array_walk_resolved_owned_iter(
+                    ed,
+                    eg,
+                    resolved,
+                    num_args,
+                    resolved
+                        .prepend_args
+                        .iter()
+                        .cloned()
+                        .chain(std::iter::once(argument))
+                        .chain(std::iter::once(key_value))
+                        .chain(userdata.into_iter().cloned())
+                        .chain(resolved.use_vars.iter().cloned()),
+                )?;
+            }
+
+            if eg.exception.is_some() {
+                if (&*owner).array_identity() == Some(walked_identity) {
+                    let member_position = (&*owner).as_array().and_then(|array| {
+                        array_walk_reference_position(array, reference_identity, position)
+                    });
+                    release_array_walk_cursor_reference_after_exception(
+                        &mut *owner,
+                        walked_identity,
+                        member_position,
+                        binding,
+                        was_reference,
+                    );
+                }
+                return Ok(());
+            }
+
+            let Some((mut next_identity, next_position, member_position)) =
+                advance_array_walk_cursor(
+                    &*owner,
+                    walked_identity,
+                    position,
+                    key,
+                    reference_identity,
+                    &mut anchors,
+                )
+            else {
+                report_invalidated_array_walk_owner(eg);
+                return Ok(());
+            };
+            if next_identity == walked_identity {
+                next_identity = release_array_walk_cursor_reference(
+                    &mut *owner,
+                    walked_identity,
+                    member_position,
+                    binding,
+                    was_reference,
+                    &mut reusable_reference,
+                );
+            }
+            expected_identity = next_identity;
+            position = next_position;
+        }
+        Ok(())
+    }
 }
 
 fn walk_object_recursive(
@@ -17346,7 +17843,7 @@ fn walk_object_recursive(
             continue;
         }
         if let Some(nested) = value.dereferenced().as_array() {
-            let walked = walk_array_recursive(
+            let walked = walk_array_recursive_snapshot(
                 ed,
                 eg,
                 resolved,
@@ -17439,7 +17936,7 @@ fn walk_object_recursive(
             continue;
         };
         if let Some(nested) = value.dereferenced().as_array() {
-            let walked = walk_array_recursive(
+            let walked = walk_array_recursive_snapshot(
                 ed,
                 eg,
                 resolved,
@@ -17516,6 +18013,7 @@ fn fn_array_walk_recursive(
     let callback = arg!(ed, 1).clone();
     let userdata = arg_opt!(ed, 2).cloned();
     let source_owner = arg!(ed, 0).dereferenced().clone();
+    let source_ptr: *mut Value = arg_mut!(ed, 0);
     if source_owner.as_array().is_none() && source_owner.as_object().is_none() {
         typed_internal_argument_error(
             eg,
@@ -17567,20 +18065,35 @@ fn fn_array_walk_recursive(
         }
         ret!(rv, Value::bool(true));
     }
-    let array = source_owner
-        .as_array()
-        .expect("validated recursive walk source must remain an array");
-    let result = walk_array_recursive(
+    drop(initialized_object);
+    drop(source_owner);
+    let scalar_callback = (callback_arg0_by_ref
+        && userdata.is_none()
+        && resolved.prepend_args.is_empty()
+        && !resolved.has_context()
+        && resolved.closure_static_vars.is_none()
+        && !resolved.is_magic_call
+        && !reject_scope_introspection_callback(eg, &resolved))
+    .then(|| {
+        prepare_scalar_long_reference_mutation_callback(resolved.func_ptr, resolved.use_vars.len())
+    })
+    .flatten();
+    let mut scalar_completed = 0u64;
+    let walk_result = walk_array_recursive_live(
         ed,
         eg,
         &resolved,
         &callback,
-        array,
+        source_ptr,
         userdata.as_ref(),
         callback_arg0_by_ref,
-    )?;
-    // Publish partial mutations before propagating a callback exception.
-    arg_mut!(ed, 0, Value::array(result));
+        scalar_callback.as_ref(),
+        &mut scalar_completed,
+    );
+    if let Some(callback) = scalar_callback.as_ref() {
+        callback.record_calls(scalar_completed);
+    }
+    walk_result?;
     if eg.exception.is_some() {
         return Ok(());
     }

@@ -1007,6 +1007,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "destination",
         "additional_headers"
     );
+    reg!("flush", fn_flush, 0, 0);
     reg!(
         "ob_start",
         fn_ob_start,

@@ -1,6 +1,6 @@
 mod common;
 
-use common::run_php;
+use common::{run_php, run_php_with_source_context};
 
 #[test]
 fn array_filter_supports_null_callbacks_and_value_key_modes() {
@@ -66,6 +66,142 @@ echo implode(',', $partial);
 "#,
         ),
         "4,5:9\nstop:10,20,3"
+    );
+}
+
+#[test]
+fn array_walk_tracks_live_cursor_across_unset_append_and_cow_replacement() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$values = ['a' => 1, 'b' => 2, 'c' => 3, 'd' => 4];
+$seen = [];
+array_walk($values, function (&$value, $key) use (&$values, &$seen) {
+    $seen[] = $key . '=' . $value;
+    if ($key === 'a') {
+        unset($values['a'], $values['b']);
+        $values['tail'] = 9;
+    }
+    $value *= 10;
+});
+echo implode(',', $seen), '|';
+foreach ($values as $key => $value) {
+    echo $key, '=', $value, ',';
+}
+echo "\n";
+
+$replacement = [7, 8];
+$unchanged = $replacement;
+$values = [1, 2, 3];
+$seen = [];
+array_walk($values, function (&$value) use (&$values, $replacement, &$seen) {
+    $seen[] = $value;
+    if ($value === 2) {
+        $values = $replacement;
+    }
+    $value += 10;
+});
+echo implode(',', $seen), '|', implode(',', $values), '|',
+    implode(',', $replacement), '|', implode(',', $unchanged);
+"#,
+        ),
+        "a=1,c=3,d=4,tail=9|c=30,d=40,tail=90,\n1,2,7,8|17,18|7,8|7,8"
+    );
+}
+
+#[test]
+fn array_walk_scalar_reference_proof_preserves_aliases_cow_and_overflow_fallback() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function mutate_scalar_walk(&$value, $key) {
+    $value += $key & 1;
+}
+
+$values = [0, 1, 2, PHP_INT_MAX];
+$copy = $values;
+array_walk($values, 'mutate_scalar_walk');
+echo implode(',', array_slice($values, 0, 3)), '|',
+    get_debug_type($values[3]), '|',
+    implode(',', $copy), "\n";
+
+$shared = 10;
+$aliases = [&$shared, &$shared];
+array_walk($aliases, 'mutate_scalar_walk');
+echo $shared, ':', $aliases[0], ':', $aliases[1], "\n";
+
+$delta = 3;
+$captured = [1, 2, 3];
+array_walk($captured, function (&$value, $key) use (&$delta) {
+    $value += ($key & 1) + $delta;
+});
+echo implode(',', $captured), ':', $delta;
+"#,
+        ),
+        concat!(
+            "0,2,2|float|0,1,2,9223372036854775807\n",
+            "11:11:11\n",
+            "4,6,6:3",
+        )
+    );
+}
+
+#[test]
+fn recursive_walk_retains_a_detached_child_but_tracks_its_live_parent() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$tree = [['x' => 1, 'y' => 2], ['z' => 3]];
+$seen = [];
+array_walk_recursive($tree, function (&$value, $key) use (&$tree, &$seen) {
+    $seen[] = $key . '=' . $value;
+    if ($key === 'x') {
+        unset($tree[0]);
+    }
+    $value += 10;
+});
+echo implode(',', $seen), '|', implode(',', array_keys($tree)), '|', $tree[1]['z'];
+"#,
+        ),
+        "x=1,y=2,z=3|1|13"
+    );
+}
+
+#[test]
+fn array_walk_reports_owner_invalidation_and_keeps_its_trace_frame() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+$invalid = [1];
+try {
+    array_walk($invalid, function ($value) use (&$invalid) {
+        $invalid = 'gone';
+    });
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+
+$values = [1];
+try {
+    array_walk($values, static function ($value) {
+        throw new Exception('trace');
+    });
+} catch (Exception $error) {
+    $trace = $error->getTrace();
+    echo count($trace), ':',
+        str_starts_with($trace[0]['function'], '{closure') ? 'closure' : 'other', '/',
+        isset($trace[0]['file']) ? 'file' : 'internal', ':',
+        $trace[1]['function'], '/', isset($trace[1]['file']) ? 'file' : 'internal', ':',
+        $trace[1]['args'][0][0];
+}
+"#,
+            "array-walk-boundary.php",
+            ".",
+        ),
+        concat!(
+            "Iterated value is no longer an array or object\n",
+            "2:closure/internal:array_walk/file:1",
+        )
     );
 }
 

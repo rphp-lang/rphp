@@ -1388,15 +1388,15 @@ fn scalar_long_source(
     operand: u16,
 ) -> Option<ScalarLongSource> {
     match op_type {
-        OpType::Cv => {
+        OpType::Cv => temporary_results.get(&operand).copied().or_else(|| {
             if operand as u32 >= this_offset && (operand as u32) < this_offset + public_args {
                 Some(ScalarLongSource::Input(
                     (operand as u32 - this_offset) as u16,
                 ))
             } else {
-                temporary_results.get(&operand).copied()
+                None
             }
-        }
+        }),
         OpType::Const => op_array
             .literals
             .get(operand as usize)
@@ -2251,6 +2251,122 @@ fn build_straight_scalar_long_function_plan(
         )?;
     }
 
+    None
+}
+
+/// Recognize a straight-line, side-effect-free Long callback whose only
+/// observable effect is one final assignment to its first by-reference
+/// parameter. Array consumers may execute this proof directly while every
+/// type, overflow, or opcode mismatch resumes the canonical callback at the
+/// first untouched member.
+pub(crate) fn build_scalar_long_reference_mutation_plan(
+    function: &UserFunction,
+    capture_count: usize,
+) -> Option<Box<ScalarLongFunctionPlan>> {
+    let common = &function.common;
+    let op_array = &function.op_array;
+    let public_args = common.sig.public_arity();
+    let total_inputs = (public_args as usize).checked_add(capture_count)?;
+    if common.plan.call != CallStrategy::Fast
+        || common.plan.ret != ReturnStrategy::Fast
+        || !matches!(common.sig.return_type_hint, ParamTypeHint::None)
+        || public_args != 2
+        || !common.sig.is_param_by_ref(0)
+        || common.sig.is_param_by_ref(1)
+        || common.sig.param_type_hints.iter().any(|hint| {
+            !matches!(
+                hint,
+                ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
+            )
+        })
+        || total_inputs > SCALAR_LONG_PLAN_MAX_ARGS as usize
+        || op_array.instructions.len() > SCALAR_LONG_PLAN_MAX_OPS + 6
+    {
+        return None;
+    }
+
+    let first_argument = common.sig.this_offset;
+    let argument_end = first_argument + public_args;
+    let mut temporary_results = HashMap::new();
+    let capture_start = common.sig.parameter_cv_count();
+    let capture_end = capture_start.checked_add(u32::try_from(capture_count).ok()?)?;
+    if capture_end > op_array.num_cvs {
+        return None;
+    }
+    for capture in 0..capture_count {
+        temporary_results.insert(
+            u16::try_from(capture_start as usize + capture).ok()?,
+            ScalarLongSource::Input(u16::try_from(public_args as usize + capture).ok()?),
+        );
+    }
+    let mut operations = Vec::new();
+    let mut output = None;
+
+    for instruction in &op_array.instructions {
+        if instruction.opcode == OpCode::ReleaseTemps {
+            continue;
+        }
+        if instruction.opcode == OpCode::Return {
+            if instruction.extended_value != 0 {
+                return None;
+            }
+            let output = output?;
+            return Some(Box::new(ScalarLongFunctionPlan::new(
+                u8::try_from(total_inputs).ok()?,
+                ScalarLongProgram {
+                    operations: operations.into_boxed_slice(),
+                    outputs: [output],
+                    output_count: 1,
+                },
+                None,
+            )));
+        }
+        // The mutation must be final. This makes every preceding input source
+        // the original argument value and leaves no post-write behavior to
+        // reproduce outside the canonical frame.
+        if output.is_some() {
+            return None;
+        }
+        if instruction.opcode == OpCode::AssignCv {
+            if instruction.op1_type != OpType::Cv {
+                return None;
+            }
+            let destination = instruction.op1 as u32;
+            if destination == first_argument {
+                output = Some(scalar_long_source(
+                    op_array,
+                    &temporary_results,
+                    first_argument,
+                    public_args,
+                    instruction.op2_type,
+                    instruction.op2,
+                )?);
+            } else {
+                if destination < first_argument
+                    || destination < argument_end
+                    || (destination >= capture_start && destination < capture_end)
+                {
+                    return None;
+                }
+                let source = scalar_long_source(
+                    op_array,
+                    &temporary_results,
+                    first_argument,
+                    public_args,
+                    instruction.op2_type,
+                    instruction.op2,
+                )?;
+                temporary_results.insert(instruction.op1, source);
+            }
+            continue;
+        }
+        append_scalar_long_operation(
+            function,
+            instruction,
+            &mut temporary_results,
+            &mut operations,
+        )?;
+    }
     None
 }
 

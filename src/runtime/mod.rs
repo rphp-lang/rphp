@@ -7049,6 +7049,13 @@ impl ExecutorGlobals {
         self.output.borrow_mut().write_all(data).unwrap();
     }
 
+    /// Flush the active request output sink. PHP's `flush()` does not bypass
+    /// user-level output buffers; it only asks the underlying SAPI/output
+    /// transport to publish bytes already handed to it.
+    pub(crate) fn flush_output(&self) {
+        let _ = self.output.borrow_mut().flush();
+    }
+
     pub(crate) fn push_output_buffer(&self, handler: Option<Value>, flags: i64) {
         self.output_buffers.borrow_mut().push(OutputBuffer {
             data: Vec::new(),

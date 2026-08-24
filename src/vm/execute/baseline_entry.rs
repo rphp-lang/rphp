@@ -424,6 +424,50 @@ impl ScalarLongCallback {
     }
 }
 
+/// Prepared proof for a pure Long callback that writes only its first
+/// by-reference parameter. The compiled function allocation remains stable
+/// for the request, while the owned plan is built once per array consumer.
+pub(crate) struct ScalarLongReferenceMutationCallback {
+    common: &'static FunctionCommon,
+    plan: Box<crate::vm::function::ScalarLongFunctionPlan>,
+}
+
+#[inline]
+pub(crate) fn prepare_scalar_long_reference_mutation_callback(
+    func_ptr: *const FunctionCommon,
+    capture_count: usize,
+) -> Option<ScalarLongReferenceMutationCallback> {
+    // SAFETY: callback resolution publishes only immutable registered function
+    // descriptors, and the returned proof is consumed synchronously before
+    // that request-owned allocation can be released.
+    unsafe {
+        if func_ptr.is_null() || (*func_ptr).fn_type != FunctionType::User {
+            return None;
+        }
+        let common = &*func_ptr;
+        let user = &*(func_ptr as *const UserFunction);
+        let plan = crate::compiler::build_scalar_long_reference_mutation_plan(user, capture_count)?;
+        Some(ScalarLongReferenceMutationCallback { common, plan })
+    }
+}
+
+impl ScalarLongReferenceMutationCallback {
+    #[inline(always)]
+    pub(crate) fn evaluate_longs(&self, arguments: &[i64]) -> Option<i64> {
+        if arguments.len() != self.plan.public_args as usize {
+            return None;
+        }
+        let mut scalar_arguments = [0i64; 8];
+        scalar_arguments[..arguments.len()].copy_from_slice(arguments);
+        evaluate_scalar_long_plan(&self.plan, &scalar_arguments)
+    }
+
+    #[inline(always)]
+    pub(crate) fn record_calls(&self, count: u64) {
+        record_scalar_calls_bulk(self.common, count);
+    }
+}
+
 /// Call a PHP function from borrowed arguments without first materializing an
 /// intermediate `Vec<Value>`. Each value is cloned exactly once, directly into
 /// its destination CV slot in the new call frame.
@@ -611,6 +655,41 @@ where
         closure_static_vars,
         None,
         std::ptr::null_mut(),
+        false,
+        None,
+    )?;
+    Ok(return_value)
+}
+
+/// Owned callback entry that retains an internal function frame as the
+/// logical caller without manufacturing a source origin for the callback
+/// itself. Array walkers use this so a thrown callback records both the
+/// callback and `array_walk*` frames, matching Zend's internal-call trace.
+pub(crate) fn call_function_owned_iter_with_context_from<I>(
+    eg: &mut ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+    called_scope_class_id: u32,
+    bound_this: Option<Value>,
+    capture_count: usize,
+    closure_static_vars: Option<crate::value::ClosureStaticVars>,
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = Value>,
+{
+    let (return_value, _) = call_function_value_iter::<_, false>(
+        eg,
+        func_ptr,
+        num_args,
+        args,
+        called_scope_class_id,
+        bound_this,
+        capture_count,
+        closure_static_vars,
+        None,
+        logical_caller,
         false,
         None,
     )?;

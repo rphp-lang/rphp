@@ -3744,6 +3744,33 @@ impl PhpArray {
     /// structure. Used by the baseline by-reference foreach writeback path
     /// after the owning Value has completed copy-on-write detachment.
     pub(crate) fn set_value_at(&mut self, pos: usize, value: Value) -> bool {
+        self.replace_value_at(pos, value).is_some()
+    }
+
+    /// Replace an existing entry by iteration position and return its previous
+    /// storage value. Live internal iterators use the returned owner to recycle
+    /// an unescaped reference cell without changing array order or layout.
+    pub(crate) fn replace_value_at(&mut self, pos: usize, value: Value) -> Option<Value> {
+        let slot = match &mut self.storage {
+            ArrayStorage::Packed(values) => values.get_mut(pos),
+            ArrayStorage::SmallHash(small) => small
+                .entries
+                .get_mut(pos)
+                .and_then(Option::as_mut)
+                .map(|entry| &mut entry.1),
+            ArrayStorage::LinearHash(linear) => {
+                linear.entries.get_mut(pos).map(|entry| &mut entry.1)
+            }
+            ArrayStorage::Hash { entries, .. } => entries.get_mut(pos).map(|entry| &mut entry.1),
+        };
+        let slot = slot?;
+        Some(std::mem::replace(slot, value))
+    }
+
+    /// Assign through a referenced entry or replace an ordinary entry without
+    /// changing array order. Frame-free callback proofs use this only after
+    /// exact scalar guards have succeeded.
+    pub(crate) fn assign_dereferenced_at(&mut self, pos: usize, value: Value) -> bool {
         let slot = match &mut self.storage {
             ArrayStorage::Packed(values) => values.get_mut(pos),
             ArrayStorage::SmallHash(small) => small
@@ -3759,7 +3786,7 @@ impl PhpArray {
         let Some(slot) = slot else {
             return false;
         };
-        *slot = value;
+        slot.assign_dereferenced(value);
         true
     }
 
@@ -6186,12 +6213,20 @@ impl Value {
     /// without exposing their storage representation to the VM.
     #[inline]
     pub(crate) fn assign_dereferenced(&mut self, value: Value) {
+        drop(self.replace_dereferenced(value));
+    }
+
+    /// Replace through a PHP reference and return the previous target, or
+    /// replace an ordinary Value directly. The caller owns the returned value.
+    #[inline]
+    pub(crate) fn replace_dereferenced(&mut self, value: Value) -> Value {
         if self.is_reference() {
-            // SAFETY: an exclusive handle to a live reference owns or borrows
-            // a live target for the duration of this synchronous assignment.
-            drop(unsafe { self.as_ref_ptr().replace(value) });
+            // SAFETY: `replace_dereferenced` has an exclusive live handle; an
+            // owned or borrowed PHP reference therefore retains its target for
+            // this synchronous replacement, and the old owner is returned.
+            unsafe { self.as_ref_ptr().replace(value) }
         } else {
-            *self = value;
+            std::mem::replace(self, value)
         }
     }
 
