@@ -2295,6 +2295,13 @@ next goal by this order unless an explicit project objective overrides it:
 5. Reflection and standard-library clusters with measured dependency reach;
 6. isolated low-fanout features and optional extensions.
 
+The current retained AMD64 PHP 8.5 selection baseline has no array-suite
+process hazard: `ext/standard/tests/array` is 790 pass, 38 fail, 13 skip and
+one unsupported, while `Zend/tests` plus `tests/lang` is 4,185 pass, 1,118
+fail, 115 skip and 181 unsupported, with no timeout or crash in either corpus.
+The next array goal must therefore be chosen by shared-root-cause fanout and
+dependency reach across those 38 visible failures, not by filename order.
+
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,
 the parser/compiler changes, failure staging changes, or a release checkpoint

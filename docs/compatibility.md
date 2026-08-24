@@ -8,6 +8,83 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`extract-reentrancy-reference-batch`, pinned to php-src 8.5 commit `fcc29c8`
+and implementation commit `325b1ad1`. `extract()` now validates the complete
+candidate-name set before its first scope write and materializes values or
+reference cells before a write which can replace the source array or invoke
+reentrant cleanup. Ordinary scalar targets retain a sequential fast path;
+prefixed targets use the same path when a function-local source has no external
+reference alias, while global and aliased sources retain the conservative
+snapshot boundary. `EXTR_REFS` promotes source entries in place and publishes
+aliases to those cells without losing copy-on-write behavior.
+
+The PHP 8.5 `$this` contract is applied before ordinary variable-name rules.
+`EXTR_OVERWRITE` raises `Cannot re-assign $this`; `EXTR_SKIP`,
+`EXTR_IF_EXISTS` and `EXTR_PREFIX_IF_EXISTS` skip it; and the three applicable
+prefix modes write the valid prefixed variable without replacing the live
+receiver. The same results hold with `EXTR_REFS`. Direct `extract()`,
+`compact()` and `get_defined_vars()` calls now retain method CV-name metadata
+only where caller-scope lookup needs it.
+
+`$GLOBALS` snapshots preserve explicit reference cells while ordinary copied
+values remain detached. Function-local `global` CVs are authoritative only
+after their binding opcode has actually executed, so an inactive conditional
+`global $name` declaration no longer mirrors or overwrites an unrelated local
+with the same name. Return synchronization and all global dimension operations
+use the same active-cell identity rule.
+
+Three original E2E regressions cover self-overwrite with values and references,
+an externally aliased prefixed source, every `$this` mode with and without
+`EXTR_REFS`, and active versus inactive conditional global bindings. The three
+supplying `bug25708.phpt`, `bug77135.phpt` and `bug77669.phpt` cases pass 3/3,
+and the adjacent extract cluster passes 18/18 against PHP 8.5.9.
+
+The complete 842-case `ext/standard/tests/array` audit moves from 787 to 790
+passes (+3/-0), with 38 failures, 13 skips, one unsupported case and no XFAIL,
+timeout or crash. The gains are exactly the three supplying bugs. Two serial
+final manifests are byte-identical with SHA-256
+`866e7aa8d611bfeb689e3ac010086d8a8493d2e40c47f36b163973985b89db16`;
+their normalized `path`/`status`/`category`/`reason` SHA-256 is
+`08253e2d680302b0e1970e61636a4561c78f27c423272aab05bc8f9e6028a487`.
+The separate 5,599-case `Zend/tests` and `tests/lang` gate moves from 4,184 to
+4,185 passes (+1/-0 through `Zend/tests/bug76383.phpt`), with 1,118 failures,
+115 skips, 181 unsupported cases and zero XFAIL, timeout or crash. Its two
+serial manifests are byte-identical with SHA-256
+`6504b10ff4b1fc70f4f060246aedd46d2578ae422e3e6cf3dba006d42d645613`
+and normalized status SHA-256
+`1838b73ce827e40013a7a0472995829ad90775a1444b794e540e0685346e0642`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The
+storage-bounded Cargo matrix disabled incremental artifacts and debug symbols
+without changing its test or feature selection. Production remains at 1,623
+unsafe blocks and 289 unsafe functions, with 352 SAFETY annotations. The
+implementation adds no dependency, opcode, VM frame, executor-global or PHP
+value/object/array layout change and no unsafe block.
+
+On performance-governor AMD64 CPU 4, 32 balanced alternating release pairs
+after four warmups give paired median changes of -0.180% for 500,000 empty
+extracts, +3.193% for 500,000 two-key scalar overwrites, +1.475% for 500,000
+two-key prefixed reference extracts and -0.015% for 100,000 `$GLOBALS`
+snapshots. Independent median changes are respectively -0.344%, +3.165%,
++1.457% and +0.029%; all checksums match and every lane is below the +5%
+ceiling. Baseline/candidate release-binary SHA-256 values are
+`46869302ecfdca2231dc279c72d68b5ecf6658bcbc126647b29d543898bf636b` /
+`b1ff073c9d324dbb43d28a8a171fd634e7ae821df0f8ca2b19dc61b79e020e3e`.
+The benchmark harness/final-log SHA-256 values are
+`515cfd0cf50bf3c6adc0de080b32f1a7b4eea745c5c399d8650356a0d5733236` /
+`873477d764fa13f1b33d979f9465969e5a1ccbd8a08160bdb62645938706eb29`.
+An eager snapshot design was rejected after paired medians regressed empty,
+overwrite, reference and global lanes by +12.664%, +15.394%, +7.709% and
++26.191%; guarded materialization retains the same observable contract.
+
+This checkpoint does not claim dynamic caller-scope builtin invocation,
+complete `$GLOBALS`/include/eval behavior, the remaining 38 array-suite
+failures, the 1,118 Zend/lang failures or broader PHP compatibility. These
+remain explicit evidence-driven follow-up work.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `by-reference-temporary-array-batch`, pinned to php-src 8.5 commit `fcc29c8`
 and implementation commit `f998a4b5`. Call arguments now retain PHP 8.5's
 three relevant reference-source classes. An ordinary writable variable or a
