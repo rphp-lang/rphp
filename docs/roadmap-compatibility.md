@@ -2295,6 +2295,28 @@ next goal by this order unless an explicit project objective overrides it:
 5. Reflection and standard-library clusters with measured dependency reach;
 6. isolated low-fanout features and optional extensions.
 
+The `array-user-sort-small-schedule-batch` checkpoint gives canonical
+`usort()`, `uasort()` and `uksort()` callbacks PHP 8.5's stable observable
+two-to-five-element comparison schedule and stops it immediately after a
+callback exception. The guarded scalar-Long path and six-or-more-element
+canonical insertion schedule remain unchanged. Release reproduction also
+localized an independent ordinary-object `print_r()` gap, so the shared cold
+renderer now emits inherited visibility-qualified and dynamic properties,
+nested values and recursion markers without recognizing the supplying class.
+
+The supplying PHP 8.5 case passes 1/1. The complete recursive 842-case array
+audit moves from 813 to 814 passes, an exact +1/-0 delta, with 14 failures, 13
+skips, one unsupported case and no XFAIL, timeout or crash. Two final array
+manifests are byte-identical. Two byte-identical Zend/lang manifests move from
+4,187 to 4,194 pass, an exact +7/-0 delta, with 1,109 failures, 115 skips and
+181 unsupported and no XFAIL, timeout or crash. All five feature
+configurations, all-feature/all-target, formatting, PHPT-runner, unsafe,
+Composer S0, four Symfony S1 gates and PHP 8.5 S2/S3 pass. CPU-pinned 32-pair
+release controls put accepted paired medians at -1.951% for scalar-Long
+`usort()` and +0.424% for the impure canonical callback, below the +5% gate.
+Custom `__debugInfo()`/lazy/property-hook projections, throwing-comparison
+partial permutation and five mixed-value sort schedule cases remain nonclaims.
+
 The `recursive-array-boolean-diagnostic-batch` checkpoint makes the shared
 rejected-argument path for `array_merge_recursive()` and
 `array_replace_recursive()` render boolean values as PHP 8.5's `true given`
@@ -2338,11 +2360,11 @@ schedule cases and throwing-comparison partial permutation remain explicit
 nonclaims.
 
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
-process hazard: `ext/standard/tests/array` is 813 pass, 15 fail, 13 skip and
-one unsupported, while `Zend/tests` plus `tests/lang` is 4,187 pass, 1,116
+process hazard: `ext/standard/tests/array` is 814 pass, 14 fail, 13 skip and
+one unsupported, while `Zend/tests` plus `tests/lang` is 4,194 pass, 1,109
 fail, 115 skip and 181 unsupported, with no timeout or crash in either corpus.
 The next array goal must therefore be chosen by shared-root-cause fanout and
-dependency reach across those 15 visible failures, not by filename order.
+dependency reach across those 14 visible failures, not by filename order.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,

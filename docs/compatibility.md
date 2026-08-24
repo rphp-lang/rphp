@@ -8,6 +8,88 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`array-user-sort-small-schedule-batch`, pinned to php-src 8.5 commit
+`fcc29c8` and implementation commit `9994a76f`. Canonical `usort()`,
+`uasort()` and `uksort()` callback execution now reuses the established PHP
+8.5 stable two-to-five-element schedule. Equal elements retain their input
+order, key reindexing/preservation remains API-specific, and a callback
+exception stops the schedule without another invocation. The guarded
+scalar-Long `usort()` proof still runs first, while all six-or-more-element
+canonical callbacks retain their preceding insertion schedule unchanged.
+
+Release reproduction of the supplying case exposed a second independent
+baseline gap that the initial debug-only reduction had hidden: ordinary
+objects were empty under `print_r()`. The general renderer now emits declared
+public, protected and private properties in inheritance order, dynamic
+properties, nested arrays and objects, and recursive array/object markers. It
+omits uninitialized properties and retains the existing enum and
+`SensitiveParameterValue` projections. No fixture, class or callback name is
+recognized by either change.
+
+Original regressions cover descending lengths two through five, an ascending
+five-element boundary, stable equal values, all three user-sort APIs, callback
+exceptions, ordinary-object visibility/inheritance/nesting/recursion and the
+previous reference-warning and boolean-comparator contracts. A 15-case trace
+matrix is byte-identical between PHP 8.5.9 and RPHP with SHA-256
+`c91618c6e55352863c2a1727300322c3e8416e8644f1d8e51fee2cfd8c536710`.
+The unmodified supplying `bug28739.phpt` passes 1/1; its final focused manifest
+and summary SHA-256 values are
+`5795841c8aec1022896d31dc5c767d54bec9b8469e5e603c22399e6d0783715f`
+and `a758492d768b97bb79ff8aa129c7450e9a4250285bad18e55d437046ff1a0d9e`.
+
+The complete 842-case `ext/standard/tests/array` audit moves from 813 to 814
+passes (+1/-0), with 14 failures, 13 skips, one unsupported case and zero
+XFAIL, timeout or crash. The only status movement is `bug28739.phpt` from
+output failure to exact pass. Two final manifests and summaries are
+respectively byte-identical with SHA-256
+`1d8201e4076eeb23bbda2aa823ccc18921867f39bb993ea2e8bc7d4c87dd9f3b`
+and `653b45f5fc8f10c187373dde08c806b5b7b11be662c91388824d55269a4cd643`.
+
+The separate 5,599-case `Zend/tests` and `tests/lang` gate moves from 4,187 to
+4,194 passes (+7/-0), with 1,109 failures, 115 skips and 181 unsupported cases
+and zero XFAIL, timeout or crash. The gains are exactly
+`autoload/bug33116.phpt`, `backtrace/debug_backtrace_options.phpt`,
+`bug38220.phpt`, `magic_methods/bug32660.phpt`, `tests/lang/bug24499.phpt`,
+`tests/lang/bug26182.phpt` and
+`tests/lang/engine_assignExecutionOrder_007.phpt`; each exercises the ordinary
+object renderer. Two final manifests and summaries are respectively
+byte-identical with SHA-256
+`bc82ae9c99a696ffeb98ab6fef0e7a0f2b7eb0713e33108e71028c7a1fb7c9a9`
+and `dff834c0fdd4e24fb9b13fcc48c9a2feb1c34d9c6bd1a8395c46535a52c2fec7`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The
+storage-bounded matrix ran without incremental artifacts or test debug symbols
+and invoked the cleanup hook before, between and after configurations.
+Production remains at 1,623 unsafe blocks and 289 unsafe functions, with 355
+SAFETY annotations. The implementation adds no dependency, opcode, compiler,
+VM-frame, executor-global or PHP value/object/array layout change and no unsafe
+block or function.
+
+On performance-governor AMD64 CPU 2, an accepted independent run of 32 balanced
+alternating release pairs after three warmups gives scalar-Long `usort()`
+independent/paired median changes of -1.222%/-1.951% and an impure 500-element
+canonical callback -0.714%/+0.424%. A first run was rejected rather than
+discarded after bimodal impure samples produced a +14.406% independent median,
+despite a +1.493% paired median. Baseline/candidate checksums agree in every
+sample and both accepted paired medians remain below the +5% regression gate.
+Baseline/candidate release-binary SHA-256 values are
+`f5a9d2542f97dd7d516ab2a8a5ed9057e60dd14beec71995593511e6a80b4b19` /
+`3a49f9d3c8c514ba9f260e5c59a1d57f35e0231b6267f0415544b1b4b393a248`.
+The benchmark harness, accepted log and rejected first-log SHA-256 values are
+`3472982e657b3291a5230f36b250f70bb0d082fab97d515c858180ce33863ce2`,
+`b08f37945c6c6ef6d2d0e3c9f73f76c05a7963364042555a469b1e54ee50a7a5`
+and `9d7ad98cf414806a7f0bc643e9898b71976d4370c223e6fbbb4d95d0e8efcab6`.
+
+This checkpoint does not claim `print_r()` projections through custom
+`__debugInfo()`, lazy-object or property-hook behavior, the partially
+published permutation after a throwing comparison, PHP's five
+implementation-specific mixed-value sort schedule cases, the remaining 14
+array-suite failures, the remaining 1,109 Zend/lang failures or broader PHP
+compatibility. These remain explicit evidence-driven follow-up work.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `recursive-array-boolean-diagnostic-batch`, pinned to php-src 8.5 commit
 `fcc29c8` and implementation commit `2377ce97`. The shared rejected-argument
 path for `array_merge_recursive()` and `array_replace_recursive()` now renders
