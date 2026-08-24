@@ -8,6 +8,64 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`array-set-operations-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+implementation commit `7a6a22e2`. `array_diff()` and `array_intersect()` now
+share their PHP 8.5 one-required-parameter variadic contract, validate every
+array argument with position-accurate diagnostics, preserve the first array's
+keys, order and live references, and compare ordinary values through PHP
+string conversion at the request precision. The admitted observable path
+covers array warnings, `Stringable` objects, exception propagation and the
+focused conversion order; scalar calls retain a separate fast path.
+
+One original E2E test covers Reflection signatures, one- and three-array
+calls, mixed scalar comparisons, reference preservation, `Stringable`
+conversion order and a later variadic `TypeError`. The 12 focused upstream
+`array_diff*` and `array_intersect*` cases pass 12/12 against PHP 8.5.9. The
+complete 842-case `ext/standard/tests/array` audit moves from 733 to 774 passes
+(+41/-0), with 54 failures, 13 skips, one unsupported case and no timeout or
+crash. The gains include the complete ordinary `array_intersect` variation
+cluster and dependent key, associative and user-comparator cases. Repeated
+candidate runs preserve the same normalized status/pass set; the final
+`path`/`status`/`category`/`reason` SHA-256 is
+`5cf831cc34d268cb5cd0caaea95d7e66650725da0a9c5ddca05030fac977ab87`.
+
+The separate 5,599-case `Zend/tests` and `tests/lang` gate remains exactly
+4,171 pass, 1,132 fail, 115 skip, 181 unsupported and zero XFAIL, timeout or
+crash (+0/-0). Its status set is identical to the preceding baseline; the
+final manifest and summary SHA-256 values are
+`fe8ee9e31f8b441d8b84198f1edc7f874c1b48a6bb6355911f58da4756ab82c8`
+and `86df0c32095d3ac297404113e1fc099b5899f41be4184d2d59ef24ff905b099b`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy self-tests, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+The production unsafe inventory remains at 1,623 blocks and 289 functions with
+346 SAFETY annotations. The implementation adds a by-value raw positional
+call-plan constructor for the narrow variadic fast path, but no dependency,
+opcode, VM frame, executor-global, unsafe block or runtime value/object/array
+layout change.
+
+On the relevant two-array release lanes, 32 balanced alternating CPU-4 pairs
+give baseline/candidate medians of 0.325/0.330 seconds for 500,000
+`array_intersect()` calls (+1.538% independently, 0.000% paired),
+0.390/0.330 seconds for 500,000 `array_diff()` calls (-15.385% independently,
+-14.286% paired), and 0.150/0.150 seconds for 100 empty requests (0.000%).
+Every lane preserves its checksum and remains below the +5% median gate. The
+new three-array `array_intersect()` lane, unsupported by the baseline, is
+stable at 0.44 seconds for 500,000 calls and is not used as a comparative
+claim. Baseline/candidate release-binary SHA-256 values are
+`37f95390696be1180d51630038867edcde2722ea59e1101ce74bb99d449da216` /
+`69818cc779068f7f1a59f0623f41af76060f6467eb7314519843473c359af27a`.
+A generic snapshot implementation (+160% to +200%) and an initial scalar path
+(about +20%) were rejected; the accepted raw positional scalar path keeps the
+hot two-array contract inside the gate and deoptimizes observable conversions
+to an original stable cold-path algorithm.
+
+Exact large-input observable comparison traces beyond the admitted focused
+oracles, the remaining 54 array-suite failures, the 1,132 Zend/lang failures
+and broader PHP compatibility remain explicit follow-up work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `binary-string-prefix-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 implementation commit `aec9f950`. One adjacent ASCII `b` or `B` before a
 single- or double-quoted string now enters the existing quoted-string scanner
