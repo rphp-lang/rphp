@@ -1,6 +1,6 @@
 # RPHP engineering roadmap
 
-Status: active coordination map, 2026-08-24
+Status: active coordination map, 2026-08-25
 
 This document coordinates two independent engineering workstreams. It stays
 short and current; detailed plans live in the workstream roadmaps, while the
@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5 AMD64 main pass set remains 4,196/5,599 with zero XFAIL, timeout or crash. The mixed internal-sort checkpoint gives `sort()`/`rsort()`/`asort()`/`arsort()`/`ksort()`/`krsort()` and `array_multisort()` one stable observation-derived schedule for heterogeneous and diagnostic-producing domains, guarded by total-scalar fast paths. The full array audit reaches 821/842 (+5/-0), with exactly the five targeted sort cases gained and no other status/category movement. All five feature configurations, unsafe, Composer S0, Symfony S1 and PHP 8.5.9 S2/S3 pass; two CPU-pinned paired-median runs keep startup, Long, numeric, string, mixed regular and multi-column lanes below the +5% gate. Throwing-comparison partial permutation, the remaining 1,107 Zend/lang failures, seven non-sort array-suite failures and broader PHP compatibility remain explicit work. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5 AMD64 main pass set remains 4,196/5,599 with zero XFAIL, timeout or crash. The binary-format checkpoint adds the complete core `pack()`/`unpack()` alphabet, grammar, cursor/offset behavior, boundary semantics, diagnostics, typing, Reflection metadata and byte-exact direct output without growing `Value`. The full array audit reaches 822/842 (+1/-0 from the preceding checkpoint), and the strings audit reaches 286/733 (+19/-0); repeated manifests are byte-identical with no other category movement. All five feature configurations, unsafe, Composer S0, Symfony S1 and PHP 8.5.9 S2/S3 pass; two CPU-pinned paired-median runs keep startup, scalar, unchanged string and `sprintf` controls below the +5% gate, while candidate-only pack/unpack throughput is published without a baseline ratio. Complete byte propagation through unrelated string APIs, optional-extension dependants, the remaining 1,107 Zend/lang failures, six array-suite failures and broader PHP compatibility remain explicit work. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,
