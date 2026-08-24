@@ -8,6 +8,90 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`array-walk-live-mutation-batch`, pinned to php-src 8.5 commit `fcc29c8`
+and implementation commit `ec682d52`. `array_walk()` now follows a live
+ordered cursor instead of a value/key snapshot: callback-side removal,
+replacement and append are observed in PHP order, replacing the walked array
+restarts on the new storage, and invalidating the owner raises the PHP 8.5
+`TypeError`. `array_walk_recursive()` keeps a detached child alive while it is
+being traversed and still follows live mutations of its parents and leaves.
+
+Each active member is represented by a stable temporary reference cell. A
+callback receives the real cell when its first parameter is by reference, an
+ordinary value otherwise, and an escaped or pre-existing reference remains
+visible after the walk. Unescaped engine-only cells are detached and recycled
+without changing COW, key order or reference identity. Exception cleanup does
+not clear a cell retained by the stored trace, and user callbacks keep the
+internal `array_walk*` frame as their logical caller. The supplying legacy
+`flush()` dependency now flushes only the underlying request transport,
+leaves user output buffers intact and returns PHP 8.5's `null`/`void` result.
+
+A guarded scalar-Long mutation proof preserves the established hot callback
+path without redefining the baseline behavior. It admits only a two-parameter
+user callback with the first parameter by reference, compatible int/mixed/no
+parameter hints, no context, userdata, static state or introspection, a
+straight-line checked Long expression and one final write to the first
+parameter. Captured Long values are explicit guarded inputs. A type, key,
+member, opcode or overflow mismatch resumes the canonical live callback at the
+first untouched member, so an already committed prefix is neither lost nor
+replayed.
+
+Four original array-callback E2E regressions cover unset/append/replacement,
+COW, shared aliases, captured references, overflow side exit, recursive parent
+detachment, owner invalidation and exception-trace arguments. An additional
+original output test covers `flush(): void` without draining `ob_start()`.
+All 45 unmodified `ext/standard/tests/array/array_walk` cases pass against PHP
+8.5.9. The complete 842-case array audit moves from 790 to 797 passes
+(+7/-0), with 31 failures, 13 skips, one unsupported case and zero XFAIL,
+timeout or crash. The gains are exactly `array_walk_closure.phpt`,
+`bug12776.phpt`, `bug61730.phpt`, `bug61967.phpt`, `bug69068.phpt`,
+`bug69068_2.phpt` and `bug70713.phpt`. Two final manifests and summaries are
+respectively byte-identical with SHA-256
+`58566027ef0f0b076f10ee71f729fc1b851c188a2f292bd05d6bc374e33bc20d`
+and `2dba7169950faed4e95a365c3d98d681398d73dbd2c5cead4169dc797df361aa`.
+
+The separate 5,599-case `Zend/tests` and `tests/lang` gate remains exactly at
+4,185 passes, 1,118 failures, 115 skips and 181 unsupported cases with zero
+XFAIL, timeout or crash. Its two final manifests and summaries are
+respectively byte-identical with SHA-256
+`6504b10ff4b1fc70f4f060246aedd46d2578ae422e3e6cf3dba006d42d645613`
+and `c5d8cf0951faad9371b610911968867bc8d2d5485357e00d04a2e515587bbb92`;
+the exact status set is unchanged from the retained baseline.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The
+storage-bounded matrix ran the cleanup hook between configurations. Production
+remains at 1,623 unsafe blocks and 289 unsafe functions, with 355 SAFETY
+annotations. The implementation adds no dependency, opcode, VM-frame,
+executor-global or PHP value/object/array layout change and no net unsafe block
+or function.
+
+On performance-governor AMD64 CPU 2, 32 balanced alternating release pairs
+after three warmups give paired median changes of +1.186% for 100 empty
+requests, +0.034% for a 500,000-member by-value walk, -92.695% for a
+100,000-member by-reference walk, -94.922% for a 200,000-member captured
+closure walk and -86.253% for 200,000 recursive leaves. Independent median
+changes are respectively +1.373%, -0.040%, -92.675%, -94.851% and -86.285%;
+all checksums match and every median is below the +5% regression ceiling.
+Baseline/candidate release-binary SHA-256 values are
+`b1ff073c9d324dbb43d28a8a171fd634e7ae821df0f8ca2b19dc61b79e020e3e` /
+`9ba963461ef4596c6fe9d1dc11a8b6a62037c1010fd1c7162d592393c067ee2b`.
+The benchmark harness/final-log SHA-256 values are
+`cf3953a2f3bd4d51f1b70e253e097e79a3da4ed777d0296349a6bc8b4d0dda86` /
+`a0bbf3856768c68c6e31c98da4bc9aef18eae49a78c25cf83290a6488d288557`.
+A canonical fresh-reference implementation was rejected after paired medians
+regressed the by-reference, captured-closure and recursive lanes by +95.871%,
++78.572% and +125.382%; reference-cell reuse plus the guarded proof retains the
+same live semantics without that cost.
+
+This checkpoint does not claim the existing typed-float by-reference callback
+coercion gap, general object-destructor timing, live structural mutation of an
+object target, the remaining 31 array-suite failures, the 1,118 Zend/lang
+failures or broader PHP compatibility. These remain explicit evidence-driven
+follow-up work.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `extract-reentrancy-reference-batch`, pinned to php-src 8.5 commit `fcc29c8`
 and implementation commit `325b1ad1`. `extract()` now validates the complete
 candidate-name set before its first scope write and materializes values or
