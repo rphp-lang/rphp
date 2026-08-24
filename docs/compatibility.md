@@ -8,6 +8,80 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`array-map-callback-contract-batch`, pinned to php-src 8.5 commit `fcc29c8`
+and implementation commit `47f9014f`. `array_map()` now validates and resolves
+its callback before validating the first and variadic array arguments, reports
+the invalid member of a two-element array callable in PHP 8.5 order, and omits
+the variadic parameter name from diagnostics where PHP does. A valid magic
+`__call` trampoline is resolved on empty inputs but is not invoked.
+
+The single-array `array_map(null, $array)` path returns the source value through
+copy-on-write instead of rebuilding its entries. This preserves reference
+cells, aliases and recursive graph topology while later writes still separate
+ordinary COW owners. `preg_replace_callback()` uses the same eager callback
+contract before validating its subject; an invalid subject therefore does not
+mask an invalid callback, while a valid magic callback is not invoked when the
+pattern has no match. The latter change is the smallest supplying fix for the
+array-suite `bug74345.phpt` callback-validation case.
+
+Two original array-callback E2E regressions cover recursive COW topology,
+callback/member and variadic-argument validation order, exact diagnostics and
+empty-input magic callables. One original regex E2E regression covers callback
+validation before subject validation and non-invocation on a no-match subject.
+The four focused supplying PHPTs pass 4/4: `array_map_variation17.phpt`,
+`array_map_variation2.phpt`, `bug74345.phpt` and `bug77931.phpt`; the focused
+manifest SHA-256 is
+`e95eb06db45d119fd1cd7e23503b62966073365011309473c3284309792cf204`.
+
+The complete 842-case `ext/standard/tests/array` audit moves from 797 to 801
+passes (+4/-0), with 27 failures, 13 skips, one unsupported case and zero
+XFAIL, timeout or crash. The gains are exactly the four supplying cases. Two
+final manifests and summaries are respectively byte-identical with SHA-256
+`9c6ba4f1f73a72db1ef49248b47f3bd40363e152f74f32def848cf9203d5c86b`
+and `4ec1021584a0c6e4df0acb658d2049a4097aa6678156ce9304bd2c4afc1ea91b`.
+The separate 5,599-case `Zend/tests` and `tests/lang` gate moves from 4,185 to
+4,187 passes (+2/-0), with 1,116 failures, 115 skips, 181 unsupported cases and
+zero XFAIL, timeout or crash. The gains are exactly `Zend/tests/bug70895.phpt`
+and `Zend/tests/bug70898.phpt`; both exercise callback validation before the
+array argument. Its two final manifests and summaries are respectively
+byte-identical with SHA-256
+`fd63812ae652d3022296ca4b6c89574e4ad37d8969ee7e8dff99dddbca4bd453`
+and `bd6180e5e4cf11053f5f658acf1f2cceeed95e2822df1d9b785235d5bbf446cc`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The
+storage-bounded matrix ran without incremental artifacts or test debug symbols
+and invoked the cleanup hook between configurations. Production remains at
+1,623 unsafe blocks and 289 unsafe functions, with 355 SAFETY annotations. The
+implementation adds no dependency, opcode, VM-frame, executor-global or PHP
+value/object/array layout change and no unsafe block or function.
+
+On performance-governor AMD64 CPU 2, 32 balanced alternating release pairs
+after three warmups give paired median changes of -0.312% for 100 empty
+requests, -3.711% for callback `array_map()`, -99.896% for single-array null
+`array_map()` and +3.039% for matched `preg_replace_callback()`. Independent
+median changes are respectively +0.286%, -4.252%, -99.895% and +3.051%; all
+checksums match and every same-work lane remains below the +5% regression
+ceiling. A separate no-match regex lane changes by +17.037% paired and +16.970%
+independent median because the baseline incorrectly skips mandatory callback
+validation; it is recorded as a correctness tax, not a same-work performance
+claim. Baseline/candidate release-binary SHA-256 values are
+`9ba963461ef4596c6fe9d1dc11a8b6a62037c1010fd1c7162d592393c067ee2b` /
+`c50527dd4e37382444deb3b7a8f97d7af947794c8c62a3ffc370487a7c88900d`.
+The benchmark harness/final-log SHA-256 values are
+`d73ffb949728fee6747ef10a64b0691f6efab272a405e7d9a1cbca1bacc942d7` /
+`c33de6ae932467af4bb4b363ead0cdc5a9236aaf8fb2984fc58fb06667e3d4a4`.
+An initial implementation was rejected after matched regex regressed by
++5.584%; the accepted literal-string callback cache path restores that
+same-work lane without assuming a stable callback name.
+
+This checkpoint does not claim array subjects for `preg_replace_callback()`,
+the remaining 27 array-suite failures, the 1,116 Zend/lang failures, general
+sort scheduling, object-cursor behavior, destructor timing or broader PHP
+compatibility. These remain explicit evidence-driven follow-up work.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `array-walk-live-mutation-batch`, pinned to php-src 8.5 commit `fcc29c8`
 and implementation commit `ec682d52`. `array_walk()` now follows a live
 ordered cursor instead of a value/key snapshot: callback-side removal,
