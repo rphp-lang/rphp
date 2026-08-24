@@ -8,6 +8,93 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`mixed-internal-sort-zend-schedule-batch`, pinned to php-src 8.5 commit
+`fcc29c8` and implementation commit `09e40114`. The internal
+`sort()`/`rsort()`/`asort()`/`arsort()`/`ksort()`/`krsort()` and
+`array_multisort()` paths now share one stable, observation-derived PHP 8.5
+comparison scheduler. Original positions resolve public-comparator equality,
+and heterogeneous, warning-producing, hook-bearing, NaN and non-transitive
+domains retain the exact observable comparison order. Previously accepted
+user-callback small schedules and `array_multisort()` argument classification
+are unchanged.
+
+The scheduler uses original RPHP small-input transcripts, insertion boundaries
+and an explicit range stack. It does not recognize a fixture, test, class,
+benchmark or precomputed permutation. Pure total scalar domains use guarded
+stable host sorting: regular values must be uniformly numeric or uniformly
+non-numeric strings, numeric values must cast without warnings or NaN, and
+string/natural modes require strings. The same proof admits pure multi-column
+`array_multisort()` inputs; any impure column routes the complete comparison
+back through the observable scheduler.
+
+Four original E2E regressions cover an 8-by-8 mixed-type pair matrix;
+non-transitive numeric/non-numeric string cycles; stable duplicates, ascending
+and descending directions, preserved/reindexed keys and lengths 5, 6, 10, 16,
+17 and 22; numeric object-warning transcripts through length 17 and the
+1,023/1,024 pivot boundary; and exact array/object numeric/string diagnostic
+order. The latter asserts five array-to-string warnings before the opaque
+object error without asserting the post-error permutation. All 12 retained
+sort E2E tests pass.
+
+PHP 8.5.9 and RPHP both pass the five supplying unmodified cases
+`array_multisort_variation7.phpt`, `array_multisort_variation9.phpt`,
+`internal_sorts_basic.phpt`, `rsort_variation11.phpt` and
+`sort_variation11.phpt`. The candidate focused manifest and summary SHA-256
+values are
+`f2eb2ef03966e6f2e2332abfb9ba40fe2597ed397a3b48b485afcec3032082f9`
+and `90361353cfb2efd15a48db7478c6c1c2a0be87d3fcd0fc3e056be8f033fb260e`;
+the PHP-oracle manifest SHA-256 is
+`72f458a677a1a94bcb6fe1c4e084c12c1d16bfe8f07219815a20bce6d4088ee0`.
+
+The complete 842-case `ext/standard/tests/array` audit moves from 816 to 821
+passes (+5/-0), with seven failures, 13 skips, one unsupported case and zero
+XFAIL, timeout or crash. The five gains are exactly the supplying cases, with
+no other status or category movement. Two final manifests and summaries are
+respectively byte-identical with SHA-256
+`fef68d76a455c6db1a7a25fd446bb1d6a26f99776ed469aab0e0c6eaf5653e95`
+and `0ba5fcb425a0fffedf3ca3a52b455cffe20a8ef4e6c67bd80746f8cd6060a1e4`.
+
+The separate 5,599-case `Zend/tests` plus `tests/lang` audit remains exactly at
+4,196 passes, 1,107 failures, 115 skips and 181 unsupported cases, with zero
+XFAIL, timeout or crash and no status/category movement. Two final manifests
+and summaries are respectively byte-identical with SHA-256
+`a6c79657d0a6f66f85de63781961e6fc3f8ae64a1796136de8d07749990be70c`
+and `45de45eab1d5459cc8cc24154cffbbfd1c7453999e46ccca3043e6cb9dd1d4e5`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The
+storage-bounded matrix ran without incremental artifacts or test debug symbols
+and invoked the cleanup hook before, between and after configurations.
+Production remains at 1,623 unsafe blocks and 289 unsafe functions with 356
+SAFETY annotations. The checkpoint adds no dependency, opcode, compiler,
+executor-global, VM-frame or PHP value/object/array layout change and no unsafe
+block or function.
+
+Two independent CPU-pinned 32-pair release controls after three warmups put
+paired median changes at +0.027%/-0.327% for 100 startups,
+-0.091%/-0.019% for 600,000 scalar Long values,
+-15.499%/-17.841% for 240,000 numeric values,
+-7.592%/-12.691% for 120,000 strings,
+-76.581%/-76.322% for 180,000 mixed regular numeric values and
+-17.970%/-16.348% for 120,000 three-column `array_multisort()` rows. Every
+sample has an exact checksum and every paired median is below the +5% gate.
+Baseline/candidate release-binary SHA-256 values are
+`69f762e49fabfe5c206926d3be4d79014b0b2a1e293d7079064ccdbf16e9a8d4` /
+`410430c3c5f24347a9d331c285898d9c24eed7add86f2dfe91d3d0bef4a0fd7a`.
+The harness and accepted-log SHA-256 values are
+`880d9dabb7a3897b52ade4835aceca95b71626aa67b69d2e6d714106753ab6a1`,
+`29da13c812843d8866f463acc013d1812a70ad79030f4b1fdb6ec6ddf4a644b5`
+and `33c7b1a23789a98e1db4cbe413283fe148ada020a860b764dddd6bd43505396c`.
+
+This checkpoint does not claim the partial permutation after a throwing
+comparison, the seven remaining non-sort array failures
+`array_fill_object.phpt`, `bug24766.phpt`, `bug35014_64bit.phpt`,
+`bug35821.phpt`, `bug40191.phpt`, `gh16905.phpt` and
+`range_inputs_float_NAN_values.phpt`, the remaining 1,107 Zend/lang failures
+or broader PHP compatibility.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `debug-zval-refcount-renderer-batch`, pinned to php-src 8.5 commit
 `fcc29c8` and implementation commit `298cc6a9`. `debug_zval_dump()` now has
 its own recursive diagnostic context instead of post-processing

@@ -2295,6 +2295,37 @@ next goal by this order unless an explicit project objective overrides it:
 5. Reflection and standard-library clusters with measured dependency reach;
 6. isolated low-fanout features and optional extensions.
 
+The `mixed-internal-sort-zend-schedule-batch` checkpoint gives internal
+`sort()`/`rsort()`/`asort()`/`arsort()`/`ksort()`/`krsort()` and
+`array_multisort()` one stable PHP 8.5 observation-derived comparison
+scheduler. It preserves original positions for comparator equality and routes
+heterogeneous, warning/hook/NaN and non-transitive domains through the exact
+observable schedule. A general scalar-total proof keeps uniformly numeric or
+non-numeric regular inputs, pure numeric casts, string/natural inputs and pure
+multi-column sorts on guarded stable host paths. No fixture, class, test,
+benchmark or precomputed permutation is recognized.
+
+Four original regressions cover pairwise mixed comparison, non-transitive
+string cycles, duplicate stability, both directions, key policy, lengths
+5/6/10/16/17/22, numeric-warning lengths through 17, pivot boundaries
+1,023/1,024 and exact array/object numeric/string diagnostics. PHP 8.5.9 and
+RPHP pass all five focused PHPTs. The complete 842-case array audit moves from
+816 to 821 pass, an exact +5/-0 delta with seven failures, 13 skips, one
+unsupported case and no other status/category movement. Two candidate array
+manifests are byte-identical. Two byte-identical 5,599-case Zend/lang manifests
+remain at 4,196 pass, 1,107 fail, 115 skip and 181 unsupported. Neither corpus
+has an XFAIL, timeout, crash or lost pass.
+
+All five Cargo configurations, all-target, formatting, runner, unsafe,
+Composer S0, four Symfony S1 gates and PHP 8.5 S2/S3 pass. Two independent
+CPU-pinned 32-pair release controls put paired medians respectively at
++0.027%/-0.327% for startup, -0.091%/-0.019% for scalar Long,
+-15.499%/-17.841% for numeric, -7.592%/-12.691% for string,
+-76.581%/-76.322% for mixed regular and -17.970%/-16.348% for multi-column
+`array_multisort()`, below the +5% gate with exact checksums. Throwing-
+comparison partial permutation, seven non-sort array failures and broader
+compatibility remain explicit nonclaims.
+
 The `debug-zval-refcount-renderer-batch` checkpoint separates
 `debug_zval_dump()` from the public `var_dump()` renderer and derives cold
 diagnostic ownership from PHP-visible frame, global, static, dynamic,
@@ -2388,11 +2419,11 @@ schedule cases and throwing-comparison partial permutation remain explicit
 nonclaims.
 
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
-process hazard: `ext/standard/tests/array` is 816 pass, 12 fail, 13 skip and
+process hazard: `ext/standard/tests/array` is 821 pass, seven fail, 13 skip and
 one unsupported, while `Zend/tests` plus `tests/lang` is 4,196 pass, 1,107
 fail, 115 skip and 181 unsupported, with no timeout or crash in either corpus.
 The next array goal must therefore be chosen by shared-root-cause fanout and
-dependency reach across those 12 visible failures, not by filename order.
+dependency reach across those seven visible failures, not by filename order.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,
