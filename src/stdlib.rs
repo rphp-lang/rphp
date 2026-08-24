@@ -16740,6 +16740,147 @@ unsafe fn try_usort_scalar_long(
     Ok(true)
 }
 
+struct UserSortCallbackState {
+    reference_warning_name: Option<String>,
+    warned_bool_return: bool,
+}
+
+impl UserSortCallbackState {
+    fn new(callback: &Value, resolved: &ResolvedCallback, eg: &ExecutorGlobals) -> Self {
+        Self {
+            reference_warning_name: callback_has_hard_reference_parameters(resolved)
+                .then(|| callable_display_name(callback, eg)),
+            warned_bool_return: false,
+        }
+    }
+}
+
+fn report_user_sort_reference_warnings(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    display_name: &str,
+) -> Result<bool, VmError> {
+    let signature = resolved.signature();
+    for index in 0..2u32 {
+        if !signature.is_param_by_ref(index) || signature.is_param_prefer_ref(index) {
+            continue;
+        }
+        let parameter = signature
+            .param_names
+            .get(index as usize)
+            .map(String::as_str)
+            .unwrap_or("unknown");
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!(
+                "{display_name}(): Argument #{} (${parameter}) must be passed by reference, value given",
+                index + 1
+            ),
+        )?;
+        if eg.exception.is_some() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn call_user_sort_callback_once(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    state: &UserSortCallbackState,
+    left: &Value,
+    right: &Value,
+) -> Result<Option<Value>, VmError> {
+    if let Some(display_name) = state.reference_warning_name.as_deref()
+        && !report_user_sort_reference_warnings(ed, eg, resolved, display_name)?
+    {
+        return Ok(None);
+    }
+    let num_args = resolved.prepend_args.len() + 2 + resolved.use_vars.len();
+    let result = call_resolved_iter(
+        eg,
+        resolved,
+        num_args,
+        resolved
+            .prepend_args
+            .iter()
+            .chain(std::iter::once(left))
+            .chain(std::iter::once(right))
+            .chain(resolved.use_vars.iter()),
+    )?;
+    if eg.exception.is_some() {
+        Ok(None)
+    } else {
+        Ok(Some(result))
+    }
+}
+
+fn user_sort_comparison(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    state: &mut UserSortCallbackState,
+    function_name: &str,
+    left: &Value,
+    right: &Value,
+) -> Result<Option<std::cmp::Ordering>, VmError> {
+    let Some(result) = call_user_sort_callback_once(ed, eg, resolved, state, left, right)? else {
+        return Ok(None);
+    };
+    match result.value_type() {
+        ValueType::True => {
+            if !state.warned_bool_return {
+                state.warned_bool_return = true;
+                report_internal_deprecation(
+                    eg,
+                    ed,
+                    &format!(
+                        "{function_name}(): Returning bool from comparison function is deprecated, return an integer less than, equal to, or greater than zero"
+                    ),
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(None);
+                }
+            }
+            Ok(Some(std::cmp::Ordering::Greater))
+        }
+        ValueType::False => {
+            if !state.warned_bool_return {
+                state.warned_bool_return = true;
+                report_internal_deprecation(
+                    eg,
+                    ed,
+                    &format!(
+                        "{function_name}(): Returning bool from comparison function is deprecated, return an integer less than, equal to, or greater than zero"
+                    ),
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(None);
+                }
+            }
+            let Some(reverse) = call_user_sort_callback_once(ed, eg, resolved, state, right, left)?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(reverse.to_long_val().cmp(&0).reverse()))
+        }
+        _ => Ok(Some(result.to_long_val().cmp(&0))),
+    }
+}
+
+fn user_sort_result_value(value: Value) -> Value {
+    if value.is_owned_reference() {
+        array_projection_value(&value)
+    } else {
+        value
+    }
+}
+
 fn fn_usort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     // Save raw pointer to array BEFORE any call_function.
     // call_function may push/pop VM stack frames but the by-ref pointer target
@@ -16750,7 +16891,10 @@ fn fn_usort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
     let items = {
         let arr = unsafe { &*arr_ptr };
         match arr.as_array() {
-            Some(a) => a.values().cloned().collect::<Vec<Value>>(),
+            Some(a) => a
+                .values()
+                .map(array_sort_snapshot_value)
+                .collect::<Vec<Value>>(),
             None => {
                 ret!(rv, Value::bool(false));
             }
@@ -16772,7 +16916,7 @@ fn fn_usort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
         Ok(true) => {
             let mut new_arr = PhpArray::new();
             for value in items {
-                new_arr.push(value);
+                new_arr.push(user_sort_result_value(value));
             }
             unsafe {
                 *arr_ptr = Value::array(new_arr);
@@ -16787,32 +16931,30 @@ fn fn_usort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
                 .as_array()
                 .expect("usort array changed before canonical fallback")
                 .values()
-                .cloned()
+                .map(array_sort_snapshot_value)
                 .collect();
         }
     }
 
     // Insertion sort with PHP callback comparison
+    let mut state = UserSortCallbackState::new(&callback, &resolved, eg);
     let len = items.len();
     for i in 1..len {
         let mut j = i;
         while j > 0 {
-            let num_args = resolved.prepend_args.len() + 2 + resolved.use_vars.len();
-            let result = call_resolved_iter(
+            let Some(ordering) = user_sort_comparison(
+                ed,
                 eg,
                 &resolved,
-                num_args,
-                resolved
-                    .prepend_args
-                    .iter()
-                    .chain(std::iter::once(&items[j - 1]))
-                    .chain(std::iter::once(&items[j]))
-                    .chain(resolved.use_vars.iter()),
-            )?;
-            if eg.exception.is_some() {
+                &mut state,
+                "usort",
+                &items[j - 1],
+                &items[j],
+            )?
+            else {
                 return Ok(());
-            }
-            if result.to_long_val() <= 0 {
+            };
+            if ordering != std::cmp::Ordering::Greater {
                 break;
             }
             items.swap(j - 1, j);
@@ -16821,7 +16963,7 @@ fn fn_usort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
     }
     let mut new_arr = PhpArray::new();
     for v in items {
-        new_arr.push(v);
+        new_arr.push(user_sort_result_value(v));
     }
     // Write back using saved raw pointer (stable across call_function calls).
     unsafe {
@@ -16856,7 +16998,7 @@ fn fn_user_key_preserving_sort(
     let mut pairs = match arg!(ed, 0).as_array() {
         Some(array) => array
             .iter()
-            .map(|(key, value)| (key, value.clone()))
+            .map(|(key, value)| (key, array_sort_snapshot_value(value)))
             .collect::<Vec<_>>(),
         None => ret!(rv, Value::bool(false)),
     };
@@ -16867,23 +17009,27 @@ fn fn_user_key_preserving_sort(
         ));
         return Ok(());
     };
+    let mut state = UserSortCallbackState::new(&callback, &resolved, eg);
 
     for index in 1..pairs.len() {
         let mut current = index;
         while current > 0 {
-            let arguments = compare_keys
-                .then(|| {
-                    [
-                        array_key_value(&pairs[current - 1].0),
-                        array_key_value(&pairs[current].0),
-                    ]
-                })
-                .unwrap_or_else(|| [pairs[current - 1].1.clone(), pairs[current].1.clone()]);
-            let comparison = call_resolved_with_values(eg, &resolved, &arguments)?;
-            if eg.exception.is_some() {
+            let keys = compare_keys.then(|| {
+                [
+                    array_key_value(&pairs[current - 1].0),
+                    array_key_value(&pairs[current].0),
+                ]
+            });
+            let (left, right) = keys.as_ref().map_or_else(
+                || (&pairs[current - 1].1, &pairs[current].1),
+                |keys| (&keys[0], &keys[1]),
+            );
+            let Some(ordering) =
+                user_sort_comparison(ed, eg, &resolved, &mut state, function_name, left, right)?
+            else {
                 return Ok(());
-            }
-            if comparison.to_long_val() <= 0 {
+            };
+            if ordering != std::cmp::Ordering::Greater {
                 break;
             }
             pairs.swap(current - 1, current);
@@ -16893,7 +17039,7 @@ fn fn_user_key_preserving_sort(
 
     let mut sorted = PhpArray::new();
     for (key, value) in pairs {
-        sorted.set(key, value);
+        sorted.set(key, user_sort_result_value(value));
     }
     arg_mut!(ed, 0, Value::array(sorted));
     ret!(rv, Value::bool(true));

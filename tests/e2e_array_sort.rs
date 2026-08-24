@@ -135,3 +135,99 @@ try {
         "Error:Nesting level too deep - recursive dependency?"
     );
 }
+
+#[test]
+fn user_sorts_preserve_reference_cells_and_pass_temporary_callback_values() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+error_reporting(E_ALL);
+$messages = [];
+set_error_handler(function ($level, $message) use (&$messages) {
+    $messages[] = "$level:$message";
+    return true;
+});
+function hardComparator(&$left, &$right) { return $left <=> $right; }
+
+$x = 30;
+$y = 10;
+$z = 20;
+$indexed = [&$x, &$y, &$z];
+usort($indexed, static fn($left, $right) => $left <=> $right);
+$indexed[0] = 11;
+$indexed[2] = 31;
+echo "$x,$y,$z|";
+
+$keyed = ['x' => &$x, 'y' => &$y, 'z' => &$z];
+uasort($keyed, static fn($left, $right) => $left <=> $right);
+$keyed['z'] = 22;
+echo implode(',', array_keys($keyed)), ":$x,$y,$z|";
+
+$indexed = [2, 1];
+usort($indexed, 'hardComparator');
+$keyed = ['two' => 2, 'one' => 1];
+uasort($keyed, 'hardComparator');
+$keys = ['b' => 2, 'a' => 1];
+uksort($keys, 'hardComparator');
+restore_error_handler();
+echo count($messages), "\n", implode("\n", $messages);
+"#,
+        ),
+        concat!(
+            "31,11,20|y,z,x:31,11,22|6\n",
+            "2:hardComparator(): Argument #1 ($left) must be passed by reference, value given\n",
+            "2:hardComparator(): Argument #2 ($right) must be passed by reference, value given\n",
+            "2:hardComparator(): Argument #1 ($left) must be passed by reference, value given\n",
+            "2:hardComparator(): Argument #2 ($right) must be passed by reference, value given\n",
+            "2:hardComparator(): Argument #1 ($left) must be passed by reference, value given\n",
+            "2:hardComparator(): Argument #2 ($right) must be passed by reference, value given",
+        )
+    );
+}
+
+#[test]
+fn user_sorts_deprecate_boolean_results_once_and_reverse_false_comparisons() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+error_reporting(E_ALL);
+$messages = [];
+$trace = [];
+set_error_handler(function ($level, $message) use (&$messages) {
+    $messages[] = "$level:$message";
+    return true;
+});
+function legacyBooleanCompare($left, $right) {
+    global $trace;
+    $trace[] = "$left:$right";
+    return $left > $right;
+}
+
+$indexed = [1, 2];
+usort($indexed, 'legacyBooleanCompare');
+echo implode(',', $indexed), '|', implode(',', $trace), "\n";
+
+$trace = [];
+$keyed = ['left' => 1, 'right' => 2];
+uasort($keyed, 'legacyBooleanCompare');
+echo implode(',', array_keys($keyed)), '|', implode(',', $trace), "\n";
+
+$trace = [];
+$keys = ['a' => 1, 'b' => 2];
+uksort($keys, 'legacyBooleanCompare');
+echo implode(',', array_keys($keys)), '|', implode(',', $trace), "\n";
+restore_error_handler();
+echo count($messages), "\n", implode("\n", $messages);
+"#,
+        ),
+        concat!(
+            "1,2|1:2,2:1\n",
+            "left,right|1:2,2:1\n",
+            "a,b|a:b,b:a\n",
+            "3\n",
+            "8192:usort(): Returning bool from comparison function is deprecated, return an integer less than, equal to, or greater than zero\n",
+            "8192:uasort(): Returning bool from comparison function is deprecated, return an integer less than, equal to, or greater than zero\n",
+            "8192:uksort(): Returning bool from comparison function is deprecated, return an integer less than, equal to, or greater than zero",
+        )
+    );
+}
