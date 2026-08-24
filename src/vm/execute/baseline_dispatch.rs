@@ -8425,6 +8425,23 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // caller's "after return" handler when it actually consumes the dirty set.
                 if !op_array.global_vars.is_empty() {
                     for (cv_idx, var_name) in &op_array.global_vars {
+                        // SAFETY: global metadata stores validated CV indices
+                        // for this live frame. The raw wrapper is inspected so
+                        // an actually executed BindGlobal can be distinguished
+                        // from an inactive conditional declaration.
+                        let cv_ptr = unsafe {
+                            if tracked_scope_global_cv(op_array, var_name) != Some(*cv_idx)
+                                || !tracked_global_binding_is_active(
+                                    eg,
+                                    op_array,
+                                    var_name,
+                                    (*frame).cv(*cv_idx),
+                                )
+                            {
+                                continue;
+                            }
+                            (*frame).cv_mut(*cv_idx) as *mut Value
+                        };
                         // A later `static` declaration for the same CV rebinds
                         // the local slot away from the global reference. The
                         // global was already updated while that reference was
@@ -8437,8 +8454,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         {
                             continue;
                         }
-                        // SAFETY: global metadata stores validated CV indices for this frame.
-                        let cv_ptr = unsafe { (*frame).cv_mut(*cv_idx) as *mut Value };
                         let val = unsafe {
                             if (*cv_ptr).is_owned_reference() {
                                 (*cv_ptr).clone_owned_reference_alias()

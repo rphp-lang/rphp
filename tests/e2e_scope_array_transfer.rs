@@ -174,3 +174,162 @@ echo $entry, ':', $source['entry'];
     );
     assert_eq!(output, "globals:live\nsecond:second");
 }
+
+#[test]
+fn extract_materializes_self_overwrite_before_scope_writes_and_keeps_refs() {
+    let output = run_php(
+        r#"<?php
+function overwriteSource(int $flags): void {
+    $source = ['source' => 10, 'tail' => 20];
+    $count = extract($source, $flags, 'p');
+    echo "$flags:$count:";
+    var_dump($source, $tail ?? null, $p_source ?? null, $p_tail ?? null);
+    if (($flags & EXTR_REFS) && ($flags & 0xff) === EXTR_OVERWRITE) {
+        $tail = 21;
+        var_dump($tail);
+    }
+    if (($flags & EXTR_REFS) && ($flags & 0xff) === EXTR_PREFIX_ALL) {
+        $p_tail = 22;
+        var_dump($source['tail']);
+    }
+}
+
+overwriteSource(EXTR_OVERWRITE);
+overwriteSource(EXTR_OVERWRITE | EXTR_REFS);
+overwriteSource(EXTR_PREFIX_ALL | EXTR_REFS);
+
+function overwriteAliasedPrefix(): void {
+    $source = ['source' => 10, 'tail' => 20];
+    $p_source =& $source;
+    $count = extract($source, EXTR_PREFIX_ALL | EXTR_REFS, 'p');
+    echo "alias:$count:";
+    var_dump($source, $p_source, $p_tail);
+    $p_tail = 23;
+    var_dump($source['tail']);
+}
+overwriteAliasedPrefix();
+"#,
+    );
+    assert_eq!(
+        output,
+        concat!(
+            "0:2:int(10)\nint(20)\nNULL\nNULL\n",
+            "256:2:int(10)\nint(20)\nNULL\nNULL\nint(21)\n",
+            "259:2:array(2) {\n",
+            "  [\"source\"]=>\n",
+            "  &int(10)\n",
+            "  [\"tail\"]=>\n",
+            "  &int(20)\n",
+            "}\n",
+            "NULL\n",
+            "int(10)\n",
+            "int(20)\n",
+            "int(22)\n",
+            "alias:2:array(2) {\n",
+            "  [\"source\"]=>\n",
+            "  &int(10)\n",
+            "  [\"tail\"]=>\n",
+            "  &int(20)\n",
+            "}\n",
+            "int(10)\n",
+            "int(20)\n",
+            "int(23)\n",
+        )
+    );
+}
+
+#[test]
+fn extract_treats_this_as_restricted_across_every_mode_and_refs_variant() {
+    let output = run_php(
+        r#"<?php
+class ExtractThisBoundary {
+    private function probe(int $flags): void {
+        $source = ['this' => 'value'];
+        try {
+            $count = extract($source, $flags, 'safe');
+            echo "$flags:$count:", isset($safe_this) ? $safe_this : 'missing', ':', get_class($this), "\n";
+        } catch (Throwable $error) {
+            echo "$flags:", $error->getMessage(), ':', get_class($this), "\n";
+        }
+    }
+
+    public function run(): void {
+        foreach ([
+            EXTR_OVERWRITE,
+            EXTR_SKIP,
+            EXTR_PREFIX_SAME,
+            EXTR_PREFIX_ALL,
+            EXTR_PREFIX_INVALID,
+            EXTR_IF_EXISTS,
+            EXTR_PREFIX_IF_EXISTS,
+        ] as $mode) {
+            $this->probe($mode);
+            $this->probe($mode | EXTR_REFS);
+        }
+    }
+}
+
+(new ExtractThisBoundary())->run();
+"#,
+    );
+    assert_eq!(
+        output,
+        concat!(
+            "0:Cannot re-assign $this:ExtractThisBoundary\n",
+            "256:Cannot re-assign $this:ExtractThisBoundary\n",
+            "1:0:missing:ExtractThisBoundary\n",
+            "257:0:missing:ExtractThisBoundary\n",
+            "2:1:value:ExtractThisBoundary\n",
+            "258:1:value:ExtractThisBoundary\n",
+            "3:1:value:ExtractThisBoundary\n",
+            "259:1:value:ExtractThisBoundary\n",
+            "4:1:value:ExtractThisBoundary\n",
+            "260:1:value:ExtractThisBoundary\n",
+            "6:0:missing:ExtractThisBoundary\n",
+            "262:0:missing:ExtractThisBoundary\n",
+            "5:0:missing:ExtractThisBoundary\n",
+            "261:0:missing:ExtractThisBoundary\n",
+        )
+    );
+}
+
+#[test]
+fn conditional_global_bindings_do_not_mirror_inactive_locals_during_extract() {
+    let output = run_php(
+        r#"<?php
+$alpha = 5;
+$beta = 6;
+function transferGlobals(bool $bind): void {
+    $GLOBALS['alpha'] = 10;
+    $GLOBALS['beta'] = 11;
+    if ($bind) {
+        global $alpha, $beta;
+    } else {
+        $alpha = null;
+        $beta = null;
+    }
+    echo $bind ? 'bound:' : 'local:';
+    var_dump($alpha, $beta, $GLOBALS['alpha'], $GLOBALS['beta']);
+    extract($GLOBALS, EXTR_REFS);
+    $alpha = 12;
+    $GLOBALS['beta'] = 13;
+    var_dump($alpha, $beta, $GLOBALS['alpha'], $GLOBALS['beta']);
+}
+transferGlobals(false);
+echo "main:$alpha:$beta\n";
+transferGlobals(true);
+echo "main:$alpha:$beta\n";
+"#,
+    );
+    assert_eq!(
+        output,
+        concat!(
+            "local:NULL\nNULL\nint(10)\nint(11)\n",
+            "int(12)\nint(11)\nint(10)\nint(13)\n",
+            "main:10:13\n",
+            "bound:int(10)\nint(11)\nint(10)\nint(11)\n",
+            "int(12)\nint(13)\nint(12)\nint(13)\n",
+            "main:12:13\n",
+        )
+    );
+}

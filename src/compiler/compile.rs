@@ -3003,6 +3003,9 @@ pub struct Compiler {
     /// A direct compact() call in a non-static closure can observe a receiver
     /// even when the source body never otherwise reads `$this`.
     needs_compact_receiver: bool,
+    /// A direct caller-scope builtin needs the ordinary CV name map even in a
+    /// method which does not otherwise execute include/eval.
+    needs_caller_scope_metadata: bool,
     /// True if this function body contains a yield expression (makes it a generator)
     contains_yield: bool,
     /// CVs bound to global variables
@@ -3332,6 +3335,7 @@ impl Compiler {
             dynamic_static_scope: false,
             bindable_closure_scope: false,
             needs_compact_receiver: false,
+            needs_caller_scope_metadata: false,
             contains_yield: false,
             global_vars: Vec::new(),
             static_vars: Vec::new(),
@@ -8891,6 +8895,13 @@ impl Compiler {
                 if generic_args.is_empty() && self.is_global_builtin_call(name, "compact") {
                     self.needs_compact_receiver = true;
                 }
+                if generic_args.is_empty()
+                    && ["extract", "compact", "get_defined_vars"]
+                        .iter()
+                        .any(|builtin| self.is_global_builtin_call(name, builtin))
+                {
+                    self.needs_caller_scope_metadata = true;
+                }
                 let assertion_construct = generic_args.is_empty()
                     && name.trim_start_matches('\\').eq_ignore_ascii_case("assert");
                 if assertion_construct && self.zend_assertions < 0 {
@@ -11882,14 +11893,16 @@ impl Compiler {
         cvs
     }
 
-    /// Retain variable names only when a compiled method can execute another
-    /// source unit in its local symbol-table scope.
+    /// Retain variable names only when a compiled method can expose its local
+    /// symbol-table scope to a source unit or a direct scope builtin.
     fn dynamic_scope_cvs(&self) -> Vec<(u32, String)> {
-        self.instructions
-            .iter()
-            .any(|instruction| matches!(instruction.opcode, OpCode::Include | OpCode::Eval))
-            .then(|| self.all_cvs())
-            .unwrap_or_default()
+        (self.needs_caller_scope_metadata
+            || self
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction.opcode, OpCode::Include | OpCode::Eval)))
+        .then(|| self.all_cvs())
+        .unwrap_or_default()
     }
 
     /// Controls how a positional argument's Send opcode is chosen.

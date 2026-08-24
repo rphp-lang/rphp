@@ -865,6 +865,16 @@ fn dynamic_scope_is_global(frame: *mut ExecuteData) -> bool {
     unsafe { !frame.is_null() && (*frame).prev_execute_data.is_null() }
 }
 
+pub(crate) fn caller_scope_is_global(
+    eg: &ExecutorGlobals,
+    internal_frame: *mut ExecuteData,
+) -> bool {
+    caller_frame_for_internal_call(internal_frame).is_some_and(|caller| {
+        let owner = dynamic_scope_frame(eg, caller);
+        dynamic_scope_is_global(owner)
+    })
+}
+
 enum CallerScopeOperation<'a> {
     Read(&'a str),
     Write {
@@ -4465,6 +4475,46 @@ fn set_global_snapshot_entry(snapshot: &mut PhpArray, name: &str, value: Value) 
     }
 }
 
+/// Resolve a statically tracked global name to the CV which is authoritative
+/// at this exact program point. Main-scope CVs are always the symbol table.
+/// A function-local `global $name`, however, only becomes authoritative after
+/// its BindGlobal opcode executes; conditional declarations must not make an
+/// unrelated local with the same name mirror `$GLOBALS` before that point.
+#[inline]
+fn tracked_scope_global_cv(
+    op_array: &crate::compiler::OpArray,
+    name: &str,
+) -> Option<u32> {
+    let variables = if !op_array.main_scope_vars.is_empty() {
+        &op_array.main_scope_vars
+    } else {
+        &op_array.global_vars
+    };
+    variables
+        .iter()
+        .find(|(_, variable)| variable == name)
+        .map(|(cv, _)| *cv)
+}
+
+#[inline]
+fn tracked_global_binding_is_active(
+    eg: &ExecutorGlobals,
+    op_array: &crate::compiler::OpArray,
+    name: &str,
+    local: &Value,
+) -> bool {
+    if !op_array.main_scope_vars.is_empty() {
+        return true;
+    }
+    let Some(local_identity) = local.reference_identity() else {
+        return false;
+    };
+    eg.globals
+        .get(name)
+        .and_then(Value::reference_identity)
+        .is_some_and(|global_identity| local_identity == global_identity)
+}
+
 #[inline(never)]
 fn op_global_dimension<'a>(
     eg: &mut ExecutorGlobals,
@@ -4489,24 +4539,29 @@ fn op_global_dimension<'a>(
 
             for (name, value) in &eg.globals {
                 if name != "GLOBALS" && value.value_type() != ValueType::Undef {
-                    set_global_snapshot_entry(&mut snapshot, name, value.clone());
+                    set_global_snapshot_entry(&mut snapshot, name, clone_scope_binding(value));
                 }
             }
-            for (cv, name) in scope_vars {
-                if name == "GLOBALS" {
-                    continue;
-                }
-                let value = (&*(*frame).get_op_ptr(*cv, OpType::Cv, op_array)).clone();
-                if value.value_type() == ValueType::Undef {
-                    let key = canonical_decimal_array_key(name)
-                        .map(ArrayKey::Int)
-                        .unwrap_or_else(|| ArrayKey::String(name.clone()));
-                    snapshot.remove(&key);
-                } else {
-                    set_global_snapshot_entry(&mut snapshot, name, value);
+            // Function-local active global CVs share the exact cells already
+            // cloned from `eg.globals`; inactive conditional declarations must
+            // not overlay them. Only a root/main scope needs its ordinary CVs
+            // published over the potentially stale globals snapshot.
+            if !op_array.main_scope_vars.is_empty() {
+                for (cv, name) in scope_vars {
+                    if name == "GLOBALS" {
+                        continue;
+                    }
+                    let value = clone_scope_binding((*frame).cv(*cv));
+                    if value.value_type() == ValueType::Undef {
+                        let key = canonical_decimal_array_key(name)
+                            .map(ArrayKey::Int)
+                            .unwrap_or_else(|| ArrayKey::String(name.clone()));
+                        snapshot.remove(&key);
+                    } else {
+                        set_global_snapshot_entry(&mut snapshot, name, value);
+                    }
                 }
             }
-
             let result = (*frame).get_op_mut(opline.result as u32, opline.result_type);
             write_fetch_dim_result(frame, result, Value::array(snapshot));
             return Ok(ColdResult::Done);
@@ -4516,12 +4571,16 @@ fn op_global_dimension<'a>(
         let name = value_to_global_name(key)?;
         match opline.opcode {
             OpCode::FetchGlobal => {
-                let local = scope_vars
-                    .iter()
-                    .find(|(_, variable)| variable == &name)
-                    .map(|(cv, _)| {
-                        (&*(*frame).get_op_ptr(*cv, OpType::Cv, op_array)).clone()
-                    });
+                let local = tracked_scope_global_cv(op_array, &name)
+                    .filter(|cv| {
+                        tracked_global_binding_is_active(
+                            eg,
+                            op_array,
+                            &name,
+                            (*frame).cv(*cv),
+                        )
+                    })
+                    .map(|cv| (&*(*frame).get_op_ptr(cv, OpType::Cv, op_array)).clone());
                 let value = local
                     .or_else(|| eg.globals.get(&name).cloned())
                     .unwrap_or_else(Value::undef);
@@ -4544,10 +4603,13 @@ fn op_global_dimension<'a>(
                     .get(&name)
                     .map(Value::reference_property_constraints)
                     .unwrap_or_default();
+                let active_cv = tracked_scope_global_cv(op_array, &name).filter(|cv| {
+                    tracked_global_binding_is_active(eg, op_array, &name, (*frame).cv(*cv))
+                });
                 if constraints.is_empty()
-                    && let Some((cv, _)) = scope_vars.iter().find(|(_, variable)| variable == &name)
+                    && let Some(cv) = active_cv
                 {
-                    constraints = (*frame).cv(*cv).reference_property_constraints();
+                    constraints = (*frame).cv(cv).reference_property_constraints();
                 }
                 value = match prepare_reference_assignment(
                     value,
@@ -4567,9 +4629,9 @@ fn op_global_dimension<'a>(
                 };
                 globals_assign(&mut eg.globals, &name, value.clone());
                 eg.dirty_globals.insert(name.clone());
-                if let Some((cv, _)) = scope_vars.iter().find(|(_, variable)| variable == &name) {
-                    let is_reference = (*frame).cv(*cv).is_reference();
-                    let destination = (*frame).get_op_mut(*cv, OpType::Cv);
+                if let Some(cv) = active_cv {
+                    let is_reference = (*frame).cv(cv).is_reference();
+                    let destination = (*frame).get_op_mut(cv, OpType::Cv);
                     if is_reference {
                         slot_set(destination, value);
                     } else {
@@ -4578,17 +4640,19 @@ fn op_global_dimension<'a>(
                 }
             }
             OpCode::UnsetGlobal => {
+                let active_cv = tracked_scope_global_cv(op_array, &name).filter(|cv| {
+                    tracked_global_binding_is_active(eg, op_array, &name, (*frame).cv(*cv))
+                });
                 globals_set(&mut eg.globals, &name, Value::undef());
                 eg.dirty_globals.insert(name.clone());
-                if let Some((cv, _)) = scope_vars.iter().find(|(_, variable)| variable == &name) {
-                    frame_slot_set(frame, (*frame).cv_mut(*cv), Value::undef());
+                if let Some(cv) = active_cv {
+                    frame_slot_set(frame, (*frame).cv_mut(cv), Value::undef());
                 }
             }
             OpCode::BindGlobalRef => {
-                let current_cv = scope_vars
-                    .iter()
-                    .find(|(_, variable)| variable == &name)
-                    .map(|(cv, _)| *cv);
+                let current_cv = tracked_scope_global_cv(op_array, &name).filter(|cv| {
+                    tracked_global_binding_is_active(eg, op_array, &name, (*frame).cv(*cv))
+                });
                 let binding = if let Some(cv) = current_cv {
                     let slot = (*frame).cv_mut(cv);
                     if slot.is_owned_reference() {
@@ -4625,6 +4689,9 @@ fn op_global_dimension<'a>(
                 );
             }
             OpCode::AssignGlobalRef => {
+                let active_cv = tracked_scope_global_cv(op_array, &name).filter(|cv| {
+                    tracked_global_binding_is_active(eg, op_array, &name, (*frame).cv(*cv))
+                });
                 let source = (*frame).cv_mut(opline.op2 as u32);
                 let binding = if source.is_owned_reference() {
                     source.clone_owned_reference_alias()
@@ -4640,10 +4707,10 @@ fn op_global_dimension<'a>(
                     binding.clone_owned_reference_alias(),
                 );
                 eg.dirty_globals.insert(name.clone());
-                if let Some((cv, _)) = scope_vars.iter().find(|(_, variable)| variable == &name) {
+                if let Some(cv) = active_cv {
                     frame_slot_set(
                         frame,
-                        (*frame).cv_mut(*cv),
+                        (*frame).cv_mut(cv),
                         binding.clone_owned_reference_alias(),
                     );
                 }

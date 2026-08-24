@@ -376,6 +376,7 @@ fn compilation_constants(eg: &ExecutorGlobals) -> HashMap<String, Value> {
 /// Clone one variable binding across the synchronous include/eval scope
 /// bridge. Ordinary `Value::clone()` intentionally reads through references,
 /// while a shared PHP symbol table must retain the reference cell itself.
+#[inline]
 fn clone_scope_binding(value: &Value) -> Value {
     if value.is_owned_reference() {
         value.clone_owned_reference_alias()

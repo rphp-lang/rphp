@@ -10481,103 +10481,334 @@ fn fn_extract(
         ));
         return Ok(());
     }
+    let may_write_indirect_target = matches!(
+        mode,
+        EXTR_PREFIX_SAME | EXTR_PREFIX_ALL | EXTR_PREFIX_INVALID | EXTR_PREFIX_IF_EXISTS
+    );
 
     let array_pointer = arg_mut!(ed, 0);
-    let Some(array) = (unsafe { &mut *array_pointer }).as_array_mut() else {
+    // SAFETY: CV(0) and the pointer returned by `arg_mut!` are the live
+    // argument slot and its synchronously borrowed PHP value, respectively.
+    let (array, source_has_external_alias) = unsafe {
+        let source_has_external_alias =
+            may_write_indirect_target && extract_source_has_external_alias((*ed).cv(0));
+        (
+            (&mut *array_pointer).as_array_mut(),
+            source_has_external_alias,
+        )
+    };
+    let Some(array) = array else {
         eg.exception = Some(crate::value::make_error_value(
             "TypeError",
             "extract(): Argument #1 ($array) must be of type array",
         ));
         return Ok(());
     };
-    let mut candidates = Vec::with_capacity(array.len());
-    for (key, _) in array.iter() {
-        let raw_name = match &key {
-            ArrayKey::Int(key) => key.to_string(),
-            ArrayKey::String(key) => key.clone(),
-        };
-        let valid = valid_variable_name(&raw_name);
-        let exists =
-            valid && crate::vm::execute::caller_scope_variable(eg, ed, &raw_name).is_some();
-        let name = match mode {
-            EXTR_SKIP if exists => continue,
-            EXTR_PREFIX_SAME if exists => format!("{prefix}_{raw_name}"),
-            EXTR_PREFIX_ALL if raw_name.is_empty() => continue,
-            EXTR_PREFIX_ALL => format!("{prefix}_{raw_name}"),
-            EXTR_PREFIX_INVALID if !valid => format!("{prefix}_{raw_name}"),
-            EXTR_PREFIX_IF_EXISTS if exists => format!("{prefix}_{raw_name}"),
-            EXTR_PREFIX_IF_EXISTS | EXTR_IF_EXISTS if !exists => continue,
-            _ if !valid => continue,
-            _ => raw_name,
-        };
-        if !valid_variable_name(&name) {
-            continue;
-        }
-        if name == "this" {
-            eg.exception = Some(crate::value::make_error_value(
-                "Error",
-                "Cannot re-assign $this",
-            ));
-            return Ok(());
-        }
-        candidates.push((key, name));
-    }
-
-    let references = flags & EXTR_REFS != 0;
-    if candidates.is_empty() {
+    if array.is_empty() {
         ret!(rv, Value::long(0));
     }
-    let Some(extracted) = extract_candidates(ed, eg, array, candidates, references) else {
+    let references = flags & EXTR_REFS != 0;
+    let inspect_indirect_targets = source_has_external_alias
+        || (may_write_indirect_target && crate::vm::execute::caller_scope_is_global(eg, ed));
+    let Some((candidates, requires_snapshot)) =
+        extract_candidates(ed, eg, array, &prefix, mode, inspect_indirect_targets)
+    else {
+        return Ok(());
+    };
+    let extracted = if references {
+        extract_reference_candidates(ed, eg, array, candidates, requires_snapshot)
+    } else {
+        extract_value_candidates(ed, eg, array, candidates, requires_snapshot)
+    };
+    let Some(extracted) = extracted else {
         return Ok(());
     };
     ret!(rv, Value::long(extracted));
+}
+
+#[cold]
+#[inline(never)]
+fn extract_source_has_external_alias(argument: &Value) -> bool {
+    argument.owned_reference_handle_count() > 2
+}
+
+#[inline(never)]
+fn extract_value_candidates(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    array: &PhpArray,
+    candidates: Vec<(ArrayKey, String)>,
+    requires_snapshot: bool,
+) -> Option<i64> {
+    if requires_snapshot {
+        let mut materialized = Vec::with_capacity(candidates.len());
+        for (key, name) in candidates {
+            let value = match key {
+                ArrayKey::Int(key) => array.get_int(key),
+                ArrayKey::String(key) => array.get_str(&key),
+            };
+            let Some(value) = value else {
+                debug_assert!(false, "extract candidate disappeared before scope writes");
+                continue;
+            };
+            materialized.push((name, value.dereferenced().clone()));
+        }
+        return assign_extract_candidates(ed, eg, materialized, false);
+    }
+
+    assign_extract_value_candidates(ed, eg, array, candidates)
+}
+
+#[inline(never)]
+fn extract_reference_candidates(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    array: &mut PhpArray,
+    candidates: Vec<(ArrayKey, String)>,
+    requires_snapshot: bool,
+) -> Option<i64> {
+    if !requires_snapshot {
+        return assign_extract_reference_candidates(ed, eg, array, candidates);
+    }
+
+    // A write may replace the caller variable which owns `array` (for example,
+    // extracting the key "source" from `$source`). Materialize every result
+    // before the first scope write so later candidates never borrow through a
+    // value that the extraction itself has already destroyed. EXTR_REFS still
+    // promotes the source entries in place and retains aliases to those cells.
+    let mut materialized = Vec::with_capacity(candidates.len());
+    for (key, name) in candidates {
+        let value = match key {
+            ArrayKey::Int(key) => array.get_int_mut(key),
+            ArrayKey::String(key) => array.get_str_mut(&key),
+        };
+        let Some(value) = value else {
+            debug_assert!(false, "extract candidate disappeared before scope writes");
+            continue;
+        };
+        let extracted_value = if value.is_owned_reference() {
+            value.clone_owned_reference_alias()
+        } else {
+            let owned = Value::owned_reference(value.dereferenced().clone());
+            let alias = owned.clone_owned_reference_alias();
+            *value = owned;
+            alias
+        };
+        materialized.push((name, extracted_value));
+    }
+    assign_extract_candidates(ed, eg, materialized, true)
+}
+
+#[inline(never)]
+fn assign_extract_value_candidates(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    array: &PhpArray,
+    candidates: Vec<(ArrayKey, String)>,
+) -> Option<i64> {
+    let mut extracted = 0;
+    for (key, name) in candidates {
+        let value = match key {
+            ArrayKey::Int(key) => array.get_int(key),
+            ArrayKey::String(key) => array.get_str(&key),
+        };
+        let Some(value) = value else {
+            debug_assert!(false, "extract candidate disappeared before scope writes");
+            continue;
+        };
+        if !assign_extract_candidate(ed, eg, &name, value.dereferenced().clone(), false)? {
+            continue;
+        }
+        extracted += 1;
+    }
+    Some(extracted)
+}
+
+#[inline(never)]
+fn assign_extract_reference_candidates(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    array: &mut PhpArray,
+    candidates: Vec<(ArrayKey, String)>,
+) -> Option<i64> {
+    let mut extracted = 0;
+    for (key, name) in candidates {
+        let value = match key {
+            ArrayKey::Int(key) => array.get_int_mut(key),
+            ArrayKey::String(key) => array.get_str_mut(&key),
+        };
+        let Some(value) = value else {
+            debug_assert!(false, "extract candidate disappeared before scope writes");
+            continue;
+        };
+        let extracted_value = if value.is_owned_reference() {
+            value.clone_owned_reference_alias()
+        } else {
+            let owned = Value::owned_reference(value.dereferenced().clone());
+            let alias = owned.clone_owned_reference_alias();
+            *value = owned;
+            alias
+        };
+        if !assign_extract_candidate(ed, eg, &name, extracted_value, true)? {
+            continue;
+        }
+        extracted += 1;
+    }
+    Some(extracted)
+}
+
+#[inline(never)]
+fn assign_extract_candidates(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    candidates: impl IntoIterator<Item = (String, Value)>,
+    references: bool,
+) -> Option<i64> {
+    let mut extracted = 0;
+    for (name, extracted_value) in candidates {
+        if !assign_extract_candidate(ed, eg, &name, extracted_value, references)? {
+            continue;
+        }
+        extracted += 1;
+    }
+    Some(extracted)
+}
+
+#[inline]
+fn assign_extract_candidate(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    name: &str,
+    value: Value,
+    references: bool,
+) -> Option<bool> {
+    match crate::vm::execute::set_caller_scope_variable(eg, ed, name, value, references, false) {
+        Ok(written) => Some(written),
+        Err(message) => {
+            eg.exception = Some(crate::value::make_error_value("TypeError", &message));
+            None
+        }
+    }
 }
 
 #[inline(never)]
 fn extract_candidates(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
-    array: &mut PhpArray,
-    candidates: Vec<(ArrayKey, String)>,
-    references: bool,
-) -> Option<i64> {
-    let mut extracted = 0;
-    for (key, name) in candidates {
-        let value = match &key {
-            ArrayKey::Int(key) => array.get_int_mut(*key),
-            ArrayKey::String(key) => array.get_str_mut(key),
-        }
-        .expect("extract key snapshot must remain present");
-        let extracted_value = if references {
-            if value.is_owned_reference() {
-                value.clone_owned_reference_alias()
-            } else {
-                let owned = Value::owned_reference(value.dereferenced().clone());
-                let alias = owned.clone_owned_reference_alias();
-                *value = owned;
-                alias
-            }
-        } else {
-            value.dereferenced().clone()
+    array: &PhpArray,
+    prefix: &str,
+    mode: i64,
+    inspect_indirect_targets: bool,
+) -> Option<(Vec<(ArrayKey, String)>, bool)> {
+    let mut candidates = Vec::with_capacity(array.len());
+    let mut requires_snapshot = false;
+    for (key, _) in array.iter() {
+        let raw_name = extract_key_name(&key);
+        let candidate =
+            extract_candidate_name(ed, eg, raw_name, prefix, mode, inspect_indirect_targets)?;
+        let Some((name, target_requires_snapshot)) = candidate else {
+            continue;
         };
-        match crate::vm::execute::set_caller_scope_variable(
-            eg,
-            ed,
-            &name,
-            extracted_value,
-            references,
-            false,
-        ) {
-            Ok(true) => {}
-            Ok(false) => continue,
-            Err(message) => {
-                eg.exception = Some(crate::value::make_error_value("TypeError", &message));
-                return None;
-            }
-        }
-        extracted += 1;
+        requires_snapshot |= target_requires_snapshot;
+        candidates.push((key, name));
     }
-    Some(extracted)
+    Some((candidates, requires_snapshot))
+}
+
+fn extract_key_name(key: &ArrayKey) -> String {
+    match key {
+        ArrayKey::Int(key) => key.to_string(),
+        ArrayKey::String(key) => key.clone(),
+    }
+}
+
+fn extract_candidate_name(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    raw_name: String,
+    prefix: &str,
+    mode: i64,
+    inspect_indirect_targets: bool,
+) -> Option<Option<(String, bool)>> {
+    let valid = valid_variable_name(&raw_name);
+    if mode == 0 {
+        if raw_name == "this" {
+            eg.exception = Some(crate::value::make_error_value(
+                "Error",
+                "Cannot re-assign $this",
+            ));
+            return None;
+        }
+        if !valid {
+            return Some(None);
+        }
+        let target = crate::vm::execute::caller_scope_variable(eg, ed, &raw_name);
+        let target_requires_snapshot = extract_target_requires_snapshot(target.as_ref());
+        return Some(Some((raw_name, target_requires_snapshot)));
+    }
+    if raw_name == "this" {
+        return match mode {
+            EXTR_SKIP | EXTR_PREFIX_IF_EXISTS | EXTR_IF_EXISTS => Some(None),
+            EXTR_PREFIX_SAME | EXTR_PREFIX_ALL | EXTR_PREFIX_INVALID => {
+                let name = format!("{prefix}_{raw_name}");
+                let requires_snapshot = if inspect_indirect_targets {
+                    let target = crate::vm::execute::caller_scope_variable(eg, ed, &name);
+                    extract_target_requires_snapshot(target.as_ref())
+                } else {
+                    false
+                };
+                Some(Some((name, requires_snapshot)))
+            }
+            0 => unreachable!("EXTR_OVERWRITE returned through the fast path"),
+            _ => unreachable!("extract mode was validated by the caller"),
+        };
+    }
+    let inspected_raw_name = matches!(
+        mode,
+        EXTR_SKIP | EXTR_PREFIX_SAME | EXTR_PREFIX_IF_EXISTS | EXTR_IF_EXISTS
+    );
+    let existing = (valid && inspected_raw_name)
+        .then(|| crate::vm::execute::caller_scope_variable(eg, ed, &raw_name))
+        .flatten();
+    let exists = existing.is_some();
+    let name = match mode {
+        EXTR_SKIP if exists => return Some(None),
+        EXTR_PREFIX_SAME if exists => format!("{prefix}_{raw_name}"),
+        EXTR_PREFIX_ALL if raw_name.is_empty() => return Some(None),
+        EXTR_PREFIX_ALL => format!("{prefix}_{raw_name}"),
+        EXTR_PREFIX_INVALID if !valid => format!("{prefix}_{raw_name}"),
+        EXTR_PREFIX_IF_EXISTS if exists => format!("{prefix}_{raw_name}"),
+        EXTR_PREFIX_IF_EXISTS | EXTR_IF_EXISTS if !exists => return Some(None),
+        _ if !valid => return Some(None),
+        _ => {
+            let target = if inspected_raw_name {
+                existing
+            } else {
+                crate::vm::execute::caller_scope_variable(eg, ed, &raw_name)
+            };
+            let target_requires_snapshot = extract_target_requires_snapshot(target.as_ref());
+            return Some(Some((raw_name, target_requires_snapshot)));
+        }
+    };
+    if !valid_variable_name(&name) {
+        return Some(None);
+    }
+    let target_requires_snapshot = if inspect_indirect_targets {
+        let target = crate::vm::execute::caller_scope_variable(eg, ed, &name);
+        extract_target_requires_snapshot(target.as_ref())
+    } else {
+        false
+    };
+    Some(Some((name, target_requires_snapshot)))
+}
+
+#[inline]
+fn extract_target_requires_snapshot(target: Option<&Value>) -> bool {
+    let Some(target) = target else { return false };
+    matches!(
+        target.dereferenced().value_type(),
+        ValueType::Array | ValueType::Object | ValueType::Closure
+    )
 }
 
 fn valid_variable_name(name: &str) -> bool {
