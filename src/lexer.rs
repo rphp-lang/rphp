@@ -357,7 +357,16 @@ impl<'a> Lexer<'a> {
                 break;
             }
 
-            let ch = self.src[self.pos];
+            let mut ch = self.src[self.pos];
+
+            // PHP's historical binary-string marker is part of the quoted
+            // literal token. It has no value-level effect, but it must be
+            // adjacent, consist of exactly one ASCII `b`/`B`, and preserve
+            // the ordinary single- or double-quoted string behavior.
+            if matches!(ch, b'b' | b'B') && matches!(self.peek_next(), Some(b'\'' | b'"')) {
+                self.pos += 1;
+                ch = self.src[self.pos];
+            }
 
             match ch {
                 b'#' if self.peek_next() == Some(b'[') => {
@@ -1217,6 +1226,64 @@ mod tests {
                 .any(|tokens| { tokens == [Token::True, Token::Comma(1), Token::False] })
         );
         assert!(tokens.contains(&Token::Null));
+    }
+
+    #[test]
+    fn binary_string_prefixes_reuse_ordinary_quoted_string_tokens() {
+        let tokens = Lexer::new(r#"<?php [b"plain", B'single'];"#)
+            .tokenize()
+            .unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                Token::LBracket(1),
+                Token::StringLiteral("plain".into()),
+                Token::Comma(1),
+                Token::StringLiteral("single".into()),
+                Token::RBracket,
+                Token::Semicolon(1),
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn binary_double_quoted_prefix_preserves_interpolation() {
+        let prefixed = Lexer::new(r#"<?php echo B"value=$value\n";"#)
+            .tokenize()
+            .unwrap();
+        let ordinary = Lexer::new(r#"<?php echo "value=$value\n";"#)
+            .tokenize()
+            .unwrap();
+
+        assert_eq!(prefixed, ordinary);
+    }
+
+    #[test]
+    fn binary_string_prefix_requires_one_adjacent_marker() {
+        let tokens = Lexer::new(r#"<?php b "spaced"; bb"long"; C::b"member";"#)
+            .tokenize()
+            .unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                Token::Identifier("b".into(), 1),
+                Token::StringLiteral("spaced".into()),
+                Token::Semicolon(1),
+                Token::Identifier("bb".into(), 1),
+                Token::StringLiteral("long".into()),
+                Token::Semicolon(1),
+                Token::Identifier("C".into(), 1),
+                Token::DoubleColon,
+                Token::StringLiteral("member".into()),
+                Token::Semicolon(1),
+                Token::Eof,
+            ]
+        );
     }
 
     #[test]

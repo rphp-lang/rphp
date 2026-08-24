@@ -15,6 +15,19 @@ fn test_e2e_echo_single_quoted() {
 }
 
 #[test]
+fn binary_string_prefixes_preserve_quoted_string_behavior() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$name = 'RPHP';
+echo b"plain", '|', B'single', '|', b"$name\n", '|', B"\x41";
+"#,
+        ),
+        "plain|single|RPHP\n|A"
+    );
+}
+
+#[test]
 fn test_e2e_concat_strings() {
     assert_eq!(
         run_php("<?php echo \"hello\" . \" \" . \"world\";"),
