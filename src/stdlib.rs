@@ -4512,7 +4512,161 @@ fn fn_array_filter(
     ret!(rv, Value::array(result));
 }
 
-// compact() intentionally removed — requires caller scope access (not yet implemented)
+struct CompactArrayFrame {
+    _owner: Value,
+    identity: usize,
+    values: Vec<Value>,
+    next: usize,
+}
+
+fn compact_array_frame(value: &Value) -> CompactArrayFrame {
+    let owner = value.dereferenced().clone();
+    let identity = owner
+        .array_identity()
+        .expect("compact array frame requires an array");
+    let values = owner
+        .as_array()
+        .expect("compact array frame owner remains an array")
+        .values()
+        .cloned()
+        .collect();
+    CompactArrayFrame {
+        _owner: owner,
+        identity,
+        values,
+        next: 0,
+    }
+}
+
+fn compact_invalid_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    position: usize,
+    value: &Value,
+) -> Result<(), VmError> {
+    let actual = match value.dereferenced().value_type() {
+        ValueType::True => "true".to_string(),
+        ValueType::False => "false".to_string(),
+        _ => value.dereferenced().diagnostic_type_name().into_owned(),
+    };
+    report_internal_diagnostic(
+        eg,
+        ed,
+        2,
+        "Warning",
+        &format!(
+            "compact(): Argument #{position} must be string or array of strings, {actual} given"
+        ),
+    )?;
+    Ok(())
+}
+
+fn compact_scope_name(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    result: &mut PhpArray,
+    name: &str,
+) -> Result<(), VmError> {
+    let value = crate::vm::execute::caller_scope_variable(eg, ed, name).or_else(|| {
+        (name == "this")
+            .then(|| crate::vm::execute::receiver_for_internal_call(ed))
+            .flatten()
+    });
+    if let Some(value) = value {
+        result.set_str(name, value.dereferenced().clone());
+    } else if name != "this" {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!("compact(): Undefined variable ${name}"),
+        )?;
+    }
+    Ok(())
+}
+
+fn compact_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    result: &mut PhpArray,
+    argument: &Value,
+    position: usize,
+) -> Result<(), VmError> {
+    let argument = argument.dereferenced();
+    if let Some(name) = argument.as_str() {
+        return compact_scope_name(ed, eg, result, name);
+    }
+    if argument.as_array().is_none() {
+        return compact_invalid_argument(ed, eg, position, argument);
+    }
+
+    let mut frames = vec![compact_array_frame(argument)];
+    let mut active = std::collections::HashSet::new();
+    active.insert(frames[0].identity);
+    while let Some(frame) = frames.last_mut() {
+        if frame.next == frame.values.len() {
+            active.remove(&frame.identity);
+            frames.pop();
+            continue;
+        }
+        let value = frame.values[frame.next].clone();
+        frame.next += 1;
+        let value = value.dereferenced();
+        if let Some(name) = value.as_str() {
+            compact_scope_name(ed, eg, result, name)?;
+        } else if value.as_array().is_some() {
+            let child = compact_array_frame(value);
+            if !active.insert(child.identity) {
+                eg.exception = Some(crate::value::make_error_value(
+                    "Error",
+                    "Recursion detected",
+                ));
+                return Ok(());
+            }
+            frames.push(child);
+        } else {
+            compact_invalid_argument(ed, eg, position, value)?;
+        }
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+/// compact($var_name, ...$var_names): array
+fn fn_compact(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let first = owned_argument(ed, 0);
+    let extra = owned_argument(ed, 1);
+    let extra = extra
+        .as_array()
+        .expect("compact variadic arguments are packed into an array");
+    if extra.has_string_keys() {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "compact() does not accept unknown named parameters",
+        ));
+        return Ok(());
+    }
+
+    let mut result = PhpArray::new();
+    compact_argument(ed, eg, &mut result, &first, 1)?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    for (index, argument) in extra.values().enumerate() {
+        compact_argument(ed, eg, &mut result, argument, index + 2)?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    ret!(rv, Value::array(result));
+}
 
 // ============================================================================
 // String functions
@@ -10267,23 +10421,46 @@ fn fn_extract(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let flags = arg_opt!(ed, 1).and_then(Value::as_long).unwrap_or(0);
+    let flags = if let Some(flags) = arg_opt!(ed, 1).and_then(Value::as_long) {
+        flags
+    } else if arg_opt!(ed, 1).is_some() {
+        let Some(flags) = typed_internal_int_argument(ed, eg, "extract", 1, "flags")? else {
+            return Ok(());
+        };
+        flags
+    } else {
+        0
+    };
     let mode = flags & 0xff;
     if !matches!(mode, 0..=6) {
         eg.exception = Some(crate::value::make_error_value(
             "ValueError",
-            "extract(): Argument #2 ($flags) must be a valid extract flag",
+            "extract(): Argument #2 ($flags) must be a valid extract type",
         ));
         return Ok(());
     }
-    let prefix = arg_opt!(ed, 2)
-        .map(Value::echo_to_string)
-        .unwrap_or_default();
-    if matches!(
-        mode,
-        EXTR_PREFIX_SAME | EXTR_PREFIX_ALL | EXTR_PREFIX_INVALID | EXTR_PREFIX_IF_EXISTS
-    ) && prefix.is_empty()
+    let prefix_supplied = arg_opt!(ed, 2).is_some();
+    if !prefix_supplied
+        && matches!(
+            mode,
+            EXTR_PREFIX_SAME | EXTR_PREFIX_ALL | EXTR_PREFIX_INVALID | EXTR_PREFIX_IF_EXISTS
+        )
     {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "extract(): Argument #3 ($prefix) is required when using this extract type",
+        ));
+        return Ok(());
+    }
+    let prefix = if prefix_supplied {
+        let Some(prefix) = typed_internal_string_argument(ed, eg, "extract", 2, "prefix")? else {
+            return Ok(());
+        };
+        prefix
+    } else {
+        String::new()
+    };
+    if !prefix.is_empty() && !valid_variable_name(&prefix) {
         eg.exception = Some(crate::value::make_error_value(
             "ValueError",
             "extract(): Argument #3 ($prefix) must be a valid identifier",
@@ -10299,9 +10476,8 @@ fn fn_extract(
         ));
         return Ok(());
     };
-    let keys: Vec<ArrayKey> = array.iter().map(|(key, _)| key).collect();
-    let mut candidates = Vec::with_capacity(keys.len());
-    for key in keys {
+    let mut candidates = Vec::with_capacity(array.len());
+    for (key, _) in array.iter() {
         let raw_name = match &key {
             ArrayKey::Int(key) => key.to_string(),
             ArrayKey::String(key) => key.clone(),
@@ -10312,6 +10488,7 @@ fn fn_extract(
         let name = match mode {
             EXTR_SKIP if exists => continue,
             EXTR_PREFIX_SAME if exists => format!("{prefix}_{raw_name}"),
+            EXTR_PREFIX_ALL if raw_name.is_empty() => continue,
             EXTR_PREFIX_ALL => format!("{prefix}_{raw_name}"),
             EXTR_PREFIX_INVALID if !valid => format!("{prefix}_{raw_name}"),
             EXTR_PREFIX_IF_EXISTS if exists => format!("{prefix}_{raw_name}"),
@@ -10333,6 +10510,23 @@ fn fn_extract(
     }
 
     let references = flags & EXTR_REFS != 0;
+    if candidates.is_empty() {
+        ret!(rv, Value::long(0));
+    }
+    let Some(extracted) = extract_candidates(ed, eg, array, candidates, references) else {
+        return Ok(());
+    };
+    ret!(rv, Value::long(extracted));
+}
+
+#[inline(never)]
+fn extract_candidates(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    array: &mut PhpArray,
+    candidates: Vec<(ArrayKey, String)>,
+    references: bool,
+) -> Option<i64> {
     let mut extracted = 0;
     for (key, name) in candidates {
         let value = match &key {
@@ -10350,17 +10544,26 @@ fn fn_extract(
                 alias
             }
         } else {
-            value.clone()
+            value.dereferenced().clone()
         };
-        debug_assert!(crate::vm::execute::set_caller_scope_variable(
+        match crate::vm::execute::set_caller_scope_variable(
             eg,
             ed,
             &name,
-            extracted_value
-        ));
+            extracted_value,
+            references,
+            false,
+        ) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(message) => {
+                eg.exception = Some(crate::value::make_error_value("TypeError", &message));
+                return None;
+            }
+        }
         extracted += 1;
     }
-    ret!(rv, Value::long(extracted));
+    Some(extracted)
 }
 
 fn valid_variable_name(name: &str) -> bool {
@@ -13209,6 +13412,11 @@ pub(crate) fn scope_introspection_callback_name(
         fn_extract as crate::vm::function::InternalFunctionHandler,
     ) {
         Some("extract")
+    } else if std::ptr::fn_addr_eq(
+        handler,
+        fn_compact as crate::vm::function::InternalFunctionHandler,
+    ) {
+        Some("compact")
     } else if std::ptr::fn_addr_eq(
         handler,
         fn_get_defined_vars as crate::vm::function::InternalFunctionHandler,
@@ -18685,9 +18893,6 @@ fn fn_array_key_last(
     }
     ret!(rv, Value::null());
 }
-
-/// compact(...$var_names): array  — can't access caller scope; stub returns empty array
-/// (Noted in registration as intentionally limited)
 
 /// ctype_alpha($text): bool
 fn fn_ctype_alpha(

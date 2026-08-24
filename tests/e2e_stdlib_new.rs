@@ -822,14 +822,18 @@ fn test_url_encoding_utf8_round_trip() {
 // Regression tests for code review findings
 // ==========================================================================
 
-// P1: compact() was a stub returning empty array — now unregistered
+// P1: compact() must read the caller scope rather than returning a stub value.
 #[test]
-fn test_compact_not_registered() {
-    // compact() should cause "undefined function" panic since it's removed
-    let result = std::panic::catch_unwind(|| run_php(r#"<?php compact("x");"#));
-    assert!(
-        result.is_err(),
-        "compact() should not be registered as a function"
+fn test_compact_reads_caller_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$value = 42;
+$result = compact('value');
+echo $result['value'];
+"#,
+        ),
+        "42"
     );
 }
 

@@ -3000,6 +3000,9 @@ pub struct Compiler {
     /// bindTo()/call(). Keep their self/parent accesses late-bound without
     /// changing lexical magic constants such as `__CLASS__`.
     bindable_closure_scope: bool,
+    /// A direct compact() call in a non-static closure can observe a receiver
+    /// even when the source body never otherwise reads `$this`.
+    needs_compact_receiver: bool,
     /// True if this function body contains a yield expression (makes it a generator)
     contains_yield: bool,
     /// CVs bound to global variables
@@ -3261,6 +3264,7 @@ impl Compiler {
             lexical_static_parent: None,
             dynamic_static_scope: false,
             bindable_closure_scope: false,
+            needs_compact_receiver: false,
             contains_yield: false,
             global_vars: Vec::new(),
             static_vars: Vec::new(),
@@ -8817,6 +8821,9 @@ impl Compiler {
                 generic_args,
                 line,
             } => {
+                if generic_args.is_empty() && self.is_global_builtin_call(name, "compact") {
+                    self.needs_compact_receiver = true;
+                }
                 let assertion_construct = generic_args.is_empty()
                     && name.trim_start_matches('\\').eq_ignore_ascii_case("assert");
                 if assertion_construct && self.zend_assertions < 0 {
@@ -9937,6 +9944,12 @@ impl Compiler {
                 }
                 if let Err(error) = func_compiler.finalize_gotos() {
                     self.deferred_error = Some(error);
+                }
+                // A direct compact() call can observe a bound receiver even
+                // when the closure body never otherwise spells `$this`.
+                // Reserve its ordinary named CV after body analysis.
+                if !*is_static && func_compiler.needs_compact_receiver {
+                    func_compiler.resolve_cv("this");
                 }
                 let null_idx = func_compiler.add_literal(Value::null());
                 let mut ret = Instruction::new(OpCode::Return);

@@ -4388,6 +4388,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         debug_assert!(!call.is_null());
                         let common = &*(*call).func;
                         let parameter_index = opline.extended_value as usize;
+                        if common.sig.is_param_prefer_ref(parameter_index as u32) {
+                            let source =
+                                (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
+                            let argument = (&*source).dereferenced().clone();
+                            let arg_slot = (*call).cv_mut(opline.op2 as u32);
+                            frame_slot_init(call, arg_slot as *mut Value, argument);
+                            (*frame).opline = opline_ptr.add(1);
+                            continue 'vm;
+                        }
                         let parameter_name = common
                             .sig
                             .param_names

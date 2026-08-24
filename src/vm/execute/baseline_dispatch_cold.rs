@@ -747,13 +747,18 @@ fn dynamic_scope_is_global(frame: *mut ExecuteData) -> bool {
 
 enum CallerScopeOperation<'a> {
     Read(&'a str),
-    Write(&'a str, Value),
+    Write {
+        name: &'a str,
+        value: Value,
+        rebind: bool,
+        strict: bool,
+    },
     Snapshot,
 }
 
 enum CallerScopeResult {
     Value(Option<Value>),
-    Written(bool),
+    Written(Result<bool, String>),
     Variables(PhpArray),
 }
 
@@ -773,8 +778,8 @@ fn caller_scope_operation(
         if caller.is_null() {
             return match operation {
                 CallerScopeOperation::Read(_) => CallerScopeResult::Value(None),
-                CallerScopeOperation::Write(name, _) => {
-                    CallerScopeResult::Written(name != "this")
+                CallerScopeOperation::Write { name, .. } => {
+                    CallerScopeResult::Written(Ok(name != "this"))
                 }
                 CallerScopeOperation::Snapshot => {
                     CallerScopeResult::Variables(PhpArray::new())
@@ -801,23 +806,69 @@ fn caller_scope_operation(
                 };
                 CallerScopeResult::Value(value)
             }
-            CallerScopeOperation::Write(name, value) => {
+            CallerScopeOperation::Write {
+                name,
+                mut value,
+                rebind,
+                strict,
+            } => {
                 if name == "this" {
-                    return CallerScopeResult::Written(false);
+                    return CallerScopeResult::Written(Ok(false));
                 }
                 if let Some(cv) = dynamic_scope_cv(owner, name) {
-                    frame_slot_set(owner, (*owner).cv_mut(cv), value);
+                    let slot = (*owner).cv_mut(cv);
+                    if rebind || !slot.is_reference() {
+                        frame_slot_set(owner, slot, value);
+                    } else {
+                        let constraints = slot.reference_property_constraints();
+                        value = match prepare_reference_assignment(value, &constraints, eg, strict) {
+                            Ok(value) => value,
+                            Err(error) => return CallerScopeResult::Written(Err(error)),
+                        };
+                        slot_set((*owner).get_op_mut(cv, OpType::Cv), value);
+                    }
                 } else if dynamic_scope_is_global(owner) {
-                    globals_assign(&mut eg.globals, name, value);
+                    if rebind {
+                        globals_set(&mut eg.globals, name, value);
+                    } else {
+                        let constraints = eg
+                            .globals
+                            .get(name)
+                            .map(Value::reference_property_constraints)
+                            .unwrap_or_default();
+                        value = match prepare_reference_assignment(value, &constraints, eg, strict) {
+                            Ok(value) => value,
+                            Err(error) => return CallerScopeResult::Written(Err(error)),
+                        };
+                        globals_assign(&mut eg.globals, name, value);
+                    }
                     eg.dirty_globals.insert(name.to_string());
                 } else {
-                    globals_assign(
-                        eg.dynamic_variables.entry(owner as usize).or_default(),
-                        name,
-                        value,
-                    );
+                    if rebind {
+                        globals_set(
+                            eg.dynamic_variables.entry(owner as usize).or_default(),
+                            name,
+                            value,
+                        );
+                    } else {
+                        let constraints = eg
+                            .dynamic_variables
+                            .get(&(owner as usize))
+                            .and_then(|variables| variables.get(name))
+                            .map(Value::reference_property_constraints)
+                            .unwrap_or_default();
+                        value = match prepare_reference_assignment(value, &constraints, eg, strict) {
+                            Ok(value) => value,
+                            Err(error) => return CallerScopeResult::Written(Err(error)),
+                        };
+                        globals_assign(
+                            eg.dynamic_variables.entry(owner as usize).or_default(),
+                            name,
+                            value,
+                        );
+                    }
                 }
-                CallerScopeResult::Written(true)
+                CallerScopeResult::Written(Ok(true))
             }
             CallerScopeOperation::Snapshot => {
                 let mut result = PhpArray::new();
@@ -866,11 +917,18 @@ pub(crate) fn set_caller_scope_variable(
     internal_frame: *mut ExecuteData,
     name: &str,
     value: Value,
-) -> bool {
+    rebind: bool,
+    strict: bool,
+) -> Result<bool, String> {
     let CallerScopeResult::Written(written) = caller_scope_operation(
         eg,
         internal_frame,
-        CallerScopeOperation::Write(name, value),
+        CallerScopeOperation::Write {
+            name,
+            value,
+            rebind,
+            strict,
+        },
     ) else {
         unreachable!();
     };

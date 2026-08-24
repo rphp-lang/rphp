@@ -358,7 +358,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         eg.register_function("iterator_to_array", pointer).unwrap();
         funcs.push(function);
     }
-    // compact() requires caller scope access (not yet implemented) — intentionally not registered
+    reg_var!("compact", fn_compact, 1, "var_name", "var_names");
 
     // --- String functions ---
     reg!("strlen", fn_strlen, 1, 1, "string");
@@ -1015,7 +1015,22 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("func_num_args", fn_func_num_args, 0, 0);
     reg!("func_get_arg", fn_func_get_arg, 1, 1, "position");
     reg!("func_get_args", fn_func_get_args, 0, 0);
-    reg_ref!("extract", fn_extract, 3, 1, 0b1, "array", "flags", "prefix");
+    {
+        let mut function = Box::new(make_internal_function_ref(
+            fn_extract,
+            3,
+            1,
+            0b1,
+            pn!["array", "flags", "prefix"],
+        ));
+        // PHP exposes &$array through Reflection but accepts a non-lvalue
+        // source when no writable storage exists (notably $GLOBALS and array
+        // literals). EXTR_REFS still aliases an ordinary lvalue source.
+        function.common.sig.prefer_ref_args = 0b1;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("extract", pointer).unwrap();
+        funcs.push(function);
+    }
     reg!("get_defined_vars", fn_get_defined_vars, 0, 0);
     reg!(
         "debug_backtrace",
