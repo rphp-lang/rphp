@@ -2282,6 +2282,39 @@ $replaceCycle['next'] = null;
     );
 }
 
+#[test]
+fn recursive_array_combiners_render_boolean_argument_values_without_state_leakage() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach ([true, false] as $value) {
+    foreach (['array_merge_recursive', 'array_replace_recursive'] as $function) {
+        try { $function($value, []); }
+        catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+        try { $function([], $value); }
+        catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+    }
+}
+
+$merged = array_merge_recursive(['key' => 1], ['key' => 2]);
+$replaced = array_replace_recursive(['key' => 1], ['key' => 2]);
+echo implode(',', $merged['key']), '|', $replaced['key'];
+"#,
+        ),
+        concat!(
+            "array_merge_recursive(): Argument #1 must be of type array, true given\n",
+            "array_merge_recursive(): Argument #2 must be of type array, true given\n",
+            "array_replace_recursive(): Argument #1 ($array) must be of type array, true given\n",
+            "array_replace_recursive(): Argument #2 must be of type array, true given\n",
+            "array_merge_recursive(): Argument #1 must be of type array, false given\n",
+            "array_merge_recursive(): Argument #2 must be of type array, false given\n",
+            "array_replace_recursive(): Argument #1 ($array) must be of type array, false given\n",
+            "array_replace_recursive(): Argument #2 must be of type array, false given\n",
+            "1,2|2",
+        )
+    );
+}
+
 // === Type functions ===
 
 #[test]

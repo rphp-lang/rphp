@@ -224,11 +224,17 @@ fn type_error(eg: &mut ExecutorGlobals, function: &str, position: usize, value: 
     } else {
         ""
     };
+    let value = value.dereferenced();
+    let actual = match value.value_type() {
+        ValueType::True => "true".into(),
+        ValueType::False => "false".into(),
+        _ => value.diagnostic_type_name(),
+    };
     eg.exception = Some(crate::value::make_error_value(
         "TypeError",
         &format!(
             "{function}(): Argument #{position}{parameter} must be of type array, {} given",
-            value.dereferenced().diagnostic_type_name()
+            actual
         ),
     ));
 }
