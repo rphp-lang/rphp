@@ -3027,7 +3027,15 @@ fn fn_sort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Re
             .values()
             .map(array_sort_snapshot_value)
             .collect::<Vec<_>>();
-        if !sort_direct_long_entries(&mut entries, flags, false, |value| value) {
+        if !sort_direct_long_entries(&mut entries, flags, false, |value| value)
+            && !sort_direct_total_scalar_entries(
+                &mut entries,
+                flags,
+                false,
+                eg.precision,
+                |value| value,
+            )
+        {
             stable_sort_checked(&mut entries, |left, right| {
                 sort_value_order_runtime(ed, eg, left, right, flags)
             })?;
@@ -3054,7 +3062,11 @@ fn fn_rsort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
             .values()
             .map(array_sort_snapshot_value)
             .collect::<Vec<_>>();
-        if !sort_direct_long_entries(&mut entries, flags, true, |value| value) {
+        if !sort_direct_long_entries(&mut entries, flags, true, |value| value)
+            && !sort_direct_total_scalar_entries(&mut entries, flags, true, eg.precision, |value| {
+                value
+            })
+        {
             stable_sort_checked(&mut entries, |left, right| {
                 sort_value_order_runtime(ed, eg, left, right, flags)
                     .map(std::cmp::Ordering::reverse)
@@ -3284,27 +3296,29 @@ fn fn_array_multisort(
     }
 
     let mut order: Vec<usize> = (0..expected_len).collect();
-    if order.len() < 6 {
-        stable_sort_small_checked(&mut order, |left, right| {
+    if columns.iter().all(|column| {
+        sort_domain_has_total_order(&column.entries, column.flags, |(_, value)| value)
+    }) {
+        order.sort_by(|left, right| {
             for column in &columns {
-                let ordering = sort_value_order_runtime(
-                    ed,
-                    eg,
+                let ordering = sort_value_order(
                     &column.entries[*left].1,
                     &column.entries[*right].1,
                     column.flags,
-                )?;
+                    eg.precision,
+                )
+                .unwrap_or(std::cmp::Ordering::Equal);
                 let ordering = if column.direction == SORT_DESC {
                     ordering.reverse()
                 } else {
                     ordering
                 };
                 if ordering != std::cmp::Ordering::Equal {
-                    return Ok(ordering);
+                    return ordering;
                 }
             }
-            Ok(std::cmp::Ordering::Equal)
-        })?;
+            std::cmp::Ordering::Equal
+        });
     } else {
         stable_sort_checked(&mut order, |left, right| {
             for column in &columns {
@@ -3326,9 +3340,9 @@ fn fn_array_multisort(
             }
             Ok(std::cmp::Ordering::Equal)
         })?;
-    }
-    if eg.exception.is_some() {
-        return Ok(());
+        if eg.exception.is_some() {
+            return Ok(());
+        }
     }
 
     for column in columns {
@@ -11643,23 +11657,80 @@ fn sort_direct_long_entries<T>(
     true
 }
 
-/// Match PHP 8.5's observable two-to-five-element stable comparison schedule.
-/// Larger inputs retain the deterministic bottom-up merge implementation.
-fn stable_sort_small_checked<T, E>(
+/// Comparison-pure scalar domains have no observable comparator schedule.
+/// Keep them on the host's stable sort while routing heterogeneous, warning,
+/// hook and non-transitive domains through the observed scheduler below.
+fn sort_direct_total_scalar_entries<T>(
     entries: &mut [T],
-    mut compare: impl FnMut(&T, &T) -> Result<std::cmp::Ordering, E>,
-) -> Result<(), E> {
-    let completed =
-        stable_sort_small_optional_checked(entries, |left, right| compare(left, right).map(Some))?;
-    debug_assert!(
-        completed,
-        "an infallible small-sort comparison cannot abort"
-    );
-    Ok(())
+    flags: i64,
+    reverse: bool,
+    precision: i32,
+    value: impl for<'a> Fn(&'a T) -> &'a Value,
+) -> bool {
+    if !sort_domain_has_total_order(entries, flags, &value) {
+        return false;
+    }
+
+    entries.sort_by(|left, right| {
+        let ordering = sort_value_order(value(left), value(right), flags, precision)
+            .unwrap_or(std::cmp::Ordering::Equal);
+        if reverse {
+            ordering.reverse()
+        } else {
+            ordering
+        }
+    });
+    true
 }
 
-/// Return `false` without issuing another comparison when the callback asks
-/// the caller to preserve an already-published exception.
+fn sort_domain_has_total_order<T>(
+    entries: &[T],
+    flags: i64,
+    value: impl for<'a> Fn(&'a T) -> &'a Value,
+) -> bool {
+    let mode = flags & !SORT_FLAG_CASE;
+    let all_strings = entries
+        .iter()
+        .all(|entry| value(entry).dereferenced().value_type() == ValueType::String);
+    let all_regular_numeric = entries.iter().all(|entry| {
+        let value = value(entry).dereferenced();
+        match value.value_type() {
+            ValueType::Long => true,
+            ValueType::Double => !value.as_double().unwrap().is_nan(),
+            ValueType::String => php_numeric_string_to_float(value.as_str().unwrap()).is_some(),
+            _ => false,
+        }
+    });
+    let all_regular_non_numeric_strings = entries.iter().all(|entry| {
+        let value = value(entry).dereferenced();
+        value.value_type() == ValueType::String
+            && php_numeric_string_to_float(value.as_str().unwrap()).is_none()
+    });
+    let all_numeric_casts_are_total = entries.iter().all(|entry| {
+        let value = value(entry).dereferenced();
+        match value.value_type() {
+            ValueType::Null
+            | ValueType::Undef
+            | ValueType::False
+            | ValueType::True
+            | ValueType::Long
+            | ValueType::String
+            | ValueType::Resource => true,
+            ValueType::Double => !value.as_double().unwrap().is_nan(),
+            _ => false,
+        }
+    });
+    match mode {
+        SORT_REGULAR => all_regular_numeric || all_regular_non_numeric_strings,
+        SORT_NUMERIC => all_numeric_casts_are_total,
+        SORT_STRING | SORT_LOCALE_STRING | SORT_NATURAL => all_strings,
+        _ => false,
+    }
+}
+
+/// Match PHP 8.5's observable two-to-five-element user-callback schedule.
+/// Return `false` without another comparison when the callback asks the caller
+/// to preserve an already-published exception.
 fn stable_sort_small_optional_checked<T, E>(
     entries: &mut [T],
     mut compare: impl FnMut(&T, &T) -> Result<Option<std::cmp::Ordering>, E>,
@@ -11722,43 +11793,11 @@ fn stable_sort_checked<T, E>(
         return Ok(());
     }
 
-    // Sort indices so comparison failures leave the structural snapshot
-    // available to the caller. Equal entries always come from the left run,
-    // which supplies PHP's stable-order contract independently of host `Ord`.
+    // Original positions provide PHP's stable fallback when the public
+    // comparator reports equality. Sorting indices also keeps every cloned
+    // entry owned by this vector if an observable comparison fails.
     let mut order = (0..length).collect::<Vec<_>>();
-    let mut merged = order.clone();
-    let mut width = 1usize;
-    while width < length {
-        let mut start = 0usize;
-        while start < length {
-            let middle = (start + width).min(length);
-            let end = (middle + width).min(length);
-            let (mut left, mut right, mut output) = (start, middle, start);
-            while left < middle && right < end {
-                if compare(&entries[order[left]], &entries[order[right]])?.is_gt() {
-                    merged[output] = order[right];
-                    right += 1;
-                } else {
-                    merged[output] = order[left];
-                    left += 1;
-                }
-                output += 1;
-            }
-            while left < middle {
-                merged[output] = order[left];
-                left += 1;
-                output += 1;
-            }
-            while right < end {
-                merged[output] = order[right];
-                right += 1;
-                output += 1;
-            }
-            start = end;
-        }
-        std::mem::swap(&mut order, &mut merged);
-        width = width.saturating_mul(2);
-    }
+    php_observed_sort_schedule(entries, &mut order, &mut compare)?;
 
     let original = std::mem::take(entries);
     let mut slots = original.into_iter().map(Some).collect::<Vec<_>>();
@@ -11769,6 +11808,236 @@ fn stable_sort_checked<T, E>(
                 .take()
                 .expect("stable-sort permutation consumes each entry once"),
         );
+    }
+    Ok(())
+}
+
+#[inline]
+fn stable_observed_compare<T, E>(
+    entries: &[T],
+    order: &[usize],
+    left: usize,
+    right: usize,
+    compare: &mut impl FnMut(&T, &T) -> Result<std::cmp::Ordering, E>,
+) -> Result<std::cmp::Ordering, E> {
+    let left_index = order[left];
+    let right_index = order[right];
+    let ordering = compare(&entries[left_index], &entries[right_index])?;
+    Ok(if ordering == std::cmp::Ordering::Equal {
+        left_index.cmp(&right_index)
+    } else {
+        ordering
+    })
+}
+
+/// Run the small-input comparison transcript inferred from PHP 8.5 oracle
+/// output. The three-item branch is intentionally directional: reversing its
+/// second comparison changes warning order for heterogeneous values.
+fn observed_small_sort_schedule<T, E>(
+    entries: &[T],
+    order: &mut [usize],
+    positions: &[usize],
+    compare: &mut impl FnMut(&T, &T) -> Result<std::cmp::Ordering, E>,
+) -> Result<(), E> {
+    match positions {
+        [] | [_] => Ok(()),
+        [left, right] => {
+            if stable_observed_compare(entries, order, *left, *right, compare)?.is_gt() {
+                order.swap(*left, *right);
+            }
+            Ok(())
+        }
+        [first, second, third] => {
+            if !stable_observed_compare(entries, order, *first, *second, compare)?.is_gt() {
+                if !stable_observed_compare(entries, order, *second, *third, compare)?.is_gt() {
+                    return Ok(());
+                }
+                order.swap(*second, *third);
+                if stable_observed_compare(entries, order, *first, *second, compare)?.is_gt() {
+                    order.swap(*first, *second);
+                }
+                return Ok(());
+            }
+            if !stable_observed_compare(entries, order, *third, *second, compare)?.is_gt() {
+                order.swap(*first, *third);
+                return Ok(());
+            }
+            order.swap(*first, *second);
+            if stable_observed_compare(entries, order, *second, *third, compare)?.is_gt() {
+                order.swap(*second, *third);
+            }
+            Ok(())
+        }
+        [..] if positions.len() <= 5 => {
+            observed_small_sort_schedule(
+                entries,
+                order,
+                &positions[..positions.len() - 1],
+                compare,
+            )?;
+            let mut cursor = positions.len() - 1;
+            while cursor != 0
+                && stable_observed_compare(
+                    entries,
+                    order,
+                    positions[cursor - 1],
+                    positions[cursor],
+                    compare,
+                )?
+                .is_gt()
+            {
+                order.swap(positions[cursor - 1], positions[cursor]);
+                cursor -= 1;
+            }
+            Ok(())
+        }
+        _ => unreachable!("small observed schedule accepts at most five positions"),
+    }
+}
+
+fn place_observed_entry(order: &mut [usize], destination: usize, source: usize) {
+    order[destination..=source].rotate_right(1);
+}
+
+fn observed_insertion_schedule<T, E>(
+    entries: &[T],
+    order: &mut [usize],
+    start: usize,
+    length: usize,
+    compare: &mut impl FnMut(&T, &T) -> Result<std::cmp::Ordering, E>,
+) -> Result<(), E> {
+    match length {
+        0 | 1 => return Ok(()),
+        2..=5 => {
+            let positions = (start..start + length).collect::<Vec<_>>();
+            return observed_small_sort_schedule(entries, order, &positions, compare);
+        }
+        _ => {}
+    }
+
+    let end = start + length;
+    let sentry = start + 6;
+    for source in start + 1..sentry {
+        let mut destination = source - 1;
+        if !stable_observed_compare(entries, order, destination, source, compare)?.is_gt() {
+            continue;
+        }
+        while destination != start {
+            destination -= 1;
+            if !stable_observed_compare(entries, order, destination, source, compare)?.is_gt() {
+                destination += 1;
+                break;
+            }
+        }
+        place_observed_entry(order, destination, source);
+    }
+
+    for source in sentry..end {
+        let mut destination = source - 1;
+        if !stable_observed_compare(entries, order, destination, source, compare)?.is_gt() {
+            continue;
+        }
+        loop {
+            destination -= 2;
+            if !stable_observed_compare(entries, order, destination, source, compare)?.is_gt() {
+                destination += 1;
+                if !stable_observed_compare(entries, order, destination, source, compare)?.is_gt() {
+                    destination += 1;
+                }
+                break;
+            }
+            if destination == start {
+                break;
+            }
+            if destination == start + 1 {
+                destination -= 1;
+                if stable_observed_compare(entries, order, source, destination, compare)?.is_gt() {
+                    destination += 1;
+                }
+                break;
+            }
+        }
+        place_observed_entry(order, destination, source);
+    }
+    Ok(())
+}
+
+/// Repository-owned scheduler whose PHP 8.5 contract is frozen by black-box
+/// comparison and warning transcripts. Original tests cover the 5/6, 16/17
+/// and 1023/1024 boundaries.
+fn php_observed_sort_schedule<T, E>(
+    entries: &[T],
+    order: &mut [usize],
+    compare: &mut impl FnMut(&T, &T) -> Result<std::cmp::Ordering, E>,
+) -> Result<(), E> {
+    let mut pending = vec![(0usize, order.len())];
+    while let Some((mut start, mut length)) = pending.pop() {
+        while length > 16 {
+            let end = start + length;
+            let offset = length >> 1;
+            if length >= 1024 {
+                let delta = offset >> 1;
+                let sample = [
+                    start,
+                    start + delta,
+                    start + offset,
+                    start + offset + delta,
+                    end - 1,
+                ];
+                observed_small_sort_schedule(entries, order, &sample, compare)?;
+            } else {
+                let sample = [start, start + offset, end - 1];
+                observed_small_sort_schedule(entries, order, &sample, compare)?;
+            }
+
+            let pivot = start + 1;
+            order.swap(pivot, start + offset);
+            let mut low = pivot + 1;
+            let mut high = end - 1;
+            loop {
+                while stable_observed_compare(entries, order, pivot, low, compare)?.is_gt() {
+                    low += 1;
+                    if low == high {
+                        break;
+                    }
+                }
+                if low == high {
+                    break;
+                }
+                high -= 1;
+                if high == low {
+                    break;
+                }
+                while stable_observed_compare(entries, order, high, pivot, compare)?.is_gt() {
+                    high -= 1;
+                    if high == low {
+                        break;
+                    }
+                }
+                if high == low {
+                    break;
+                }
+                order.swap(low, high);
+                low += 1;
+                if low == high {
+                    break;
+                }
+            }
+            order.swap(pivot, low - 1);
+
+            let left = (start, low - start - 1);
+            let right = (low, end - low);
+            let (next, later) = if left.1 < right.1 {
+                (left, right)
+            } else {
+                (right, left)
+            };
+            if later.1 != 0 {
+                pending.push(later);
+            }
+            (start, length) = next;
+        }
+        observed_insertion_schedule(entries, order, start, length, compare)?;
     }
     Ok(())
 }
@@ -18841,7 +19110,15 @@ fn fn_asort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
             .iter()
             .map(|(key, value)| (key, array_sort_snapshot_value(value)))
             .collect();
-        if !sort_direct_long_entries(&mut pairs, flags, false, |(_, value)| value) {
+        if !sort_direct_long_entries(&mut pairs, flags, false, |(_, value)| value)
+            && !sort_direct_total_scalar_entries(
+                &mut pairs,
+                flags,
+                false,
+                eg.precision,
+                |(_, value)| value,
+            )
+        {
             stable_sort_checked(&mut pairs, |(_, left), (_, right)| {
                 sort_value_order_runtime(ed, eg, left, right, flags)
             })?;
@@ -18872,7 +19149,15 @@ fn fn_arsort(
             .iter()
             .map(|(key, value)| (key, array_sort_snapshot_value(value)))
             .collect();
-        if !sort_direct_long_entries(&mut pairs, flags, true, |(_, value)| value) {
+        if !sort_direct_long_entries(&mut pairs, flags, true, |(_, value)| value)
+            && !sort_direct_total_scalar_entries(
+                &mut pairs,
+                flags,
+                true,
+                eg.precision,
+                |(_, value)| value,
+            )
+        {
             stable_sort_checked(&mut pairs, |(_, left), (_, right)| {
                 sort_value_order_runtime(ed, eg, left, right, flags)
                     .map(std::cmp::Ordering::reverse)
@@ -18900,9 +19185,12 @@ fn fn_ksort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
             .iter()
             .map(|(key, value)| (key, array_sort_snapshot_value(value)))
             .collect();
-        pairs.sort_by(|(left, _), (right, _)| {
-            sort_key_order(left, right, flags, eg.precision).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        stable_sort_checked(&mut pairs, |(left, _), (right, _)| {
+            Ok::<_, VmError>(
+                sort_key_order(left, right, flags, eg.precision)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+        })?;
         let mut new_arr = PhpArray::new();
         for (key, value) in pairs {
             new_arr.set(key, array_projection_value(&value));
@@ -18926,11 +19214,13 @@ fn fn_krsort(
             .iter()
             .map(|(key, value)| (key, array_sort_snapshot_value(value)))
             .collect();
-        pairs.sort_by(|(left, _), (right, _)| {
-            sort_key_order(left, right, flags, eg.precision)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .reverse()
-        });
+        stable_sort_checked(&mut pairs, |(left, _), (right, _)| {
+            Ok::<_, VmError>(
+                sort_key_order(left, right, flags, eg.precision)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .reverse(),
+            )
+        })?;
         let mut new_arr = PhpArray::new();
         for (key, value) in pairs {
             new_arr.set(key, array_projection_value(&value));
