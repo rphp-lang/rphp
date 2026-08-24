@@ -6144,34 +6144,9 @@ impl ExecutorGlobals {
         name: &str,
         func: *const FunctionCommon,
     ) -> Result<(), String> {
-        self.register_function_key(name.to_lowercase(), func, name)
-    }
-
-    /// Register a built-in whose declared name is already the canonical
-    /// lowercase lookup key. Request startup installs hundreds of these, so
-    /// avoid repeating Unicode lowercase scans for static ASCII names.
-    pub(crate) fn register_canonical_function(
-        &mut self,
-        name: &str,
-        func: *const FunctionCommon,
-    ) -> Result<(), String> {
-        debug_assert!(!name.bytes().any(|byte| byte.is_ascii_uppercase()));
-        self.register_function_key(name.to_owned(), func, name)
-    }
-
-    #[inline]
-    fn register_function_key(
-        &mut self,
-        key: String,
-        func: *const FunctionCommon,
-        declared_name: &str,
-    ) -> Result<(), String> {
+        let key = name.to_lowercase();
         if let Some(&previous) = self.function_table.get(&key) {
-            return Err(Self::function_redeclaration_error(
-                previous,
-                func,
-                declared_name,
-            ));
+            return Err(Self::function_redeclaration_error(previous, func, name));
         }
         self.function_table.insert(key, func);
         Ok(())
