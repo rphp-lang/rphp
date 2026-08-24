@@ -12,10 +12,10 @@ use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 
 use super::{
-    bytes_to_php_string, direct_arg_opt, direct_arg_str, owned_argument, percent_decode_bytes,
-    php_string_to_bytes, push_percent_escape, typed_internal_bool_argument,
-    typed_internal_int_argument, typed_internal_string_argument,
-    typed_internal_string_argument_expected,
+    bytes_to_php_string, direct_arg_opt, direct_arg_str, legacy_encoding::LegacyEncoding,
+    owned_argument, percent_decode_bytes, php_string_to_bytes, push_percent_escape,
+    report_internal_diagnostic, typed_internal_bool_argument, typed_internal_int_argument,
+    typed_internal_string_argument, typed_internal_string_argument_expected,
 };
 
 // ============================================================================
@@ -278,13 +278,215 @@ fn decode_html_entities(src: &str, decode_numeric: bool) -> String {
     out
 }
 
+#[derive(Clone, Copy)]
+enum HtmlEntityOutputEncoding {
+    Utf8,
+    Legacy(LegacyEncoding),
+}
+
+fn html_numeric_reference_allowed(codepoint: u32, document: i64) -> bool {
+    if codepoint > 0x10ffff || (0xd800..=0xdfff).contains(&codepoint) {
+        return false;
+    }
+    match document {
+        ENT_XML1 | ENT_XHTML => {
+            matches!(codepoint, 0x09 | 0x0a | 0x0d)
+                || (0x20..=0xd7ff).contains(&codepoint)
+                || (0xe000..=0xfffd).contains(&codepoint)
+                || (0x10000..=0x10ffff).contains(&codepoint)
+        }
+        ENT_HTML5 => {
+            let noncharacter = (0xfdd0..=0xfdef).contains(&codepoint)
+                || matches!(codepoint & 0xffff, 0xfffe | 0xffff);
+            !noncharacter
+                && (matches!(codepoint, 0x09 | 0x0a | 0x0c)
+                    || (0x20..=0x7e).contains(&codepoint)
+                    || (0xa0..=0x10ffff).contains(&codepoint))
+        }
+        _ => {
+            matches!(codepoint, 0x09 | 0x0a | 0x0d)
+                || (0x20..=0x7e).contains(&codepoint)
+                || (0xa0..=0x10ffff).contains(&codepoint)
+        }
+    }
+}
+
+fn html_quote_reference_allowed(codepoint: u32, flags: i64) -> bool {
+    match codepoint {
+        0x22 => flags & 2 != 0,
+        0x27 => flags & 1 != 0,
+        _ => true,
+    }
+}
+
+fn parse_numeric_html_reference(source: &[u8]) -> Option<(u32, usize)> {
+    if source.first() != Some(&b'#') {
+        return None;
+    }
+    let (radix, mut position) = if matches!(source.get(1), Some(b'x' | b'X')) {
+        (16_u32, 2)
+    } else {
+        (10_u32, 1)
+    };
+    let digits_start = position;
+    let mut codepoint = 0_u32;
+    while let Some(byte) = source.get(position) {
+        let digit = char::from(*byte).to_digit(radix);
+        let Some(digit) = digit else {
+            break;
+        };
+        codepoint = codepoint.checked_mul(radix)?.checked_add(digit)?;
+        position += 1;
+    }
+    if position == digits_start || source.get(position) != Some(&b';') {
+        return None;
+    }
+    Some((codepoint, position + 1))
+}
+
+fn named_html_reference(source: &[u8], document: i64) -> Option<(u32, usize)> {
+    Some(match source {
+        source if source.starts_with(b"amp;") => (0x26, 4),
+        source if source.starts_with(b"lt;") => (0x3c, 3),
+        source if source.starts_with(b"gt;") => (0x3e, 3),
+        source if source.starts_with(b"quot;") => (0x22, 5),
+        source
+            if source.starts_with(b"apos;")
+                && matches!(document, ENT_XML1 | ENT_XHTML | ENT_HTML5) =>
+        {
+            (0x27, 5)
+        }
+        source if source.starts_with(b"nbsp;") => (0xa0, 5),
+        source if source.starts_with(b"copy;") => (0xa9, 5),
+        source if source.starts_with(b"reg;") => (0xae, 4),
+        _ => return None,
+    })
+}
+
+fn encode_html_entity_codepoint(
+    codepoint: u32,
+    encoding: HtmlEntityOutputEncoding,
+    out: &mut String,
+) -> bool {
+    match encoding {
+        HtmlEntityOutputEncoding::Utf8 => {
+            let Some(character) = char::from_u32(codepoint) else {
+                return false;
+            };
+            let mut buffer = [0; 4];
+            for byte in character.encode_utf8(&mut buffer).bytes() {
+                out.push(char::from(byte));
+            }
+            true
+        }
+        HtmlEntityOutputEncoding::Legacy(encoding) => {
+            let Some(byte) = encoding.encode(codepoint) else {
+                return false;
+            };
+            out.push(char::from(byte));
+            true
+        }
+    }
+}
+
+fn decode_html_entities_for_encoding(
+    source: &[u8],
+    flags: i64,
+    encoding: HtmlEntityOutputEncoding,
+) -> String {
+    let document = flags & ENT_DOCUMENT_MASK;
+    let mut out = String::with_capacity(source.len());
+    let mut position = 0;
+    while position < source.len() {
+        if source[position] != b'&' {
+            out.push(char::from(source[position]));
+            position += 1;
+            continue;
+        }
+
+        let tail = &source[position + 1..];
+        let numeric = tail.first() == Some(&b'#');
+        let parsed = if numeric {
+            parse_numeric_html_reference(tail)
+        } else {
+            named_html_reference(tail, document)
+        };
+        if let Some((codepoint, consumed)) = parsed
+            && html_quote_reference_allowed(codepoint, flags)
+            && (!numeric || html_numeric_reference_allowed(codepoint, document))
+            && encode_html_entity_codepoint(codepoint, encoding, &mut out)
+        {
+            position += consumed + 1;
+            continue;
+        }
+        // An invalid prefix may contain another ampersand before the
+        // semicolon (`&#x&amp;`). Preserve only this ampersand so the later
+        // valid entity still gets its own decoding opportunity.
+        out.push('&');
+        position += 1;
+    }
+    out
+}
+
+fn html_entity_decoded_value(decoded: String) -> Value {
+    Value::binary_string_from_storage(decoded)
+}
+
 pub(super) fn fn_html_entity_decode(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    ret!(rv, Value::string(decode_html_entities(s.as_ref(), true)));
+    if arg_opt!(ed, 1).is_none()
+        && arg_opt!(ed, 2).is_none()
+        && let Some(source) = arg!(ed, 0).php_string_bytes()
+    {
+        let decoded = decode_html_entities_for_encoding(
+            &source,
+            ENT_QUOTES_MASK | ENT_SUBSTITUTE,
+            HtmlEntityOutputEncoding::Utf8,
+        );
+        ret!(rv, html_entity_decoded_value(decoded));
+    }
+    let original_bytes = arg!(ed, 0).php_string_bytes().map(Cow::into_owned);
+    let Some(string) = typed_internal_string_argument(ed, eg, "html_entity_decode", 0, "string")?
+    else {
+        return Ok(());
+    };
+    let flags = if arg_opt!(ed, 1).is_some() {
+        let Some(flags) = typed_internal_int_argument(ed, eg, "html_entity_decode", 1, "flags")?
+        else {
+            return Ok(());
+        };
+        flags
+    } else {
+        ENT_QUOTES_MASK | ENT_SUBSTITUTE
+    };
+    let Some(encoding_name) = html_encoding_argument(ed, eg, "html_entity_decode")? else {
+        return Ok(());
+    };
+    let encoding = if encoding_name.eq_ignore_ascii_case("UTF-8") {
+        HtmlEntityOutputEncoding::Utf8
+    } else if let Some(encoding) = LegacyEncoding::parse(&encoding_name) {
+        HtmlEntityOutputEncoding::Legacy(encoding)
+    } else {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!(
+                "html_entity_decode(): Charset \"{encoding_name}\" is not supported, assuming UTF-8"
+            ),
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        HtmlEntityOutputEncoding::Utf8
+    };
+    let source = original_bytes.unwrap_or_else(|| string.into_bytes());
+    let decoded = decode_html_entities_for_encoding(&source, flags, encoding);
+    ret!(rv, html_entity_decoded_value(decoded));
 }
 
 pub(super) fn fn_filter_var(

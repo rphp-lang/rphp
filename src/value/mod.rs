@@ -4868,6 +4868,20 @@ impl Value {
         value
     }
 
+    /// Create a PHP byte string from storage already expressed through the
+    /// runtime's lossless Latin-1 bridge.
+    #[inline]
+    pub(crate) fn binary_string_from_storage(storage: String) -> Self {
+        debug_assert!(
+            storage
+                .chars()
+                .all(|character| u32::from(character) <= 0xff)
+        );
+        let mut value = Self::string(storage);
+        value.type_info |= Self::BINARY_STRING_FLAG;
+        value
+    }
+
     /// Create a PHP source/compiler string whose storage is interned by Zend.
     #[inline]
     pub(crate) fn interned_string(s: impl Into<String>) -> Self {

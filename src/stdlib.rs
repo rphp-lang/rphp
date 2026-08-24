@@ -49,6 +49,7 @@ use crate::vm::opcode::OpCode;
 #[cfg(feature = "include-path")]
 pub(crate) mod include_path;
 mod json_decode;
+mod legacy_encoding;
 mod pack;
 mod parse_ini;
 mod random;

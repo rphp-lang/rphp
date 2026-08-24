@@ -8,6 +8,87 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`html-entity-numeric-legacy-encoding-batch`, pinned to php-src 8.5 commit
+`fcc29c8`. `html_entity_decode()` now applies PHP 8.5's numeric-reference,
+quote-flag and HTML401/XML1/XHTML/HTML5 document-validity rules to byte-exact
+UTF-8 and legacy output. The admitted single-byte encodings are ISO-8859-1,
+ISO-8859-15, ISO-8859-5, CP866, KOI8-R, MacRoman, Windows-1251 and
+Windows-1252, including their exercised case-insensitive PHP aliases.
+Undefined byte slots and Unicode code points that are not representable in the
+selected encoding remain verbatim entities. Malformed, overflowing,
+surrogate, disallowed control and noncharacter references likewise remain
+visible instead of being silently replaced.
+
+The implementation was derived from the public
+[PHP `html_entity_decode()` contract](https://www.php.net/manual/en/function.html-entity-decode.php),
+the [WHATWG Encoding Standard](https://encoding.spec.whatwg.org/) and its
+published IBM866, ISO-8859-5, KOI8-R, Macintosh, Windows-1251 and Windows-1252
+indexes. PHP 8.5.9 black-box runs establish alias, warning, flag and invalid-
+input behavior. No php-src implementation or test table is copied or
+mechanically translated. Four table-level unit tests cover every ASCII,
+defined and undefined mapping slot plus aliases; six original E2E regressions
+cover byte boundaries, undefined slots, C0/C1 controls, quote/document flags,
+decimal and hexadecimal forms, long zero padding, malformed and out-of-range
+forms, neighboring valid entities, embedded NUL, raw output, `bin2hex()` and
+unsupported-charset
+warnings.
+
+All eight supplying PHP 8.5 cases pass. The focused manifest and summary
+SHA-256 values are
+`a8df305cdf94a9b9452f16aea5deb50fe8419c2d4123b440ddd9fd8926d46b83`
+and `7dda131c6d1647e40a7aa230ad4604f2e148e5f8b3d17d389cdb381d4c05afd5`;
+the pre-change and PHP 8.5.9 oracle manifest SHA-256 values are respectively
+`f5c2906cfe2e6a292f39ab833828cb3afa921f6b6dc316aeb4f5f4772e94cdd8`
+and `b0263dc691a05a57a06ec790a60efe9142565a18dd37796d2eea01d19259c95d`.
+
+The complete 733-case `ext/standard/tests/strings` audit moves from 286 to 296
+passes (+10/-0), with 352 failures, 54 skips, 30 unsupported cases, the
+retained `dirname_multi.phpt` timeout and zero crashes. The exact gains are
+`bug53021.phpt`, `html_entity_decode2.phpt`, `html_entity_decode3.phpt` and the
+CP866, ISO-8859-15, ISO-8859-5, KOI8-R, MacRoman, Windows-1251 and Windows-1252
+decode cases. There is no other status or category movement. The final strings
+manifest and summary SHA-256 values are
+`a8cc0eedb4d255833dd69f2ce18e1b3dfc353a93b06fa18892a2a4ff52d02e38`
+and `b0e253c9705469c42de0258c5d3b1cd47b23602b90cf10af9ed33d329ad654e6`.
+
+The complete 842-case array audit remains byte-identical at 822 passes, six
+failures, 13 skips and one unsupported case, and the 5,599-case Zend/lang audit
+remains byte-identical at 4,196 passes, 1,107 failures, 115 skips and 181
+unsupported cases. Neither corpus has an XFAIL, timeout or crash. Their
+manifest SHA-256 values remain
+`083f5588c19ab3fc2e1ae684f98d42c86b0ada8ba3dee3c182d6f42ad8bc751c`
+and `a6c79657d0a6f66f85de63781961e6fc3f8ae64a1796136de8d07749990be70c`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+Production remains at 1,623 unsafe blocks and 289 unsafe functions with 356
+SAFETY annotations. The checkpoint adds no dependency, opcode,
+executor-global field, VM-frame field, value-layout growth, unsafe block or
+unsafe function.
+
+Two independent CPU-2-pinned 32-pair default-release controls after three
+warmups put paired median changes at +0.669%/+0.816% for 100 startups,
+-0.265%/-0.191% for the unchanged string control, -8.869%/-8.970% for the
+default UTF-8 `html_entity_decode()` lane and -0.353%/+0.269% for the unchanged
+`htmlspecialchars()` control. Every median is below the +5% gate and every
+sample retains its exact checksum. Candidate-only Windows-1252 decode
+throughput is 1,685,267/1,669,107 iterations per second with checksum
+`5920000`; no baseline ratio is claimed because the preceding binary does not
+implement that encoding. Baseline/candidate release-binary SHA-256 values are
+`0ac6f3d05451fb5b25044ffc01376e421aec4c22f74d0dcf168d378ee8ca6ae1` /
+`3ac7e3763932d8219b476c3ccfc4e4e970f2a16db5520f1c8fe7fe07eae20cc8`.
+The transient benchmark harness SHA-256 is
+`9d4cd21581631b4defa7e178293a698e2b4db2d642fef28a830e4ff3d05e83c2`.
+
+This checkpoint does not claim the complete HTML4/HTML5 named-entity tables,
+multi-code-point named entities, `ENT_DISALLOWED`, replacement of malformed
+UTF-8 input, iconv/mbstring extension surfaces, the remaining 352 strings
+failures and 30 unsupported cases, the inherited strings timeout, the six
+array failures, the remaining 1,107 Zend/lang failures or broader PHP
+compatibility.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `binary-pack-unpack-format-contract-batch`, pinned to php-src 8.5 commit
 `fcc29c8` and implementation commit `49c57cb6`. The default runtime now
 registers PHP 8.5-compatible `pack()` and `unpack()` signatures and implements

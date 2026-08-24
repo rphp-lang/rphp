@@ -2295,6 +2295,34 @@ next goal by this order unless an explicit project objective overrides it:
 5. Reflection and standard-library clusters with measured dependency reach;
 6. isolated low-fanout features and optional extensions.
 
+The `html-entity-numeric-legacy-encoding-batch` checkpoint gives
+`html_entity_decode()` a byte-exact numeric-reference path for UTF-8 and the
+PHP 8.5 single-byte encodings ISO-8859-1, ISO-8859-15, ISO-8859-5, CP866,
+KOI8-R, MacRoman, Windows-1251 and Windows-1252. Public WHATWG indexes, the PHP
+manual and PHP 8.5.9 black-box observations define the clean-room mappings,
+aliases, document modes, quote flags, invalid forms and warning fallback.
+Undefined slots and unrepresentable code points remain verbatim entities.
+
+All eight supplying cases pass. The complete 733-case strings audit moves from
+286 to 296 passes, an exact +10/-0 delta with no other status/category movement;
+the two adjacent gains are `html_entity_decode2.phpt` and
+`html_entity_decode3.phpt`. Array remains byte-identical at 822/842 and
+Zend/lang at 4,196/5,599, without a new timeout or crash. Four mapping-level
+unit tests cover all ASCII, defined and undefined table slots; six original
+E2E tests cover the admitted parser, flag, invalid-input and binary-output
+boundaries.
+
+All five Cargo configurations, all-target, formatting, runner, unsafe,
+Composer S0, four Symfony S1 gates and PHP 8.5 S2/S3 pass. Two independent
+CPU-pinned 32-pair release controls put paired medians at +0.669%/+0.816% for
+startup, -0.265%/-0.191% for the string control, -8.869%/-8.970% for default
+UTF-8 entity decode and -0.353%/+0.269% for the `htmlspecialchars()` control,
+below the +5% gate with exact checksums. Candidate-only legacy decode reaches
+1.685/1.669 million iterations per second; no unavailable-baseline ratio is
+claimed. Full named-entity tables, multi-code-point entities,
+`ENT_DISALLOWED`, malformed-UTF-8 replacement, optional encoding extensions
+and the remaining corpus gaps stay explicit nonclaims.
+
 The `binary-pack-unpack-format-contract-batch` checkpoint adds the complete
 core PHP 8.5 `pack()`/`unpack()` format alphabet, repeat and naming grammar,
 cursor/offset behavior, integer and float boundary semantics, diagnostics,
