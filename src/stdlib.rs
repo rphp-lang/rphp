@@ -3095,6 +3095,54 @@ struct MultisortColumn {
     destination: *mut Value,
 }
 
+#[derive(Clone, Copy)]
+enum MultisortFlagKind {
+    Direction,
+    Comparison,
+}
+
+#[derive(Clone, Copy)]
+enum MultisortArgumentViolation {
+    NotArrayOrFlag,
+    DuplicateFlag,
+    InvalidFlag,
+}
+
+fn multisort_flag_kind(flag: i64) -> Option<MultisortFlagKind> {
+    if matches!(flag, SORT_ASC | SORT_DESC) {
+        Some(MultisortFlagKind::Direction)
+    } else if matches!(
+        flag & !SORT_FLAG_CASE,
+        SORT_REGULAR | SORT_NUMERIC | SORT_STRING | SORT_LOCALE_STRING | SORT_NATURAL
+    ) {
+        Some(MultisortFlagKind::Comparison)
+    } else {
+        None
+    }
+}
+
+fn multisort_argument_error(
+    eg: &mut ExecutorGlobals,
+    position: usize,
+    violation: MultisortArgumentViolation,
+) {
+    let parameter = if position == 1 { " ($array)" } else { "" };
+    let (class, requirement) = match violation {
+        MultisortArgumentViolation::NotArrayOrFlag => {
+            ("TypeError", "must be an array or a sort flag")
+        }
+        MultisortArgumentViolation::DuplicateFlag => (
+            "TypeError",
+            "must be an array or a sort flag that has not already been specified",
+        ),
+        MultisortArgumentViolation::InvalidFlag => ("ValueError", "must be a valid sort flag"),
+    };
+    eg.exception = Some(crate::value::make_error_value(
+        class,
+        &format!("array_multisort(): Argument #{position}{parameter} {requirement}"),
+    ));
+}
+
 fn multisort_array_value(value: &Value) -> Option<Vec<(ArrayKey, Value)>> {
     value.as_array().map(|array| {
         array
@@ -3143,13 +3191,14 @@ fn fn_array_multisort(
         return Ok(());
     }
     let Some(first_entries) = multisort_array_value(first_value) else {
-        eg.exception = Some(crate::value::make_error_value(
-            "TypeError",
-            &format!(
-                "array_multisort(): Argument #1 ($array) must be of type array, {} given",
-                first_value.type_name()
-            ),
-        ));
+        let violation = match first_value.as_long() {
+            Some(flag) if multisort_flag_kind(flag).is_some() => {
+                MultisortArgumentViolation::DuplicateFlag
+            }
+            Some(_) => MultisortArgumentViolation::InvalidFlag,
+            None => MultisortArgumentViolation::NotArrayOrFlag,
+        };
+        multisort_argument_error(eg, 1, violation);
         return Ok(());
     };
     // SAFETY: the raw CV is live, and an explicit reference owns or borrows a
@@ -3200,80 +3249,89 @@ fn fn_array_multisort(
                 continue;
             }
 
+            let position = offset + 2;
             let Some(flag) = value.as_long() else {
-                eg.exception = Some(crate::value::make_error_value(
-                    "TypeError",
-                    &format!(
-                        "array_multisort(): Argument #{} must be an array or a sort flag",
-                        offset + 2
-                    ),
-                ));
+                multisort_argument_error(eg, position, MultisortArgumentViolation::NotArrayOrFlag);
                 return Ok(());
             };
             let column = columns.last_mut().expect("the first sort column exists");
-            if matches!(flag, SORT_ASC | SORT_DESC) {
-                if column.direction_set {
-                    eg.exception = Some(crate::value::make_error_value(
-                        "TypeError",
-                        &format!(
-                            "array_multisort(): Argument #{} must be an array or a sort flag that has not already been specified",
-                            offset + 2
-                        ),
-                    ));
+            match multisort_flag_kind(flag) {
+                Some(MultisortFlagKind::Direction) => {
+                    if column.direction_set {
+                        multisort_argument_error(
+                            eg,
+                            position,
+                            MultisortArgumentViolation::DuplicateFlag,
+                        );
+                        return Ok(());
+                    }
+                    column.direction = flag;
+                    column.direction_set = true;
+                }
+                Some(MultisortFlagKind::Comparison) => {
+                    if column.flags_set {
+                        multisort_argument_error(
+                            eg,
+                            position,
+                            MultisortArgumentViolation::DuplicateFlag,
+                        );
+                        return Ok(());
+                    }
+                    column.flags = flag;
+                    column.flags_set = true;
+                }
+                None => {
+                    multisort_argument_error(eg, position, MultisortArgumentViolation::InvalidFlag);
                     return Ok(());
                 }
-                column.direction = flag;
-                column.direction_set = true;
-            } else if matches!(
-                flag & !SORT_FLAG_CASE,
-                SORT_REGULAR | SORT_NUMERIC | SORT_STRING | SORT_LOCALE_STRING | SORT_NATURAL
-            ) {
-                if column.flags_set {
-                    eg.exception = Some(crate::value::make_error_value(
-                        "TypeError",
-                        &format!(
-                            "array_multisort(): Argument #{} must be an array or a sort flag that has not already been specified",
-                            offset + 2
-                        ),
-                    ));
-                    return Ok(());
-                }
-                column.flags = flag;
-                column.flags_set = true;
-            } else {
-                eg.exception = Some(crate::value::make_error_value(
-                    "ValueError",
-                    &format!(
-                        "array_multisort(): Argument #{} is an invalid sort flag",
-                        offset + 2
-                    ),
-                ));
-                return Ok(());
             }
         }
     }
 
     let mut order: Vec<usize> = (0..expected_len).collect();
-    stable_sort_checked(&mut order, |left, right| {
-        for column in &columns {
-            let ordering = sort_value_order_runtime(
-                ed,
-                eg,
-                &column.entries[*left].1,
-                &column.entries[*right].1,
-                column.flags,
-            )?;
-            let ordering = if column.direction == SORT_DESC {
-                ordering.reverse()
-            } else {
-                ordering
-            };
-            if ordering != std::cmp::Ordering::Equal {
-                return Ok(ordering);
+    if order.len() < 6 {
+        stable_sort_small_checked(&mut order, |left, right| {
+            for column in &columns {
+                let ordering = sort_value_order_runtime(
+                    ed,
+                    eg,
+                    &column.entries[*left].1,
+                    &column.entries[*right].1,
+                    column.flags,
+                )?;
+                let ordering = if column.direction == SORT_DESC {
+                    ordering.reverse()
+                } else {
+                    ordering
+                };
+                if ordering != std::cmp::Ordering::Equal {
+                    return Ok(ordering);
+                }
             }
-        }
-        Ok(std::cmp::Ordering::Equal)
-    })?;
+            Ok(std::cmp::Ordering::Equal)
+        })?;
+    } else {
+        stable_sort_checked(&mut order, |left, right| {
+            for column in &columns {
+                let ordering = sort_value_order_runtime(
+                    ed,
+                    eg,
+                    &column.entries[*left].1,
+                    &column.entries[*right].1,
+                    column.flags,
+                )?;
+                let ordering = if column.direction == SORT_DESC {
+                    ordering.reverse()
+                } else {
+                    ordering
+                };
+                if ordering != std::cmp::Ordering::Equal {
+                    return Ok(ordering);
+                }
+            }
+            Ok(std::cmp::Ordering::Equal)
+        })?;
+    }
     if eg.exception.is_some() {
         return Ok(());
     }
@@ -11605,6 +11663,50 @@ fn sort_direct_long_entries<T>(
         }
     });
     true
+}
+
+/// Match PHP 8.5's observable two-to-five-element stable comparison schedule.
+/// Larger inputs retain the deterministic bottom-up merge implementation.
+fn stable_sort_small_checked<T, E>(
+    entries: &mut [T],
+    mut compare: impl FnMut(&T, &T) -> Result<std::cmp::Ordering, E>,
+) -> Result<(), E> {
+    if entries.len() < 2 {
+        return Ok(());
+    }
+    let first = compare(&entries[0], &entries[1])?;
+    if first == std::cmp::Ordering::Greater {
+        entries.swap(0, 1);
+    }
+    if entries.len() == 2 {
+        return Ok(());
+    }
+
+    if first == std::cmp::Ordering::Greater {
+        if compare(&entries[2], &entries[0])? == std::cmp::Ordering::Less {
+            entries.swap(1, 2);
+            entries.swap(0, 1);
+        } else if compare(&entries[1], &entries[2])? == std::cmp::Ordering::Greater {
+            entries.swap(1, 2);
+        }
+    } else if compare(&entries[1], &entries[2])? == std::cmp::Ordering::Greater {
+        entries.swap(1, 2);
+        if compare(&entries[0], &entries[1])? == std::cmp::Ordering::Greater {
+            entries.swap(0, 1);
+        }
+    }
+
+    for index in 3..entries.len() {
+        let mut current = index;
+        while current > 0 {
+            if compare(&entries[current - 1], &entries[current])? != std::cmp::Ordering::Greater {
+                break;
+            }
+            entries.swap(current - 1, current);
+            current -= 1;
+        }
+    }
+    Ok(())
 }
 
 fn stable_sort_checked<T, E>(

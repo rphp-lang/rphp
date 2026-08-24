@@ -116,6 +116,97 @@ echo count($warnings), ':', implode(';', $warnings);
 }
 
 #[test]
+fn array_multisort_classifies_fixed_and_variadic_arguments_before_sorting() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function showFailure($callback) {
+    try { $callback(); }
+    catch (Throwable $error) {
+        echo get_class($error), ':', $error->getMessage(), "\n";
+    }
+}
+
+showFailure(fn() => array_multisort(0));
+showFailure(fn() => array_multisort(12345));
+showFailure(fn() => array_multisort(null));
+$values = [2, 1];
+showFailure(fn() => array_multisort($values, SORT_ASC, SORT_DESC));
+$values = [2, 1];
+showFailure(fn() => array_multisort($values, SORT_STRING, SORT_NUMERIC));
+$values = [2, 1];
+showFailure(fn() => array_multisort($values, 12345));
+$values = [2, 1];
+showFailure(fn() => array_multisort($values, 1.5));
+
+$first = [2, 1];
+$second = ['b', 'a'];
+$alias =& $second;
+var_dump(array_multisort(
+    $first,
+    SORT_ASC,
+    SORT_NUMERIC,
+    $alias,
+    SORT_DESC,
+    SORT_STRING,
+));
+echo implode(',', $first), '|', implode(',', $second), '|';
+$alias[0] = 'x';
+echo implode(',', $second);
+"#,
+        ),
+        concat!(
+            "TypeError:array_multisort(): Argument #1 ($array) must be an array or a sort flag that has not already been specified\n",
+            "ValueError:array_multisort(): Argument #1 ($array) must be a valid sort flag\n",
+            "TypeError:array_multisort(): Argument #1 ($array) must be an array or a sort flag\n",
+            "TypeError:array_multisort(): Argument #3 must be an array or a sort flag that has not already been specified\n",
+            "TypeError:array_multisort(): Argument #3 must be an array or a sort flag that has not already been specified\n",
+            "ValueError:array_multisort(): Argument #2 must be a valid sort flag\n",
+            "TypeError:array_multisort(): Argument #2 must be an array or a sort flag\n",
+            "bool(true)\n",
+            "1,2|a,b|x,b",
+        )
+    );
+}
+
+#[test]
+fn array_multisort_nested_diagnostics_keep_outer_small_sort_state() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$nested = [];
+function nestedMultisortHandler($level, $message) {
+    global $nested;
+    $missing = null;
+    try { array_multisort($missing, SORT_ASC); }
+    catch (Throwable $error) {
+        $nested[] = get_class($error) . ':' . $error->getMessage();
+    }
+    return true;
+}
+set_error_handler('nestedMultisortHandler');
+$first = new stdClass;
+$second = new stdClass;
+$third = new stdClass;
+$objects = [$first, $second, $third];
+$result = array_multisort($objects, SORT_NUMERIC);
+restore_error_handler();
+echo (int) $result, '|', count($nested), '|';
+echo (int) ($objects[0] === $first), (int) ($objects[1] === $second), (int) ($objects[2] === $third), "\n";
+echo implode("\n", $nested);
+"#,
+        ),
+        concat!(
+            "1|4|111\n",
+            "TypeError:array_multisort(): Argument #1 ($array) must be an array or a sort flag\n",
+            "TypeError:array_multisort(): Argument #1 ($array) must be an array or a sort flag\n",
+            "TypeError:array_multisort(): Argument #1 ($array) must be an array or a sort flag\n",
+            "TypeError:array_multisort(): Argument #1 ($array) must be an array or a sort flag",
+        )
+    );
+}
+
+#[test]
 fn recursive_regular_sort_raises_a_catchable_error_without_host_failure() {
     assert_eq!(
         run_php(
