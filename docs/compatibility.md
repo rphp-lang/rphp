@@ -8,6 +8,68 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`var-export-array-object-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+implementation commit `2fec7f8e`. `var_export()` now renders nested arrays,
+ordinary objects and `stdClass` with PHP 8.5 indentation and line breaks,
+quotes apostrophes and backslashes, preserves NUL bytes through PHP's
+concatenated double-quoted escape form, dereferences live references and
+projects public, protected and private properties under their source names.
+Named objects use `\\Class::__set_state(array(...))`, while `stdClass` uses
+`(object) array(...)`; enum cases keep their dedicated export form. Ancestry
+tracking replaces each recursive array or object occurrence with `NULL` and
+emits the corresponding catchable warning without rejecting repeated
+non-recursive aliases.
+
+Two original E2E tests cover nested and binary-key output, references,
+`stdClass`, named objects, visibility properties and recursive array/object
+warnings. Two existing oracle-inaccurate nested expectations were corrected.
+Six of the seven supplying array cases now pass exactly; `bug26458.phpt`
+remains visible only because its separate `debug_zval_dump()` output lacks
+reference-count metadata, while its `var_export()` output is byte-identical to
+PHP 8.5.9. Across all 43 `ext/standard` cases containing `var_export`, the
+audit moves from 9 passes, 27 failures, 6 skips and one crash to 27 passes, 10
+failures, 6 skips and no crash (+18/-0). The former recursive
+`var_export_error2.phpt` stack overflow is among the new exact passes.
+
+The complete 842-case `ext/standard/tests/array` audit moves from 774 to 780
+passes (+6/-0), with 48 failures, 13 skips, one unsupported case and no
+timeout or crash. Two serial final runs preserve the same normalized
+`path`/`status`/`category`/`reason` set with SHA-256
+`a1e1042e394bdea34ec9f354625d1fa5e61287f8c943ae4313a1a06f37c96040`.
+The separate 5,599-case `Zend/tests` and `tests/lang` gate remains exactly
+4,171 pass, 1,132 fail, 115 skip, 181 unsupported and zero XFAIL, timeout or
+crash (+0/-0); both serial runs have normalized status-set SHA-256
+`003d24af0f4c8ef8ec4ed3275485acec295bdf0451cd71270a3f889ef4199759`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy self-tests, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+The production unsafe inventory remains at 1,623 blocks and 289 functions with
+346 SAFETY annotations. The implementation adds no dependency, compiler,
+opcode, VM frame, executor-global, unsafe block or runtime value/object/array
+layout change.
+
+On AMD64 CPU 4, 32 balanced alternating release pairs after three warmups give
+baseline/candidate p10/median/p90 values of
+0.446130/0.456792/0.466920 and 0.272965/0.279423/0.285496 seconds for 500,000
+flat-array exports (independent median -38.829%, paired median -38.749%), and
+0.254350/0.261545/0.264021 and 0.174843/0.177038/0.185157 seconds for one
+million escaped-scalar exports (independent median -32.311%, paired median
+-32.088%). Exact checksums are 51,500,000 and 23,000,000. Baseline/candidate
+release-binary SHA-256 values are
+`69818cc779068f7f1a59f0623f41af76060f6467eb7314519843473c359af27a` /
+`3e8d5f8132ebca6d9ee18a275a9724031f56e66c22bece353a85482145d165d2`.
+An initially correct generic renderer was rejected after rough controls showed
+about +19% flat-array and +8% to +10% scalar regressions; the accepted
+single-pass quoting and fast paths that avoid ancestry allocations for
+scalar/flat inputs retain the same observable contract. These results apply
+only to the measured workloads and are not a general speed claim.
+
+Reference-count rendering in `debug_zval_dump()`, the remaining 48 array-suite
+failures, the 1,132 Zend/lang failures and broader PHP compatibility remain
+explicit follow-up work.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `array-set-operations-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 implementation commit `7a6a22e2`. `array_diff()` and `array_intersect()` now
 share their PHP 8.5 one-required-parameter variadic contract, validate every
