@@ -34,6 +34,14 @@ function unsupported_rphp_ini_directives(string $section): array
     return array_keys($unsupported);
 }
 
+function encode_manifest_record(array $result): string
+{
+    return json_encode(
+        $result,
+        JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR,
+    );
+}
+
 /** @return array<string, mixed> */
 function run_test(
     string $absolutePath,
@@ -312,7 +320,7 @@ function run_command(array $options, array $paths): void
         }
         $relative = str_replace(DIRECTORY_SEPARATOR, '/', substr($test, strlen($root) + 1));
         $result = run_test($test, $relative, $target, $kind, $timeout, $loaded);
-        fwrite($handle, json_encode($result, JSON_UNESCAPED_SLASHES) . "\n");
+        fwrite($handle, encode_manifest_record($result) . "\n");
         $completed++;
         if ($completed % 100 === 0) {
             fwrite(STDERR, "shard {$shardIndex}: {$completed} cases\n");
