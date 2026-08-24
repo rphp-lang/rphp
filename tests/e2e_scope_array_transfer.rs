@@ -239,6 +239,32 @@ overwriteAliasedPrefix();
 }
 
 #[test]
+fn extract_prefix_modes_snapshot_before_replacing_a_source_named_target() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function probePrefixMode(int $mode): void {
+    $bucket = ['bucket' => 11, 'tail' => 22];
+    $count = extract($bucket, $mode, 'p');
+    echo $mode, ':', $count, ':',
+        is_array($bucket) ? 'array' : $bucket, ':',
+        $p_bucket ?? '-', ':', $p_tail ?? '-', ':', $tail ?? '-', "\n";
+}
+foreach ([EXTR_PREFIX_SAME, EXTR_PREFIX_ALL, EXTR_PREFIX_INVALID, EXTR_PREFIX_IF_EXISTS] as $mode) {
+    probePrefixMode($mode);
+}
+"#,
+        ),
+        concat!(
+            "2:2:array:11:-:22\n",
+            "3:2:array:11:22:-\n",
+            "4:2:11:-:-:22\n",
+            "5:1:array:11:-:-\n",
+        ),
+    );
+}
+
+#[test]
 fn extract_treats_this_as_restricted_across_every_mode_and_refs_variant() {
     let output = run_php(
         r#"<?php

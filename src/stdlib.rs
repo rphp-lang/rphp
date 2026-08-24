@@ -49,6 +49,7 @@ use crate::vm::opcode::OpCode;
 #[cfg(feature = "include-path")]
 pub(crate) mod include_path;
 mod json_decode;
+mod pack;
 mod parse_ini;
 mod random;
 pub(crate) mod reflection;
@@ -4750,8 +4751,8 @@ pub(crate) fn direct_strlen_len(argument: &Value) -> i64 {
     } else {
         argument
     };
-    match argument.as_str() {
-        Some(string) => string.len() as i64,
+    match argument.php_string_len() {
+        Some(length) => length as i64,
         None => argument.echo_to_string().len() as i64,
     }
 }
@@ -7179,6 +7180,102 @@ fn fn_hex2bin(
     ret!(rv, Value::string(bytes_to_php_string(&output)));
 }
 
+fn emit_pack_warnings(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    warnings: Vec<String>,
+) -> Result<bool, VmError> {
+    for warning in warnings {
+        report_internal_diagnostic(eg, ed, 2, "Warning", &warning)?;
+        if eg.exception.is_some() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn fn_pack(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let format = arg_str!(ed, 0);
+    let values = arg!(ed, 1).as_array();
+    let outcome = pack::pack_values(&format, values.as_deref());
+    if !emit_pack_warnings(ed, eg, outcome.warnings)? {
+        return Ok(());
+    }
+    match outcome.value {
+        Ok(bytes) => ret!(rv, Value::binary_string(&bytes)),
+        Err(message) => {
+            eg.exception = Some(crate::value::make_error_value("ValueError", &message));
+            Ok(())
+        }
+    }
+}
+
+fn fn_unpack(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if internal_call_is_strict(ed) {
+        for (index, parameter, expected, matches) in [
+            (
+                0,
+                "format",
+                "string",
+                arg!(ed, 0).dereferenced().value_type() == ValueType::String,
+            ),
+            (
+                1,
+                "string",
+                "string",
+                arg!(ed, 1).dereferenced().value_type() == ValueType::String,
+            ),
+            (
+                2,
+                "offset",
+                "int",
+                arg_opt!(ed, 2)
+                    .is_none_or(|value| value.dereferenced().value_type() == ValueType::Long),
+            ),
+        ] {
+            if !matches {
+                let value = arg!(ed, index).dereferenced();
+                eg.exception = Some(crate::value::make_error_value(
+                    "TypeError",
+                    &format!(
+                        "unpack(): Argument #{} (${parameter}) must be of type {expected}, {} given",
+                        index + 1,
+                        value.type_name()
+                    ),
+                ));
+                return Ok(());
+            }
+        }
+    }
+    let format = arg_str!(ed, 0);
+    let data = arg_str!(ed, 1);
+    let bytes = php_string_to_bytes(&data);
+    let offset = arg_opt!(ed, 2).map_or(0, explicit_long_conversion);
+    if offset < 0 || usize::try_from(offset).map_or(true, |offset| offset > bytes.len()) {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "unpack(): Argument #3 ($offset) must be contained in argument #2 ($data)",
+        ));
+        return Ok(());
+    }
+    let outcome = pack::unpack_values(&format, &bytes, offset as usize);
+    if !emit_pack_warnings(ed, eg, outcome.warnings)? {
+        return Ok(());
+    }
+    match outcome.value {
+        Ok(Some(array)) => ret!(rv, Value::array(array)),
+        Ok(None) => ret!(rv, Value::bool(false)),
+        Err(message) => {
+            eg.exception = Some(crate::value::make_error_value("ValueError", &message));
+            Ok(())
+        }
+    }
+}
+
 #[inline]
 fn decode_hex_nibble(byte: u8) -> u8 {
     match byte {
@@ -7265,12 +7362,30 @@ fn format_sprintf_values(
         if bytes[index] == b'%' {
             result.push_str(&fmt[literal_start..index]);
             if index + 1 < bytes.len() {
-                let spec = bytes[index + 1] as char;
-                if spec == '%' {
+                if bytes[index + 1] == b'%' {
                     result.push('%');
-                } else {
+                    index += 2;
+                    literal_start = index;
+                    continue;
+                }
+
+                let mut spec_index = index + 1;
+                let zero_pad = bytes.get(spec_index) == Some(&b'0');
+                if zero_pad {
+                    spec_index += 1;
+                }
+                let mut width = 0usize;
+                while let Some(digit @ b'0'..=b'9') = bytes.get(spec_index).copied() {
+                    width = width
+                        .saturating_mul(10)
+                        .saturating_add(usize::from(digit - b'0'));
+                    spec_index += 1;
+                }
+                if spec_index < bytes.len() {
+                    let spec = bytes[spec_index] as char;
                     let arg = args.and_then(|args| args.get_value_at(arg_idx));
                     arg_idx += 1;
+                    let mut formatted = String::new();
                     match spec {
                         's' => {
                             if let Some(arg) = arg {
@@ -7282,59 +7397,70 @@ fn format_sprintf_values(
                                     else {
                                         return Ok(None);
                                     };
-                                    result.push_str(&rendered);
+                                    formatted.push_str(&rendered);
                                 } else {
-                                    arg.append_echo_to_with_precision(&mut result, eg.precision);
+                                    arg.append_echo_to_with_precision(&mut formatted, eg.precision);
                                 }
                             }
                         }
                         'd' => {
                             let _ = write!(
-                                result,
+                                formatted,
                                 "{}",
                                 arg.map(|value| value.to_long_val()).unwrap_or(0)
                             );
                         }
                         'f' => {
                             let value = arg.map(|value| value.to_float_val()).unwrap_or(0.0);
-                            let _ = write!(result, "{value:.6}");
+                            let _ = write!(formatted, "{value:.6}");
                         }
                         'x' => {
                             let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
-                            let _ = write!(result, "{value:x}");
+                            let _ = write!(formatted, "{value:x}");
                         }
                         'X' => {
                             let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
-                            let _ = write!(result, "{value:X}");
+                            let _ = write!(formatted, "{value:X}");
                         }
                         'o' => {
                             let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
-                            let _ = write!(result, "{value:o}");
+                            let _ = write!(formatted, "{value:o}");
                         }
                         'b' => {
                             let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
-                            let _ = write!(result, "{value:b}");
+                            let _ = write!(formatted, "{value:b}");
                         }
                         'c' => {
                             let code = arg.map(|value| value.to_long_val()).unwrap_or(0);
-                            result.push((code & 0xFF) as u8 as char);
+                            formatted.push((code & 0xFF) as u8 as char);
                         }
                         _ => {
-                            result.push('%');
-                            result.push(spec);
+                            result.push_str(&fmt[index..=spec_index]);
                             arg_idx -= 1;
+                            index = spec_index + 1;
+                            literal_start = index;
+                            continue;
                         }
                     }
+                    let padding = width.saturating_sub(formatted.len());
+                    if padding != 0 {
+                        if zero_pad && formatted.starts_with('-') {
+                            result.push('-');
+                            result.extend(std::iter::repeat_n('0', padding));
+                            formatted.remove(0);
+                        } else {
+                            let padding_character = if zero_pad { '0' } else { ' ' };
+                            result.extend(std::iter::repeat_n(padding_character, padding));
+                        }
+                    }
+                    result.push_str(&formatted);
+                    index = spec_index + 1;
+                    literal_start = index;
+                    continue;
                 }
-                index += 2;
-                literal_start = index;
-                continue;
-            } else {
-                result.push('%');
-                index += 1;
-                literal_start = index;
-                continue;
             }
+            result.push_str(&fmt[index..]);
+            return Ok(Some(result));
         }
         index += 1;
     }
@@ -10577,11 +10703,16 @@ fn fn_extract(
     let references = flags & EXTR_REFS != 0;
     let inspect_indirect_targets = source_has_external_alias
         || (may_write_indirect_target && crate::vm::execute::caller_scope_is_global(eg, ed));
-    let Some((candidates, requires_snapshot)) =
+    let Some((candidates, target_requires_snapshot)) =
         extract_candidates(ed, eg, array, &prefix, mode, inspect_indirect_targets)
     else {
         return Ok(());
     };
+    // Prefix modes can write a sibling caller CV whose value owns or aliases
+    // the source array. Materialize before the first scope write even when the
+    // current target is scalar: the write itself may retire another candidate
+    // through caller-slot aliasing.
+    let requires_snapshot = target_requires_snapshot || may_write_indirect_target;
     let extracted = if references {
         extract_reference_candidates(ed, eg, array, candidates, requires_snapshot)
     } else {

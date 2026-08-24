@@ -4737,6 +4737,11 @@ impl Value {
     /// top-level constant array starts with this owner, while strings and
     /// nested arrays acquire it when an immutable containing array separates.
     const LITERAL_SOURCE_OWNER_FLAG: u32 = 1 << 13;
+    /// Marks strings materialized from an explicit byte buffer. The current
+    /// storage bridge maps each byte to the same Unicode scalar; retaining the
+    /// provenance lets byte-counting APIs avoid counting Rust's UTF-8 encoding
+    /// width instead of PHP bytes.
+    const BINARY_STRING_FLAG: u32 = 1 << 14;
     const OWNED_REFERENCE_FLAG: u32 = 1 << 8;
     /// Marks only the frame-local alias that created a local-static cell.
     /// A later declaration of the same static in that frame may replace the
@@ -4853,6 +4858,14 @@ impl Value {
     pub fn string(s: impl Into<String>) -> Self {
         let rc = Rc::new(s.into());
         Self::shared_string(rc)
+    }
+
+    /// Create a PHP byte string through the runtime's lossless Latin-1 bridge.
+    #[inline]
+    pub(crate) fn binary_string(bytes: &[u8]) -> Self {
+        let mut value = Self::string(php_byte_string_from_bytes(bytes.iter().copied()));
+        value.type_info |= Self::BINARY_STRING_FLAG;
+        value
     }
 
     /// Create a PHP source/compiler string whose storage is interned by Zend.
@@ -5538,6 +5551,29 @@ impl Value {
     pub(crate) fn is_interned_string(&self) -> bool {
         self.value_type() == ValueType::String
             && self.type_info & Self::IMMUTABLE_PROVENANCE_FLAG != 0
+    }
+
+    /// Byte length of a PHP string, accounting for byte-buffer provenance.
+    #[inline]
+    pub(crate) fn php_string_len(&self) -> Option<usize> {
+        let string = self.as_str()?;
+        Some(if self.type_info & Self::BINARY_STRING_FLAG != 0 {
+            string.chars().count()
+        } else {
+            string.len()
+        })
+    }
+
+    /// Borrow ordinary UTF-8 source bytes or recover explicitly materialized
+    /// binary bytes from the lossless storage bridge.
+    #[inline]
+    pub(crate) fn php_string_bytes(&self) -> Option<Cow<'_, [u8]>> {
+        let string = self.as_str()?;
+        Some(if self.type_info & Self::BINARY_STRING_FLAG != 0 {
+            Cow::Owned(php_byte_string_bytes(string))
+        } else {
+            Cow::Borrowed(string.as_bytes())
+        })
     }
 
     /// Add/remove the strong reference owned by a dynamic callback cache.

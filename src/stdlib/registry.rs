@@ -381,6 +381,38 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("random_bytes", fn_random_bytes, 1, 1, "length");
     reg!("bin2hex", fn_bin2hex, 1, 1, "string");
     reg!("hex2bin", fn_hex2bin, 1, 1, "string");
+    {
+        let mut function = Box::new(make_internal_function_variadic(
+            fn_pack,
+            1,
+            pn!["format", "values"],
+        ));
+        function.common.sig.param_type_hints = vec![ParamTypeHint::String, ParamTypeHint::Mixed];
+        function.common.sig.return_type_hint = ParamTypeHint::String;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("pack", pointer).unwrap();
+        funcs.push(function);
+    }
+    {
+        let mut function = Box::new(make_internal_function(
+            fn_unpack,
+            3,
+            2,
+            pn!["format", "string", "offset"],
+        ));
+        function.common.sig.param_type_hints = vec![
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+        ];
+        function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::ClassName("false".to_string()),
+        ]);
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("unpack", pointer).unwrap();
+        funcs.push(function);
+    }
     reg!("md5", fn_md5, 2, 1, "string", "binary");
     // S3 exposes md5, xxh128 and crc32, including binary output. The wider
     // algorithm catalogue stays explicit compatibility work rather than
