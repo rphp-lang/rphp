@@ -1703,6 +1703,62 @@ fn array_diff_accepts_one_source_and_all_variadic_comparison_arrays() {
 }
 
 #[test]
+fn ordinary_array_value_sets_match_php_85_variadics_references_and_conversion_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach (["array_diff", "array_intersect"] as $function) {
+    $reflection = new ReflectionFunction($function);
+    echo $function, ":", $reflection->getNumberOfRequiredParameters(), ":", $reflection->getNumberOfParameters();
+    foreach ($reflection->getParameters() as $parameter) {
+        echo ":$", $parameter->getName(), $parameter->isVariadic() ? "..." : "";
+    }
+    echo "\n";
+}
+
+$shared = "live";
+$source = ["one" => 1, "two" => "2", "ref" => &$shared, "three" => 3];
+$diff = array_diff($source, [2], [3]);
+var_dump($diff);
+$intersect = array_intersect($source, [1, 2, "live"], ["2", "live", 9]);
+var_dump($intersect);
+$intersect["ref"] = "changed";
+echo "$shared\n";
+
+class RenderedSetValue {
+    public function __construct(private string $value, private string $name) {}
+    public function __toString(): string {
+        echo "render:$this->name\n";
+        return $this->value;
+    }
+}
+$left = [new RenderedSetValue("x", "left-1"), new RenderedSetValue("x", "left-2")];
+$right = [new RenderedSetValue("x", "right-1"), new RenderedSetValue("z", "right-2")];
+echo "diff=", count(array_diff($left, $right)), "\n";
+echo "intersect=", count(array_intersect($left, $right)), "\n";
+
+try {
+    array_intersect([1], [], 42);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+        ),
+        concat!(
+            "array_diff:1:2:$array:$arrays...\n",
+            "array_intersect:1:2:$array:$arrays...\n",
+            "array(2) {\n  [\"one\"]=>\n  int(1)\n  [\"ref\"]=>\n  &string(4) \"live\"\n}\n",
+            "array(2) {\n  [\"two\"]=>\n  string(1) \"2\"\n  [\"ref\"]=>\n  &string(4) \"live\"\n}\n",
+            "changed\n",
+            "diff=render:right-1\nrender:right-2\nrender:left-1\nrender:left-2\n0\n",
+            "intersect=render:left-1\nrender:left-2\nrender:right-1\nrender:right-2\n",
+            "render:left-1\nrender:right-1\nrender:left-1\nrender:left-2\n2\n",
+            "array_intersect(): Argument #3 must be of type array, int given\n",
+        )
+    );
+}
+
+#[test]
 fn array_key_set_operations_accept_variadic_comparison_arrays() {
     assert_eq!(
         run_php(

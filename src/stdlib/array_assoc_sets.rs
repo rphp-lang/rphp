@@ -6,7 +6,7 @@
 //! normally.
 
 use crate::runtime::ExecutorGlobals;
-use crate::value::{ArrayKey, PhpArray, Value};
+use crate::value::{ArrayKey, PhpArray, Value, ValueType};
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 use std::cmp::Ordering;
@@ -74,11 +74,17 @@ fn snapshot(array: &PhpArray) -> Vec<Entry> {
 
 fn array_type_error(eg: &mut ExecutorGlobals, function: &str, position: usize, value: &Value) {
     let parameter = if position == 1 { " ($array)" } else { "" };
+    let value = value.dereferenced();
+    let actual = match value.value_type() {
+        ValueType::True => "true".into(),
+        ValueType::False => "false".into(),
+        _ => value.diagnostic_type_name(),
+    };
     eg.exception = Some(crate::value::make_error_value(
         "TypeError",
         &format!(
             "{function}(): Argument #{position}{parameter} must be of type array, {} given",
-            value.dereferenced().diagnostic_type_name()
+            actual
         ),
     ));
 }
@@ -162,6 +168,582 @@ fn value_order(
             Ok(Some(left.as_bytes().cmp(right.as_bytes())))
         }
     }
+}
+
+/// Stable insertion sort for the cold observable-conversion path. The focused
+/// PHP oracle fixes the adjacent comparison order for duplicate values; scalar
+/// inputs never enter this quadratic path.
+fn observable_sort_entries<F>(entries: &mut [Entry], compare: &mut F) -> Result<bool, VmError>
+where
+    F: FnMut(&Entry, &Entry) -> Result<Option<Ordering>, VmError>,
+{
+    for current in 1..entries.len() {
+        let mut position = current;
+        while position > 0 {
+            let Some(ordering) = compare(&entries[position - 1], &entries[position])? else {
+                return Ok(false);
+            };
+            if ordering != Ordering::Greater {
+                break;
+            }
+            entries.swap(position - 1, position);
+            position -= 1;
+        }
+    }
+    Ok(true)
+}
+fn write_entry_result(
+    return_pointer: *mut Value,
+    entries: impl IntoIterator<Item = Entry>,
+    keep: Option<&[bool]>,
+) {
+    let mut result = PhpArray::new();
+    for entry in entries {
+        if keep.is_none_or(|keep| keep[entry.ordinal]) {
+            result.set(entry.key, result_entry_value(&entry.value));
+        }
+    }
+    super::write_return_value(return_pointer, Value::array(result));
+}
+
+fn ordinary_array_diff(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+    first: Value,
+    comparison_values: Vec<Value>,
+) -> Result<(), VmError> {
+    let Some(first_array) = first.dereferenced().as_array() else {
+        array_type_error(eg, "array_diff", 1, &first);
+        return Ok(());
+    };
+    let source = snapshot(first_array);
+
+    if source.is_empty() {
+        for (index, value) in comparison_values.iter().enumerate() {
+            if value.dereferenced().as_array().is_none() {
+                array_type_error(eg, "array_diff", index + 2, value);
+                return Ok(());
+            }
+        }
+        write_entry_result(return_pointer, source, None);
+        return Ok(());
+    }
+
+    // PHP 8.5 converts the sole source value before it validates later array
+    // arguments and stops converting candidates after the first match.
+    if source.len() == 1 {
+        let Some(search) = super::internal_value_to_string(execute_data, eg, &source[0].value)?
+        else {
+            return Ok(());
+        };
+        let mut found = false;
+        for (index, value) in comparison_values.iter().enumerate() {
+            let Some(array) = value.dereferenced().as_array() else {
+                array_type_error(eg, "array_diff", index + 2, value);
+                return Ok(());
+            };
+            if found {
+                continue;
+            }
+            for candidate in array.values() {
+                let Some(rendered) = super::internal_value_to_string(execute_data, eg, candidate)?
+                else {
+                    return Ok(());
+                };
+                if rendered == search {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if found {
+            super::write_return_value(return_pointer, Value::array(PhpArray::new()));
+        } else {
+            write_entry_result(return_pointer, source, None);
+        }
+        return Ok(());
+    }
+
+    let mut comparisons = Vec::with_capacity(comparison_values.len());
+    let mut comparison_count = 0usize;
+    for (index, value) in comparison_values.iter().enumerate() {
+        let Some(array) = value.dereferenced().as_array() else {
+            array_type_error(eg, "array_diff", index + 2, value);
+            return Ok(());
+        };
+        let entries = snapshot(array);
+        comparison_count += entries.len();
+        comparisons.push(entries);
+    }
+    if comparison_count == 0 {
+        write_entry_result(return_pointer, source, None);
+        return Ok(());
+    }
+
+    let mut excluded = Vec::with_capacity(comparison_count);
+    for candidates in &comparisons {
+        for candidate in candidates {
+            let Some(rendered) =
+                super::internal_value_to_string(execute_data, eg, &candidate.value)?
+            else {
+                return Ok(());
+            };
+            excluded.push(rendered);
+        }
+    }
+
+    let mut keep = vec![true; source.len()];
+    for entry in &source {
+        let Some(rendered) = super::internal_value_to_string(execute_data, eg, &entry.value)?
+        else {
+            return Ok(());
+        };
+        if excluded.iter().any(|candidate| candidate == &rendered) {
+            keep[entry.ordinal] = false;
+        }
+    }
+    write_entry_result(return_pointer, source, Some(&keep));
+    Ok(())
+}
+
+fn has_observable_string_conversion(entries: &[Entry]) -> bool {
+    entries.iter().any(|entry| {
+        matches!(
+            entry.value.dereferenced().value_type(),
+            ValueType::Array | ValueType::Object | ValueType::Closure
+        )
+    })
+}
+
+fn scalar_array_intersection(
+    return_pointer: *mut Value,
+    eg: &ExecutorGlobals,
+    source: Vec<Entry>,
+    comparisons: &[Vec<Entry>],
+) {
+    let rendered_comparisons = comparisons
+        .iter()
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|entry| {
+                    entry
+                        .value
+                        .dereferenced()
+                        .echo_to_string_with_precision(eg.precision)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let mut keep = vec![true; source.len()];
+    for entry in &source {
+        let rendered = entry
+            .value
+            .dereferenced()
+            .echo_to_string_with_precision(eg.precision);
+        keep[entry.ordinal] = rendered_comparisons
+            .iter()
+            .all(|candidates| candidates.iter().any(|candidate| candidate == &rendered));
+    }
+    write_entry_result(return_pointer, source, Some(&keep));
+}
+
+fn observable_array_intersection(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+    mut source: Vec<Entry>,
+    mut comparisons: Vec<Vec<Entry>>,
+) -> Result<(), VmError> {
+    let mut compare = |left: &Entry, right: &Entry| {
+        value_order(
+            execute_data,
+            eg,
+            &left.value,
+            &right.value,
+            None,
+            ValueMode::CompareAsString,
+        )
+    };
+    if !observable_sort_entries(&mut source, &mut compare)? {
+        return Ok(());
+    }
+    for entries in &mut comparisons {
+        if !observable_sort_entries(entries, &mut compare)? {
+            return Ok(());
+        }
+    }
+
+    let mut positions = vec![0usize; comparisons.len()];
+    let mut keep = vec![true; source.len()];
+    let mut source_position = 0usize;
+    'source_groups: while source_position < source.len() {
+        let group_start = source_position;
+        let mut present_everywhere = true;
+        for (index, candidates) in comparisons.iter().enumerate() {
+            let position = &mut positions[index];
+            let mut matched = false;
+            while *position < candidates.len() {
+                let Some(ordering) = compare(&source[group_start], &candidates[*position])? else {
+                    return Ok(());
+                };
+                match ordering {
+                    Ordering::Greater => *position += 1,
+                    Ordering::Equal => {
+                        matched = true;
+                        *position += 1;
+                        break;
+                    }
+                    Ordering::Less => break,
+                }
+            }
+            if !matched {
+                present_everywhere = false;
+            }
+            if !matched && *position == candidates.len() {
+                for entry in &source[group_start..] {
+                    keep[entry.ordinal] = false;
+                }
+                break 'source_groups;
+            }
+            if !matched {
+                break;
+            }
+        }
+
+        loop {
+            if !present_everywhere {
+                keep[source[source_position].ordinal] = false;
+            }
+            let previous = source_position;
+            source_position += 1;
+            if source_position == source.len() {
+                break 'source_groups;
+            }
+            let Some(ordering) = compare(&source[previous], &source[source_position])? else {
+                return Ok(());
+            };
+            if ordering != Ordering::Equal {
+                break;
+            }
+        }
+    }
+
+    source.sort_by_key(|entry| entry.ordinal);
+    write_entry_result(return_pointer, source, Some(&keep));
+    Ok(())
+}
+
+fn ordinary_array_intersect(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+    first: Value,
+    comparison_values: Vec<Value>,
+) -> Result<(), VmError> {
+    let Some(first_array) = first.dereferenced().as_array() else {
+        array_type_error(eg, "array_intersect", 1, &first);
+        return Ok(());
+    };
+    let source = snapshot(first_array);
+    let mut comparisons = Vec::with_capacity(comparison_values.len());
+    for (index, value) in comparison_values.iter().enumerate() {
+        let Some(array) = value.dereferenced().as_array() else {
+            array_type_error(eg, "array_intersect", index + 2, value);
+            return Ok(());
+        };
+        comparisons.push(snapshot(array));
+    }
+
+    let observable = has_observable_string_conversion(&source)
+        || comparisons
+            .iter()
+            .any(|entries| has_observable_string_conversion(entries));
+    if observable {
+        observable_array_intersection(execute_data, return_pointer, eg, source, comparisons)
+    } else {
+        scalar_array_intersection(return_pointer, eg, source, &comparisons);
+        Ok(())
+    }
+}
+
+#[inline(always)]
+fn scalar_string(value: &Value, precision: i32) -> Option<String> {
+    let value = if value.value_type() == ValueType::Reference {
+        value.dereferenced()
+    } else {
+        value
+    };
+    if matches!(
+        value.value_type(),
+        ValueType::Array | ValueType::Object | ValueType::Closure
+    ) {
+        None
+    } else if precision == 14 {
+        Some(value.echo_to_string())
+    } else {
+        Some(value.echo_to_string_with_precision(precision))
+    }
+}
+
+fn try_scalar_array_diff(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<bool, VmError> {
+    let first = arg!(execute_data, 0);
+    let Some(source) = first.as_array() else {
+        array_type_error(eg, "array_diff", 1, first);
+        return Ok(true);
+    };
+    let Some(arguments) = arg!(execute_data, 1).as_array() else {
+        return Ok(false);
+    };
+
+    let mut excluded = Vec::new();
+    for (index, argument) in arguments.values().enumerate() {
+        let Some(array) = argument.dereferenced().as_array() else {
+            array_type_error(eg, "array_diff", index + 2, argument);
+            return Ok(true);
+        };
+        for value in array.values() {
+            let Some(rendered) = scalar_string(value, eg.precision) else {
+                return Ok(false);
+            };
+            excluded.push(rendered);
+        }
+    }
+
+    if arguments.is_empty() {
+        super::write_return_value(return_pointer, Value::array(source.clone()));
+        return Ok(true);
+    }
+
+    let mut result = PhpArray::new();
+    for (key, value) in source.iter() {
+        let Some(rendered) = scalar_string(value, eg.precision) else {
+            return Ok(false);
+        };
+        if !excluded.iter().any(|candidate| candidate == &rendered) {
+            result.set(key, result_entry_value(value));
+        }
+    }
+    super::write_return_value(return_pointer, Value::array(result));
+    Ok(true)
+}
+
+fn try_scalar_array_intersect(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<bool, VmError> {
+    let first = arg!(execute_data, 0);
+    let Some(source) = first.as_array() else {
+        array_type_error(eg, "array_intersect", 1, first);
+        return Ok(true);
+    };
+    let Some(arguments) = arg!(execute_data, 1).as_array() else {
+        return Ok(false);
+    };
+
+    let mut rendered_comparisons = Vec::with_capacity(arguments.len());
+    for (index, argument) in arguments.values().enumerate() {
+        let Some(array) = argument.dereferenced().as_array() else {
+            array_type_error(eg, "array_intersect", index + 2, argument);
+            return Ok(true);
+        };
+        let mut rendered = Vec::with_capacity(array.len());
+        for value in array.values() {
+            let Some(value) = scalar_string(value, eg.precision) else {
+                return Ok(false);
+            };
+            rendered.push(value);
+        }
+        rendered_comparisons.push(rendered);
+    }
+
+    let mut result = PhpArray::new();
+    for (key, value) in source.iter() {
+        let Some(rendered) = scalar_string(value, eg.precision) else {
+            return Ok(false);
+        };
+        if rendered_comparisons
+            .iter()
+            .all(|candidates| candidates.iter().any(|candidate| candidate == &rendered))
+        {
+            result.set(key, result_entry_value(value));
+        }
+    }
+    super::write_return_value(return_pointer, Value::array(result));
+    Ok(true)
+}
+
+fn try_scalar_array_diff_raw(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+    supplied_num_args: u32,
+) -> Result<bool, VmError> {
+    let first = arg!(execute_data, 0);
+    let Some(source) = first.as_array() else {
+        array_type_error(eg, "array_diff", 1, first);
+        return Ok(true);
+    };
+    if supplied_num_args == 1 {
+        if source
+            .values()
+            .any(|value| scalar_string(value, eg.precision).is_none())
+        {
+            return Ok(false);
+        }
+        super::write_return_value(return_pointer, Value::array(source.clone()));
+        return Ok(true);
+    }
+
+    let second = arg!(execute_data, 1);
+    let Some(comparison) = second.as_array() else {
+        array_type_error(eg, "array_diff", 2, second);
+        return Ok(true);
+    };
+    let mut excluded = Vec::with_capacity(comparison.len());
+    for value in comparison.values() {
+        let Some(rendered) = scalar_string(value, eg.precision) else {
+            return Ok(false);
+        };
+        excluded.push(rendered);
+    }
+    let mut result = PhpArray::new();
+    for (key, value) in source.iter() {
+        let Some(rendered) = scalar_string(value, eg.precision) else {
+            return Ok(false);
+        };
+        if !excluded.iter().any(|candidate| candidate == &rendered) {
+            result.set(key, result_entry_value(value));
+        }
+    }
+    super::write_return_value(return_pointer, Value::array(result));
+    Ok(true)
+}
+
+fn try_scalar_array_intersect_raw(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+    supplied_num_args: u32,
+) -> Result<bool, VmError> {
+    let first = arg!(execute_data, 0);
+    let Some(source) = first.as_array() else {
+        array_type_error(eg, "array_intersect", 1, first);
+        return Ok(true);
+    };
+    if supplied_num_args == 1 {
+        if source
+            .values()
+            .any(|value| scalar_string(value, eg.precision).is_none())
+        {
+            return Ok(false);
+        }
+        super::write_return_value(return_pointer, Value::array(source.clone()));
+        return Ok(true);
+    }
+
+    let second = arg!(execute_data, 1);
+    let Some(comparison) = second.as_array() else {
+        array_type_error(eg, "array_intersect", 2, second);
+        return Ok(true);
+    };
+    let mut candidates = Vec::with_capacity(comparison.len());
+    for value in comparison.values() {
+        let Some(rendered) = scalar_string(value, eg.precision) else {
+            return Ok(false);
+        };
+        candidates.push(rendered);
+    }
+    let mut result = PhpArray::new();
+    for (key, value) in source.iter() {
+        let Some(rendered) = scalar_string(value, eg.precision) else {
+            return Ok(false);
+        };
+        if candidates.iter().any(|candidate| candidate == &rendered) {
+            result.set(key, result_entry_value(value));
+        }
+    }
+    super::write_return_value(return_pointer, Value::array(result));
+    Ok(true)
+}
+
+pub(super) fn fn_array_diff_variadic(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if try_scalar_array_diff(execute_data, return_pointer, eg)? {
+        return Ok(());
+    }
+    let first = super::owned_argument(execute_data, 0);
+    let rest = super::owned_argument(execute_data, 1);
+    ordinary_array_diff(
+        execute_data,
+        return_pointer,
+        eg,
+        first,
+        variadic_values(&rest),
+    )
+}
+
+pub(super) fn fn_array_intersect_variadic(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if try_scalar_array_intersect(execute_data, return_pointer, eg)? {
+        return Ok(());
+    }
+    let first = super::owned_argument(execute_data, 0);
+    let rest = super::owned_argument(execute_data, 1);
+    ordinary_array_intersect(
+        execute_data,
+        return_pointer,
+        eg,
+        first,
+        variadic_values(&rest),
+    )
+}
+
+pub(super) fn fn_array_diff_raw_variadic(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+    supplied_num_args: u32,
+) -> Result<(), VmError> {
+    if try_scalar_array_diff_raw(execute_data, return_pointer, eg, supplied_num_args)? {
+        return Ok(());
+    }
+    let first = super::owned_argument(execute_data, 0);
+    let comparisons = (supplied_num_args > 1)
+        .then(|| super::owned_argument(execute_data, 1))
+        .into_iter()
+        .collect();
+    ordinary_array_diff(execute_data, return_pointer, eg, first, comparisons)
+}
+
+pub(super) fn fn_array_intersect_raw_variadic(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+    supplied_num_args: u32,
+) -> Result<(), VmError> {
+    if try_scalar_array_intersect_raw(execute_data, return_pointer, eg, supplied_num_args)? {
+        return Ok(());
+    }
+    let first = super::owned_argument(execute_data, 0);
+    let comparisons = (supplied_num_args > 1)
+        .then(|| super::owned_argument(execute_data, 1))
+        .into_iter()
+        .collect();
+    ordinary_array_intersect(execute_data, return_pointer, eg, first, comparisons)
 }
 
 fn entry_matches(

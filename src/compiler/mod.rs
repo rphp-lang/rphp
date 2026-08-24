@@ -6242,6 +6242,21 @@ pub fn make_internal_function_variadic(
     }
 }
 
+/// Create a by-value variadic InternalFunction with a raw positional handler.
+/// Calls with at most one variadic value can use the validated fast-call path;
+/// wider and named calls retain the canonical packed-array ABI.
+pub fn make_internal_function_variadic_raw(
+    handler: InternalFunctionHandler,
+    raw_variadic_handler: RawVariadicInternalFunctionHandler,
+    required_num_args: u32,
+    param_names: Vec<String>,
+) -> InternalFunction {
+    let mut function = make_internal_function_variadic(handler, required_num_args, param_names);
+    function.raw_variadic_handler = Some(raw_variadic_handler);
+    function.common.plan.call = CallStrategy::Fast;
+    function
+}
+
 /// Create a variadic InternalFunction with a by-reference mask for its fixed
 /// parameters. Variadic values remain ordinary by-value arguments unless the
 /// mask explicitly reaches the variadic public position.

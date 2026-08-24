@@ -19,8 +19,9 @@ use crate::compiler::compile::{ClassConstantDefinition, PropertyDefinition};
 use crate::compiler::{
     make_direct_internal_function, make_internal_function, make_internal_function_ref,
     make_internal_function_variadic, make_internal_function_variadic_prefer_ref,
-    make_internal_function_variadic_ref, make_internal_function_variadic_ref_raw_all,
-    make_internal_method, make_internal_method_variadic,
+    make_internal_function_variadic_raw, make_internal_function_variadic_ref,
+    make_internal_function_variadic_ref_raw_all, make_internal_method,
+    make_internal_method_variadic,
 };
 use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
@@ -16491,64 +16492,6 @@ fn fn_uksort(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     fn_user_key_preserving_sort(ed, rv, eg, true, "uksort")
-}
-
-/// array_diff($array, ...$arrays): array
-fn fn_array_diff(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let Some(source) = arg!(ed, 0).as_array() else {
-        ret!(rv, Value::array(PhpArray::new()));
-    };
-    let Some(arguments) = arg!(ed, 1).as_array() else {
-        ret!(rv, Value::array(source.clone()));
-    };
-    let mut excluded = Vec::new();
-    for argument in arguments.values() {
-        let Some(array) = argument.as_array() else {
-            ret!(rv, Value::array(PhpArray::new()));
-        };
-        excluded.extend(array.values().map(Value::echo_to_string));
-    }
-    let mut result = PhpArray::new();
-    for (key, value) in source.iter() {
-        let rendered = value.echo_to_string();
-        if !excluded.iter().any(|candidate| *candidate == rendered) {
-            match key {
-                ArrayKey::Int(index) => result.set_int(index, value.clone()),
-                ArrayKey::String(name) => result.set_str(&name, value.clone()),
-            }
-        }
-    }
-    ret!(rv, Value::array(result));
-}
-
-/// array_intersect($array1, $array2): array
-fn fn_array_intersect(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let arr1 = arg!(ed, 0);
-    let arr2 = arg!(ed, 1);
-
-    if let (Some(a1), Some(a2)) = (arr1.as_array(), arr2.as_array()) {
-        let mut result = PhpArray::new();
-        let vals2: Vec<String> = a2.values().map(Value::echo_to_string).collect();
-        for (k, v) in a1.iter() {
-            let vs = v.echo_to_string();
-            if vals2.iter().any(|v2| *v2 == vs) {
-                match k {
-                    ArrayKey::Int(i) => result.set_int(i, v.clone()),
-                    ArrayKey::String(s) => result.set_str(&s, v.clone()),
-                }
-            }
-        }
-        ret!(rv, Value::array(result));
-    }
-    ret!(rv, Value::array(PhpArray::new()));
 }
 
 fn report_array_walk_userdata_reference_warning(

@@ -119,6 +119,20 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         }};
     }
 
+    macro_rules! reg_var_raw {
+        ($name:expr, $handler:expr, $raw_handler:expr, $min_args:expr, $($pnames:expr),*) => {{
+            let f = Box::new(make_internal_function_variadic_raw(
+                $handler,
+                $raw_handler,
+                $min_args,
+                pn![$($pnames),*],
+            ));
+            let ptr = &f.common as *const FunctionCommon;
+            eg.register_function($name, ptr).unwrap();
+            funcs.push(f);
+        }};
+    }
+
     macro_rules! reg_var_prefer_ref {
         ($name:expr, $handler:expr, $min_args:expr, $($pnames:expr),*) => {{
             let f = Box::new(make_internal_function_variadic_prefer_ref(
@@ -1394,7 +1408,14 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg_ref!("usort", fn_usort, 2, 2, 0b1, "array", "callback");
     reg_ref!("uasort", fn_uasort, 2, 2, 0b1, "array", "callback");
     reg_ref!("uksort", fn_uksort, 2, 2, 0b1, "array", "callback");
-    reg_var!("array_diff", fn_array_diff, 1, "array", "arrays");
+    reg_var_raw!(
+        "array_diff",
+        fn_array_diff_variadic,
+        fn_array_diff_raw_variadic,
+        1,
+        "array",
+        "arrays"
+    );
     reg_var!(
         "array_diff_assoc",
         fn_array_diff_assoc,
@@ -1475,13 +1496,13 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "array",
         "arrays"
     );
-    reg!(
+    reg_var_raw!(
         "array_intersect",
-        fn_array_intersect,
-        2,
-        2,
-        "array1",
-        "array2"
+        fn_array_intersect_variadic,
+        fn_array_intersect_raw_variadic,
+        1,
+        "array",
+        "arrays"
     );
     reg_ref!(
         "array_walk",
