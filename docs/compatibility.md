@@ -8,6 +8,84 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`by-reference-temporary-array-batch`, pinned to php-src 8.5 commit `fcc29c8`
+and implementation commit `f998a4b5`. Call arguments now retain PHP 8.5's
+three relevant reference-source classes. An ordinary writable variable or a
+producer that actually returns by reference binds the existing alias without
+a notice. A call, method, static call, dynamic call or object-construction
+result passed to a hard-reference parameter instead emits the catchable
+severity-8 `Only variables should be passed by reference` notice, materializes
+a private reference cell and invokes the callee. Direct rvalues such as
+literals, array literals, arithmetic, ternaries, assignments, inc/dec results,
+closures, casts and nullsafe results raise the canonical catchable `Error`
+before the callee; PHP compiler-special built-in results such as `strlen()`
+retain that direct-rvalue boundary.
+
+The same contract applies to positional and named arguments, preserves a real
+reference-return alias, reports nested temporary notices in evaluation order,
+and prevents callee entry when a custom notice handler throws. Direct-rvalue
+errors now retain their source origin and frame-zero trace. Compiler metadata
+uses one previously spare bit in the existing send field, and only marked
+indirect temporaries enter the cold
+runtime classification. Ordinary `SendRef` is unchanged; marked `SendVarEx`
+operands remain eligible for the existing exact built-in callback pipeline
+only when the planner has already proved a TMP/VAR result in that fixed
+by-value call shape.
+
+Two original E2E tests cover ordinary/static/dynamic/named producers, true
+reference returns, direct-rvalue families, compiler-special built-ins, nested
+notice order, throwing handlers and uncaught origin/trace. Two older tests
+that incorrectly expected PHP 8.5 to accept direct array literals for
+`array_unshift()` and `array_splice()` were corrected while retaining their
+ordinary mutation checks. The five supplying array cases pass 5/5 against
+PHP 8.5.9. Across the 29 pinned PHPTs that explicitly exercise the two
+by-reference temporary diagnostics, the audit moves from 8 to 27 passes
+(+19/-0); the two remaining failures are independently incomplete anonymous-
+closure trace naming and variadic-parameter diagnostic rendering.
+
+The complete 842-case `ext/standard/tests/array` audit moves from 780 to 787
+passes (+7/-0), with 41 failures, 13 skips, one unsupported case and no
+timeout or crash. The gains are the five supplying cases plus
+`array_walk/bug39576.phpt` and `bug31158.phpt`. Two serial final runs have the
+same normalized `path`/`status`/`category`/`reason` SHA-256
+`90e07664c690d73f418b78607bab83834f0da823b7a60bf227e7152fa43e2a8e`.
+The separate 5,599-case `Zend/tests` and `tests/lang` gate moves from 4,171 to
+4,184 passes (+13/-0), with 1,119 failures, 115 skips, 181 unsupported cases
+and zero XFAIL, timeout or crash. Its two serial normalized status sets have
+SHA-256 `ab24642ff08ecabe9ab1db3953605d0b54cdcc2feb23786b07ececa0bed79fc7`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy self-tests, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+The production unsafe inventory remains at 1,623 blocks and 289 functions,
+with 351 SAFETY annotations. The implementation adds no dependency, opcode,
+VM frame, executor-global, unsafe block or runtime value/object/array layout
+change.
+
+On performance-governor AMD64 CPU 4, 32 balanced alternating release pairs
+after four warmups and with no excluded samples give baseline/candidate
+p10/median/p90 values of 0.206440/0.212005/0.215403 and
+0.213814/0.218715/0.221527 seconds for five million ordinary by-value literal
+calls (+3.165% independently, +3.264% paired),
+0.259330/0.262273/0.280989 and 0.263129/0.264989/0.271251 seconds for two
+million ordinary writable by-reference calls (+1.036% independently, +1.340%
+paired), and 0.237669/0.241749/0.260790 and
+0.235549/0.240839/0.248244 seconds for one million
+`array_shift($variable)` calls (-0.376% independently, -0.873% paired).
+Checksums are respectively 35,000,000, 2,000,000 and 7,000,000; every lane is
+below the +5% median ceiling. Baseline/candidate release-binary SHA-256 values
+are `3e8d5f8132ebca6d9ee18a275a9724031f56e66c22bece353a85482145d165d2` /
+`bb0580d189067fbecb04f90c5e6e4bdec119a26a167640117a79d6c41089cafc`.
+The benchmark harness/log SHA-256 values are
+`4a6587bff504710cd7522a35834ca3f7b2f4d5444f69329321e3473934ec884e` /
+`76a5d03422d0bd3d1eb0fdb0c0b41a02302dbcbd2a8b9a545a983290adad4469`.
+
+This checkpoint does not claim every PHP expression form as a reference
+source; include/eval, pipe and suspended yield boundaries remain separate
+classification work. The remaining 41 array-suite failures, 1,119 Zend/lang
+failures and broader PHP compatibility remain explicit follow-up work.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `var-export-array-object-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 implementation commit `2fec7f8e`. `var_export()` now renders nested arrays,
 ordinary objects and `stdClass` with PHP 8.5 indentation and line breaks,
