@@ -8,6 +8,110 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`binary-pack-unpack-format-contract-batch`, pinned to php-src 8.5 commit
+`fcc29c8` and implementation commit `49c57cb6`. The default runtime now
+registers PHP 8.5-compatible `pack()` and `unpack()` signatures and implements
+the complete core format alphabet: text/NUL formats `a`, `A` and `Z`; nibble
+formats `h` and `H`; cursor formats `x`, `X` and `@`; signed, unsigned,
+machine-width, little-endian and big-endian integers; and native/little/big
+endian floats. Counts, `*`, named repeats and suffixes, unnamed-key overwrite,
+offset-relative cursor behavior, short/excess input, integer truncation,
+negative zero, infinity, NaN and PHP 8.5 warning/exception ordering are part of
+the admitted contract.
+
+Packed bytes carry provenance in an unused `Value::type_info` bit, preserving
+the 16-byte value layout. `strlen()`, `bin2hex()`, `unpack()` and generic VM
+output recover the original bytes; an original E2E check proves that direct
+`echo pack('C4', 0, 127, 128, 255)` writes `00 7f 80 ff` byte-for-byte. The
+focused work also restores zero-padded width in the existing scalar
+`sprintf()` path without allocating a temporary string for width-free `%s`,
+`%d` and related conversions. The PHPT manifest writer substitutes malformed
+UTF-8 only in its diagnostic excerpt while retaining exact output hashes, so a
+binary mismatch can be reported without aborting the audit.
+
+Eight original E2E regressions cover raw binary output; every integer width,
+endianness and truncation boundary; float special values; text, NUL, nibble and
+cursor behavior; repeats and names; empty, short and excess arguments;
+diagnostics; offsets; weak/strict typing; variadics; named arguments; and
+Reflection signatures. The 11-case focused PHP 8.5 slice passes nine cases and
+has only the expected 32-bit platform skips `pack.phpt` and `pack64_32.phpt`.
+Two final focused manifests and summaries are byte-identical with SHA-256
+`83ea58bc9cfc24aa7e202e12fba99bffd264c72c0849a2e1a15a4f7bcb3cfe9b`
+and `939aa9c5e20369d06a8deeb3259b9c18acafcebb69e3361a8415861a89906554`.
+PHP 8.5.9 has the same 9-pass/2-skip distribution; its focused manifest
+SHA-256 is
+`b59eaca9c9a0dd0cb47d13101ac57686923c80b84971daf878414009606a5e6f`.
+
+The complete 842-case `ext/standard/tests/array` audit moves from 821 to 822
+passes (+1/-0), with six failures, 13 skips, one unsupported case and zero
+XFAIL, timeout or crash. The only movement is `bug24766.phpt` from output
+failure to exact pass. Two final manifests and summaries are respectively
+byte-identical with SHA-256
+`083f5588c19ab3fc2e1ae684f98d42c86b0ada8ba3dee3c182d6f42ad8bc751c`
+and `f90fdc686752bbda38ee2670f6c60f24539402970590388f02e93bcfa01bb32a`.
+
+The complete 733-case `ext/standard/tests/strings` audit moves from 267 to 286
+passes (+19/-0), with 362 failures, 54 skips, 30 unsupported cases, the
+retained `dirname_multi.phpt` timeout and zero crashes. The gains are
+`bug27278.phpt`, `bug35817.phpt`, `bug36148.phpt`, `bug38770.phpt`,
+`bug61038.phpt`, `bug61764.phpt`, `bug69522.phpt`, `bug70487.phpt`,
+`bug75075.phpt`, `bug78833.phpt`, `gh10940.phpt`, `pack64.phpt`,
+`pack_A.phpt`, `pack_Z.phpt`, `pack_arrays.phpt`, `pack_float.phpt`,
+`unpack_bug68225.phpt`, `unpack_error.phpt` and `unpack_offset.phpt`. There is
+no other status/category movement. Two final manifests and summaries are
+respectively byte-identical with SHA-256
+`0d0f40adaa48be998dd77887aca7155505332de9fb1a51ad12c64fc538d9edc1`
+and `b0455bd18820892a31f4d0ee366cb34eecb4335cf33035920b8dc03f080030a3`.
+
+The separate 5,599-case `Zend/tests` plus `tests/lang` audit remains exactly at
+4,196 passes, 1,107 failures, 115 skips and 181 unsupported cases, with zero
+XFAIL, timeout or crash and no status/category movement. Two final manifests
+and summaries are respectively byte-identical with SHA-256
+`a6c79657d0a6f66f85de63781961e6fc3f8ae64a1796136de8d07749990be70c`
+and `5731afe1845d4d7aa8cf6f3121554f5498190a4949e2c2e7219c11682182ea7f`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+Production remains at 1,623 unsafe blocks and 289 unsafe functions with 356
+SAFETY annotations. The checkpoint adds no dependency, opcode, executor-global
+field, VM-frame field or value-layout growth and no unsafe block or function.
+
+The performance host is an AMD Ryzen 9 7950X with 61 GiB RAM, x86-64 Linux
+7.0.0-30, CPU 2 in the `performance` governor, and Rust 1.93.1/LLVM 21.1.8.
+Both binaries use the locked default release profile without extra compiler
+flags. Two independent CPU-2-pinned 32-pair controls after three warmups put
+paired median changes at +3.997%/+4.044% for 100 cold starts,
+-6.546%/-6.693% for five million scalar additions, +1.580%/+1.348% for 100
+executions of the unchanged 200,000-append repository string workload and
+-1.665%/-1.563% for 500,000 width-free scalar `sprintf()` calls. Every median
+is below the +5% gate and every sample retains its exact checksum. The first
+`sprintf()` paired p10/p90 is -3.607%/+5.929%; the second is
+-3.030%/+1.828%, so the isolated upper-tail sample is disclosed rather than
+promoted to a median claim. A candidate-only 200,000-iteration `pack()` plus
+`unpack()` lane has identical `26473497632` checksums and median throughput
+1,486,726/1,444,879 iterations per second; no baseline ratio is claimed because
+the preceding binary does not implement the functions.
+
+Baseline/candidate release-binary SHA-256 values are
+`410430c3c5f24347a9d331c285898d9c24eed7add86f2dfe91d3d0bef4a0fd7a` /
+`0ac6f3d05451fb5b25044ffc01376e421aec4c22f74d0dcf168d378ee8ca6ae1`.
+The transient harness and accepted-log SHA-256 values are
+`24abebfd744b89bbc3edaa4578e1502d11b8103fb771063c96e06ebdded3f048`,
+`33e28da018386dbb7610580c04394c3b4fe5d1755c353b2b3ed73a17fee5152b`
+and `3a0f2648aeee6badf5fd5ec3f50232574bd96ca13153b02412a5f8448ddd24f4`.
+
+This checkpoint does not claim 32-bit execution, complete propagation of
+arbitrary bytes through every legacy string API and diagnostic renderer,
+optional-extension dependants, the remaining six array failures
+`array_fill_object.phpt`, `bug35014_64bit.phpt`, `bug35821.phpt`,
+`bug40191.phpt`, `gh16905.phpt` and `range_inputs_float_NAN_values.phpt`, the
+remaining 362 strings failures, 30 strings unsupported cases and retained
+timeout, the remaining 1,107 Zend/lang failures or broader PHP compatibility.
+The pack-supplying entity cases that now reach later independent HTML-entity
+failures do not count as pack passes.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `mixed-internal-sort-zend-schedule-batch`, pinned to php-src 8.5 commit
 `fcc29c8` and implementation commit `09e40114`. The internal
 `sort()`/`rsort()`/`asort()`/`arsort()`/`ksort()`/`krsort()` and

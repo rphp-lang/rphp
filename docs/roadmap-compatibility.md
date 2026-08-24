@@ -2295,6 +2295,34 @@ next goal by this order unless an explicit project objective overrides it:
 5. Reflection and standard-library clusters with measured dependency reach;
 6. isolated low-fanout features and optional extensions.
 
+The `binary-pack-unpack-format-contract-batch` checkpoint adds the complete
+core PHP 8.5 `pack()`/`unpack()` format alphabet, repeat and naming grammar,
+cursor/offset behavior, integer and float boundary semantics, diagnostics,
+typing and Reflection signatures. A spare provenance bit preserves packed
+bytes through `strlen()`, `bin2hex()`, `unpack()` and direct output without
+growing the 16-byte value layout. Eight original E2E tests include byte-exact
+raw output and all admitted format boundaries; the 11 focused upstream cases
+pass 9/9 with two expected 32-bit platform skips.
+
+The complete array audit moves from 821 to 822 pass (+1/-0), and the 733-case
+strings audit moves from 267 to 286 pass (+19/-0). Both repeated manifests are
+byte-identical with no lost pass or other category movement. Two byte-identical
+Zend/lang manifests remain at 4,196 pass, 1,107 fail, 115 skip and 181
+unsupported, with no XFAIL, timeout or crash. The strings corpus retains its
+pre-existing `dirname_multi.phpt` timeout outside this feature boundary.
+
+All five Cargo configurations, all-target, formatting, runner, unsafe,
+Composer S0, four Symfony S1 gates and PHP 8.5 S2/S3 pass. Two independent
+CPU-pinned 32-pair release controls put paired medians at +3.997%/+4.044% for
+startup, -6.546%/-6.693% for scalar work, +1.580%/+1.348% for the unchanged
+repository string workload and -1.665%/-1.563% for scalar `sprintf()`, below
+the +5% gate with exact checksums. Candidate-only pack/unpack throughput is
+1.487/1.445 million iterations per second; no ratio is claimed against the
+preceding binary. Complete binary propagation through unrelated legacy string
+APIs, optional-extension dependants, six remaining array failures, 362 strings
+failures, 30 strings unsupported cases, the retained timeout and broader
+compatibility remain explicit nonclaims.
+
 The `mixed-internal-sort-zend-schedule-batch` checkpoint gives internal
 `sort()`/`rsort()`/`asort()`/`arsort()`/`ksort()`/`krsort()` and
 `array_multisort()` one stable PHP 8.5 observation-derived comparison
@@ -2419,11 +2447,11 @@ schedule cases and throwing-comparison partial permutation remain explicit
 nonclaims.
 
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
-process hazard: `ext/standard/tests/array` is 821 pass, seven fail, 13 skip and
+process hazard: `ext/standard/tests/array` is 822 pass, six fail, 13 skip and
 one unsupported, while `Zend/tests` plus `tests/lang` is 4,196 pass, 1,107
 fail, 115 skip and 181 unsupported, with no timeout or crash in either corpus.
 The next array goal must therefore be chosen by shared-root-cause fanout and
-dependency reach across those seven visible failures, not by filename order.
+dependency reach across those six visible failures, not by filename order.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,
