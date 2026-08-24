@@ -467,6 +467,82 @@ fn test_var_export_array() {
 }
 
 #[test]
+fn var_export_matches_php_85_nested_binary_keys_references_and_object_properties() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ExportSample {
+    public $public = 1;
+    protected $protected = 2;
+    private $private = 3;
+    public array $nested = ["A\0B" => ["quote'" => "x\0y"]];
+}
+$ref = "live";
+$values = [
+    "binary" => "A\0B",
+    "nested" => ["quote'" => &$ref],
+    "std" => (object) [0 => 1],
+    "object" => new ExportSample,
+];
+echo var_export($values, true), "\n";
+"#,
+        ),
+        concat!(
+            "array (\n",
+            "  'binary' => 'A' . \"\\0\" . 'B',\n",
+            "  'nested' => \n",
+            "  array (\n",
+            "    'quote\\'' => 'live',\n",
+            "  ),\n",
+            "  'std' => \n",
+            "  (object) array(\n",
+            "     '0' => 1,\n",
+            "  ),\n",
+            "  'object' => \n",
+            "  \\ExportSample::__set_state(array(\n",
+            "     'public' => 1,\n",
+            "     'protected' => 2,\n",
+            "     'private' => 3,\n",
+            "     'nested' => \n",
+            "    array (\n",
+            "      'A' . \"\\0\" . 'B' => \n",
+            "      array (\n",
+            "        'quote\\'' => 'x' . \"\\0\" . 'y',\n",
+            "      ),\n",
+            "    ),\n",
+            "  )),\n",
+            ")\n",
+        )
+    );
+}
+
+#[test]
+fn var_export_replaces_recursive_arrays_and_objects_with_null_and_warns() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($severity, $message) {
+    echo "warning:$message\n";
+    return true;
+});
+$array = [];
+$array[] =& $array;
+echo var_export($array, true), "\n";
+$object = new stdClass;
+$object->self =& $object;
+echo var_export($object, true), "\n";
+"#,
+        ),
+        concat!(
+            "warning:var_export does not handle circular references\n",
+            "array (\n  0 => NULL,\n)\n",
+            "warning:var_export does not handle circular references\n",
+            "(object) array(\n   'self' => NULL,\n)\n",
+        )
+    );
+}
+
+#[test]
 fn var_export_uses_canonical_special_float_spellings() {
     assert_eq!(
         run_php(

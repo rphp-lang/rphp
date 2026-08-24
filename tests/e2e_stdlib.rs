@@ -2529,7 +2529,7 @@ echo var_export(State::Ready, true), "\n";
 echo var_export([State::Ready], true), "\n";
 "#
         ),
-        "Domain\\State Enum:string\n(\n    [name] => Ready\n    [value] => ready\n)\n\\Domain\\State::Ready\narray (\n  0 =>\n  \\Domain\\State::Ready,\n)\n"
+        "Domain\\State Enum:string\n(\n    [name] => Ready\n    [value] => ready\n)\n\\Domain\\State::Ready\narray (\n  0 => \n  \\Domain\\State::Ready,\n)\n"
     );
 }
 

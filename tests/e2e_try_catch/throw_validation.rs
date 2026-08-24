@@ -249,7 +249,7 @@ fn exception_ignore_args_omits_arguments_when_the_trace_is_created() {
             "/fixture/ignore-args.php",
             "/fixture",
         ),
-        "array (\n  0 => array (\n  'file' => '/fixture/ignore-args.php',\n  'line' => 4,\n  'function' => 'captureIgnored',\n),\n)\n#0 /fixture/ignore-args.php(4): captureIgnored()\n#1 {main}"
+        "array (\n  0 => \n  array (\n    'file' => '/fixture/ignore-args.php',\n    'line' => 4,\n    'function' => 'captureIgnored',\n  ),\n)\n#0 /fixture/ignore-args.php(4): captureIgnored()\n#1 {main}"
     );
 }
 

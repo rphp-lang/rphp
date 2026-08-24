@@ -9219,7 +9219,20 @@ fn fn_var_export(
         Some(v) => v.is_truthy(),
         None => false,
     };
-    let output = var_export_value(&v, eg);
+    let mut state = VarExportState::default();
+    let output = var_export_value(&v, eg, &mut state);
+    for _ in 0..state.recursive_values {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            "var_export does not handle circular references",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
     if return_str {
         ret!(rv, Value::string(output));
     } else {
@@ -12180,7 +12193,81 @@ fn enum_case_export(val: &Value, eg: &ExecutorGlobals) -> Option<String> {
     ))
 }
 
-fn var_export_value(val: &Value, eg: &ExecutorGlobals) -> String {
+#[inline]
+fn var_export_string(value: &str) -> String {
+    let mut output = String::with_capacity(value.len() + 2);
+    output.push('\'');
+    for character in value.chars() {
+        match character {
+            '\0' => output.push_str("' . \"\\0\" . '"),
+            '\\' | '\'' => {
+                output.push('\\');
+                output.push(character);
+            }
+            _ => output.push(character),
+        }
+    }
+    output.push('\'');
+    output
+}
+
+fn push_var_export_indent(output: &mut String, level: usize) {
+    for _ in 0..level {
+        output.push_str("  ");
+    }
+}
+
+fn var_export_nested_value(value: &Value) -> bool {
+    matches!(
+        value.dereferenced().value_type(),
+        ValueType::Array | ValueType::Object
+    )
+}
+
+#[derive(Default)]
+struct VarExportState {
+    arrays: Vec<usize>,
+    objects: Vec<usize>,
+    recursive_values: usize,
+}
+
+fn push_var_export_entry(
+    output: &mut String,
+    key: &str,
+    value: &Value,
+    eg: &ExecutorGlobals,
+    level: usize,
+    key_padding: usize,
+    state: &mut VarExportState,
+) {
+    let exported = var_export_value_at(value, eg, level + 1, state);
+    push_var_export_indent(output, level);
+    for _ in 0..key_padding {
+        output.push(' ');
+    }
+    output.push_str(key);
+    if var_export_nested_value(value) && exported != "NULL" {
+        output.push_str(" => \n");
+        push_var_export_indent(output, level + 1);
+        output.push_str(&exported);
+    } else {
+        output.push_str(" => ");
+        output.push_str(&exported);
+    }
+    output.push_str(",\n");
+}
+
+fn var_export_object_property_name(key: &str) -> &str {
+    key.rsplit_once('\0').map_or(key, |(_, name)| name)
+}
+
+fn var_export_value_at(
+    val: &Value,
+    eg: &ExecutorGlobals,
+    level: usize,
+    state: &mut VarExportState,
+) -> String {
+    let val = val.dereferenced();
     match val.value_type() {
         ValueType::Null => "NULL".to_string(),
         ValueType::True => "true".to_string(),
@@ -12190,32 +12277,51 @@ fn var_export_value(val: &Value, eg: &ExecutorGlobals) -> String {
             val.as_double().unwrap(),
             eg.serialize_precision,
         ),
-        ValueType::String => format!(
-            "'{}'",
-            val.as_str()
-                .unwrap()
-                .replace('\\', "\\\\")
-                .replace('\'', "\\'")
-        ),
+        ValueType::String => var_export_string(val.as_str().unwrap()),
         ValueType::Array => {
             let arr = val.as_array().unwrap();
+            let can_recurse = arr.values().any(var_export_nested_value);
+            let identity = if can_recurse {
+                let identity = val
+                    .array_identity()
+                    .expect("array export requires a live array identity");
+                if state.arrays.contains(&identity) {
+                    state.recursive_values += 1;
+                    return "NULL".to_string();
+                }
+                state.arrays.push(identity);
+                Some(identity)
+            } else {
+                None
+            };
             let mut out = "array (\n".to_string();
             for (key, v) in arr.iter() {
                 let key_str = match &key {
-                    ArrayKey::Int(k) => format!("{}", k),
-                    ArrayKey::String(k) => format!("'{}'", k),
+                    ArrayKey::Int(k) => k.to_string(),
+                    ArrayKey::String(k) => var_export_string(k),
                 };
-                let exported = var_export_value(v, eg);
-                if enum_case_export(v, eg).is_some() {
-                    out.push_str(&format!("  {} =>\n  {},\n", key_str, exported));
-                } else {
-                    out.push_str(&format!("  {} => {},\n", key_str, exported));
-                }
+                push_var_export_entry(&mut out, &key_str, v, eg, level, 2, state);
             }
+            push_var_export_indent(&mut out, level);
             out.push(')');
+            if let Some(identity) = identity {
+                let completed = state.arrays.pop();
+                debug_assert_eq!(completed, Some(identity));
+            }
             out
         }
-        ValueType::Object => enum_case_export(val, eg).unwrap_or_else(|| {
+        ValueType::Object => {
+            if let Some(case) = enum_case_export(val, eg) {
+                return case;
+            }
+            let identity = val
+                .object_identity()
+                .expect("object export requires a live object identity");
+            if state.objects.contains(&identity) {
+                state.recursive_values += 1;
+                return "NULL".to_string();
+            }
+            state.objects.push(identity);
             let object = val
                 .as_object()
                 .expect("object export requires a live object value");
@@ -12225,21 +12331,39 @@ fn var_export_value(val: &Value, eg: &ExecutorGlobals) -> String {
             let properties = properties
                 .as_array()
                 .expect("object-to-array projection must return an array");
-            let mut out = format!("\\{class_name}::__set_state(array(\n");
+            let std_class = class_name.eq_ignore_ascii_case("stdClass");
+            let mut out = if std_class {
+                "(object) array(\n".to_string()
+            } else {
+                format!(
+                    "\\{}::__set_state(array(\n",
+                    class_name.trim_start_matches('\\')
+                )
+            };
             for (key, value) in properties.iter() {
                 let key = match key {
                     ArrayKey::Int(key) => key.to_string(),
                     ArrayKey::String(key) => {
-                        format!("'{}'", key.replace('\\', "\\\\").replace('\'', "\\'"))
+                        var_export_string(var_export_object_property_name(&key))
                     }
                 };
-                out.push_str(&format!("   {key} => {},\n", var_export_value(value, eg)));
+                push_var_export_entry(&mut out, &key, value, eg, level, 3, state);
             }
-            out.push_str("))");
+            push_var_export_indent(&mut out, level);
+            out.push(')');
+            if !std_class {
+                out.push(')');
+            }
+            let completed = state.objects.pop();
+            debug_assert_eq!(completed, Some(identity));
             out
-        }),
+        }
         _ => "NULL".to_string(),
     }
+}
+
+fn var_export_value(val: &Value, eg: &ExecutorGlobals, state: &mut VarExportState) -> String {
+    var_export_value_at(val, eg, 0, state)
 }
 
 /// JSON value that retains PHP array insertion order for object-shaped arrays.
