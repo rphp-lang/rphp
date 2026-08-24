@@ -2295,6 +2295,25 @@ next goal by this order unless an explicit project objective overrides it:
 5. Reflection and standard-library clusters with measured dependency reach;
 6. isolated low-fanout features and optional extensions.
 
+The `recursive-array-boolean-diagnostic-batch` checkpoint makes the shared
+rejected-argument path for `array_merge_recursive()` and
+`array_replace_recursive()` render boolean values as PHP 8.5's `true given`
+and `false given`, while retaining every other type name, argument number and
+the two APIs' distinct first-parameter naming contract. An original E2E matrix
+covers both boolean values at fixed/variadic positions and successful calls
+after each rejected series. The change is local to an existing cold type-error
+helper; successful combiners, startup and runtime layouts are unchanged, so no
+runtime performance lane applies.
+
+The two supplying PHP 8.5 cases pass 2/2. The complete recursive 842-case array
+audit moves from 811 to 813 passes, an exact +2/-0 delta, with 15 failures, 13
+skips, one unsupported case and no XFAIL, timeout or crash. Two final array
+manifests are byte-identical. Two byte-identical Zend/lang manifests remain at
+4,187 pass, 1,116 fail, 115 skip and 181 unsupported, with no status movement,
+timeout or crash. All five feature configurations, all-feature/all-target,
+formatting, PHPT-runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5
+S2/S3 pass.
+
 The `array-multisort-argument-contract-batch` checkpoint makes fixed and
 variadic `array_multisort()` arguments share a stateful PHP 8.5 classifier for
 columns, direction/comparison flags, duplicate valid flags, invalid integer
@@ -2319,11 +2338,11 @@ schedule cases and throwing-comparison partial permutation remain explicit
 nonclaims.
 
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
-process hazard: `ext/standard/tests/array` is 811 pass, 17 fail, 13 skip and
+process hazard: `ext/standard/tests/array` is 813 pass, 15 fail, 13 skip and
 one unsupported, while `Zend/tests` plus `tests/lang` is 4,187 pass, 1,116
 fail, 115 skip and 181 unsupported, with no timeout or crash in either corpus.
 The next array goal must therefore be chosen by shared-root-cause fanout and
-dependency reach across those 17 visible failures, not by filename order.
+dependency reach across those 15 visible failures, not by filename order.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,

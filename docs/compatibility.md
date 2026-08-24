@@ -8,6 +8,61 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`recursive-array-boolean-diagnostic-batch`, pinned to php-src 8.5 commit
+`fcc29c8` and implementation commit `2377ce97`. The shared rejected-argument
+path for `array_merge_recursive()` and `array_replace_recursive()` now renders
+boolean values as PHP 8.5's value-sensitive `true given` and `false given`
+instead of the generic `bool given`. The change remains local to the recursive
+combiner type-error helper: integer, float, null, string, resource and concrete
+object-class names are unchanged, as are argument numbers and the intentionally
+different first-parameter naming rules of the two APIs.
+
+One original E2E regression covers both boolean values at fixed and variadic
+positions in both combiners, then performs successful recursive merge and
+replace calls to prove that rejected calls leave no combiner state behind. The
+two supplying PHP 8.5 PHPTs, `array_merge_recursive_variation1.phpt` and
+`array_merge_recursive_variation2.phpt`, pass 2/2; their final focused manifest
+SHA-256 is
+`a808352c460e04b9ff64a45d8befba19318f8292ce339970063039345f025eb1`.
+PHP 8.5.9 also passes both cases; its oracle manifest SHA-256 is
+`b2851667f4bde59c5cce844c00a9f74302da498770a12e3833bd92b9df014546`,
+and the per-case actual-output hashes equal the shared expected-output hashes.
+
+The complete 842-case `ext/standard/tests/array` audit moves from 811 to 813
+passes (+2/-0), with 15 failures, 13 skips, one unsupported case and zero
+XFAIL, timeout or crash. The gains are exactly the two supplying cases. Two
+final manifests and summaries are respectively byte-identical with SHA-256
+`511c924f53fbdf52cc2a11152ac8bbeb1b62da61c40b28ba303b1881f62aee6a`
+and `0035748dadcf1942ef37b3b8e51171332de3d9786298b876602965290d809ed7`.
+The separate 5,599-case `Zend/tests` and `tests/lang` gate remains exactly at
+4,187 passes, 1,116 failures, 115 skips and 181 unsupported cases with zero
+XFAIL, timeout or crash. Its two final manifests and summaries are respectively
+byte-identical with SHA-256
+`fd63812ae652d3022296ca4b6c89574e4ad37d8969ee7e8dff99dddbca4bd453`
+and `141c60ac68551bebb3ed30e48dca7a483bc6f6ca7f0a17288727e3ddaa14125a`;
+the exact status set is unchanged from the retained baseline.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The
+storage-bounded matrix ran without incremental artifacts or test debug symbols
+and invoked the cleanup hook before, between and after configurations.
+Production remains at 1,623 unsafe blocks and 289 unsafe functions, with 355
+SAFETY annotations. The implementation adds no dependency, opcode, compiler,
+VM-frame, executor-global or PHP value/object/array layout change and no unsafe
+block or function. Baseline/candidate release-binary SHA-256 values are
+`60e0de885576d0b364dfeb51138eabd22d45d2f7dea98a9836b0d954014cf54d` /
+`f5a9d2542f97dd7d516ab2a8a5ed9057e60dd14beec71995593511e6a80b4b19`.
+No runtime performance lane applies because the new value-sensitive rendering
+is reached only after an explicit non-array argument has already been rejected;
+startup, successful merge/replace execution and runtime layouts are unchanged.
+
+This checkpoint does not claim the remaining 15 array-suite failures,
+including PHP's five implementation-specific mixed-sort schedule cases, the
+1,116 Zend/lang failures or broader PHP compatibility. These remain explicit
+evidence-driven follow-up work.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `array-multisort-argument-contract-batch`, pinned to php-src 8.5 commit
 `fcc29c8` and implementation commit `9f31a595`. `array_multisort()` now
 classifies every fixed and variadic argument through one stateful contract:
