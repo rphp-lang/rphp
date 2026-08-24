@@ -8,6 +8,51 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`binary-string-prefix-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+implementation commit `aec9f950`. One adjacent ASCII `b` or `B` before a
+single- or double-quoted string now enters the existing quoted-string scanner
+without emitting an identifier. The marker has no value-level effect, while
+double-quoted interpolation and escapes retain their ordinary behavior. A
+space after `b` and a longer identifier such as `bb` retain their separate
+token boundaries, and the existing binary heredoc/nowdoc path is unchanged.
+
+Three lexer unit tests and one original string E2E test cover lower- and
+upper-case markers, both quote forms, interpolation, escapes, adjacency,
+longer identifiers and member-token context. The exact 16-case supplying
+`ext/standard/tests/array` cluster moves from 0 to 16 passes; the matching PHP
+8.5.9 oracle passes 16/16. The complete 842-case array audit moves from 717 to
+733 passes (+16/-0), with 95 failures, 13 skips, one unsupported case and no
+timeout or crash. All 16 former parse failures become exact passes, leaving no
+front-end rejection in the attempted array corpus. Two serial final manifests
+and summaries are respectively byte-identical with SHA-256
+`439c7d6c7e83872d37b287ed361dfb9fe22e9b8c095fc5005490755fa2b9334f`
+and `ed415f24b96839ec8bae7fb9cbf339ec5124e4db6a07c787b9ec12b2017149a1`.
+
+The separate 5,599-case `Zend/tests` and `tests/lang` gate remains exactly
+4,171 pass, 1,132 fail, 115 skip, 181 unsupported and zero XFAIL, timeout or
+crash (+0/-0). Both candidate manifests are byte-identical to each other and
+to the preceding baseline with SHA-256
+`fe8ee9e31f8b441d8b84198f1edc7f874c1b48a6bb6355911f58da4756ab82c8`;
+the two final summaries are byte-identical with SHA-256
+`b77d6d51c39ebf53e4fa212e5b5f7208d1b47a87e413c4465874bf9db1c1bb1c`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy self-tests, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+The production unsafe inventory remains at 1,623 blocks and 289 functions with
+346 SAFETY annotations. The implementation adds no dependency, parser,
+compiler, opcode, VM frame, executor-global, runtime value or object/array
+layout change. Its baseline/candidate release-binary SHA-256 values are
+`eab5a72967765858186ae8eed33fe7b9de3fbdf19aa56cec8f1d2ad0af5f7b09` /
+`37f95390696be1180d51630038867edcde2722ea59e1101ce74bb99d449da216`.
+No runtime performance gate applies to this lexer-only compile-time change;
+the relevant compile/load and ecosystem gates pass.
+
+The remaining 95 array-suite failures consist of 78 output and 17 runtime
+differences. The remaining 1,132 Zend/lang failures and broader front-end and
+PHP compatibility remain explicit follow-up work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `leading-dot-float-literals`, pinned to php-src 8.5 commit `fcc29c8` and
 implementation commit `458a3aa3`. A dot immediately followed by a decimal
 digit now enters the existing numeric-literal scanner, so `.5`, `-.5`, `+.5`,
