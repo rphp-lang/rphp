@@ -24,7 +24,10 @@ use super::*;
 /// The returned Vec must live as long as the EG (owns the InternalFunction structs).
 pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     eg.reserve_stdlib_capacity();
-    let mut funcs: Vec<Box<InternalFunction>> = Vec::with_capacity(128);
+    // The default registry currently owns 437 functions. Reserve its stable
+    // envelope once instead of copying hundreds of owning pointers through
+    // the 128/256 growth boundaries during every request startup.
+    let mut funcs: Vec<Box<InternalFunction>> = Vec::with_capacity(512);
 
     // Register built-in exception classes first (Throwable, Error, TypeError, Exception)
     let class_funcs = register_builtin_classes(eg);

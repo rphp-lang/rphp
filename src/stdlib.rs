@@ -7346,6 +7346,66 @@ fn fn_vprintf(
     ret!(rv, Value::long(length));
 }
 
+#[inline(always)]
+fn append_sprintf_value(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    result: &mut String,
+    spec: char,
+    arg: Option<&Value>,
+) -> Result<bool, VmError> {
+    match spec {
+        's' => {
+            if let Some(arg) = arg {
+                if matches!(
+                    arg.dereferenced().value_type(),
+                    ValueType::Array | ValueType::Object | ValueType::Closure
+                ) {
+                    let Some(rendered) = internal_value_to_string(ed, eg, arg)? else {
+                        return Ok(false);
+                    };
+                    result.push_str(&rendered);
+                } else {
+                    arg.append_echo_to_with_precision(result, eg.precision);
+                }
+            }
+        }
+        'd' => {
+            let _ = write!(
+                result,
+                "{}",
+                arg.map(|value| value.to_long_val()).unwrap_or(0)
+            );
+        }
+        'f' => {
+            let value = arg.map(|value| value.to_float_val()).unwrap_or(0.0);
+            let _ = write!(result, "{value:.6}");
+        }
+        'x' => {
+            let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
+            let _ = write!(result, "{value:x}");
+        }
+        'X' => {
+            let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
+            let _ = write!(result, "{value:X}");
+        }
+        'o' => {
+            let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
+            let _ = write!(result, "{value:o}");
+        }
+        'b' => {
+            let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
+            let _ = write!(result, "{value:b}");
+        }
+        'c' => {
+            let code = arg.map(|value| value.to_long_val()).unwrap_or(0);
+            result.push((code & 0xFF) as u8 as char);
+        }
+        _ => unreachable!("format specifier was validated by the caller"),
+    }
+    Ok(true)
+}
+
 fn format_sprintf_values(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
@@ -7383,64 +7443,25 @@ fn format_sprintf_values(
                 }
                 if spec_index < bytes.len() {
                     let spec = bytes[spec_index] as char;
+                    if !matches!(spec, 's' | 'd' | 'f' | 'x' | 'X' | 'o' | 'b' | 'c') {
+                        result.push_str(&fmt[index..=spec_index]);
+                        index = spec_index + 1;
+                        literal_start = index;
+                        continue;
+                    }
                     let arg = args.and_then(|args| args.get_value_at(arg_idx));
                     arg_idx += 1;
+                    if width == 0 {
+                        if !append_sprintf_value(ed, eg, &mut result, spec, arg)? {
+                            return Ok(None);
+                        }
+                        index = spec_index + 1;
+                        literal_start = index;
+                        continue;
+                    }
                     let mut formatted = String::new();
-                    match spec {
-                        's' => {
-                            if let Some(arg) = arg {
-                                if matches!(
-                                    arg.dereferenced().value_type(),
-                                    ValueType::Array | ValueType::Object | ValueType::Closure
-                                ) {
-                                    let Some(rendered) = internal_value_to_string(ed, eg, arg)?
-                                    else {
-                                        return Ok(None);
-                                    };
-                                    formatted.push_str(&rendered);
-                                } else {
-                                    arg.append_echo_to_with_precision(&mut formatted, eg.precision);
-                                }
-                            }
-                        }
-                        'd' => {
-                            let _ = write!(
-                                formatted,
-                                "{}",
-                                arg.map(|value| value.to_long_val()).unwrap_or(0)
-                            );
-                        }
-                        'f' => {
-                            let value = arg.map(|value| value.to_float_val()).unwrap_or(0.0);
-                            let _ = write!(formatted, "{value:.6}");
-                        }
-                        'x' => {
-                            let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
-                            let _ = write!(formatted, "{value:x}");
-                        }
-                        'X' => {
-                            let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
-                            let _ = write!(formatted, "{value:X}");
-                        }
-                        'o' => {
-                            let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
-                            let _ = write!(formatted, "{value:o}");
-                        }
-                        'b' => {
-                            let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
-                            let _ = write!(formatted, "{value:b}");
-                        }
-                        'c' => {
-                            let code = arg.map(|value| value.to_long_val()).unwrap_or(0);
-                            formatted.push((code & 0xFF) as u8 as char);
-                        }
-                        _ => {
-                            result.push_str(&fmt[index..=spec_index]);
-                            arg_idx -= 1;
-                            index = spec_index + 1;
-                            literal_start = index;
-                            continue;
-                        }
+                    if !append_sprintf_value(ed, eg, &mut formatted, spec, arg)? {
+                        return Ok(None);
                     }
                     let padding = width.saturating_sub(formatted.len());
                     if padding != 0 {
