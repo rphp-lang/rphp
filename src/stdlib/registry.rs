@@ -42,13 +42,13 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ($name:expr, $handler:expr, $max_args:expr, $min_args:expr, $($pnames:expr),*) => {{
             let f = Box::new(make_internal_function($handler, $max_args, $min_args, pn![$($pnames),*]));
             let ptr = &f.common as *const FunctionCommon;
-            eg.register_function($name, ptr).unwrap();
+            eg.register_canonical_function($name, ptr).unwrap();
             funcs.push(f);
         }};
         ($name:expr, $handler:expr, $max_args:expr, $min_args:expr) => {{
             let f = Box::new(make_internal_function($handler, $max_args, $min_args, vec![]));
             let ptr = &f.common as *const FunctionCommon;
-            eg.register_function($name, ptr).unwrap();
+            eg.register_canonical_function($name, ptr).unwrap();
             funcs.push(f);
         }};
     }
@@ -69,7 +69,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 pn![$($pnames),*],
             ));
             let ptr = &f.common as *const FunctionCommon;
-            eg.register_function($name, ptr).unwrap();
+            eg.register_canonical_function($name, ptr).unwrap();
             funcs.push(f);
         }};
         ($name:expr, $handler:expr, $direct:expr, $max_args:expr, $min_args:expr) => {{
@@ -87,7 +87,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 vec![],
             ));
             let ptr = &f.common as *const FunctionCommon;
-            eg.register_function($name, ptr).unwrap();
+            eg.register_canonical_function($name, ptr).unwrap();
             funcs.push(f);
         }};
     }
@@ -96,13 +96,13 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ($name:expr, $handler:expr, $max_args:expr, $min_args:expr, $ref_args:expr, $($pnames:expr),*) => {{
             let f = Box::new(make_internal_function_ref($handler, $max_args, $min_args, $ref_args, pn![$($pnames),*]));
             let ptr = &f.common as *const FunctionCommon;
-            eg.register_function($name, ptr).unwrap();
+            eg.register_canonical_function($name, ptr).unwrap();
             funcs.push(f);
         }};
         ($name:expr, $handler:expr, $max_args:expr, $min_args:expr, $ref_args:expr) => {{
             let f = Box::new(make_internal_function_ref($handler, $max_args, $min_args, $ref_args, vec![]));
             let ptr = &f.common as *const FunctionCommon;
-            eg.register_function($name, ptr).unwrap();
+            eg.register_canonical_function($name, ptr).unwrap();
             funcs.push(f);
         }};
     }
@@ -111,13 +111,13 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ($name:expr, $handler:expr, $min_args:expr, $($pnames:expr),*) => {{
             let f = Box::new(make_internal_function_variadic($handler, $min_args, pn![$($pnames),*]));
             let ptr = &f.common as *const FunctionCommon;
-            eg.register_function($name, ptr).unwrap();
+            eg.register_canonical_function($name, ptr).unwrap();
             funcs.push(f);
         }};
         ($name:expr, $handler:expr, $min_args:expr) => {{
             let f = Box::new(make_internal_function_variadic($handler, $min_args, vec![]));
             let ptr = &f.common as *const FunctionCommon;
-            eg.register_function($name, ptr).unwrap();
+            eg.register_canonical_function($name, ptr).unwrap();
             funcs.push(f);
         }};
     }
@@ -131,7 +131,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 pn![$($pnames),*],
             ));
             let ptr = &f.common as *const FunctionCommon;
-            eg.register_function($name, ptr).unwrap();
+            eg.register_canonical_function($name, ptr).unwrap();
             funcs.push(f);
         }};
     }
@@ -144,7 +144,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 pn![$($pnames),*],
             ));
             let ptr = &f.common as *const FunctionCommon;
-            eg.register_function($name, ptr).unwrap();
+            eg.register_canonical_function($name, ptr).unwrap();
             funcs.push(f);
         }};
     }
@@ -159,7 +159,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 pn![$($pnames),*],
             ));
             let ptr = &f.common as *const FunctionCommon;
-            eg.register_function($name, ptr).unwrap();
+            eg.register_canonical_function($name, ptr).unwrap();
             funcs.push(f);
         }};
     }
@@ -175,7 +175,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 pn![$($pnames),*],
             ));
             let ptr = &f.common as *const FunctionCommon;
-            eg.register_function($name, ptr).unwrap();
+            eg.register_canonical_function($name, ptr).unwrap();
             funcs.push(f);
         }};
     }
@@ -372,7 +372,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ];
         function.common.sig.return_type_hint = ParamTypeHint::Array;
         let pointer = &function.common as *const FunctionCommon;
-        eg.register_function("iterator_to_array", pointer).unwrap();
+        eg.register_canonical_function("iterator_to_array", pointer)
+            .unwrap();
         funcs.push(function);
     }
     reg_var!("compact", fn_compact, 1, "var_name", "var_names");
@@ -393,7 +394,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         function.common.sig.param_type_hints = vec![ParamTypeHint::String, ParamTypeHint::Mixed];
         function.common.sig.return_type_hint = ParamTypeHint::String;
         let pointer = &function.common as *const FunctionCommon;
-        eg.register_function("pack", pointer).unwrap();
+        eg.register_canonical_function("pack", pointer).unwrap();
         funcs.push(function);
     }
     {
@@ -413,7 +414,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             ParamTypeHint::ClassName("false".to_string()),
         ]);
         let pointer = &function.common as *const FunctionCommon;
-        eg.register_function("unpack", pointer).unwrap();
+        eg.register_canonical_function("unpack", pointer).unwrap();
         funcs.push(function);
     }
     reg!("md5", fn_md5, 2, 1, "string", "binary");
@@ -1078,7 +1079,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         // literals). EXTR_REFS still aliases an ordinary lvalue source.
         function.common.sig.prefer_ref_args = 0b1;
         let pointer = &function.common as *const FunctionCommon;
-        eg.register_function("extract", pointer).unwrap();
+        eg.register_canonical_function("extract", pointer).unwrap();
         funcs.push(function);
     }
     reg!("get_defined_vars", fn_get_defined_vars, 0, 0);
