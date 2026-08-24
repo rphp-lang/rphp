@@ -248,6 +248,12 @@ pub(crate) fn ordinary_callback_invalid_reason(callback: &Value, eg: &ExecutorGl
     let Some(first) = array.get_value_at(0).map(Value::dereferenced) else {
         return "first array member is not a valid class name or object".to_string();
     };
+    if first.as_str().is_none()
+        && first.as_object().is_none()
+        && first.value_type() != ValueType::Closure
+    {
+        return "first array member is not a valid class name or object".to_string();
+    }
     let Some(method) = array
         .get_value_at(1)
         .map(Value::dereferenced)
@@ -4302,29 +4308,6 @@ fn fn_array_map(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let callback = arg!(ed, 0);
-    let first = arg!(ed, 1);
-    let Some(first_array) = first.as_array() else {
-        typed_internal_argument_error(eg, "array_map", first, 2, "array", "array");
-        return Ok(());
-    };
-    let mut arrays = vec![first_array];
-    if let Some(extra) = arg_opt!(ed, 2).and_then(Value::as_array) {
-        for (index, value) in extra.values().enumerate() {
-            let Some(array) = value.dereferenced().as_array() else {
-                typed_internal_argument_error(
-                    eg,
-                    "array_map",
-                    value.dereferenced(),
-                    index + 3,
-                    "arrays",
-                    "array",
-                );
-                return Ok(());
-            };
-            arrays.push(array);
-        }
-    }
-    let length = arrays.iter().map(|array| array.len()).max().unwrap_or(0);
     let resolved = if callback.value_type() == ValueType::Null {
         None
     } else {
@@ -4345,6 +4328,32 @@ fn fn_array_map(
             }
         }
     };
+    let first = arg!(ed, 1);
+    let Some(first_array) = first.as_array() else {
+        typed_internal_argument_error(eg, "array_map", first, 2, "array", "array");
+        return Ok(());
+    };
+    let mut arrays = vec![first_array];
+    if let Some(extra) = arg_opt!(ed, 2).and_then(Value::as_array) {
+        for (index, value) in extra.values().enumerate() {
+            let Some(array) = value.dereferenced().as_array() else {
+                typed_internal_argument_error(
+                    eg,
+                    "array_map",
+                    value.dereferenced(),
+                    index + 3,
+                    "",
+                    "array",
+                );
+                return Ok(());
+            };
+            arrays.push(array);
+        }
+    }
+    let length = arrays.iter().map(|array| array.len()).max().unwrap_or(0);
+    if resolved.is_none() && arrays.len() == 1 {
+        ret!(rv, first.clone());
+    }
     let mut result = if arrays.len() == 1 && first_array.is_packed() {
         PhpArray::with_packed_capacity(length)
     } else if arrays.len() == 1 {
@@ -4352,13 +4361,6 @@ fn fn_array_map(
     } else {
         PhpArray::with_packed_capacity(length)
     };
-    if resolved.is_none() && arrays.len() == 1 {
-        for (key, value) in first_array.iter() {
-            result.set(key, array_projection_value(value));
-        }
-        ret!(rv, Value::array(result));
-    }
-
     if let Some(resolved) = resolved.as_ref() {
         if arrays.len() == 1 {
             for (key, value) in first_array.iter() {
@@ -5466,10 +5468,15 @@ fn typed_internal_argument_error(
         ValueType::False => "false".to_string(),
         _ => argument.diagnostic_type_name().into_owned(),
     };
+    let parameter = if parameter.is_empty() {
+        String::new()
+    } else {
+        format!(" (${parameter})")
+    };
     eg.exception = Some(crate::value::make_error_value(
         "TypeError",
         &format!(
-            "{function}(): Argument #{position} (${parameter}) must be of type {expected}, {actual} given"
+            "{function}(): Argument #{position}{parameter} must be of type {expected}, {actual} given"
         ),
     ));
 }
@@ -13671,6 +13678,19 @@ impl Clone for ResolvedCallback {
 }
 
 impl ResolvedCallback {
+    #[inline(always)]
+    fn plain_function(func_ptr: *const FunctionCommon) -> Self {
+        Self {
+            func_ptr,
+            prepend_args: vec![],
+            use_vars: vec![],
+            called_scope_class_id: 0,
+            bound_this: None,
+            closure_static_vars: None,
+            is_magic_call: false,
+        }
+    }
+
     #[inline]
     pub(crate) fn has_context(&self) -> bool {
         self.called_scope_class_id != 0 || self.bound_this.is_some()
@@ -14732,15 +14752,7 @@ fn resolve_cached_string_callback(
     if func_ptr.is_null() {
         return None;
     }
-    Some(ResolvedCallback {
-        func_ptr,
-        prepend_args: vec![],
-        use_vars: vec![],
-        called_scope_class_id: 0,
-        bound_this: None,
-        closure_static_vars: None,
-        is_magic_call: false,
-    })
+    Some(ResolvedCallback::plain_function(func_ptr))
 }
 
 #[inline]
@@ -14927,6 +14939,12 @@ pub(super) fn resolve_callback_at_callsite(
     let needs_scope = val.value_type() == ValueType::Array
         || val.as_str().is_some_and(|name| name.contains("::"));
     if !needs_scope {
+        if val.value_type() == ValueType::String
+            && let Some(slot) = callback_cache_slot(ed)
+            && let Some(func_ptr) = resolve_literal_string_callback_with_cache(val, eg, slot)
+        {
+            return Some(ResolvedCallback::plain_function(func_ptr));
+        }
         return resolve_callback_with_cache(val, eg, None, callback_cache_slot(ed));
     }
     let lexical_class = crate::vm::execute::lexical_class_name_for_internal_call(eg, ed);
@@ -20562,7 +20580,38 @@ fn fn_preg_replace_callback(
 ) -> Result<(), VmError> {
     let pattern_str = arg_str!(ed, 0);
     let callback = arg!(ed, 1).clone();
-    let subject = arg_str!(ed, 2).into_owned();
+    let resolved = match resolve_callback_at_callsite_checked(&callback, eg, ed)? {
+        Some(resolved) => resolved,
+        None => {
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            let reason = ordinary_callback_invalid_reason(&callback, eg);
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                &format!(
+                    "preg_replace_callback(): Argument #2 ($callback) must be a valid callback, {reason}"
+                ),
+            ));
+            return Ok(());
+        }
+    };
+    let subject = if arg!(ed, 2).as_array().is_some() {
+        arg_str!(ed, 2).into_owned()
+    } else {
+        let Some(subject) = typed_internal_string_argument_expected(
+            ed,
+            eg,
+            "preg_replace_callback",
+            2,
+            "subject",
+            "array|string",
+        )?
+        else {
+            return Ok(());
+        };
+        subject
+    };
     let limit = arg_opt!(ed, 3).map_or(-1, Value::to_long_val);
     let limit = if limit < 0 {
         usize::MAX
@@ -20580,7 +20629,7 @@ fn fn_preg_replace_callback(
     };
 
     let Some((result, replacements)) =
-        regex_callback::replace(&re, subject, &callback, limit, flags & 512 != 0, ed, eg)?
+        regex_callback::replace(&re, subject, &resolved, limit, flags & 512 != 0, eg)?
     else {
         return Ok(());
     };

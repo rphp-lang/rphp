@@ -469,6 +469,35 @@ fn preg_replace_callback_honors_limit_and_writes_count_by_reference() {
 }
 
 #[test]
+fn preg_replace_callback_validates_callback_before_subject_without_invoking_magic() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            class RegexBoundaryMagic {
+                public function __call($name, $arguments) { echo "unexpected:$name\n"; }
+            }
+            try {
+                preg_replace_callback('/x/', 'missing_regex_callback', new stdClass);
+            } catch (TypeError $error) {
+                echo $error->getMessage(), "\n";
+            }
+            try {
+                preg_replace_callback('/x/', [new RegexBoundaryMagic, 'missing'], new stdClass);
+            } catch (TypeError $error) {
+                echo $error->getMessage(), "\n";
+            }
+            echo '[', preg_replace_callback('/x/', [new RegexBoundaryMagic, 'missing'], ''), ']';
+            "#,
+        ),
+        concat!(
+            "preg_replace_callback(): Argument #2 ($callback) must be a valid callback, function \"missing_regex_callback\" not found or invalid function name\n",
+            "preg_replace_callback(): Argument #3 ($subject) must be of type array|string, stdClass given\n",
+            "[]",
+        )
+    );
+}
+
+#[test]
 fn test_preg_replace_callback_builds_empty_replacements() {
     assert_eq!(
         run_php(

@@ -1,14 +1,11 @@
 //! Streaming `preg_replace_callback` consumer kept out of the general stdlib
 //! codegen unit so its specialized ownership path cannot perturb preg_match.
 
-use super::{
-    call_resolved_owned_iter, call_resolved_owned_iter_readback_arg0, resolve_callback_or_fatal,
-};
+use super::{ResolvedCallback, call_resolved_owned_iter, call_resolved_owned_iter_readback_arg0};
 use crate::regex::Regex;
 use crate::runtime::ExecutorGlobals;
 use crate::value::{PhpArray, Value};
 use crate::vm::execute::VmError;
-use crate::vm::frame::ExecuteData;
 
 /// Return `None` when the callback raised a PHP exception. No partial output is
 /// published in that case; `ExecutorGlobals` retains the exception for the
@@ -17,16 +14,14 @@ use crate::vm::frame::ExecuteData;
 pub(super) fn replace(
     regex: &Regex,
     subject: String,
-    callback: &Value,
+    resolved: &ResolvedCallback,
     limit: usize,
     unmatched_as_null: bool,
-    execute_data: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
 ) -> Result<Option<(String, usize)>, VmError> {
     if limit == 0 {
         return Ok(Some((subject, 0)));
     }
-    let mut resolved = None;
     let mut result = String::new();
     let mut previous_end = 0;
     let mut reusable_capture_free_matches: Option<Value> = None;
@@ -36,11 +31,9 @@ pub(super) fn replace(
         if replacements == limit {
             return Ok(false);
         }
-        if resolved.is_none() {
-            resolved = Some(resolve_callback_or_fatal(eg, callback, execute_data)?);
+        if replacements == 0 {
             result.reserve(subject.len());
         }
-        let resolved = resolved.as_ref().unwrap();
         let full_match = caps.get(0).unwrap();
         let capture_free = caps.len() == 1 && caps.named_groups().is_empty();
 

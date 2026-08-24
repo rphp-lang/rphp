@@ -144,7 +144,78 @@ catch (TypeError $e) { echo $e->getMessage(); }
     );
     assert_eq!(
         output,
-        "4:4\n7:7\narray_map(): Argument #2 ($array) must be of type array, null given\narray_map(): Argument #3 ($arrays) must be of type array, null given"
+        "4:4\n7:7\narray_map(): Argument #2 ($array) must be of type array, null given\narray_map(): Argument #3 must be of type array, null given"
+    );
+}
+
+#[test]
+fn null_array_map_preserves_recursive_cow_topology() {
+    let output = run_php(
+        r#"<?php
+$source = [];
+$source['self'] =& $source;
+$mapped = array_map(null, $source);
+var_dump($mapped);
+
+$mapped['mapped'] = 1;
+echo (int) array_key_exists('mapped', $mapped['self']), ':';
+$source['source'] = 2;
+echo (int) array_key_exists('source', $mapped['self']), ':';
+$mapped['self']['through'] = 3;
+echo (int) array_key_exists('through', $mapped), ':';
+echo (int) array_key_exists('through', $source), "\n";
+"#,
+    );
+    assert_eq!(
+        output,
+        concat!(
+            "array(1) {\n  [\"self\"]=>\n  *RECURSION*\n}\n",
+            "0:1:0:1\n",
+        )
+    );
+}
+
+#[test]
+fn array_map_validates_callback_and_variadic_arguments_in_order() {
+    let output = run_php(
+        r#"<?php
+class EmptyMapMagic {
+    public function __call($name, $arguments) { echo "unexpected:$name\n"; }
+}
+
+$callbacks = [[1, 'run'], [1, 2], [new stdClass, 2], ['stdClass', 2], ['MissingMapClass', 2]];
+foreach ($callbacks as $callback) {
+    try { array_map($callback, [1]); }
+    catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+try { array_map(42, null); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+
+$magic = [new EmptyMapMagic, 'missing'];
+echo count(array_map($magic, [])), ':', count(array_map($magic, [], [])), "\n";
+
+try { array_map('trim', [], 1); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { array_map('trim', [], [], true); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { array_map('trim', [], [], [], null); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        output,
+        concat!(
+            "array_map(): Argument #1 ($callback) must be a valid callback or null, first array member is not a valid class name or object\n",
+            "array_map(): Argument #1 ($callback) must be a valid callback or null, first array member is not a valid class name or object\n",
+            "array_map(): Argument #1 ($callback) must be a valid callback or null, second array member is not a valid method\n",
+            "array_map(): Argument #1 ($callback) must be a valid callback or null, second array member is not a valid method\n",
+            "array_map(): Argument #1 ($callback) must be a valid callback or null, second array member is not a valid method\n",
+            "array_map(): Argument #1 ($callback) must be a valid callback or null, no array or string given\n",
+            "0:0\n",
+            "array_map(): Argument #3 must be of type array, int given\n",
+            "array_map(): Argument #4 must be of type array, true given\n",
+            "array_map(): Argument #5 must be of type array, null given\n",
+        )
     );
 }
 
