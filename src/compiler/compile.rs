@@ -28,19 +28,20 @@ use crate::value::{
     canonical_decimal_array_key as canonical_string_literal_array_key,
 };
 use crate::vm::instruction::{
-    ARITHMETIC_COMPOUND_ASSIGN, ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_DYNAMIC_CALL_CLASS,
-    ARRAY_INIT_HASH_HINT, ARRAY_UNPACK_CONSTANT_EXPRESSION, ASSIGN_CV_MOVE_SOURCE,
-    ASSIGN_CV_REBIND, ASSIGN_DIM_KEY_ALREADY_NORMALIZED, ASSIGN_DIM_REFERENCE,
-    ASSIGN_DIM_RESULT_VALUE, ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_CLONE_WITH, ASSIGN_OBJ_MODIFY,
-    ASSIGN_PROP_MOVE_SOURCE, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE,
-    CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_RETURN_EXPLICITLY_IGNORED,
-    CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME,
-    CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_CALL_OWNER, CLASS_CONST_DYNAMIC_NAME,
-    CLASS_CONST_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES, EVAL_FLAG_ERROR_SUPPRESS,
-    FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_ISSET,
-    FETCH_DIM_MUTABLE, FETCH_DIM_SILENT, FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME,
-    FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC,
-    FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT,
+    ARITHMETIC_COMPOUND_ASSIGN, ARRAY_ELEMENT_FINAL_IMMUTABLE_LITERAL,
+    ARRAY_ELEMENT_IMMUTABLE_CONTAINER, ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_DYNAMIC_CALL_CLASS,
+    ARRAY_INIT_HASH_HINT, ARRAY_INIT_IMMUTABLE_LITERAL, ARRAY_UNPACK_CONSTANT_EXPRESSION,
+    ASSIGN_CV_MOVE_SOURCE, ASSIGN_CV_REBIND, ASSIGN_DIM_KEY_ALREADY_NORMALIZED,
+    ASSIGN_DIM_REFERENCE, ASSIGN_DIM_RESULT_VALUE, ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_CLONE_WITH,
+    ASSIGN_OBJ_MODIFY, ASSIGN_PROP_MOVE_SOURCE, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
+    CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS,
+    CALL_FLAG_RETURN_EXPLICITLY_IGNORED, CALL_USER_FUNC_ARRAY_SOURCE_UNPACK,
+    CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_CALL_OWNER,
+    CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES,
+    EVAL_FLAG_ERROR_SUPPRESS, FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_ERROR_SUPPRESS,
+    FETCH_DIM_ISSET, FETCH_DIM_MUTABLE, FETCH_DIM_SILENT, FETCH_DYNAMIC_ERROR_SUPPRESS,
+    FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS,
+    FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT,
     INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
     NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
     OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OpType, PROPERTY_INCDEC_DECREMENT,
@@ -8048,7 +8049,7 @@ impl Compiler {
                 (idx, OpType::Const)
             }
             Expr::StringLiteral(s) => {
-                let idx = self.add_literal(Value::string(s.clone()));
+                let idx = self.add_literal(Value::interned_string(s.clone()));
                 (idx, OpType::Const)
             }
             Expr::Null => {
@@ -9362,6 +9363,17 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::ArrayLiteral(elements) => {
+                // PHP retains a single immutable owner for a scalar constant
+                // array expression. RPHP materializes the same storage at run
+                // time, so carry this compile-time fact in the existing Value
+                // metadata for exact cold diagnostics. References and unpacks
+                // deliberately stay dynamic.
+                let immutable_literal = !elements
+                    .iter()
+                    .any(|element| element.by_reference || element.unpack)
+                    && self
+                        .eval_const_expr_in_source(expr, &self.known_constants)
+                        .is_ok();
                 if self.deferred_error.is_none()
                     && let Some(element) = elements.iter().find(|element| {
                         element.unpack
@@ -9410,10 +9422,13 @@ impl Compiler {
                     }
                     ArrayLiteralStorageHint::Unknown => {}
                 }
+                if immutable_literal && elements.is_empty() {
+                    init._pad |= ARRAY_INIT_IMMUTABLE_LITERAL;
+                }
                 self.instructions.push(init);
 
                 // Add elements
-                for elem in elements {
+                for (element_index, elem) in elements.iter().enumerate() {
                     let (val_op, val_type) = if elem.by_reference {
                         match self.compile_array_element_reference_source(&elem.value) {
                             Ok(source) => (source, OpType::Cv),
@@ -9436,6 +9451,12 @@ impl Compiler {
                     }
                     if elem.by_reference {
                         add._pad |= ARRAY_ELEMENT_REFERENCE;
+                    }
+                    if immutable_literal && element_index + 1 == elements.len() {
+                        add._pad |= ARRAY_ELEMENT_FINAL_IMMUTABLE_LITERAL;
+                    }
+                    if immutable_literal {
+                        add._pad |= ARRAY_ELEMENT_IMMUTABLE_CONTAINER;
                     }
                     add.op1_type = OpType::Tmp;
                     add.op1 = arr_tmp;

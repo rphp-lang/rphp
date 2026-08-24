@@ -6314,7 +6314,10 @@ impl Compiler {
                     let case_name = &case.name;
                     use crate::value::{PhpArray, PhpObject};
                     let mut props = std::collections::HashMap::new();
-                    props.insert("name".to_string(), Value::string(case_name.clone()));
+                    props.insert(
+                        "name".to_string(),
+                        Value::interned_string(case_name.clone()),
+                    );
                     if is_backed {
                         if let Some(val) = case_value {
                             props.insert("value".to_string(), val);

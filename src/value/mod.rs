@@ -2495,6 +2495,33 @@ impl PhpArray {
         self.cursor.set(self.cursor.get() & !ARRAY_CURSOR_PRISTINE);
     }
 
+    /// Preserve Zend's literal-source ownership on the direct refcounted
+    /// children duplicated by the first separation of immutable array storage.
+    fn mark_immutable_cow_children(&mut self) {
+        match &mut self.storage {
+            ArrayStorage::Packed(values) => {
+                for value in values {
+                    value.mark_immutable_array_cow_child();
+                }
+            }
+            ArrayStorage::SmallHash(small) => {
+                for (_, value) in small.entries.iter_mut().flatten() {
+                    value.mark_immutable_array_cow_child();
+                }
+            }
+            ArrayStorage::LinearHash(linear) => {
+                for (_, value) in &mut linear.entries {
+                    value.mark_immutable_array_cow_child();
+                }
+            }
+            ArrayStorage::Hash { entries, .. } => {
+                for (_, value) in entries {
+                    value.mark_immutable_array_cow_child();
+                }
+            }
+        }
+    }
+
     #[inline]
     pub(crate) fn cursor_reset(&self) -> Option<&Value> {
         self.cursor_rewind();
@@ -4699,6 +4726,17 @@ pub(crate) enum CycleNodeKind {
 }
 
 impl Value {
+    /// Type-specific provenance retained in the spare `type_info` bits. For
+    /// strings it identifies compiler-interned storage; for arrays it records
+    /// the extra immutable literal owner that Zend includes in diagnostics.
+    /// The bit is intentionally shared because the low-byte type tag makes
+    /// the two meanings disjoint, preserving the 16-byte Value layout.
+    const IMMUTABLE_PROVENANCE_FLAG: u32 = 1 << 12;
+    /// A refcounted value copied out of immutable literal storage retains one
+    /// logical owner in Zend's op array. The meaning is type-specific: a
+    /// top-level constant array starts with this owner, while strings and
+    /// nested arrays acquire it when an immutable containing array separates.
+    const LITERAL_SOURCE_OWNER_FLAG: u32 = 1 << 13;
     const OWNED_REFERENCE_FLAG: u32 = 1 << 8;
     /// Marks only the frame-local alias that created a local-static cell.
     /// A later declaration of the same static in that frame may replace the
@@ -4815,6 +4853,14 @@ impl Value {
     pub fn string(s: impl Into<String>) -> Self {
         let rc = Rc::new(s.into());
         Self::shared_string(rc)
+    }
+
+    /// Create a PHP source/compiler string whose storage is interned by Zend.
+    #[inline]
+    pub(crate) fn interned_string(s: impl Into<String>) -> Self {
+        let mut value = Self::string(s);
+        value.type_info |= Self::IMMUTABLE_PROVENANCE_FLAG;
+        value
     }
 
     /// Create a string value from an existing owner. Used by immutable
@@ -5487,6 +5533,13 @@ impl Value {
         }
     }
 
+    /// Whether this string came from compiler-interned immutable storage.
+    #[inline]
+    pub(crate) fn is_interned_string(&self) -> bool {
+        self.value_type() == ValueType::String
+            && self.type_info & Self::IMMUTABLE_PROVENANCE_FLAG != 0
+    }
+
     /// Add/remove the strong reference owned by a dynamic callback cache.
     /// String retention is PHP-observable only as memory lifetime: unlike
     /// objects, strings have no destructor side effects.
@@ -5509,6 +5562,7 @@ impl Value {
         if self.value_type() != ValueType::String {
             return None;
         }
+        self.type_info &= !(Self::IMMUTABLE_PROVENANCE_FLAG | Self::LITERAL_SOURCE_OWNER_FLAG);
         let rc_ptr = self.data.ptr as *mut String;
         // Reconstruct Rc without consuming it (ManuallyDrop prevents decrement)
         let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr));
@@ -5538,7 +5592,11 @@ impl Value {
         unsafe {
             let rc_ptr = self.data.ptr as *mut String;
             let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr));
-            (Rc::strong_count(&rc) == 1).then(|| &mut *rc_ptr)
+            if Rc::strong_count(&rc) != 1 {
+                return None;
+            }
+            self.type_info &= !(Self::IMMUTABLE_PROVENANCE_FLAG | Self::LITERAL_SOURCE_OWNER_FLAG);
+            Some(&mut *rc_ptr)
         }
     }
 
@@ -5559,6 +5617,58 @@ impl Value {
             .map(|array| array as *const PhpArray as usize)
     }
 
+    /// Mark a fully materialized compile-time array literal. Zend retains one
+    /// immutable source owner until the first mutation detaches the value.
+    #[inline]
+    pub(crate) fn mark_immutable_array_literal(&mut self) {
+        debug_assert_eq!(self.value_type(), ValueType::Array);
+        self.type_info |= Self::IMMUTABLE_PROVENANCE_FLAG | Self::LITERAL_SOURCE_OWNER_FLAG;
+    }
+
+    /// This literal is stored inside another immutable array. Its contents
+    /// remain immutable, while the outer array becomes its sole source owner.
+    #[inline]
+    pub(crate) fn demote_nested_immutable_array_owner(&mut self) {
+        if self.value_type() == ValueType::Array {
+            self.type_info &= !Self::LITERAL_SOURCE_OWNER_FLAG;
+        }
+    }
+
+    #[inline]
+    pub(crate) fn is_immutable_array_literal(&self) -> bool {
+        self.value_type() == ValueType::Array
+            && self.type_info & Self::IMMUTABLE_PROVENANCE_FLAG != 0
+    }
+
+    #[inline]
+    pub(crate) fn has_array_literal_source_owner(&self) -> bool {
+        self.value_type() == ValueType::Array
+            && self.type_info & Self::LITERAL_SOURCE_OWNER_FLAG != 0
+    }
+
+    /// Mark one direct refcounted child copied while immutable array storage
+    /// separates. Longer strings cease to be interned in Zend at this point;
+    /// nested arrays keep immutable contents but gain the retained source zval.
+    #[inline]
+    fn mark_immutable_array_cow_child(&mut self) {
+        match self.value_type() {
+            ValueType::String if self.as_str().is_some_and(|value| value.len() > 1) => {
+                self.type_info &= !Self::IMMUTABLE_PROVENANCE_FLAG;
+                self.type_info |= Self::LITERAL_SOURCE_OWNER_FLAG;
+            }
+            ValueType::Array if self.is_immutable_array_literal() => {
+                self.type_info |= Self::LITERAL_SOURCE_OWNER_FLAG;
+            }
+            _ => {}
+        }
+    }
+
+    #[inline]
+    pub(crate) fn has_string_literal_source_owner(&self) -> bool {
+        self.value_type() == ValueType::String
+            && self.type_info & Self::LITERAL_SOURCE_OWNER_FLAG != 0
+    }
+
     /// Get mutable array reference with COW semantics.
     /// If sole owner (refcount == 1): returns mutable reference in place (no copy).
     /// If shared (refcount > 1): detaches — clones the PhpArray into a new Rc, updates pointer.
@@ -5567,6 +5677,8 @@ impl Value {
         if self.value_type() != ValueType::Array {
             return None;
         }
+        let immutable_literal = self.is_immutable_array_literal();
+        self.type_info &= !(Self::IMMUTABLE_PROVENANCE_FLAG | Self::LITERAL_SOURCE_OWNER_FLAG);
         unsafe {
             let rc_ptr = self.data.ptr as *mut PhpArray;
             let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr));
@@ -5581,6 +5693,9 @@ impl Value {
                 self.data.ptr = Rc::into_raw(new_rc) as *mut u8;
                 &mut *(self.data.ptr as *mut PhpArray)
             };
+            if immutable_literal {
+                array.mark_immutable_cow_children();
+            }
             array.mark_mutated();
             Some(array)
         }
@@ -5601,6 +5716,11 @@ impl Value {
             let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr));
             if Rc::strong_count(&rc) != 1 {
                 return None;
+            }
+            let immutable_literal = self.is_immutable_array_literal();
+            self.type_info &= !(Self::IMMUTABLE_PROVENANCE_FLAG | Self::LITERAL_SOURCE_OWNER_FLAG);
+            if immutable_literal {
+                (*rc_ptr).mark_immutable_cow_children();
             }
             (*rc_ptr).mark_mutated();
             Some(&mut *rc_ptr)

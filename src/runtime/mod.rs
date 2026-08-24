@@ -5145,6 +5145,12 @@ impl ExecutorGlobals {
         self.static_property_values.get(storage_slot)
     }
 
+    /// Canonical PHP static-property roots for cold ownership diagnostics.
+    /// Compiler defaults and inline caches are deliberately excluded.
+    pub(crate) fn static_property_values(&self) -> &[Value] {
+        &self.static_property_values
+    }
+
     #[inline(always)]
     pub(crate) fn static_property_value_mut(&mut self, storage_slot: usize) -> Option<&mut Value> {
         // Indirect/reference access can publish an object without returning

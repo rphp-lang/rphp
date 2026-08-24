@@ -989,6 +989,123 @@ try { $value->dynamic = 1; } catch (Throwable $error) { echo get_class($error), 
 }
 
 #[test]
+fn debug_zval_dump_counts_php_storage_instead_of_engine_handles() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$literal = 'literal';
+$dynamic = str_repeat('d', 4);
+$dynamicAlias = $dynamic;
+$array = ['n' => 1];
+$arrayAlias = $array;
+$object = new stdClass;
+$objectAlias = $object;
+debug_zval_dump(
+    $literal,
+    $dynamic,
+    $dynamicAlias,
+    $array,
+    $arrayAlias,
+    $object,
+    $objectAlias,
+);
+unset($dynamicAlias, $arrayAlias, $objectAlias);
+debug_zval_dump($dynamic, $array, $object);
+"#,
+        ),
+        concat!(
+            "string(7) \"literal\" interned\n",
+            "string(4) \"dddd\" refcount(4)\n",
+            "string(4) \"dddd\" refcount(4)\n",
+            "array(1) refcount(5){\n  [\"n\"]=>\n  int(1)\n}\n",
+            "array(1) refcount(5){\n  [\"n\"]=>\n  int(1)\n}\n",
+            "object(stdClass)#1 (0) refcount(4){\n}\n",
+            "object(stdClass)#1 (0) refcount(4){\n}\n",
+            "string(4) \"dddd\" refcount(2)\n",
+            "array(1) refcount(3){\n  [\"n\"]=>\n  int(1)\n}\n",
+            "object(stdClass)#1 (0) refcount(2){\n}\n",
+        )
+    );
+}
+
+#[test]
+fn debug_zval_dump_tracks_enum_array_and_reference_owner_transitions() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+enum Signal { case Ready; }
+debug_zval_dump(Signal::Ready);
+$first = Signal::Ready;
+debug_zval_dump($first);
+$second = $first;
+debug_zval_dump($first);
+unset($second);
+debug_zval_dump($first);
+unset($first);
+debug_zval_dump(Signal::Ready);
+
+$base = [1];
+$reference = &$base;
+debug_zval_dump($base, $reference);
+unset($reference);
+debug_zval_dump($base);
+$base[] = 2;
+debug_zval_dump($base);
+"#,
+        ),
+        concat!(
+            "object(Signal)#1 (1) refcount(2){\n",
+            "  [\"name\"]=>\n  string(5) \"Ready\" interned\n}\n",
+            "object(Signal)#1 (1) refcount(3){\n",
+            "  [\"name\"]=>\n  string(5) \"Ready\" interned\n}\n",
+            "object(Signal)#1 (1) refcount(4){\n",
+            "  [\"name\"]=>\n  string(5) \"Ready\" interned\n}\n",
+            "object(Signal)#1 (1) refcount(3){\n",
+            "  [\"name\"]=>\n  string(5) \"Ready\" interned\n}\n",
+            "object(Signal)#1 (1) refcount(2){\n",
+            "  [\"name\"]=>\n  string(5) \"Ready\" interned\n}\n",
+            "array(1) packed refcount(4){\n  [0]=>\n  int(1)\n}\n",
+            "array(1) packed refcount(4){\n  [0]=>\n  int(1)\n}\n",
+            "array(1) packed refcount(3){\n  [0]=>\n  int(1)\n}\n",
+            "array(2) packed refcount(2){\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n",
+        )
+    );
+}
+
+#[test]
+fn debug_zval_dump_tracks_literal_children_across_nested_array_cow() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$literal = ["long", ["deep"]];
+debug_zval_dump($literal);
+$literal[] = "tail";
+debug_zval_dump($literal);
+$literal[1][] = 2;
+debug_zval_dump($literal);
+"#,
+        ),
+        concat!(
+            "array(2) packed refcount(3){\n",
+            "  [0]=>\n  string(4) \"long\" refcount(1)\n",
+            "  [1]=>\n  array(1) packed refcount(1){\n",
+            "    [0]=>\n    string(4) \"deep\" refcount(1)\n  }\n}\n",
+            "array(3) packed refcount(2){\n",
+            "  [0]=>\n  string(4) \"long\" refcount(2)\n",
+            "  [1]=>\n  array(1) packed refcount(2){\n",
+            "    [0]=>\n    string(4) \"deep\" refcount(1)\n  }\n",
+            "  [2]=>\n  string(4) \"tail\" interned\n}\n",
+            "array(3) packed refcount(2){\n",
+            "  [0]=>\n  string(4) \"long\" refcount(2)\n",
+            "  [1]=>\n  array(2) packed refcount(1){\n",
+            "    [0]=>\n    string(4) \"deep\" refcount(2)\n",
+            "    [1]=>\n    int(2)\n  }\n",
+            "  [2]=>\n  string(4) \"tail\" interned\n}\n",
+        )
+    );
+}
+
+#[test]
 fn sensitive_parameter_trace_snapshot_keeps_an_object_alive() {
     assert_eq!(
         run_php_with_source_context(

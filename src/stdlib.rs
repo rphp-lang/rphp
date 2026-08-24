@@ -343,12 +343,7 @@ pub(crate) mod autoload;
 /// references with the same semantics as `arg!` on an ExecuteData frame.
 #[inline(always)]
 fn direct_arg(args: &[Value], index: usize) -> &Value {
-    let value = &args[index];
-    if value.is_reference() {
-        unsafe { &*value.as_ref_ptr() }
-    } else {
-        value
-    }
+    args[index].dereferenced()
 }
 
 #[inline(always)]
@@ -9216,21 +9211,7 @@ fn debug_zval_dump_value(
     eg: &mut ExecutorGlobals,
     ed: *mut ExecuteData,
 ) -> Result<String, VmError> {
-    let dump = var_dump_output_value(value, eg, ed)?;
-    let mut output = String::with_capacity(dump.len() + 32);
-    for line in dump.split_inclusive('\n') {
-        let value_line = line.trim_start();
-        let object_line = value_line.starts_with("object(")
-            || value_line.starts_with("lazy ghost object(")
-            || value_line.starts_with("lazy proxy object(");
-        if object_line && line.ends_with(" {\n") {
-            output.push_str(&line[..line.len() - 3]);
-            output.push_str(" refcount(2){\n");
-        } else {
-            output.push_str(line);
-        }
-    }
-    Ok(output)
+    dump_output_value(value, eg, ed, DumpContext::debug(ed))
 }
 
 fn fn_debug_zval_dump(
@@ -9238,22 +9219,19 @@ fn fn_debug_zval_dump(
     _rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let first_value = arg!(ed, 0).clone();
-    let remaining = arg!(ed, 1)
-        .as_array()
-        .map(|arguments| arguments.values().cloned().collect::<Vec<_>>())
-        .unwrap_or_default();
-    let first = debug_zval_dump_value(&first_value, eg, ed)?;
+    let first = debug_zval_dump_value(arg!(ed, 0), eg, ed)?;
     if eg.exception.is_some() {
         return Ok(());
     }
     eg.write_output(first.as_bytes());
-    for value in remaining {
-        let output = debug_zval_dump_value(&value, eg, ed)?;
-        if eg.exception.is_some() {
-            return Ok(());
+    if let Some(remaining) = arg!(ed, 1).as_array() {
+        for value in remaining.values() {
+            let output = debug_zval_dump_value(value, eg, ed)?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            eg.write_output(output.as_bytes());
         }
-        eg.write_output(output.as_bytes());
     }
     Ok(())
 }
@@ -11852,20 +11830,286 @@ fn array_lookup_values_match(
     array_values_match(needle, value, strict, precision)
 }
 
+#[derive(Clone, Copy)]
+struct DumpContext {
+    debug_zval: bool,
+    execute_data: *mut ExecuteData,
+    immutable_array_member: bool,
+    refcount_bias: usize,
+}
+
+impl DumpContext {
+    const PLAIN: Self = Self {
+        debug_zval: false,
+        execute_data: std::ptr::null_mut(),
+        immutable_array_member: false,
+        refcount_bias: 0,
+    };
+
+    #[inline]
+    fn debug(execute_data: *mut ExecuteData) -> Self {
+        Self {
+            debug_zval: true,
+            execute_data,
+            immutable_array_member: false,
+            refcount_bias: 0,
+        }
+    }
+
+    #[inline]
+    fn child(self) -> Self {
+        Self {
+            immutable_array_member: false,
+            refcount_bias: 0,
+            ..self
+        }
+    }
+
+    #[inline]
+    fn array_member(self, immutable: bool) -> Self {
+        Self {
+            immutable_array_member: immutable,
+            refcount_bias: 0,
+            ..self
+        }
+    }
+
+    #[inline]
+    fn lazy_proxy_instance(self) -> Self {
+        Self {
+            immutable_array_member: false,
+            // Zend's initialized proxy retains its real instance through an
+            // engine-visible owner that is not represented by an ordinary
+            // PHP property or frame slot in RPHP.
+            refcount_bias: 1,
+            ..self
+        }
+    }
+
+    #[inline]
+    fn ownership(self, value: &Value, eg: &ExecutorGlobals) -> PhpVisibleOwnership {
+        php_visible_ownership(value, eg, self.execute_data)
+    }
+
+    #[inline]
+    fn refcount(self, value: &Value, eg: &ExecutorGlobals) -> usize {
+        self.ownership(value, eg).count.max(1) + self.refcount_bias
+    }
+
+    #[inline]
+    fn refcount_with_literal_source(self, value: &Value, eg: &ExecutorGlobals) -> usize {
+        let ownership = self.ownership(value, eg);
+        ownership.count.max(1)
+            + self.refcount_bias
+            + usize::from(!ownership.target_in_immutable_array)
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct PhpVisibleOwnership {
+    count: usize,
+    target_in_immutable_array: bool,
+}
+
+#[derive(Default)]
+struct PhpVisibleOwnerCounter {
+    target: Option<(u8, usize)>,
+    count: usize,
+    target_in_immutable_array: bool,
+    visited_arrays: std::collections::HashSet<usize>,
+    visited_objects: std::collections::HashSet<usize>,
+    visited_references: std::collections::HashSet<usize>,
+}
+
+impl PhpVisibleOwnerCounter {
+    fn new(target: &Value) -> Self {
+        Self {
+            target: dump_owner_identity(target.dereferenced()),
+            ..Self::default()
+        }
+    }
+
+    fn visit(&mut self, value: &Value) {
+        self.visit_from(value, false);
+    }
+
+    fn visit_from(&mut self, value: &Value, immutable_array_member: bool) {
+        if value.is_reference() {
+            let identity = value.reference_identity();
+            if identity.is_some_and(|identity| !self.visited_references.insert(identity)) {
+                return;
+            }
+            self.visit_from(value.dereferenced(), immutable_array_member);
+            return;
+        }
+
+        let identity = dump_owner_identity(value);
+        if identity.is_some() && identity == self.target {
+            self.count += 1;
+            self.target_in_immutable_array |= immutable_array_member;
+        }
+
+        match value.value_type() {
+            ValueType::Array => {
+                let Some(identity) = value.array_identity() else {
+                    return;
+                };
+                if !self.visited_arrays.insert(identity) {
+                    return;
+                }
+                if let Some(array) = value.as_array() {
+                    let immutable = value.is_immutable_array_literal();
+                    for child in array.values() {
+                        self.visit_from(child, immutable);
+                    }
+                }
+            }
+            ValueType::Object => {
+                let Some(identity) = value.object_identity() else {
+                    return;
+                };
+                if !self.visited_objects.insert(identity) {
+                    return;
+                }
+                if let Some(object) = value.as_object() {
+                    object.for_each_property(|_, child| self.visit(child));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn dump_owner_identity(value: &Value) -> Option<(u8, usize)> {
+    match value.value_type() {
+        ValueType::String => value
+            .string_rc_ptr()
+            .map(|pointer| (ValueType::String as u8, pointer as usize)),
+        ValueType::Array => value
+            .array_identity()
+            .map(|identity| (ValueType::Array as u8, identity)),
+        ValueType::Object => value
+            .object_identity()
+            .map(|identity| (ValueType::Object as u8, identity)),
+        ValueType::Closure => value.as_closure().map(|closure| {
+            (
+                ValueType::Closure as u8,
+                closure as *const PhpClosure as usize,
+            )
+        }),
+        _ => None,
+    }
+}
+
+fn php_visible_ownership(
+    target: &Value,
+    eg: &ExecutorGlobals,
+    mut execute_data: *mut ExecuteData,
+) -> PhpVisibleOwnership {
+    let mut counter = PhpVisibleOwnerCounter::new(target);
+    let mut visited_frames = std::collections::HashSet::new();
+    let mut saw_main_frame = false;
+    while !execute_data.is_null() && visited_frames.insert(execute_data as usize) {
+        // SAFETY: debug_zval_dump receives the active call frame, and every
+        // predecessor remains live until this synchronous internal call exits.
+        unsafe {
+            let common = &*(*execute_data).func;
+            if common.fn_type == FunctionType::User {
+                let function = &*((*execute_data).func as *const UserFunction);
+                saw_main_frame |= function.op_array.is_main_script();
+                for (slot, name) in &function.op_array.all_cvs {
+                    let aliases_global = function
+                        .op_array
+                        .global_vars
+                        .iter()
+                        .any(|(global_slot, _)| global_slot == slot);
+                    if !name.starts_with('\0') && !aliases_global {
+                        counter.visit((*execute_data).cv(*slot));
+                    }
+                }
+            } else {
+                // Variadic normalization may retain raw extra-argument slots
+                // after building the canonical variadic array. Only formal
+                // parameter CVs are PHP-visible storage at handler entry.
+                for slot in 0..common.sig.parameter_cv_count() {
+                    counter.visit((*execute_data).cv(slot));
+                }
+            }
+            execute_data = (*execute_data).prev_execute_data;
+        }
+    }
+
+    if !saw_main_frame {
+        for value in eg.globals.values() {
+            counter.visit(value);
+        }
+    }
+
+    for value in eg.static_property_values() {
+        counter.visit(value);
+    }
+    for values in eg.static_vars.values() {
+        for value in values.values() {
+            counter.visit(value);
+        }
+    }
+    for values in eg.dynamic_variables.values() {
+        for value in values.values() {
+            counter.visit(value);
+        }
+    }
+    for value in eg.constant_table.borrow().values() {
+        counter.visit(value);
+    }
+    PhpVisibleOwnership {
+        count: counter.count,
+        target_in_immutable_array: counter.target_in_immutable_array,
+    }
+}
+
+fn dump_object_header(
+    context: DumpContext,
+    value: &Value,
+    prefix: &str,
+    kind: &str,
+    class_name: &str,
+    handle: u32,
+    property_count: usize,
+    eg: &ExecutorGlobals,
+) -> String {
+    if context.debug_zval {
+        format!(
+            "{prefix}{kind}object({class_name})#{handle} ({property_count}) refcount({}){{\n",
+            context.refcount(value, eg)
+        )
+    } else {
+        format!("{prefix}{kind}object({class_name})#{handle} ({property_count}) {{\n")
+    }
+}
+
 fn var_dump_output_value(
     value: &Value,
     eg: &mut ExecutorGlobals,
     ed: *mut ExecuteData,
 ) -> Result<String, VmError> {
+    dump_output_value(value, eg, ed, DumpContext::PLAIN)
+}
+
+fn dump_output_value(
+    value: &Value,
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    context: DumpContext,
+) -> Result<String, VmError> {
     if value.value_type() != ValueType::Object {
-        return Ok(var_dump_value(value, 0, eg));
+        return Ok(dump_value(value, 0, eg, context));
     }
 
     // Retain the receiver across the synchronous user call. __debugInfo() may
     // rebind the variable that supplied var_dump() or initialize a lazy proxy.
     let receiver = value.clone();
     let Some(debug_info) = crate::vm::execute::call_object_debug_info(eg, &receiver)? else {
-        return Ok(var_dump_value(&receiver, 0, eg));
+        return Ok(dump_value(&receiver, 0, eg, context));
     };
     if eg.exception.is_some() {
         return Ok(String::new());
@@ -11901,7 +12145,9 @@ fn var_dump_output_value(
             "__debuginfo() must return an array in {file} on line {line}"
         )));
     };
-    Ok(var_dump_debug_info_object(&receiver, debug_info, 0, eg))
+    Ok(var_dump_debug_info_object(
+        &receiver, debug_info, 0, eg, context,
+    ))
 }
 
 fn var_dump_debug_info_object(
@@ -11909,6 +12155,7 @@ fn var_dump_debug_info_object(
     debug_info: &Value,
     indent: usize,
     eg: &ExecutorGlobals,
+    context: DumpContext,
 ) -> String {
     let prefix = "  ".repeat(indent);
     let object = object_value
@@ -11928,15 +12175,17 @@ fn var_dump_debug_info_object(
     let properties = debug_info
         .as_array()
         .expect("validated debug projection must remain an array");
-    let mut output = format!(
-        "{}{}object({})#{} ({}) {{\n",
-        prefix,
+    let mut output = dump_object_header(
+        context,
+        object_value,
+        &prefix,
         lazy_prefix,
         display_class,
         object_value
             .object_handle()
             .expect("live debug projection receiver must retain its handle"),
-        properties.len()
+        properties.len(),
+        eg,
     );
     drop(object);
 
@@ -11956,6 +12205,7 @@ fn var_dump_debug_info_object(
             indent + 1,
             eg,
             true,
+            context.child(),
             &mut visited_arrays,
             &mut visited_objects,
         ));
@@ -11976,12 +12226,13 @@ fn var_dump_debug_info_key(key: &str) -> String {
     format!("[\"{key}\"]")
 }
 
-fn var_dump_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
+fn dump_value(val: &Value, indent: usize, eg: &ExecutorGlobals, context: DumpContext) -> String {
     var_dump_value_inner(
         val,
         indent,
         eg,
         false,
+        context,
         &mut std::collections::HashSet::new(),
         &mut std::collections::HashSet::new(),
     )
@@ -11992,6 +12243,7 @@ fn var_dump_value_inner(
     indent: usize,
     eg: &ExecutorGlobals,
     show_reference: bool,
+    context: DumpContext,
     visited_arrays: &mut std::collections::HashSet<usize>,
     visited_objects: &mut std::collections::HashSet<usize>,
 ) -> String {
@@ -12001,6 +12253,7 @@ fn var_dump_value_inner(
             indent,
             eg,
             false,
+            context,
             visited_arrays,
             visited_objects,
         );
@@ -12031,7 +12284,24 @@ fn var_dump_value_inner(
         }
         ValueType::String => {
             let s = val.as_str().unwrap();
-            format!("{}string({}) \"{}\"\n", prefix, s.len(), s)
+            if !context.debug_zval {
+                return format!("{}string({}) \"{}\"\n", prefix, s.len(), s);
+            }
+            let annotation = if val.is_interned_string() {
+                if context.immutable_array_member && s.len() > 1 {
+                    format!("refcount({})", context.refcount(val, eg))
+                } else {
+                    "interned".to_string()
+                }
+            } else if val.has_string_literal_source_owner() {
+                format!(
+                    "refcount({})",
+                    context.refcount_with_literal_source(val, eg)
+                )
+            } else {
+                format!("refcount({})", context.refcount(val, eg))
+            };
+            format!("{}string({}) \"{}\" {}\n", prefix, s.len(), s, annotation)
         }
         ValueType::Array => {
             let identity = val
@@ -12041,7 +12311,27 @@ fn var_dump_value_inner(
                 return format!("{}*RECURSION*\n", prefix);
             }
             let arr = val.as_array().unwrap();
-            let mut out = format!("{}array({}) {{\n", prefix, arr.len());
+            let mut out = if context.debug_zval {
+                if arr.is_pristine_empty() {
+                    format!("{}array(0) interned {{\n", prefix)
+                } else {
+                    let packed = if arr.is_packed() { " packed" } else { "" };
+                    format!(
+                        "{}array({}){} refcount({}){{\n",
+                        prefix,
+                        arr.len(),
+                        packed,
+                        if val.has_array_literal_source_owner() {
+                            context.refcount_with_literal_source(val, eg)
+                        } else {
+                            context.refcount(val, eg)
+                        }
+                    )
+                }
+            } else {
+                format!("{}array({}) {{\n", prefix, arr.len())
+            };
+            let member_context = context.array_member(val.is_immutable_array_literal());
             for (key, v) in arr.iter() {
                 let key_str = match &key {
                     ArrayKey::Int(k) => format!("[{}]", k),
@@ -12053,6 +12343,7 @@ fn var_dump_value_inner(
                     indent + 1,
                     eg,
                     true,
+                    member_context,
                     visited_arrays,
                     visited_objects,
                 ));
@@ -12078,28 +12369,39 @@ fn var_dump_value_inner(
                 .filter(|state| !state.initializing);
             let initialized_proxy = lazy_state.and_then(|state| state.proxy_instance.clone());
             let output = if object.class_name.as_ref() == "SensitiveParameterValue" {
-                format!(
-                    "{}object(SensitiveParameterValue)#{} (0) {{\n{}}}\n",
-                    prefix,
+                let mut out = dump_object_header(
+                    context,
+                    val,
+                    &prefix,
+                    "",
+                    "SensitiveParameterValue",
                     val.object_handle()
                         .expect("live sensitive value must retain its object handle"),
-                    prefix,
-                )
+                    0,
+                    eg,
+                );
+                out.push_str(&format!("{}}}\n", prefix));
+                out
             } else if let Some(instance) = initialized_proxy {
-                let mut out = format!(
-                    "{}lazy proxy object({})#{} (1) {{\n{}  [\"instance\"]=>\n",
-                    prefix,
-                    object.class_name,
+                let mut out = dump_object_header(
+                    context,
+                    val,
+                    &prefix,
+                    "lazy proxy ",
+                    &object.class_name,
                     val.object_handle()
                         .expect("live lazy proxy must retain its request-local handle"),
-                    prefix,
+                    1,
+                    eg,
                 );
+                out.push_str(&format!("{}  [\"instance\"]=>\n", prefix));
                 drop(object);
                 out.push_str(&var_dump_value_inner(
                     &instance,
                     indent + 1,
                     eg,
                     true,
+                    context.lazy_proxy_instance(),
                     visited_arrays,
                     visited_objects,
                 ));
@@ -12124,18 +12426,24 @@ fn var_dump_value_inner(
                 } else {
                     internal_name
                 };
-                let mut out = format!(
-                    "{}object(Generator)#{} (1) {{\n{}  [\"function\"]=>\n",
-                    prefix,
+                let mut out = dump_object_header(
+                    context,
+                    val,
+                    &prefix,
+                    "",
+                    "Generator",
                     val.object_handle()
                         .expect("live generator must retain its request-local handle"),
-                    prefix
+                    1,
+                    eg,
                 );
+                out.push_str(&format!("{}  [\"function\"]=>\n", prefix));
                 out.push_str(&var_dump_value_inner(
                     &Value::string(function_name),
                     indent + 1,
                     eg,
                     false,
+                    context.child(),
                     visited_arrays,
                     visited_objects,
                 ));
@@ -12144,18 +12452,24 @@ fn var_dump_value_inner(
             } else if object.class_name.as_ref() == "WeakReference" {
                 drop(object);
                 let target = eg.weak_reference_target(val).unwrap_or_else(Value::null);
-                let mut out = format!(
-                    "{}object(WeakReference)#{} (1) {{\n{}  [\"object\"]=>\n",
-                    prefix,
+                let mut out = dump_object_header(
+                    context,
+                    val,
+                    &prefix,
+                    "",
+                    "WeakReference",
                     val.object_handle()
                         .expect("live WeakReference must retain its object handle"),
-                    prefix,
+                    1,
+                    eg,
                 );
+                out.push_str(&format!("{}  [\"object\"]=>\n", prefix));
                 out.push_str(&var_dump_value_inner(
                     &target,
                     indent + 1,
                     eg,
                     true,
+                    context.child(),
                     visited_arrays,
                     visited_objects,
                 ));
@@ -12164,12 +12478,16 @@ fn var_dump_value_inner(
             } else if object.class_name.as_ref() == "WeakMap" {
                 drop(object);
                 let entries = eg.weak_map_entries(val);
-                let mut out = format!(
-                    "{}object(WeakMap)#{} ({}) {{\n",
-                    prefix,
+                let mut out = dump_object_header(
+                    context,
+                    val,
+                    &prefix,
+                    "",
+                    "WeakMap",
                     val.object_handle()
                         .expect("live WeakMap must retain its object handle"),
                     entries.len(),
+                    eg,
                 );
                 for (index, (key, value)) in entries.iter().enumerate() {
                     out.push_str(&format!(
@@ -12181,6 +12499,7 @@ fn var_dump_value_inner(
                         indent + 2,
                         eg,
                         true,
+                        context.child(),
                         visited_arrays,
                         visited_objects,
                     ));
@@ -12190,6 +12509,7 @@ fn var_dump_value_inner(
                         indent + 2,
                         eg,
                         true,
+                        context.child(),
                         visited_arrays,
                         visited_objects,
                     ));
@@ -12201,6 +12521,7 @@ fn var_dump_value_inner(
                 .class_table
                 .get(object.class_name.as_ref())
                 .is_some_and(|class| class.is_enum)
+                && !context.debug_zval
             {
                 let case = object
                     .get_property("name")
@@ -12235,14 +12556,16 @@ fn var_dump_value_inner(
                     crate::runtime::LazyObjectStrategy::Ghost => "lazy ghost ",
                     crate::runtime::LazyObjectStrategy::Proxy => "lazy proxy ",
                 });
-                let mut out = format!(
-                    "{}{}object({})#{} ({}) {{\n",
-                    prefix,
+                let mut out = dump_object_header(
+                    context,
+                    val,
+                    &prefix,
                     lazy_prefix,
                     display_class,
                     val.object_handle()
                         .expect("live object must retain its request-local handle"),
-                    property_count
+                    property_count,
+                    eg,
                 );
                 if let Some(class) = class {
                     for slot in var_dump_property_slots(eg, object.class_id) {
@@ -12274,6 +12597,7 @@ fn var_dump_value_inner(
                             indent + 1,
                             eg,
                             true,
+                            context.child(),
                             visited_arrays,
                             visited_objects,
                         ));
@@ -12289,6 +12613,7 @@ fn var_dump_value_inner(
                         indent + 1,
                         eg,
                         true,
+                        context.child(),
                         visited_arrays,
                         visited_objects,
                     ));
@@ -12398,9 +12723,15 @@ fn var_dump_value_inner(
                 + usize::from(!static_values.is_empty())
                 + usize::from(closure.bound_this.is_some())
                 + usize::from(!parameters.is_empty());
-            let mut out = format!(
-                "{}object(Closure)#{} ({}) {{\n",
-                prefix, closure.object_handle, property_count
+            let mut out = dump_object_header(
+                context,
+                val,
+                &prefix,
+                "",
+                "Closure",
+                closure.object_handle,
+                property_count,
+                eg,
             );
             let mut append_property = |name: &str, value: &Value| {
                 out.push_str(&format!("{}  [\"{}\"]=>\n", prefix, name));
@@ -12409,6 +12740,7 @@ fn var_dump_value_inner(
                     indent + 1,
                     eg,
                     true,
+                    context.child(),
                     visited_arrays,
                     visited_objects,
                 ));

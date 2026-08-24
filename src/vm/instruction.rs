@@ -349,6 +349,9 @@ pub const ARRAY_INIT_HASH_HINT: u16 = 1;
 /// InitArray flag: op1 is the already-evaluated class half of a dynamic static
 /// call. Validate it before evaluating the method expression.
 pub const ARRAY_INIT_DYNAMIC_CALL_CLASS: u16 = 1 << 1;
+/// Empty compile-time array literal. Non-empty literals are finalized on their
+/// last AddArrayElement so construction mutations do not erase provenance.
+pub const ARRAY_INIT_IMMUTABLE_LITERAL: u16 = 1 << 2;
 
 /// AddArrayUnpack flag: the array literal is being materialized as a PHP
 /// constant expression (for example a constant, parameter default or static
@@ -358,6 +361,12 @@ pub const ARRAY_INIT_DYNAMIC_CALL_CLASS: u16 = 1 << 1;
 pub const ARRAY_UNPACK_CONSTANT_EXPRESSION: u16 = 1;
 /// AddArrayElement flag: preserve the source l-value's PHP reference identity.
 pub const ARRAY_ELEMENT_REFERENCE: u16 = 1 << 1;
+/// Final element of a fully compile-time array literal. Runtime marks the
+/// completed array with Zend's retained immutable-storage provenance.
+pub const ARRAY_ELEMENT_FINAL_IMMUTABLE_LITERAL: u16 = 1 << 2;
+/// Element stored in an immutable outer literal. A nested immutable array keeps
+/// immutable contents but the outer storage becomes its sole source owner.
+pub const ARRAY_ELEMENT_IMMUTABLE_CONTAINER: u16 = 1 << 3;
 
 /// Arithmetic/bitwise opcode flag: the operation is the read phase of a
 /// compound assignment. PHP validates commutative binary operands as an

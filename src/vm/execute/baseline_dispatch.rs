@@ -5523,7 +5523,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // live frame; frame_tmp_set records its heap ownership.
                 unsafe {
                     let result_ptr = (*frame).get_op_mut(opline.result as u32, opline.result_type);
-                    frame_tmp_set(frame, result_ptr, Value::array(array));
+                    let mut value = Value::array(array);
+                    if opline._pad & ARRAY_INIT_IMMUTABLE_LITERAL != 0 {
+                        value.mark_immutable_array_literal();
+                    }
+                    frame_tmp_set(frame, result_ptr, value);
                 }
             }
 
@@ -5540,7 +5544,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // frame. The array TMP is exclusively mutated here; a reference
                 // element aliases either a live CV or its owned reference cell.
                 unsafe {
-                    let cloned_val = if opline._pad & ARRAY_ELEMENT_REFERENCE != 0 {
+                    let mut cloned_val = if opline._pad & ARRAY_ELEMENT_REFERENCE != 0 {
                         let source = (*frame).cv_mut(opline.op2 as u32) as *mut Value;
                         if (*source).is_owned_reference() {
                             (*source).clone_owned_reference_alias()
@@ -5567,6 +5571,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         );
                         val.clone()
                     };
+                    if opline._pad & ARRAY_ELEMENT_IMMUTABLE_CONTAINER != 0 {
+                        cloned_val.demote_nested_immutable_array_owner();
+                    }
                     let arr_ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
                     let arr = &mut *arr_ptr;
                     let php_arr = arr.as_array_mut().ok_or_else(|| {
@@ -5597,6 +5604,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     } else {
                         php_arr.push(cloned_val);
+                    }
+                    if opline._pad & ARRAY_ELEMENT_FINAL_IMMUTABLE_LITERAL != 0 {
+                        arr.mark_immutable_array_literal();
                     }
                 }
             }
