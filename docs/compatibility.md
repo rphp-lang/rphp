@@ -8,6 +8,93 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`htmlspecialchars-decode-decbin-binary-batch`, pinned to php-src 8.5 commit
+`fcc29c8`. `htmlspecialchars_decode()` now decodes exactly one layer of the
+five special-character named and numeric references, applies
+`ENT_NOQUOTES`/`ENT_COMPAT`/`ENT_QUOTES`, and admits `&apos;` only for the
+exercised XML1, XHTML and HTML5 document modes. Its default text hot path
+retains ordinary UTF-8 storage, while explicitly materialized PHP byte strings
+preserve every byte, including NUL and `0x80` through `0xff`.
+
+The same checkpoint registers AMD64 `decbin()` with PHP 8.5's `$num`
+signature, weak/strict integer conversion and 64-bit two's-complement output.
+`chr()` now produces an exact one-byte string across the full `0..255` range
+and emits PHP 8.5's out-of-range deprecation before modulo-256 truncation;
+`ord()` consumes that byte provenance without weakening its established weak
+scalar conversion. The implementation was derived from the public
+[PHP `htmlspecialchars_decode()` contract](https://www.php.net/manual/en/function.htmlspecialchars-decode.php),
+the [PHP `decbin()` contract](https://www.php.net/manual/en/function.decbin.php)
+and PHP 8.5.9 black-box observations. No php-src implementation or test table
+is copied or mechanically translated.
+
+Six original E2E regressions cover quote/document flags, named and numeric
+forms, single-pass behavior, all 256 byte values, embedded NUL, AMD64 integer
+boundaries, named arguments, weak deprecations, strict errors and
+`chr()`/`ord()` round trips. The 11-case supplying slice moves from zero passes
+and ten failures to ten passes and the expected 32-bit-only skip, exactly
+matching PHP 8.5.9. Candidate and oracle manifests are byte-identical with
+SHA-256
+`c4dd974ba5b16fe8097ee129c91d7e48c9147939f73b6accefcd0009c6ed991f`;
+the candidate summary is
+`fe38d4a3319b50db152d72131b51284c815ee2aa701a18dc2fcba447e84cfbc3`,
+and the pre-change manifest is
+`389333c8110d05dc72a2d5ee40a8d84cfe6b2b41591e884e4ce467d738674fdc`.
+
+The complete 733-case `ext/standard/tests/strings` audit moves from 296 to 305
+passes (+9/-0), with 343 failures, 54 skips, 30 unsupported cases, the retained
+`dirname_multi.phpt` timeout and zero crashes. The exact gains are
+`chr_out_of_range.phpt`, `chr_variation1.phpt`,
+`htmlspecialchars_decode_basic.phpt`, the four decode variations 4 through 7,
+`strip_tags_variation6.phpt` and `strncasecmp_variation6.phpt`; there is no
+other status or category movement. The final strings manifest and summary
+SHA-256 values are
+`c149062356840981cbcb7286a43d17b13e5dfc5802abcbb2635736da7467f0b1`
+and `09afce65b1a68d91ef9804998912394102275cfb2b0515fc2d3abf00a4160cb6`.
+
+The complete 842-case array audit remains byte-identical at 822 passes, six
+failures, 13 skips and one unsupported case, and the 5,599-case Zend/lang audit
+remains byte-identical at 4,196 passes, 1,107 failures, 115 skips and 181
+unsupported cases. Neither corpus has an XFAIL, timeout or crash. Their
+manifest SHA-256 values remain
+`083f5588c19ab3fc2e1ae684f98d42c86b0ada8ba3dee3c182d6f42ad8bc751c`
+and `a6c79657d0a6f66f85de63781961e6fc3f8ae64a1796136de8d07749990be70c`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+Production remains at 1,623 unsafe blocks and 289 unsafe functions with 356
+SAFETY annotations. The checkpoint adds no dependency, opcode, frame or value
+layout growth and no unsafe block or function.
+
+On the AMD Ryzen 9 7950X validation machine with 61 GiB RAM, x86-64 Linux
+7.0.0-30, CPU 2 in the `performance` governor and Rust 1.93.1/LLVM 21.1.8,
+two independent CPU-pinned 32-pair default-release controls after three
+warmups put paired median changes at -1.871%/-1.912% for 100 startups,
+-6.365%/-6.491% for the unchanged string control, -0.899%/-0.667% for default
+UTF-8 `html_entity_decode()`, -1.763%/-1.589% for `htmlspecialchars()`,
+-1.911%/-1.349% for `htmlspecialchars_decode()` and -1.851%/-0.892% for
+`ord()`. Every median is below the +5% gate and every sample retains its exact
+checksum. Candidate-only `decbin()` throughput is 6,904,964/6,830,474
+iterations per second with checksum `14951426`; no baseline ratio is claimed
+because the preceding binary does not implement the function.
+
+Baseline/candidate release-binary SHA-256 values are
+`3ac7e3763932d8219b476c3ccfc4e4e970f2a16db5520f1c8fe7fe07eae20cc8` /
+`711b93718fb5bd586d73a780d975d52d37b0144363257e5eef472b10e4c053d0`.
+The transient benchmark harness and accepted-log SHA-256 values are
+`b7a725ccd9517e41d33771ce33e14bb26fc4f906681e114158dcbab7a77f2b45`,
+`59ea37873e589bc9628712546b195c924befceeda847c068c7c15a22bac1556f`
+and `a502302808073a1bd97a373b753232f00b86eec38b3c955c99c9977d68e1fc90`.
+
+This checkpoint does not claim 32-bit execution, compiler/source-literal
+provenance for arbitrary non-UTF-8 escapes, PHP 8.5's remaining `ord()`
+multi-byte deprecations, the other base-conversion functions, complete named-
+entity tables, `ENT_DISALLOWED`, malformed-UTF-8 replacement, optional
+encoding extensions, the remaining 343 strings failures and 30 unsupported
+cases, the inherited strings timeout, the six array failures, the remaining
+1,107 Zend/lang failures or broader PHP compatibility.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `html-entity-numeric-legacy-encoding-batch`, pinned to php-src 8.5 commit
 `fcc29c8`. `html_entity_decode()` now applies PHP 8.5's numeric-reference,
 quote-flag and HTML401/XML1/XHTML/HTML5 document-validity rules to byte-exact

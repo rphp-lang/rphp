@@ -5567,6 +5567,12 @@ impl Value {
             && self.type_info & Self::IMMUTABLE_PROVENANCE_FLAG != 0
     }
 
+    /// Whether this string uses the runtime's lossless PHP byte bridge.
+    #[inline]
+    pub(crate) fn is_binary_string(&self) -> bool {
+        self.value_type() == ValueType::String && self.type_info & Self::BINARY_STRING_FLAG != 0
+    }
+
     /// Byte length of a PHP string, accounting for byte-buffer provenance.
     #[inline]
     pub(crate) fn php_string_len(&self) -> Option<usize> {

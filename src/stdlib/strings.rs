@@ -206,76 +206,51 @@ pub(super) fn fn_htmlspecialchars(
     );
 }
 
-/// htmlspecialchars_decode($string): string
+/// htmlspecialchars_decode($string, $flags = ENT_QUOTES | ENT_SUBSTITUTE): string
 /// Decodes only one layer — `&amp;lt;` becomes `&lt;`, not `<`.
 pub(super) fn fn_htmlspecialchars_decode(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    ret!(rv, Value::string(decode_html_entities(s.as_ref(), false)));
-}
-
-fn decode_html_entities(src: &str, decode_numeric: bool) -> String {
-    // Single-pass decode to avoid chaining issues (e.g. &amp;lt; → &lt; not <).
-    let mut out = String::with_capacity(src.len());
-    let mut i = 0;
-    let bytes = src.as_bytes();
-    while i < bytes.len() {
-        if bytes[i] == b'&' {
-            if src[i..].starts_with("&amp;") {
-                out.push('&');
-                i += 5;
-            } else if src[i..].starts_with("&quot;") {
-                out.push('"');
-                i += 6;
-            } else if src[i..].starts_with("&#039;") {
-                out.push('\'');
-                i += 6;
-            } else if src[i..].starts_with("&lt;") {
-                out.push('<');
-                i += 4;
-            } else if src[i..].starts_with("&gt;") {
-                out.push('>');
-                i += 4;
-            } else if src[i..].starts_with("&apos;") {
-                out.push('\'');
-                i += 6;
-            } else if decode_numeric {
-                let decoded = src[i + 1..].find(';').and_then(|relative_end| {
-                    let entity = &src[i + 1..i + 1 + relative_end];
-                    let codepoint = entity
-                        .strip_prefix("#x")
-                        .or_else(|| entity.strip_prefix("#X"))
-                        .and_then(|digits| u32::from_str_radix(digits, 16).ok())
-                        .or_else(|| {
-                            entity
-                                .strip_prefix('#')
-                                .and_then(|digits| digits.parse::<u32>().ok())
-                        });
-                    codepoint
-                        .and_then(char::from_u32)
-                        .map(|character| (character, relative_end + 2))
-                });
-                if let Some((character, consumed)) = decoded {
-                    out.push(character);
-                    i += consumed;
-                } else {
-                    out.push('&');
-                    i += 1;
-                }
-            } else {
-                out.push('&');
-                i += 1;
-            }
-        } else {
-            let character = src[i..].chars().next().unwrap();
-            out.push(character);
-            i += character.len_utf8();
+    if arg_opt!(ed, 1).is_none() {
+        let argument = arg!(ed, 0);
+        if let Some(source) = argument.as_str()
+            && !argument.is_binary_string()
+        {
+            ret!(
+                rv,
+                Value::string(decode_html_special_references_default_text(source))
+            );
+        }
+        if let Some(source) = argument.php_string_bytes() {
+            ret!(
+                rv,
+                Value::binary_string_from_storage(decode_html_special_references_default(&source))
+            );
         }
     }
-    out
+    let original_bytes = arg!(ed, 0).php_string_bytes().map(Cow::into_owned);
+    let Some(string) =
+        typed_internal_string_argument(ed, eg, "htmlspecialchars_decode", 0, "string")?
+    else {
+        return Ok(());
+    };
+    let flags = if arg_opt!(ed, 1).is_some() {
+        let Some(flags) =
+            typed_internal_int_argument(ed, eg, "htmlspecialchars_decode", 1, "flags")?
+        else {
+            return Ok(());
+        };
+        flags
+    } else {
+        ENT_QUOTES_MASK | ENT_SUBSTITUTE
+    };
+    let source = original_bytes.unwrap_or_else(|| string.into_bytes());
+    ret!(
+        rv,
+        Value::binary_string_from_storage(decode_html_special_references(&source, flags))
+    );
 }
 
 #[derive(Clone, Copy)]
@@ -342,6 +317,139 @@ fn parse_numeric_html_reference(source: &[u8]) -> Option<(u32, usize)> {
         return None;
     }
     Some((codepoint, position + 1))
+}
+
+fn decode_html_special_references_default_text(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut position = 0;
+    while position < source.len() {
+        if source.as_bytes()[position] == b'&' {
+            let tail = &source[position..];
+            if tail.starts_with("&amp;") {
+                out.push('&');
+                position += 5;
+                continue;
+            } else if tail.starts_with("&quot;") {
+                out.push('"');
+                position += 6;
+                continue;
+            } else if tail.starts_with("&#039;") {
+                out.push('\'');
+                position += 6;
+                continue;
+            } else if tail.starts_with("&lt;") {
+                out.push('<');
+                position += 4;
+                continue;
+            } else if tail.starts_with("&gt;") {
+                out.push('>');
+                position += 4;
+                continue;
+            } else if tail.as_bytes().get(1) == Some(&b'#')
+                && let Some((codepoint, consumed)) =
+                    parse_numeric_html_reference(&tail.as_bytes()[1..])
+                && matches!(codepoint, 0x22 | 0x26 | 0x27 | 0x3c | 0x3e)
+            {
+                out.push(char::from(codepoint as u8));
+                position += consumed + 1;
+                continue;
+            }
+        }
+        let character = source[position..]
+            .chars()
+            .next()
+            .expect("position remains on a character boundary");
+        out.push(character);
+        position += character.len_utf8();
+    }
+    out
+}
+
+fn decode_html_special_references_default(source: &[u8]) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut position = 0;
+    while position < source.len() {
+        if source[position] == b'&' {
+            let tail = &source[position..];
+            if tail.starts_with(b"&amp;") {
+                out.push('&');
+                position += 5;
+                continue;
+            } else if tail.starts_with(b"&quot;") {
+                out.push('"');
+                position += 6;
+                continue;
+            } else if tail.starts_with(b"&#039;") {
+                out.push('\'');
+                position += 6;
+                continue;
+            } else if tail.starts_with(b"&lt;") {
+                out.push('<');
+                position += 4;
+                continue;
+            } else if tail.starts_with(b"&gt;") {
+                out.push('>');
+                position += 4;
+                continue;
+            } else if tail.get(1) == Some(&b'#')
+                && let Some((codepoint, consumed)) = parse_numeric_html_reference(&tail[1..])
+                && matches!(codepoint, 0x22 | 0x26 | 0x27 | 0x3c | 0x3e)
+            {
+                out.push(char::from(codepoint as u8));
+                position += consumed + 1;
+                continue;
+            }
+        }
+        out.push(char::from(source[position]));
+        position += 1;
+    }
+    out
+}
+
+fn decode_html_special_references(source: &[u8], flags: i64) -> String {
+    let document = flags & ENT_DOCUMENT_MASK;
+    let mut out = String::with_capacity(source.len());
+    let mut position = 0;
+    while position < source.len() {
+        if source[position] != b'&' {
+            out.push(char::from(source[position]));
+            position += 1;
+            continue;
+        }
+
+        let tail = &source[position + 1..];
+        let parsed = if tail.first() == Some(&b'#') {
+            parse_numeric_html_reference(tail)
+                .filter(|(codepoint, _)| matches!(*codepoint, 0x22 | 0x26 | 0x27 | 0x3c | 0x3e))
+        } else {
+            Some(match tail {
+                tail if tail.starts_with(b"amp;") => (0x26, 4),
+                tail if tail.starts_with(b"lt;") => (0x3c, 3),
+                tail if tail.starts_with(b"gt;") => (0x3e, 3),
+                tail if tail.starts_with(b"quot;") => (0x22, 5),
+                tail if tail.starts_with(b"apos;")
+                    && matches!(document, ENT_XML1 | ENT_XHTML | ENT_HTML5) =>
+                {
+                    (0x27, 5)
+                }
+                _ => {
+                    out.push('&');
+                    position += 1;
+                    continue;
+                }
+            })
+        };
+        if let Some((codepoint, consumed)) = parsed
+            && html_quote_reference_allowed(codepoint, flags)
+        {
+            out.push(char::from_u32(codepoint).expect("special HTML code points are ASCII"));
+            position += consumed + 1;
+            continue;
+        }
+        out.push('&');
+        position += 1;
+    }
+    out
 }
 
 fn named_html_reference(source: &[u8], document: i64) -> Option<(u32, usize)> {
@@ -902,14 +1010,26 @@ pub(super) fn fn_chunk_split(
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_html_entities, direct_chunk_split};
+    use super::{ENT_HTML5, ENT_QUOTES_MASK, decode_html_special_references, direct_chunk_split};
     use crate::value::Value;
 
     #[test]
-    fn entity_decode_is_single_pass_and_numeric_mode_is_explicit() {
-        let source = "&amp;lt;&lt;&#65;&#x41;";
-        assert_eq!(decode_html_entities(source, false), "&lt;<&#65;&#x41;");
-        assert_eq!(decode_html_entities(source, true), "&lt;<AA");
+    fn special_entity_decode_is_single_pass_flags_aware_and_bounded() {
+        const ENT_NOQUOTES: i64 = 0;
+        const ENT_COMPAT: i64 = 2;
+        let source = b"&amp;lt;|&quot;|&#34;|&apos;|&#39;|&lt;|&#60;|&#65;";
+        assert_eq!(
+            decode_html_special_references(source, ENT_NOQUOTES),
+            "&lt;|&quot;|&#34;|&apos;|&#39;|<|<|&#65;"
+        );
+        assert_eq!(
+            decode_html_special_references(source, ENT_COMPAT),
+            "&lt;|\"|\"|&apos;|&#39;|<|<|&#65;"
+        );
+        assert_eq!(
+            decode_html_special_references(source, ENT_QUOTES_MASK | ENT_HTML5),
+            "&lt;|\"|\"|'|'|<|<|&#65;"
+        );
     }
 
     #[test]

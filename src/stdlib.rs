@@ -7069,10 +7069,16 @@ fn fn_number_format(
 
 #[inline(always)]
 fn direct_ord(args: &[Value]) -> Result<Value, VmError> {
-    let s = direct_arg_str(args, 0);
-    Ok(Value::long(
-        s.as_bytes().first().copied().unwrap_or(0) as i64
-    ))
+    let byte = if let Some(bytes) = args.first().and_then(Value::php_string_bytes) {
+        bytes.first().copied().unwrap_or(0)
+    } else {
+        direct_arg_str(args, 0)
+            .as_bytes()
+            .first()
+            .copied()
+            .unwrap_or(0)
+    };
+    Ok(Value::long(i64::from(byte)))
 }
 
 fn fn_ord(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -7091,15 +7097,20 @@ fn fn_ord(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Res
 }
 
 fn fn_chr(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    if arg!(ed, 0).dereferenced().value_type() == ValueType::Null {
+    let Some(codepoint) = typed_internal_int_argument(ed, eg, "chr", 0, "codepoint")? else {
+        return Ok(());
+    };
+    if !(0..=255).contains(&codepoint) {
         report_internal_deprecation(
             eg,
             ed,
-            "chr(): Passing null to parameter #1 ($codepoint) of type int is deprecated",
+            "chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256",
         )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
     }
-    let code = (arg_long!(ed, 0) & 0xFF) as u8;
-    ret!(rv, Value::string(String::from(code as char)));
+    ret!(rv, Value::binary_string(&[(codepoint & 0xff) as u8]));
 }
 
 fn fn_bin2hex(
@@ -19828,6 +19839,17 @@ fn fn_base_convert(
         return Ok(());
     };
     ret!(rv, Value::string(output));
+}
+
+fn fn_decbin(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(number) = typed_internal_int_argument(ed, eg, "decbin", 0, "num")? else {
+        return Ok(());
+    };
+    ret!(rv, Value::string(format!("{:b}", number as u64)));
 }
 
 #[cfg(test)]

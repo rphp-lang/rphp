@@ -2295,6 +2295,34 @@ next goal by this order unless an explicit project objective overrides it:
 5. Reflection and standard-library clusters with measured dependency reach;
 6. isolated low-fanout features and optional extensions.
 
+The `htmlspecialchars-decode-decbin-binary-batch` checkpoint gives
+`htmlspecialchars_decode()` PHP 8.5's quote/document flags, named and numeric
+special-character references, single-pass behavior and byte-exact output.
+`decbin()` covers AMD64 two's-complement boundaries and typed conversion;
+`chr()` and `ord()` now round-trip explicitly materialized bytes while
+retaining weak scalar `ord()` calls and PHP 8.5's `chr()` deprecations. Six
+original E2E regressions cover the admitted flag, byte, typing, diagnostic and
+integer boundaries without copying php-src source or tests.
+
+The 11 supplying cases move from zero passes and ten failures to ten passes
+plus one 32-bit-only skip, exactly matching PHP 8.5.9. The complete 733-case
+strings audit moves from 296 to 305 passes, an exact +9/-0 delta with no other
+status/category movement. Array remains byte-identical at 822/842 and
+Zend/lang at 4,196/5,599, without a new timeout or crash.
+
+All five Cargo configurations, all-target, formatting, runner, unsafe,
+Composer S0, four Symfony S1 gates and PHP 8.5 S2/S3 pass. Two independent
+CPU-pinned 32-pair release controls put paired medians at -1.871%/-1.912% for
+startup, -6.365%/-6.491% for the string control, -0.899%/-0.667% for default
+UTF-8 entity decode, -1.763%/-1.589% for `htmlspecialchars()`,
+-1.911%/-1.349% for `htmlspecialchars_decode()` and -1.851%/-0.892% for
+`ord()`, below the +5% gate with exact checksums. Candidate-only `decbin()`
+reaches 6.905/6.830 million iterations per second; no unavailable-baseline
+ratio is claimed. Source-literal binary provenance, remaining `ord()`
+deprecations, 32-bit execution, other base conversion, full named entities,
+malformed-UTF-8 replacement and the remaining corpus gaps stay explicit
+nonclaims.
+
 The `html-entity-numeric-legacy-encoding-batch` checkpoint gives
 `html_entity_decode()` a byte-exact numeric-reference path for UTF-8 and the
 PHP 8.5 single-byte encodings ISO-8859-1, ISO-8859-15, ISO-8859-5, CP866,

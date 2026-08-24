@@ -1596,6 +1596,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "from_base",
         "to_base"
     );
+    reg!("decbin", fn_decbin, 1, 1, "num");
 
     // --- Environment / system ---
     reg!("getenv", fn_getenv, 1, 1, "name");
