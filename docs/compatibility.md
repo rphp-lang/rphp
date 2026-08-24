@@ -8,6 +8,81 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`array-multisort-argument-contract-batch`, pinned to php-src 8.5 commit
+`fcc29c8` and implementation commit `9f31a595`. `array_multisort()` now
+classifies every fixed and variadic argument through one stateful contract:
+arrays open a new column, direction and comparison flags may each occur once
+per column, duplicate valid flags are distinguished from invalid integer flags,
+and non-integer values retain their separate type error. The resulting PHP 8.5
+`TypeError`/`ValueError` class, argument number, first-parameter name, wording
+and validation order are exact for the admitted cases.
+
+Two-to-five-row `array_multisort()` inputs use PHP 8.5's observable stable
+small-sort comparison schedule. This makes nested diagnostics from object
+numeric conversion reentrant without storing request-global sort state: an
+error handler can invoke another `array_multisort()`, its exception is caught,
+the outer three-row operation still returns successfully, and the original
+stable order is retained. Inputs of six or more rows keep the preceding direct
+closure and bottom-up merge path unchanged.
+
+Two original E2E regressions cover fixed/variadic validation, both duplicate
+flag classes, invalid flags, foreign types, an aliased second column and nested
+diagnostics with stable outer state. The four focused supplying PHPTs pass 4/4:
+`gh19300_2.phpt` and `array_multisort_variation{1,2,3}.phpt`; the focused
+manifest SHA-256 is
+`f9482ee74d6a2ccb2f8cd9eb869876a5f0c5024c23acc23c6b9b8c1dcf16bdb9`.
+PHP 8.5.9 passes the same four cases; its oracle manifest SHA-256 is
+`d8283510448bd2b6cd5815e4bc1af6395ba659dfc0986e5333867f1bb1d653bb`.
+
+The complete 842-case `ext/standard/tests/array` audit moves from 807 to 811
+passes (+4/-0), with 17 failures, 13 skips, one unsupported case and zero
+XFAIL, timeout or crash. The gains are exactly the four supplying cases. Two
+final manifests and summaries are respectively byte-identical with SHA-256
+`2abce3f22124dc27290bfff070f95f287a3aeb20123291b383483c5a24566537`
+and `153e3826f70aad24d3dd792b2d8232ebf671c2c40bdf4ad7ffb0c2c5fd7c0473`.
+The separate 5,599-case `Zend/tests` and `tests/lang` gate remains exactly at
+4,187 passes, 1,116 failures, 115 skips and 181 unsupported cases with zero
+XFAIL, timeout or crash. Its two final manifests and summaries are respectively
+byte-identical with SHA-256
+`fd63812ae652d3022296ca4b6c89574e4ad37d8969ee7e8dff99dddbca4bd453`
+and `5fd16c18e3cbac6ec8d787fbc6c7d5dcf8672b4daa730bd5ea3c9bc861981ac5`;
+the exact status set is unchanged from the retained baseline.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The
+storage-bounded matrix ran without incremental artifacts or test debug symbols
+and invoked the cleanup hook before, between and after configurations.
+Production remains at 1,623 unsafe blocks and 289 unsafe functions, with 355
+SAFETY annotations. The implementation adds no dependency, opcode, compiler,
+VM-frame, executor-global or PHP value/object/array layout change and no unsafe
+block or function.
+
+On performance-governor AMD64 CPU 2, 32 balanced alternating release pairs
+after three warmups give paired median changes of -0.251% for 100 empty
+requests and +0.195% for the published 150,000-row two-column
+`array_multisort()` workload. Independent median changes are respectively
+-0.395% and -0.365%; the sort paired p10/p90 range is -2.836%/+2.442%, all
+checksums match PHP 8.5.9, no sample was excluded and both lanes remain below
+the +5% regression ceiling. Baseline/candidate release-binary SHA-256 values
+are `27b567ad359c9eef82a78ead48c823cee2a317789f9c43edb05a3d277a6f6592` /
+`60e0de885576d0b364dfeb51138eabd22d45d2f7dea98a9836b0d954014cf54d`.
+The benchmark harness/final-log SHA-256 values are
+`c1b738c78fff01f42e5a179b95c108819e084bbb58126755fedfa3759962bf9d` /
+`f23e9cffca01c63212302686580d4b78d7df28cd732842938b70d6cda44babc0`.
+An initial shared-reference closure arrangement was rejected after a noisy
++6.413% paired sort median; restoring the preceding direct closure exclusively
+for six-or-more-row inputs produced the accepted independent rerun above.
+
+This checkpoint does not claim PHP's implementation-specific comparison
+schedule for non-transitive mixed values in
+`array_multisort_variation{7,9}.phpt`, `internal_sorts_basic.phpt`,
+`rsort_variation11.phpt` or `sort_variation11.phpt`, magic-method trace parity,
+partial permutation after a throwing comparison, the remaining 17 array-suite
+failures, the 1,116 Zend/lang failures or broader PHP compatibility. These
+remain explicit evidence-driven follow-up work.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `array-user-sort-callback-contract-batch`, pinned to php-src 8.5 commit
 `fcc29c8` and implementation commit `ab6ca6f4`. `usort()`, `uasort()` and
 `uksort()` now share a PHP 8.5 callback boundary. Comparator parameters are
