@@ -8,6 +8,75 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`array-user-sort-callback-contract-batch`, pinned to php-src 8.5 commit
+`fcc29c8` and implementation commit `ab6ca6f4`. `usort()`, `uasort()` and
+`uksort()` now share a PHP 8.5 callback boundary. Comparator parameters are
+temporary values even when the sorted member is a reference; a hard-reference
+declaration emits the exact warning for each supplied argument before every
+invocation. The structural snapshot retains the original reference cells, and
+the final permutation republishes only PHP-visible aliases while reindexing or
+preserving keys according to the selected API.
+
+A boolean comparator result emits one deprecation per sort operation. `true`
+orders the left member after the right; `false` invokes the comparator once
+more with reversed operands and reverses the sign of that result, preserving
+legacy boolean comparators and their observable callback effects. Integer and
+other comparator results keep their ordinary sign contract. The existing
+guarded scalar-Long sort proof remains unchanged and rejects reference-bearing
+inputs before its fast path.
+
+Two original array-sort E2E regressions cover `usort()` and `uasort()` alias
+write-through, all three APIs' hard-reference warnings, one bool deprecation
+per operation and the exact reversed-callback trace. The six focused supplying
+PHPTs pass 6/6: `array_user_key_compare.phpt`, `uasort_variation10.phpt`,
+`uasort_variation7.phpt`, `usort_variation11.phpt`, `usort_variation7.phpt`
+and `usort_variation9.phpt`; the focused manifest SHA-256 is
+`1b8a1f0454e79b3e600081ca844ec2503e6c22cc276b28dfd556a06de3a4fd6d`.
+
+The complete 842-case `ext/standard/tests/array` audit moves from 801 to 807
+passes (+6/-0), with 21 failures, 13 skips, one unsupported case and zero
+XFAIL, timeout or crash. The gains are exactly the six supplying cases. Two
+final manifests and summaries are respectively byte-identical with SHA-256
+`e829179e89a209f2e659c03e8fce1a3be155268f86630fd7c0719be02fe2f4d4`
+and `6c0523f83fea638d23a04ef26ebb1ede8e5818bbeff870b17d6acfd3417dbc77`.
+The separate 5,599-case `Zend/tests` and `tests/lang` gate remains exactly at
+4,187 passes, 1,116 failures, 115 skips and 181 unsupported cases with zero
+XFAIL, timeout or crash. Its two final manifests and summaries are respectively
+byte-identical with SHA-256
+`fd63812ae652d3022296ca4b6c89574e4ad37d8969ee7e8dff99dddbca4bd453`
+and `79bc1c2fd92a19ab363d3ac3cd5b3d58b33395aa4aa7fad68ffc64223e6c60b3`;
+the exact status set is unchanged from the retained baseline.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The
+storage-bounded matrix ran without incremental artifacts or test debug symbols
+and invoked the cleanup hook between configurations. Production remains at
+1,623 unsafe blocks and 289 unsafe functions, with 355 SAFETY annotations. The
+implementation adds no dependency, opcode, compiler, VM-frame,
+executor-global or PHP value/object/array layout change and no unsafe block or
+function.
+
+On performance-governor AMD64 CPU 2, 32 balanced alternating release pairs
+after three warmups give paired median changes of +0.218% for 100 empty
+requests, +0.970% for subtraction-based scalar-Long `usort()`, +1.204% for
+spaceship scalar-Long `usort()` and +0.416% for an impure canonical callback.
+Independent median changes are respectively -0.756%, +1.562%, +0.818% and
++0.281%; all checksums match and every lane remains below the +5% regression
+ceiling. Baseline/candidate release-binary SHA-256 values are
+`c50527dd4e37382444deb3b7a8f97d7af947794c8c62a3ffc370487a7c88900d` /
+`27b567ad359c9eef82a78ead48c823cee2a317789f9c43edb05a3d277a6f6592`.
+The benchmark harness/final-log SHA-256 values are
+`97b58b831426cbf0c292305ee808b08ef94936e8b71452b4ce7f1f1a4914fe9b` /
+`b51ba67b1c908c836ebd4003bd6f37f080c84bd3d27a6332cc72976f73799cbe`.
+
+This checkpoint does not claim the separate `array_udiff()` callback-cache
+case, PHP's implementation-specific mixed-value comparison schedule, partial
+permutation after a throwing comparator, the remaining 21 array-suite
+failures, the 1,116 Zend/lang failures or broader PHP compatibility. These
+remain explicit evidence-driven follow-up work.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `array-map-callback-contract-batch`, pinned to php-src 8.5 commit `fcc29c8`
 and implementation commit `47f9014f`. `array_map()` now validates and resolves
 its callback before validating the first and variadic array arguments, reports
