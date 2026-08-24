@@ -198,6 +198,14 @@ fn test_float_whole_number_display() {
     assert_eq!(run_php("<?php echo 3.0;"), "3");
 }
 
+#[test]
+fn leading_dot_float_literals_match_php_numeric_and_concat_boundaries() {
+    assert_eq!(
+        run_php("<?php var_dump(.5, -.5, +.5, .5e2, .5e-2, .1_2); $x = 1; var_dump($x . 5);",),
+        "float(0.5)\nfloat(-0.5)\nfloat(0.5)\nfloat(50)\nfloat(0.005)\nfloat(0.12)\nstring(2) \"15\"\n",
+    );
+}
+
 // ========== Unary minus ==========
 
 #[test]

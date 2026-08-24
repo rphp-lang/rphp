@@ -518,6 +518,8 @@ impl<'a> Lexer<'a> {
                     } else if self.peek_next() == Some(b'=') {
                         tokens.push(Token::DotAssign);
                         self.pos += 2;
+                    } else if self.peek_next().is_some_and(|byte| byte.is_ascii_digit()) {
+                        tokens.push(self.read_number()?);
                     } else {
                         tokens.push(Token::Dot);
                         self.pos += 1;
@@ -1524,6 +1526,31 @@ mod tests {
 
         assert!(tokens.contains(&Token::Float(10.0)));
         assert!(tokens.contains(&Token::Float(-0.0)));
+    }
+
+    #[test]
+    fn float_literal_may_omit_its_integer_part() {
+        let tokens = Lexer::new("<?php echo .5, .5e2, .1_2, 1..5, 1 . 5;")
+            .tokenize()
+            .unwrap();
+
+        assert_eq!(
+            tokens
+                .iter()
+                .filter_map(|token| match token {
+                    Token::Float(value) => Some(*value),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![0.5, 50.0, 0.12, 1.0, 0.5]
+        );
+        assert_eq!(
+            tokens
+                .iter()
+                .filter(|token| matches!(token, Token::Dot))
+                .count(),
+            1
+        );
     }
 
     #[test]
