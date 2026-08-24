@@ -610,6 +610,18 @@ impl<'a> Lexer<'a> {
                         current.push('\t');
                         pos += 1;
                     }
+                    b'e' => {
+                        current.push('\u{1b}');
+                        pos += 1;
+                    }
+                    b'f' => {
+                        current.push('\u{c}');
+                        pos += 1;
+                    }
+                    b'v' => {
+                        current.push('\u{b}');
+                        pos += 1;
+                    }
                     b'\\' => {
                         current.push('\\');
                         pos += 1;

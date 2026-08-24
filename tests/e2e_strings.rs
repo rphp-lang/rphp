@@ -155,6 +155,32 @@ echo $value;
 }
 
 #[test]
+fn scalar_literals_flow_through_array_selection_and_transform_functions() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$scalars = [TrUe, fAlSe, nUlL];
+$filtered = array_filter($scalars);
+echo count($filtered), ':', (int) $filtered[0], '|';
+echo array_rand([TrUe]), '|';
+
+$escapes = "\e\f\v";
+$document = <<<TEXT
+\e\f\v
+TEXT;
+echo bin2hex($escapes), ':', bin2hex($document), '|';
+echo count(array_diff([$escapes], ["\x1b\x0c\x0b"])), '|';
+echo bin2hex(array_reverse([$escapes])[0]), '|';
+$values = [];
+array_unshift($values, $escapes);
+echo bin2hex($values[0]);
+"#,
+        ),
+        "1:1|0|1b0c0b:1b0c0b|0|1b0c0b|1b0c0b"
+    );
+}
+
+#[test]
 fn test_e2e_single_quote_literal_backslash_n() {
     assert_eq!(run_php("<?php echo 'a\\nb';"), "a\\nb");
 }

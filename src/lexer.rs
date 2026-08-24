@@ -791,9 +791,9 @@ impl<'a> Lexer<'a> {
                         "endswitch" => tokens.push(Token::EndSwitch),
                         "case" => tokens.push(Token::Case(line)),
                         "default" => tokens.push(Token::Default(line)),
-                        "null" | "NULL" => tokens.push(Token::Null),
-                        "true" | "TRUE" => tokens.push(Token::True),
-                        "false" | "FALSE" => tokens.push(Token::False),
+                        ident if ident.eq_ignore_ascii_case("null") => tokens.push(Token::Null),
+                        ident if ident.eq_ignore_ascii_case("true") => tokens.push(Token::True),
+                        ident if ident.eq_ignore_ascii_case("false") => tokens.push(Token::False),
                         "array" => tokens.push(Token::ArrayKw),
                         "foreach" => tokens.push(Token::Foreach { line }),
                         "endforeach" => tokens.push(Token::EndForeach),
@@ -1203,6 +1203,36 @@ mod tests {
         assert!(matches!(tokens[2], Token::PipeGreater(1)));
         assert!(tokens.iter().any(|token| *token == Token::Pipe));
         assert!(tokens.iter().any(|token| *token == Token::PipePipe));
+    }
+
+    #[test]
+    fn scalar_literal_keywords_are_ascii_case_insensitive() {
+        let tokens = Lexer::new("<?php [TrUe, fAlSe, nUlL];").tokenize().unwrap();
+
+        assert!(
+            tokens
+                .windows(3)
+                .any(|tokens| { tokens == [Token::True, Token::Comma(1), Token::False] })
+        );
+        assert!(tokens.contains(&Token::Null));
+    }
+
+    #[test]
+    fn double_quoted_and_heredoc_control_escapes_match_php() {
+        let tokens = Lexer::new("<?php echo \"\\e\\f\\v|\\E\\F\\V\"; echo <<<TXT\n\\e\\f\\v\nTXT;")
+            .tokenize()
+            .unwrap();
+
+        assert_eq!(
+            tokens
+                .iter()
+                .filter_map(|token| match token {
+                    Token::StringLiteral(value) => Some(value.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec!["\u{1b}\u{c}\u{b}|\\E\\F\\V", "\u{1b}\u{c}\u{b}"]
+        );
     }
 
     fn echo(line: usize) -> Token {
