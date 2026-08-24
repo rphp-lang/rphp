@@ -2561,6 +2561,62 @@ fn print_r_return_mode_returns_without_writing_output() {
 }
 
 #[test]
+fn print_r_renders_ordinary_object_visibility_nesting_and_recursion() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ParentRecord {
+    public $visible = 1;
+    protected $guarded = 2;
+    private $secret = 3;
+    public $nested = ['x' => 4];
+    public $self;
+}
+class ChildRecord extends ParentRecord { private $secret = 5; }
+$record = new ChildRecord;
+$record->self = $record;
+print_r($record);
+print_r(['record' => $record]);
+"#,
+        ),
+        concat!(
+            "ChildRecord Object\n",
+            "(\n",
+            "    [visible] => 1\n",
+            "    [guarded:protected] => 2\n",
+            "    [secret:ParentRecord:private] => 3\n",
+            "    [nested] => Array\n",
+            "        (\n",
+            "            [x] => 4\n",
+            "        )\n",
+            "\n",
+            "    [self] => ChildRecord Object\n",
+            " *RECURSION*\n",
+            "    [secret:ChildRecord:private] => 5\n",
+            ")\n",
+            "Array\n",
+            "(\n",
+            "    [record] => ChildRecord Object\n",
+            "        (\n",
+            "            [visible] => 1\n",
+            "            [guarded:protected] => 2\n",
+            "            [secret:ParentRecord:private] => 3\n",
+            "            [nested] => Array\n",
+            "                (\n",
+            "                    [x] => 4\n",
+            "                )\n",
+            "\n",
+            "            [self] => ChildRecord Object\n",
+            " *RECURSION*\n",
+            "            [secret:ChildRecord:private] => 5\n",
+            "        )\n",
+            "\n",
+            ")\n",
+        )
+    );
+}
+
+#[test]
 fn enum_print_r_and_var_export_preserve_case_identity() {
     assert_eq!(
         run_php(

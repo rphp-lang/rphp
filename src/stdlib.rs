@@ -11671,27 +11671,51 @@ fn stable_sort_small_checked<T, E>(
     entries: &mut [T],
     mut compare: impl FnMut(&T, &T) -> Result<std::cmp::Ordering, E>,
 ) -> Result<(), E> {
-    if entries.len() < 2 {
-        return Ok(());
+    let completed =
+        stable_sort_small_optional_checked(entries, |left, right| compare(left, right).map(Some))?;
+    debug_assert!(
+        completed,
+        "an infallible small-sort comparison cannot abort"
+    );
+    Ok(())
+}
+
+/// Return `false` without issuing another comparison when the callback asks
+/// the caller to preserve an already-published exception.
+fn stable_sort_small_optional_checked<T, E>(
+    entries: &mut [T],
+    mut compare: impl FnMut(&T, &T) -> Result<Option<std::cmp::Ordering>, E>,
+) -> Result<bool, E> {
+    macro_rules! compare_or_abort {
+        ($left:expr, $right:expr) => {
+            match compare($left, $right)? {
+                Some(ordering) => ordering,
+                None => return Ok(false),
+            }
+        };
     }
-    let first = compare(&entries[0], &entries[1])?;
+
+    if entries.len() < 2 {
+        return Ok(true);
+    }
+    let first = compare_or_abort!(&entries[0], &entries[1]);
     if first == std::cmp::Ordering::Greater {
         entries.swap(0, 1);
     }
     if entries.len() == 2 {
-        return Ok(());
+        return Ok(true);
     }
 
     if first == std::cmp::Ordering::Greater {
-        if compare(&entries[2], &entries[0])? == std::cmp::Ordering::Less {
+        if compare_or_abort!(&entries[2], &entries[0]) == std::cmp::Ordering::Less {
             entries.swap(1, 2);
             entries.swap(0, 1);
-        } else if compare(&entries[1], &entries[2])? == std::cmp::Ordering::Greater {
+        } else if compare_or_abort!(&entries[1], &entries[2]) == std::cmp::Ordering::Greater {
             entries.swap(1, 2);
         }
-    } else if compare(&entries[1], &entries[2])? == std::cmp::Ordering::Greater {
+    } else if compare_or_abort!(&entries[1], &entries[2]) == std::cmp::Ordering::Greater {
         entries.swap(1, 2);
-        if compare(&entries[0], &entries[1])? == std::cmp::Ordering::Greater {
+        if compare_or_abort!(&entries[0], &entries[1]) == std::cmp::Ordering::Greater {
             entries.swap(0, 1);
         }
     }
@@ -11699,14 +11723,16 @@ fn stable_sort_small_checked<T, E>(
     for index in 3..entries.len() {
         let mut current = index;
         while current > 0 {
-            if compare(&entries[current - 1], &entries[current])? != std::cmp::Ordering::Greater {
+            if compare_or_abort!(&entries[current - 1], &entries[current])
+                != std::cmp::Ordering::Greater
+            {
                 break;
             }
             entries.swap(current - 1, current);
             current -= 1;
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 fn stable_sort_checked<T, E>(
@@ -12459,6 +12485,18 @@ fn var_dump_property_slots(eg: &ExecutorGlobals, class_id: u32) -> Vec<usize> {
 }
 
 fn print_r_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
+    let mut visited_arrays = std::collections::HashSet::new();
+    let mut visited_objects = std::collections::HashSet::new();
+    print_r_value_inner(val, indent, eg, &mut visited_arrays, &mut visited_objects)
+}
+
+fn print_r_value_inner(
+    val: &Value,
+    indent: usize,
+    eg: &ExecutorGlobals,
+    visited_arrays: &mut std::collections::HashSet<usize>,
+    visited_objects: &mut std::collections::HashSet<usize>,
+) -> String {
     let val = val.dereferenced();
     match val.value_type() {
         ValueType::Null => String::new(),
@@ -12469,6 +12507,12 @@ fn print_r_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
         ValueType::String => val.as_str().unwrap().to_string(),
         ValueType::Array => {
             let arr = val.as_array().unwrap();
+            let identity = val
+                .array_identity()
+                .expect("live print_r array must retain an identity");
+            if !visited_arrays.insert(identity) {
+                return "Array\n *RECURSION*".to_string();
+            }
             // print_r() indents a nested array's body relative to both the
             // containing key and its `=>` value column.
             let prefix = "    ".repeat(indent * 2);
@@ -12484,11 +12528,12 @@ fn print_r_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
                     "{}[{}] => {}",
                     inner,
                     key_str,
-                    print_r_value(v, indent + 1, eg)
+                    print_r_value_inner(v, indent + 1, eg, visited_arrays, visited_objects,)
                 ));
                 out.push('\n');
             }
             out.push_str(&format!("{})\n", prefix));
+            visited_arrays.remove(&identity);
             out
         }
         ValueType::Object => {
@@ -12498,37 +12543,97 @@ fn print_r_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
             if object.class_name.as_ref() == "SensitiveParameterValue" {
                 return "SensitiveParameterValue Object\n(\n)\n".to_string();
             }
-            let Some(class) = eg.find_class(&object.class_name) else {
+            let Some(class) = eg.class_by_id(object.class_id) else {
                 return String::new();
             };
-            if !class.is_enum {
-                return String::new();
+            if class.is_enum {
+                let Some(name) = object.get_property("name").and_then(Value::as_str) else {
+                    return String::new();
+                };
+                let prefix = "    ".repeat(indent * 2);
+                let inner = "    ".repeat(indent * 2 + 1);
+                let value = object.get_property("value");
+                let backing = value.map_or("", |value| match value.value_type() {
+                    ValueType::Long => ":int",
+                    ValueType::String => ":string",
+                    _ => "",
+                });
+                let mut out = format!("{} Enum{}\n{}(\n", object.class_name, backing, prefix);
+                out.push_str(&format!("{}[name] => {}\n", inner, name));
+                if let Some(value) = value {
+                    out.push_str(&format!(
+                        "{}[value] => {}\n",
+                        inner,
+                        value.echo_to_string_with_precision(eg.precision)
+                    ));
+                }
+                out.push_str(&format!("{})\n", prefix));
+                return out;
             }
-            let Some(name) = object.get_property("name").and_then(Value::as_str) else {
-                return String::new();
-            };
-            let prefix = "    ".repeat(indent);
-            let inner = "    ".repeat(indent + 1);
-            let value = object.get_property("value");
-            let backing = value.map_or("", |value| match value.value_type() {
-                ValueType::Long => ":int",
-                ValueType::String => ":string",
-                _ => "",
-            });
-            let mut out = format!("{} Enum{}\n{}(\n", object.class_name, backing, prefix);
-            out.push_str(&format!("{}[name] => {}\n", inner, name));
-            if let Some(value) = value {
+
+            let display_class = object
+                .class_name
+                .strip_prefix("class@anonymous#")
+                .map_or(object.class_name.as_ref(), |_| "class@anonymous");
+            let identity = val
+                .object_identity()
+                .expect("live print_r object must retain an identity");
+            if !visited_objects.insert(identity) {
+                return format!("{display_class} Object\n *RECURSION*");
+            }
+
+            let prefix = "    ".repeat(indent * 2);
+            let inner = "    ".repeat(indent * 2 + 1);
+            let mut out = format!("{display_class} Object\n{prefix}(\n");
+            for slot in var_dump_property_slots(eg, object.class_id) {
+                let definition = &class.properties[slot];
+                if definition.is_virtual_hook_property() {
+                    continue;
+                }
+                let Some(value) = object.get_property_slot(slot) else {
+                    continue;
+                };
+                if value.value_type() == ValueType::Undef {
+                    continue;
+                }
                 out.push_str(&format!(
-                    "{}[value] => {}\n",
+                    "{}{} => {}",
                     inner,
-                    value.echo_to_string_with_precision(eg.precision)
+                    print_r_property_key(definition),
+                    print_r_value_inner(value, indent + 1, eg, visited_arrays, visited_objects,)
                 ));
+                out.push('\n');
             }
+            object.for_each_dynamic_property(|name, value| {
+                if value.value_type() == ValueType::Undef {
+                    return;
+                }
+                out.push_str(&format!(
+                    "{}[{}] => {}",
+                    inner,
+                    name,
+                    print_r_value_inner(value, indent + 1, eg, visited_arrays, visited_objects,)
+                ));
+                out.push('\n');
+            });
             out.push_str(&format!("{})\n", prefix));
+            visited_objects.remove(&identity);
             out
         }
         ValueType::Resource => val.echo_to_string(),
         _ => String::new(),
+    }
+}
+
+fn print_r_property_key(definition: &PropertyDefinition) -> String {
+    let declaring_class = definition
+        .declaring_class
+        .strip_prefix("class@anonymous#")
+        .map_or(definition.declaring_class.as_str(), |_| "class@anonymous");
+    match definition.visibility {
+        Visibility::Public => format!("[{}]", definition.name),
+        Visibility::Protected => format!("[{}:protected]", definition.name),
+        Visibility::Private => format!("[{}:{}:private]", definition.name, declaring_class),
     }
 }
 
@@ -17038,29 +17143,38 @@ fn fn_usort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
         }
     }
 
-    // Insertion sort with PHP callback comparison
     let mut state = UserSortCallbackState::new(&callback, &resolved, eg);
-    let len = items.len();
-    for i in 1..len {
-        let mut j = i;
-        while j > 0 {
-            let Some(ordering) = user_sort_comparison(
-                ed,
-                eg,
-                &resolved,
-                &mut state,
-                "usort",
-                &items[j - 1],
-                &items[j],
-            )?
-            else {
-                return Ok(());
-            };
-            if ordering != std::cmp::Ordering::Greater {
-                break;
+    if items.len() < 6 {
+        let completed = stable_sort_small_optional_checked(&mut items, |left, right| {
+            user_sort_comparison(ed, eg, &resolved, &mut state, "usort", left, right)
+        })?;
+        if !completed {
+            return Ok(());
+        }
+    } else {
+        // Larger callback sorts retain their established insertion schedule.
+        let len = items.len();
+        for i in 1..len {
+            let mut j = i;
+            while j > 0 {
+                let Some(ordering) = user_sort_comparison(
+                    ed,
+                    eg,
+                    &resolved,
+                    &mut state,
+                    "usort",
+                    &items[j - 1],
+                    &items[j],
+                )?
+                else {
+                    return Ok(());
+                };
+                if ordering != std::cmp::Ordering::Greater {
+                    break;
+                }
+                items.swap(j - 1, j);
+                j -= 1;
             }
-            items.swap(j - 1, j);
-            j -= 1;
         }
     }
     let mut new_arr = PhpArray::new();
@@ -17113,29 +17227,49 @@ fn fn_user_key_preserving_sort(
     };
     let mut state = UserSortCallbackState::new(&callback, &resolved, eg);
 
-    for index in 1..pairs.len() {
-        let mut current = index;
-        while current > 0 {
-            let keys = compare_keys.then(|| {
-                [
-                    array_key_value(&pairs[current - 1].0),
-                    array_key_value(&pairs[current].0),
-                ]
-            });
-            let (left, right) = keys.as_ref().map_or_else(
-                || (&pairs[current - 1].1, &pairs[current].1),
-                |keys| (&keys[0], &keys[1]),
-            );
-            let Some(ordering) =
-                user_sort_comparison(ed, eg, &resolved, &mut state, function_name, left, right)?
-            else {
-                return Ok(());
-            };
-            if ordering != std::cmp::Ordering::Greater {
-                break;
+    if pairs.len() < 6 {
+        let completed = stable_sort_small_optional_checked(&mut pairs, |left, right| {
+            let keys = compare_keys.then(|| [array_key_value(&left.0), array_key_value(&right.0)]);
+            let (left, right) = keys
+                .as_ref()
+                .map_or_else(|| (&left.1, &right.1), |keys| (&keys[0], &keys[1]));
+            user_sort_comparison(ed, eg, &resolved, &mut state, function_name, left, right)
+        })?;
+        if !completed {
+            return Ok(());
+        }
+    } else {
+        for index in 1..pairs.len() {
+            let mut current = index;
+            while current > 0 {
+                let keys = compare_keys.then(|| {
+                    [
+                        array_key_value(&pairs[current - 1].0),
+                        array_key_value(&pairs[current].0),
+                    ]
+                });
+                let (left, right) = keys.as_ref().map_or_else(
+                    || (&pairs[current - 1].1, &pairs[current].1),
+                    |keys| (&keys[0], &keys[1]),
+                );
+                let Some(ordering) = user_sort_comparison(
+                    ed,
+                    eg,
+                    &resolved,
+                    &mut state,
+                    function_name,
+                    left,
+                    right,
+                )?
+                else {
+                    return Ok(());
+                };
+                if ordering != std::cmp::Ordering::Greater {
+                    break;
+                }
+                pairs.swap(current - 1, current);
+                current -= 1;
             }
-            pairs.swap(current - 1, current);
-            current -= 1;
         }
     }
 

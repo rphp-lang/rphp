@@ -277,6 +277,108 @@ echo count($messages), "\n", implode("\n", $messages);
 }
 
 #[test]
+fn user_sorts_match_php_small_input_traces_stability_and_exception_stop() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function traceUserSort($function, $values) {
+    $trace = [];
+    $array = $values;
+    $function($array, function ($left, $right) use (&$trace) {
+        $trace[] = "$left:$right";
+        return $left <=> $right;
+    });
+    $order = $function === 'uksort' ? array_keys($array) : $array;
+    echo $function, '|', count($values), '|', implode(',', $trace), '|', implode(',', $order), "\n";
+}
+
+foreach (['usort', 'uasort'] as $function) {
+    foreach ([[2, 1], [3, 2, 1], [4, 3, 2, 1], [5, 4, 3, 2, 1], [1, 2, 3, 4, 5]] as $values) {
+        traceUserSort($function, $values);
+    }
+}
+foreach ([
+    [2 => 0, 1 => 0],
+    [3 => 0, 2 => 0, 1 => 0],
+    [4 => 0, 3 => 0, 2 => 0, 1 => 0],
+    [5 => 0, 4 => 0, 3 => 0, 2 => 0, 1 => 0],
+    [1 => 0, 2 => 0, 3 => 0, 4 => 0, 5 => 0],
+] as $values) {
+    traceUserSort('uksort', $values);
+}
+
+foreach (['usort', 'uasort', 'uksort'] as $function) {
+    $trace = [];
+    if ($function === 'uksort') {
+        $array = ['a' => 0, 'b' => 0, 'c' => 0, 'd' => 0, 'e' => 0];
+        $callback = function ($left, $right) use (&$trace) {
+            $trace[] = "$left:$right";
+            return 0;
+        };
+    } else {
+        $array = [];
+        foreach (['a', 'b', 'c', 'd', 'e'] as $id) {
+            $value = new stdClass;
+            $value->id = $id;
+            $array[] = $value;
+        }
+        $callback = function ($left, $right) use (&$trace) {
+            $trace[] = "$left->id:$right->id";
+            return 0;
+        };
+    }
+    $function($array, $callback);
+    $order = $function === 'uksort'
+        ? array_keys($array)
+        : array_map(fn($value) => $value->id, $array);
+    echo "tie:$function|", implode(',', $trace), '|', implode(',', $order), "\n";
+}
+
+foreach (['usort', 'uasort', 'uksort'] as $function) {
+    $calls = 0;
+    $array = $function === 'uksort'
+        ? [4 => 0, 3 => 0, 2 => 0, 1 => 0]
+        : [4, 3, 2, 1];
+    try {
+        $function($array, function ($left, $right) use (&$calls) {
+            if (++$calls === 2) {
+                throw new RuntimeException('stop');
+            }
+            return $left <=> $right;
+        });
+    } catch (RuntimeException $error) {
+        echo "throw:$function|", $error->getMessage(), '|', $calls, "\n";
+    }
+}
+"#,
+        ),
+        concat!(
+            "usort|2|2:1|1,2\n",
+            "usort|3|3:2,1:2|1,2,3\n",
+            "usort|4|4:3,2:3,4:1,3:1,2:1|1,2,3,4\n",
+            "usort|5|5:4,3:4,5:2,4:2,3:2,5:1,4:1,3:1,2:1|1,2,3,4,5\n",
+            "usort|5|1:2,2:3,3:4,4:5|1,2,3,4,5\n",
+            "uasort|2|2:1|1,2\n",
+            "uasort|3|3:2,1:2|1,2,3\n",
+            "uasort|4|4:3,2:3,4:1,3:1,2:1|1,2,3,4\n",
+            "uasort|5|5:4,3:4,5:2,4:2,3:2,5:1,4:1,3:1,2:1|1,2,3,4,5\n",
+            "uasort|5|1:2,2:3,3:4,4:5|1,2,3,4,5\n",
+            "uksort|2|2:1|1,2\n",
+            "uksort|3|3:2,1:2|1,2,3\n",
+            "uksort|4|4:3,2:3,4:1,3:1,2:1|1,2,3,4\n",
+            "uksort|5|5:4,3:4,5:2,4:2,3:2,5:1,4:1,3:1,2:1|1,2,3,4,5\n",
+            "uksort|5|1:2,2:3,3:4,4:5|1,2,3,4,5\n",
+            "tie:usort|a:b,b:c,c:d,d:e|a,b,c,d,e\n",
+            "tie:uasort|a:b,b:c,c:d,d:e|a,b,c,d,e\n",
+            "tie:uksort|a:b,b:c,c:d,d:e|a,b,c,d,e\n",
+            "throw:usort|stop|2\n",
+            "throw:uasort|stop|2\n",
+            "throw:uksort|stop|2\n",
+        )
+    );
+}
+
+#[test]
 fn user_sorts_deprecate_boolean_results_once_and_reverse_false_comparisons() {
     assert_eq!(
         run_php(
