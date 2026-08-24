@@ -217,9 +217,11 @@ fn report_php_diagnostic(
     label: &str,
     suppressed: bool,
 ) -> Result<(), VmError> {
-    let instruction_index = unsafe {
-        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
-    };
+    let instruction_index = op_array
+        .instructions
+        .iter()
+        .position(|instruction| std::ptr::eq(instruction, opline))
+        .expect("active send instruction belongs to its op array");
     let line = op_array.source_line(instruction_index).unwrap_or(0);
     let file = if op_array.source_file.is_empty() {
         op_array.name.as_str()
@@ -278,6 +280,124 @@ fn report_php_notice(
     message: &str,
 ) -> Result<(), VmError> {
     report_php_diagnostic(eg, frame, op_array, opline, message, 8, "Notice", false)
+}
+
+#[cold]
+fn call_argument_diagnostic_origin_index(
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> usize {
+    let instruction_index = unsafe {
+        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    };
+    if op_array.source_line(instruction_index).is_some() {
+        return instruction_index;
+    }
+    (0..instruction_index)
+        .rev()
+        .find(|index| op_array.source_line(*index).is_some())
+        .unwrap_or(instruction_index)
+}
+
+#[cold]
+#[inline(never)]
+fn attach_call_argument_throwable_origin(
+    error: &Value,
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) {
+    let instruction_index = call_argument_diagnostic_origin_index(op_array, opline);
+    attach_throwable_origin(error, eg, frame, op_array, instruction_index);
+}
+
+/// Prepare a call/new result for a hard-reference parameter. PHP admits this
+/// indirect temporary as a private reference cell, but reports E_NOTICE when
+/// the producer did not itself return by reference. `None` means a user error
+/// handler threw and the caller must retire the pending activation.
+#[cold]
+#[inline(never)]
+fn prepare_indirect_temporary_reference(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    func_common: &FunctionCommon,
+    parameter_index: u32,
+) -> Result<Option<Value>, VmError> {
+    debug_assert!(matches!(opline.op1_type, OpType::Tmp | OpType::Var));
+    // SAFETY: the compiler marks only value-producing call/new operands. Their
+    // TMP/VAR slot belongs to this live caller until the send consumes it.
+    unsafe {
+        let source = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+        if !func_common.sig.is_param_prefer_ref(parameter_index)
+            && !(*source).is_reference()
+        {
+            report_php_diagnostic(
+                eg,
+                frame,
+                op_array,
+                opline,
+                "Only variables should be passed by reference",
+                8,
+                "Notice",
+                opline._pad & crate::vm::instruction::SEND_FLAG_ERROR_SUPPRESS != 0,
+            )?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+        }
+        Ok(Some(materialize_reference_alias(frame, source)))
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn op_send_indirect_temporary_reference<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    opline_ptr: *const Instruction,
+) -> Result<Option<ColdResult<'a>>, VmError> {
+    // SAFETY: the active Send instruction owns a live pending activation and
+    // names one compiler-sized destination slot. Success advances the caller
+    // exactly once; a throwing Notice handler consumes that activation before
+    // transferring control.
+    unsafe {
+        let call = (*frame).call;
+        debug_assert!(!call.is_null());
+        let func_common = &*(*call).func;
+        let parameter_index = opline.extended_value;
+        if !func_common.sig.is_param_by_ref(parameter_index) {
+            return Ok(None);
+        }
+        let Some(argument) = prepare_indirect_temporary_reference(
+            eg,
+            frame,
+            op_array,
+            opline,
+            func_common,
+            parameter_index,
+        )?
+        else {
+            let exception = eg
+                .exception
+                .take()
+                .expect("reference Notice handler marked an exception");
+            return Ok(Some(match cleanup_call_and_throw(eg, frame, call, exception)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            }));
+        };
+        let destination = (*call).cv_mut(opline.op2 as u32);
+        frame_slot_init(call, destination as *mut Value, argument);
+        (*frame).opline = opline_ptr.add(1);
+        Ok(Some(ColdResult::Continue))
+    }
 }
 
 fn report_php_deprecation(

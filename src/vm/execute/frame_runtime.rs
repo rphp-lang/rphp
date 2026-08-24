@@ -522,6 +522,14 @@ unsafe fn try_copy_scalar_arg(
     op_array: &crate::compiler::OpArray,
     send: &Instruction,
 ) -> bool {
+    if send._pad & (SEND_FLAG_NONREFERENCEABLE | SEND_FLAG_INDIRECT_TEMPORARY) != 0 {
+        let common = &*(*call).func;
+        if common.sig.is_param_by_ref(send.extended_value) {
+            // The ordinary send owns the direct-rvalue Error or indirect-
+            // temporary Notice/reference materialization. Do not fuse it.
+            return false;
+        }
+    }
     let source = match send.op1_type {
         OpType::Tmp | OpType::Var => {
             (frame as *const Value).add(CALL_FRAME_SLOTS + send.op1 as usize)

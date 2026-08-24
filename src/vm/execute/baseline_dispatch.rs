@@ -4290,6 +4290,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     parameter_name
                                 ),
                             );
+                            attach_call_argument_throwable_origin(
+                                &error, eg, frame, op_array, opline,
+                            );
                             cleanup_pending_calls(eg, frame);
                             match throw_in_frame(eg, frame, error)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
@@ -4307,13 +4310,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     call
                 };
                 debug_assert!(!call.is_null());
-                let dst = unsafe {
-                    (call as *mut Value).add(CALL_FRAME_SLOTS + opline.op2 as usize)
+                // SAFETY: `call` is the live pending activation and this
+                // compiler-emitted send names a source in the live caller plus
+                // one compiler-sized destination slot.
+                let (dst, source, common) = unsafe {
+                    (
+                        (call as *mut Value).add(CALL_FRAME_SLOTS + opline.op2 as usize),
+                        (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
+                        &*(*call).func,
+                    )
                 };
-                let source = unsafe {
-                    (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-                };
-                let common = unsafe { &*(*call).func };
                 // SAFETY: source is resolved from the live caller op-array and
                 // dst is the compiler-sized argument slot in the pending call.
                 let borrowed = !unsafe { (*source).is_undef() }
@@ -4413,6 +4419,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 parameter_name
                             ),
                         );
+                        attach_call_argument_throwable_origin(
+                            &error, eg, frame, op_array, opline,
+                        );
                         cleanup_pending_calls(eg, frame);
                         match throw_in_frame(eg, frame, error)? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
@@ -4442,6 +4451,25 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::SendVarEx => {
                 // Runtime-checked send: by-ref if callee expects it AND op1 is CV, else by-val
                 // op2 = CV slot in callee, extended_value = parameter index for ref_args check
+                if opline._pad & SEND_FLAG_INDIRECT_TEMPORARY != 0
+                    && let Some(flow) = op_send_indirect_temporary_reference(
+                        eg, frame, op_array, opline, opline_ptr,
+                    )?
+                {
+                    match flow {
+                        ColdResult::Continue => continue 'vm,
+                        ColdResult::NewFrame(new_frame, new_op_array) => {
+                            frame = new_frame;
+                            op_array = new_op_array;
+                            continue 'vm;
+                        }
+                        ColdResult::Unhandled(thrown) => {
+                            eg.exception = Some(thrown);
+                            return Ok(());
+                        }
+                        _ => unreachable!("indirect reference send returned invalid control flow"),
+                    }
+                }
                 let call = unsafe { (*frame).call };
                 debug_assert!(!call.is_null());
                 let param_idx = opline.extended_value;

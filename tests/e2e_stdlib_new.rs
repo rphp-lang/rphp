@@ -17,10 +17,16 @@ fn test_array_unshift() {
     assert_eq!(
         run_php(
             r#"<?php
-echo array_unshift([2, 3], 1);
+$values = [2, 3];
+echo array_unshift($values, 1), ':', implode(',', $values), "\n";
+try { array_unshift([2, 3], 1); }
+catch (Error $error) { echo $error->getMessage(); }
 "#
         ),
-        "3"
+        concat!(
+            "3:1,2,3\n",
+            "array_unshift(): Argument #1 ($array) could not be passed by reference",
+        )
     );
 }
 
@@ -151,11 +157,17 @@ fn test_array_splice() {
     assert_eq!(
         run_php(
             r#"<?php
-$removed = array_splice([1, 2, 3, 4, 5], 1, 2);
-echo implode(",", $removed);
+$values = [1, 2, 3, 4, 5];
+$removed = array_splice($values, 1, 2);
+echo implode(',', $removed), ':', implode(',', $values), "\n";
+try { array_splice([1, 2, 3], 1, 1); }
+catch (Error $error) { echo $error->getMessage(); }
 "#
         ),
-        "2,3"
+        concat!(
+            "2,3:1,4,5\n",
+            "array_splice(): Argument #1 ($array) could not be passed by reference",
+        )
     );
 }
 

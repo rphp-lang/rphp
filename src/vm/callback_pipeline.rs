@@ -1,7 +1,7 @@
 use crate::compiler::OpArray;
 use crate::value::Value;
 
-use super::instruction::{Instruction, OpType};
+use super::instruction::{Instruction, OpType, SEND_FLAG_INDIRECT_TEMPORARY};
 use super::opcode::OpCode;
 
 /// Compiler-proven bytecode span for the exact nested shape
@@ -55,7 +55,11 @@ fn is_named_call(op_array: &OpArray, instruction: Instruction, name: &str, arity
 
 #[inline]
 fn is_positional_send(instruction: Instruction, position: u16) -> bool {
-    instruction.opcode == OpCode::SendVal && instruction.op2 == position
+    (instruction.opcode == OpCode::SendVal
+        || (instruction.opcode == OpCode::SendVarEx
+            && instruction._pad & SEND_FLAG_INDIRECT_TEMPORARY != 0
+            && matches!(instruction.op1_type, OpType::Tmp | OpType::Var)))
+        && instruction.op2 == position
 }
 
 #[inline]

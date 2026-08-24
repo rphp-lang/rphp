@@ -83,6 +83,13 @@ pub const SEND_FLAG_NONREFERENCEABLE: u16 = 1 << 3;
 /// parameter and the snapshot for an ordinary by-value parameter.
 pub const SEND_FLAG_YIELD_SNAPSHOT: u16 = 1 << 4;
 
+/// SendVal/SendVarEx/SendNamed flag: the source is an indirect temporary
+/// produced by a call or object construction. PHP lets a hard-reference
+/// parameter bind that temporary, but emits E_NOTICE unless the producer
+/// returned an actual reference. Direct rvalues use
+/// `SEND_FLAG_NONREFERENCEABLE` instead and remain errors.
+pub const SEND_FLAG_INDIRECT_TEMPORARY: u16 = 1 << 5;
+
 /// FetchCvR flag: evaluate this read under PHP's `@` reporting mask. Custom
 /// handlers still run and observe the suppressed mask.
 pub const FETCH_CV_ERROR_SUPPRESS: u16 = 1;

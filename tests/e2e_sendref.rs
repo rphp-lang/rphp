@@ -1,6 +1,6 @@
 /// Tests for pass-by-reference (SendRef) — both user functions and stdlib.
 mod common;
-use common::run_php;
+use common::{run_php, run_php_expect_error_with_source_context};
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
@@ -42,6 +42,83 @@ var_dump($array);
             "int(7)\n",
             "sort(): Argument #1 ($array) could not be passed by reference\n",
             "array(0) {\n}\n",
+        )
+    );
+}
+
+#[test]
+fn indirect_temporaries_notice_while_direct_rvalues_fail_before_the_callee() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($severity, $message) {
+    echo "notice:$severity:$message\n";
+    return true;
+});
+function produced_value() { return 10; }
+function &produced_reference() { static $value = 40; return $value; }
+function mutate_temporary(&$value) { echo "call:$value\n"; $value++; }
+class TemporaryProducer { static function value() { return 20; } }
+
+mutate_temporary(produced_value());
+mutate_temporary(value: TemporaryProducer::value());
+$callback = 'mutate_temporary';
+$callback(produced_value());
+mutate_temporary(produced_reference());
+echo "reference:", produced_reference(), "\n";
+
+try { mutate_temporary([1]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+try { mutate_temporary(true ? 1 : 2); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+try { mutate_temporary($assigned = 7); }
+catch (Error $error) { echo $error->getMessage(), ":$assigned\n"; }
+try { str_replace('a', 'b', 'a', strlen('direct')); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+
+$nested = [[['zero', 'one'], 'un'], 'eins'];
+echo array_shift(array_shift(array_shift($nested))), "\n";
+
+set_error_handler(function () { throw new Exception('handler stopped call'); });
+try { mutate_temporary(produced_value()); }
+catch (Exception $error) { echo $error->getMessage(); }
+"#,
+        ),
+        concat!(
+            "notice:8:Only variables should be passed by reference\n",
+            "call:10\n",
+            "notice:8:Only variables should be passed by reference\n",
+            "call:20\n",
+            "notice:8:Only variables should be passed by reference\n",
+            "call:10\n",
+            "call:40\n",
+            "reference:41\n",
+            "mutate_temporary(): Argument #1 ($value) could not be passed by reference\n",
+            "mutate_temporary(): Argument #1 ($value) could not be passed by reference\n",
+            "mutate_temporary(): Argument #1 ($value) could not be passed by reference:7\n",
+            "str_replace(): Argument #4 ($count) could not be passed by reference\n",
+            "notice:8:Only variables should be passed by reference\n",
+            "notice:8:Only variables should be passed by reference\n",
+            "zero\n",
+            "handler stopped call",
+        )
+    );
+}
+
+#[test]
+fn direct_rvalue_reference_error_retains_uncaught_origin_and_trace() {
+    assert_eq!(
+        run_php_expect_error_with_source_context(
+            "<?php\nnext([1, 2]);\n",
+            "/fixture/byref-temporary.php",
+            "/fixture",
+        )
+        .to_string(),
+        concat!(
+            "Uncaught Error: next(): Argument #1 ($array) could not be passed by reference in /fixture/byref-temporary.php:2\n",
+            "Stack trace:\n",
+            "#0 {main}\n",
+            "  thrown in /fixture/byref-temporary.php on line 2",
         )
     );
 }

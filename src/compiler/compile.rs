@@ -45,10 +45,10 @@ use crate::vm::instruction::{
     NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
     OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OpType, PROPERTY_INCDEC_DECREMENT,
     PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE,
-    SEND_FLAG_GLOBALS, SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_YIELD_SNAPSHOT,
-    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY,
-    STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT,
-    THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    SEND_FLAG_GLOBALS, SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE,
+    SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
+    STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH,
+    STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -3138,9 +3138,56 @@ impl Compiler {
         }
     }
 
-    fn nonreferenceable_call_argument_line(expr: &Expr) -> Option<usize> {
+    fn nonreferenceable_call_argument_line(&self, expr: &Expr) -> Option<usize> {
+        if self.is_zend_special_builtin_write_result(expr) {
+            return Some(expression_source_line(expr));
+        }
         Self::nullsafe_chain_line(expr).or_else(|| match expr {
-            Expr::Assign { .. } => Some(expression_source_line(expr)),
+            Expr::ErrorSuppress(inner) => self.nonreferenceable_call_argument_line(inner),
+            Expr::Integer(_)
+            | Expr::Float(_)
+            | Expr::StringLiteral(_)
+            | Expr::Null
+            | Expr::Bool(_)
+            | Expr::BinaryOp { .. }
+            | Expr::PostInc { .. }
+            | Expr::PostDec { .. }
+            | Expr::PostIncTarget(_)
+            | Expr::PostDecTarget(_)
+            | Expr::PreInc { .. }
+            | Expr::PreDec { .. }
+            | Expr::PreIncTarget(_)
+            | Expr::PreDecTarget(_)
+            | Expr::Not(_)
+            | Expr::UnaryPlus(_)
+            | Expr::UnaryMinus(_)
+            | Expr::Ternary { .. }
+            | Expr::ArrayLiteral(_)
+            | Expr::Cast { .. }
+            | Expr::Isset(_)
+            | Expr::Empty(_)
+            | Expr::NullCoalesce { .. }
+            | Expr::CoalesceAssign { .. }
+            | Expr::CompoundAssignExpression { .. }
+            | Expr::Elvis { .. }
+            | Expr::Match { .. }
+            | Expr::Closure { .. }
+            | Expr::ClassConstant { .. }
+            | Expr::DynamicClassConstant { .. }
+            | Expr::DynamicNamedClassConstant { .. }
+            | Expr::Assign { .. }
+            | Expr::AssignTarget { .. }
+            | Expr::ArrayAppendAssign { .. }
+            | Expr::FirstClassFunctionCallable { .. }
+            | Expr::FirstClassCallable { .. }
+            | Expr::Instanceof { .. }
+            | Expr::DynamicInstanceof { .. }
+            | Expr::Constant(_)
+            | Expr::CompilerHaltOffsetConstant { .. }
+            | Expr::MagicConstant { .. }
+            | Expr::Print(_)
+            | Expr::BitwiseNot(_)
+            | Expr::Clone { .. } => Some(expression_source_line(expr)),
             Expr::ListAssign { targets, line, .. }
                 if !targets.iter().any(ListTarget::contains_reference) =>
             {
@@ -3148,6 +3195,26 @@ impl Compiler {
             }
             _ => None,
         })
+    }
+
+    fn indirect_temporary_call_argument_line(&self, expr: &Expr) -> Option<usize> {
+        if Self::nullsafe_chain_line(expr).is_some()
+            || self.is_zend_special_builtin_write_result(expr)
+        {
+            return None;
+        }
+        match expr {
+            Expr::ErrorSuppress(inner) => self.indirect_temporary_call_argument_line(inner),
+            Expr::FunctionCall { line, .. }
+            | Expr::MethodCall { line, .. }
+            | Expr::StaticCall { line, .. }
+            | Expr::DynamicCall { line, .. }
+            | Expr::DynamicStaticCall { line, .. }
+            | Expr::New { line, .. }
+            | Expr::DynamicNew { line, .. }
+            | Expr::AnonymousNew { line, .. } => Some(*line),
+            _ => None,
+        }
     }
 
     fn is_mutable_call_reference_source(expr: &Expr) -> bool {
@@ -9546,6 +9613,12 @@ impl Compiler {
                         && instruction._pad & crate::vm::instruction::SEND_FLAG_FETCH_CV_R != 0
                     {
                         instruction._pad |= crate::vm::instruction::SEND_FLAG_ERROR_SUPPRESS;
+                    } else if matches!(
+                        instruction.opcode,
+                        OpCode::SendVal | OpCode::SendRef | OpCode::SendVarEx | OpCode::SendNamed
+                    ) && instruction._pad & SEND_FLAG_INDIRECT_TEMPORARY != 0
+                    {
+                        instruction._pad |= crate::vm::instruction::SEND_FLAG_ERROR_SUPPRESS;
                     }
                 }
                 result
@@ -11982,10 +12055,16 @@ impl Compiler {
                 }
                 CallArg::Positional(expr) | CallArg::Unpack(expr) => {
                     let (op, op_type) = self.compile_expr(expr);
-                    let nonreferenceable_line = Self::nonreferenceable_call_argument_line(expr);
+                    let nonreferenceable_line = self.nonreferenceable_call_argument_line(expr);
                     let nonreferenceable = nonreferenceable_line.is_some();
+                    let indirect_temporary_line = self.indirect_temporary_call_argument_line(expr);
+                    debug_assert!(
+                        nonreferenceable_line.is_none() || indirect_temporary_line.is_none()
+                    );
                     let opcode = if nonreferenceable {
                         OpCode::SendVal
+                    } else if indirect_temporary_line.is_some() {
+                        OpCode::SendVarEx
                     } else {
                         Self::positional_opcode(ref_args, i, op_type, use_var_ex)
                     };
@@ -12004,7 +12083,11 @@ impl Compiler {
                         send._pad |= SEND_FLAG_NONREFERENCEABLE;
                         send.extended_value = i as u32;
                     }
-                    if let Some(line) = nonreferenceable_line {
+                    if indirect_temporary_line.is_some() {
+                        send._pad |= SEND_FLAG_INDIRECT_TEMPORARY;
+                        send.extended_value = i as u32;
+                    }
+                    if let Some(line) = nonreferenceable_line.or(indirect_temporary_line) {
                         self.push_instruction_at_line(send, line);
                     } else {
                         self.instructions.push(send);
@@ -12046,11 +12129,18 @@ impl Compiler {
                     // initialize only the argument slots that no preceding
                     // positional send could have written.
                     send.extended_value = i as u32;
-                    let nonreferenceable_line = Self::nonreferenceable_call_argument_line(value);
+                    let nonreferenceable_line = self.nonreferenceable_call_argument_line(value);
                     if nonreferenceable_line.is_some() {
                         send._pad |= SEND_FLAG_NONREFERENCEABLE;
                     }
-                    if let Some(line) = nonreferenceable_line {
+                    let indirect_temporary_line = self.indirect_temporary_call_argument_line(value);
+                    debug_assert!(
+                        nonreferenceable_line.is_none() || indirect_temporary_line.is_none()
+                    );
+                    if indirect_temporary_line.is_some() {
+                        send._pad |= SEND_FLAG_INDIRECT_TEMPORARY;
+                    }
+                    if let Some(line) = nonreferenceable_line.or(indirect_temporary_line) {
                         self.push_instruction_at_line(send, line);
                     } else {
                         self.instructions.push(send);
@@ -12421,12 +12511,16 @@ impl Compiler {
         {
             match arg {
                 CallArg::Positional(expr) | CallArg::Unpack(expr) => {
-                    let nonreferenceable_line = Self::nonreferenceable_call_argument_line(expr);
+                    let nonreferenceable_line = self.nonreferenceable_call_argument_line(expr);
                     let nonreferenceable = nonreferenceable_line.is_some();
+                    let indirect_temporary_line = self.indirect_temporary_call_argument_line(expr);
+                    debug_assert!(
+                        nonreferenceable_line.is_none() || indirect_temporary_line.is_none()
+                    );
                     let yield_snapshot = use_var_ex && source_cv.is_some();
                     let opcode = if nonreferenceable {
                         OpCode::SendVal
-                    } else if yield_snapshot {
+                    } else if yield_snapshot || indirect_temporary_line.is_some() {
                         OpCode::SendVarEx
                     } else {
                         Self::positional_opcode(ref_args, index, *op_type, use_var_ex)
@@ -12454,7 +12548,11 @@ impl Compiler {
                         send._pad |= SEND_FLAG_NONREFERENCEABLE;
                         send.extended_value = index as u32;
                     }
-                    if let Some(line) = nonreferenceable_line {
+                    if indirect_temporary_line.is_some() {
+                        send._pad |= SEND_FLAG_INDIRECT_TEMPORARY;
+                        send.extended_value = index as u32;
+                    }
+                    if let Some(line) = nonreferenceable_line.or(indirect_temporary_line) {
                         self.push_instruction_at_line(send, line);
                     } else {
                         self.instructions.push(send);
@@ -12473,11 +12571,19 @@ impl Compiler {
                         send._pad |= SEND_FLAG_YIELD_SNAPSHOT;
                     }
                     let nonreferenceable_line =
-                        Self::nonreferenceable_call_argument_line(arg.expr());
+                        self.nonreferenceable_call_argument_line(arg.expr());
                     if nonreferenceable_line.is_some() {
                         send._pad |= SEND_FLAG_NONREFERENCEABLE;
                     }
-                    if let Some(line) = nonreferenceable_line {
+                    let indirect_temporary_line =
+                        self.indirect_temporary_call_argument_line(arg.expr());
+                    debug_assert!(
+                        nonreferenceable_line.is_none() || indirect_temporary_line.is_none()
+                    );
+                    if indirect_temporary_line.is_some() {
+                        send._pad |= SEND_FLAG_INDIRECT_TEMPORARY;
+                    }
+                    if let Some(line) = nonreferenceable_line.or(indirect_temporary_line) {
                         self.push_instruction_at_line(send, line);
                     } else {
                         self.instructions.push(send);
