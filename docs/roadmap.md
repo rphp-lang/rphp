@@ -1,6 +1,6 @@
 # RPHP engineering roadmap
 
-Status: active coordination map, 2026-08-23
+Status: active coordination map, 2026-08-24
 
 This document coordinates two independent engineering workstreams. It stays
 short and current; detailed plans live in the workstream roadmaps, while the
@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5 AMD64 main pass set is 4,153/5,599, +5/-0 from the preceding checkpoint with zero timeouts or crashes. The reflection-surface batch adds PHP 8.5 string rendering for functions and attributes, opaque array-reference identity and ordinary unit/backed enum Reflection APIs; `Reflector` also inherits `Stringable`. Its five-case focus moves from 0 to 5 passes and is byte-identical to PHP 8.5.9. All five feature configurations, unsafe, Composer S0, Symfony S1 and PHP 8.5.9 S2/S3 pass; three 32-pair AMD64 controls stay between -0.372% and +3.560% paired, below the +5% gate. Exact optional-default strings, complete Reflection metadata/debug projection and broader enum/attribute edges remain explicit work. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5 AMD64 main pass set is 4,171/5,599, +3/-0 from the preceding checkpoint with zero XFAIL, timeout or crash. The scalar-literal/escape batch adds ASCII case-insensitive `true`/`false`/`null` and lower-case `\e`/`\f`/`\v` decoding in double-quoted strings and heredocs. The full array audit reaches 693/842, +29/-0, with no timeout or crash. All five feature configurations, unsafe, Composer S0, Symfony S1 and PHP 8.5.9 S2/S3 pass. No runtime performance gate applies because the change is lexer-only. The remaining 1,132 Zend/lang failures, 135 array-suite failures and broader lexer and PHP compatibility remain explicit work. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,

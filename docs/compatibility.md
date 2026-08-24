@@ -8,6 +8,55 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`scalar-literal-escape-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+implementation commit `3b89a9ce`. The lexer now recognizes every ASCII case
+spelling of `true`, `false` and `null`, and decodes lower-case `\e`, `\f` and
+`\v` in double-quoted strings and heredocs as escape, form-feed and
+vertical-tab. Upper-case `\E`, `\F` and `\V` remain literal, while
+single-quoted strings and nowdocs retain their existing literal behavior.
+
+Two lexer unit tests and one original E2E test cover the scalar spellings,
+control bytes and the resulting values through `array_filter()`,
+`array_rand()`, `array_diff()`, `array_reverse()` and `array_unshift()`. The
+complete 842-case `ext/standard/tests/array` audit moves from 664 to 693 passes
+(+29/-0), with 135 failures, 13 skips, one unsupported case and no timeout or
+crash. Two serial candidate runs have the same status/pass set and normalized
+`path`/`status`/`category`/`reason` SHA-256
+`14ff3531939429b12dc7e5a141cbbff069d765c2931bcca9ff7e40597aecaae5`;
+their summaries are byte-identical with SHA-256
+`b65ddca8cbc2ae8d45936f27d3f9afde562263b7ad12febae1bd667e38891e87`.
+The raw manifests intentionally differ only in expected random `array_rand()`
+output hashes and a few durations, so no byte-identity claim is made for them.
+
+The separate 5,599-case `Zend/tests` and `tests/lang` gate moves from 4,168 to
+4,171 passes (+3/-0), with 1,132 failures, 115 skips, 181 unsupported cases
+and zero XFAIL, timeout or crash. The exact gains are
+`Zend/tests/bug60350.phpt`, `Zend/tests/eval_constant_resolution.phpt` and
+`Zend/tests/numeric_strings/trailling_whitespaces.phpt`. Two serial candidate
+runs have byte-identical manifest SHA-256
+`fe8ee9e31f8b441d8b84198f1edc7f874c1b48a6bb6355911f58da4756ab82c8`
+and summary SHA-256
+`e391bea8043c31c9cb96ef7699a415293dc4c4b9f883852c681eb25157edadbb`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy self-tests, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+The production unsafe inventory remains at 1,623 blocks and 289 functions with
+346 SAFETY annotations. The implementation adds no dependency, opcode, VM
+frame, executor-global, runtime value or object/array layout change. Its
+baseline/candidate release-binary SHA-256 values are
+`8490b7fb27fcc136b780c3ca808aeb38712cebb91c36ebc5fbd906bde297a40d` /
+`4a663361830e5aeb0e11c8dfc42e2c216946f79031323a95299a9ec255a76490`.
+No runtime performance gate applies to this compile-time lexer-only change;
+the relevant compile/load and ecosystem gates pass.
+
+Six escape-bearing `array_intersect*` tests and `array_pad_variation3.phpt`
+remain failures because they additionally depend on independent intersection
+semantics and a leading-dot numeric parser gap. The remaining 135 array-suite
+failures, 1,132 Zend/lang failures and broader lexer and PHP compatibility
+remain explicit follow-up work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `scope-array-transfer-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 implementation commit `3f5b4a41`. Its complete 22-case `compact*` and
 `extract*` focus moves from 4 to 22 passes (+18/-0), with no remaining failure,
