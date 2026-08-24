@@ -8,6 +8,83 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`debug-zval-refcount-renderer-batch`, pinned to php-src 8.5 commit
+`fcc29c8` and implementation commit `298cc6a9`. `debug_zval_dump()` now has
+its own recursive diagnostic context instead of post-processing
+`var_dump()` text. It renders arrays, strings, ordinary and special objects,
+closures, enum cases and lazy objects while leaving the public `var_dump()`
+and `print_r()` projections unchanged. Refcounts are derived from actual
+PHP-visible CV, global, static, dynamic-variable, constant, property and
+container roots; handler clones, hidden CVs and duplicate reference cells are
+not counted.
+
+Compiler-interned strings and immutable array literals retain type-specific
+provenance in two previously spare `Value::type_info` bits. First array
+separation transfers the literal source ownership needed by direct strings
+and nested arrays, and first mutation clears provenance before ordinary COW
+continues. This keeps `Value` at 16 bytes and adds no opcode, dependency,
+executor-global field, VM-frame field or unsafe block. Empty arrays and source
+strings use PHP's `interned` form; non-empty packed arrays, dynamic strings,
+references, object aliases and enum cases expose only ownership that RPHP can
+prove.
+
+Three original E2E regressions cover independent string/array/object aliases,
+array references, enum-case growth and release, and direct/nested literal
+children across successive COW mutations. The four supplying unmodified cases
+`bug26458.phpt`, `bug72369.phpt`, `enum/cases-refcount.phpt` and
+`enum/unserialize-refcount.phpt` pass, as does the retained lazy-proxy
+`init_trigger_debug_zval_dump.phpt` regression. Their five-case focused
+manifest and summary SHA-256 values are
+`8b4d5050b723f37443398ccc5801fca1e82d1ecac0ffaea6e264183ff9438c2b`
+and `529d475c3621d3200a8e773e6bf29f0d2ebe779c81da0dbe6325c4f79791ccbc`.
+
+The complete 842-case `ext/standard/tests/array` audit moves from 814 to 816
+passes (+2/-0), with 12 failures, 13 skips, one unsupported case and zero
+XFAIL, timeout or crash. The only gains are `bug26458.phpt` and
+`bug72369.phpt`. Two final manifests and summaries are respectively
+byte-identical with SHA-256
+`2545cba3b92abb023fc12af417aace162ce9775214c7fa791e35d95e9141e35c`
+and `4cb4b61c5d96f5de4671f307c97f6e54008459dc9fa07a13afc93c2f3c2b295b`.
+
+The separate 5,599-case `Zend/tests` and `tests/lang` audit moves from 4,194
+to 4,196 passes (+2/-0), with 1,107 failures, 115 skips and 181 unsupported
+cases and zero XFAIL, timeout or crash. The only gains are
+`Zend/tests/enum/cases-refcount.phpt` and
+`Zend/tests/enum/unserialize-refcount.phpt`. Two final manifests and summaries
+are respectively byte-identical with SHA-256
+`a6c79657d0a6f66f85de63781961e6fc3f8ae64a1796136de8d07749990be70c`
+and `7b4d16cdb94a9a88afa59031adf3016a80d2c477ae698974842854125bd6f2bb`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The
+storage-bounded matrix ran without incremental artifacts or test debug symbols
+and invoked the cleanup hook before, between and after configurations.
+Production remains at 1,623 unsafe blocks and 289 unsafe functions, now with
+356 SAFETY annotations.
+
+Two independent CPU-pinned 32-pair release controls after three warmups put
+paired median changes at -5.463%/-4.924% for 100 startups,
++1.301%/+1.024% for three million ordinary appends and +2.813%/+1.736% for
+250,000 literal outer/nested COW cycles. All checksums are exact and every
+median is below the +5% regression gate. The literal-COW p90 is explicitly
+noisy at +8.532%/+8.417%; its p10 is -4.296%/-12.263%, so the acceptance claim
+is limited to the two independently reproduced paired medians. Baseline and
+candidate release-binary SHA-256 values are
+`3a49f9d3c8c514ba9f260e5c59a1d57f35e0231b6267f0415544b1b4b393a248` /
+`6ce62624e6de63306ad38f71911d9016acfe6d7b63547204b93d47341ba07c67`.
+The harness and accepted-log SHA-256 values are
+`d6c536a14f4be38be058aaa66cff925a3d7b556e54a1b6b86ca6ada71046a0e7`,
+`6b84446680c056d5ced52fd9fc638810bdcca2f620f852cb7ed65cd2eb43dce1`
+and `040833d75a1aa2e937ab9180e3b38e8670dba4fbafb9957fb0642a4c9cd78157`.
+
+This checkpoint does not claim exact diagnostics for `debug_zval_dump()`
+cases that still fail earlier on independent `arginfo`/`chunk_split()`
+prerequisites, `bug60825.phpt`, values whose storage RPHP cannot represent
+exactly, the remaining 12 array failures, the remaining 1,107 Zend/lang
+failures or broader PHP compatibility.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `array-user-sort-small-schedule-batch`, pinned to php-src 8.5 commit
 `fcc29c8` and implementation commit `9994a76f`. Canonical `usort()`,
 `uasort()` and `uksort()` callback execution now reuses the established PHP
@@ -89,7 +166,7 @@ implementation-specific mixed-value sort schedule cases, the remaining 14
 array-suite failures, the remaining 1,109 Zend/lang failures or broader PHP
 compatibility. These remain explicit evidence-driven follow-up work.
 
-The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
+The earlier measured AMD64 PHP 8.5 contract checkpoint is the
 `recursive-array-boolean-diagnostic-batch`, pinned to php-src 8.5 commit
 `fcc29c8` and implementation commit `2377ce97`. The shared rejected-argument
 path for `array_merge_recursive()` and `array_replace_recursive()` now renders

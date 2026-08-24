@@ -2295,6 +2295,34 @@ next goal by this order unless an explicit project objective overrides it:
 5. Reflection and standard-library clusters with measured dependency reach;
 6. isolated low-fanout features and optional extensions.
 
+The `debug-zval-refcount-renderer-batch` checkpoint separates
+`debug_zval_dump()` from the public `var_dump()` renderer and derives cold
+diagnostic ownership from PHP-visible frame, global, static, dynamic,
+constant, property and container roots. Compiler-interned strings and
+immutable array literals use two type-specific spare `Value` bits; first COW
+transfers literal-source ownership to direct refcounted children without
+growing the 16-byte value layout. Three original E2E regressions cover dynamic
+and interned strings, array/object aliases and references, enum-case lifetime,
+and nested literal children across repeated separation.
+
+All five focused PHPTs pass. The complete 842-case array audit moves from 814
+to 816 pass (+2/-0), with 12 failures, 13 skips and one unsupported case. The
+5,599-case Zend/lang audit moves from 4,194 to 4,196 pass (+2/-0), with 1,107
+failures, 115 skips and 181 unsupported. Both repeated manifests are
+byte-identical and neither corpus has an XFAIL, timeout, crash, lost pass or
+other category movement. All five Cargo configurations, all-target,
+formatting, runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5
+S2/S3 pass.
+
+Because first literal separation and ordinary array mutation share a branch,
+two independent CPU-pinned 32-pair release controls cover startup, three
+million ordinary appends and 250,000 nested literal COW cycles. Their paired
+medians are respectively -5.463%/-4.924%, +1.301%/+1.024% and
++2.813%/+1.736%, below the +5% gate with exact checksums. Literal-COW p90 is
+noisy at +8.532%/+8.417% and remains disclosed rather than promoted to a gate.
+`arginfo`/`chunk_split()` prerequisite cases, `bug60825.phpt` and
+unrepresentable Zend ownership states remain explicit nonclaims.
+
 The `array-user-sort-small-schedule-batch` checkpoint gives canonical
 `usort()`, `uasort()` and `uksort()` callbacks PHP 8.5's stable observable
 two-to-five-element comparison schedule and stops it immediately after a
@@ -2360,11 +2388,11 @@ schedule cases and throwing-comparison partial permutation remain explicit
 nonclaims.
 
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
-process hazard: `ext/standard/tests/array` is 814 pass, 14 fail, 13 skip and
-one unsupported, while `Zend/tests` plus `tests/lang` is 4,194 pass, 1,109
+process hazard: `ext/standard/tests/array` is 816 pass, 12 fail, 13 skip and
+one unsupported, while `Zend/tests` plus `tests/lang` is 4,196 pass, 1,107
 fail, 115 skip and 181 unsupported, with no timeout or crash in either corpus.
 The next array goal must therefore be chosen by shared-root-cause fanout and
-dependency reach across those 14 visible failures, not by filename order.
+dependency reach across those 12 visible failures, not by filename order.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,
