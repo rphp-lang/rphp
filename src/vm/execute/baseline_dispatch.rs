@@ -2235,7 +2235,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                 } else if val.value_type() == ValueType::String {
                     // Fast path: string → write bytes directly, no allocation
-                    eg.write_output(val.as_str().unwrap().as_bytes());
+                    let bytes = val.php_string_bytes().unwrap();
+                    eg.write_output(bytes.as_ref());
                 } else if val.value_type() == ValueType::Long {
                     // Fast path: integer → stack-local write, no heap allocation
                     use std::io::Write;
@@ -2261,7 +2262,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     };
                     resume_pending_exception!();
                     if let Some(result) = conversion {
-                        let Some(output) = result.as_str() else {
+                        let Some(output) = result.php_string_bytes() else {
                             throw_operator!(
                                 "TypeError",
                                 &format!(
@@ -2269,7 +2270,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 )
                             );
                         };
-                        eg.write_output(output.as_bytes());
+                        eg.write_output(output.as_ref());
                     } else {
                         throw_operator!(
                             "Error",

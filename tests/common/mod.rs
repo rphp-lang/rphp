@@ -38,6 +38,12 @@ pub fn run_php(source: &str) -> String {
     run_php_with_functions(source, |_| {})
 }
 
+/// Helper: compile and execute PHP source, return captured bytes.
+#[allow(dead_code)]
+pub fn run_php_bytes(source: &str) -> Vec<u8> {
+    run_php_with_compiler_bytes(source, Compiler::new(), |_| {})
+}
+
 #[allow(dead_code)]
 pub fn run_php_with_functions(source: &str, register: impl FnOnce(&mut ExecutorGlobals)) -> String {
     run_php_with_compiler(source, Compiler::new(), register)
@@ -57,6 +63,14 @@ fn run_php_with_compiler(
     compiler: Compiler,
     register: impl FnOnce(&mut ExecutorGlobals),
 ) -> String {
+    String::from_utf8(run_php_with_compiler_bytes(source, compiler, register)).unwrap()
+}
+
+fn run_php_with_compiler_bytes(
+    source: &str,
+    compiler: Compiler,
+    register: impl FnOnce(&mut ExecutorGlobals),
+) -> Vec<u8> {
     let tokens = Lexer::new(source).tokenize().unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();
     let result = compiler.compile(&stmts).unwrap();
@@ -87,7 +101,7 @@ fn run_php_with_compiler(
     }
     register(&mut eg);
     execute::execute(&mut eg, &main_func).unwrap();
-    captured_output(&buf)
+    buf.lock().unwrap().clone()
 }
 
 /// Run PHP source, discard output. For benchmarks.

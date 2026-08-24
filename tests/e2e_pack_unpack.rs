@@ -1,7 +1,15 @@
 //! Original PHP 8.5 differential boundaries for pack()/unpack().
 
 mod common;
-use common::run_php;
+use common::{run_php, run_php_bytes};
+
+#[test]
+fn packed_binary_echo_is_byte_exact() {
+    assert_eq!(
+        run_php_bytes("<?php echo pack('C4', 0, 127, 128, 255);"),
+        [0, 127, 128, 255]
+    );
+}
 
 #[test]
 fn integer_width_endian_sign_and_truncation_contract() {

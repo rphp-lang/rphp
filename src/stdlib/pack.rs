@@ -483,7 +483,7 @@ pub(super) fn unpack_values(format: &str, data: &[u8], offset: usize) -> Outcome
                     }
                     Repeat::Count(count) => count,
                 };
-                let target = offset.saturating_add(count.max(1));
+                let target = position.max(offset.saturating_add(count));
                 if target > data.len() {
                     warnings.push("unpack(): Type @: outside of string".to_string());
                     position = data.len();
@@ -527,14 +527,14 @@ mod tests {
         arguments.push(Value::string("123"));
         let packed = pack_values("H*X@4", Some(&arguments));
         assert_eq!(packed.value.unwrap(), [0x12, 0, 0, 0]);
-        let unpacked = unpack_values("H3hex/@0/x/Cfirst", &[0x12, 0x30], 0)
+        let unpacked = unpack_values("H3hex/@0/x/Cfirst", &[0x12, 0x30, 0x40, 0x50], 0)
             .value
             .unwrap()
             .unwrap();
         assert_eq!(unpacked.get_str("hex").and_then(Value::as_str), Some("123"));
         assert_eq!(
             unpacked.get_str("first").and_then(Value::as_long),
-            Some(0x30)
+            Some(0x50)
         );
     }
 }
