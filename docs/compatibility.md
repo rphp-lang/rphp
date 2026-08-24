@@ -8,6 +8,96 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`scope-array-transfer-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+implementation commit `3f5b4a41`. Its complete 22-case `compact*` and
+`extract*` focus moves from 4 to 22 passes (+18/-0), with no remaining failure,
+skip, unsupported case, timeout or crash. Two final runs have identical
+manifest SHA-256
+`bc6d7dc1237c5d53a7725bb9fd4e8e2117de9a32ea559202dbcc216cc29449bc`
+and summary SHA-256
+`2bdc96307734c4bb73d5a7d6125bde893b3e270cebea68b016179281e010714c`.
+
+`compact()` now reads the exact synchronous caller scope, traverses nested
+name arrays iteratively, preserves insertion order, snapshots referenced
+values, emits PHP 8.5 undefined-variable and invalid-value warnings, detects
+recursive arrays and exposes a bound closure receiver through `this`. Like
+PHP, it cannot be invoked through a dynamic callable or output-buffer callback.
+A direct call in a non-static closure reserves the ordinary named `this` CV
+without changing `get_defined_vars()` for closures that do not call
+`compact()`.
+
+`extract()` now applies the PHP 8.5 flag and prefix validation order, all seven
+base modes and `EXTR_REFS`. Default extraction dereferences source cells and
+assigns through an existing caller reference with its typed-property
+constraints; reference extraction materializes or reuses a source cell and
+rebinds the caller name. Its Reflection-visible array parameter remains by
+reference while the prefer-reference call boundary accepts non-lvalues such as
+`$GLOBALS`. Candidate collection walks the source array directly and the empty
+case returns before entering the cold write loop.
+
+Five original E2E tests cover nested names, order, warnings, reference
+snapshots, receiver visibility, recursion and dynamic-call rejection; prefix
+modes and error precedence; default/reference extraction, rebinding, typed
+reference checks and weak coercion; and `$GLOBALS` plus copy-on-write source
+references. The complete 842-case `ext/standard/tests/array` audit moves from
+636 to 664 passes (+28/-0), with 164 failures, 13 skips, one unsupported case
+and no timeout or crash. In addition to the 18 focused gains,
+`bug29493.phpt`, `bug30074.phpt`, `bug31213.phpt`, `bug33989.phpt`,
+`bug42233.phpt`, `bug44181.phpt`, `bug46873.phpt`, `bug69198.phpt`,
+`bug71220.phpt` and `bug71603.phpt` pass. Two final runs have identical
+manifest and summary SHA-256 values
+`a4ea80041ae8d6bd96d9fce9e07e0e51708d2342a55004675dcc7b1d70ee6ec4`
+and `960c01eedb87c26ca1ab594cb1633f8a347575edcc95b4fc3d45e653134edf4c`.
+
+The separate 5,599-case `Zend/tests` and `tests/lang` gate remains exactly
+4,168 pass, 1,135 fail, 115 skip, 181 unsupported and zero XFAIL, timeout or
+crash (+0/-0). Two final runs have identical manifest SHA-256
+`242cdb9e4aef28c790106494535ad4d0e83b844a69dd3c04e19dd2dbf7593852`
+and summary SHA-256
+`27c2f5168ca4349721136f504104f97eff3fcebe8567be21f42be85a5f90773e`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy self-tests, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+The production unsafe inventory remains at 1,623 blocks and 289 functions with
+346 SAFETY annotations. The implementation adds no dependency, opcode, VM
+frame, executor-global or PHP value/object/array layout change.
+
+On an AMD Ryzen 9 7950X AMD64 host with Linux 7.0, Rust 1.93.1 and 61 GiB RAM,
+a performance-governor CPU 2 ran 32 balanced alternating release pairs per
+lane, three warmups per binary and no excluded samples. Baseline/candidate
+p10/median/p90 seconds and independent/paired median changes are
+0.242955/0.244686/0.248462 versus 0.241359/0.242956/0.247141
+(-0.707%/-0.754%) for 100 empty requests; 0.130702/0.132583/0.135365 versus
+0.125191/0.131104/0.132295 (-1.116%/-1.307%) for 500,000 skipped
+`extract()` writes; 0.058441/0.058725/0.059332 versus
+0.056853/0.057189/0.057795 (-2.616%/-2.733%) for 500,000 bound-closure
+calls; and 0.121396/0.122765/0.125829 versus 0.119323/0.122539/0.130326
+(-0.184%/+0.368%) for 500,000 `get_defined_vars()` calls. Paired p10/p90
+changes are -1.958%/+0.262%, -6.041%/+0.020%, -3.934%/-1.753% and
+-3.560%/+6.565%, respectively. Every lane preserves its checksum and remains
+below the +5% median gate; negative changes are absence-of-regression evidence,
+not a general optimization claim. Baseline/candidate binary SHA-256 values are
+`4b8a48bfaa7f4a44c715c9b05fc4cc85c9c44c61d78d086b8b1008b3a3a0c6cd` /
+`8490b7fb27fcc136b780c3ca808aeb38712cebb91c36ebc5fbd906bde297a40d`.
+The harness and extract/bound-closure/defined-vars workload SHA-256 values are
+`a8805555e7cbf94fb675b6c764f12b19fac5b7d557e6de1a399f6949801e54ab`,
+`c2e638553577bac20fbf50b041cddadc13f391c017f3da83f7d974f313b9b599`,
+`847ad80e71be3dc22c170c7de046d8bc1bd09c6ab3534c57efed14fd0242b00b`
+and `382d2e0f6aa0fdaecab384db34e22a8a4c1f545ee243c5c8d8191166f448456a`.
+An executor-global caller-scope sidecar, blanket closure receiver CV and generic
+key snapshot were rejected during performance validation; the accepted design
+keeps caller-scope state in existing structures, reserves the receiver only
+for direct `compact()` closures and iterates extraction keys in place.
+
+This checkpoint does not claim `bug25708.phpt`, which advances from runtime to
+output failure but still depends on older conditional global/`$GLOBALS`
+synchronization. `Zend/tests/gh13142.phpt` likewise advances from runtime to
+output failure and exposes an existing undefined-global NUL-diagnostic gap.
+The remaining 164 array-suite failures, 1,135 Zend/lang failures and broader
+PHP compatibility remain explicit follow-up work.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `array-transform-callback-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 implementation commit `1566b3bd`. The complete 39-case `array_column*`,
 `array_map*` and `array_combine*` focus moves from 15 to 31 passes (+16/-0),
