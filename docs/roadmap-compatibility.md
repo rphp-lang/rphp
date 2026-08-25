@@ -2981,10 +2981,29 @@ controls measure +1.112% for existing MD5, -2.087% for existing xxh128,
 -97.569% for call-RHS concat, -69.274% for binary append and -4.297% for
 startup, all within +5% with matching comparable checksums.
 
+The `3f2e4294` `base64-decode-byte-contract` checkpoint closes all five
+supplying strict/invalid-byte cases against PHP 8.5.9 while retaining the
+already passing whitespace case. One typed handler owns PHP-byte input,
+weak/strict and null conversion, diagnostics and call/Reflection metadata;
+separate loose and strict decoder loops preserve the ordinary hot path while
+covering ignored NUL/high bytes, exact whitespace, terminal padding, unpadded
+tails, binary output, references and COW. Three original E2Es, two unit tests,
+four clean-room probes and an exhaustive 74,898-result short-input sweep cover
+the contract.
+
+Strings moves from 549 to 554 pass (+5/-0), with no lost pass or other outcome
+movement. Array remains exactly 828/842 and Zend/lang exactly 4,209/5,599.
+Three release runs have identical classification maps. All five feature
+configurations, all-feature/all-target, formatting, HTML data, runner, unsafe,
+Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Exact-final-binary
+CPU-pinned controls measure -6.452% for valid ASCII decode, -8.617% for the
+unchanged encoder, +3.105% for NUL-byte decode and -2.715% for startup, all
+within +5% with matching comparable checksums.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 549 pass, 99 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 554 pass, 94 fail, 54 skip and 30 unsupported, with one retained timeout;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
@@ -2998,11 +3017,11 @@ and both `str_split()` and `chunk_split()` are 6/6, while the complete
 `nl2br()` family is 5/5, the complete `strtr()` family is 16/16, the direct and
 related byte-search/window family is 79/79, and the direct split/join family is
 19 pass plus one explicit unsupported case. `str_getcsv()` and the visible
-checksum/hash supplying clusters are both 8/8. The next goal should close the
-five failing `base64_decode()` strict/invalid-byte cases in `bug24312.phpt`,
-`bug37244.phpt`, `bug72152.phpt`, `bug72263.phpt` and `bug72264.phpt` through
-one typed PHP-byte decoder while retaining the passing `bug34214.phpt`
-whitespace boundary;
+checksum/hash supplying clusters are both 8/8, and the selected
+`base64_decode()` family is 6/6. The next goal should close the five visible
+quoted-printable failures in `bug62462.phpt`, `bug64879.phpt`,
+`quoted_printable_decode_basic.phpt`, `quoted_printable_encode_001.phpt` and
+`quoted_printable_encode_002.phpt` through one shared PHP-byte codec contract;
 wider string-offset writes, typed-parameter and associative-key binary
 provenance, detached-callback alias spelling, unknown entity-encoding warnings,
 platform cryptography, tag parsing and broader legacy multibyte behavior remain
