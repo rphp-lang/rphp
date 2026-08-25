@@ -2572,17 +2572,45 @@ for `asort()`, +2.217% for keyed `foreach` and -3.575% for startup, inside the
 +5% gate. Broader named-entity encoding/decoding remains the next high-yield
 shared-table cluster.
 
+The `htmlentities-table-engine` checkpoint closes the five-case ordinary
+HTML4/HTML5 encode/decode table cluster against PHP 8.5.9. `htmlentities()`
+uses canonical document/quote mappings, greedy two-codepoint HTML5 matches and
+`double_encode=false` preservation; `html_entity_decode()` accepts all 2,125
+semicolon-terminated WHATWG HTML5 aliases, multi-codepoint values and the
+admitted legacy encodings. The generated decoder uses one compact exact
+name/value blob with 16-bit record offsets. Marked UTF-8 translation-table arrays
+normalize byte-produced UTF-8 keys for fetch, existence, assignment and unset
+without growing `PhpArray`, and binary string concatenation now preserves PHP
+bytes while leaving the ordinary text path direct.
+
+The focused cluster moves from 0/5 to 5/5 and strings moves from 418 to 424
+pass (+6/-0), with 224 fail, 54 skip, 30 unsupported and the retained timeout.
+Array remains 828 pass, 13 skip and one unsupported; Zend/lang remains 4,202
+pass, 1,101 fail, 115 skip and 181 unsupported without timeout or crash. Three
+serial final manifests have identical normalized strings/array/Zend hashes
+`31c09a0686360fee93f92aefb04a61b0e2484e3e93fd1069e6a934cdb7a45ebe`,
+`ff41c1f1ea94aac84b3225be3cff2a51d9620d8fc7a4f7fbae371f41e62de700`
+and `58f964c434be118ac09885d4223db8339aecc3b8f1766e4baf1d649e1692f973`.
+All five feature configurations, all-feature/all-target, formatting, runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass; unsafe
+blocks fall from 1,623 to 1,621. Exact-binary tmpfs A/B controls put paired
+medians at +1.611% for ASCII encoding, -9.126% for default decoding, +2.138%
+for ordinary concatenation and +0.464% for startup, within +5%. A naive table
+encoder, per-entity decode allocations and normalizing `pack()` values were
+rejected on measured performance or byte-provenance evidence.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 418 pass, 230 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 424 pass, 224 fail, 54 skip and 30 unsupported, with one retained timeout;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
-is 10/10. `Zend/tests` plus `tests/lang` is 4,202 pass, 1,101 fail, 115 skip and
-181 unsupported, with no timeout or crash. The next goal should reuse the
-shared entity data to close the highest-yield ordinary `htmlentities()` and
-`html_entity_decode()` cluster rather than extending the already-zero array
-failure count or the closed position-search/printf/translation-table families.
+is 10/10 and the ordinary named-entity family is 5/5. `Zend/tests` plus
+`tests/lang` is 4,202 pass, 1,101 fail, 115 skip and 181 unsupported, with no
+timeout or crash. The next goal should close the three-case
+`ENT_DISALLOWED` family (`htmlentities20..22.phpt`) as the highest coherent
+remaining entity cluster; invalid UTF-8 substitution/ignore and EUC-JP remain
+separate contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,

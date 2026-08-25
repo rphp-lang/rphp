@@ -126,6 +126,31 @@ fn prepare_concat_operand_string(
     Ok(Some(value.echo_to_string_with_precision(eg.precision)))
 }
 
+#[inline]
+fn concatenate_string_values(left: &Value, right: &Value) -> Value {
+    if !left.is_binary_string() && !right.is_binary_string() {
+        let left = left.as_str();
+        let right = right.as_str();
+        debug_assert!(left.is_some() && right.is_some());
+        let left = left.unwrap_or_default();
+        let right = right.unwrap_or_default();
+        let mut concatenated = String::with_capacity(left.len() + right.len());
+        concatenated.push_str(left);
+        concatenated.push_str(right);
+        return Value::string(concatenated);
+    }
+
+    let left = left.php_string_bytes();
+    let right = right.php_string_bytes();
+    debug_assert!(left.is_some() && right.is_some());
+    let left = left.unwrap_or_default();
+    let right = right.unwrap_or_default();
+    let mut concatenated = Vec::with_capacity(left.len() + right.len());
+    concatenated.extend_from_slice(left.as_ref());
+    concatenated.extend_from_slice(right.as_ref());
+    Value::binary_string(&concatenated)
+}
+
 #[inline(never)]
 fn op_concat(
     eg: &mut ExecutorGlobals,
@@ -151,13 +176,9 @@ fn op_concat(
     let op2 = op2.dereferenced();
     // Fast path: both operands are strings — avoid echo_to_string() heap allocation.
     if op1.value_type() == ValueType::String && op2.value_type() == ValueType::String {
-        let s1 = op1.as_str().unwrap();
-        let s2 = op2.as_str().unwrap();
-        let mut concatenated = String::with_capacity(s1.len() + s2.len());
-        concatenated.push_str(s1);
-        concatenated.push_str(s2);
-        // SAFETY: result_ptr is this instruction's live TMP result slot.
-        unsafe { frame_tmp_set(frame, result_ptr, Value::string(concatenated)) };
+        // SAFETY: result_ptr is this instruction's compiler-owned live TMP;
+        // the helper returns an owned Value and retains no operand borrow.
+        unsafe { frame_tmp_set(frame, result_ptr, concatenate_string_values(op1, op2)) };
         return Ok(());
     }
 

@@ -963,6 +963,14 @@ fn fn_array_key_exists_named(
         ret!(rv, Value::bool(array.get_int(key).is_some()));
     }
     if let Some(key) = key.as_str() {
+        if array.has_utf8_text_keys() && arg!(ed, 0).is_binary_string() {
+            let key = array.normalize_utf8_text_key(ArrayKey::String(key.to_string()), arg!(ed, 0));
+            let exists = match key {
+                ArrayKey::Int(key) => array.get_int(key).is_some(),
+                ArrayKey::String(key) => array.get_str(&key).is_some(),
+            };
+            ret!(rv, Value::bool(exists));
+        }
         let exists = crate::value::canonical_decimal_array_key(key).map_or_else(
             || array.get_str(key).is_some(),
             |key| array.get_int(key).is_some(),
@@ -1059,6 +1067,7 @@ fn fn_array_key_exists_named(
             return Ok(());
         }
     };
+    let key = array.normalize_utf8_text_key(key, key_value);
     let exists = match key {
         ArrayKey::Int(key) => array.get_int(key).is_some(),
         ArrayKey::String(key) => array.get_str(&key).is_some(),
@@ -19238,6 +19247,9 @@ fn fn_user_key_preserving_sort(
     let external_byte_keys = arg!(ed, 0)
         .as_array()
         .is_some_and(PhpArray::has_external_byte_keys);
+    let utf8_text_keys = arg!(ed, 0)
+        .as_array()
+        .is_some_and(PhpArray::has_utf8_text_keys);
     let mut pairs = match arg!(ed, 0).as_array() {
         Some(array) => array
             .iter()
@@ -19311,6 +19323,9 @@ fn fn_user_key_preserving_sort(
     }
     if external_byte_keys {
         sorted.mark_external_byte_keys();
+    }
+    if utf8_text_keys {
+        sorted.mark_utf8_text_keys();
     }
     arg_mut!(ed, 0, Value::array(sorted));
     ret!(rv, Value::bool(true));
@@ -20541,6 +20556,7 @@ fn fn_asort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
         let external_byte_keys = php_arr.has_external_byte_keys();
+        let utf8_text_keys = php_arr.has_utf8_text_keys();
         let mut pairs: Vec<(ArrayKey, Value)> = php_arr
             .iter()
             .map(|(key, value)| (key, array_sort_snapshot_value(value)))
@@ -20568,6 +20584,9 @@ fn fn_asort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
         if external_byte_keys {
             new_arr.mark_external_byte_keys();
         }
+        if utf8_text_keys {
+            new_arr.mark_utf8_text_keys();
+        }
         *arr = Value::array(new_arr);
         ret!(rv, Value::bool(true));
     }
@@ -20584,6 +20603,7 @@ fn fn_arsort(
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
         let external_byte_keys = php_arr.has_external_byte_keys();
+        let utf8_text_keys = php_arr.has_utf8_text_keys();
         let mut pairs: Vec<(ArrayKey, Value)> = php_arr
             .iter()
             .map(|(key, value)| (key, array_sort_snapshot_value(value)))
@@ -20612,6 +20632,9 @@ fn fn_arsort(
         if external_byte_keys {
             new_arr.mark_external_byte_keys();
         }
+        if utf8_text_keys {
+            new_arr.mark_utf8_text_keys();
+        }
         *arr = Value::array(new_arr);
         ret!(rv, Value::bool(true));
     }
@@ -20624,6 +20647,7 @@ fn fn_ksort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
         let external_byte_keys = php_arr.has_external_byte_keys();
+        let utf8_text_keys = php_arr.has_utf8_text_keys();
         let mut pairs: Vec<(ArrayKey, Value)> = php_arr
             .iter()
             .map(|(key, value)| (key, array_sort_snapshot_value(value)))
@@ -20641,6 +20665,9 @@ fn fn_ksort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
         if external_byte_keys {
             new_arr.mark_external_byte_keys();
         }
+        if utf8_text_keys {
+            new_arr.mark_utf8_text_keys();
+        }
         *arr = Value::array(new_arr);
         ret!(rv, Value::bool(true));
     }
@@ -20657,6 +20684,7 @@ fn fn_krsort(
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
         let external_byte_keys = php_arr.has_external_byte_keys();
+        let utf8_text_keys = php_arr.has_utf8_text_keys();
         let mut pairs: Vec<(ArrayKey, Value)> = php_arr
             .iter()
             .map(|(key, value)| (key, array_sort_snapshot_value(value)))
@@ -20674,6 +20702,9 @@ fn fn_krsort(
         }
         if external_byte_keys {
             new_arr.mark_external_byte_keys();
+        }
+        if utf8_text_keys {
+            new_arr.mark_utf8_text_keys();
         }
         *arr = Value::array(new_arr);
         ret!(rv, Value::bool(true));

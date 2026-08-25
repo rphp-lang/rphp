@@ -1841,8 +1841,15 @@ const ARRAY_INT_KEY_INITIALIZED: usize = 1usize << (usize::BITS - 2);
 // scalars; this marker restores byte provenance at observable boundaries
 // without enlarging PhpArray or changing ordinary key lookup.
 const ARRAY_EXTERNAL_BYTE_KEYS: usize = 1usize << (usize::BITS - 3);
-const ARRAY_CURSOR_METADATA: usize =
-    ARRAY_CURSOR_PRISTINE | ARRAY_INT_KEY_INITIALIZED | ARRAY_EXTERNAL_BYTE_KEYS;
+// UTF-8 translation tables retain ordinary text keys for source-literal
+// lookup, while byte-producing functions can supply the same PHP bytes through
+// the Latin-1 bridge. This bit permits that one lookup normalization without
+// changing ordinary array-key representation.
+const ARRAY_UTF8_TEXT_KEYS: usize = 1usize << (usize::BITS - 4);
+const ARRAY_CURSOR_METADATA: usize = ARRAY_CURSOR_PRISTINE
+    | ARRAY_INT_KEY_INITIALIZED
+    | ARRAY_EXTERNAL_BYTE_KEYS
+    | ARRAY_UTF8_TEXT_KEYS;
 
 /// Fast deterministic hashing for integer-only PHP array keys.
 ///
@@ -2561,6 +2568,31 @@ impl PhpArray {
 
     pub(crate) fn has_external_byte_keys(&self) -> bool {
         self.cursor.get() & ARRAY_EXTERNAL_BYTE_KEYS != 0
+    }
+
+    pub(crate) fn mark_utf8_text_keys(&self) {
+        self.cursor.set(self.cursor.get() | ARRAY_UTF8_TEXT_KEYS);
+    }
+
+    pub(crate) fn has_utf8_text_keys(&self) -> bool {
+        self.cursor.get() & ARRAY_UTF8_TEXT_KEYS != 0
+    }
+
+    pub(crate) fn normalize_utf8_text_key(&self, key: ArrayKey, source: &Value) -> ArrayKey {
+        if !self.has_utf8_text_keys() || !source.is_binary_string() {
+            return key;
+        }
+        let ArrayKey::String(_) = key else {
+            return key;
+        };
+        let Some(bytes) = source.php_string_bytes() else {
+            return key;
+        };
+        let Ok(text) = std::str::from_utf8(bytes.as_ref()) else {
+            return key;
+        };
+        canonical_decimal_array_key(text)
+            .map_or_else(|| ArrayKey::String(text.to_string()), ArrayKey::Int)
     }
 
     /// Preserve Zend's literal-source ownership on the direct refcounted

@@ -8,6 +8,77 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`htmlentities-table-engine`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. `htmlentities()` now encodes the canonical HTML4
+and HTML5 named entities, including greedy two-codepoint HTML5 mappings,
+document-specific apostrophes, quote modes and `double_encode=false` entity
+preservation. `html_entity_decode()` accepts the complete 2,125-entry
+semicolon-terminated WHATWG HTML5 alias set, HTML4 aliases, multi-codepoint
+values, document/quote modes and the admitted legacy single-byte encodings.
+The reproducible public-data checker emits one compact exact name/value blob
+with 16-bit record offsets, so unknown names cannot alias a valid entity; it
+does not copy php-src implementation or tests.
+
+UTF-8 table arrays retain ordinary source-text keys while valid UTF-8 keys
+produced through PHP's byte bridge resolve identically for fetch,
+`array_key_exists()`, assignment and unset. A spare `PhpArray` cursor metadata
+bit carries that table-only contract through key-preserving sorts without
+growing the array layout. String concatenation now preserves PHP bytes when
+either operand has binary provenance, while its ordinary text path retains the
+existing direct allocation. Three original E2E regressions cover canonical and
+alias encoding, every document and quote mode, multi-codepoint values,
+double-encoding, byte consumers and table-key mutation interactions.
+
+The five-case supplying family (`htmlentities_html4.phpt`,
+`htmlentities_html5.phpt`, both matching `html_entity_decode_html*.phpt` cases
+and `htmlentities17.phpt`) moves from 0/5 to 5/5. Its normalized baseline,
+PHP-oracle and candidate SHA-256 values are
+`3b7fd26c122f86f14cc19f160db3a48e7aaa96c517d358ed7de50fbc12e7b8a7`,
+`f2e59b4e8c7ca9f9f155281632dc605cb8bee9529ff259e8c89bba816aeaf483`
+and `f2e59b4e8c7ca9f9f155281632dc605cb8bee9529ff259e8c89bba816aeaf483`.
+The complete 733-case strings audit moves from 418 to 424 passes, an exact
++6/-0 delta comprising the five supplying cases and `bug29119.phpt`; 224
+failures, 54 skips, 30 unsupported cases, the retained `dirname_multi.phpt`
+timeout and zero crashes remain. Array stays at 828 passes, 13 skips and one
+unsupported case; Zend/lang stays at 4,202 passes, 1,101 failures, 115 skips
+and 181 unsupported cases with no timeout or crash. Three serial final runs
+have identical normalized strings/array/Zend SHA-256 values:
+`31c09a0686360fee93f92aefb04a61b0e2484e3e93fd1069e6a934cdb7a45ebe`,
+`ff41c1f1ea94aac84b3225be3cff2a51d9620d8fc7a4f7fbae371f41e62de700`
+and `58f964c434be118ac09885d4223db8339aecc3b8f1766e4baf1d649e1692f973`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production unsafe blocks fall from
+1,623 to 1,621 while unsafe functions remain 289 and SAFETY annotations remain
+357. CPU-2-pinned balanced release A/B controls use byte-identical tmpfs copies
+of the exact retained binaries to exclude physical-file fragmentation: paired
+medians are +1.611% for 500,000 ASCII `htmlentities()` calls, -9.126% for one
+million default decode calls, +2.138% for five million ordinary concatenations
+and +0.464% for 1,000 empty-process pairs. Independent medians are +1.060%,
+-8.972%, +2.206% and +0.257%; every output/checksum matches and all medians are
+below +5%. The direct Cargo-target files initially showed a false +5.2% to
++5.8% startup delta from roughly 40 extra minor faults; Callgrind found only
++0.03% instructions and copying the exact bytes to tmpfs removed the extent
+artifact without changing either SHA-256. Baseline/candidate hashes are
+`afda7a89d2e3432b23e273e86aaf7d700662580e90e8313e4b4a9a64106c221a`
+and `966bb5d9e0f0f2764f77a24879f10547f41417908cccf57c0b1eb57d50e03f6b`.
+
+The first table-lookup encoder was rejected after making the ordinary ASCII
+path roughly six times slower, and per-entity temporary allocations made
+default decode roughly 40% slower. The accepted design restores direct ASCII
+handling, uses a compact exact alias index and adds a default
+common-reference decode path. Converting valid UTF-8 `pack()` results into
+ordinary text was also rejected because it broke byte provenance; normalization
+is confined to keys of marked UTF-8 translation tables.
+
+This checkpoint does not claim the seven remaining entity-related strings
+failures: invalid UTF-8 substitution/ignore handling, `ENT_DISALLOWED`, EUC-JP
+and broader legacy multibyte behavior remain separate clusters. It also does
+not claim 32-bit execution, the remaining strings/Zend failures, unsupported
+INI/extensions or broader PHP compatibility.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `html-translation-table-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. RPHP now exposes `HTML_SPECIALCHARS`,
 `HTML_ENTITIES` and `get_html_translation_table()` with PHP-compatible defaults,
@@ -67,7 +138,7 @@ This checkpoint does not claim the broader `htmlentities()` or
 32-bit execution, the remaining strings/Zend failures, unsupported INI and
 extension cases, or broader PHP compatibility.
 
-The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
+The measured checkpoint before that is the
 `printf-format-engine-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. `sprintf()`, `printf()`, `vsprintf()` and
 `vprintf()` now share one PHP-byte formatting engine with positional and

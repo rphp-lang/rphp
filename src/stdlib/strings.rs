@@ -13,7 +13,7 @@ use crate::vm::frame::ExecuteData;
 
 use super::{
     StringSearchDirection, bytes_to_php_string, direct_arg_opt, direct_arg_str,
-    html_entities::{HTML4_ENTITIES, HTML5_ENTITIES},
+    html_entities::{HTML4_ENTITIES, HTML5_ENTITIES, html5_characters_for_entity},
     legacy_encoding::LegacyEncoding,
     owned_argument, percent_decode_bytes, php_string_to_bytes, push_percent_escape,
     report_internal_diagnostic, string_position_builtin, typed_internal_bool_argument,
@@ -112,14 +112,8 @@ fn valid_html_entity(src: &str, document: i64) -> Option<usize> {
         || body.strip_prefix('#').is_some_and(|digits| {
             !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
         });
-    let named = match document {
-        ENT_XML1 => matches!(body, "amp" | "lt" | "gt" | "quot" | "apos"),
-        ENT_XHTML | ENT_HTML5 => matches!(
-            body,
-            "amp" | "lt" | "gt" | "quot" | "apos" | "copy" | "nbsp" | "reg"
-        ),
-        _ => matches!(body, "amp" | "lt" | "gt" | "quot" | "copy" | "nbsp" | "reg"),
-    };
+    let named = named_html_reference(&bytes[1..], document)
+        .is_some_and(|(_, consumed)| consumed == semicolon);
     (numeric || named).then_some(semicolon + 1)
 }
 
@@ -213,7 +207,7 @@ fn html_encode_arguments(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
     function: &str,
-) -> Result<Option<(String, i64, bool)>, VmError> {
+) -> Result<Option<(String, i64, String, bool)>, VmError> {
     let Some(string) = typed_internal_string_argument(ed, eg, function, 0, "string")? else {
         return Ok(None);
     };
@@ -225,9 +219,9 @@ fn html_encode_arguments(
     } else {
         ENT_QUOTES_MASK | ENT_SUBSTITUTE
     };
-    if html_encoding_argument(ed, eg, function)?.is_none() {
+    let Some(encoding) = html_encoding_argument(ed, eg, function)? else {
         return Ok(None);
-    }
+    };
     let double_encode = if arg_opt!(ed, 3).is_some() {
         let Some(double_encode) =
             typed_internal_bool_argument(ed, eg, function, 3, "double_encode")?
@@ -238,7 +232,7 @@ fn html_encode_arguments(
     } else {
         true
     };
-    Ok(Some((string, flags, double_encode)))
+    Ok(Some((string, flags, encoding, double_encode)))
 }
 
 fn html_translation_encoding_argument(
@@ -276,7 +270,8 @@ pub(super) fn fn_htmlspecialchars(
     {
         ret!(rv, Value::string(encode_html_special_chars_default(string)));
     }
-    let Some((string, flags, double_encode)) = html_encode_arguments(ed, eg, "htmlspecialchars")?
+    let Some((string, flags, _encoding, double_encode)) =
+        html_encode_arguments(ed, eg, "htmlspecialchars")?
     else {
         return Ok(());
     };
@@ -370,6 +365,14 @@ fn html_quote_reference_allowed(codepoint: u32, flags: i64) -> bool {
     match codepoint {
         0x22 => flags & 2 != 0,
         0x27 => flags & 1 != 0,
+        _ => true,
+    }
+}
+
+fn html_quote_characters_allowed(characters: &str, flags: i64) -> bool {
+    match characters {
+        "\"" => flags & 2 != 0,
+        "'" => flags & 1 != 0,
         _ => true,
     }
 }
@@ -491,13 +494,19 @@ fn decode_html_special_references(source: &[u8], flags: i64) -> String {
     let mut out = String::with_capacity(source.len());
     let mut position = 0;
     while position < source.len() {
-        if source[position] != b'&' {
-            out.push(char::from(source[position]));
+        let Some(remaining) = source.get(position..) else {
+            break;
+        };
+        let Some(first) = remaining.first() else {
+            break;
+        };
+        if *first != b'&' {
+            out.push(char::from(*first));
             position += 1;
             continue;
         }
 
-        let tail = &source[position + 1..];
+        let tail = remaining.get(1..).unwrap_or_default();
         let parsed = if tail.first() == Some(&b'#') {
             parse_numeric_html_reference(tail)
                 .filter(|(codepoint, _)| matches!(*codepoint, 0x22 | 0x26 | 0x27 | 0x3c | 0x3e))
@@ -532,23 +541,64 @@ fn decode_html_special_references(source: &[u8], flags: i64) -> String {
     out
 }
 
-fn named_html_reference(source: &[u8], document: i64) -> Option<(u32, usize)> {
-    Some(match source {
-        source if source.starts_with(b"amp;") => (0x26, 4),
-        source if source.starts_with(b"lt;") => (0x3c, 3),
-        source if source.starts_with(b"gt;") => (0x3e, 3),
-        source if source.starts_with(b"quot;") => (0x22, 5),
+fn html_entity_for_characters(
+    entries: &'static [(&'static str, &'static str)],
+    characters: &str,
+) -> Option<&'static str> {
+    entries
+        .binary_search_by(|(candidate, _)| candidate.cmp(&characters))
+        .ok()
+        .map(|position| entries[position].1)
+}
+
+fn html4_characters_for_entity(name: &[u8]) -> Option<&'static str> {
+    HTML4_ENTITIES.iter().find_map(|(characters, entity)| {
+        entity
+            .as_bytes()
+            .strip_prefix(b"&")
+            .filter(|candidate| *candidate == name)
+            .map(|_| *characters)
+    })
+}
+
+fn named_html_reference(source: &[u8], document: i64) -> Option<(&'static str, usize)> {
+    let common = match source {
+        source if source.starts_with(b"amp;") => Some(("&", 4)),
+        source if source.starts_with(b"lt;") => Some(("<", 3)),
+        source if source.starts_with(b"gt;") => Some((">", 3)),
+        source if source.starts_with(b"quot;") => Some(("\"", 5)),
         source
             if source.starts_with(b"apos;")
                 && matches!(document, ENT_XML1 | ENT_XHTML | ENT_HTML5) =>
         {
-            (0x27, 5)
+            Some(("'", 5))
         }
-        source if source.starts_with(b"nbsp;") => (0xa0, 5),
-        source if source.starts_with(b"copy;") => (0xa9, 5),
-        source if source.starts_with(b"reg;") => (0xae, 4),
-        _ => return None,
-    })
+        source if source.starts_with(b"nbsp;") && document != ENT_XML1 => Some(("\u{a0}", 5)),
+        source if source.starts_with(b"copy;") && document != ENT_XML1 => Some(("\u{a9}", 5)),
+        source if source.starts_with(b"reg;") && document != ENT_XML1 => Some(("\u{ae}", 4)),
+        _ => None,
+    };
+    if common.is_some() {
+        return common;
+    }
+    let semicolon = source.iter().take(34).position(|byte| *byte == b';')?;
+    let consumed = semicolon + 1;
+    let name = &source[..consumed];
+    let characters = match document {
+        ENT_XML1 => match name {
+            b"amp;" => "&",
+            b"lt;" => "<",
+            b"gt;" => ">",
+            b"quot;" => "\"",
+            b"apos;" => "'",
+            _ => return None,
+        },
+        ENT_HTML5 => html5_characters_for_entity(std::str::from_utf8(name).ok()?)?,
+        ENT_XHTML if name == b"apos;" => "'",
+        ENT_XHTML | 0 => html4_characters_for_entity(name)?,
+        _ => html4_characters_for_entity(name)?,
+    };
+    Some((characters, consumed))
 }
 
 fn encode_html_entity_codepoint(
@@ -577,6 +627,28 @@ fn encode_html_entity_codepoint(
     }
 }
 
+fn encode_html_entity_characters(
+    characters: &str,
+    encoding: HtmlEntityOutputEncoding,
+    out: &mut String,
+) -> bool {
+    if matches!(encoding, HtmlEntityOutputEncoding::Utf8) {
+        for character in characters.chars() {
+            let encoded = encode_html_entity_codepoint(u32::from(character), encoding, out);
+            debug_assert!(encoded, "valid Unicode always has a UTF-8 representation");
+        }
+        return true;
+    }
+    let mut encoded = String::with_capacity(characters.len());
+    for character in characters.chars() {
+        if !encode_html_entity_codepoint(u32::from(character), encoding, &mut encoded) {
+            return false;
+        }
+    }
+    out.push_str(&encoded);
+    true
+}
+
 fn decode_html_entities_for_encoding(
     source: &[u8],
     flags: i64,
@@ -593,16 +665,18 @@ fn decode_html_entities_for_encoding(
         }
 
         let tail = &source[position + 1..];
-        let numeric = tail.first() == Some(&b'#');
-        let parsed = if numeric {
-            parse_numeric_html_reference(tail)
-        } else {
-            named_html_reference(tail, document)
-        };
-        if let Some((codepoint, consumed)) = parsed
-            && html_quote_reference_allowed(codepoint, flags)
-            && (!numeric || html_numeric_reference_allowed(codepoint, document))
-            && encode_html_entity_codepoint(codepoint, encoding, &mut out)
+        if tail.first() == Some(&b'#') {
+            if let Some((codepoint, consumed)) = parse_numeric_html_reference(tail)
+                && html_quote_reference_allowed(codepoint, flags)
+                && html_numeric_reference_allowed(codepoint, document)
+                && encode_html_entity_codepoint(codepoint, encoding, &mut out)
+            {
+                position += consumed + 1;
+                continue;
+            }
+        } else if let Some((characters, consumed)) = named_html_reference(tail, document)
+            && html_quote_characters_allowed(characters, flags)
+            && encode_html_entity_characters(characters, encoding, &mut out)
         {
             position += consumed + 1;
             continue;
@@ -612,6 +686,44 @@ fn decode_html_entities_for_encoding(
         // valid entity still gets its own decoding opportunity.
         out.push('&');
         position += 1;
+    }
+    out
+}
+
+fn decode_html_entities_default_utf8(source: &[u8]) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut position = 0;
+    while position < source.len() {
+        let tail = &source[position..];
+        let common = if tail.starts_with(b"&amp;") {
+            Some(('&', 5))
+        } else if tail.starts_with(b"&quot;") {
+            Some(('"', 6))
+        } else if tail.starts_with(b"&#039;") {
+            Some(('\'', 6))
+        } else if tail.starts_with(b"&lt;") {
+            Some(('<', 4))
+        } else if tail.starts_with(b"&gt;") {
+            Some(('>', 4))
+        } else {
+            None
+        };
+        if let Some((character, consumed)) = common {
+            out.push(character);
+            position += consumed;
+        } else if tail.first() == Some(&b'&') {
+            out.push_str(&decode_html_entities_for_encoding(
+                tail,
+                ENT_QUOTES_MASK | ENT_SUBSTITUTE,
+                HtmlEntityOutputEncoding::Utf8,
+            ));
+            break;
+        } else if let Some(byte) = tail.first() {
+            out.push(char::from(*byte));
+            position += 1;
+        } else {
+            break;
+        }
     }
     out
 }
@@ -629,11 +741,7 @@ pub(super) fn fn_html_entity_decode(
         && arg_opt!(ed, 2).is_none()
         && let Some(source) = arg!(ed, 0).php_string_bytes()
     {
-        let decoded = decode_html_entities_for_encoding(
-            &source,
-            ENT_QUOTES_MASK | ENT_SUBSTITUTE,
-            HtmlEntityOutputEncoding::Utf8,
-        );
+        let decoded = decode_html_entities_default_utf8(&source);
         ret!(rv, html_entity_decoded_value(decoded));
     }
     let original_bytes = arg!(ed, 0).php_string_bytes().map(Cow::into_owned);
@@ -685,6 +793,64 @@ fn html_translation_entries(table: i64, document: i64) -> &'static [(&'static st
     } else {
         HTML4_ENTITIES
     }
+}
+
+fn encode_named_html_entities_utf8(
+    source: &[u8],
+    flags: i64,
+    double_encode: bool,
+) -> Option<String> {
+    let source = std::str::from_utf8(source).ok()?;
+    let document = flags & ENT_DOCUMENT_MASK;
+    let entries = html_translation_entries(1, document);
+    let mut output = String::with_capacity(source.len());
+    let mut position = 0;
+    while position < source.len() {
+        if !double_encode
+            && source.as_bytes()[position] == b'&'
+            && let Some(consumed) = valid_html_entity(&source[position..], document)
+        {
+            output.push_str(&source[position..position + consumed]);
+            position += consumed;
+            continue;
+        }
+
+        let character = source[position..]
+            .chars()
+            .next()
+            .expect("position remains on a character boundary");
+        let first_end = position + character.len_utf8();
+        let mut matched_end = first_end;
+        let mut entity = None;
+        if document == ENT_HTML5
+            && first_end < source.len()
+            && let Some(next) = source[first_end..].chars().next()
+        {
+            let second_end = first_end + next.len_utf8();
+            if let Some(candidate) =
+                html_entity_for_characters(entries, &source[position..second_end])
+            {
+                matched_end = second_end;
+                entity = Some(candidate);
+            }
+        }
+        if entity.is_none() {
+            entity = html_entity_for_characters(entries, &source[position..first_end]);
+        }
+        if let Some(mut entity) = entity
+            && html_quote_characters_allowed(&source[position..matched_end], flags)
+        {
+            if document == ENT_XML1 && &source[position..matched_end] == "'" {
+                entity = "&apos;";
+            }
+            output.push_str(entity);
+            position = matched_end;
+        } else {
+            output.push(character);
+            position = first_end;
+        }
+    }
+    Some(output)
 }
 
 /// get_html_translation_table($table = HTML_SPECIALCHARS,
@@ -766,6 +932,8 @@ pub(super) fn fn_get_html_translation_table(
     }
     if encoding.has_external_byte_keys() {
         result.mark_external_byte_keys();
+    } else if matches!(encoding, HtmlTranslationEncoding::Utf8) {
+        result.mark_utf8_text_keys();
     }
     ret!(rv, Value::array(result));
 }
@@ -895,13 +1063,26 @@ pub(super) fn fn_htmlentities(
         && arg_opt!(ed, 2).is_none()
         && arg_opt!(ed, 3).is_none()
         && let Some(string) = arg!(ed, 0).as_str()
+        && string.is_ascii()
     {
         ret!(rv, Value::string(encode_html_special_chars_default(string)));
     }
-    let Some((string, flags, double_encode)) = html_encode_arguments(ed, eg, "htmlentities")?
+    let binary_input = arg!(ed, 0).is_binary_string();
+    let original_bytes = arg!(ed, 0).php_string_bytes().map(Cow::into_owned);
+    let Some((string, flags, encoding, double_encode)) =
+        html_encode_arguments(ed, eg, "htmlentities")?
     else {
         return Ok(());
     };
+    if encoding.eq_ignore_ascii_case("UTF-8") {
+        let source = original_bytes.unwrap_or_else(|| string.as_bytes().to_vec());
+        if let Some(encoded) = encode_named_html_entities_utf8(&source, flags, double_encode) {
+            if binary_input {
+                ret!(rv, Value::binary_string(encoded.as_bytes()));
+            }
+            ret!(rv, Value::string(encoded));
+        }
+    }
     ret!(
         rv,
         Value::string(encode_html_special_chars(&string, flags, double_encode))

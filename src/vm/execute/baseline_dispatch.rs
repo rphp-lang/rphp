@@ -3061,16 +3061,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 };
                 debug_assert_eq!(left.value_type(), ValueType::String);
                 debug_assert_eq!(right.value_type(), ValueType::String);
-                let lhs = unsafe { left.as_str().unwrap_unchecked() };
-                let rhs = unsafe { right.as_str().unwrap_unchecked() };
-                let mut concatenated = String::with_capacity(lhs.len() + rhs.len());
-                concatenated.push_str(lhs);
-                concatenated.push_str(rhs);
                 let result_ptr = unsafe {
                     (*frame).get_op_mut(opline.result as u32, opline.result_type)
                 };
                 unsafe {
-                    frame_tmp_set(frame, result_ptr, Value::string(concatenated))
+                    frame_tmp_set(frame, result_ptr, concatenate_string_values(left, right))
                 };
             }
 
@@ -5757,7 +5752,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             })),
                         );
                     } else {
-                        match value_to_array_key_ref(idx_val) {
+                        let normalized_utf8_key = (arr.has_utf8_text_keys()
+                            && idx_val.is_binary_string())
+                        .then(|| value_to_array_key(idx_val).ok())
+                        .flatten()
+                        .map(|key| arr.normalize_utf8_text_key(key, idx_val));
+                        let array_key = normalized_utf8_key.as_ref().map_or_else(
+                            || value_to_array_key_ref(idx_val),
+                            |key| {
+                                Ok(match key {
+                                    ArrayKey::Int(key) => ArrayKeyRef::Int(*key),
+                                    ArrayKey::String(key) => ArrayKeyRef::String(key),
+                                })
+                            },
+                        );
+                        match array_key {
                             Ok(array_key) => {
                                 let fetched = match &array_key {
                                     ArrayKeyRef::Int(key) => arr.get_int(*key),
@@ -6430,7 +6439,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe { (*frame).opline = opline_ptr.add(1) };
                     continue 'vm;
                 }
-                let key = array_key_owned_or_throw!(
+                let mut key = array_key_owned_or_throw!(
                     idx_val,
                     &format!(
                         "Cannot access offset of type {} on array",
@@ -6446,6 +6455,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let arr = unsafe { &mut *arr_ptr };
                     arr.as_array_mut().unwrap().set(key, cloned_val);
                 } else if let Some(php_arr) = arr.as_array_mut() {
+                    key = php_arr.normalize_utf8_text_key(key, idx_val);
                     if let Some(element) = php_arr.get_key_mut(&key) {
                         if opline._pad & crate::vm::instruction::ASSIGN_DIM_REFERENCE != 0 {
                             // `=&` rebinds this array dimension itself. Writing
@@ -6787,7 +6797,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe { (*frame).opline = opline_ptr.add(1) };
                     continue 'vm;
                 }
-                let key = array_key_owned_or_throw!(
+                let mut key = array_key_owned_or_throw!(
                     idx_val,
                     &format!(
                         "Cannot unset offset of type {} on array",
@@ -6798,7 +6808,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 );
                 match arr.value_type() {
                     ValueType::Array => {
-                        arr.as_array_mut().unwrap().remove(&key);
+                        let array = arr.as_array_mut().unwrap();
+                        key = array.normalize_utf8_text_key(key, idx_val);
+                        array.remove(&key);
                     }
                     ValueType::Undef | ValueType::Null => {
                         // PHP silently ignores unset on undef/null
