@@ -2811,10 +2811,38 @@ Exact-final-binary CPU-pinned paired medians are -26.620%, -15.070% and
 -7.549% for the three affected shapes; adjacent and retained controls range
 from -0.483% to +2.192%, within +5%.
 
+The `da03109e` `substr-replace-byte-contract` checkpoint closes all four
+supplying `substr_replace()` cases against PHP 8.5.9. One saturating PHP-byte
+splice engine covers scalar and array subjects, positional replacement/offset/
+length broadcasting, short-control defaults, excess-value truncation, extreme
+positive and negative bounds, preserved keys, references/COW and binary data.
+Handler-owned union boundaries reproduce weak/strict and nested conversions,
+diagnostics, named/dynamic/callback calls and Reflection metadata. A guarded
+ASCII scalar path deopts every binary or non-ASCII value to the canonical byte
+engine. Three original E2E tests and four independent probes, including 1,920
+bounds combinations, cover the contract.
+
+The focused cluster moves from 0/4 to 4/4 and strings moves from 487 to 495
+pass (+8/-0), with `bug42208.phpt`, `bug54238.phpt`, `bug55871.phpt` and
+`bug72146.phpt` as four adjacent general gains. Array remains exactly 828/842
+and Zend/lang exactly 4,206/5,599, with every prior pass retained and no other
+outcome movement. Three serial final-binary strings runs have identical hash
+`5c170f81b42dd75fb3c674daeb810d1e63f8278d5f67f5b159ad1b62e67cc20c`;
+the retained stable strings/array/Zend hashes are
+`d76f59bb17de02ecd78130d7dd37448757e418ced9f52fb39bc1933e15af50a5`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `907bddc39e20247bdf412dc3de5fa6653912c1e7c0b0c542ff70af2cb3a896f8`.
+All five feature configurations, all-feature/all-target, formatting, HTML data,
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Exact-final-binary CPU-pinned paired medians are -0.113%, +0.545% and +0.732%
+for the three affected call shapes; retained `str_replace()` controls range
+from -14.858% to +0.568%, the retained array lane is -1.335%, and startup is
+-4.052%, all within +5%.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 487 pass, 161 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 495 pass, 153 fail, 54 skip and 30 unsupported, with one retained timeout;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
@@ -2823,12 +2851,13 @@ pair is 2/2 and the byte-escaping supplying family is 12/12. `Zend/tests` plus
 `tests/lang` is 4,206 pass, 1,097 fail, 115 skip and 181 unsupported, with no
 timeout or crash. The trim/charlist family is 11/11, increment/decrement is 6/6
 and both `str_split()` and `chunk_split()` are 6/6, while the complete
-`str_replace()`/`str_ireplace()` cluster is 8/8. The next goal should close the
-four visible `substr_replace()` failures through a shared PHP-byte splice
-contract for scalar and array inputs, offset/length broadcasting, keys,
-references and typed boundaries; wider string-offset writes, typed-parameter
-binary provenance, detached-callback alias spelling, unknown entity-encoding
-warnings and broader legacy multibyte behavior remain explicit contracts.
+`str_replace()`/`str_ireplace()` cluster is 8/8 and the selected
+`substr_replace()` family plus its four adjacent gains is 8/8. The next goal
+should close the four visible `nl2br()` failures through one PHP-byte newline
+recognizer with exact CR/LF/CRLF ordering, XHTML/HTML break selection and shared
+typed call metadata; wider string-offset writes, typed-parameter binary
+provenance, detached-callback alias spelling, unknown entity-encoding warnings
+and broader legacy multibyte behavior remain explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,
