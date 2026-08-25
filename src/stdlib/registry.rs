@@ -1451,16 +1451,23 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "separator",
         "enclosure"
     );
-    reg_direct!(
-        "chunk_split",
-        fn_chunk_split,
-        direct_chunk_split,
-        3,
-        1,
-        "string",
-        "chunklen",
-        "end"
-    );
+    {
+        let mut function = Box::new(make_internal_function(
+            fn_chunk_split,
+            3,
+            1,
+            pn!["string", "length", "separator"],
+        ));
+        function.common.sig.param_type_hints = vec![
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::String,
+        ];
+        function.common.sig.return_type_hint = ParamTypeHint::String;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("chunk_split", pointer).unwrap();
+        funcs.push(function);
+    }
 
     // --- Additional array functions ---
     reg!(

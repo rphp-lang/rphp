@@ -338,6 +338,7 @@ mod tests {
         assert!(!supports_direct_internal_call("intdiv", 1));
         assert!(supports_direct_internal_call("json_decode", 2));
         assert!(supports_direct_internal_call("json_decode", 1));
+        assert!(supports_direct_internal_call("chunk_split", 1));
         assert!(supports_direct_internal_call("chunk_split", 3));
         assert!(!supports_direct_internal_call("chunk_split", 4));
         assert!(!supports_direct_internal_call("substr", 1));

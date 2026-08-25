@@ -1305,6 +1305,24 @@ where
         }
     };
 
+    // Detached internal calls bypass DoFcall, but their catchable failures
+    // still expose the internal function as frame zero just like an ordinary
+    // source call. Snapshot that frame before the detached activation is
+    // released; the caller's shared throw boundary supplies the source origin.
+    if function_type == FunctionType::Internal
+        && let Some(exception) = eg.exception.as_ref()
+        && !trace_caller.is_null()
+    {
+        // SAFETY: both detached frames stay live through this snapshot. Link
+        // them only while the shared synchronous trace helper walks the chain.
+        unsafe {
+            let previous = (*frame).prev_execute_data;
+            (*frame).prev_execute_data = trace_caller;
+            attach_internal_call_trace_if_missing(exception, frame, trace_caller, eg);
+            (*frame).prev_execute_data = previous;
+        }
+    }
+
     let arg0 = if READBACK_ARG0 {
         let arg0_cv = unsafe { (*func_ptr).sig.param_cv_index(0) } as usize;
         Some(if num_args > arg0_cv {

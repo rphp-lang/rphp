@@ -3757,7 +3757,26 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         "ord(): Passing null to parameter #1 ($character) of type string is deprecated",
                     )?;
                 }
-                let result = crate::stdlib::invoke_direct_internal1(kind, argument)?;
+                let result = if kind == crate::builtin_metadata::DirectInternalKind::ChunkSplit {
+                    if let Some(result) = crate::stdlib::try_direct_chunk_split1(argument) {
+                        result
+                    } else {
+                        let argument = argument.clone();
+                        let function = eg.find_function("chunk_split").ok_or_else(|| {
+                            VmError::Fatal("Unknown function chunk_split".into())
+                        })?;
+                        let result = call_function_iter(
+                            eg,
+                            function,
+                            1,
+                            std::iter::once(&argument),
+                        )?;
+                        resume_pending_exception!();
+                        result
+                    }
+                } else {
+                    crate::stdlib::invoke_direct_internal1(kind, argument)?
+                };
 
                 if opline.result_type != OpType::Unused {
                     let result_ptr = unsafe {
@@ -3920,6 +3939,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             .filter(|spec| {
                                 spec.required_args <= 1
                                     && spec.max_args >= 1
+                                    && spec.kind
+                                        != crate::builtin_metadata::DirectInternalKind::ChunkSplit
                                     && spec.kind.lowering()
                                         != crate::builtin_metadata::DirectInternalLowering::Generic2
                             })

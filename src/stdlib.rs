@@ -198,7 +198,6 @@ mod strings;
 mod weak;
 
 use filesystem::{bytes_to_php_string, php_string_to_bytes};
-use strings::direct_chunk_split;
 
 pub use builtin_classes::register_builtin_classes;
 
@@ -359,17 +358,6 @@ fn direct_arg_str(args: &[Value], index: usize) -> Cow<'_, str> {
 }
 
 #[inline(always)]
-fn direct_arg_opt(args: &[Value], index: usize) -> Option<&Value> {
-    let value = args.get(index)?;
-    let value = if value.is_reference() {
-        unsafe { &*value.as_ref_ptr() }
-    } else {
-        value
-    };
-    (value.value_type() != ValueType::Undef).then_some(value)
-}
-
-#[inline(always)]
 fn json_decode_values(input: &Value, associative: Option<&Value>) -> Value {
     let input = if input.is_reference() {
         unsafe { &*input.as_ref_ptr() }
@@ -395,6 +383,13 @@ fn direct_json_decode(args: &[Value]) -> Result<Value, VmError> {
     Ok(json_decode_values(&args[0], args.get(1)))
 }
 
+/// Attempt the exact-string unary `chunk_split` fast path. Callers must resume
+/// through the canonical internal frame when this guard returns `None`.
+#[inline(always)]
+pub(crate) fn try_direct_chunk_split1(argument: &Value) -> Option<Value> {
+    strings::direct_chunk_split_default_string(argument)
+}
+
 /// Dispatch a compiler-identified pure builtin without resolving a runtime
 /// FunctionCommon or crossing the generic internal-function ABI.
 #[inline(always)]
@@ -413,13 +408,15 @@ pub(crate) fn invoke_direct_internal1(
         DirectInternalKind::Abs => direct_abs(args),
         DirectInternalKind::Floor => direct_floor(args),
         DirectInternalKind::Sqrt => direct_sqrt(args),
-        DirectInternalKind::ChunkSplit => direct_chunk_split(args),
         DirectInternalKind::Sin => direct_sin(args),
         DirectInternalKind::Tan => direct_tan(args),
         DirectInternalKind::Asin => direct_asin(args),
         DirectInternalKind::Acos => direct_acos(args),
         DirectInternalKind::Atan => direct_atan(args),
         DirectInternalKind::Exp => direct_exp(args),
+        DirectInternalKind::ChunkSplit => Err(VmError::Fatal(
+            "chunk_split direct call requires canonical fallback".into(),
+        )),
         DirectInternalKind::Intdiv
         | DirectInternalKind::JsonDecode
         | DirectInternalKind::Min2

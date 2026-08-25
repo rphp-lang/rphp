@@ -12,13 +12,14 @@ use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 
 use super::{
-    StringSearchDirection, bytes_to_php_string, direct_arg_opt, direct_arg_str,
+    StringSearchDirection, bytes_to_php_string,
     html_entities::{HTML4_ENTITIES, HTML5_ENTITIES, html5_characters_for_entity},
+    internal_call_source,
     legacy_encoding::LegacyEncoding,
     owned_argument, percent_decode_bytes, php_string_to_bytes, push_percent_escape,
     report_internal_diagnostic, string_position_builtin, typed_internal_bool_argument,
     typed_internal_int_argument, typed_internal_string_argument,
-    typed_internal_string_argument_expected,
+    typed_internal_string_argument_expected, typed_internal_string_value_argument_expected,
 };
 
 // ============================================================================
@@ -1753,46 +1754,147 @@ pub(super) fn fn_str_getcsv(
     ret!(rv, Value::array(arr));
 }
 
-/// chunk_split($string, $chunklen = 76, $end = "\r\n"): string
-pub(super) fn direct_chunk_split(args: &[Value]) -> Result<Value, VmError> {
-    let s = direct_arg_str(args, 0);
-    let chunklen = direct_arg_opt(args, 1)
-        .map(|v| v.to_long_val() as usize)
-        .unwrap_or(76);
-    let end = direct_arg_opt(args, 2)
-        .map(|v| v.echo_to_string())
-        .unwrap_or_else(|| "\r\n".to_string());
-    if chunklen == 0 {
-        return Err(VmError::Fatal(
-            "chunk_split(): Argument #2 ($chunklen) must be greater than 0".into(),
-        ));
+const PHP_DEFAULT_MEMORY_LIMIT: usize = 128 * 1024 * 1024;
+
+fn chunk_split_result_length(
+    string_length: usize,
+    length: usize,
+    separator_length: usize,
+) -> Result<usize, usize> {
+    // PHP appends the separator even when the source is empty.
+    let chunks = string_length.div_ceil(length).max(1);
+    let separator_bytes = separator_length.checked_mul(chunks).ok_or(usize::MAX)?;
+    let result_length = string_length
+        .checked_add(separator_bytes)
+        .ok_or(usize::MAX)?;
+    if result_length > PHP_DEFAULT_MEMORY_LIMIT {
+        Err(result_length)
+    } else {
+        Ok(result_length)
     }
-    let mut result = String::new();
-    for chunk in s.as_bytes().chunks(chunklen) {
-        result.push_str(&String::from_utf8_lossy(chunk));
-        result.push_str(&end);
+}
+
+fn chunk_split_php_bytes(string: &Value, length: usize, separator: &Value) -> Result<Value, usize> {
+    let string_bytes = string.php_string_bytes().unwrap_or_default();
+    let separator_bytes = separator.php_string_bytes().unwrap_or_default();
+    let result_length =
+        chunk_split_result_length(string_bytes.len(), length, separator_bytes.len())?;
+
+    if !string.is_binary_string()
+        && !separator.is_binary_string()
+        && string_bytes.is_ascii()
+        && separator_bytes.is_ascii()
+    {
+        let source = string.as_str().unwrap_or("");
+        let separator = separator.as_str().unwrap_or("");
+        let mut result = String::with_capacity(result_length);
+        if source.is_empty() {
+            result.push_str(separator);
+        } else {
+            for chunk in source.as_bytes().chunks(length) {
+                result.push_str(std::str::from_utf8(chunk).expect("ASCII chunk is valid UTF-8"));
+                result.push_str(separator);
+            }
+        }
+        return Ok(Value::string(result));
     }
-    Ok(Value::string(result))
+
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(result_length)
+        .map_err(|_| result_length)?;
+    if string_bytes.is_empty() {
+        result.extend_from_slice(&separator_bytes);
+    } else {
+        for chunk in string_bytes.chunks(length) {
+            result.extend_from_slice(chunk);
+            result.extend_from_slice(&separator_bytes);
+        }
+    }
+    if string.is_binary_string() || separator.is_binary_string() || !result.is_ascii() {
+        Ok(Value::binary_string(&result))
+    } else {
+        Ok(Value::string(
+            String::from_utf8(result).expect("ASCII chunk_split result is valid UTF-8"),
+        ))
+    }
+}
+
+pub(super) fn direct_chunk_split_default_string(argument: &Value) -> Option<Value> {
+    let argument = argument.dereferenced();
+    (argument.value_type() == ValueType::String)
+        .then(|| chunk_split_php_bytes(argument, 76, &Value::string("\r\n")))?
+        .ok()
 }
 
 pub(super) fn fn_chunk_split(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    // SAFETY: registry metadata reserves three CV slots for chunk_split;
-    // the internal frame stays live for the complete handler invocation.
-    let args = unsafe { std::slice::from_raw_parts((*ed).cv(0), 3) };
-    let result = direct_chunk_split(args)?;
-    ret!(rv, result);
+    let Some(string) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "chunk_split",
+        0,
+        "string",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    let length = match arg_opt!(ed, 1) {
+        Some(_) => {
+            let Some(length) = typed_internal_int_argument(ed, eg, "chunk_split", 1, "length")?
+            else {
+                return Ok(());
+            };
+            length
+        }
+        None => 76,
+    };
+    if length < 1 {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "chunk_split(): Argument #2 ($length) must be greater than 0",
+        ));
+        return Ok(());
+    }
+    let separator = match arg_opt!(ed, 2) {
+        Some(_) => {
+            let Some(separator) = typed_internal_string_value_argument_expected(
+                ed,
+                eg,
+                "chunk_split",
+                2,
+                "separator",
+                "string",
+            )?
+            else {
+                return Ok(());
+            };
+            separator
+        }
+        None => Value::string("\r\n"),
+    };
+    let length = usize::try_from(length).unwrap_or(usize::MAX);
+    match chunk_split_php_bytes(&string, length, &separator) {
+        Ok(result) => ret!(rv, result),
+        Err(bytes) => {
+            let (file, line) = internal_call_source(ed);
+            Err(VmError::Fatal(format!(
+                "Allowed memory size of {PHP_DEFAULT_MEMORY_LIMIT} bytes exhausted (tried to allocate {bytes} bytes) in {file} on line {line}"
+            )))
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         BasicMultibyteEncoding, ENT_HTML5, ENT_IGNORE, ENT_QUOTES_MASK, ENT_SUBSTITUTE,
-        basic_multibyte_unit, decode_html_special_references, direct_chunk_split,
-        sanitize_html_utf8,
+        PHP_DEFAULT_MEMORY_LIMIT, basic_multibyte_unit, chunk_split_php_bytes,
+        chunk_split_result_length, decode_html_special_references, sanitize_html_utf8,
     };
     use crate::value::Value;
 
@@ -1816,10 +1918,42 @@ mod tests {
     }
 
     #[test]
-    fn direct_chunk_split_preserves_chunk_and_ending_order() {
-        let args = [Value::string("abcdef"), Value::long(2), Value::string("|")];
-        let result = direct_chunk_split(&args).unwrap();
+    fn chunk_split_preserves_bytes_empty_input_and_ending_order() {
+        let result =
+            chunk_split_php_bytes(&Value::string("abcdef"), 2, &Value::string("|")).unwrap();
         assert_eq!(result.as_str(), Some("ab|cd|ef|"));
+
+        let empty = chunk_split_php_bytes(&Value::string(""), 1, &Value::string("|")).unwrap();
+        assert_eq!(empty.as_str(), Some("|"));
+
+        let binary = chunk_split_php_bytes(
+            &Value::binary_string(&[0, 0xff, b'A']),
+            2,
+            &Value::binary_string(&[0]),
+        )
+        .unwrap();
+        assert_eq!(
+            binary.php_string_bytes().as_deref(),
+            Some(&[0, 0xff, 0, b'A', 0][..])
+        );
+    }
+
+    #[test]
+    fn chunk_split_rejects_oversized_and_overflowing_result_lengths() {
+        assert_eq!(chunk_split_result_length(0, 7, 1), Ok(1));
+        assert_eq!(chunk_split_result_length(5, 2, 2), Ok(11));
+        assert_eq!(
+            chunk_split_result_length(50_000_000, 1, 2),
+            Err(150_000_000)
+        );
+        assert_eq!(
+            chunk_split_result_length(PHP_DEFAULT_MEMORY_LIMIT, 1, 1),
+            Err(PHP_DEFAULT_MEMORY_LIMIT * 2)
+        );
+        assert_eq!(
+            chunk_split_result_length(usize::MAX, 1, usize::MAX),
+            Err(usize::MAX)
+        );
     }
 
     #[test]
