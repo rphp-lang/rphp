@@ -2937,10 +2937,34 @@ Exact-final-binary CPU-pinned paired medians range from -4.842% to +2.510%
 across five affected/control shapes; retained replacement and byte-search
 controls range from -5.640% to +2.594%, and startup is -3.344%, all within +5%.
 
+The `4a5808cb` `str-getcsv-byte-contract` checkpoint closes all eight supplying
+`str_getcsv()` cases against PHP 8.5.9. A typed four-argument handler and the
+shared byte CSV state machine cover separator/enclosure collisions, doubled
+enclosures, legacy and empty escapes, empty/trailing fields, malformed and
+multiline input, NUL/high/UTF-8 bytes, diagnostics, call shapes, Reflection and
+reference/COW detachment. A guarded allocation-direct ordinary-ASCII path
+deopts every binary, multiline or diagnostic case before observable work.
+Three original E2E tests, three parser unit tests and four clean-room probes
+cover the combined contract.
+
+The focused cluster moves from 0/8 to 8/8 and strings moves from 533 to 541
+pass (+8/-0), with no lost pass or other outcome movement. The adjacent serial
+`fgetcsv()` selection gains three passes and loses none. Array remains exactly
+828/842 and Zend/lang exactly 4,207/5,599. Three serial release runs have
+identical stable strings, array and Zend hashes
+`7a8c316ac61c81054f811afa21ecf345b6d9cf9c2868f3e22692309f4e77c3ed`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `7395473944b83035e48b985b944472f6b1d3bfb26884b5f437c1b390dbd876e4`.
+All five feature configurations, all-feature/all-target, formatting, HTML data,
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Exact-final-binary CPU-pinned paired medians range from -4.642% to +3.835%
+across affected, retained split/join, byte-search and startup controls, all
+within +5% with matching checksums.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 533 pass, 115 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 541 pass, 107 fail, 54 skip and 30 unsupported, with one retained timeout;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
@@ -2953,12 +2977,12 @@ and both `str_split()` and `chunk_split()` are 6/6, while the complete
 `substr_replace()` family plus its four adjacent gains is 8/8; the complete
 `nl2br()` family is 5/5, the complete `strtr()` family is 16/16, the direct and
 related byte-search/window family is 79/79, and the direct split/join family is
-19 pass plus one explicit unsupported case. The next goal should close the
-eight visible `str_getcsv()` failures in `bug55674.phpt`, `bug65947.phpt`,
-`gh11982.phpt`, `gh12151.phpt`, `oss_fuzz_57392.phpt`, `str_getcsv_001.phpt`,
-`str_getcsv_002.phpt` and `str_getcsv_errors.phpt` through typed four-argument
-metadata and exact PHP-byte enclosure, escape, multiline, malformed-input and
-diagnostic semantics;
+19 pass plus one explicit unsupported case, and `str_getcsv()` is 8/8 for its
+visible supplying cluster. The next goal should close the eight visible
+checksum/hash failures in `bug36306.phpt`, `crc32.phpt`, `crc32_basic.phpt`,
+`md5_file.phpt`, `sha1.phpt`, `sha1_basic.phpt`, `sha1_file.phpt` and
+`sha1raw.phpt` through shared PHP-byte digesting, file-I/O diagnostics, typed
+metadata, raw-output provenance and exact call semantics;
 wider string-offset writes, typed-parameter and associative-key binary
 provenance, detached-callback alias spelling, unknown entity-encoding warnings,
 platform cryptography, tag parsing and broader legacy multibyte behavior remain

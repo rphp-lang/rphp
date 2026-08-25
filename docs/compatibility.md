@@ -8,6 +8,76 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`str-getcsv-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. `str_getcsv()` now exposes PHP 8.5's typed
+four-argument signature and parses PHP bytes with the shared CSV state machine.
+It covers separator/enclosure collisions, doubled enclosures, legacy and empty
+escape modes, empty and trailing fields, malformed enclosed input, embedded and
+terminal line endings, NUL, arbitrary high bytes and UTF-8 byte sequences.
+Returned fields retain byte provenance, are detached from the source and
+preserve references and copy-on-write aliases.
+
+Handler-owned string boundaries reproduce weak and strict scalar conversion,
+null deprecations, single-byte separator/enclosure validation, empty-or-one-byte
+escape validation and the PHP 8.5 default-escape deprecation in observable
+order. Static, dynamic, named and callback calls share the implementation;
+Reflection exposes one required and four total parameters, their string types
+and the array return type. A guarded allocation-direct path handles ordinary
+ASCII records, while binary, UTF-8, NUL, multiline and diagnostic inputs deopt
+to the canonical byte parser before any PHP-visible effect.
+
+Three original E2E regressions and three parser unit regressions cover the byte
+state machine, weak/strict diagnostics, call shapes, Reflection, references and
+COW. Four independent clean-room probes match PHP 8.5.9 byte for byte at
+SHA-256
+`dd67852b84ca0c5269b02987113c6c077030d74059e58f3aee55967b15183bb8`,
+`c034ab0ff3340494aa2e7b24a6870908d74a0180f2e18f400cc2cb06b6301aa6`,
+`386239b930ad4b16b43cbfd4b301ebcdd6c6e9c5dee363c39a23888a227c5c8f`
+and `cac8210bc708b28601104c22b7f2ca1d3ee8e5f0208f145215c74a8d998880a8`.
+All eight supplying cases move from 0/8 to 8/8. A serial adjacent `fgetcsv()`
+selection gains `fgetcsv_variation1.phpt`, `fgetcsv_variation2.phpt` and
+`fgetcsv_variation6.phpt` without a lost pass.
+
+The complete 733-case strings audit moves from 533 to 541 passes, an exact
++8/-0 delta consisting only of the supplying paths. There are 107 failures,
+54 skips, 30 unsupported cases, the retained `dirname_multi.phpt` timeout and
+zero crashes. Array remains exactly classified at 828 passes, 13 skips and one
+unsupported case. Zend/lang remains exactly 4,207 passes, 1,096 failures, 115
+skips and 181 unsupported cases, with no timeout or crash. Three serial release
+runs have identical stable path/outcome/runner-control hashes
+`7a8c316ac61c81054f811afa21ecf345b6d9cf9c2868f3e22692309f4e77c3ed`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `7395473944b83035e48b985b944472f6b1d3bfb26884b5f437c1b390dbd876e4`
+for strings, array and Zend/lang respectively.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML data, PHPT-runner and unsafe-policy checks, Composer 2.8.12
+S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at
+1,623 unsafe blocks and 289 unsafe functions, with 363 SAFETY annotations and
+seven `# Safety` sections. Exact-final-binary CPU-2-pinned balanced controls
+compare parent SHA-256
+`53b6a48376eaa1aab585e731cd6fe191f0278eab079da1cff150a8b174a3285e`
+with candidate
+`31af8c97e1d85d73e012b274b2cb496f5c1405d765d3e3347e5f3a44565ebbd3`.
+Affected simple, quoted, control, dynamic, `fgetcsv()` and loop medians are
++0.194%, +1.140%, -0.067%, +2.111%, +0.977% and +0.402%. Retained split/join
+controls range from -1.193% to +1.440%, retained byte-search controls from
+-0.799% to +3.835%, and 200 empty processes measure -4.642%. Every checksum
+matches and every median is below +5%.
+
+This checkpoint does not claim general internal-Reflection default rendering,
+legacy decoder-to-typed-parameter binary provenance, exact OOM diagnostics,
+32-bit execution or broader CSV/file compatibility. The remaining 107 strings
+and wider Zend failures stay visible. The next risk-adjusted high-yield
+candidate is the eight-case checksum/hash cluster: `bug36306.phpt`,
+`crc32.phpt`, `crc32_basic.phpt`, `md5_file.phpt`, `sha1.phpt`,
+`sha1_basic.phpt`, `sha1_file.phpt` and `sha1raw.phpt`. It can reuse the
+existing byte-digest and stream boundaries without taking on platform
+`crypt()` behavior.
+
+The source checkpoint is commit `4a5808cb`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `split-join-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and validated
 against PHP 8.5.9. `explode()` now applies its separator and positive, zero or
 negative limit to PHP bytes, including empty fields, no-match inputs, NUL,
@@ -84,7 +154,7 @@ candidate is the eight visible `str_getcsv()` failures: the existing scalar
 parser lacks PHP 8.5's fourth escape parameter and exact byte, multiline,
 malformed-enclosure and diagnostic contract.
 
-The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
+The checkpoint preceding that is
 `string-search-byte-window-contract`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. `strpos()`, `strstr()`, `strrchr()`,
 `strspn()`, `strcspn()`, `substr_count()` and `substr_compare()` now share
