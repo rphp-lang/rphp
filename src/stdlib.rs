@@ -6404,33 +6404,45 @@ fn trim_mask(ed: *mut ExecuteData) -> [bool; 256] {
     mask
 }
 
-fn fn_addcslashes(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let string = php_string_to_bytes(arg_str!(ed, 0).as_ref());
-    let characters = php_string_to_bytes(arg_str!(ed, 1).as_ref());
+fn addcslashes_mask(characters: &[u8]) -> ([bool; 256], Vec<&'static str>) {
     let mut mask = [false; 256];
+    let mut warnings = Vec::new();
     let mut index = 0;
     while index < characters.len() {
         if index + 3 < characters.len()
             && characters[index + 1] == b'.'
             && characters[index + 2] == b'.'
-            && characters[index] <= characters[index + 3]
+            && characters[index + 3] != b'.'
+            && (index == 0 || characters[index - 1] != b'.')
         {
-            for byte in characters[index]..=characters[index + 3] {
-                mask[byte as usize] = true;
+            if characters[index] <= characters[index + 3] {
+                for byte in characters[index]..=characters[index + 3] {
+                    mask[byte as usize] = true;
+                }
+                index += 4;
+                continue;
             }
-            index += 4;
-        } else {
-            mask[characters[index] as usize] = true;
-            index += 1;
+            warnings.push("Invalid '..'-range, '..'-range needs to be incrementing");
+        } else if index == 0
+            && characters.get(index + 1) == Some(&b'.')
+            && characters.get(index + 2) != Some(&b'.')
+        {
+            warnings.push("Invalid '..'-range, no character to the left of '..'");
+        } else if index + 3 == characters.len()
+            && characters[index + 1] == b'.'
+            && characters[index + 2] == b'.'
+        {
+            warnings.push("Invalid '..'-range, no character to the right of '..'");
         }
+        mask[characters[index] as usize] = true;
+        index += 1;
     }
+    (mask, warnings)
+}
 
+fn addcslashes_bytes(string: &[u8], mask: &[bool; 256]) -> Vec<u8> {
     let mut escaped = Vec::with_capacity(string.len());
-    for byte in string {
+    for &byte in string {
         if !mask[byte as usize] {
             escaped.push(byte);
             continue;
@@ -6452,7 +6464,184 @@ fn fn_addcslashes(
             _ => escaped.push(byte),
         }
     }
-    ret!(rv, Value::string(bytes_to_php_string(&escaped)));
+    escaped
+}
+
+fn fn_addcslashes(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(string) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "addcslashes",
+        0,
+        "string",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    let Some(characters) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "addcslashes",
+        1,
+        "characters",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    let string = string.php_string_bytes().unwrap_or_default();
+    let characters = characters.php_string_bytes().unwrap_or_default();
+    let (mask, warnings) = addcslashes_mask(&characters);
+    for warning in warnings {
+        report_internal_diagnostic(eg, ed, 2, "Warning", &format!("addcslashes(): {warning}"))?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    ret!(rv, Value::binary_string(&addcslashes_bytes(&string, &mask)));
+}
+
+fn addslashes_bytes(string: &[u8]) -> Vec<u8> {
+    let mut escaped = Vec::with_capacity(string.len());
+    for &byte in string {
+        match byte {
+            0 => escaped.extend_from_slice(b"\\0"),
+            b'\'' | b'"' | b'\\' => {
+                escaped.push(b'\\');
+                escaped.push(byte);
+            }
+            _ => escaped.push(byte),
+        }
+    }
+    escaped
+}
+
+fn stripslashes_bytes(string: &[u8]) -> Vec<u8> {
+    let mut stripped = Vec::with_capacity(string.len());
+    let mut position = 0;
+    while position < string.len() {
+        if string[position] != b'\\' {
+            stripped.push(string[position]);
+            position += 1;
+            continue;
+        }
+        let Some(&escaped) = string.get(position + 1) else {
+            break;
+        };
+        stripped.push(if escaped == b'0' { 0 } else { escaped });
+        position += 2;
+    }
+    stripped
+}
+
+fn stripcslashes_bytes(string: &[u8]) -> Vec<u8> {
+    let mut stripped = Vec::with_capacity(string.len());
+    let mut position = 0;
+    while position < string.len() {
+        let byte = string[position];
+        if byte != b'\\' {
+            stripped.push(byte);
+            position += 1;
+            continue;
+        }
+        let Some(&escaped) = string.get(position + 1) else {
+            stripped.push(b'\\');
+            break;
+        };
+        position += 2;
+        match escaped {
+            b'a' => stripped.push(7),
+            b'b' => stripped.push(8),
+            b't' => stripped.push(b'\t'),
+            b'n' => stripped.push(b'\n'),
+            b'v' => stripped.push(11),
+            b'f' => stripped.push(12),
+            b'r' => stripped.push(b'\r'),
+            b'0'..=b'7' => {
+                let mut value = escaped - b'0';
+                let mut digits = 1;
+                while digits < 3 {
+                    let Some(&digit @ b'0'..=b'7') = string.get(position) else {
+                        break;
+                    };
+                    value = value.wrapping_mul(8).wrapping_add(digit - b'0');
+                    position += 1;
+                    digits += 1;
+                }
+                stripped.push(value);
+            }
+            b'x' | b'X' => {
+                let mut value = 0_u8;
+                let mut digits = 0;
+                while digits < 2 {
+                    let Some(&digit) = string.get(position) else {
+                        break;
+                    };
+                    let nibble = match digit {
+                        b'0'..=b'9' => digit - b'0',
+                        b'a'..=b'f' => digit - b'a' + 10,
+                        b'A'..=b'F' => digit - b'A' + 10,
+                        _ => break,
+                    };
+                    value = (value << 4) | nibble;
+                    position += 1;
+                    digits += 1;
+                }
+                if digits == 0 {
+                    stripped.push(escaped);
+                } else {
+                    stripped.push(value);
+                }
+            }
+            _ => stripped.push(escaped),
+        }
+    }
+    stripped
+}
+
+fn unary_slash_string(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    transform: fn(&[u8]) -> Vec<u8>,
+) -> Result<(), VmError> {
+    let Some(string) =
+        typed_internal_string_value_argument_expected(ed, eg, function, 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let string = string.php_string_bytes().unwrap_or_default();
+    ret!(rv, Value::binary_string(&transform(&string)));
+}
+
+fn fn_addslashes(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    unary_slash_string(ed, rv, eg, "addslashes", addslashes_bytes)
+}
+
+fn fn_stripslashes(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    unary_slash_string(ed, rv, eg, "stripslashes", stripslashes_bytes)
+}
+
+fn fn_stripcslashes(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    unary_slash_string(ed, rv, eg, "stripcslashes", stripcslashes_bytes)
 }
 
 fn trim_bytes(ed: *mut ExecuteData, trim_left: bool, trim_right: bool) -> String {

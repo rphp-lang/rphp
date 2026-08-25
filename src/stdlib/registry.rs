@@ -505,6 +505,9 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "count"
     );
     reg!("addcslashes", fn_addcslashes, 2, 2, "string", "characters");
+    reg!("addslashes", fn_addslashes, 1, 1, "string");
+    reg!("stripslashes", fn_stripslashes, 1, 1, "string");
+    reg!("stripcslashes", fn_stripcslashes, 1, 1, "string");
     reg_direct!(
         "strtolower",
         fn_strtolower,

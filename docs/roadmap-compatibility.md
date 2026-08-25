@@ -2670,20 +2670,41 @@ runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
 Exact-binary paired medians range from -1.459% to +2.621% across six relevant
 entity, decode, concatenation and startup workloads, within +5%.
 
+The `byte-escaping` checkpoint closes the 12 supplying `addslashes()`,
+`stripslashes()`, `addcslashes()` and `stripcslashes()` cases against PHP
+8.5.9. One PHP-byte engine covers all 256 input values, add/remove rules, C,
+octal and hexadecimal decoding, charlist ranges, invalid-range warnings, weak
+conversions and strict diagnostics. Two original E2E regressions cover the
+normal, binary, boundary, diagnostic and round-trip contracts.
+
+The focused cluster moves from 0/12 to 12/12 and strings moves from 436 to 450
+pass (+14/-0), with `bug40915.phpt` and `gh10187.phpt` as the two general
+adjacent gains. There are 198 fail, 54 skip, 30 unsupported and the retained
+timeout. Array and Zend/lang classifications remain identical at 828/842 and
+4,202/5,599 pass. Three serial release runs have identical stable
+path/outcome/runner-control hashes
+`69cd84b076a3272b087b65893465c1780dcde00ba75d084cd7a19fed63ed6b5e`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `23b268c0c442d77064179a09e3a16664f45b191e58e390bdb88e661be65e3a73`.
+All five feature configurations, all-feature/all-target, formatting, HTML data,
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Exact-binary paired medians are -5.621% for `addcslashes()`, +0.296% for
+ordinary concatenation and +0.391% for startup, within +5%.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 436 pass, 212 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 450 pass, 198 fail, 54 skip and 30 unsupported, with one retained timeout;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
 and invalid-UTF-8 recovery families are both 3/3; the EUC-JP/Big5 supplying
-pair is 2/2. `Zend/tests` plus
+pair is 2/2 and the byte-escaping supplying family is 12/12. `Zend/tests` plus
 `tests/lang` is 4,202 pass, 1,101 fail, 115 skip and 181 unsupported, with no
-timeout or crash. The next goal should first cluster and close the 12 visible
-byte-escaping failures shared by `addslashes()`, `stripslashes()`,
-`addcslashes()` and `stripcslashes()`; unknown entity-encoding warnings and
-broader legacy multibyte behavior remain explicit contracts.
+timeout or crash. The next goal should first cluster and close the 11 visible
+byte-charlist and alias failures shared by `trim()`, `ltrim()`, `rtrim()` and
+`chop()`; typed-parameter binary provenance, unknown entity-encoding warnings
+and broader legacy multibyte behavior remain explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,

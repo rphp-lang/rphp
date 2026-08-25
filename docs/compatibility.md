@@ -7,7 +7,72 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 PHP 8.5 contract checkpoint is
+The latest measured AMD64 PHP 8.5 contract checkpoint is `byte-escaping`,
+pinned to php-src 8.5 commit `fcc29c8` and validated against PHP 8.5.9.
+RPHP now exposes `addslashes()`, `stripslashes()` and `stripcslashes()` and
+routes them with `addcslashes()` through a shared PHP-byte boundary. The
+functions preserve all 256 byte values and weak scalar conversion, reject
+strict scalar calls with the canonical parameter diagnostics, and retain PHP's
+null-to-string deprecation.
+
+`addslashes()` escapes only NUL, both quotes and backslash, while
+`stripslashes()` removes one escape level and maps `\0` to NUL.
+`stripcslashes()` additionally decodes the named C controls, one-to-three-digit
+wrapping octal values and one-to-two-digit hexadecimal values, retaining a
+trailing backslash. `addcslashes()` now reads both arguments as PHP bytes,
+builds increasing byte ranges, treats invalid ranges literally after issuing
+PHP's precise warning and emits named controls, three-digit octal escapes or
+ordinary prefixed bytes as required. No dependency, opcode, compiler path,
+runtime layout field or unsafe block was added.
+
+Two original E2E regressions cover binary and UTF-8 inputs, round trips,
+trailing escapes, octal/hex boundaries and overflow, valid and invalid ranges,
+warnings, weak conversions and strict diagnostics. The 12-case supplying
+family moves from 0/12 to 12/12. Its stable baseline, PHP-oracle and final-
+candidate SHA-256 values are
+`e3b1b3e9cd6698fd518409e0dbd42d382d6405dabaed761c68fdbb88d602ea6c`,
+`9c2cb531ddbb91f0791b19cfd1d14ce78e4aead1533427ee652da8b415d49e13`
+and `9c2cb531ddbb91f0791b19cfd1d14ce78e4aead1533427ee652da8b415d49e13`.
+Independent 0-to-255, compact boundary and strict-diagnostic observations
+match PHP at normalized SHA-256 values
+`3d66fa27895e52db9603e110686d4d0bc07fce77d382a7c02b0be8a080602e16`,
+`7b22a3a0ced4ec3c83ddaa85e6075c77204137384c53122cecfe4e93b0f1055a`
+and `eb28e5977ed540a50b2cd59987721776e876511d469d49b9fe85923389f2eb18`.
+
+The complete 733-case strings audit moves from 436 to 450 passes, an exact
++14/-0 delta: the supplying family plus `bug40915.phpt` and `gh10187.phpt`.
+There are 198 failures, 54 skips, 30 unsupported cases, the retained
+`dirname_multi.phpt` timeout and zero crashes. Array remains exactly classified
+at 828 passes, 13 skips and one unsupported case. Zend/lang remains exactly
+classified at 4,202 passes, 1,101 failures, 115 skips and 181 unsupported cases
+without timeout or crash. Three serial release runs have identical stable
+path/outcome/runner-control SHA-256 values
+`69cd84b076a3272b087b65893465c1780dcde00ba75d084cd7a19fed63ed6b5e`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `23b268c0c442d77064179a09e3a16664f45b191e58e390bdb88e661be65e3a73`
+for strings, array and Zend/lang respectively.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML data, PHPT-runner and unsafe-policy checks, Composer 2.8.12
+S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at
+1,621 unsafe blocks, 289 unsafe functions, 357 SAFETY annotations and seven
+`# Safety` sections. Exact-binary CPU-2-pinned balanced release A/B controls
+compare parent SHA-256
+`aa97f415e13f145b1940f24ec9ecb73cd93ef013c05a056dc3f82ac4b4545f6b`
+with candidate
+`0abe4704531c1b081486bd5476ede5ae766f32d8907251c7071d545b3e763b4b`.
+Paired medians are -5.621% for 500,000 `addcslashes()` calls, +0.296% for five
+million ordinary concatenations and +0.391% for 1,000 empty-process pairs;
+independent medians are -5.031%, +0.401% and +0.207%. Every output/checksum
+matches and every median is below +5%.
+
+This checkpoint does not claim the independent binary-provenance gap at typed
+user-function parameter boundaries, 32-bit execution, remaining strings/Zend
+failures or wider PHP compatibility. The next high-yield bounded candidate is
+the 11-case byte-charlist and alias cluster shared by `trim()`, `ltrim()`,
+`rtrim()` and `chop()`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `html-entity-eucjp-big5`, pinned to php-src 8.5 commit `fcc29c8` and validated
 against PHP 8.5.9. The basic-only multibyte path used by `htmlentities()` and
 `htmlspecialchars()` now recognizes PHP's `EUC-JP`, `EUCJP`, `eucJP-win` and
