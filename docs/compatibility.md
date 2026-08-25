@@ -8,6 +8,76 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`array-suite-zero-failure-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. It closes the six ordinary failures in the
+complete recursive `ext/standard/tests/array` selection through shared runtime
+contracts rather than path-specific handling: inherited property overrides
+retain their first declaration-order bucket during object enumeration; `%u`
+formats an integer as an AMD64 unsigned value; unary minus remains outside a
+numeric literal when followed by exponentiation; `array_map()` Throwable
+traces retain the internal callback boundary and source call site;
+`ArrayObject::append()` appends to its internal array; and deprecated
+`reset()`/`end()`/`current()`/`next()`/`prev()`/`key()` object cursors enumerate
+initialized declared and dynamic properties in PHP visibility order.
+
+Five original E2E regressions plus a lexer unit regression cover unsigned
+formatting, `ArrayObject` append and type errors, object cursor state and
+uninitialized properties, exponent precedence, property override ordering and
+stored callback traces. The six supplying unmodified PHPT cases move from
+0/6 to 6/6 and exactly match the PHP 8.5.9 oracle. Their manifest SHA-256 is
+`2cf627533231a8b43a1e4436bb743d4f1330f9120baae72b7b020cf4ba2c1fd6`.
+
+The complete 842-case array audit moves from 822 to 828 passes, an exact
++6/-0 delta, with zero ordinary failures, 13 skips, one unsupported case and
+no XFAIL, timeout or crash. Its manifest SHA-256 is
+`d1d07b2537a5257a59d3d13c0839674fb7a35ba1f2470ff5d2218fb2eab0d746`.
+The complete 733-case strings audit moves from 305 to 309 passes (+4/-0), with
+339 failures, 54 skips, 30 unsupported cases, the retained
+`dirname_multi.phpt` timeout and zero crashes. The exact adjacent gains are
+the AMD64 `sprintf`, `vprintf` and `vsprintf` unsigned-format cases; the
+manifest SHA-256 is
+`53c3d4456a1976f1b7e6b5be975e9feadd84fb312a7f18e392fe1795893b432d`.
+
+The complete 5,599-case Zend/lang audit moves from 4,196 to 4,201 passes, an
+exact +5/-0 delta, with 1,102 failures, 115 skips, 181 unsupported cases and
+no XFAIL, timeout or crash. The gains cover closure and `array_map()` trace
+behavior, deprecated object iteration and the shared inherited-property order;
+there is no lost pass or other status movement. The manifest SHA-256 is
+`cd2242198abe9df721424bbdf746902ce7c85143d64edc5cb16a4c84c3a19f44`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+Production remains at 1,623 unsafe blocks and 289 unsafe functions. The
+existing `PhpObject` size assertion remains 72 bytes: deprecated cursor state
+and property guards share a lazily allocated auxiliary owner, so ordinary
+objects, VM frames and bytecode layouts do not grow.
+
+Two independent CPU-0-pinned 32-pair default-release controls after four
+warmups exercise 1,024,000 ordinary non-scalar-plan `array_map()` callback
+invocations per sample with checksum `1076000`. Independent/paired/order-
+balanced median changes are respectively +3.563%/+4.286%/+3.564% and
++2.814%/+3.146%/+3.314%, below the +5% gate. Compiler-proven scalar-Long
+callbacks retain their existing frame-free path; proven leaf callbacks defer
+the live-trace sidecar while Throwable materialization and callbacks capable of
+nested dispatch retain the internal boundary. Baseline/candidate binary
+SHA-256 values are
+`711b93718fb5bd586d73a780d975d52d37b0144363257e5eef472b10e4c053d0` /
+`00016f466c9b74a6a09be1d21a4b15abaa296a33f99d05705b1adf30f31b12cb`.
+The transient harness and accepted-log SHA-256 values are
+`8a0192d95216afcb21511c8a57f7d4a744455c24199143e1f6de03f5a1ca4e6e`,
+`7d7a79dc391aaaa14e0904a8fbd14144f0fbb8fcdc4a23c84aeb491a41589b80`
+and `24740694d1d91670acf458a68b15c6d76422bced0f15128cab647efbe6ae9e21`.
+
+This checkpoint does not claim complete `sprintf()` flags, widths or
+precisions, the rest of `ArrayObject`, mutation/reentrancy edge behavior for
+deprecated object cursors, 32-bit execution, the 339 remaining strings
+failures and 30 unsupported cases, the inherited strings timeout, the 1,102
+remaining Zend/lang failures or broader PHP compatibility. The selected array
+suite has no ordinary failure, but its 13 architecture/capability skips and one
+unsupported case remain explicit rather than being counted as passes.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `htmlspecialchars-decode-decbin-binary-batch`, pinned to php-src 8.5 commit
 `fcc29c8`. `htmlspecialchars_decode()` now decodes exactly one layer of the
 five special-character named and numeric references, applies

@@ -1642,6 +1642,20 @@ impl ExecutorGlobals {
         }
     }
 
+    #[cold]
+    pub(crate) fn discard_detached_trace_origin(&mut self, frame: usize) {
+        let origins_empty = self
+            .detached_trace_origins
+            .as_deref_mut()
+            .is_some_and(|origins| {
+                origins.remove(&frame);
+                origins.is_empty()
+            });
+        if origins_empty {
+            self.detached_trace_origins = None;
+        }
+    }
+
     #[inline]
     pub(crate) fn trace_caller(
         &self,
@@ -5022,25 +5036,7 @@ impl ExecutorGlobals {
         let Some(class) = self.class_by_id(class_id) else {
             return Vec::new();
         };
-        let mut lineage = Vec::new();
-        let mut current = Some(class.name.as_str());
-        while let Some(class_name) = current {
-            let Some(definition) = self.find_class(class_name) else {
-                break;
-            };
-            lineage.push(definition.name.as_str());
-            current = definition.parent.as_deref();
-        }
-        lineage.reverse();
-
-        let mut candidates = (0..class.properties.len()).collect::<Vec<_>>();
-        candidates.sort_by_key(|slot| {
-            let property = &class.properties[*slot];
-            lineage
-                .iter()
-                .position(|owner| owner.eq_ignore_ascii_case(&property.declaring_class))
-                .unwrap_or(lineage.len())
-        });
+        let candidates = self.instance_property_slots_in_iteration_order(class_id);
 
         let mut visible = Vec::<(String, usize)>::new();
         let mut positions = std::collections::HashMap::<String, usize>::new();
@@ -5070,6 +5066,50 @@ impl ExecutorGlobals {
             }
         }
         visible.into_iter().map(|(_, slot)| slot).collect()
+    }
+
+    /// Declared slots in the order exposed by object iteration and diagnostic
+    /// renderers. A non-private override retains the first ancestor bucket's
+    /// position even though the compact object layout stores the overriding
+    /// child declaration in its own slot.
+    pub(crate) fn instance_property_slots_in_iteration_order(&self, class_id: u32) -> Vec<usize> {
+        let Some(class) = self.class_by_id(class_id) else {
+            return Vec::new();
+        };
+        let mut lineage = Vec::new();
+        let mut current = Some(class.name.as_str());
+        while let Some(class_name) = current {
+            let Some(definition) = self.find_class(class_name) else {
+                break;
+            };
+            lineage.push(definition.name.as_str());
+            current = definition.parent.as_deref();
+        }
+        lineage.reverse();
+
+        let mut slots = (0..class.properties.len()).collect::<Vec<_>>();
+        slots.sort_by_key(|slot| {
+            let property = &class.properties[*slot];
+            if property.visibility != Visibility::Private {
+                for (rank, owner) in lineage.iter().enumerate() {
+                    let inherited_bucket = self.find_class(owner).is_some_and(|definition| {
+                        definition.properties.iter().any(|candidate| {
+                            candidate.visibility != Visibility::Private
+                                && candidate.name == property.name
+                                && candidate.declaring_class.eq_ignore_ascii_case(owner)
+                        })
+                    });
+                    if inherited_bucket {
+                        return rank;
+                    }
+                }
+            }
+            lineage
+                .iter()
+                .position(|owner| owner.eq_ignore_ascii_case(&property.declaring_class))
+                .unwrap_or(lineage.len())
+        });
+        slots
     }
 
     /// Resolve one class-local declaration index to its canonical mutable

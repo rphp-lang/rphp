@@ -492,6 +492,7 @@ where
         None,
         std::ptr::null_mut(),
         false,
+        false,
         None,
     )?;
     Ok(return_value)
@@ -523,6 +524,7 @@ where
         None,
         None,
         logical_caller,
+        true,
         false,
         internal_trace_origin.then(|| ("Unknown".to_string(), 0, None, false)),
     )?;
@@ -554,6 +556,7 @@ where
         None,
         None,
         logical_caller,
+        true,
         true,
         None,
     )?;
@@ -595,6 +598,7 @@ where
         None,
         std::ptr::null_mut(),
         false,
+        false,
         None,
     )?;
     Ok(return_value)
@@ -624,6 +628,7 @@ where
             None,
             None,
             std::ptr::null_mut(),
+            false,
             false,
             None,
         )?;
@@ -655,6 +660,7 @@ where
         closure_static_vars,
         None,
         std::ptr::null_mut(),
+        false,
         false,
         None,
     )?;
@@ -690,6 +696,43 @@ where
         closure_static_vars,
         None,
         logical_caller,
+        true,
+        false,
+        None,
+    )?;
+    Ok(return_value)
+}
+
+/// Owned callback entry that may retain the internal caller for live nested
+/// traces. Proven leaf callback bodies defer that link until a Throwable is
+/// materialized, avoiding sidecar updates on every successful call.
+pub(crate) fn call_function_owned_iter_with_context_from_mode<I>(
+    eg: &mut ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+    called_scope_class_id: u32,
+    bound_this: Option<Value>,
+    capture_count: usize,
+    closure_static_vars: Option<crate::value::ClosureStaticVars>,
+    publish_live_trace_caller: bool,
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = Value>,
+{
+    let (return_value, _) = call_function_value_iter::<_, false>(
+        eg,
+        func_ptr,
+        num_args,
+        args,
+        called_scope_class_id,
+        bound_this,
+        capture_count,
+        closure_static_vars,
+        None,
+        logical_caller,
+        publish_live_trace_caller,
         false,
         None,
     )?;
@@ -721,6 +764,7 @@ where
         closure_static_vars,
         Some(named_variadic),
         std::ptr::null_mut(),
+        false,
         false,
         None,
     )?;
@@ -756,6 +800,7 @@ where
         closure_static_vars,
         Some(named_variadic),
         logical_caller,
+        true,
         false,
         Some((
             trace_origin.0,
@@ -793,6 +838,7 @@ where
             None,
             std::ptr::null_mut(),
             false,
+            false,
             None,
         )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
@@ -824,6 +870,7 @@ where
         None,
         std::ptr::null_mut(),
         false,
+        false,
         None,
     )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
@@ -842,6 +889,7 @@ fn call_function_value_iter<I, const READBACK_ARG0: bool>(
     closure_static_vars: Option<crate::value::ClosureStaticVars>,
     named_variadic: Option<Vec<(String, Value)>>,
     logical_caller: *mut ExecuteData,
+    publish_live_trace_caller: bool,
     trace_caller_at_current_site: bool,
     trace_origin: Option<(String, usize, Option<&Value>, bool)>,
 ) -> Result<(Value, Option<Value>), VmError>
@@ -1031,7 +1079,7 @@ where
     } else {
         logical_caller
     };
-    if !logical_caller.is_null() {
+    if publish_live_trace_caller && !logical_caller.is_null() {
         if trace_caller_at_current_site {
             eg.publish_detached_trace_caller_at_current_site(
                 frame as usize,
@@ -1372,6 +1420,7 @@ where
         None,
         None,
         logical_caller,
+        true,
         false,
         Some((
             call_file.to_string(),
@@ -1416,6 +1465,7 @@ where
         None,
         None,
         std::ptr::null_mut(),
+        false,
         false,
         None,
     )?;

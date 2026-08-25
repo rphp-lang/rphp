@@ -547,10 +547,27 @@ enum DynamicPropertyStorage {
 /// caches; indexed entries and their index share one string allocation.
 pub struct DynamicPropertyMap {
     storage: DynamicPropertyStorage,
-    /// Magic-property recursion guards share this already-cold allocation.
-    /// The map itself may contain no user-visible properties while a guard is
-    /// active and is released again when the last guard leaves.
-    property_guards: Option<Box<HashMap<String, u8>>>,
+    /// Magic-property recursion guards and the deprecated object-array cursor
+    /// share one already-cold allocation. The map itself may contain no
+    /// user-visible properties while either piece of side state is active.
+    auxiliary: Option<Box<DynamicPropertyAux>>,
+}
+
+const OBJECT_CURSOR_UNTOUCHED: usize = usize::MAX;
+const OBJECT_CURSOR_INVALID: usize = usize::MAX - 1;
+
+struct DynamicPropertyAux {
+    property_guards: HashMap<String, u8>,
+    object_cursor: usize,
+}
+
+impl DynamicPropertyAux {
+    fn new() -> Self {
+        Self {
+            property_guards: HashMap::new(),
+            object_cursor: OBJECT_CURSOR_UNTOUCHED,
+        }
+    }
 }
 
 impl Clone for DynamicPropertyMap {
@@ -558,8 +575,9 @@ impl Clone for DynamicPropertyMap {
         Self {
             storage: self.storage.clone(),
             // A cloned PHP object starts outside any magic operation even if
-            // cloning was requested from inside a getter or setter.
-            property_guards: None,
+            // cloning was requested from inside a getter or setter, and its
+            // legacy object cursor starts at the first storage bucket.
+            auxiliary: None,
         }
     }
 }
@@ -575,7 +593,7 @@ impl DynamicPropertyMap {
         };
         Self {
             storage,
-            property_guards: None,
+            auxiliary: None,
         }
     }
 
@@ -585,7 +603,7 @@ impl DynamicPropertyMap {
                 storage: DynamicPropertyStorage::Indexed(IndexedDynamicProperties::from_hash_map(
                     properties,
                 )),
-                property_guards: None,
+                auxiliary: None,
             };
         }
         let mut result = Self::with_capacity(properties.len());
@@ -866,36 +884,59 @@ impl DynamicPropertyMap {
 
     #[inline]
     fn property_guard_active(&self, key: &str, operation: u8) -> bool {
-        self.property_guards
+        self.auxiliary
             .as_ref()
-            .and_then(|guards| guards.get(key))
+            .and_then(|auxiliary| auxiliary.property_guards.get(key))
             .is_some_and(|guard| guard & operation != 0)
     }
 
     #[inline]
     fn set_property_guard(&mut self, key: &str, operation: u8, active: bool) {
         if active {
-            let guards = self
+            let auxiliary = self
+                .auxiliary
+                .get_or_insert_with(|| Box::new(DynamicPropertyAux::new()));
+            *auxiliary
                 .property_guards
-                .get_or_insert_with(|| Box::new(HashMap::new()));
-            *guards.entry(key.to_string()).or_insert(0) |= operation;
+                .entry(key.to_string())
+                .or_insert(0) |= operation;
             return;
         }
 
-        let Some(guards) = self.property_guards.as_mut() else {
+        let Some(auxiliary) = self.auxiliary.as_mut() else {
             return;
         };
         let mut remove = false;
-        if let Some(guard) = guards.get_mut(key) {
+        if let Some(guard) = auxiliary.property_guards.get_mut(key) {
             *guard &= !operation;
             remove = *guard == 0;
         }
         if remove {
-            guards.remove(key);
+            auxiliary.property_guards.remove(key);
         }
-        if guards.is_empty() {
-            self.property_guards = None;
+        if auxiliary.property_guards.is_empty()
+            && auxiliary.object_cursor == OBJECT_CURSOR_UNTOUCHED
+        {
+            self.auxiliary = None;
         }
+    }
+
+    /// `None` means the native property table has not yet been inspected;
+    /// `Some(None)` is an exhausted/invalid cursor and `Some(Some(n))` is an
+    /// initialized position among the currently visible values.
+    fn object_cursor(&self) -> Option<Option<usize>> {
+        let cursor = self.auxiliary.as_ref()?.object_cursor;
+        match cursor {
+            OBJECT_CURSOR_UNTOUCHED => None,
+            OBJECT_CURSOR_INVALID => Some(None),
+            position => Some(Some(position)),
+        }
+    }
+
+    fn set_object_cursor(&mut self, position: Option<usize>) {
+        self.auxiliary
+            .get_or_insert_with(|| Box::new(DynamicPropertyAux::new()))
+            .object_cursor = position.unwrap_or(OBJECT_CURSOR_INVALID);
     }
 
     pub(crate) fn for_each(&self, mut visitor: impl FnMut(&str, &Value)) {
@@ -1527,7 +1568,7 @@ impl PhpObject {
             return;
         };
         properties.set_property_guard(key, operation, false);
-        if properties.is_empty() && properties.property_guards.is_none() {
+        if properties.is_empty() && properties.auxiliary.is_none() {
             self.dynamic_properties = None;
         }
     }
@@ -1586,6 +1627,18 @@ impl PhpObject {
         if let Some(dynamic) = &self.dynamic_properties {
             dynamic.for_each(visitor);
         }
+    }
+
+    pub(crate) fn object_cursor(&self) -> Option<Option<usize>> {
+        self.dynamic_properties
+            .as_ref()
+            .and_then(|properties| properties.object_cursor())
+    }
+
+    pub(crate) fn set_object_cursor(&mut self, position: Option<usize>) {
+        self.dynamic_properties
+            .get_or_insert_with(|| Box::new(DynamicPropertyMap::with_capacity(0)))
+            .set_object_cursor(position);
     }
 
     pub(crate) fn clone_for_php(&self) -> Self {

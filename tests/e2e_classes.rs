@@ -1551,6 +1551,34 @@ echo $c->x;
 }
 
 #[test]
+fn non_private_property_override_retains_its_ancestor_display_position() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ParentDisplayProperties {
+    protected $member = 'parent';
+    public $first = 1;
+    public $second = 2;
+}
+class ChildDisplayProperties extends ParentDisplayProperties {
+    protected $member = 'child';
+    public $last = 3;
+}
+var_dump(new ChildDisplayProperties);
+"#,
+        ),
+        concat!(
+            "object(ChildDisplayProperties)#1 (4) {\n",
+            "  [\"member\":protected]=>\n  string(5) \"child\"\n",
+            "  [\"first\"]=>\n  int(1)\n",
+            "  [\"second\"]=>\n  int(2)\n",
+            "  [\"last\"]=>\n  int(3)\n",
+            "}\n",
+        ),
+    );
+}
+
+#[test]
 fn test_class_property_default_bool() {
     assert_eq!(
         run_php(

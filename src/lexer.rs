@@ -601,10 +601,24 @@ impl<'a> Lexer<'a> {
                         && !Self::is_loop_control_operand_sign(&tokens)
                     {
                         self.pos += 1;
-                        match self.read_number()? {
-                            Token::Integer(n) => tokens.push(Token::Integer(-n)),
-                            Token::Float(f) => tokens.push(Token::Float(-f)),
-                            token => tokens.push(token),
+                        let number = self.read_number()?;
+                        let followed_by_power =
+                            self.skip_halt_trivia(self.pos).is_ok_and(|position| {
+                                self.src.get(position..position + 2) == Some(b"**")
+                            });
+                        if followed_by_power {
+                            // PHP's exponentiation binds more tightly than a
+                            // unary sign. Keep the compact signed-literal path
+                            // everywhere else, including PHP_INT_MIN, but let
+                            // the parser see `-` before a powered literal.
+                            tokens.push(Token::Minus);
+                            tokens.push(number);
+                        } else {
+                            match number {
+                                Token::Integer(n) => tokens.push(Token::Integer(-n)),
+                                Token::Float(f) => tokens.push(Token::Float(-f)),
+                                token => tokens.push(token),
+                            }
                         }
                     } else {
                         tokens.push(Token::Minus);
@@ -1584,6 +1598,19 @@ mod tests {
                 Token::Semicolon(1),
                 Token::Eof,
             ]
+        );
+    }
+
+    #[test]
+    fn powered_negative_literal_keeps_the_unary_sign_token() {
+        let tokens = Lexer::new("<?php -10.0 /* power */ ** 400;")
+            .tokenize()
+            .unwrap();
+
+        assert!(
+            tokens
+                .windows(3)
+                .any(|tokens| { tokens == [Token::Minus, Token::Float(10.0), Token::StarStar] })
         );
     }
 

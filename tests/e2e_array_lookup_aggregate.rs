@@ -3,6 +3,69 @@ mod common;
 use common::run_php;
 
 #[test]
+fn sprintf_unsigned_and_array_object_append_cover_legacy_array_inputs() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+echo sprintf('%u|%020u', -1, -1), "\n";
+$object = new ArrayObject();
+$object->append('foo');
+$object->append('bar');
+echo count($object), "\n";
+try { array_unique($object); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+"#,
+        ),
+        "18446744073709551615|18446744073709551615\n2\narray_unique(): Argument #1 ($array) must be of type array, ArrayObject given\n",
+    );
+}
+
+#[test]
+fn deprecated_object_cursors_skip_uninitialized_declared_properties() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo $level, ':', $message, "\n";
+    return true;
+});
+class CursorValues {
+    public int $a;
+    public int $b;
+    public int $c;
+}
+$values = new CursorValues;
+$values->b = 10;
+$values->c = 20;
+var_dump(reset($values), key($values), next($values), key($values), prev($values));
+$empty = new class { public int $value; };
+var_dump(current($empty), key($empty));
+$empty->value = 30;
+var_dump(current($empty), key($empty));
+var_dump(reset($empty), key($empty));
+"#,
+        ),
+        concat!(
+            "8192:reset(): Calling reset() on an object is deprecated\n",
+            "8192:key(): Calling key() on an object is deprecated\n",
+            "8192:next(): Calling next() on an object is deprecated\n",
+            "8192:key(): Calling key() on an object is deprecated\n",
+            "8192:prev(): Calling prev() on an object is deprecated\n",
+            "int(10)\nstring(1) \"b\"\nint(20)\nstring(1) \"c\"\nint(10)\n",
+            "8192:current(): Calling current() on an object is deprecated\n",
+            "8192:key(): Calling key() on an object is deprecated\n",
+            "bool(false)\nNULL\n",
+            "8192:current(): Calling current() on an object is deprecated\n",
+            "8192:key(): Calling key() on an object is deprecated\n",
+            "bool(false)\nNULL\n",
+            "8192:reset(): Calling reset() on an object is deprecated\n",
+            "8192:key(): Calling key() on an object is deprecated\n",
+            "int(30)\nstring(5) \"value\"\n",
+        ),
+    );
+}
+
+#[test]
 fn lookup_signatures_filters_references_and_types_match_php_85() {
     assert_eq!(
         run_php(

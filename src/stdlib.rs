@@ -4431,36 +4431,54 @@ fn fn_array_map(
         PhpArray::with_packed_capacity(length)
     };
     if let Some(resolved) = resolved.as_ref() {
-        if arrays.len() == 1 {
-            for (key, value) in first_array.iter() {
-                let argument = value.dereferenced().clone();
-                let mapped =
-                    call_resolved_with_values(eg, resolved, std::slice::from_ref(&argument))?;
-                if eg.exception.is_some() {
-                    return Ok(());
+        let publish_live_trace_caller = resolved.requires_live_internal_trace_caller();
+        let mapped = with_internal_trace_origin(ed, eg, |eg| {
+            if arrays.len() == 1 {
+                for (key, value) in first_array.iter() {
+                    let argument = value.dereferenced().clone();
+                    let mapped = call_resolved_with_values_from_internal(
+                        ed,
+                        eg,
+                        resolved,
+                        std::slice::from_ref(&argument),
+                        publish_live_trace_caller,
+                    )?;
+                    if eg.exception.is_some() {
+                        return Ok(None);
+                    }
+                    result.set(key, mapped);
                 }
-                result.set(key, mapped);
+                return Ok(Some(result));
             }
-            ret!(rv, Value::array(result));
-        }
 
-        for position in 0..length {
-            let row = arrays
-                .iter()
-                .map(|array| {
-                    array
-                        .get_value_at(position)
-                        .map(|value| value.dereferenced().clone())
-                        .unwrap_or_else(Value::null)
-                })
-                .collect::<Vec<_>>();
-            let mapped = call_resolved_with_values(eg, resolved, &row)?;
-            if eg.exception.is_some() {
-                return Ok(());
+            for position in 0..length {
+                let row = arrays
+                    .iter()
+                    .map(|array| {
+                        array
+                            .get_value_at(position)
+                            .map(|value| value.dereferenced().clone())
+                            .unwrap_or_else(Value::null)
+                    })
+                    .collect::<Vec<_>>();
+                let mapped = call_resolved_with_values_from_internal(
+                    ed,
+                    eg,
+                    resolved,
+                    &row,
+                    publish_live_trace_caller,
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(None);
+                }
+                result.push(mapped);
             }
-            result.push(mapped);
+            Ok(Some(result))
+        })?;
+        if let Some(mapped) = mapped {
+            ret!(rv, Value::array(mapped));
         }
-        ret!(rv, Value::array(result));
+        return Ok(());
     }
 
     for position in 0..length {
@@ -7389,6 +7407,10 @@ fn append_sprintf_value(
                 arg.map(|value| value.to_long_val()).unwrap_or(0)
             );
         }
+        'u' => {
+            let value = arg.map(|value| value.to_long_val()).unwrap_or(0) as u64;
+            let _ = write!(result, "{value}");
+        }
         'f' => {
             let value = arg.map(|value| value.to_float_val()).unwrap_or(0.0);
             let _ = write!(result, "{value:.6}");
@@ -7455,7 +7477,7 @@ fn format_sprintf_values(
                 }
                 if spec_index < bytes.len() {
                     let spec = bytes[spec_index] as char;
-                    if !matches!(spec, 's' | 'd' | 'f' | 'x' | 'X' | 'o' | 'b' | 'c') {
+                    if !matches!(spec, 's' | 'd' | 'u' | 'f' | 'x' | 'X' | 'o' | 'b' | 'c') {
                         result.push_str(&fmt[index..=spec_index]);
                         index = spec_index + 1;
                         literal_start = index;
@@ -9994,6 +10016,26 @@ fn internal_call_source(ed: *mut ExecuteData) -> (String, usize) {
             .unwrap_or(0);
         (file, line)
     }
+}
+
+#[inline]
+fn with_internal_trace_origin<T>(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    action: impl FnOnce(&mut ExecutorGlobals) -> Result<T, VmError>,
+) -> Result<T, VmError> {
+    let publish = eg.detached_trace_origin(ed as usize).is_none();
+    if publish {
+        let (file, line) = internal_call_source(ed);
+        if !file.is_empty() && line != 0 {
+            eg.publish_detached_trace_origin(ed as usize, file, line);
+        }
+    }
+    let result = action(eg);
+    if publish {
+        eg.discard_detached_trace_origin(ed as usize);
+    }
+    result
 }
 
 fn internal_call_is_strict(ed: *mut ExecuteData) -> bool {
@@ -13224,29 +13266,7 @@ fn var_dump_property_key(definition: &PropertyDefinition) -> String {
 }
 
 fn var_dump_property_slots(eg: &ExecutorGlobals, class_id: u32) -> Vec<usize> {
-    let Some(class) = eg.class_by_id(class_id) else {
-        return Vec::new();
-    };
-    let mut lineage = Vec::new();
-    let mut current = Some(class.name.as_str());
-    while let Some(class_name) = current {
-        let Some(definition) = eg.find_class(class_name) else {
-            break;
-        };
-        lineage.push(definition.name.as_str());
-        current = definition.parent.as_deref();
-    }
-    lineage.reverse();
-
-    let mut slots = (0..class.properties.len()).collect::<Vec<_>>();
-    slots.sort_by_key(|slot| {
-        let property = &class.properties[*slot];
-        lineage
-            .iter()
-            .position(|owner| owner.eq_ignore_ascii_case(&property.declaring_class))
-            .unwrap_or(lineage.len())
-    });
-    slots
+    eg.instance_property_slots_in_iteration_order(class_id)
 }
 
 fn print_r_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
@@ -14650,6 +14670,19 @@ impl Clone for ResolvedCallback {
 }
 
 impl ResolvedCallback {
+    #[inline]
+    fn metadata(&self) -> (&FunctionCommon, Option<&crate::compiler::OpArray>) {
+        // SAFETY: callback resolution only publishes pointers owned by the
+        // request's immutable function table, which outlives the descriptor;
+        // the common header tag is checked before borrowing a UserFunction.
+        unsafe {
+            let common = &*self.func_ptr;
+            let user = (common.fn_type == FunctionType::User)
+                .then(|| &(*(self.func_ptr as *const crate::vm::function::UserFunction)).op_array);
+            (common, user)
+        }
+    }
+
     #[inline(always)]
     fn plain_function(func_ptr: *const FunctionCommon) -> Self {
         Self {
@@ -14672,9 +14705,51 @@ impl ResolvedCallback {
     /// descriptor's lifetime.
     #[inline]
     pub(crate) fn common(&self) -> &FunctionCommon {
-        // SAFETY: callback resolution only publishes pointers owned by the
-        // request's immutable function table, which outlives the descriptor.
-        unsafe { &*self.func_ptr }
+        self.metadata().0
+    }
+
+    #[inline]
+    fn requires_live_internal_trace_caller(&self) -> bool {
+        self.metadata().1.is_none_or(|op_array| {
+            op_array.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction.opcode,
+                    OpCode::Echo
+                        | OpCode::InitFcall
+                        | OpCode::DoFcall
+                        | OpCode::CallUserFuncArray
+                        | OpCode::InitUserCall
+                        | OpCode::InitMethodCall
+                        | OpCode::InitStaticCall
+                        | OpCode::InitDynamicCall
+                        | OpCode::InitLateStaticCall
+                        | OpCode::Throw
+                        | OpCode::NewObj
+                        | OpCode::FetchObjR
+                        | OpCode::AssignObjProp
+                        | OpCode::AssignObjDim
+                        | OpCode::IssetObj
+                        | OpCode::UnsetObj
+                        | OpCode::BindObjPropRef
+                        | OpCode::FetchDimR
+                        | OpCode::AssignDim
+                        | OpCode::UnsetDim
+                        | OpCode::BindArrayDimRef
+                        | OpCode::ForeachInit
+                        | OpCode::ForeachNext
+                        | OpCode::ForeachNextRef
+                        | OpCode::ForeachNextPlain
+                        | OpCode::Cast
+                        | OpCode::Instanceof
+                        | OpCode::CloneObj
+                        | OpCode::Include
+                        | OpCode::Eval
+                        | OpCode::AssertCheck
+                        | OpCode::Yield
+                        | OpCode::YieldFrom
+                )
+            })
+        })
     }
 
     #[inline]
@@ -16316,6 +16391,22 @@ where
 /// functions can enter the guarded scalar callback ABI, while internal
 /// handlers retain their direct slice ABI and every other callable shape uses
 /// the canonical receiver/capture-aware frame path.
+#[inline(always)]
+fn try_execute_resolved_scalar_long_callback<'a, I>(
+    resolved: &ResolvedCallback,
+    public_num_args: usize,
+    arguments: I,
+) -> Option<i64>
+where
+    I: IntoIterator<Item = &'a Value>,
+{
+    // SAFETY: callback resolution only publishes a request-owned immutable
+    // function pointer that remains live for the descriptor's lifetime. The
+    // guarded ABI validates the function kind, arity and every argument before
+    // reading the concrete user-function plan.
+    unsafe { try_execute_scalar_long_callback(resolved.func_ptr, public_num_args, arguments) }
+}
+
 #[inline]
 pub(crate) fn call_resolved_with_values(
     eg: &mut ExecutorGlobals,
@@ -16338,7 +16429,7 @@ pub(crate) fn call_resolved_with_values(
         && resolved.closure_static_vars.is_none()
     {
         if let Some(result) =
-            unsafe { try_execute_scalar_long_callback(resolved.func_ptr, args.len(), args.iter()) }
+            try_execute_resolved_scalar_long_callback(resolved, args.len(), args.iter())
         {
             return Ok(Value::long(result));
         }
@@ -16355,6 +16446,55 @@ pub(crate) fn call_resolved_with_values(
             .iter()
             .chain(args.iter())
             .chain(resolved.use_vars.iter()),
+    )
+}
+
+/// Invoke a user callback beneath the live internal-function activation. This
+/// preserves Zend's `[internal function]` boundary in stored Throwable traces;
+/// scalar-proven callbacks retain their frame-free fast path.
+#[inline]
+fn call_resolved_with_values_from_internal(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    args: &[Value],
+    publish_live_trace_caller: bool,
+) -> Result<Value, VmError> {
+    if resolved.is_magic_call
+        || resolved.common().fn_type != FunctionType::User
+        || reject_scope_introspection_callback(eg, resolved)
+    {
+        return call_resolved_with_values(eg, resolved, args);
+    }
+    if resolved.prepend_args.is_empty()
+        && resolved.use_vars.is_empty()
+        && !resolved.has_context()
+        && resolved.closure_static_vars.is_none()
+    {
+        if let Some(result) =
+            try_execute_resolved_scalar_long_callback(resolved, args.len(), args.iter())
+        {
+            return Ok(Value::long(result));
+        }
+    }
+
+    let num_args = resolved.prepend_args.len() + args.len() + resolved.use_vars.len();
+    crate::vm::execute::call_function_owned_iter_with_context_from_mode(
+        eg,
+        ed,
+        resolved.func_ptr,
+        num_args,
+        resolved
+            .prepend_args
+            .iter()
+            .cloned()
+            .chain(args.iter().cloned())
+            .chain(resolved.use_vars.iter().map(Value::clone_closure_capture)),
+        resolved.called_scope_class_id,
+        resolved.bound_this.clone(),
+        resolved.use_vars.len(),
+        resolved.closure_static_vars.clone(),
+        publish_live_trace_caller,
     )
 }
 
@@ -20832,7 +20972,7 @@ fn fn_array_key_first(
     ret!(rv, Value::null());
 }
 
-fn cursor_value(
+fn array_cursor_value(
     ed: *mut ExecuteData,
     rv: *mut Value,
     select: impl FnOnce(&PhpArray) -> Option<&Value>,
@@ -20845,41 +20985,191 @@ fn cursor_value(
     ret!(rv, value);
 }
 
-fn fn_reset(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    cursor_value(ed, rv, PhpArray::cursor_reset)
+#[derive(Clone, Copy)]
+enum ObjectCursorOperation {
+    Reset,
+    End,
+    Current,
+    Next,
+    Prev,
+    Key,
 }
 
-fn fn_end(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    cursor_value(ed, rv, PhpArray::cursor_end)
+fn object_cursor_entries(eg: &ExecutorGlobals, value: &Value) -> Vec<(String, Value)> {
+    let object = value
+        .as_object()
+        .expect("object cursor is entered only for an object");
+    let mut entries = Vec::new();
+    if let Some(class) = eg.class_by_id(object.class_id) {
+        for slot in eg.instance_property_slots_in_iteration_order(object.class_id) {
+            let Some(value) = object.get_property_slot(slot) else {
+                continue;
+            };
+            if value.value_type() == ValueType::Undef {
+                continue;
+            }
+            let definition = &class.properties[slot];
+            let key = match definition.visibility {
+                Visibility::Public => definition.name.clone(),
+                Visibility::Protected => format!("\0*\0{}", definition.name),
+                Visibility::Private => {
+                    format!("\0{}\0{}", definition.declaring_class, definition.name)
+                }
+            };
+            entries.push((key, value.dereferenced().clone()));
+        }
+    }
+    object.for_each_dynamic_property(|key, value| {
+        if value.value_type() != ValueType::Undef {
+            entries.push((key.to_string(), value.dereferenced().clone()));
+        }
+    });
+    entries
+}
+
+fn object_cursor_value(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    operation: ObjectCursorOperation,
+) -> Result<(), VmError> {
+    report_internal_deprecation(
+        eg,
+        ed,
+        &format!("{function}(): Calling {function}() on an object is deprecated"),
+    )?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+
+    let argument = arg!(ed, 0);
+    let entries = object_cursor_entries(eg, argument);
+    let state = argument
+        .as_object()
+        .and_then(|object| object.object_cursor());
+    let current = match state {
+        None => (!entries.is_empty()).then_some(0),
+        Some(position) => position.filter(|position| *position < entries.len()),
+    };
+    let selected = match operation {
+        ObjectCursorOperation::Reset => (!entries.is_empty()).then_some(0),
+        ObjectCursorOperation::End => entries.len().checked_sub(1),
+        ObjectCursorOperation::Current | ObjectCursorOperation::Key => current,
+        ObjectCursorOperation::Next => current
+            .and_then(|position| position.checked_add(1))
+            .filter(|position| *position < entries.len()),
+        ObjectCursorOperation::Prev => current.and_then(|position| position.checked_sub(1)),
+    };
+    if let Some(mut object) = argument.as_object_mut() {
+        object.set_object_cursor(selected);
+    }
+
+    if matches!(operation, ObjectCursorOperation::Key) {
+        if let Some((key, _)) = selected.and_then(|position| entries.get(position)) {
+            ret!(rv, Value::string(key));
+        }
+        ret!(rv, Value::null());
+    }
+    let value = selected
+        .and_then(|position| entries.get(position))
+        .map(|(_, value)| value.clone())
+        .unwrap_or_else(|| Value::bool(false));
+    ret!(rv, value);
+}
+
+fn cursor_value(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    operation: ObjectCursorOperation,
+    select: impl FnOnce(&PhpArray) -> Option<&Value>,
+) -> Result<(), VmError> {
+    let argument = arg!(ed, 0);
+    if argument.as_array().is_some() {
+        return array_cursor_value(ed, rv, select);
+    }
+    if argument.as_object().is_some() {
+        return object_cursor_value(ed, rv, eg, function, operation);
+    }
+    typed_internal_argument_error(eg, function, argument, 1, "array", "array|object");
+    Ok(())
+}
+
+fn fn_reset(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    cursor_value(
+        ed,
+        rv,
+        eg,
+        "reset",
+        ObjectCursorOperation::Reset,
+        PhpArray::cursor_reset,
+    )
+}
+
+fn fn_end(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    cursor_value(
+        ed,
+        rv,
+        eg,
+        "end",
+        ObjectCursorOperation::End,
+        PhpArray::cursor_end,
+    )
 }
 
 fn fn_current(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    cursor_value(ed, rv, PhpArray::cursor_current)
+    cursor_value(
+        ed,
+        rv,
+        eg,
+        "current",
+        ObjectCursorOperation::Current,
+        PhpArray::cursor_current,
+    )
 }
 
-fn fn_next(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    cursor_value(ed, rv, PhpArray::cursor_next)
+fn fn_next(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    cursor_value(
+        ed,
+        rv,
+        eg,
+        "next",
+        ObjectCursorOperation::Next,
+        PhpArray::cursor_next,
+    )
 }
 
-fn fn_prev(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    cursor_value(ed, rv, PhpArray::cursor_prev)
+fn fn_prev(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    cursor_value(
+        ed,
+        rv,
+        eg,
+        "prev",
+        ObjectCursorOperation::Prev,
+        PhpArray::cursor_prev,
+    )
 }
 
 /// key($array): int|string|null for the array's current internal cursor.
-fn fn_key(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_key(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     if let Some(key) = arg!(ed, 0).as_array().and_then(PhpArray::cursor_key) {
         match key {
             ArrayKey::Int(key) => ret!(rv, Value::long(key)),
             ArrayKey::String(key) => ret!(rv, Value::string(key)),
         }
+    }
+    if arg!(ed, 0).as_object().is_some() {
+        return object_cursor_value(ed, rv, eg, "key", ObjectCursorOperation::Key);
+    }
+    if arg!(ed, 0).as_array().is_none() {
+        typed_internal_argument_error(eg, "key", arg!(ed, 0), 1, "array", "array|object");
+        return Ok(());
     }
     ret!(rv, Value::null());
 }

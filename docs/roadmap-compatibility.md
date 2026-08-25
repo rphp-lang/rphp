@@ -2295,6 +2295,28 @@ next goal by this order unless an explicit project objective overrides it:
 5. Reflection and standard-library clusters with measured dependency reach;
 6. isolated low-fanout features and optional extensions.
 
+The `array-suite-zero-failure-batch` checkpoint closes all six ordinary
+failures in the complete recursive 842-case `ext/standard/tests/array`
+selection through shared object enumeration, unsigned formatting, lexer
+precedence, callback trace, `ArrayObject` append and deprecated object-cursor
+contracts. Six original regressions protect the general boundaries without
+copying php-src source or recognizing a supplying path.
+
+The supplying cases move from 0/6 to 6/6 against PHP 8.5.9. The array audit
+moves from 822 to 828 pass (+6/-0), with zero fail, 13 skip and one unsupported;
+strings moves from 305 to 309 pass (+4/-0); and Zend/lang moves from 4,196 to
+4,201 pass (+5/-0), with no lost pass, timeout or crash. All five Cargo
+configurations, all-target, formatting, runner, unsafe, Composer S0, four
+Symfony S1 gates and PHP 8.5 S2/S3 pass. `PhpObject` remains 72 bytes and the
+unsafe inventory remains 1,623 blocks/289 functions.
+
+Two CPU-pinned 32-pair release controls for ordinary non-scalar-plan
+`array_map()` callbacks put paired/order-balanced medians at
++4.286%/+3.564% and +3.146%/+3.314%, below the +5% gate with exact checksums.
+The complete formatting surface, broader `ArrayObject`, deprecated object-
+cursor mutation/reentrancy edges, 32-bit execution, the strings timeout and
+remaining strings/Zend gaps remain explicit nonclaims.
+
 The `htmlspecialchars-decode-decbin-binary-batch` checkpoint gives
 `htmlspecialchars_decode()` PHP 8.5's quote/document flags, named and numeric
 special-character references, single-pass behavior and byte-exact output.
@@ -2503,11 +2525,12 @@ schedule cases and throwing-comparison partial permutation remain explicit
 nonclaims.
 
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
-process hazard: `ext/standard/tests/array` is 822 pass, six fail, 13 skip and
-one unsupported, while `Zend/tests` plus `tests/lang` is 4,196 pass, 1,107
-fail, 115 skip and 181 unsupported, with no timeout or crash in either corpus.
-The next array goal must therefore be chosen by shared-root-cause fanout and
-dependency reach across those six visible failures, not by filename order.
+process hazard or ordinary array failure: `ext/standard/tests/array` is 828
+pass, zero fail, 13 skip and one unsupported. `Zend/tests` plus `tests/lang`
+is 4,201 pass, 1,102 fail, 115 skip and 181 unsupported, with no timeout or
+crash. The next goal should therefore move to the highest-fanout ordinary
+failure cluster in the strings or Zend/lang manifests rather than extending
+the already-zero array failure count.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,

@@ -1,6 +1,6 @@
 /// Tests for array_map, array_filter and array_reduce callback invocation.
 mod common;
-use common::{run_php, run_php_expect_error};
+use common::{run_php, run_php_expect_error, run_php_with_source_context};
 
 include!("e2e_array_map_filter/map_basics.rs");
 

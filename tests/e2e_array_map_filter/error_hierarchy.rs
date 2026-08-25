@@ -94,3 +94,31 @@ echo ":after";
     );
     assert_eq!(out, "caught:after");
 }
+
+#[test]
+fn array_map_throwable_trace_retains_the_internal_callback_boundary() {
+    let out = run_php_with_source_context(
+        r#"<?php
+class MapTrace {
+    private static function leaf(int $value): void { throw new Exception("stop:$value"); }
+    public static function callback(int $value): void { self::leaf($value); }
+}
+try {
+    array_map([MapTrace::class, 'callback'], [7]);
+} catch (Throwable $error) {
+    foreach ($error->getTrace() as $index => $frame) {
+        echo $index, ':', $frame['file'] ?? 'internal', ':', $frame['line'] ?? 0, ':',
+            $frame['class'] ?? '', $frame['type'] ?? '', $frame['function'], "\n";
+    }
+}
+"#,
+        "/virtual/array-map-trace.php",
+        "/virtual",
+    );
+    assert_eq!(
+        out,
+        "0:/virtual/array-map-trace.php:4:MapTrace::leaf\n\
+1:internal:0:MapTrace::callback\n\
+2:/virtual/array-map-trace.php:7:array_map\n",
+    );
+}

@@ -189,6 +189,14 @@ fn test_negative_float_literal() {
 }
 
 #[test]
+fn exponentiation_binds_more_tightly_than_a_compact_negative_literal() {
+    assert_eq!(
+        run_php("<?php var_dump(-2 ** 2, (-2) ** 2, 2 ** -3, -10.0 ** 400 + 10.0 ** 400);"),
+        "int(-4)\nint(4)\nfloat(0.125)\nfloat(NAN)\n",
+    );
+}
+
+#[test]
 fn test_float_scientific_notation() {
     assert_eq!(run_php("<?php echo 1.5e2;"), "150");
 }
