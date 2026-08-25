@@ -8624,10 +8624,11 @@ fn fn_str_repeat(
     if binary {
         ret!(rv, php_byte_result(repeated, true));
     }
-    // SAFETY: `s` is UTF-8 and the buffer consists exclusively of complete
-    // copies of its bytes. Both the current length and the remaining length
-    // are multiples of `s.len()`, so the final partial doubling cannot split
-    // a code point.
+    // SAFETY: this branch is reachable only when `binary` is false, making
+    // `source_bytes` exactly `s.as_bytes()`. The buffer consists exclusively
+    // of complete copies of UTF-8 `s`; both its current and remaining lengths
+    // are multiples of `s.len()`, so the final doubling cannot split a code
+    // point.
     ret!(
         rv,
         Value::string(unsafe { String::from_utf8_unchecked(repeated) })
