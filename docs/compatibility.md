@@ -67,7 +67,7 @@ median is below +5%.
 
 This checkpoint does not claim unknown-encoding warnings, further legacy
 multibyte encodings, 32-bit execution, remaining strings/Zend failures or wider
-PHP compatibility. The next high-yield bounded candidate is the 13-case byte
+PHP compatibility. The next high-yield bounded candidate is the 12-case byte
 escaping cluster shared by `addslashes()`, `stripslashes()`, `addcslashes()`
 and `stripcslashes()`.
 

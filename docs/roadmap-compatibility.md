@@ -2680,7 +2680,7 @@ is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
 and invalid-UTF-8 recovery families are both 3/3; the EUC-JP/Big5 supplying
 pair is 2/2. `Zend/tests` plus
 `tests/lang` is 4,202 pass, 1,101 fail, 115 skip and 181 unsupported, with no
-timeout or crash. The next goal should first cluster and close the 13 visible
+timeout or crash. The next goal should first cluster and close the 12 visible
 byte-escaping failures shared by `addslashes()`, `stripslashes()`,
 `addcslashes()` and `stripcslashes()`; unknown entity-encoding warnings and
 broader legacy multibyte behavior remain explicit contracts.
