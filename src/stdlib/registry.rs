@@ -642,7 +642,20 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "break_str",
         "cut_long_words"
     );
-    reg!("nl2br", fn_nl2br, 1, 1, "string");
+    {
+        let mut function = Box::new(make_internal_function(
+            fn_nl2br,
+            2,
+            1,
+            pn!["string", "use_xhtml"],
+        ));
+        function.common.sig.param_type_hints = vec![ParamTypeHint::String, ParamTypeHint::Bool];
+        function.common.sig.return_type_hint = ParamTypeHint::String;
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("nl2br", pointer).unwrap();
+        funcs.push(function);
+    }
     reg!("strrev", fn_strrev, 1, 1, "string");
     reg!(
         "number_format",

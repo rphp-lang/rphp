@@ -8413,13 +8413,127 @@ fn fn_wordwrap(
     ret!(rv, Value::string(result));
 }
 
-fn fn_nl2br(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    ret!(rv, Value::string(s.replace('\n', "<br />\n")));
+fn fn_nl2br(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let exact_string = arg!(ed, 0).dereferenced();
+    let exact_xhtml = match arg_opt!(ed, 1) {
+        None => Some(true),
+        Some(value) => match value.dereferenced().value_type() {
+            ValueType::True => Some(true),
+            ValueType::False => Some(false),
+            _ => None,
+        },
+    };
+    if exact_string.value_type() == ValueType::String
+        && !exact_string.is_binary_string()
+        && exact_string.as_str().is_some_and(str::is_ascii)
+        && let Some(use_xhtml) = exact_xhtml
+    {
+        let source = exact_string.as_str().unwrap_or_default();
+        let bytes = source.as_bytes();
+        let Some(first_newline) = memchr::memchr2(b'\r', b'\n', bytes) else {
+            ret!(rv, Value::string(source.to_string()));
+        };
+        let line_break = if use_xhtml { "<br />" } else { "<br>" };
+        let estimated_growth = line_break
+            .len()
+            .checked_mul(source.len().min(8))
+            .and_then(|growth| source.len().checked_add(growth));
+        let Some(estimated_capacity) = estimated_growth else {
+            eg.exception = Some(crate::value::make_error_value(
+                "Error",
+                "nl2br(): Failed to allocate result string",
+            ));
+            return Ok(());
+        };
+        let mut result = String::with_capacity(estimated_capacity);
+        let mut copied = 0usize;
+        let mut newline = first_newline;
+        loop {
+            let newline_length = php_newline_length(bytes, newline);
+            result.push_str(&source[copied..newline]);
+            result.push_str(line_break);
+            result.push_str(&source[newline..newline + newline_length]);
+            copied = newline + newline_length;
+            let Some(relative) = memchr::memchr2(b'\r', b'\n', &bytes[copied..]) else {
+                break;
+            };
+            newline = copied + relative;
+        }
+        result.push_str(&source[copied..]);
+        ret!(rv, Value::string(result));
+    }
+
+    let Some(string) =
+        typed_internal_string_value_argument_expected(ed, eg, "nl2br", 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let use_xhtml = if arg_opt!(ed, 1).is_some() {
+        let Some(use_xhtml) = typed_internal_bool_argument(ed, eg, "nl2br", 1, "use_xhtml")? else {
+            return Ok(());
+        };
+        use_xhtml
+    } else {
+        true
+    };
+
+    let source = string.php_string_bytes().unwrap_or_default();
+    let line_break: &[u8] = if use_xhtml { b"<br />" } else { b"<br>" };
+    let mut newline_count = 0usize;
+    let mut position = 0usize;
+    while let Some(relative) = memchr::memchr2(b'\r', b'\n', &source[position..]) {
+        let newline = position + relative;
+        newline_count = newline_count.saturating_add(1);
+        position = newline + php_newline_length(&source, newline);
+    }
+
+    let result_length = line_break
+        .len()
+        .checked_mul(newline_count)
+        .and_then(|growth| source.len().checked_add(growth));
+    let Some(result_length) = result_length else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "nl2br(): Failed to allocate result string",
+        ));
+        return Ok(());
+    };
+    let mut result = Vec::new();
+    if result.try_reserve_exact(result_length).is_err() {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "nl2br(): Failed to allocate result string",
+        ));
+        return Ok(());
+    }
+    position = 0;
+    let mut copied = 0usize;
+    while let Some(relative) = memchr::memchr2(b'\r', b'\n', &source[position..]) {
+        let newline = position + relative;
+        let newline_length = php_newline_length(&source, newline);
+        result.extend_from_slice(&source[copied..newline]);
+        result.extend_from_slice(line_break);
+        result.extend_from_slice(&source[newline..newline + newline_length]);
+        copied = newline + newline_length;
+        position = copied;
+    }
+    result.extend_from_slice(&source[copied..]);
+
+    let value = if string.is_binary_string() || !result.is_ascii() {
+        Value::binary_string(&result)
+    } else {
+        Value::string(String::from_utf8(result).expect("ASCII nl2br result is valid UTF-8"))
+    };
+    ret!(rv, value);
+}
+
+#[inline]
+fn php_newline_length(source: &[u8], position: usize) -> usize {
+    usize::from(
+        source
+            .get(position + 1)
+            .is_some_and(|next| *next != source[position] && matches!(*next, b'\r' | b'\n')),
+    ) + 1
 }
 
 fn fn_strrev(
