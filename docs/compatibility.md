@@ -8,6 +8,77 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`string-replacement-contract`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. `str_replace()` and `str_ireplace()` now share one
+ordered PHP-byte replacement engine. Scalar and array search, replacement and
+subject values follow PHP's positional replacement schedule, including empty
+search items, missing replacement items, cumulative count, subject-key
+preservation and array/reference copy-on-write. Case-insensitive matching folds
+ASCII only and leaves NUL, arbitrary high bytes and UTF-8 byte sequences intact.
+
+The three public value parameters expose PHP 8.5's `array|string` types and the
+optional fourth parameter is a real by-reference `count`; Reflection also
+reports `array|string` returns. A handler-owned internal argument boundary
+preserves those types without applying user-function coercion first. It
+implements weak scalar, null-deprecation and stringable-object conversions,
+strict rejection, the scalar-search/array-replacement error, resource/object
+diagnostics and nested array-to-string warnings at PHP's observable stage.
+Static, dynamic, named and `call_user_func_array()` paths share the contract.
+Detached array callbacks retain the originating strict-types bit while ordinary
+engine callbacks keep their established weak-call behavior.
+
+Three original E2E regressions cover ordered multi-replacement, missing and
+empty entries, associative keys, references and source immutability, binary and
+case-insensitive bytes, nested arrays, weak/strict unions, Stringable and
+invalid objects/resources, exact count writes and non-reference errors,
+Reflection, and all admitted call shapes. Five independent clean-room probes
+match the PHP oracle byte-for-byte; their output SHA-256 values are
+`1338dbe716bc0233282923cc11acc7ad2d478f9c6cf0f8dcbbd34721bb870c0f`,
+`259b56802807ad5545807680bc8a058a38c0eb84dbb7e4d9c1e12dd77b299923`,
+`59bac9f206ec9833782e1b52f48dcf8b74aaf06d7892ca44e0a2c65649d55e20`,
+`b99ac86ad19a820bb02d48380f9f38e912177072a0c3b5dce985d96bcbc39306`
+and `9148deddcfd4e1cb7f9364fe04422c2942d6fde0293e4c275b470afeab6f23e9`.
+The eight supplying cases move from 0/8 to 8/8; their baseline, PHP-oracle and
+final-candidate normalized hashes are
+`ee0324f24ae327b618b27ec47da05f562a8451c2a8e08b1bc1ac0aed40ed80d7`,
+`101d31b234cc4b91d11fb65eb653282133304e6d47caffb9b38fdbbaf0f0205b`
+and the same `101d31b234cc4b91d11fb65eb653282133304e6d47caffb9b38fdbbaf0f0205b`.
+
+The complete 733-case strings audit moves from 479 to 487 passes, an exact
++8/-0 delta consisting only of the supplying cluster. There are 161 failures,
+54 skips, 30 unsupported cases, the retained `dirname_multi.phpt` timeout and
+zero crashes. Array remains exactly classified at 828 passes, 13 skips and one
+unsupported case. Zend/lang remains exactly classified at 4,206 passes, 1,097
+failures, 115 skips and 181 unsupported cases with no timeout or crash. Three
+serial release runs have identical stable path/outcome/runner-control hashes
+`46795271cb898e278640f21bd0f7f26fe28430f1a2a9f79d576e911389c07082`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `907bddc39e20247bdf412dc3de5fa6653912c1e7c0b0c542ff70af2cb3a896f8`
+for strings, array and Zend/lang respectively.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML data, PHPT-runner and unsafe-policy checks, Composer 2.8.12
+S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production has 1,623
+unsafe blocks, 289 unsafe functions, 361 SAFETY annotations and seven
+`# Safety` sections. Exact-binary CPU-2-pinned balanced release A/B controls
+compare parent SHA-256
+`c3ef53c5b8b3ef2ebb8a00b5277a310cb75efcbeac52915fa1495b2442895b1f`
+with candidate
+`ea952a8c9134c09bc6780101fc2a744a56f3c321332f586b43e47508bf0e3223`.
+Paired medians are -26.620% for scalar `str_replace()`, -15.070% for scalar
+`str_ireplace()` and -7.549% for array replacement. Adjacent controls are
+-0.483% for `str_split()`, +1.256%, +0.271% and +2.130% for the three retained
+`chunk_split()` shapes, and +2.192% for 200 empty processes. Every
+output/checksum matches and every median is below +5%.
+
+This checkpoint does not claim locale-dependent non-ASCII case folding, exact
+partial-count mutation after a throwing nested conversion, source-unpack
+diagnostic locations, 32-bit execution or the remaining strings/Zend failures.
+The next bounded high-yield candidate is the four visible `substr_replace()`
+cases, which can reuse the proven PHP-byte, array-key, reference and typed-call
+boundaries while adding offset/length broadcasting and splice semantics.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `chunk-split-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. `chunk_split()` now divides the exact PHP-byte
 sequence, appends the separator after every complete or final partial chunk,
