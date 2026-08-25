@@ -582,7 +582,19 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "pad_string",
         "pad_type"
     );
-    reg!("str_split", fn_str_split, 2, 1, "string", "length");
+    {
+        let mut function = Box::new(make_internal_function(
+            fn_str_split,
+            2,
+            1,
+            pn!["string", "length"],
+        ));
+        function.common.sig.param_type_hints = vec![ParamTypeHint::String, ParamTypeHint::Int];
+        function.common.sig.return_type_hint = ParamTypeHint::Array;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("str_split", pointer).unwrap();
+        funcs.push(function);
+    }
     reg!("ucfirst", fn_ucfirst, 1, 1, "string");
     reg!("lcfirst", fn_lcfirst, 1, 1, "string");
     reg!("ucwords", fn_ucwords, 2, 1, "string", "separators");

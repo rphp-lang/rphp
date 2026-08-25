@@ -8,6 +8,67 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`str-split-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and validated
+against PHP 8.5.9. `str_split()` now partitions the exact PHP-byte sequence,
+not Rust UTF-8 storage, into ordered packed-array chunks. The default length is
+one, every positive length is accepted, a final short chunk is retained and an
+empty input returns an empty array. Embedded NUL, valid UTF-8 and arbitrary
+invalid bytes round-trip without replacement or source mutation; extreme
+positive lengths safely return the source as one chunk.
+
+The function now uses the shared internal `string` and `int` boundaries.
+Weak scalar and stringable-object conversion, both null deprecations, lossy
+float and float-string deprecations, non-finite rejection and strict scalar
+errors match PHP. Zero and negative lengths raise the canonical `ValueError`.
+Registry metadata exposes the two typed parameters, required/optional arity
+and `array` return type. The result array is pre-sized from byte length and
+chunk length, and non-ASCII chunks retain explicit binary provenance.
+
+Three original E2E regressions cover empty/default/partial/extreme lengths,
+ASCII, NUL, UTF-8 and invalid bytes, immutability, exact `ValueError`, weak and
+strict conversion/diagnostics and bounded Reflection type metadata. Independent
+byte/weak and strict probes match the PHP oracle at SHA-256
+`c27332ff902ea23c877bd3649d647dba45d4dc6866f0831b0005f0425571feca`
+and `fc5ec6be5b88f47d3119e63aecb1f6c1df36f8267e91f06e23c8e88c15074b6d`.
+The six supplying cases move from 0/6 to 6/6; their stable baseline, PHP-oracle
+and final-candidate hashes are
+`2e05cf51636a5c24dd53f674158752148ba0b98645d55ef9400ba5ad5c8a3b88`,
+`b9d67d9895c257da36b83aa4e4b32ce49f192c470d6c25201080dc73db0f3920`
+and the same `b9d67d9895c257da36b83aa4e4b32ce49f192c470d6c25201080dc73db0f3920`.
+
+The complete 733-case strings audit moves from 467 to 473 passes, an exact
++6/-0 delta consisting only of the supplying cluster. There are 175 failures,
+54 skips, 30 unsupported cases, the retained `dirname_multi.phpt` timeout and
+zero crashes. Array remains exactly classified at 828 passes, 13 skips and one
+unsupported case. Zend/lang remains exactly classified at 4,206 passes, 1,097
+failures, 115 skips and 181 unsupported cases with no timeout or crash. No
+prior pass or other outcome changes. Three serial release runs have identical
+stable path/outcome/runner-control hashes
+`37c82319888ecf014768a0f38e13d02d3094aa628a6c51b57b0f6cf2bb7c3448`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `907bddc39e20247bdf412dc3de5fa6653912c1e7c0b0c542ff70af2cb3a896f8`
+for strings, array and Zend/lang respectively.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML data, PHPT-runner and unsafe-policy checks, Composer 2.8.12
+S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at
+1,622 unsafe blocks, 289 unsafe functions, 358 SAFETY annotations and seven
+`# Safety` sections. Exact-binary CPU-2-pinned balanced release A/B controls
+compare parent SHA-256
+`ff912856a80ffad4102b168fbd8b78a3d4ddf13437afaa923356e2705a510254`
+with candidate
+`8304df522d9be65af65a0af8478db62c306096dddfb3b3e71a79ca739799288d`.
+Paired medians are -5.284% for 200,000 byte-splitting calls, -3.069% for the
+established string workload and -4.368% for 200 empty processes. Every
+output/checksum matches and every median is below +5%.
+
+This checkpoint does not claim Reflection's exact internal-extension label or
+optional-default rendering, 32-bit execution, `chunk_split()` semantics or the
+remaining strings/Zend failures. The next bounded high-yield candidate is the
+six remaining `chunk_split()` cases, sharing the byte and typed-argument
+boundary while adding ending, allocation and catchable-length behavior.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `string-increment-decrement`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. RPHP now exposes `str_increment()` and
 `str_decrement()` with PHP's alphanumeric-ASCII input boundary. Increment

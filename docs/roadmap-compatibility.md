@@ -2742,21 +2742,43 @@ affected assignment control, -1.240% for the established array workload,
 +0.840% for the established string workload and +1.608% for startup, within
 +5%.
 
+The `str-split-byte-contract` checkpoint closes all six supplying
+`str_split()` cases against PHP 8.5.9. The implementation partitions exact PHP
+bytes into a pre-sized packed array, returns an empty array for empty input,
+retains the final partial chunk and supports default, positive and extreme
+lengths without mutating the source. Shared typed boundaries reproduce
+weak/strict string and integer coercion, null and lossy-conversion deprecations,
+non-finite/type rejection and the zero/negative-length `ValueError`; signature
+metadata publishes string/int parameters and an array return.
+
+The focused cluster moves from 0/6 to 6/6 and strings moves from 467 to 473
+pass (+6/-0). Array remains exactly 828/842 and Zend/lang exactly 4,206/5,599,
+with every prior pass retained and no other outcome movement. Three serial
+release runs have identical stable strings/array/Zend hashes
+`37c82319888ecf014768a0f38e13d02d3094aa628a6c51b57b0f6cf2bb7c3448`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `907bddc39e20247bdf412dc3de5fa6653912c1e7c0b0c542ff70af2cb3a896f8`.
+All five feature configurations, all-feature/all-target, formatting, HTML data,
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Exact-final-binary CPU-pinned paired medians are -5.284% for the directly
+affected split workload, -3.069% for the established string workload and
+-4.368% for startup, within +5%.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 467 pass, 181 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 473 pass, 175 fail, 54 skip and 30 unsupported, with one retained timeout;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
 and invalid-UTF-8 recovery families are both 3/3; the EUC-JP/Big5 supplying
 pair is 2/2 and the byte-escaping supplying family is 12/12. `Zend/tests` plus
 `tests/lang` is 4,206 pass, 1,097 fail, 115 skip and 181 unsupported, with no
-timeout or crash. The trim/charlist family is 11/11 and the increment/decrement
-family is 6/6. The next goal should close the six visible `str_split()`
-failures; wider string-offset writes, typed-parameter binary provenance,
-detached-callback alias spelling, unknown entity-encoding warnings and broader
-legacy multibyte behavior remain explicit contracts.
+timeout or crash. The trim/charlist family is 11/11, increment/decrement is 6/6
+and `str_split()` is 6/6. The next goal should close the six visible
+`chunk_split()` failures; wider string-offset writes, typed-parameter binary
+provenance, detached-callback alias spelling, unknown entity-encoding warnings
+and broader legacy multibyte behavior remain explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,

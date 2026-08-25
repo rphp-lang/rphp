@@ -7269,25 +7269,45 @@ fn append_repeated_padding(output: &mut Vec<u8>, padding: &[u8], length: usize) 
 fn fn_str_split(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    let chunk = match arg_opt!(ed, 1) {
-        Some(v) => v.to_long_val().max(1) as usize,
+    let Some(string) =
+        typed_internal_string_value_argument_expected(ed, eg, "str_split", 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let length = match arg_opt!(ed, 1) {
+        Some(_) => {
+            let Some(length) = typed_internal_int_argument(ed, eg, "str_split", 1, "length")?
+            else {
+                return Ok(());
+            };
+            length
+        }
         None => 1,
     };
-    let mut arr = PhpArray::new();
-    let bytes = s.as_bytes();
+    if length < 1 {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "str_split(): Argument #2 ($length) must be greater than 0",
+        ));
+        return Ok(());
+    }
+
+    let chunk = usize::try_from(length).unwrap_or(usize::MAX);
+    let bytes = string.php_string_bytes().unwrap_or_default();
+    let mut arr = PhpArray::with_packed_capacity(bytes.len().div_ceil(chunk));
     let mut i = 0;
     while i < bytes.len() {
         let end = (i + chunk).min(bytes.len());
-        arr.push(Value::string(
-            String::from_utf8_lossy(&bytes[i..end]).into_owned(),
-        ));
+        let part = &bytes[i..end];
+        let value = if string.is_binary_string() || !part.is_ascii() {
+            Value::binary_string(part)
+        } else {
+            Value::string(String::from_utf8(part.to_vec()).expect("ASCII chunk is valid UTF-8"))
+        };
+        arr.push(value);
         i = end;
-    }
-    if arr.is_empty() {
-        arr.push(Value::string(""));
     }
     ret!(rv, Value::array(arr));
 }
