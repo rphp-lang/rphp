@@ -1631,6 +1631,24 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             ParamTypeHint::ClassName("false".to_string()),
         ])
     );
+    reg_typed!(
+        "quoted_printable_encode",
+        fn_quoted_printable_encode,
+        1,
+        1,
+        ["string"],
+        [ParamTypeHint::String],
+        ParamTypeHint::String
+    );
+    reg_typed!(
+        "quoted_printable_decode",
+        fn_quoted_printable_decode,
+        1,
+        1,
+        ["string"],
+        [ParamTypeHint::String],
+        ParamTypeHint::String
+    );
     reg!(
         "filter_var",
         fn_filter_var,

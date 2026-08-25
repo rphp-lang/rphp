@@ -1652,6 +1652,55 @@ pub(super) fn fn_base64_decode(
     }
 }
 
+pub(super) fn fn_quoted_printable_encode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(input) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "quoted_printable_encode",
+        0,
+        "string",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    let bytes = input.php_string_bytes().unwrap_or_default();
+    let encoded = crate::quoted_printable::encode(&bytes);
+    ret!(
+        rv,
+        Value::string(
+            String::from_utf8(encoded).expect("quoted-printable output contains only ASCII")
+        )
+    );
+}
+
+pub(super) fn fn_quoted_printable_decode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(input) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "quoted_printable_decode",
+        0,
+        "string",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    let bytes = input.php_string_bytes().unwrap_or_default();
+    ret!(
+        rv,
+        php_byte_result(crate::quoted_printable::decode(&bytes), false)
+    );
+}
+
 // ============================================================================
 // Missing common string functions
 // ============================================================================

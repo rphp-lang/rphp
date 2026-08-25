@@ -8582,7 +8582,14 @@ fn fn_str_repeat(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    let source_value = arg!(ed, 0);
+    let binary = source_value.is_binary_string();
     let s = arg_str!(ed, 0);
+    let source_bytes = if binary {
+        source_value.php_string_bytes().unwrap_or_default()
+    } else {
+        Cow::Borrowed(s.as_bytes())
+    };
     let times = arg_long!(ed, 1);
     if times < 0 {
         eg.exception = Some(crate::value::make_error_value(
@@ -8598,7 +8605,7 @@ fn fn_str_repeat(
             "Allowed memory size of 134217728 bytes exhausted (tried to allocate {bytes} bytes) in {file} on line {line}"
         ))
     };
-    let total_bytes = s
+    let total_bytes = source_bytes
         .len()
         .checked_mul(times)
         .ok_or_else(|| allocation_failure(usize::MAX))?;
@@ -8607,19 +8614,24 @@ fn fn_str_repeat(
         .try_reserve_exact(total_bytes)
         .map_err(|_| allocation_failure(total_bytes))?;
     if total_bytes != 0 {
-        repeated.extend_from_slice(s.as_bytes());
+        repeated.extend_from_slice(&source_bytes);
         while repeated.len() < total_bytes {
             let remaining = total_bytes - repeated.len();
             let copy_len = repeated.len().min(remaining);
             repeated.extend_from_within(..copy_len);
         }
     }
+    if binary {
+        ret!(rv, php_byte_result(repeated, true));
+    }
     // SAFETY: `s` is UTF-8 and the buffer consists exclusively of complete
     // copies of its bytes. Both the current length and the remaining length
     // are multiples of `s.len()`, so the final partial doubling cannot split
     // a code point.
-    let result = unsafe { String::from_utf8_unchecked(repeated) };
-    ret!(rv, Value::string(result));
+    ret!(
+        rv,
+        Value::string(unsafe { String::from_utf8_unchecked(repeated) })
+    );
 }
 
 fn fn_substr_count(

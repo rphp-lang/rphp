@@ -10,6 +10,7 @@ pub mod generics;
 pub mod jit;
 pub mod lexer;
 pub mod parser;
+pub mod quoted_printable;
 pub mod regex;
 #[cfg(feature = "resource-lifetime")]
 mod resource_handle;
