@@ -1622,12 +1622,32 @@ pub(super) fn fn_base64_encode(
 pub(super) fn fn_base64_decode(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
+    let Some(input) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "base64_decode",
+        0,
+        "string",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    let strict = if arg_opt!(ed, 1).is_some() {
+        let Some(strict) = typed_internal_bool_argument(ed, eg, "base64_decode", 1, "strict")?
+        else {
+            return Ok(());
+        };
+        strict
+    } else {
+        false
+    };
     use crate::base64;
-    match base64::decode(s.as_ref()) {
-        Some(bytes) => ret!(rv, Value::string(bytes_to_php_string(&bytes))),
+    let bytes = input.php_string_bytes().unwrap_or_default();
+    match base64::decode(&bytes, strict) {
+        Some(bytes) => ret!(rv, php_byte_result(bytes, false)),
         None => ret!(rv, Value::bool(false)),
     }
 }

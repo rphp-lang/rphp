@@ -1619,7 +1619,18 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("rawurlencode", fn_rawurlencode, 1, 1, "string");
     reg!("rawurldecode", fn_rawurldecode, 1, 1, "string");
     reg!("base64_encode", fn_base64_encode, 1, 1, "data");
-    reg!("base64_decode", fn_base64_decode, 1, 1, "data");
+    reg_typed!(
+        "base64_decode",
+        fn_base64_decode,
+        2,
+        1,
+        ["string", "strict"],
+        [ParamTypeHint::String, ParamTypeHint::Bool],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
     reg!(
         "filter_var",
         fn_filter_var,
