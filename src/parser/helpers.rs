@@ -1943,7 +1943,7 @@ impl Parser {
         let operand = self.parse_expr()?;
         let literal_requires_positive_integer = match operand {
             Expr::Integer(level) if level > 0 => return Ok(Some(level as u32)),
-            Expr::Integer(0) | Expr::StringLiteral(_) => true,
+            Expr::Integer(0) | Expr::StringLiteral(_) | Expr::BinaryStringLiteral(_) => true,
             Expr::Float(level) if !level.is_sign_negative() => true,
             _ => false,
         };

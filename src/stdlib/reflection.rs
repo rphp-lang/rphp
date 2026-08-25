@@ -710,6 +710,7 @@ fn evaluate_deferred_attribute_expression(
         Expr::Integer(value) => Ok(Value::long(*value)),
         Expr::Float(value) => Ok(Value::double(*value)),
         Expr::StringLiteral(value) => Ok(Value::string(value.clone())),
+        Expr::BinaryStringLiteral(value) => Ok(Value::binary_string_from_storage(value.clone())),
         Expr::Bool(value) => Ok(Value::bool(*value)),
         Expr::Null => Ok(Value::null()),
         Expr::Constant(name) => {

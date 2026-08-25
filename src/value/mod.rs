@@ -4982,6 +4982,15 @@ impl Value {
         value
     }
 
+    /// Create an immutable compiled PHP byte-string literal from lossless
+    /// Latin-1 storage.
+    #[inline]
+    pub(crate) fn interned_binary_string_from_storage(storage: String) -> Self {
+        let mut value = Self::binary_string_from_storage(storage);
+        value.type_info |= Self::IMMUTABLE_PROVENANCE_FLAG;
+        value
+    }
+
     /// Create a PHP source/compiler string whose storage is interned by Zend.
     #[inline]
     pub(crate) fn interned_string(s: impl Into<String>) -> Self {

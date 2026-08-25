@@ -96,6 +96,10 @@ pub enum Token {
     Integer(i64),          // 42, -1
     Float(f64),            // 3.14, 1.5e10
     StringLiteral(String), // "hello", 'world'
+    /// A PHP byte string produced by byte escapes or lossless document bytes.
+    /// The frontend keeps its Latin-1 bridge separate from ordinary Unicode
+    /// source text until the compiler can attach runtime byte provenance.
+    BinaryStringLiteral(String),
     /// One indirect-variable sigil. Ordinary `$name` remains a single
     /// `Variable` token; `$$name` and `${expr}` retain the leading sigil so
     /// the parser can build PHP's right-associated variable-variable tree.
@@ -197,7 +201,7 @@ struct DeferredCompileDiagnostic {
 }
 
 enum StringPart {
-    Literal(String),
+    Literal(String, bool),
     Variable(String, usize),
     PropertyAccess(String, String, bool, usize), // var_name, property_name, nullsafe, source line
     ArrayAccess(String, String, usize), // var_name, index (string or integer literal), line
@@ -1135,6 +1139,7 @@ impl<'a> Lexer<'a> {
                     | Token::Variable(_, _)
                     | Token::This(_)
                     | Token::StringLiteral(_)
+                    | Token::BinaryStringLiteral(_)
                     | Token::RParen
                     | Token::RBracket
                     | Token::Identifier(_, _)
@@ -2018,6 +2023,19 @@ mod tests {
             "{}|\\u1234",
             char::from_u32(0x10ffff).unwrap()
         ))));
+    }
+
+    #[test]
+    fn byte_escapes_retain_invalid_utf8_provenance() {
+        let tokens = Lexer::new(r#"<?php ["Â", "\u{A0}", "\xC2\xA0", "\xC2", "\xE2\x82{$tail}"];"#)
+            .tokenize()
+            .unwrap();
+
+        assert!(tokens.contains(&Token::StringLiteral("Â".into())));
+        assert!(tokens.contains(&Token::StringLiteral(" ".into())));
+        assert!(tokens.contains(&Token::BinaryStringLiteral("Â ".into())));
+        assert!(tokens.contains(&Token::BinaryStringLiteral("Â".into())));
+        assert!(tokens.contains(&Token::BinaryStringLiteral("â\u{82}".into())));
     }
 
     #[test]

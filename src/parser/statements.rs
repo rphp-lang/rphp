@@ -1204,6 +1204,7 @@ impl Parser {
             | Token::Integer(_)
             | Token::Float(_)
             | Token::StringLiteral(_)
+            | Token::BinaryStringLiteral(_)
             | Token::MagicConstant { .. }
             | Token::Dollar(_)
             | Token::This(_)

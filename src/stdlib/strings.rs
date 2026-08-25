@@ -26,6 +26,7 @@ use super::{
 // ============================================================================
 
 const ENT_QUOTES_MASK: i64 = 3;
+const ENT_IGNORE: i64 = 4;
 const ENT_SUBSTITUTE: i64 = 8;
 const ENT_DISALLOWED: i64 = 128;
 const ENT_DOCUMENT_MASK: i64 = 48;
@@ -228,6 +229,65 @@ fn encode_html_special_chars_default(src: &str) -> String {
     out
 }
 
+/// Validate PHP byte strings with the Unicode maximal-subpart behavior used by
+/// PHP 8.5's HTML encoder. Structurally complete overlong, surrogate and
+/// out-of-range sequences form one invalid unit; an invalid lead or isolated
+/// continuation forms its own unit. ENT_IGNORE takes precedence when both
+/// recovery flags are supplied.
+fn sanitize_html_utf8(source: &[u8], flags: i64) -> Option<Cow<'_, str>> {
+    if let Ok(source) = std::str::from_utf8(source) {
+        return Some(Cow::Borrowed(source));
+    }
+    let ignore = flags & ENT_IGNORE != 0;
+    let substitute = !ignore && flags & ENT_SUBSTITUTE != 0;
+    if !ignore && !substitute {
+        return None;
+    }
+
+    let mut output = String::with_capacity(source.len());
+    let mut position = 0;
+    while position < source.len() {
+        let byte = source[position];
+        if byte < 0x80 {
+            output.push(char::from(byte));
+            position += 1;
+            continue;
+        }
+
+        let expected = match byte {
+            0xc2..=0xdf => 2,
+            0xe0..=0xef => 3,
+            0xf0..=0xf4 => 4,
+            _ => 1,
+        };
+        let mut consumed = 1;
+        while consumed < expected
+            && source
+                .get(position + consumed)
+                .is_some_and(|byte| matches!(byte, 0x80..=0xbf))
+        {
+            consumed += 1;
+        }
+        let structurally_complete = consumed == expected;
+        let scalar_boundary_valid = match (byte, source.get(position + 1).copied()) {
+            (0xe0, Some(second)) => second >= 0xa0,
+            (0xed, Some(second)) => second <= 0x9f,
+            (0xf0, Some(second)) => second >= 0x90,
+            (0xf4, Some(second)) => second <= 0x8f,
+            _ => expected > 1,
+        };
+        if structurally_complete && scalar_boundary_valid {
+            let valid = std::str::from_utf8(&source[position..position + consumed])
+                .expect("validated UTF-8 unit");
+            output.push_str(valid);
+        } else if substitute {
+            output.push('\u{fffd}');
+        }
+        position += consumed;
+    }
+    Some(Cow::Owned(output))
+}
+
 fn html_encoding_argument(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
@@ -306,6 +366,7 @@ pub(super) fn fn_htmlspecialchars(
     if arg_opt!(ed, 1).is_none()
         && arg_opt!(ed, 2).is_none()
         && arg_opt!(ed, 3).is_none()
+        && !arg!(ed, 0).is_binary_string()
         && let Some(string) = arg!(ed, 0).as_str()
     {
         ret!(rv, Value::string(encode_html_special_chars_default(string)));
@@ -315,37 +376,49 @@ pub(super) fn fn_htmlspecialchars(
     else {
         return Ok(());
     };
-    if flags & ENT_DISALLOWED != 0 {
-        let binary_input = arg!(ed, 0).is_binary_string();
-        let original_bytes = arg!(ed, 0).php_string_bytes().map(Cow::into_owned);
-        let source = original_bytes.unwrap_or_else(|| string.as_bytes().to_vec());
-        match HtmlTranslationEncoding::parse(&encoding_name) {
-            Some(HtmlTranslationEncoding::Utf8) => {
-                let source = match std::str::from_utf8(&source) {
-                    Ok(source) => Cow::Borrowed(source),
-                    Err(_) if flags & ENT_SUBSTITUTE != 0 => String::from_utf8_lossy(&source),
-                    Err(_) => ret!(rv, Value::string("")),
+    let binary_input = arg!(ed, 0).is_binary_string();
+    match HtmlTranslationEncoding::parse(&encoding_name) {
+        Some(HtmlTranslationEncoding::Utf8) => {
+            let source = if binary_input {
+                let source = arg!(ed, 0)
+                    .php_string_bytes()
+                    .map(Cow::into_owned)
+                    .unwrap_or_else(|| string.as_bytes().to_vec());
+                let Some(source) = sanitize_html_utf8(&source, flags).map(Cow::into_owned) else {
+                    ret!(rv, Value::string(""));
                 };
-                let encoded =
-                    encode_html_special_chars_disallowed_utf8(&source, flags, double_encode);
-                if binary_input {
-                    ret!(rv, Value::binary_string(encoded.as_bytes()));
-                }
-                ret!(rv, Value::string(encoded));
+                Cow::Owned(source)
+            } else {
+                Cow::Borrowed(string.as_str())
+            };
+            let encoded = if flags & ENT_DISALLOWED != 0 {
+                encode_html_special_chars_disallowed_utf8(&source, flags, double_encode)
+            } else {
+                encode_html_special_chars(&source, flags, double_encode)
+            };
+            if binary_input {
+                ret!(rv, Value::binary_string(encoded.as_bytes()));
             }
-            Some(HtmlTranslationEncoding::Legacy(encoding)) => {
-                let encoded =
-                    encode_html_entities_legacy(&source, flags, double_encode, encoding, false)
-                        .unwrap_or_default();
-                ret!(rv, Value::binary_string_from_storage(encoded));
-            }
-            Some(HtmlTranslationEncoding::BasicOnly) => {
-                let encoded = encode_html_entities_basic_multibyte(&source, flags, double_encode)
-                    .unwrap_or_default();
-                ret!(rv, Value::binary_string_from_storage(encoded));
-            }
-            None => {}
+            ret!(rv, Value::string(encoded));
         }
+        Some(HtmlTranslationEncoding::Legacy(encoding)) => {
+            let source = arg!(ed, 0)
+                .php_string_bytes()
+                .unwrap_or_else(|| Cow::Borrowed(string.as_bytes()));
+            let encoded =
+                encode_html_entities_legacy(&source, flags, double_encode, encoding, false)
+                    .unwrap_or_default();
+            ret!(rv, Value::binary_string_from_storage(encoded));
+        }
+        Some(HtmlTranslationEncoding::BasicOnly) => {
+            let source = arg!(ed, 0)
+                .php_string_bytes()
+                .unwrap_or_else(|| Cow::Borrowed(string.as_bytes()));
+            let encoded = encode_html_entities_basic_multibyte(&source, flags, double_encode)
+                .unwrap_or_default();
+            ret!(rv, Value::binary_string_from_storage(encoded));
+        }
+        None => {}
     }
     ret!(
         rv,
@@ -918,12 +991,7 @@ fn html_translation_entries(table: i64, document: i64) -> &'static [(&'static st
     }
 }
 
-fn encode_named_html_entities_utf8(
-    source: &[u8],
-    flags: i64,
-    double_encode: bool,
-) -> Option<String> {
-    let source = std::str::from_utf8(source).ok()?;
+fn encode_named_html_entities_utf8(source: &str, flags: i64, double_encode: bool) -> String {
     let document = flags & ENT_DOCUMENT_MASK;
     let entries = html_translation_entries(1, document);
     let mut output = String::with_capacity(source.len());
@@ -980,7 +1048,7 @@ fn encode_named_html_entities_utf8(
             position = first_end;
         }
     }
-    Some(output)
+    output
 }
 
 fn push_storage_bytes(output: &mut String, bytes: &[u8]) {
@@ -1326,36 +1394,35 @@ pub(super) fn fn_htmlentities(
         ret!(rv, Value::string(encode_html_special_chars_default(string)));
     }
     let binary_input = arg!(ed, 0).is_binary_string();
-    let original_bytes = arg!(ed, 0).php_string_bytes().map(Cow::into_owned);
     let Some((string, flags, encoding, double_encode)) =
         html_encode_arguments(ed, eg, "htmlentities")?
     else {
         return Ok(());
     };
-    let source = original_bytes.unwrap_or_else(|| string.as_bytes().to_vec());
     match HtmlTranslationEncoding::parse(&encoding) {
         Some(HtmlTranslationEncoding::Utf8) => {
-            if let Some(encoded) = encode_named_html_entities_utf8(&source, flags, double_encode) {
-                if binary_input {
-                    ret!(rv, Value::binary_string(encoded.as_bytes()));
-                }
-                ret!(rv, Value::string(encoded));
+            let source = if binary_input {
+                let source = arg!(ed, 0)
+                    .php_string_bytes()
+                    .map(Cow::into_owned)
+                    .unwrap_or_else(|| string.as_bytes().to_vec());
+                let Some(source) = sanitize_html_utf8(&source, flags).map(Cow::into_owned) else {
+                    ret!(rv, Value::string(""));
+                };
+                Cow::Owned(source)
+            } else {
+                Cow::Borrowed(string.as_str())
+            };
+            let encoded = encode_named_html_entities_utf8(&source, flags, double_encode);
+            if binary_input {
+                ret!(rv, Value::binary_string(encoded.as_bytes()));
             }
-            if flags & ENT_DISALLOWED != 0 {
-                if flags & ENT_SUBSTITUTE != 0 {
-                    let source = String::from_utf8_lossy(&source);
-                    let encoded =
-                        encode_named_html_entities_utf8(source.as_bytes(), flags, double_encode)
-                            .expect("lossy UTF-8 is valid");
-                    if binary_input {
-                        ret!(rv, Value::binary_string(encoded.as_bytes()));
-                    }
-                    ret!(rv, Value::string(encoded));
-                }
-                ret!(rv, Value::string(""));
-            }
+            ret!(rv, Value::string(encoded));
         }
-        Some(HtmlTranslationEncoding::Legacy(legacy)) if flags & ENT_DISALLOWED != 0 => {
+        Some(HtmlTranslationEncoding::Legacy(legacy)) => {
+            let source = arg!(ed, 0)
+                .php_string_bytes()
+                .unwrap_or_else(|| Cow::Borrowed(string.as_bytes()));
             let encoded = encode_html_entities_legacy(&source, flags, double_encode, legacy, true)
                 .unwrap_or_default();
             ret!(rv, Value::binary_string_from_storage(encoded));
@@ -1371,6 +1438,9 @@ pub(super) fn fn_htmlentities(
             if eg.exception.is_some() {
                 return Ok(());
             }
+            let source = arg!(ed, 0)
+                .php_string_bytes()
+                .unwrap_or_else(|| Cow::Borrowed(string.as_bytes()));
             let encoded = encode_html_entities_basic_multibyte(&source, flags, double_encode)
                 .unwrap_or_default();
             ret!(rv, Value::binary_string_from_storage(encoded));
@@ -1640,7 +1710,10 @@ pub(super) fn fn_chunk_split(
 
 #[cfg(test)]
 mod tests {
-    use super::{ENT_HTML5, ENT_QUOTES_MASK, decode_html_special_references, direct_chunk_split};
+    use super::{
+        ENT_HTML5, ENT_IGNORE, ENT_QUOTES_MASK, ENT_SUBSTITUTE, decode_html_special_references,
+        direct_chunk_split, sanitize_html_utf8,
+    };
     use crate::value::Value;
 
     #[test]
@@ -1667,5 +1740,22 @@ mod tests {
         let args = [Value::string("abcdef"), Value::long(2), Value::string("|")];
         let result = direct_chunk_split(&args).unwrap();
         assert_eq!(result.as_str(), Some("ab|cd|ef|"));
+    }
+
+    #[test]
+    fn invalid_utf8_sanitizer_groups_only_valid_lead_sequences() {
+        assert_eq!(
+            sanitize_html_utf8(b"\xed\xa0\x80A\x80", ENT_SUBSTITUTE).as_deref(),
+            Some("\u{fffd}A\u{fffd}")
+        );
+        assert_eq!(
+            sanitize_html_utf8(b"\xf4\x90\x80\x80B", ENT_SUBSTITUTE).as_deref(),
+            Some("\u{fffd}B")
+        );
+        assert_eq!(
+            sanitize_html_utf8(b"\xe2\x82C", ENT_IGNORE | ENT_SUBSTITUTE).as_deref(),
+            Some("C")
+        );
+        assert!(sanitize_html_utf8(b"A\x80", ENT_QUOTES_MASK).is_none());
     }
 }

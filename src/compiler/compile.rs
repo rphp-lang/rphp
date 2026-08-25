@@ -152,6 +152,15 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
         format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
     }
 
+    fn quote_binary_string(value: &str) -> String {
+        let mut quoted = String::from("\"");
+        for byte in value.chars().map(|character| character as u8) {
+            quoted.push_str(&format!("\\x{byte:02X}"));
+        }
+        quoted.push('"');
+        quoted
+    }
+
     fn render_float(value: f64) -> String {
         let rendered = value.to_string();
         if value.is_finite()
@@ -417,6 +426,7 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
             Expr::Integer(value) => (value.to_string(), 100),
             Expr::Float(value) => (render_float(*value), 100),
             Expr::StringLiteral(value) => (quote_string(value), 100),
+            Expr::BinaryStringLiteral(value) => (quote_binary_string(value), 100),
             Expr::Bool(value) => (value.to_string(), 100),
             Expr::Null => ("null".to_string(), 100),
             Expr::Variable { name, .. } => (format!("${name}"), 100),
@@ -807,7 +817,7 @@ fn array_literal_storage_hint(elements: &[crate::parser::ArrayElement]) -> Array
     if elements.iter().any(|element| {
         matches!(
             element.key.as_ref(),
-            Some(Expr::StringLiteral(value))
+            Some(Expr::StringLiteral(value) | Expr::BinaryStringLiteral(value))
                 if canonical_string_literal_array_key(value).is_none()
         )
     }) {
@@ -822,7 +832,9 @@ fn array_literal_storage_hint(elements: &[crate::parser::ArrayElement]) -> Array
                 continue;
             }
             Some(Expr::Integer(key)) => *key,
-            Some(Expr::StringLiteral(key)) => canonical_string_literal_array_key(key).unwrap(),
+            Some(Expr::StringLiteral(key) | Expr::BinaryStringLiteral(key)) => {
+                canonical_string_literal_array_key(key).unwrap()
+            }
             _ => return ArrayLiteralStorageHint::Unknown,
         };
 
@@ -2413,6 +2425,7 @@ fn deferred_constant_expression_is_supported(expression: &Expr) -> bool {
         Expr::Integer(_)
         | Expr::Float(_)
         | Expr::StringLiteral(_)
+        | Expr::BinaryStringLiteral(_)
         | Expr::Bool(_)
         | Expr::Null
         | Expr::Constant(_)
@@ -3151,6 +3164,7 @@ impl Compiler {
             Expr::Integer(_)
             | Expr::Float(_)
             | Expr::StringLiteral(_)
+            | Expr::BinaryStringLiteral(_)
             | Expr::Null
             | Expr::Bool(_)
             | Expr::BinaryOp { .. }
@@ -3248,6 +3262,7 @@ impl Compiler {
             Expr::Integer(_)
             | Expr::Float(_)
             | Expr::StringLiteral(_)
+            | Expr::BinaryStringLiteral(_)
             | Expr::MagicConstant { .. }
             | Expr::Bool(_)
             | Expr::Null
@@ -4540,7 +4555,7 @@ impl Compiler {
     }
 
     fn literal_callback_has_no_ref_parameters(&self, callback: &Expr) -> bool {
-        let Expr::StringLiteral(name) = callback else {
+        let (Expr::StringLiteral(name) | Expr::BinaryStringLiteral(name)) = callback else {
             return false;
         };
         let name = name.trim_start_matches('\\');
@@ -4573,7 +4588,9 @@ impl Compiler {
 
     fn zend_defined_literal_without_scope_separator(expression: &Expr) -> bool {
         match expression {
-            Expr::StringLiteral(name) => !name.contains('\\') && !name.contains(':'),
+            Expr::StringLiteral(name) | Expr::BinaryStringLiteral(name) => {
+                !name.contains('\\') && !name.contains(':')
+            }
             Expr::Integer(_) | Expr::Float(_) => true,
             Expr::BinaryOp {
                 op: BinOp::Concat,
@@ -4592,7 +4609,9 @@ impl Compiler {
             Expr::Bool(value) => *value,
             Expr::Integer(value) => *value != 0,
             Expr::Float(value) => *value != 0.0,
-            Expr::StringLiteral(value) => !value.is_empty() && value != "0",
+            Expr::StringLiteral(value) | Expr::BinaryStringLiteral(value) => {
+                !value.is_empty() && value != "0"
+            }
             Expr::Constant(name) => crate::builtin_constant(name.trim_start_matches('\\'))
                 .is_some_and(|value| value.is_truthy()),
             _ => false,
@@ -5143,7 +5162,7 @@ impl Compiler {
         match default {
             Expr::Integer(value) => value.to_string(),
             Expr::Float(value) => Value::double(*value).echo_to_string_with_precision(14),
-            Expr::StringLiteral(value) => {
+            Expr::StringLiteral(value) | Expr::BinaryStringLiteral(value) => {
                 let mut characters = value.chars();
                 let prefix = characters.by_ref().take(10).collect::<String>();
                 let truncated = characters.next().is_some();
@@ -5938,6 +5957,7 @@ impl Compiler {
             Expr::Integer(n) => Ok(Value::long(*n)),
             Expr::Float(f) => Ok(Value::double(*f)),
             Expr::StringLiteral(s) => Ok(Value::string(s.clone())),
+            Expr::BinaryStringLiteral(s) => Ok(Value::binary_string_from_storage(s.clone())),
             Expr::Bool(b) => Ok(Value::bool(*b)),
             Expr::Null => Ok(Value::null()),
             Expr::Constant(name) | Expr::CompilerHaltOffsetConstant { name, .. } => {
@@ -6624,6 +6644,7 @@ impl Compiler {
             Expr::Integer(_)
             | Expr::Float(_)
             | Expr::StringLiteral(_)
+            | Expr::BinaryStringLiteral(_)
             | Expr::Null
             | Expr::Bool(_)
             | Expr::MagicConstant { .. } => true,
@@ -8050,6 +8071,10 @@ impl Compiler {
             }
             Expr::StringLiteral(s) => {
                 let idx = self.add_literal(Value::interned_string(s.clone()));
+                (idx, OpType::Const)
+            }
+            Expr::BinaryStringLiteral(s) => {
+                let idx = self.add_literal(Value::interned_binary_string_from_storage(s.clone()));
                 (idx, OpType::Const)
             }
             Expr::Null => {

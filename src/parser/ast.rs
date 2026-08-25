@@ -149,6 +149,9 @@ pub enum Expr {
     Integer(i64),
     Float(f64),
     StringLiteral(String),
+    /// Lossless Latin-1 storage for PHP bytes introduced by byte escapes or
+    /// preserved document-string content.
+    BinaryStringLiteral(String),
     Null,
     Bool(bool),
     Variable {
@@ -616,6 +619,7 @@ impl Expr {
             | Expr::Integer(_)
             | Expr::Float(_)
             | Expr::StringLiteral(_)
+            | Expr::BinaryStringLiteral(_)
             | Expr::Null
             | Expr::Bool(_)
             | Expr::Variable { .. }

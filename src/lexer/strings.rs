@@ -187,11 +187,8 @@ impl<'a> Lexer<'a> {
         self.pos = document_end.marker_start + label.len();
 
         if nowdoc {
-            let literal = String::from_utf8(content).map_err(|_| {
-                StringLexError::new("Nowdoc content is not valid UTF-8", content_start_line)
-            })?;
             return Ok(InterpolatedString {
-                parts: vec![StringPart::Literal(literal)],
+                parts: vec![Self::literal_part(content, false)],
                 diagnostics: Vec::new(),
             });
         }
@@ -489,7 +486,11 @@ impl<'a> Lexer<'a> {
     ) -> Result<InterpolatedString, StringLexError> {
         let mut parts = Vec::new();
         let mut diagnostics = Vec::new();
-        let mut current = String::new();
+        // PHP source strings are byte sequences. Accumulate bytes first so
+        // `\xNN` and octal escapes can retain invalid UTF-8 without confusing
+        // them with a literal Unicode code point having the same value.
+        let mut current = Vec::new();
+        let mut current_is_binary = false;
         let mut pos = 0;
 
         while pos < content.len() {
@@ -524,7 +525,9 @@ impl<'a> Lexer<'a> {
                                 line,
                             });
                         }
-                        current.push(char::from((value & 0xff) as u8));
+                        let byte = (value & 0xff) as u8;
+                        current.push(byte);
+                        current_is_binary |= byte >= 0x80;
                     }
                     b'x' => {
                         let escape_start = pos;
@@ -541,10 +544,11 @@ impl<'a> Lexer<'a> {
                             digits += 1;
                         }
                         if digits == 0 {
-                            current.push('\\');
-                            current.push(content[escape_start] as char);
+                            current.push(b'\\');
+                            current.push(content[escape_start]);
                         } else {
-                            current.push(char::from(value));
+                            current.push(value);
+                            current_is_binary |= value >= 0x80;
                         }
                     }
                     b'u' if content.get(pos + 1) == Some(&b'{') => {
@@ -596,48 +600,49 @@ impl<'a> Lexer<'a> {
                                 "Invalid UTF-8 codepoint escape sequence",
                             ));
                         };
-                        current.push(character);
+                        let mut encoded = [0; 4];
+                        current.extend_from_slice(character.encode_utf8(&mut encoded).as_bytes());
                     }
                     b'n' => {
-                        current.push('\n');
+                        current.push(b'\n');
                         pos += 1;
                     }
                     b'r' => {
-                        current.push('\r');
+                        current.push(b'\r');
                         pos += 1;
                     }
                     b't' => {
-                        current.push('\t');
+                        current.push(b'\t');
                         pos += 1;
                     }
                     b'e' => {
-                        current.push('\u{1b}');
+                        current.push(0x1b);
                         pos += 1;
                     }
                     b'f' => {
-                        current.push('\u{c}');
+                        current.push(0x0c);
                         pos += 1;
                     }
                     b'v' => {
-                        current.push('\u{b}');
+                        current.push(0x0b);
                         pos += 1;
                     }
                     b'\\' => {
-                        current.push('\\');
+                        current.push(b'\\');
                         pos += 1;
                     }
                     b'$' => {
-                        current.push('$');
+                        current.push(b'$');
                         pos += 1;
                     }
                     b'"' => {
-                        current.push('"');
+                        current.push(b'"');
                         pos += 1;
                     }
                     _ => {
-                        current.push('\\');
+                        current.push(b'\\');
                         let escaped_offset = pos;
-                        Self::push_utf8_char(content, &mut pos, &mut current).map_err(
+                        Self::push_utf8_bytes(content, &mut pos, &mut current).map_err(
                             |message| {
                                 Self::string_lex_error_at(
                                     content,
@@ -654,7 +659,10 @@ impl<'a> Lexer<'a> {
                 let next = content.get(pos + 1).copied().unwrap_or(0);
                 if next == b'{' {
                     if !current.is_empty() {
-                        parts.push(StringPart::Literal(std::mem::take(&mut current)));
+                        parts.push(Self::take_literal_part(
+                            &mut current,
+                            &mut current_is_binary,
+                        ));
                     }
                     let expression_line =
                         source_line + Self::count_logical_line_breaks(&content[..variable_offset]);
@@ -702,7 +710,10 @@ impl<'a> Lexer<'a> {
                     pos = expression_end + 1;
                 } else if Self::is_identifier_start(next) {
                     if !current.is_empty() {
-                        parts.push(StringPart::Literal(std::mem::take(&mut current)));
+                        parts.push(Self::take_literal_part(
+                            &mut current,
+                            &mut current_is_binary,
+                        ));
                     }
                     pos += 1;
                     let interpolation_line =
@@ -812,12 +823,15 @@ impl<'a> Lexer<'a> {
                         parts.push(StringPart::Variable(name, interpolation_line));
                     }
                 } else {
-                    current.push('$');
+                    current.push(b'$');
                     pos += 1;
                 }
             } else if content[pos] == b'{' && content.get(pos + 1) == Some(&b'$') {
                 if !current.is_empty() {
-                    parts.push(StringPart::Literal(std::mem::take(&mut current)));
+                    parts.push(Self::take_literal_part(
+                        &mut current,
+                        &mut current_is_binary,
+                    ));
                 }
                 let expression_start = pos + 1;
                 let expression_line =
@@ -863,16 +877,33 @@ impl<'a> Lexer<'a> {
                 }
             } else {
                 let character_offset = pos;
-                Self::push_utf8_char(content, &mut pos, &mut current).map_err(|message| {
+                Self::push_utf8_bytes(content, &mut pos, &mut current).map_err(|message| {
                     Self::string_lex_error_at(content, character_offset, source_line, message)
                 })?;
             }
         }
 
         if !current.is_empty() || parts.is_empty() {
-            parts.push(StringPart::Literal(current));
+            parts.push(Self::literal_part(current, current_is_binary));
         }
         Ok(InterpolatedString { parts, diagnostics })
+    }
+
+    fn take_literal_part(bytes: &mut Vec<u8>, binary: &mut bool) -> StringPart {
+        Self::literal_part(std::mem::take(bytes), std::mem::take(binary))
+    }
+
+    fn literal_part(bytes: Vec<u8>, binary: bool) -> StringPart {
+        if binary {
+            return StringPart::Literal(bytes.into_iter().map(char::from).collect(), true);
+        }
+        match String::from_utf8(bytes) {
+            Ok(text) => StringPart::Literal(text, false),
+            Err(error) => StringPart::Literal(
+                error.into_bytes().into_iter().map(char::from).collect(),
+                true,
+            ),
+        }
     }
 
     fn string_lex_error_at(
@@ -999,6 +1030,30 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    fn push_utf8_bytes(bytes: &[u8], pos: &mut usize, output: &mut Vec<u8>) -> Result<(), String> {
+        let rest = &bytes[*pos..];
+        let valid = match std::str::from_utf8(rest) {
+            Ok(valid) => valid,
+            Err(error) if error.valid_up_to() > 0 => {
+                std::str::from_utf8(&rest[..error.valid_up_to()]).unwrap()
+            }
+            Err(_) => {
+                return Err(format!(
+                    "Invalid UTF-8 byte 0x{:02x} in string at position {}",
+                    bytes[*pos], *pos
+                ));
+            }
+        };
+        let length = valid
+            .chars()
+            .next()
+            .expect("non-empty source tail")
+            .len_utf8();
+        output.extend_from_slice(&rest[..length]);
+        *pos += length;
+        Ok(())
+    }
+
     fn hex_value(byte: u8) -> Option<u8> {
         match byte {
             b'0'..=b'9' => Some(byte - b'0'),
@@ -1019,7 +1074,11 @@ impl<'a> Lexer<'a> {
     pub(super) fn emit_string_parts(tokens: &mut Vec<Token>, parts: &[StringPart]) {
         if parts.len() == 1 {
             match &parts[0] {
-                StringPart::Literal(value) => tokens.push(Token::StringLiteral(value.clone())),
+                StringPart::Literal(value, binary) => tokens.push(if *binary {
+                    Token::BinaryStringLiteral(value.clone())
+                } else {
+                    Token::StringLiteral(value.clone())
+                }),
                 StringPart::Variable(name, line) => {
                     tokens.push(Token::LParen(0));
                     tokens.push(Token::StringLiteral(String::new()));
@@ -1074,7 +1133,11 @@ impl<'a> Lexer<'a> {
                 tokens.push(Token::Dot);
             }
             match part {
-                StringPart::Literal(value) => tokens.push(Token::StringLiteral(value.clone())),
+                StringPart::Literal(value, binary) => tokens.push(if *binary {
+                    Token::BinaryStringLiteral(value.clone())
+                } else {
+                    Token::StringLiteral(value.clone())
+                }),
                 StringPart::Variable(name, line) => {
                     tokens.push(Token::Variable(name.clone(), *line));
                 }

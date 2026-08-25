@@ -1948,6 +1948,7 @@ impl Parser {
             Expr::Integer(_)
             | Expr::Float(_)
             | Expr::StringLiteral(_)
+            | Expr::BinaryStringLiteral(_)
             | Expr::Bool(_)
             | Expr::Null
             | Expr::Globals { .. }

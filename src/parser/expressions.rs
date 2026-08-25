@@ -1043,6 +1043,13 @@ impl Parser {
                 };
                 Ok(Expr::StringLiteral(val))
             }
+            Token::BinaryStringLiteral(_) => {
+                let val = match self.advance() {
+                    Token::BinaryStringLiteral(s) => s,
+                    _ => unreachable!(),
+                };
+                Ok(Expr::BinaryStringLiteral(val))
+            }
             Token::Null => {
                 self.advance();
                 Ok(Expr::Null)
