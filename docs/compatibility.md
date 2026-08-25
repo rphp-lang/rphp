@@ -8,6 +8,76 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`chunk-split-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. `chunk_split()` now divides the exact PHP-byte
+sequence, appends the separator after every complete or final partial chunk,
+and also returns the separator for an empty source. Default length 76 and CRLF
+ending, every positive and extreme length, an empty ending, embedded NUL,
+valid UTF-8 and arbitrary invalid bytes are preserved without replacement or
+source mutation.
+
+The canonical internal function uses shared typed `string`, `int`, `string`
+boundaries and exposes those names and types plus a `string` return through
+Reflection. Weak scalar and stringable-object conversions, null and lossy-
+float deprecations, strict rejection, non-finite rejection and exact
+`TypeError` diagnostics match PHP. Zero and negative lengths raise the
+catchable canonical `ValueError`. Result sizing is checked before allocation;
+overflow and results beyond the retained 128 MiB default-memory model fail
+deterministically with source-qualified allocation diagnostics.
+
+Static unary non-strict calls retain a guarded exact-string fast path through
+the same byte engine. A non-string or rejected allocation resumes through the
+canonical internal frame without repeating a side effect; caught throwables
+retain `chunk_split` as trace frame zero. Strict calls, dynamic calls,
+callbacks, named arguments and explicit lengths/endings use the canonical
+path. Three original E2E regressions cover byte boundaries, empty/default/
+partial/extreme lengths, immutability, weak/strict diagnostics, Reflection,
+dynamic and callback invocation, and guarded-fallback traces.
+
+Independent byte/weak, strict and direct-fallback observations match the PHP
+oracle at SHA-256
+`fdd926220126adbed69544921297e59e9a867b239ad7a505e3f1ef24ae896123`,
+`a73cefcabc6dd278fdfe43d45a1c53886ee17c688850ebe606ca31017eed9603`
+and `b2a33312e4d364817784debd1862c0f6521e0da641014cd7c5f32d98533aad`.
+The six supplying cases move from 0/6 to 6/6; their stable baseline,
+PHP-oracle and final-candidate normalized hashes are
+`ac661689d1815e0e39d822832dabe238e933c176dc1c9229d2a95ccdec4ac414`,
+`1b217fbec37edf9815da3221d8871f1a6766258cb04e7dde3c8fff98613da699`
+and the same `1b217fbec37edf9815da3221d8871f1a6766258cb04e7dde3c8fff98613da699`.
+
+The complete 733-case strings audit moves from 473 to 479 passes, an exact
++6/-0 delta consisting only of the supplying cluster. There are 169 failures,
+54 skips, 30 unsupported cases, the retained `dirname_multi.phpt` timeout and
+zero crashes. Array remains exactly classified at 828 passes, 13 skips and one
+unsupported case. Zend/lang remains exactly classified at 4,206 passes, 1,097
+failures, 115 skips and 181 unsupported cases with no timeout or crash. Three
+serial release runs have identical stable path/outcome/runner-control hashes
+`fea90603c26bc296537b236a8ff93fff5322e2d303c440c11a0b9cee1424d66b`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `907bddc39e20247bdf412dc3de5fa6653912c1e7c0b0c542ff70af2cb3a896f8`
+for strings, array and Zend/lang respectively.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML data, PHPT-runner and unsafe-policy checks, Composer 2.8.12
+S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production has 1,621
+unsafe blocks, 289 unsafe functions, 358 SAFETY annotations and seven
+`# Safety` sections. Exact-binary CPU-2-pinned balanced release A/B controls
+compare parent SHA-256
+`8304df522d9be65af65a0af8478db62c306096dddfb3b3e71a79ca739799288d`
+with candidate
+`c3ef53c5b8b3ef2ebb8a00b5277a310cb75efcbeac52915fa1495b2442895b1f`.
+Paired medians are -30.602% for unary default calls, -20.866% for explicit
+length/ending calls, -18.857% for dynamic callback calls, +2.218% for the
+adjacent `str_split()` control and -4.105% for 200 empty processes. Every
+output/checksum matches and every median is below +5%.
+
+This checkpoint does not claim configurable request-wide memory accounting,
+Reflection's exact internal-extension/default rendering, 32-bit execution or
+the remaining strings/Zend failures. The next bounded high-yield candidate is
+the eight visible `str_replace()`/`str_ireplace()` cases, which share one
+ordered byte-replacement, array/reference, count and weak/strict boundary.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `str-split-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and validated
 against PHP 8.5.9. `str_split()` now partitions the exact PHP-byte sequence,
 not Rust UTF-8 storage, into ordered packed-array chunks. The default length is
