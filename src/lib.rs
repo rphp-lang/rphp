@@ -17,6 +17,7 @@ mod resource_handle;
 pub mod runtime;
 #[allow(unused_unsafe)]
 pub mod stdlib;
+pub mod uuencode;
 pub mod value;
 pub mod vm;
 

@@ -1649,6 +1649,27 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String],
         ParamTypeHint::String
     );
+    reg_typed!(
+        "convert_uuencode",
+        fn_convert_uuencode,
+        1,
+        1,
+        ["string"],
+        [ParamTypeHint::String],
+        ParamTypeHint::String
+    );
+    reg_typed!(
+        "convert_uudecode",
+        fn_convert_uudecode,
+        1,
+        1,
+        ["string"],
+        [ParamTypeHint::String],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
     reg!(
         "filter_var",
         fn_filter_var,

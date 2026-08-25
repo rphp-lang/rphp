@@ -1701,6 +1701,62 @@ pub(super) fn fn_quoted_printable_decode(
     );
 }
 
+pub(super) fn fn_convert_uuencode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(input) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "convert_uuencode",
+        0,
+        "string",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    let encoded = crate::uuencode::encode(&input.php_string_bytes().unwrap_or_default());
+    ret!(
+        rv,
+        Value::string(String::from_utf8(encoded).expect("UUencode output contains only ASCII"))
+    );
+}
+
+pub(super) fn fn_convert_uudecode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(input) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "convert_uudecode",
+        0,
+        "string",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    let bytes = input.php_string_bytes().unwrap_or_default();
+    let Some(decoded) = crate::uuencode::decode(&bytes) else {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            "convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        ret!(rv, Value::bool(false));
+    };
+    ret!(rv, php_byte_result(decoded, false));
+}
+
 // ============================================================================
 // Missing common string functions
 // ============================================================================
