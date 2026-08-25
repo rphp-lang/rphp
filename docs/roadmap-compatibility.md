@@ -3021,10 +3021,29 @@ and -0.601% for startup, all within +5% with matching comparable checksums.
 Candidate-only quoted-printable throughput is recorded without a parent A/B
 claim because neither function existed in the parent.
 
+The `be2a27d2` `uuencode-byte-contract` checkpoint closes all four supplying
+UUencode cases against PHP 8.5.9. Typed handlers share one clean-room PHP-byte
+codec for 45-byte lines, six-bit characters, padding, terminal markers,
+NUL/high-byte output and PHP's short, full, overlong, truncated and malformed
+decoder behavior. Weak/strict conversion, null and invalid-input diagnostics,
+call shapes, Reflection, references and COW remain inside the same boundary.
+Three original E2Es, three unit tests, five clean-room probes and an exhaustive
+22,621-input short sweep cover the contract.
+
+Strings moves from 559 to 563 pass (+4/-0), with no lost pass or other outcome
+movement. Array remains exactly 828/842 and Zend/lang exactly 4,209/5,599.
+Three release runs have identical path/status/category maps. All five feature
+configurations, all-feature/all-target, formatting, HTML data, runner, unsafe,
+Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Exact-final-binary
+CPU-pinned retained quoted-printable controls range from -1.420% to +3.307%
+and startup is +1.182%, all within +5% with matching outputs. Candidate-only
+UUencode throughput is recorded without a parent A/B claim because neither
+function existed in the parent.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 559 pass, 89 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 563 pass, 85 fail, 54 skip and 30 unsupported, with one retained timeout;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
@@ -3040,10 +3059,11 @@ related byte-search/window family is 79/79, and the direct split/join family is
 19 pass plus one explicit unsupported case. `str_getcsv()` and the visible
 checksum/hash supplying clusters are both 8/8, the selected
 `base64_decode()` family is 6/6, and the visible quoted-printable family is
-5/5. The next goal should close the four visible UUencode failures in
-`bug67252.phpt`, `convert_uudecode_basic.phpt`,
-`convert_uuencode_basic.phpt` and `uuencode.phpt` through one shared PHP-byte
-codec contract;
+5/5, while the visible UUencode family is 4/4. The next goal should close the
+six-case path decomposition cluster in `basename.phpt`, `basename_basic.phpt`,
+`basename_variation.phpt`, `dirname_variation.phpt`, the retained
+`dirname_multi.phpt` timeout and `pathinfo.phpt` through one shared byte-level
+path engine;
 wider string-offset writes, typed-parameter and associative-key binary
 provenance, detached-callback alias spelling, unknown entity-encoding warnings,
 platform cryptography, tag parsing and broader legacy multibyte behavior remain
