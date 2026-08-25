@@ -2691,20 +2691,47 @@ runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
 Exact-binary paired medians are -5.621% for `addcslashes()`, +0.296% for
 ordinary concatenation and +0.391% for startup, within +5%.
 
+The `trim-charlist` checkpoint closes the 11 supplying `trim()`, `ltrim()`,
+`rtrim()` and `chop()` cases against PHP 8.5.9. One byte-oriented engine covers
+the exact default mask, all 256 byte values, increasing ranges, ambiguous and
+invalid dot runs, direction, weak/strict calls and null deprecations. Immutable
+alias metadata exposes `chop` through the existing cold lookup fallback while
+preserving its public diagnostic, inventory and Reflection identity and
+rejecting redeclaration. Four original E2E tests and an independent 3,280-row
+charlist matrix cover the normal, binary, boundary, diagnostic and alias
+contracts.
+
+The focused cluster moves from 0/11 to 11/11 and strings moves from 450 to 461
+pass (+11/-0), with no adjacent status gain or lost pass. Array remains exactly
+828/842 and Zend/lang retains exactly 4,202/5,599 passes. The sole remaining-
+failure stage movement is explained: `bug43201.phpt` itself invokes `chop()`
+and advances from its former undefined-function fatal to its independent
+magic-property output divergence. Three serial release runs have identical
+stable hashes
+`99915c79203500855145164e2dc7f961c7961c3635abdfa7d59de865b366a3f0`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `ce465455c9ae15155a8ab4439d34e800eaff3158827fb37c436a7aba245b79ee`.
+All five feature configurations, all-feature/all-target, formatting, HTML data,
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Exact-binary paired medians are -7.014% for default trim, -1.931% for explicit
+charlists, +4.703% for ordinary concatenation, +0.351% for callback dispatch
+and -6.300% for startup, within +5%.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 450 pass, 198 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 461 pass, 187 fail, 54 skip and 30 unsupported, with one retained timeout;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
 and invalid-UTF-8 recovery families are both 3/3; the EUC-JP/Big5 supplying
 pair is 2/2 and the byte-escaping supplying family is 12/12. `Zend/tests` plus
 `tests/lang` is 4,202 pass, 1,101 fail, 115 skip and 181 unsupported, with no
-timeout or crash. The next goal should first cluster and close the 11 visible
-byte-charlist and alias failures shared by `trim()`, `ltrim()`, `rtrim()` and
-`chop()`; typed-parameter binary provenance, unknown entity-encoding warnings
-and broader legacy multibyte behavior remain explicit contracts.
+timeout or crash. The trim/charlist family is now 11/11. The next goal should
+first cluster and close the six visible `str_increment()`/`str_decrement()`
+failures; typed-parameter binary provenance, detached-callback alias spelling,
+unknown entity-encoding warnings and broader legacy multibyte behavior remain
+explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,

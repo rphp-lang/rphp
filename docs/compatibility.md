@@ -7,7 +7,75 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 PHP 8.5 contract checkpoint is `byte-escaping`,
+The latest measured AMD64 PHP 8.5 contract checkpoint is `trim-charlist`,
+pinned to php-src 8.5 commit `fcc29c8` and validated against PHP 8.5.9.
+`trim()`, `ltrim()` and `rtrim()` now operate on PHP bytes with the exact
+default NUL/space/tab/newline/vertical-tab/carriage-return mask. Explicit
+charlists admit literal bytes and increasing byte ranges over all 256 values,
+retain PHP's interpretation of ambiguous dot runs and emit the canonical
+warnings for missing, decreasing or otherwise invalid ranges. Direction,
+empty/full trimming, weak scalar conversion, strict type errors and null-to-
+string deprecations match the oracle.
+
+`chop()` is exposed as a case-insensitive public alias of the canonical
+`rtrim()` descriptor without adding a second request-local function-table
+entry. Static, namespaced-fallback and dynamic calls retain `chop` in typed and
+charlist diagnostics; `function_exists()`, `get_defined_functions()` and
+Reflection expose the alias and user declarations cannot redeclare it. The
+ordinary string path shares an unchanged result, uses an immutable default
+mask and a warning-free charlist parser, and falls back to the complete
+diagnostic parser for ambiguous input. One diagnostic-only unsafe frame walk
+recovers the active public alias; no dependency, opcode or runtime/value/object
+layout field was added.
+
+Four original E2E regressions cover all byte values, default-mask boundaries,
+left/right/both directions, valid and invalid ranges, exact warning sequences,
+weak and strict calls, alias inventory, Reflection, namespaces and
+redeclaration. An independent 3,280-row exhaustive charlist matrix matches the
+PHP oracle at SHA-256
+`2a80e9982a70a722f68ee4513187bb5ced2e66619a137eb1b00f8eb6f607dcd9`.
+The 11 supplying cases move from 0/11 to 11/11; their stable baseline, oracle
+and final normalized hashes are
+`385c29f97371bc96a2add1625b1747c88efed48247ab4805a82bf1c63f64b747`,
+`1b485b2b57e9d5c5a19fb016d5db88e5ae56d26ecb3c04f934cd59b22f68f65c`
+and the same `1b485b2b57e9d5c5a19fb016d5db88e5ae56d26ecb3c04f934cd59b22f68f65c`.
+
+The complete 733-case strings audit moves from 450 to 461 passes, an exact
++11/-0 delta consisting only of the supplying cluster. There are 187 failures,
+54 skips, 30 unsupported cases, the retained `dirname_multi.phpt` timeout and
+zero crashes. Array remains byte-for-byte classified at 828 passes, 13 skips
+and one unsupported case. Zend/lang retains exactly 4,202 passes, 1,101
+failures, 115 skips and 181 unsupported cases with no timeout or crash. Its
+only outcome-stage movement is `Zend/tests/magic_methods/bug43201.phpt` from
+runtime/255 to output/0: that test itself calls the newly available `chop()`
+and now reaches its independent, already visible magic-property divergence.
+No previous pass is lost. Three serial release runs have identical stable
+path/outcome/runner-control hashes
+`99915c79203500855145164e2dc7f961c7961c3635abdfa7d59de865b366a3f0`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `ce465455c9ae15155a8ab4439d34e800eaff3158827fb37c436a7aba245b79ee`
+for strings, array and Zend/lang respectively.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML data, PHPT-runner and unsafe-policy checks, Composer 2.8.12
+S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production is at 1,622
+unsafe blocks, 289 unsafe functions, 358 SAFETY annotations and seven
+`# Safety` sections. Exact-binary CPU-2-pinned balanced release A/B controls
+compare parent SHA-256
+`0abe4704531c1b081486bd5476ede5ae766f32d8907251c7071d545b3e763b4b`
+with candidate
+`bc3fc4749fe82dd611b5d27194e52a32bf6ae0562633dd41af928037fba90767`.
+Paired medians are -7.014% for one million default `trim()` calls, -1.931%
+for 500,000 explicit-range `rtrim()` calls, +4.703% for ordinary concatenation,
++0.351% for `call_user_func()` and -6.300% for 200 empty processes. Every
+output/checksum matches and every median is below +5%.
+
+This checkpoint does not claim detached-callback alias spelling in diagnostics,
+the independent magic-property behavior remaining in `bug43201.phpt`, 32-bit
+execution or the remaining strings/Zend failures. The next bounded high-yield
+candidate is the six-case PHP 8.5 `str_increment()`/`str_decrement()` cluster.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is `byte-escaping`,
 pinned to php-src 8.5 commit `fcc29c8` and validated against PHP 8.5.9.
 RPHP now exposes `addslashes()`, `stripslashes()` and `stripcslashes()` and
 routes them with `addcslashes()` through a shared PHP-byte boundary. The

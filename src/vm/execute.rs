@@ -2743,11 +2743,104 @@ fn call_initializer_before<'a>(
     None
 }
 
-/// Recover the public method identity of one live frame backed by shared trait
-/// bytecode. The active call site retains the selected alias, while `$this` or
-/// the static initializer identifies the nearest class that composed the
-/// trait. Keeping this on diagnostic/trace paths avoids cloning every trait
-/// op-array or publishing per-call side state.
+/// Recover an internal alias from the live call initializer while its shared
+/// target descriptor stays canonical for lookup and execution.
+#[cold]
+pub(crate) fn invoked_internal_alias_name(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+) -> Option<&'static str> {
+    // SAFETY: the caller and its instruction operands stay live for the
+    // complete synchronous internal call. Bounds checks mirror the trait-call
+    // diagnostic recovery immediately below.
+    unsafe {
+        if frame.is_null() {
+            return None;
+        }
+        let function = (*frame).func;
+        if function.is_null() {
+            return None;
+        }
+        if (*function).fn_type != FunctionType::Internal {
+            return None;
+        }
+        let caller = (*frame).prev_execute_data;
+        if caller.is_null() || (*caller).func.is_null() {
+            return None;
+        }
+        let caller_function = Function::from_common_ptr((*caller).func);
+        if caller_function.fn_type() != FunctionType::User {
+            return None;
+        }
+        let caller_op_array = &caller_function.as_user().op_array;
+        let base = caller_op_array.instructions.as_ptr();
+        let resume = (*caller).opline;
+        let resume_index = resume.offset_from(base);
+        let do_fcall_ptr = if resume_index >= 0
+            && (resume_index as usize) < caller_op_array.instructions.len()
+            && (*resume).opcode == OpCode::DoFcall
+        {
+            resume
+        } else if resume_index > 0
+            && (resume_index as usize) <= caller_op_array.instructions.len()
+            && (*resume.sub(1)).opcode == OpCode::DoFcall
+        {
+            resume.sub(1)
+        } else {
+            return None;
+        };
+        let initializer = call_initializer_before(caller_op_array, do_fcall_ptr)?;
+        let alias = match initializer.opcode {
+            OpCode::InitFcall => {
+                let called = &*(*caller).get_op_ptr(
+                    initializer.op2 as u32,
+                    initializer.op2_type,
+                    caller_op_array,
+                );
+                called
+                    .as_str()
+                    .and_then(|name| {
+                        crate::builtin_metadata::internal_function_alias(
+                            crate::stdlib::dynamic_function_lookup_name(name),
+                        )
+                    })
+                    .or_else(|| {
+                        (initializer.extended_value != 0)
+                            .then(|| {
+                                &*(*caller).get_op_ptr(
+                                    initializer.extended_value,
+                                    OpType::Const,
+                                    caller_op_array,
+                                )
+                            })
+                            .and_then(Value::as_str)
+                            .and_then(crate::builtin_metadata::internal_function_alias)
+                    })
+            }
+            OpCode::InitDynamicCall => {
+                let called = &*(*caller).get_op_ptr(
+                    initializer.op1 as u32,
+                    initializer.op1_type,
+                    caller_op_array,
+                );
+                called.as_str().and_then(|name| {
+                    crate::builtin_metadata::internal_function_alias(
+                        crate::stdlib::dynamic_function_lookup_name(name),
+                    )
+                })
+            }
+            _ => return None,
+        }?;
+        eg.function_table
+            .get(alias.target)
+            .is_some_and(|target| std::ptr::eq(*target, function))
+            .then_some(alias.alias)
+    }
+}
+
+/// Recover a public method identity from shared trait bytecode and the active
+/// call site. Keeping this diagnostic path cold avoids cloning op-arrays or
+/// publishing per-call side state.
 #[cold]
 pub(crate) fn displayed_frame_function_name(
     eg: &ExecutorGlobals,

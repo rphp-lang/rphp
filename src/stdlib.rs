@@ -6377,34 +6377,49 @@ fn fn_strtoupper(
     ret!(rv, result);
 }
 
-fn trim_mask(ed: *mut ExecuteData) -> [bool; 256] {
+const DEFAULT_TRIM_MASK: [bool; 256] = {
     let mut mask = [false; 256];
-    let default = [0_u8, b'\t', b'\n', 11, b'\r', b' '];
-    let characters = arg_opt!(ed, 1).and_then(Value::as_str);
-    let bytes = characters.map_or(default.as_slice(), str::as_bytes);
+    mask[0] = true;
+    mask[b'\t' as usize] = true;
+    mask[b'\n' as usize] = true;
+    mask[11] = true;
+    mask[b'\r' as usize] = true;
+    mask[b' ' as usize] = true;
+    mask
+};
+
+/// Parse the warning-free charlist grammar used by ordinary trim calls. Any
+/// ambiguous or invalid dot run falls back to the diagnostic parser below.
+#[inline(always)]
+fn valid_php_charlist_mask(characters: &[u8]) -> Option<[bool; 256]> {
+    let mut mask = [false; 256];
     let mut index = 0;
-    while index < bytes.len() {
-        if index + 3 < bytes.len() && bytes[index + 1] == b'.' && bytes[index + 2] == b'.' {
-            let start = bytes[index];
-            let end = bytes[index + 3];
-            if start <= end {
-                for byte in start..=end {
-                    mask[byte as usize] = true;
-                }
-            } else {
-                mask[start as usize] = true;
-                mask[end as usize] = true;
+    while index < characters.len() {
+        if index + 3 < characters.len()
+            && characters[index + 1] == b'.'
+            && characters[index + 2] == b'.'
+        {
+            let start = characters[index];
+            let end = characters[index + 3];
+            if start > end {
+                return None;
+            }
+            for byte in start..=end {
+                mask[byte as usize] = true;
             }
             index += 4;
         } else {
-            mask[bytes[index] as usize] = true;
+            if characters[index] == b'.' && characters.get(index + 1) == Some(&b'.') {
+                return None;
+            }
+            mask[characters[index] as usize] = true;
             index += 1;
         }
     }
-    mask
+    Some(mask)
 }
 
-fn addcslashes_mask(characters: &[u8]) -> ([bool; 256], Vec<&'static str>) {
+fn php_charlist_mask(characters: &[u8]) -> ([bool; 256], Vec<&'static str>) {
     let mut mask = [false; 256];
     let mut warnings = Vec::new();
     let mut index = 0;
@@ -6412,8 +6427,6 @@ fn addcslashes_mask(characters: &[u8]) -> ([bool; 256], Vec<&'static str>) {
         if index + 3 < characters.len()
             && characters[index + 1] == b'.'
             && characters[index + 2] == b'.'
-            && characters[index + 3] != b'.'
-            && (index == 0 || characters[index - 1] != b'.')
         {
             if characters[index] <= characters[index + 3] {
                 for byte in characters[index]..=characters[index + 3] {
@@ -6422,17 +6435,32 @@ fn addcslashes_mask(characters: &[u8]) -> ([bool; 256], Vec<&'static str>) {
                 index += 4;
                 continue;
             }
+
+            // A dot can itself begin the next range. PHP shifts to that
+            // interpretation when another byte follows it (for example,
+            // `a...z` is the literal `a` followed by the range `...z`).
+            if characters[index + 3] == b'.' && index + 4 < characters.len() {
+                mask[characters[index] as usize] = true;
+                index += 1;
+                continue;
+            }
+
             warnings.push("Invalid '..'-range, '..'-range needs to be incrementing");
-        } else if index == 0
-            && characters.get(index + 1) == Some(&b'.')
-            && characters.get(index + 2) != Some(&b'.')
-        {
-            warnings.push("Invalid '..'-range, no character to the left of '..'");
-        } else if index + 3 == characters.len()
-            && characters[index + 1] == b'.'
-            && characters[index + 2] == b'.'
-        {
-            warnings.push("Invalid '..'-range, no character to the right of '..'");
+            mask[characters[index] as usize] = true;
+            index += 2;
+            continue;
+        }
+
+        if characters[index] == b'.' && characters.get(index + 1) == Some(&b'.') {
+            if index == 0 {
+                warnings.push("Invalid '..'-range, no character to the left of '..'");
+            } else if index + 2 == characters.len() {
+                warnings.push("Invalid '..'-range, no character to the right of '..'");
+            } else if characters[index - 1] > characters[index + 2] {
+                warnings.push("Invalid '..'-range, '..'-range needs to be incrementing");
+            } else {
+                warnings.push("Invalid '..'-range");
+            }
         }
         mask[characters[index] as usize] = true;
         index += 1;
@@ -6496,7 +6524,7 @@ fn fn_addcslashes(
     };
     let string = string.php_string_bytes().unwrap_or_default();
     let characters = characters.php_string_bytes().unwrap_or_default();
-    let (mask, warnings) = addcslashes_mask(&characters);
+    let (mask, warnings) = php_charlist_mask(&characters);
     for warning in warnings {
         report_internal_diagnostic(eg, ed, 2, "Warning", &format!("addcslashes(): {warning}"))?;
         if eg.exception.is_some() {
@@ -6644,10 +6672,13 @@ fn fn_stripcslashes(
     unary_slash_string(ed, rv, eg, "stripcslashes", stripcslashes_bytes)
 }
 
-fn trim_bytes(ed: *mut ExecuteData, trim_left: bool, trim_right: bool) -> String {
-    let string = arg_str!(ed, 0);
-    let bytes = string.as_bytes();
-    let mask = trim_mask(ed);
+#[inline(always)]
+fn trim_php_byte_bounds(
+    bytes: &[u8],
+    mask: &[bool; 256],
+    trim_left: bool,
+    trim_right: bool,
+) -> (usize, usize) {
     let mut start = 0;
     let mut end = bytes.len();
     if trim_left {
@@ -6660,27 +6691,131 @@ fn trim_bytes(ed: *mut ExecuteData, trim_left: bool, trim_right: bool) -> String
             end -= 1;
         }
     }
-    String::from_utf8_lossy(&bytes[start..end]).into_owned()
+    (start, end)
 }
 
-fn fn_trim(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::string(trim_bytes(ed, true, true)));
+#[inline(always)]
+fn trimmed_php_string_value(
+    source: &Value,
+    bytes: &[u8],
+    mask: &[bool; 256],
+    trim_left: bool,
+    trim_right: bool,
+) -> Value {
+    let (start, end) = trim_php_byte_bounds(bytes, mask, trim_left, trim_right);
+    if start == 0 && end == bytes.len() {
+        return source.clone();
+    }
+    let trimmed = &bytes[start..end];
+    if !source.is_binary_string()
+        && let Some(text) = source.as_str().and_then(|storage| storage.get(start..end))
+    {
+        Value::string(text.to_owned())
+    } else {
+        Value::binary_string(trimmed)
+    }
 }
 
-fn fn_rtrim(
+fn fn_trim_direction(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    trim_left: bool,
+    trim_right: bool,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::string(trim_bytes(ed, false, true)));
+    // Ordinary string calls are overwhelmingly dominant. They need neither
+    // scalar coercion nor a defensive Value clone, and valid charlists cannot
+    // re-enter through an error handler. Keep that path allocation-free until
+    // the returned substring itself must be materialized.
+    let source_argument = arg!(ed, 0);
+    if source_argument.value_type() == ValueType::String {
+        if let Some(characters) = arg_opt!(ed, 1) {
+            if characters.value_type() == ValueType::String {
+                let characters = characters.php_string_bytes().unwrap_or_default();
+                if let Some(mask) = valid_php_charlist_mask(&characters) {
+                    let bytes = source_argument.php_string_bytes().unwrap_or_default();
+                    ret!(
+                        rv,
+                        trimmed_php_string_value(
+                            source_argument,
+                            &bytes,
+                            &mask,
+                            trim_left,
+                            trim_right,
+                        )
+                    );
+                }
+            }
+        } else {
+            let bytes = source_argument.php_string_bytes().unwrap_or_default();
+            ret!(
+                rv,
+                trimmed_php_string_value(
+                    source_argument,
+                    &bytes,
+                    &DEFAULT_TRIM_MASK,
+                    trim_left,
+                    trim_right,
+                )
+            );
+        }
+    }
+
+    let function = if function == "rtrim" {
+        crate::vm::execute::invoked_internal_alias_name(eg, ed).unwrap_or(function)
+    } else {
+        function
+    };
+
+    let Some(string) =
+        typed_internal_string_value_argument_expected(ed, eg, function, 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let explicit_mask;
+    let mask = if arg_opt!(ed, 1).is_some() {
+        let Some(characters) = typed_internal_string_value_argument_expected(
+            ed,
+            eg,
+            function,
+            1,
+            "characters",
+            "string",
+        )?
+        else {
+            return Ok(());
+        };
+        let characters = characters.php_string_bytes().unwrap_or_default();
+        let (mask, warnings) = php_charlist_mask(&characters);
+        for warning in warnings {
+            report_internal_diagnostic(eg, ed, 2, "Warning", &format!("{function}(): {warning}"))?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+        }
+        explicit_mask = mask;
+        &explicit_mask
+    } else {
+        &DEFAULT_TRIM_MASK
+    };
+    let bytes = string.php_string_bytes().unwrap_or_default();
+    ret!(
+        rv,
+        trimmed_php_string_value(&string, &bytes, mask, trim_left, trim_right)
+    );
 }
 
-fn fn_ltrim(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    ret!(rv, Value::string(trim_bytes(ed, true, false)));
+fn fn_trim(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    fn_trim_direction(ed, rv, eg, "trim", true, true)
+}
+
+fn fn_rtrim(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    fn_trim_direction(ed, rv, eg, "rtrim", false, true)
+}
+
+fn fn_ltrim(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    fn_trim_direction(ed, rv, eg, "ltrim", true, false)
 }
 
 fn fn_explode(
@@ -9844,6 +9979,12 @@ fn fn_get_defined_functions(
             FunctionType::Undef => {}
         }
     }
+    internal.extend(
+        crate::builtin_metadata::INTERNAL_FUNCTION_ALIASES
+            .iter()
+            .filter(|alias| eg.function_table.contains_key(alias.target))
+            .map(|alias| alias.alias.to_string()),
+    );
     // The function table is hash-backed. PHP does not specify list ordering,
     // so make the exposed RPHP inventory stable across repeated requests.
     internal.sort_unstable();

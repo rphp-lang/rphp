@@ -237,12 +237,20 @@ fn function_construct(
         .as_closure()
         .map(|closure| closure.func)
         .or_else(|| eg.find_function(&owner));
-    let public_name = function.map_or_else(
-        || owner.trim_start_matches('\\').to_string(),
-        |function| {
-            crate::vm::execute::displayed_function_name(eg, function as *const FunctionCommon)
-        },
-    );
+    let requested_name = owner.trim_start_matches('\\');
+    let public_name = crate::builtin_metadata::internal_function_alias(requested_name)
+        .map(|alias| alias.alias.to_string())
+        .unwrap_or_else(|| {
+            function.map_or_else(
+                || requested_name.to_string(),
+                |function| {
+                    crate::vm::execute::displayed_function_name(
+                        eg,
+                        function as *const FunctionCommon,
+                    )
+                },
+            )
+        });
     let is_anonymous = target
         .as_closure()
         .and_then(PhpClosure::user_function)

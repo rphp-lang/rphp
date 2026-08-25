@@ -98,6 +98,28 @@ pub(crate) fn zend_special_write_rule(name: &str) -> Option<ZendSpecialWriteRule
     }
 }
 
+/// One public PHP name that deliberately reuses another built-in descriptor.
+/// Keeping aliases in immutable metadata avoids perturbing the request-local
+/// function table while ordinary exact-name lookup remains unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct InternalFunctionAlias {
+    pub(crate) alias: &'static str,
+    pub(crate) target: &'static str,
+}
+
+pub(crate) const INTERNAL_FUNCTION_ALIASES: &[InternalFunctionAlias] = &[InternalFunctionAlias {
+    alias: "chop",
+    target: "rtrim",
+}];
+
+#[inline]
+pub(crate) fn internal_function_alias(name: &str) -> Option<InternalFunctionAlias> {
+    INTERNAL_FUNCTION_ALIASES
+        .iter()
+        .copied()
+        .find(|alias| alias.alias.eq_ignore_ascii_case(name))
+}
+
 impl DirectInternalKind {
     #[inline(always)]
     pub fn from_id(id: u32) -> Option<Self> {
@@ -381,5 +403,17 @@ mod tests {
         assert_eq!(zend_special_write_rule("is_callable"), None);
         assert_eq!(zend_special_write_rule("array_values"), None);
         assert_eq!(zend_special_write_rule("strtolower"), None);
+    }
+
+    #[test]
+    fn internal_function_alias_metadata_is_case_insensitive() {
+        assert_eq!(
+            internal_function_alias("CHOP"),
+            Some(InternalFunctionAlias {
+                alias: "chop",
+                target: "rtrim",
+            })
+        );
+        assert_eq!(internal_function_alias("rtrim"), None);
     }
 }

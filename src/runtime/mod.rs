@@ -6185,6 +6185,11 @@ impl ExecutorGlobals {
         func: *const FunctionCommon,
     ) -> Result<(), String> {
         let key = name.to_lowercase();
+        if let Some(alias) = crate::builtin_metadata::internal_function_alias(&key)
+            && let Some(&previous) = self.function_table.get(alias.target)
+        {
+            return Err(Self::function_redeclaration_error(previous, func, name));
+        }
         if let Some(&previous) = self.function_table.get(&key) {
             return Err(Self::function_redeclaration_error(previous, func, name));
         }
@@ -6302,6 +6307,9 @@ impl ExecutorGlobals {
     /// resolvable parent chain without adding work to exact-hit dispatch.
     #[cold]
     fn find_inherited_function(&self, name: &str) -> Option<*const FunctionCommon> {
+        if let Some(alias) = crate::builtin_metadata::internal_function_alias(name) {
+            return self.function_table.get(alias.target).copied();
+        }
         let (class_name, method) = name.split_once("::")?;
         let mut class = self.find_class(class_name)?;
         for _ in 0..self.class_table.len() {
