@@ -7,7 +7,73 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 PHP 8.5 contract checkpoint is the
+The latest measured AMD64 PHP 8.5 contract checkpoint is
+`html-entity-disallowed`, pinned to php-src 8.5 commit `fcc29c8` and validated
+against PHP 8.5.9. RPHP now exposes `ENT_DISALLOWED` and applies PHP's distinct
+HTML 4.01, XHTML/XML and HTML5 permitted-codepoint sets in `htmlentities()` and
+`htmlspecialchars()`. UTF-8 literals receive U+FFFD where the selected document
+forbids them, while invalid UTF-8 without `ENT_SUBSTITUTE` remains an empty
+result. `double_encode=false` now preserves numeric references only when their
+bounded value and selected document/flag combination admits them; this includes
+PHP 8.5's observable distinction between literal HTML5 carriage returns and
+their numeric references.
+
+The same engine decodes every admitted single-byte encoding before selecting
+named entities or applying the document rules. A disallowed character that the
+target encoding cannot represent becomes `&#xFFFD;`, while the basic
+`htmlspecialchars()` path keeps PHP's byte-oriented high-byte behavior. The
+existing SJIS/Shift_JIS/CP932 basic-only path now validates single-byte,
+half-width and lead/trail units, produces the PHP notice from `htmlentities()`
+and rejects incomplete or invalid units. The reversible Encoding Standard
+tables now provide both encode and decode directions. No dependency, opcode,
+runtime layout field or unsafe block was added.
+
+Three original E2E regressions cover literal C0/C1/noncharacter boundaries,
+document-specific numeric-reference preservation, Windows-1251 named entities,
+unrepresentable replacements, handled SJIS diagnostics and invalid units. The
+supplying `htmlentities20.phpt` through `htmlentities22.phpt` family moves from
+0/3 to 3/3. Its normalized baseline, PHP-oracle and final-candidate SHA-256
+values are
+`16f4d90567c9e1c173e6edfdc58bd671b18433314553a2f24625da90c329e0fc`,
+`0f3df0c330585ca1ca4553be9f3c1386aec4b429ad79763e45649b8a92e37bfc`
+and `0f3df0c330585ca1ca4553be9f3c1386aec4b429ad79763e45649b8a92e37bfc`.
+
+The complete 733-case strings audit moves from 424 to 427 passes, an exact
++3/-0 delta comprising only the supplying family; 221 failures, 54 skips, 30
+unsupported cases, the retained `dirname_multi.phpt` timeout and zero crashes
+remain. Array stays byte-for-byte equal to its parent at 828 passes, 13 skips
+and one unsupported case. Zend/lang also stays byte-for-byte equal at 4,202
+passes, 1,101 failures, 115 skips and 181 unsupported cases with no timeout or
+crash. Three serial final runs produce identical normalized
+path/status/category SHA-256 values
+`4086d81b061156ce5e1954cc62429603f475945b577893649195a764b634403f`,
+`da4ac28d1398a8d2324d1cba58a2ef41f479a3249f2ef3fe4156ff0ea5eea35f`
+and `58f964c434be118ac09885d4223db8339aecc3b8f1766e4baf1d649e1692f973`
+for strings, array and Zend/lang respectively.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at 1,621 unsafe
+blocks, 289 unsafe functions, 357 SAFETY annotations and seven `# Safety`
+sections. Exact-binary CPU-2-pinned balanced release A/B controls compare parent
+SHA-256
+`966bb5d9e0f0f2764f77a24879f10547f41417908cccf57c0b1eb57d50e03f6b`
+with candidate
+`9a9730ee690b8624eeeaa2627c007c7b7201ed0fc76f820269045200a1a92753`.
+Paired medians are -2.570% for 500,000 default ASCII entity calls, -4.111%
+for 500,000 paired `double_encode=false` entity/special-character iterations,
++2.101% for one million default decode calls, +0.572% for five million ordinary
+concatenations and -0.244% for 1,000 empty-process pairs. Independent medians
+are -2.091%, -4.008%, +2.107%, +0.321% and -0.392%; every output/checksum
+matches and every median is below +5%.
+
+This checkpoint does not claim the three remaining invalid-UTF-8
+substitution/ignore cases or the separate EUC-JP case. The next coherent goal
+is `htmlentities-utf-3.phpt`, `htmlentities19.phpt` and `htmlentities24.phpt`;
+EUC-JP, broader multibyte encodings, 32-bit execution, remaining strings/Zend
+failures and wider PHP compatibility remain explicit work.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `htmlentities-table-engine`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. `htmlentities()` now encodes the canonical HTML4
 and HTML5 named entities, including greedy two-codepoint HTML5 mappings,

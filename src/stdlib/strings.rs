@@ -27,6 +27,7 @@ use super::{
 
 const ENT_QUOTES_MASK: i64 = 3;
 const ENT_SUBSTITUTE: i64 = 8;
+const ENT_DISALLOWED: i64 = 128;
 const ENT_DOCUMENT_MASK: i64 = 48;
 const ENT_XML1: i64 = 16;
 const ENT_XHTML: i64 = 32;
@@ -88,8 +89,8 @@ impl HtmlTranslationEncoding {
     }
 }
 
-fn valid_html_entity(src: &str, document: i64) -> Option<usize> {
-    let bytes = src.as_bytes();
+fn valid_html_entity(src: &[u8], flags: i64) -> Option<usize> {
+    let bytes = src;
     if bytes.first() != Some(&b'&') {
         return None;
     }
@@ -102,16 +103,10 @@ fn valid_html_entity(src: &str, document: i64) -> Option<usize> {
     if semicolon < 2 {
         return None;
     }
-    let body = &src[1..semicolon];
-    let numeric = body
-        .strip_prefix("#x")
-        .or_else(|| body.strip_prefix("#X"))
-        .is_some_and(|digits| {
-            !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_hexdigit())
-        })
-        || body.strip_prefix('#').is_some_and(|digits| {
-            !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
-        });
+    let document = flags & ENT_DOCUMENT_MASK;
+    let numeric = parse_numeric_html_reference(&bytes[1..]).is_some_and(|(codepoint, consumed)| {
+        consumed == semicolon && html_numeric_reference_valid_for_encoding(codepoint, flags)
+    });
     let named = named_html_reference(&bytes[1..], document)
         .is_some_and(|(_, consumed)| consumed == semicolon);
     (numeric || named).then_some(semicolon + 1)
@@ -144,7 +139,7 @@ fn encode_html_special_chars(src: &str, flags: i64, double_encode: bool) -> Stri
     let mut position = 0;
     while position < src.len() {
         if src.as_bytes()[position] == b'&'
-            && let Some(length) = valid_html_entity(&src[position..], document)
+            && let Some(length) = valid_html_entity(&src.as_bytes()[position..], flags)
         {
             out.push_str(&src[position..position + length]);
             position += length;
@@ -171,6 +166,51 @@ fn encode_html_special_chars(src: &str, flags: i64, double_encode: bool) -> Stri
         position += character.len_utf8();
     }
     out
+}
+
+fn encode_html_special_chars_disallowed_utf8(
+    source: &str,
+    flags: i64,
+    double_encode: bool,
+) -> String {
+    let document = flags & ENT_DOCUMENT_MASK;
+    let quote_flags = flags & ENT_QUOTES_MASK;
+    let mut output = String::with_capacity(source.len());
+    let mut position = 0;
+    while position < source.len() {
+        if !double_encode
+            && source.as_bytes()[position] == b'&'
+            && let Some(consumed) = valid_html_entity(&source.as_bytes()[position..], flags)
+        {
+            output.push_str(&source[position..position + consumed]);
+            position += consumed;
+            continue;
+        }
+        let character = source[position..]
+            .chars()
+            .next()
+            .expect("position remains on a character boundary");
+        position += character.len_utf8();
+        if !html_literal_codepoint_allowed(u32::from(character), document) {
+            output.push('\u{fffd}');
+            continue;
+        }
+        match character {
+            '&' => output.push_str("&amp;"),
+            '"' if quote_flags & 2 != 0 => output.push_str("&quot;"),
+            '\'' if quote_flags & 1 != 0 => {
+                if matches!(document, ENT_XML1 | ENT_XHTML | ENT_HTML5) {
+                    output.push_str("&apos;");
+                } else {
+                    output.push_str("&#039;");
+                }
+            }
+            '<' => output.push_str("&lt;"),
+            '>' => output.push_str("&gt;"),
+            _ => output.push(character),
+        }
+    }
+    output
 }
 
 fn encode_html_special_chars_default(src: &str) -> String {
@@ -270,11 +310,43 @@ pub(super) fn fn_htmlspecialchars(
     {
         ret!(rv, Value::string(encode_html_special_chars_default(string)));
     }
-    let Some((string, flags, _encoding, double_encode)) =
+    let Some((string, flags, encoding_name, double_encode)) =
         html_encode_arguments(ed, eg, "htmlspecialchars")?
     else {
         return Ok(());
     };
+    if flags & ENT_DISALLOWED != 0 {
+        let binary_input = arg!(ed, 0).is_binary_string();
+        let original_bytes = arg!(ed, 0).php_string_bytes().map(Cow::into_owned);
+        let source = original_bytes.unwrap_or_else(|| string.as_bytes().to_vec());
+        match HtmlTranslationEncoding::parse(&encoding_name) {
+            Some(HtmlTranslationEncoding::Utf8) => {
+                let source = match std::str::from_utf8(&source) {
+                    Ok(source) => Cow::Borrowed(source),
+                    Err(_) if flags & ENT_SUBSTITUTE != 0 => String::from_utf8_lossy(&source),
+                    Err(_) => ret!(rv, Value::string("")),
+                };
+                let encoded =
+                    encode_html_special_chars_disallowed_utf8(&source, flags, double_encode);
+                if binary_input {
+                    ret!(rv, Value::binary_string(encoded.as_bytes()));
+                }
+                ret!(rv, Value::string(encoded));
+            }
+            Some(HtmlTranslationEncoding::Legacy(encoding)) => {
+                let encoded =
+                    encode_html_entities_legacy(&source, flags, double_encode, encoding, false)
+                        .unwrap_or_default();
+                ret!(rv, Value::binary_string_from_storage(encoded));
+            }
+            Some(HtmlTranslationEncoding::BasicOnly) => {
+                let encoded = encode_html_entities_basic_multibyte(&source, flags, double_encode)
+                    .unwrap_or_default();
+                ret!(rv, Value::binary_string_from_storage(encoded));
+            }
+            None => {}
+        }
+    }
     ret!(
         rv,
         Value::string(encode_html_special_chars(&string, flags, double_encode))
@@ -359,6 +431,57 @@ fn html_numeric_reference_allowed(codepoint: u32, document: i64) -> bool {
                 || (0xa0..=0x10ffff).contains(&codepoint)
         }
     }
+}
+
+fn html_numeric_reference_valid_for_encoding(codepoint: u32, flags: i64) -> bool {
+    if codepoint > 0x10ffff {
+        return false;
+    }
+    if flags & ENT_DISALLOWED == 0 {
+        return true;
+    }
+    match flags & ENT_DOCUMENT_MASK {
+        ENT_XML1 | ENT_XHTML => {
+            html_numeric_reference_allowed(codepoint, flags & ENT_DOCUMENT_MASK)
+        }
+        // PHP 8.5 preserves syntactically bounded surrogate references in
+        // HTML5 even though the corresponding literal byte sequence is not
+        // valid UTF-8.
+        ENT_HTML5 if (0xd800..=0xdfff).contains(&codepoint) => true,
+        ENT_HTML5 => html_numeric_reference_allowed(codepoint, ENT_HTML5),
+        _ => true,
+    }
+}
+
+fn html_literal_codepoint_allowed(codepoint: u32, document: i64) -> bool {
+    match document {
+        ENT_XML1 | ENT_XHTML => {
+            matches!(codepoint, 0x09 | 0x0a | 0x0d)
+                || (0x20..=0xd7ff).contains(&codepoint)
+                || (0xe000..=0xfffd).contains(&codepoint)
+                || (0x10000..=0x10ffff).contains(&codepoint)
+        }
+        ENT_HTML5 => {
+            let noncharacter = (0xfdd0..=0xfdef).contains(&codepoint)
+                || matches!(codepoint & 0xffff, 0xfffe | 0xffff);
+            !noncharacter
+                && (matches!(codepoint, 0x09 | 0x0a | 0x0c | 0x0d)
+                    || (0x20..=0x7e).contains(&codepoint)
+                    || (0xa0..=0x10ffff).contains(&codepoint))
+        }
+        _ => {
+            matches!(codepoint, 0x09 | 0x0a | 0x0d)
+                || (0x20..=0x7e).contains(&codepoint)
+                || (0xa0..=0x10ffff).contains(&codepoint)
+        }
+    }
+}
+
+fn html_basic_legacy_codepoint_allowed(codepoint: u32, document: i64) -> bool {
+    if codepoint >= 0x20 {
+        return true;
+    }
+    matches!(codepoint, 0x09 | 0x0a | 0x0d) || (document == ENT_HTML5 && codepoint == 0x0c)
 }
 
 fn html_quote_reference_allowed(codepoint: u32, flags: i64) -> bool {
@@ -808,7 +931,7 @@ fn encode_named_html_entities_utf8(
     while position < source.len() {
         if !double_encode
             && source.as_bytes()[position] == b'&'
-            && let Some(consumed) = valid_html_entity(&source[position..], document)
+            && let Some(consumed) = valid_html_entity(&source.as_bytes()[position..], flags)
         {
             output.push_str(&source[position..position + consumed]);
             position += consumed;
@@ -820,6 +943,13 @@ fn encode_named_html_entities_utf8(
             .next()
             .expect("position remains on a character boundary");
         let first_end = position + character.len_utf8();
+        if flags & ENT_DISALLOWED != 0
+            && !html_literal_codepoint_allowed(u32::from(character), document)
+        {
+            output.push('\u{fffd}');
+            position = first_end;
+            continue;
+        }
         let mut matched_end = first_end;
         let mut entity = None;
         if document == ENT_HTML5
@@ -849,6 +979,134 @@ fn encode_named_html_entities_utf8(
             output.push(character);
             position = first_end;
         }
+    }
+    Some(output)
+}
+
+fn push_storage_bytes(output: &mut String, bytes: &[u8]) {
+    output.extend(bytes.iter().copied().map(char::from));
+}
+
+fn push_basic_html_character(output: &mut String, byte: u8, flags: i64) {
+    let document = flags & ENT_DOCUMENT_MASK;
+    let quote_flags = flags & ENT_QUOTES_MASK;
+    match byte {
+        b'&' => output.push_str("&amp;"),
+        b'"' if quote_flags & 2 != 0 => output.push_str("&quot;"),
+        b'\'' if quote_flags & 1 != 0 => {
+            if matches!(document, ENT_XML1 | ENT_XHTML | ENT_HTML5) {
+                output.push_str("&apos;");
+            } else {
+                output.push_str("&#039;");
+            }
+        }
+        b'<' => output.push_str("&lt;"),
+        b'>' => output.push_str("&gt;"),
+        _ => output.push(char::from(byte)),
+    }
+}
+
+fn encode_html_entities_legacy(
+    source: &[u8],
+    flags: i64,
+    double_encode: bool,
+    encoding: LegacyEncoding,
+    all_entities: bool,
+) -> Option<String> {
+    let document = flags & ENT_DOCUMENT_MASK;
+    let entries = html_translation_entries(i64::from(all_entities), document);
+    let mut output = String::with_capacity(source.len());
+    let mut position = 0;
+    while position < source.len() {
+        if !double_encode
+            && source[position] == b'&'
+            && let Some(consumed) = valid_html_entity(&source[position..], flags)
+        {
+            push_storage_bytes(&mut output, &source[position..position + consumed]);
+            position += consumed;
+            continue;
+        }
+
+        let byte = source[position];
+        let codepoint = encoding.decode(byte)?;
+        if flags & ENT_DISALLOWED != 0
+            && !(if all_entities {
+                html_literal_codepoint_allowed(codepoint, document)
+            } else {
+                html_basic_legacy_codepoint_allowed(codepoint, document)
+            })
+        {
+            output.push_str("&#xFFFD;");
+            position += 1;
+            continue;
+        }
+
+        if all_entities {
+            let character = char::from_u32(codepoint)?;
+            let mut buffer = [0; 4];
+            let characters = character.encode_utf8(&mut buffer);
+            if let Some(mut entity) = html_entity_for_characters(entries, characters)
+                && html_quote_characters_allowed(characters, flags)
+            {
+                if document == ENT_XML1 && characters == "'" {
+                    entity = "&apos;";
+                }
+                output.push_str(entity);
+                position += 1;
+                continue;
+            }
+        }
+        push_basic_html_character(&mut output, byte, flags);
+        position += 1;
+    }
+    Some(output)
+}
+
+fn encode_html_entities_basic_multibyte(
+    source: &[u8],
+    flags: i64,
+    double_encode: bool,
+) -> Option<String> {
+    let document = flags & ENT_DOCUMENT_MASK;
+    let mut output = String::with_capacity(source.len());
+    let mut position = 0;
+    while position < source.len() {
+        if !double_encode
+            && source[position] == b'&'
+            && let Some(consumed) = valid_html_entity(&source[position..], flags)
+        {
+            push_storage_bytes(&mut output, &source[position..position + consumed]);
+            position += consumed;
+            continue;
+        }
+
+        let byte = source[position];
+        if byte < 0x80 {
+            if flags & ENT_DISALLOWED != 0
+                && !html_basic_legacy_codepoint_allowed(u32::from(byte), document)
+            {
+                output.push_str("&#xFFFD;");
+            } else {
+                push_basic_html_character(&mut output, byte, flags);
+            }
+            position += 1;
+            continue;
+        }
+        if (0xa1..=0xdf).contains(&byte) {
+            output.push(char::from(byte));
+            position += 1;
+            continue;
+        }
+        if matches!(byte, 0x81..=0x9f | 0xe0..=0xfc) {
+            let trail = *source.get(position + 1)?;
+            if matches!(trail, 0x40..=0x7e | 0x80..=0xfc) {
+                output.push(char::from(byte));
+                output.push(char::from(trail));
+                position += 2;
+                continue;
+            }
+        }
+        return None;
     }
     Some(output)
 }
@@ -1074,14 +1332,50 @@ pub(super) fn fn_htmlentities(
     else {
         return Ok(());
     };
-    if encoding.eq_ignore_ascii_case("UTF-8") {
-        let source = original_bytes.unwrap_or_else(|| string.as_bytes().to_vec());
-        if let Some(encoded) = encode_named_html_entities_utf8(&source, flags, double_encode) {
-            if binary_input {
-                ret!(rv, Value::binary_string(encoded.as_bytes()));
+    let source = original_bytes.unwrap_or_else(|| string.as_bytes().to_vec());
+    match HtmlTranslationEncoding::parse(&encoding) {
+        Some(HtmlTranslationEncoding::Utf8) => {
+            if let Some(encoded) = encode_named_html_entities_utf8(&source, flags, double_encode) {
+                if binary_input {
+                    ret!(rv, Value::binary_string(encoded.as_bytes()));
+                }
+                ret!(rv, Value::string(encoded));
             }
-            ret!(rv, Value::string(encoded));
+            if flags & ENT_DISALLOWED != 0 {
+                if flags & ENT_SUBSTITUTE != 0 {
+                    let source = String::from_utf8_lossy(&source);
+                    let encoded =
+                        encode_named_html_entities_utf8(source.as_bytes(), flags, double_encode)
+                            .expect("lossy UTF-8 is valid");
+                    if binary_input {
+                        ret!(rv, Value::binary_string(encoded.as_bytes()));
+                    }
+                    ret!(rv, Value::string(encoded));
+                }
+                ret!(rv, Value::string(""));
+            }
         }
+        Some(HtmlTranslationEncoding::Legacy(legacy)) if flags & ENT_DISALLOWED != 0 => {
+            let encoded = encode_html_entities_legacy(&source, flags, double_encode, legacy, true)
+                .unwrap_or_default();
+            ret!(rv, Value::binary_string_from_storage(encoded));
+        }
+        Some(HtmlTranslationEncoding::BasicOnly) => {
+            report_internal_diagnostic(
+                eg,
+                ed,
+                8,
+                "Notice",
+                "htmlentities(): Only basic entities substitution is supported for multi-byte encodings other than UTF-8; functionality is equivalent to htmlspecialchars",
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            let encoded = encode_html_entities_basic_multibyte(&source, flags, double_encode)
+                .unwrap_or_default();
+            ret!(rv, Value::binary_string_from_storage(encoded));
+        }
+        _ => {}
     }
     ret!(
         rv,

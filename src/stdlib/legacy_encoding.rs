@@ -48,6 +48,23 @@ impl LegacyEncoding {
             Self::Windows1252 => encode_from_index(codepoint, &WINDOWS_1252),
         }
     }
+
+    pub(super) fn decode(self, byte: u8) -> Option<u32> {
+        if byte < 0x80 {
+            return Some(u32::from(byte));
+        }
+        let codepoint = match self {
+            Self::Iso88591 => u16::from(byte),
+            Self::Iso885915 => decode_iso_8859_15(byte),
+            Self::Iso88595 => ISO_8859_5[usize::from(byte - 0x80)],
+            Self::Ibm866 => IBM866[usize::from(byte - 0x80)],
+            Self::Koi8R => KOI8_R[usize::from(byte - 0x80)],
+            Self::MacRoman => MACINTOSH[usize::from(byte - 0x80)],
+            Self::Windows1251 => WINDOWS_1251[usize::from(byte - 0x80)],
+            Self::Windows1252 => WINDOWS_1252[usize::from(byte - 0x80)],
+        };
+        (codepoint != UNDEFINED).then_some(u32::from(codepoint))
+    }
 }
 
 fn encode_from_index(codepoint: u32, index: &[u16; 128]) -> Option<u8> {
@@ -74,6 +91,20 @@ fn encode_iso_8859_15(codepoint: u32) -> Option<u8> {
         let byte = u8::try_from(codepoint).ok()?;
         (!matches!(byte, 0xa4 | 0xa6 | 0xa8 | 0xb4 | 0xb8 | 0xbc | 0xbd | 0xbe)).then_some(byte)
     })
+}
+
+fn decode_iso_8859_15(byte: u8) -> u16 {
+    match byte {
+        0xa4 => 0x20ac,
+        0xa6 => 0x0160,
+        0xa8 => 0x0161,
+        0xb4 => 0x017d,
+        0xb8 => 0x017e,
+        0xbc => 0x0152,
+        0xbd => 0x0153,
+        0xbe => 0x0178,
+        _ => u16::from(byte),
+    }
 }
 
 const IBM866: [u16; 128] = [
@@ -180,10 +211,15 @@ mod tests {
             for (position, codepoint) in index.iter().copied().enumerate() {
                 if codepoint == UNDEFINED {
                     assert_eq!(encoding.encode(position as u32 + 0x80), None);
+                    assert_eq!(encoding.decode(position as u8 + 0x80), None);
                 } else {
                     assert_eq!(
                         encoding.encode(u32::from(codepoint)),
                         Some(position as u8 + 0x80)
+                    );
+                    assert_eq!(
+                        encoding.decode(position as u8 + 0x80),
+                        Some(u32::from(codepoint))
                     );
                 }
             }
@@ -196,12 +232,15 @@ mod tests {
         assert_eq!(LegacyEncoding::Iso885915.encode(0x00a4), None);
         assert_eq!(LegacyEncoding::Iso885915.encode(0x0178), Some(0xbe));
         assert_eq!(LegacyEncoding::Iso885915.encode(0x00be), None);
+        assert_eq!(LegacyEncoding::Iso885915.decode(0xa4), Some(0x20ac));
+        assert_eq!(LegacyEncoding::Iso885915.decode(0xbe), Some(0x0178));
     }
 
     #[test]
     fn latin_indexes_cover_every_defined_byte_slot() {
         for byte in 0x80_u8..=0xff {
             assert_eq!(LegacyEncoding::Iso88591.encode(u32::from(byte)), Some(byte));
+            assert_eq!(LegacyEncoding::Iso88591.decode(byte), Some(u32::from(byte)));
 
             let latin9_codepoint = match byte {
                 0xa4 => 0x20ac,
@@ -217,6 +256,10 @@ mod tests {
             assert_eq!(
                 LegacyEncoding::Iso885915.encode(latin9_codepoint),
                 Some(byte)
+            );
+            assert_eq!(
+                LegacyEncoding::Iso885915.decode(byte),
+                Some(latin9_codepoint)
             );
         }
     }

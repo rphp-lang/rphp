@@ -2599,18 +2599,42 @@ for ordinary concatenation and +0.464% for startup, within +5%. A naive table
 encoder, per-entity decode allocations and normalizing `pack()` values were
 rejected on measured performance or byte-provenance evidence.
 
+The `html-entity-disallowed` checkpoint closes
+`htmlentities20.phpt` through `htmlentities22.phpt` against PHP 8.5.9.
+`ENT_DISALLOWED` now drives reusable document-specific permitted-codepoint
+rules for UTF-8 literals and `double_encode=false` numeric references in both
+`htmlentities()` and `htmlspecialchars()`. Single-byte inputs are decoded
+through reversible Encoding Standard tables; unrepresentable replacements use
+`&#xFFFD;`. The SJIS basic-only path validates units, emits PHP's notice and
+rejects incomplete or invalid sequences. Three original tests cover literal,
+reference, Windows-1251 and SJIS boundaries.
+
+The focused cluster moves from 0/3 to 3/3 and strings moves from 424 to 427
+pass (+3/-0), with 221 fail, 54 skip, 30 unsupported and the retained timeout.
+Array and Zend/lang manifests are byte-for-byte identical to the parent at
+828/842 and 4,202/5,599 pass respectively. Three serial final runs have
+identical normalized strings/array/Zend hashes
+`4086d81b061156ce5e1954cc62429603f475945b577893649195a764b634403f`,
+`da4ac28d1398a8d2324d1cba58a2ef41f479a3249f2ef3fe4156ff0ea5eea35f`
+and `58f964c434be118ac09885d4223db8339aecc3b8f1766e4baf1d649e1692f973`.
+All five feature configurations, all-feature/all-target, formatting, runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Exact-binary paired medians are -2.570% for default entity encoding, -4.111% for
+`double_encode=false`, +2.101% for default decoding, +0.572% for ordinary
+concatenation and -0.244% for startup, within +5%.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 424 pass, 224 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 427 pass, 221 fail, 54 skip and 30 unsupported, with one retained timeout;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
-is 10/10 and the ordinary named-entity family is 5/5. `Zend/tests` plus
+is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
+family is 3/3. `Zend/tests` plus
 `tests/lang` is 4,202 pass, 1,101 fail, 115 skip and 181 unsupported, with no
-timeout or crash. The next goal should close the three-case
-`ENT_DISALLOWED` family (`htmlentities20..22.phpt`) as the highest coherent
-remaining entity cluster; invalid UTF-8 substitution/ignore and EUC-JP remain
-separate contracts.
+timeout or crash. The next goal should close the three-case invalid-UTF-8
+substitution/ignore family (`htmlentities-utf-3.phpt`, `htmlentities19.phpt`
+and `htmlentities24.phpt`); EUC-JP remains a separate contract.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,
