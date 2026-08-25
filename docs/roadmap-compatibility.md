@@ -2862,10 +2862,35 @@ Exact-final-binary CPU-pinned paired medians are -4.976%, -0.491% and -9.326%
 for the three affected shapes; retained replacement controls range from
 -1.932% to -0.600%, and startup is -0.721%, all within +5%.
 
+The `de4fbd0c` `strtr-byte-contract` checkpoint closes all six supplying
+`strtr()` cases against PHP 8.5.9. One PHP-byte engine covers positional
+three-string translation with last-duplicate-wins/truncation and replacement-
+map translation with longest-key-first stable ordering, nonrecursive output,
+lazy value conversion and empty-key diagnostics. Handler-owned overloaded
+boundaries preserve weak/strict conversions, references/COW, exact arity,
+named/dynamic/callback calls and Reflection metadata. Guarded ASCII table and
+pair paths deopt all non-exact inputs to the canonical engine. Three original
+E2E tests and four independent clean-room probes cover the contract, together
+with the adjacent heredoc quote escape and nullable Reflection spelling.
+
+The focused cluster moves from 0/6 to 6/6 and strings moves from 499 to 505
+pass (+6/-0), with no adjacent gain, lost pass or other outcome movement. The
+complete `strtr()` family is 16/16. Array remains exactly 828/842 and Zend/lang
+exactly 4,206/5,599. Three serial release runs have identical stable strings,
+array and Zend hashes
+`69e047b139f3a7bcfb016e9d7e87b6eae94b0fb8bcecd5ecee79c06c39644c0f`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `907bddc39e20247bdf412dc3de5fa6653912c1e7c0b0c542ff70af2cb3a896f8`.
+All five feature configurations, all-feature/all-target, formatting, HTML data,
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Exact-final-binary CPU-pinned paired medians are -64.500%, -6.972% and -8.701%
+for the three affected call shapes; retained replacement controls range from
+-0.480% to +1.136%, and startup is -7.453%, all within +5%.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 499 pass, 149 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 505 pass, 143 fail, 54 skip and 30 unsupported, with one retained timeout;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
@@ -2876,12 +2901,14 @@ timeout or crash. The trim/charlist family is 11/11, increment/decrement is 6/6
 and both `str_split()` and `chunk_split()` are 6/6, while the complete
 `str_replace()`/`str_ireplace()` cluster is 8/8 and the selected
 `substr_replace()` family plus its four adjacent gains is 8/8; the complete
-`nl2br()` family is 5/5. The next goal should close the six visible `strtr()`
-failures through one PHP-byte translation contract for the three-string and
-replacement-map forms, longest-key ordering, diagnostics, references and typed
-call metadata; wider string-offset writes, typed-parameter binary provenance,
-detached-callback alias spelling, unknown entity-encoding warnings and broader
-legacy multibyte behavior remain explicit contracts.
+`nl2br()` family is 5/5 and the complete `strtr()` family is 16/16. The next
+goal should close the 19 visible byte-search/window failures spanning
+`strpos()`, `strstr()`, `strrchr()`, `strspn()`, `strcspn()`, `substr_count()`
+and `substr_compare()` through shared typed string/offset boundaries and exact
+PHP-byte windows while retaining each function's distinct search semantics;
+wider string-offset writes, typed-parameter and associative-key binary
+provenance, detached-callback alias spelling, unknown entity-encoding warnings
+and broader legacy multibyte behavior remain explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,

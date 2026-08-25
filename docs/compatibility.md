@@ -8,9 +8,79 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`strtr-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and validated
+against PHP 8.5.9. The three-string `strtr()` form now applies one positional
+PHP-byte table, lets the last duplicate source byte win and ignores an unmatched
+tail in the longer source or replacement string. The replacement-map form
+selects the longest key first, preserves insertion order between equal-length
+keys and never recursively translates newly inserted bytes. Empty keys warn
+only when the subject and map reach matching, and replacement values are
+converted lazily once on their first use. This follows the public
+[`strtr()` contract](https://www.php.net/manual/en/function.strtr.php) while the
+PHP 8.5.9 oracle defines exact current diagnostics and call metadata.
+
+Both forms preserve NUL, arbitrary high bytes and UTF-8 byte sequences in the
+subject and replacement values, references and copy-on-write. Handler-owned
+union boundaries reproduce weak/strict scalar conversion, null deprecations,
+Stringable/resource/array/object diagnostics and the distinct overloaded arity
+messages. Static, dynamic, named and callback calls share the implementation.
+Reflection reports `array|string $from` and nullable `?string $to` accurately.
+A guarded ASCII byte-table path serves exact three-string calls and a guarded
+ASCII pair schedule serves exact string maps; all other inputs deopt to the
+canonical byte engine without repeating observable conversions.
+
+Three original E2E regressions cover duplicate/truncated maps, longest-key and
+nonrecursive replacement, lazy side effects, references/COW, binary data,
+weak/strict calls, diagnostics, call shapes, Reflection and the adjacent PHP
+heredoc `\"` escape rule. Four independent clean-room probes match the PHP
+oracle byte for byte at SHA-256
+`e9f64059f624c93686a9b0a7be839f2ae6862cb5d8f45a9d5b68bc9b617f12ee`,
+`dfe9bad70a4510a03c5ab464e534ac0091c74490b17eaa0b76b563a722d90350`,
+`ce24eb02c438b14dddc917ffc8be1bae8a38c963d7116264b9216d659e6359ca`
+and `10f15d6c06d86168b03fbc92efd8e367aa3441bcd1d7a85ece4c7c6952a38034`.
+The six supplying cases move from 0/6 to 6/6.
+
+The complete 733-case strings audit moves from 499 to 505 passes, an exact
++6/-0 delta consisting only of the supplying cluster. There are 143 failures,
+54 skips, 30 unsupported cases, the retained `dirname_multi.phpt` timeout and
+zero crashes. The complete 16-case `strtr()` family is 16/16. Array remains
+exactly classified at 828 passes, 13 skips and one unsupported case. Zend/lang
+remains exactly classified at 4,206 passes, 1,097 failures, 115 skips and 181
+unsupported cases with no timeout or crash. Three serial release runs have
+identical stable path/outcome/runner-control hashes
+`69e047b139f3a7bcfb016e9d7e87b6eae94b0fb8bcecd5ecee79c06c39644c0f`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `907bddc39e20247bdf412dc3de5fa6653912c1e7c0b0c542ff70af2cb3a896f8`
+for strings, array and Zend/lang respectively.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML data, PHPT-runner and unsafe-policy checks, Composer 2.8.12
+S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at
+1,623 unsafe blocks and 289 unsafe functions, with 363 SAFETY annotations and
+seven `# Safety` sections. Exact-binary CPU-pinned balanced controls compare
+parent SHA-256
+`441f4421b71af63f4d13969e5768db091bbf04c7f5b2edbf18913bc3403d9a15`
+with candidate
+`a2c1207f50d6bcb2b7e64fc14173a1f73f1bd052c03feefe91b3f7d1163ecfbb`.
+Paired medians are -64.500%, -6.972% and -8.701% for character-table,
+replacement-map and dynamic `strtr()` calls. Retained scalar `str_replace()`,
+scalar `str_ireplace()` and array replacement controls are +0.805%, +1.136%
+and -0.480%; 200 empty processes measure -7.453%. Every checksum matches and
+every median is below +5%.
+
+This checkpoint does not claim request-wide allocation accounting, exact OOM
+diagnostics, 32-bit execution or per-key binary-string provenance for arbitrary
+associative arrays. The remaining 143 strings and wider Zend failures stay
+visible. The next bounded high-yield candidate is the 19-case byte-search and
+window family spanning `strpos()`, `strstr()`, `strrchr()`, `strspn()`,
+`strcspn()`, `substr_count()` and `substr_compare()`: these cases share typed
+string boundaries, PHP-byte offsets/windows and empty-needle diagnostics while
+retaining distinct search, span and comparison semantics.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `nl2br-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and validated
-against PHP 8.5.9. `nl2br()` now inserts exactly one `<br />` or `<br>` before
-each PHP newline sequence: CRLF and LFCR are paired, while standalone CR and LF
+against PHP 8.5.9. `nl2br()` inserts exactly one `<br />` or `<br>` before each
+PHP newline sequence: CRLF and LFCR are paired, while standalone CR and LF
 remain independent. The original newline bytes stay in the result. Empty and
 newline-free strings, repeated/mixed sequences, embedded NUL, arbitrary high
 bytes and UTF-8 byte sequences preserve their exact PHP-byte content and do not
@@ -64,10 +134,8 @@ and -0.600%; 200 empty processes measure -0.721%. Every checksum matches and
 every median is below +5%.
 
 This checkpoint does not claim request-wide allocation accounting or exact OOM
-diagnostics, 32-bit execution, or the remaining strings/Zend failures. The next
-bounded high-yield candidate is the six visible `strtr()` cases, which need one
-PHP-byte translation contract across both the three-string and replacement-map
-forms plus typed, diagnostic and reference boundaries.
+diagnostics, 32-bit execution, or the remaining strings/Zend failures. Its next
+bounded candidate was the six visible `strtr()` cases now closed above.
 
 The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `substr-replace-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and
