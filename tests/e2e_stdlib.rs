@@ -1340,7 +1340,7 @@ fn test_e2e_strtr_pair_map_prefers_longest_key_and_accepts_integer_keys() {
 fn test_e2e_strtr_pair_map_warns_and_ignores_empty_keys() {
     assert_eq!(
         run_php("<?php echo strtr('abc', ['' => 'x']);"),
-        "Warning: strtr(): Ignoring replacement of empty string\nabc"
+        "\nWarning: strtr(): Ignoring replacement of empty string in <main> on line 1\nabc"
     );
 }
 

@@ -1307,9 +1307,11 @@ mod tests {
 
     #[test]
     fn double_quoted_and_heredoc_control_escapes_match_php() {
-        let tokens = Lexer::new("<?php echo \"\\e\\f\\v|\\E\\F\\V\"; echo <<<TXT\n\\e\\f\\v\nTXT;")
-            .tokenize()
-            .unwrap();
+        let tokens = Lexer::new(
+            "<?php echo \"\\e\\f\\v|\\E\\F\\V|\\\"\"; echo <<<TXT\n\\e\\f\\v|\\\"\nTXT;",
+        )
+        .tokenize()
+        .unwrap();
 
         assert_eq!(
             tokens
@@ -1319,7 +1321,7 @@ mod tests {
                     _ => None,
                 })
                 .collect::<Vec<_>>(),
-            vec!["\u{1b}\u{c}\u{b}|\\E\\F\\V", "\u{1b}\u{c}\u{b}"]
+            vec!["\u{1b}\u{c}\u{b}|\\E\\F\\V|\"", "\u{1b}\u{c}\u{b}|\\\""]
         );
     }
 

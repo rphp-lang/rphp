@@ -3354,17 +3354,23 @@ fn parameter_get_type(
         "intersection" => "ReflectionIntersectionType",
         _ => "ReflectionNamedType",
     };
+    let allows_null = parameter_property_bool(ed, "__reflection_allows_null");
+    let rendered = if kind == "named"
+        && allows_null
+        && !matches!(name.to_ascii_lowercase().as_str(), "mixed" | "null")
+    {
+        format!("?{name}")
+    } else {
+        name.clone()
+    };
     return_value(
         rv,
         object_value(
             class,
             [
                 ("__generic_name", Value::string(name.clone())),
-                ("__generic_string", Value::string(name)),
-                (
-                    "__reflection_allows_null",
-                    Value::bool(parameter_property_bool(ed, "__reflection_allows_null")),
-                ),
+                ("__generic_string", Value::string(rendered)),
+                ("__reflection_allows_null", Value::bool(allows_null)),
             ],
         ),
     )

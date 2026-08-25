@@ -3128,13 +3128,16 @@ fn too_few_arguments_error(
     supplied: u32,
     caller_op_array: &crate::compiler::OpArray,
     call_instruction: &Instruction,
+    exact_arity_diagnostics: bool,
 ) -> Value {
     let name = displayed_frame_function_name(eg, call);
     let required = common.sig.required_num_args;
     let internal_diagnostic =
         common.fn_type == FunctionType::Internal || is_synthesized_enum_method(eg, function);
     let relation = if internal_diagnostic {
-        if common.sig.is_variadic || common.sig.public_arity() > required {
+        if exact_arity_diagnostics {
+            "exactly"
+        } else if common.sig.is_variadic || common.sig.public_arity() > required {
             "at least"
         } else {
             "exactly"
@@ -3250,10 +3253,11 @@ fn too_many_internal_arguments_error(
     function: *const FunctionCommon,
     signature: &crate::vm::function::SignatureInfo,
     supplied: u32,
+    exact_arity_diagnostics: bool,
 ) -> Value {
     debug_assert!(!signature.is_variadic);
     let maximum = signature.public_arity();
-    let relation = if maximum == signature.required_num_args {
+    let relation = if exact_arity_diagnostics || maximum == signature.required_num_args {
         "exactly"
     } else {
         "at most"
@@ -3387,7 +3391,15 @@ fn execute_full_call<'a>(
     // that frame or cast an unverified user-function descriptor.
     // SAFETY: handler-owned validation metadata is read only after the same
     // verified internal-function kind check as the raw handler tail.
-    let (func_common, num_args, raw_variadic_handler, handler_validates_types) = unsafe {
+    // SAFETY: exact-arity metadata shares that registered InternalFunction
+    // tail and is read only while the live call retains its function entry.
+    let (
+        func_common,
+        num_args,
+        raw_variadic_handler,
+        handler_validates_types,
+        exact_arity_diagnostics,
+    ) = unsafe {
         let common = &*(*call).func;
         let internal = (common.fn_type == FunctionType::Internal).then(|| {
             &*(common as *const FunctionCommon as *const super::function::InternalFunction)
@@ -3409,6 +3421,7 @@ fn execute_full_call<'a>(
             (*call).num_args,
             raw_handler,
             internal.is_some_and(|function| function.handler_validates_types),
+            internal.is_some_and(|function| function.exact_arity_diagnostics),
         )
     };
     let public_max = func_common.sig.public_arity();
@@ -3421,6 +3434,7 @@ fn execute_full_call<'a>(
             func_common as *const FunctionCommon,
             &func_common.sig,
             num_args,
+            exact_arity_diagnostics,
         );
         // SAFETY: `call` is the live pending call owned by `frame`; its
         // compiler-sized slots were initialized by the preceding sends.
@@ -3626,6 +3640,7 @@ fn execute_full_call<'a>(
             num_args,
             op_array,
             opline,
+            exact_arity_diagnostics,
         );
         // SAFETY: `call` is the live pending frame owned by `frame`; every
         // initialized send slot must be released before the frame is popped.

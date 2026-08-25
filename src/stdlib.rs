@@ -5609,6 +5609,20 @@ fn typed_internal_string_value_argument_expected(
     parameter: &str,
     expected: &str,
 ) -> Result<Option<Value>, VmError> {
+    typed_internal_string_value_argument_with_null_expected(
+        ed, eg, function, index, parameter, expected, expected,
+    )
+}
+
+fn typed_internal_string_value_argument_with_null_expected(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    index: u32,
+    parameter: &str,
+    expected: &str,
+    null_expected: &str,
+) -> Result<Option<Value>, VmError> {
     let argument = owned_argument(ed, index);
     let argument = argument.dereferenced();
     let strict = internal_call_is_strict(ed);
@@ -5619,7 +5633,7 @@ fn typed_internal_string_value_argument_expected(
                 eg,
                 ed,
                 &format!(
-                    "{function}(): Passing null to parameter #{} (${parameter}) of type {expected} is deprecated",
+                    "{function}(): Passing null to parameter #{} (${parameter}) of type {null_expected} is deprecated",
                     index + 1
                 ),
             )?;
@@ -6152,103 +6166,249 @@ fn fn_strpbrk(
 }
 
 fn fn_strtr(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let subject = arg_str!(ed, 0);
-    let from_or_pairs = arg!(ed, 1);
-
-    if let Some(to_value) = arg_opt!(ed, 2) {
-        let from = match from_or_pairs.as_str() {
-            Some(value) => Cow::Borrowed(value),
-            None if !matches!(
-                from_or_pairs.value_type(),
-                ValueType::Array | ValueType::Object
-            ) =>
-            {
-                Cow::Owned(from_or_pairs.echo_to_string())
-            }
-            None => {
-                eg.exception = Some(crate::value::make_error_value(
-                    "TypeError",
-                    "strtr(): Argument #2 ($from) must be of type string",
-                ));
-                return Ok(());
-            }
-        };
-        let to = match to_value.as_str() {
-            Some(value) => Cow::Borrowed(value),
-            None if !matches!(to_value.value_type(), ValueType::Array | ValueType::Object) => {
-                Cow::Owned(to_value.echo_to_string())
-            }
-            None => {
-                eg.exception = Some(crate::value::make_error_value(
-                    "TypeError",
-                    "strtr(): Argument #3 ($to) must be of type string",
-                ));
-                return Ok(());
-            }
-        };
-
-        let mut translated = subject.as_bytes().to_vec();
-        let from = from.as_bytes();
-        let to = to.as_bytes();
-        for byte in &mut translated {
-            if let Some(position) = from.iter().position(|candidate| candidate == byte)
-                && let Some(replacement) = to.get(position)
-            {
-                *byte = *replacement;
-            }
-        }
+    let exact_subject = arg!(ed, 0);
+    let exact_from = arg!(ed, 1);
+    let exact_to = arg_opt!(ed, 2);
+    if let Some(exact_to) = exact_to
+        && exact_subject.value_type() == ValueType::String
+        && exact_from.value_type() == ValueType::String
+        && exact_to.value_type() == ValueType::String
+        && !exact_subject.is_binary_string()
+        && !exact_from.is_binary_string()
+        && !exact_to.is_binary_string()
+        && exact_subject.as_str().is_some_and(str::is_ascii)
+        && exact_from.as_str().is_some_and(str::is_ascii)
+        && exact_to.as_str().is_some_and(str::is_ascii)
+    {
+        let result = strtr_character_bytes(
+            exact_subject.as_str().unwrap_or_default().as_bytes(),
+            exact_from.as_str().unwrap_or_default().as_bytes(),
+            exact_to.as_str().unwrap_or_default().as_bytes(),
+        );
         ret!(
             rv,
-            Value::string(String::from_utf8_lossy(&translated).into_owned())
+            Value::string(String::from_utf8(result).expect("ASCII strtr result is valid UTF-8"))
         );
     }
+    if exact_to.is_none()
+        && exact_subject.value_type() == ValueType::String
+        && !exact_subject.is_binary_string()
+        && exact_subject.as_str().is_some_and(str::is_ascii)
+        && let Some(pairs) = exact_from.as_array()
+        && let Some(result) = strtr_ascii_pairs(exact_subject.as_str().unwrap_or_default(), pairs)
+    {
+        ret!(rv, Value::string(result));
+    }
 
-    let Some(pairs) = from_or_pairs.as_array() else {
-        eg.exception = Some(crate::value::make_error_value(
-            "TypeError",
-            "strtr(): Argument #2 ($from) must be of type array, string given",
-        ));
+    let Some(subject) =
+        typed_internal_string_value_argument_expected(ed, eg, "strtr", 0, "string", "string")?
+    else {
         return Ok(());
     };
 
+    if exact_to.is_some() {
+        let Some(from) = typed_internal_string_value_argument_with_null_expected(
+            ed,
+            eg,
+            "strtr",
+            1,
+            "from",
+            "string",
+            "array|string",
+        )?
+        else {
+            return Ok(());
+        };
+        let Some(to) = typed_internal_string_value_argument_with_null_expected(
+            ed, eg, "strtr", 2, "to", "string", "?string",
+        )?
+        else {
+            return Ok(());
+        };
+        let source = subject.php_string_bytes().unwrap_or_default();
+        let from_bytes = from.php_string_bytes().unwrap_or_default();
+        let to_bytes = to.php_string_bytes().unwrap_or_default();
+        let result = strtr_character_bytes(&source, &from_bytes, &to_bytes);
+        let binary = subject.is_binary_string()
+            || (to.is_binary_string()
+                && source.iter().any(|byte| {
+                    from_bytes
+                        .iter()
+                        .take(to_bytes.len())
+                        .any(|from| from == byte)
+                }));
+        ret!(rv, php_byte_result(result, binary));
+    }
+
+    let from_or_pairs = owned_argument(ed, 1);
+    let from_or_pairs = from_or_pairs.dereferenced();
+    let Some(pairs) = from_or_pairs.as_array() else {
+        typed_internal_argument_error(eg, "strtr", from_or_pairs, 2, "from", "array");
+        return Ok(());
+    };
+
+    let input = subject.php_string_bytes().unwrap_or_default();
+    if input.is_empty() || pairs.is_empty() {
+        ret!(rv, subject);
+    }
+
+    let external_byte_keys = pairs.has_external_byte_keys();
     let mut replacements = Vec::with_capacity(pairs.len());
     for (key, value) in pairs.iter() {
         let search = match key {
-            ArrayKey::Int(value) => value.to_string(),
-            ArrayKey::String(value) => value,
+            ArrayKey::Int(value) => value.to_string().into_bytes(),
+            ArrayKey::String(value) if external_byte_keys => php_string_to_bytes(&value),
+            ArrayKey::String(value) => value.into_bytes(),
         };
         if search.is_empty() {
-            eg.write_output(b"Warning: strtr(): Ignoring replacement of empty string\n");
+            report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                "strtr(): Ignoring replacement of empty string",
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
             continue;
         }
-        if value.value_type() == ValueType::Array {
-            eg.write_output(b"Warning: Array to string conversion\n");
-        }
-        replacements.push((search.into_bytes(), value.echo_to_string()));
+        replacements.push(StrtrReplacement {
+            search,
+            source: value.clone(),
+            converted: None,
+        });
     }
-    // PHP selects the longest key at each input position. `sort_by` is stable,
-    // so equal-length keys retain their source-array order.
+    replacements.sort_by(|left, right| right.search.len().cmp(&left.search.len()));
+
+    let mut translated = Vec::new();
+    if translated.try_reserve_exact(input.len()).is_err() {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "strtr(): Failed to allocate result string",
+        ));
+        return Ok(());
+    }
+    let mut position = 0usize;
+    let mut used_binary_replacement = false;
+    while position < input.len() {
+        let matched = replacements
+            .iter()
+            .position(|replacement| input[position..].starts_with(&replacement.search));
+        let Some(index) = matched else {
+            translated.push(input[position]);
+            position += 1;
+            continue;
+        };
+        if replacements[index].converted.is_none() {
+            let Some(converted) = replacement_item_text(ed, eg, &replacements[index].source)?
+            else {
+                return Ok(());
+            };
+            replacements[index].converted = Some(converted);
+        }
+        let replacement = replacements[index]
+            .converted
+            .as_ref()
+            .expect("matched strtr replacement was converted");
+        let Some(result_length) = translated.len().checked_add(replacement.bytes.len()) else {
+            eg.exception = Some(crate::value::make_error_value(
+                "Error",
+                "strtr(): Failed to allocate result string",
+            ));
+            return Ok(());
+        };
+        if result_length > translated.capacity()
+            && translated
+                .try_reserve(result_length - translated.len())
+                .is_err()
+        {
+            eg.exception = Some(crate::value::make_error_value(
+                "Error",
+                "strtr(): Failed to allocate result string",
+            ));
+            return Ok(());
+        }
+        translated.extend_from_slice(&replacement.bytes);
+        used_binary_replacement |= replacement.binary && !replacement.bytes.is_empty();
+        position += replacements[index].search.len();
+    }
+    ret!(
+        rv,
+        php_byte_result(
+            translated,
+            subject.is_binary_string() || used_binary_replacement
+        )
+    );
+}
+
+struct StrtrReplacement {
+    search: Vec<u8>,
+    source: Value,
+    converted: Option<ReplacementText>,
+}
+
+fn strtr_character_bytes(subject: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
+    let mut translations = std::array::from_fn::<_, 256, _>(|byte| byte as u8);
+    for (&from, &to) in from.iter().zip(to) {
+        translations[from as usize] = to;
+    }
+    subject
+        .iter()
+        .map(|byte| translations[*byte as usize])
+        .collect()
+}
+
+fn strtr_ascii_pairs(subject: &str, pairs: &PhpArray) -> Option<String> {
+    if subject.is_empty() || pairs.is_empty() {
+        return Some(subject.to_string());
+    }
+    if pairs.has_external_byte_keys() {
+        return None;
+    }
+
+    let mut replacements = Vec::with_capacity(pairs.len());
+    for (key, replacement) in pairs.iter() {
+        let search = match key {
+            ArrayKey::Int(value) => value.to_string().into_bytes(),
+            ArrayKey::String(value) if value.is_ascii() && !value.is_empty() => value.into_bytes(),
+            ArrayKey::String(_) => return None,
+        };
+        let replacement = replacement.dereferenced();
+        if replacement.value_type() != ValueType::String
+            || replacement.is_binary_string()
+            || !replacement.as_str().is_some_and(str::is_ascii)
+        {
+            return None;
+        }
+        replacements.push((search, replacement.as_str().unwrap_or_default().as_bytes()));
+    }
     replacements.sort_by(|(left, _), (right, _)| right.len().cmp(&left.len()));
 
     let input = subject.as_bytes();
     let mut translated = Vec::with_capacity(input.len());
-    let mut position = 0;
+    let mut position = 0usize;
     while position < input.len() {
         if let Some((search, replacement)) = replacements
             .iter()
             .find(|(search, _)| input[position..].starts_with(search))
         {
-            translated.extend_from_slice(replacement.as_bytes());
+            translated.extend_from_slice(replacement);
             position += search.len();
         } else {
             translated.push(input[position]);
             position += 1;
         }
     }
-    ret!(
-        rv,
-        Value::string(String::from_utf8_lossy(&translated).into_owned())
-    );
+    Some(String::from_utf8(translated).expect("ASCII strtr map result is valid UTF-8"))
+}
+
+fn php_byte_result(bytes: Vec<u8>, binary: bool) -> Value {
+    if binary || !bytes.is_ascii() {
+        Value::binary_string(&bytes)
+    } else {
+        Value::string(String::from_utf8(bytes).expect("ASCII PHP byte result is valid UTF-8"))
+    }
 }
 
 fn fn_str_replace(

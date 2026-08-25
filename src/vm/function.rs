@@ -1872,6 +1872,10 @@ pub struct InternalFunction {
     /// Reflection. Ordinary call boundaries must not apply user-declaration
     /// coercion to these parameters first.
     pub handler_validates_types: bool,
+    /// Invalid arities name the nearest exact overload rather than describing
+    /// the reflected minimum/maximum range. This models overloaded internals
+    /// such as `strtr()` whose admitted calls have distinct parameter shapes.
+    pub exact_arity_diagnostics: bool,
 }
 
 /// Safe wrapper over function pointer — dispatch via fn_type().

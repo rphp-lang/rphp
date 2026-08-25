@@ -636,6 +636,9 @@ impl<'a> Lexer<'a> {
                         pos += 1;
                     }
                     b'"' => {
+                        if heredoc_line_adjustment != 0 {
+                            current.push(b'\\');
+                        }
                         current.push(b'"');
                         pos += 1;
                     }

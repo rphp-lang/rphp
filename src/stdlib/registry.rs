@@ -492,7 +492,25 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
     reg!("strrpos", fn_strrpos, 3, 2, "haystack", "needle", "offset");
     reg!("strrchr", fn_strrchr, 2, 2, "haystack", "needle");
-    reg!("strtr", fn_strtr, 3, 2, "string", "from", "to");
+    {
+        let mut function = Box::new(make_internal_function(
+            fn_strtr,
+            3,
+            2,
+            pn!["string", "from", "to"],
+        ));
+        function.common.sig.param_type_hints = vec![
+            ParamTypeHint::String,
+            ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String]),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+        ];
+        function.common.sig.return_type_hint = ParamTypeHint::String;
+        function.handler_validates_types = true;
+        function.exact_arity_diagnostics = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("strtr", pointer).unwrap();
+        funcs.push(function);
+    }
     {
         let array_or_string =
             || ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String]);

@@ -899,12 +899,17 @@ where
     let saved_execute_data = eg.current_execute_data.get();
     // SAFETY: the detached-call boundary receives a resolved registered
     // function descriptor that remains live for the synchronous invocation.
-    let (user_callee, signature, function_type) = unsafe {
+    // SAFETY: exact-arity metadata is read only after the descriptor's
+    // internal kind has selected its registered InternalFunction tail.
+    let (user_callee, signature, function_type, exact_arity_diagnostics) = unsafe {
+        let function_type = (*func_ptr).fn_type;
         (
-            ((*func_ptr).fn_type == FunctionType::User)
-                .then(|| &*(func_ptr as *const UserFunction)),
+            (function_type == FunctionType::User).then(|| &*(func_ptr as *const UserFunction)),
             &(*func_ptr).sig,
-            (*func_ptr).fn_type,
+            function_type,
+            (function_type == FunctionType::Internal)
+                .then(|| &*(func_ptr as *const super::function::InternalFunction))
+                .is_some_and(|function| function.exact_arity_diagnostics),
         )
     };
     // `call_user_func*()` executes the resolved callback through this detached
@@ -996,7 +1001,9 @@ where
         let common = unsafe { &*func_ptr };
         let required = signature.required_num_args;
         let relation = if common.fn_type == FunctionType::Internal {
-            if signature.is_variadic || signature.public_arity() > required {
+            if exact_arity_diagnostics {
+                "exactly"
+            } else if signature.is_variadic || signature.public_arity() > required {
                 "at least"
             } else {
                 "exactly"
@@ -1054,6 +1061,7 @@ where
             func_ptr,
             signature,
             public_num_args as u32,
+            exact_arity_diagnostics,
         );
         eg.exception = Some(error.clone());
         if !capture_generated_preentry_error {
