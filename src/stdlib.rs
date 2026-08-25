@@ -6259,6 +6259,7 @@ fn fn_str_replace(
     string_replace_builtin(ed, rv, eg, "str_replace", false)
 }
 
+#[derive(Clone)]
 struct ReplacementText {
     bytes: Vec<u8>,
     binary: bool,
@@ -6509,23 +6510,38 @@ fn replace_ascii_case_insensitive(
     let mut copied = 0;
     let mut scan = 0;
     while scan + needle.len() <= source.len() {
-        let searchable_end = source.len() - needle.len() + 1;
-        let Some(relative) = source[scan..searchable_end]
-            .iter()
-            .position(|byte| byte.eq_ignore_ascii_case(&first))
-        else {
-            break;
-        };
-        let matched = scan + relative;
-        if source[matched..matched + needle.len()].eq_ignore_ascii_case(needle) {
-            result.push_str(&subject[copied..matched]);
+        if source[scan].eq_ignore_ascii_case(&first)
+            && source[scan..scan + needle.len()].eq_ignore_ascii_case(needle)
+        {
+            result.push_str(&subject[copied..scan]);
             result.push_str(replacement);
             *count = count.saturating_add(1);
-            copied = matched + needle.len();
+            copied = scan + needle.len();
             scan = copied;
         } else {
-            scan = matched + 1;
+            scan += 1;
         }
+    }
+    result.push_str(&subject[copied..]);
+    result
+}
+
+fn replace_text_case_sensitive(
+    subject: &str,
+    search: &str,
+    replacement: &str,
+    count: &mut usize,
+) -> String {
+    if search.is_empty() {
+        return subject.to_string();
+    }
+    let mut result = String::with_capacity(subject.len());
+    let mut copied = 0;
+    for (matched, _) in subject.match_indices(search) {
+        result.push_str(&subject[copied..matched]);
+        result.push_str(replacement);
+        *count = count.saturating_add(1);
+        copied = matched + search.len();
     }
     result.push_str(&subject[copied..]);
     result
@@ -6561,8 +6577,7 @@ fn string_replace_builtin(
         return Ok(());
     }
 
-    if case_insensitive
-        && search.value_type() == ValueType::String
+    if search.value_type() == ValueType::String
         && replace.value_type() == ValueType::String
         && subject.value_type() == ValueType::String
         && !search.is_binary_string()
@@ -6573,12 +6588,14 @@ fn string_replace_builtin(
         && subject.as_str().is_some_and(str::is_ascii)
     {
         let mut count = 0;
-        let result = replace_ascii_case_insensitive(
-            subject.as_str().unwrap_or_default(),
-            search.as_str().unwrap_or_default(),
-            replace.as_str().unwrap_or_default(),
-            &mut count,
-        );
+        let subject = subject.as_str().unwrap_or_default();
+        let search = search.as_str().unwrap_or_default();
+        let replace = replace.as_str().unwrap_or_default();
+        let result = if case_insensitive {
+            replace_ascii_case_insensitive(subject, search, replace, &mut count)
+        } else {
+            replace_text_case_sensitive(subject, search, replace, &mut count)
+        };
         arg_mut!(ed, 3, Value::long(count as i64));
         ret!(rv, Value::string(result));
     }
@@ -6652,6 +6669,368 @@ fn string_replace_builtin(
     // was supplied, arg_mut! follows its reference, including Reference(Undef).
     arg_mut!(ed, 3, Value::long(count as i64));
     ret!(rv, result);
+}
+
+enum SubstrIntegerArgument {
+    Scalar(Option<i64>),
+    Array(Value),
+}
+
+fn typed_internal_array_or_int_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    index: u32,
+    parameter: &str,
+    nullable: bool,
+) -> Result<Option<SubstrIntegerArgument>, VmError> {
+    let argument = owned_argument(ed, index);
+    let argument = argument.dereferenced();
+    if argument.value_type() == ValueType::Array {
+        return Ok(Some(SubstrIntegerArgument::Array(argument.clone())));
+    }
+    if nullable && argument.value_type() == ValueType::Null {
+        return Ok(Some(SubstrIntegerArgument::Scalar(None)));
+    }
+
+    let expected = if nullable {
+        "array|int|null"
+    } else {
+        "array|int"
+    };
+    if argument.value_type() == ValueType::Null && !internal_call_is_strict(ed) {
+        report_internal_deprecation(
+            eg,
+            ed,
+            &format!(
+                "substr_replace(): Passing null to parameter #{} (${parameter}) of type {expected} is deprecated",
+                index + 1
+            ),
+        )?;
+        if eg.exception.is_some() {
+            return Ok(None);
+        }
+        return Ok(Some(SubstrIntegerArgument::Scalar(Some(0))));
+    }
+
+    let Some(integer) =
+        typed_internal_int_argument_expected(ed, eg, "substr_replace", index, parameter, expected)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(SubstrIntegerArgument::Scalar(Some(integer))))
+}
+
+fn substr_control_item_to_long(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    value: &Value,
+) -> Result<Option<i64>, VmError> {
+    let value = value.dereferenced();
+    if matches!(value.value_type(), ValueType::Object | ValueType::Closure) {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!(
+                "Object of class {} could not be converted to int",
+                value.diagnostic_type_name()
+            ),
+        )?;
+        if eg.exception.is_some() {
+            return Ok(None);
+        }
+    }
+    Ok(Some(crate::vm::execute::explicit_long_conversion(value)))
+}
+
+fn substr_replace_bounds(source_length: usize, offset: i64, length: Option<i64>) -> (usize, usize) {
+    let start = if offset < 0 {
+        source_length.saturating_sub(usize::try_from(offset.unsigned_abs()).unwrap_or(usize::MAX))
+    } else {
+        usize::try_from(offset)
+            .unwrap_or(usize::MAX)
+            .min(source_length)
+    };
+    let end = match length {
+        None => source_length,
+        Some(length) if length < 0 => source_length
+            .saturating_sub(usize::try_from(length.unsigned_abs()).unwrap_or(usize::MAX))
+            .max(start),
+        Some(length) => start
+            .saturating_add(usize::try_from(length).unwrap_or(usize::MAX))
+            .min(source_length),
+    };
+    (start, end)
+}
+
+fn replace_php_substring(
+    eg: &mut ExecutorGlobals,
+    source: ReplacementText,
+    replacement: &ReplacementText,
+    offset: i64,
+    length: Option<i64>,
+) -> Option<Value> {
+    let (start, end) = substr_replace_bounds(source.bytes.len(), offset, length);
+    let result_length = start
+        .checked_add(replacement.bytes.len())
+        .and_then(|length| length.checked_add(source.bytes.len() - end));
+    let Some(result_length) = result_length else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "substr_replace(): Failed to allocate result string",
+        ));
+        return None;
+    };
+    let mut result = Vec::new();
+    if result.try_reserve_exact(result_length).is_err() {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "substr_replace(): Failed to allocate result string",
+        ));
+        return None;
+    }
+    result.extend_from_slice(&source.bytes[..start]);
+    result.extend_from_slice(&replacement.bytes);
+    result.extend_from_slice(&source.bytes[end..]);
+    let binary = source.binary || (replacement.binary && !replacement.bytes.is_empty());
+    Some(if binary || !result.is_ascii() {
+        Value::binary_string(&result)
+    } else {
+        Value::string(String::from_utf8(result).expect("ASCII substring result is valid UTF-8"))
+    })
+}
+
+fn replace_text_substring(
+    eg: &mut ExecutorGlobals,
+    source: &str,
+    replacement: &str,
+    start: usize,
+    end: usize,
+) -> Option<Value> {
+    let result_length = start
+        .checked_add(replacement.len())
+        .and_then(|length| length.checked_add(source.len() - end));
+    let Some(result_length) = result_length else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "substr_replace(): Failed to allocate result string",
+        ));
+        return None;
+    };
+    let mut result = String::with_capacity(result_length);
+    result.push_str(&source[..start]);
+    result.push_str(replacement);
+    result.push_str(&source[end..]);
+    Some(Value::string(result))
+}
+
+pub(super) fn substr_replace_builtin(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let exact_subject = arg!(ed, 0).dereferenced();
+    let exact_replacement = arg!(ed, 1).dereferenced();
+    let exact_offset = arg!(ed, 2).dereferenced();
+    let exact_length = match arg_opt!(ed, 3) {
+        None => Some(None),
+        Some(length) => match length.dereferenced().value_type() {
+            ValueType::Null => Some(None),
+            ValueType::Long => Some(length.dereferenced().as_long()),
+            _ => None,
+        },
+    };
+    if exact_subject.value_type() == ValueType::String
+        && exact_replacement.value_type() == ValueType::String
+        && exact_offset.value_type() == ValueType::Long
+        && let Some(length) = exact_length
+        && !exact_subject.is_binary_string()
+        && !exact_replacement.is_binary_string()
+        && exact_subject.as_str().is_some_and(str::is_ascii)
+        && exact_replacement.as_str().is_some_and(str::is_ascii)
+    {
+        let source = exact_subject.as_str().unwrap_or_default();
+        let replacement = exact_replacement.as_str().unwrap_or_default();
+        let (start, end) = substr_replace_bounds(
+            source.len(),
+            exact_offset.as_long().unwrap_or_default(),
+            length,
+        );
+        if source.is_char_boundary(start) && source.is_char_boundary(end) {
+            let Some(result) = replace_text_substring(eg, source, replacement, start, end) else {
+                return Ok(());
+            };
+            ret!(rv, result);
+        }
+    }
+
+    let Some(subject) =
+        typed_internal_array_or_string_argument(ed, eg, "substr_replace", 0, "string")?
+    else {
+        return Ok(());
+    };
+    let Some(replacement) =
+        typed_internal_array_or_string_argument(ed, eg, "substr_replace", 1, "replace")?
+    else {
+        return Ok(());
+    };
+    let Some(offset) = typed_internal_array_or_int_argument(ed, eg, 2, "offset", false)? else {
+        return Ok(());
+    };
+    let length = if arg_opt!(ed, 3).is_some() {
+        let Some(length) = typed_internal_array_or_int_argument(ed, eg, 3, "length", true)? else {
+            return Ok(());
+        };
+        length
+    } else {
+        SubstrIntegerArgument::Scalar(None)
+    };
+
+    if subject.value_type() == ValueType::String {
+        if matches!(offset, SubstrIntegerArgument::Array(_)) {
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                "substr_replace(): Argument #3 ($offset) cannot be an array when working on a single string",
+            ));
+            return Ok(());
+        }
+        if matches!(length, SubstrIntegerArgument::Array(_)) {
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                "substr_replace(): Argument #4 ($length) cannot be an array when working on a single string",
+            ));
+            return Ok(());
+        }
+        let replacement = if let Some(replacements) = replacement.as_array() {
+            match replacements.values().next() {
+                Some(value) => {
+                    let Some(value) = replacement_item_text(ed, eg, value)? else {
+                        return Ok(());
+                    };
+                    value
+                }
+                None => ReplacementText::empty(),
+            }
+        } else {
+            ReplacementText::from_string_value(&replacement)
+        };
+        let SubstrIntegerArgument::Scalar(Some(offset)) = offset else {
+            unreachable!("the required offset has a scalar integer")
+        };
+        let SubstrIntegerArgument::Scalar(length) = length else {
+            unreachable!("the scalar-subject length was rejected above")
+        };
+        let Some(result) = replace_php_substring(
+            eg,
+            ReplacementText::from_string_value(&subject),
+            &replacement,
+            offset,
+            length,
+        ) else {
+            return Ok(());
+        };
+        ret!(rv, result);
+    }
+
+    let replacement_values = replacement
+        .as_array()
+        .map(|array| array.values().cloned().collect::<Vec<_>>());
+    let scalar_replacement = if replacement.value_type() == ValueType::String {
+        Some(ReplacementText::from_string_value(&replacement))
+    } else {
+        None
+    };
+    let offset_values = match &offset {
+        SubstrIntegerArgument::Array(value) => Some(
+            value
+                .as_array()
+                .expect("array offset argument")
+                .values()
+                .cloned()
+                .collect::<Vec<_>>(),
+        ),
+        SubstrIntegerArgument::Scalar(_) => None,
+    };
+    let scalar_offset = match offset {
+        SubstrIntegerArgument::Scalar(Some(offset)) => Some(offset),
+        SubstrIntegerArgument::Array(_) => None,
+        SubstrIntegerArgument::Scalar(None) => unreachable!("offset is not nullable"),
+    };
+    let length_values = match &length {
+        SubstrIntegerArgument::Array(value) => Some(
+            value
+                .as_array()
+                .expect("array length argument")
+                .values()
+                .cloned()
+                .collect::<Vec<_>>(),
+        ),
+        SubstrIntegerArgument::Scalar(_) => None,
+    };
+    let scalar_length = match length {
+        SubstrIntegerArgument::Scalar(length) => length,
+        SubstrIntegerArgument::Array(_) => None,
+    };
+    let subjects = subject
+        .as_array()
+        .expect("typed subject is either a string or an array")
+        .iter()
+        .map(|(key, value)| (key, value.clone()))
+        .collect::<Vec<_>>();
+    let mut result = PhpArray::new();
+    for (index, (key, subject)) in subjects.into_iter().enumerate() {
+        let Some(subject) = replacement_item_text(ed, eg, &subject)? else {
+            return Ok(());
+        };
+        let replacement = if let Some(values) = replacement_values.as_ref() {
+            match values.get(index) {
+                Some(value) => {
+                    let Some(value) = replacement_item_text(ed, eg, value)? else {
+                        return Ok(());
+                    };
+                    value
+                }
+                None => ReplacementText::empty(),
+            }
+        } else {
+            scalar_replacement
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(ReplacementText::empty)
+        };
+        let offset = if let Some(values) = offset_values.as_ref() {
+            match values.get(index) {
+                Some(value) => {
+                    let Some(value) = substr_control_item_to_long(ed, eg, value)? else {
+                        return Ok(());
+                    };
+                    value
+                }
+                None => 0,
+            }
+        } else {
+            scalar_offset.expect("scalar offset exists when no offset array exists")
+        };
+        let length = if let Some(values) = length_values.as_ref() {
+            match values.get(index) {
+                Some(value) => {
+                    let Some(value) = substr_control_item_to_long(ed, eg, value)? else {
+                        return Ok(());
+                    };
+                    Some(value)
+                }
+                None => None,
+            }
+        } else {
+            scalar_length
+        };
+        let Some(value) = replace_php_substring(eg, subject, &replacement, offset, length) else {
+            return Ok(());
+        };
+        result.set(key, value);
+    }
+    ret!(rv, Value::array(result));
 }
 
 #[inline(always)]

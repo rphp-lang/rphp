@@ -1662,38 +1662,13 @@ pub(super) fn fn_str_ireplace(
     super::string_replace_builtin(ed, rv, eg, "str_ireplace", true)
 }
 
-/// substr_replace($string, $replacement, $start, $length = null): string
+/// substr_replace($string, $replace, $offset, $length = null): array|string
 pub(super) fn fn_substr_replace(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    let replacement = arg_str!(ed, 1);
-    let start_raw = arg_long!(ed, 2);
-    let len = s.len() as i64;
-    let start = if start_raw < 0 {
-        (len + start_raw).max(0) as usize
-    } else {
-        start_raw.min(len) as usize
-    };
-    let length = match arg_opt!(ed, 3) {
-        Some(v) if !v.is_undef() => {
-            let l = v.to_long_val();
-            if l < 0 {
-                ((len as i64 - start as i64) + l).max(0) as usize
-            } else {
-                l as usize
-            }
-        }
-        _ => s.len() - start,
-    };
-    let end = (start + length).min(s.len());
-    let mut result = String::with_capacity(start + replacement.len() + (s.len() - end));
-    result.push_str(&s[..start]);
-    result.push_str(replacement.as_ref());
-    result.push_str(&s[end..]);
-    ret!(rv, Value::string(result));
+    super::substr_replace_builtin(ed, rv, eg)
 }
 
 /// str_getcsv($string, $separator = ",", $enclosure = "\"", $escape = "\\"): array
