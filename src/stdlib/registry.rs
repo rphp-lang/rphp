@@ -803,6 +803,51 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("ucfirst", fn_ucfirst, 1, 1, "string");
     reg!("lcfirst", fn_lcfirst, 1, 1, "string");
     reg!("ucwords", fn_ucwords, 2, 1, "string", "separators");
+    reg_typed!(
+        "count_chars",
+        fn_count_chars,
+        2,
+        1,
+        ["string", "mode"],
+        [ParamTypeHint::String, ParamTypeHint::Int],
+        ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String])
+    );
+    reg_typed!(
+        "metaphone",
+        fn_metaphone,
+        2,
+        1,
+        ["string", "max_phonemes"],
+        [ParamTypeHint::String, ParamTypeHint::Int],
+        ParamTypeHint::String
+    );
+    reg_typed!(
+        "quotemeta",
+        fn_quotemeta,
+        1,
+        1,
+        ["string"],
+        [ParamTypeHint::String],
+        ParamTypeHint::String
+    );
+    reg_typed!(
+        "soundex",
+        fn_soundex,
+        1,
+        1,
+        ["string"],
+        [ParamTypeHint::String],
+        ParamTypeHint::String
+    );
+    reg_typed!(
+        "str_rot13",
+        fn_str_rot13,
+        1,
+        1,
+        ["string"],
+        [ParamTypeHint::String],
+        ParamTypeHint::String
+    );
     reg!("str_word_count", fn_str_word_count, 1, 1, "string");
     reg!(
         "levenshtein",

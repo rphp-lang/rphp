@@ -9268,6 +9268,224 @@ mod strtok_shuffle_tests {
     }
 }
 
+fn count_chars_value(input: &[u8], mode: i64, binary: bool) -> Value {
+    let counts = crate::string_byte_utilities::count_chars(input);
+    if mode <= 2 {
+        let mut result = PhpArray::new();
+        for (byte, count) in counts.into_iter().enumerate() {
+            if mode == 0 || (mode == 1 && count != 0) || (mode == 2 && count == 0) {
+                result.set_int(byte as i64, Value::long(count as i64));
+            }
+        }
+        return Value::array(result);
+    }
+
+    let bytes = counts
+        .into_iter()
+        .enumerate()
+        .filter_map(|(byte, count)| {
+            ((mode == 3 && count != 0) || (mode == 4 && count == 0)).then_some(byte as u8)
+        })
+        .collect();
+    php_byte_result(bytes, binary)
+}
+
+fn fn_count_chars(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let exact_input = arg!(ed, 0);
+    let exact_mode = arg_opt!(ed, 1);
+    if exact_input.value_type() == ValueType::String
+        && exact_mode.is_none_or(|mode| mode.value_type() == ValueType::Long)
+    {
+        let mode = exact_mode.map_or(0, |mode| mode.as_long().unwrap_or_default());
+        if !(0..=4).contains(&mode) {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                "count_chars(): Argument #2 ($mode) must be between 0 and 4 (inclusive)",
+            ));
+            return Ok(());
+        }
+        let binary = exact_input.is_binary_string();
+        let input = exact_input.php_string_bytes().unwrap_or_default();
+        ret!(rv, count_chars_value(&input, mode, binary));
+    }
+
+    let Some(input) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "count_chars",
+        0,
+        "string",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    let mode = if arg_opt!(ed, 1).is_some() {
+        let Some(mode) = typed_internal_int_argument(ed, eg, "count_chars", 1, "mode")? else {
+            return Ok(());
+        };
+        mode
+    } else {
+        0
+    };
+    if !(0..=4).contains(&mode) {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "count_chars(): Argument #2 ($mode) must be between 0 and 4 (inclusive)",
+        ));
+        return Ok(());
+    }
+    let binary = input.is_binary_string();
+    let input = input.php_string_bytes().unwrap_or_default();
+    ret!(rv, count_chars_value(&input, mode, binary));
+}
+
+fn fn_metaphone(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let exact_input = arg!(ed, 0);
+    let exact_limit = arg_opt!(ed, 1);
+    if exact_input.value_type() == ValueType::String
+        && exact_limit.is_none_or(|limit| limit.value_type() == ValueType::Long)
+    {
+        let limit = exact_limit.map_or(0, |limit| limit.as_long().unwrap_or_default());
+        if limit < 0 {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                "metaphone(): Argument #2 ($max_phonemes) must be greater than or equal to 0",
+            ));
+            return Ok(());
+        }
+        let input = exact_input.php_string_bytes().unwrap_or_default();
+        ret!(
+            rv,
+            php_byte_result(
+                crate::string_byte_utilities::metaphone(&input, limit as usize),
+                false
+            )
+        );
+    }
+
+    let Some(input) =
+        typed_internal_string_value_argument_expected(ed, eg, "metaphone", 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let limit = if arg_opt!(ed, 1).is_some() {
+        let Some(limit) = typed_internal_int_argument(ed, eg, "metaphone", 1, "max_phonemes")?
+        else {
+            return Ok(());
+        };
+        limit
+    } else {
+        0
+    };
+    if limit < 0 {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "metaphone(): Argument #2 ($max_phonemes) must be greater than or equal to 0",
+        ));
+        return Ok(());
+    }
+    let input = input.php_string_bytes().unwrap_or_default();
+    ret!(
+        rv,
+        php_byte_result(
+            crate::string_byte_utilities::metaphone(&input, limit as usize),
+            false
+        )
+    );
+}
+
+fn fn_quotemeta(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let input = arg!(ed, 0);
+    if input.value_type() == ValueType::String {
+        let binary = input.is_binary_string();
+        let input = input.php_string_bytes().unwrap_or_default();
+        ret!(
+            rv,
+            php_byte_result(crate::string_byte_utilities::quotemeta(&input), binary)
+        );
+    }
+    let Some(input) =
+        typed_internal_string_value_argument_expected(ed, eg, "quotemeta", 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let binary = input.is_binary_string();
+    let input = input.php_string_bytes().unwrap_or_default();
+    ret!(
+        rv,
+        php_byte_result(crate::string_byte_utilities::quotemeta(&input), binary)
+    );
+}
+
+fn fn_soundex(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let input = arg!(ed, 0);
+    if input.value_type() == ValueType::String {
+        let input = input.php_string_bytes().unwrap_or_default();
+        ret!(
+            rv,
+            Value::string(bytes_to_php_string(&crate::string_byte_utilities::soundex(
+                &input
+            )))
+        );
+    }
+    let Some(input) =
+        typed_internal_string_value_argument_expected(ed, eg, "soundex", 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let input = input.php_string_bytes().unwrap_or_default();
+    ret!(
+        rv,
+        Value::string(bytes_to_php_string(&crate::string_byte_utilities::soundex(
+            &input
+        )))
+    );
+}
+
+fn fn_str_rot13(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let input = arg!(ed, 0);
+    if input.value_type() == ValueType::String {
+        let binary = input.is_binary_string();
+        let input = input.php_string_bytes().unwrap_or_default();
+        ret!(
+            rv,
+            php_byte_result(crate::string_byte_utilities::str_rot13(&input), binary)
+        );
+    }
+    let Some(input) =
+        typed_internal_string_value_argument_expected(ed, eg, "str_rot13", 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let binary = input.is_binary_string();
+    let input = input.php_string_bytes().unwrap_or_default();
+    ret!(
+        rv,
+        php_byte_result(crate::string_byte_utilities::str_rot13(&input), binary)
+    );
+}
+
 fn fn_str_word_count(
     ed: *mut ExecuteData,
     rv: *mut Value,
