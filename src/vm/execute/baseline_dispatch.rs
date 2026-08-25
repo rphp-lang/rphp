@@ -2065,6 +2065,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::AssignConcat => {
+                // A direct CV may already be undefined, or a re-entrant RHS
+                // call may have unset a top-level global before the compound
+                // read. The checked snapshot path represents that left side
+                // as the empty string, then publishes the warning before any
+                // RHS conversion. Its final write therefore overwrites error-
+                // handler mutations just like FetchCvR + Concat + AssignCv.
+                let mut undefined_target = false;
                 // SAFETY: both named operands are initialized in this live
                 // frame. Checked values are cloned before user-code re-entry;
                 // the ordinary path acquires its own bounded unsafe region.
@@ -2081,29 +2088,46 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         op_array,
                     ))
                     .dereferenced();
-                    let checked = [left, right].into_iter().any(|value| {
-                        matches!(
-                            value.value_type(),
-                            ValueType::Array | ValueType::Object | ValueType::Closure
-                        )
-                    });
-                    checked.then(|| {
-                        let left = left.clone();
-                        let right = if opline.op1_type == opline.op2_type
-                            && opline.op1 == opline.op2
-                        {
-                            left.clone()
-                        } else {
-                            (&*(*frame).get_op_ptr(
-                                opline.op2 as u32,
-                                opline.op2_type,
-                                op_array,
-                            ))
-                            .clone()
-                        };
-                        (left, right)
-                    })
+                    if left.is_undef() {
+                        undefined_target = true;
+                        Some((Value::string(""), right.clone()))
+                    } else {
+                        let checked = [left, right].into_iter().any(|value| {
+                            matches!(
+                                value.value_type(),
+                                ValueType::Array | ValueType::Object | ValueType::Closure
+                            )
+                        });
+                        checked.then(|| {
+                            let left = left.clone();
+                            let right = if opline.op1_type == opline.op2_type
+                                && opline.op1 == opline.op2
+                            {
+                                left.clone()
+                            } else {
+                                (&*(*frame).get_op_ptr(
+                                    opline.op2 as u32,
+                                    opline.op2_type,
+                                    op_array,
+                                ))
+                                .clone()
+                            };
+                            (left, right)
+                        })
+                    }
                 };
+                if undefined_target {
+                    let name = op_array
+                        .all_cvs
+                        .iter()
+                        .find(|(index, _)| *index == u32::from(opline.op1))
+                        .map(|(_, name)| name.as_str())
+                        .unwrap_or("");
+                    report_undefined_variable_name(
+                        eg, frame, op_array, opline, name, false,
+                    )?;
+                    resume_pending_exception!();
+                }
                 if let Some((left, right)) = checked_operands {
                     // Object conversion may re-enter user code and mutate a
                     // source CV. Snapshot both already-evaluated operands before
@@ -2135,10 +2159,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         slot_set(destination, prepared);
                     }
                 } else {
-                // SAFETY: all operands and the optional reference-owning CV
-                // belong to this live frame. The ordinary path performs no
-                // user-code conversion and preserves its existing COW rules.
-                unsafe {
+                    // SAFETY: all operands and the optional reference-owning
+                    // CV belong to this live frame. The ordinary path performs
+                    // no user-code conversion and preserves its existing COW
+                    // rules.
+                    unsafe {
                 if opline.op1_type == OpType::Cv
                     && !{
                         (*frame)
@@ -2189,8 +2214,28 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let dest = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
                 let dest_ref = &mut *dest;
                 if dest_ref.value_type() == ValueType::String {
-                    // Fast path: avoid echo_to_string() allocation when RHS is string
-                    if rhs.value_type() == ValueType::String {
+                    if !dest_ref.is_binary_string() && rhs.is_binary_string() {
+                        // The ordinary UTF-8 owner and the lossless byte
+                        // carrier use different storage representations.
+                        // Convert only at the provenance transition; later
+                        // binary appends remain in-place below.
+                        let mut bytes = dest_ref.as_str().unwrap().as_bytes().to_vec();
+                        bytes.extend_from_slice(
+                            rhs.php_string_bytes().unwrap_unchecked().as_ref(),
+                        );
+                        slot_set(dest, Value::binary_string(&bytes));
+                    } else if dest_ref.is_binary_string() && !rhs.is_binary_string() {
+                        let rhs = if rhs.value_type() == ValueType::String {
+                            rhs.as_str().unwrap().to_string()
+                        } else {
+                            rhs.echo_to_string_with_precision(eg.precision)
+                        };
+                        let storage = crate::value::php_byte_string_from_bytes(rhs.bytes());
+                        let destination = dest_ref.as_string_mut().unwrap_unchecked();
+                        destination.push_str(&storage);
+                    } else if rhs.value_type() == ValueType::String {
+                        // Same-provenance strings append without conversion or
+                        // allocation while the destination remains unique.
                         let rhs_s = rhs.as_str().unwrap();
                         let s = dest_ref.as_string_mut().unwrap_unchecked();
                         s.push_str(rhs_s);
@@ -2201,16 +2246,24 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                 } else {
                     let lhs_str = dest_ref.echo_to_string_with_precision(eg.precision);
-                    let rhs_str = if rhs.value_type() == ValueType::String {
-                        rhs.as_str().unwrap().to_string()
+                    if rhs.is_binary_string() {
+                        let mut bytes = lhs_str.into_bytes();
+                        bytes.extend_from_slice(
+                            rhs.php_string_bytes().unwrap_unchecked().as_ref(),
+                        );
+                        slot_set(dest, Value::binary_string(&bytes));
                     } else {
-                        rhs.echo_to_string_with_precision(eg.precision)
-                    };
-                    let mut new_s = lhs_str;
-                    new_s.push_str(&rhs_str);
-                    slot_set(dest, Value::string(new_s));
+                        let rhs_str = if rhs.value_type() == ValueType::String {
+                            rhs.as_str().unwrap().to_string()
+                        } else {
+                            rhs.echo_to_string_with_precision(eg.precision)
+                        };
+                        let mut new_s = lhs_str;
+                        new_s.push_str(&rhs_str);
+                        slot_set(dest, Value::string(new_s));
+                    }
                 }
-                }
+                    }
                 }
             }
 
@@ -3875,7 +3928,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     &*proven_scalar_op_ptr(frame, op_array, opline.op1, opline.op1_type)
                 };
                 debug_assert_eq!(argument.value_type(), ValueType::String);
-                let length = unsafe { argument.as_str().unwrap_unchecked().len() as i64 };
+                // SAFETY: the opcode's proven String may use the lossless
+                // PHP-byte carrier; php_string_len() accepts both storage
+                // forms and returns the observable byte length.
+                let length = unsafe { argument.php_string_len().unwrap_unchecked() as i64 };
 
                 if opline.result_type != OpType::Unused {
                     let result_ptr = unsafe {

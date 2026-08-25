@@ -5041,6 +5041,111 @@ fn format_hex_digest(digest: &[u8]) -> String {
     output
 }
 
+/// PHP's `crc32()` uses the reflected IEEE CRC-32 recurrence and exposes the
+/// resulting unsigned 32-bit word as a positive integer on AMD64.
+fn php_crc32_ieee(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            let polynomial = if crc & 1 == 0 { 0 } else { 0xedb8_8320 };
+            crc = (crc >> 1) ^ polynomial;
+        }
+    }
+    !crc
+}
+
+fn sha1_digest(input: &[u8]) -> [u8; 20] {
+    let bit_length = (input.len() as u64).wrapping_mul(8);
+    let mut padded = Vec::with_capacity(input.len().saturating_add(72));
+    padded.extend_from_slice(input);
+    padded.push(0x80);
+    while padded.len() % 64 != 56 {
+        padded.push(0);
+    }
+    padded.extend_from_slice(&bit_length.to_be_bytes());
+
+    let mut state = [
+        0x6745_2301_u32,
+        0xefcd_ab89,
+        0x98ba_dcfe,
+        0x1032_5476,
+        0xc3d2_e1f0,
+    ];
+    for chunk in padded.chunks_exact(64) {
+        let mut words = [0_u32; 80];
+        for (word, bytes) in words.iter_mut().take(16).zip(chunk.chunks_exact(4)) {
+            *word = u32::from_be_bytes(bytes.try_into().unwrap());
+        }
+        for index in 16..80 {
+            words[index] =
+                (words[index - 3] ^ words[index - 8] ^ words[index - 14] ^ words[index - 16])
+                    .rotate_left(1);
+        }
+
+        let [mut a, mut b, mut c, mut d, mut e] = state;
+        for (round, word) in words.into_iter().enumerate() {
+            let (function, constant) = match round {
+                0..=19 => ((b & c) | (!b & d), 0x5a82_7999),
+                20..=39 => (b ^ c ^ d, 0x6ed9_eba1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8f1b_bcdc),
+                _ => (b ^ c ^ d, 0xca62_c1d6),
+            };
+            let next = a
+                .rotate_left(5)
+                .wrapping_add(function)
+                .wrapping_add(e)
+                .wrapping_add(constant)
+                .wrapping_add(word);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = next;
+        }
+        state[0] = state[0].wrapping_add(a);
+        state[1] = state[1].wrapping_add(b);
+        state[2] = state[2].wrapping_add(c);
+        state[3] = state[3].wrapping_add(d);
+        state[4] = state[4].wrapping_add(e);
+    }
+
+    let mut output = [0_u8; 20];
+    for (bytes, word) in output.chunks_exact_mut(4).zip(state) {
+        bytes.copy_from_slice(&word.to_be_bytes());
+    }
+    output
+}
+
+#[cfg(test)]
+mod checksum_digest_tests {
+    use super::{format_hex_digest, php_crc32_ieee, sha1_digest};
+
+    #[test]
+    fn crc32_matches_php_for_empty_binary_and_block_edge_inputs() {
+        assert_eq!(php_crc32_ieee(b""), 0);
+        assert_eq!(php_crc32_ieee(b"checksum lane"), 1_074_860_217);
+        assert_eq!(php_crc32_ieee(b"a\0\xffz"), 2_167_024_170);
+        assert_eq!(php_crc32_ieee(&vec![b'q'; 65]), 425_929_956);
+    }
+
+    #[test]
+    fn sha1_matches_php_for_binary_and_multi_block_inputs() {
+        assert_eq!(
+            format_hex_digest(&sha1_digest(b"checksum lane")),
+            "184b813dadd5b407c44692826da5be14cefde813"
+        );
+        assert_eq!(
+            format_hex_digest(&sha1_digest(b"a\0\xffz")),
+            "6b419a441881c5640e2654f6f0e553c37da893e0"
+        );
+        assert_eq!(
+            format_hex_digest(&sha1_digest(&vec![b'q'; 65])),
+            "b0931a65ae5cf3e027199de5f7c56eb0f073c552"
+        );
+    }
+}
+
 #[cfg(test)]
 mod md5_tests {
     use super::{format_hex_digest, md5_digest};
@@ -5099,6 +5204,134 @@ fn fn_md5(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Res
         ret!(rv, Value::string(bytes_to_php_string(&digest)));
     }
     ret!(rv, Value::string(format_hex_digest(&digest)));
+}
+
+fn fn_crc32(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let Some(input) =
+        typed_internal_string_value_argument_expected(ed, eg, "crc32", 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let bytes = input.php_string_bytes().unwrap_or_default();
+    ret!(rv, Value::long(i64::from(php_crc32_ieee(&bytes))));
+}
+
+fn fn_sha1(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let Some(input) =
+        typed_internal_string_value_argument_expected(ed, eg, "sha1", 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let binary = if arg_opt!(ed, 1).is_some() {
+        let Some(binary) = typed_internal_bool_argument(ed, eg, "sha1", 1, "binary")? else {
+            return Ok(());
+        };
+        binary
+    } else {
+        false
+    };
+    let bytes = input.php_string_bytes().unwrap_or_default();
+    let digest = sha1_digest(&bytes);
+    if binary {
+        ret!(rv, php_byte_result(digest.to_vec(), true));
+    }
+    ret!(rv, Value::string(format_hex_digest(&digest)));
+}
+
+fn digest_file_error_reason(error: &std::io::Error) -> String {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => "No such file or directory".to_string(),
+        std::io::ErrorKind::PermissionDenied => "Permission denied".to_string(),
+        std::io::ErrorKind::IsADirectory => "Is a directory".to_string(),
+        _ if error.raw_os_error() == Some(36) => "File name too long".to_string(),
+        _ => error
+            .to_string()
+            .split_once(" (os error ")
+            .map_or_else(|| error.to_string(), |(message, _)| message.to_string()),
+    }
+}
+
+fn file_digest_builtin<const N: usize>(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    digest: fn(&[u8]) -> [u8; N],
+) -> Result<(), VmError> {
+    let Some(filename) =
+        typed_internal_string_value_argument_expected(ed, eg, function, 0, "filename", "string")?
+    else {
+        return Ok(());
+    };
+    let binary = if arg_opt!(ed, 1).is_some() {
+        let Some(binary) = typed_internal_bool_argument(ed, eg, function, 1, "binary")? else {
+            return Ok(());
+        };
+        binary
+    } else {
+        false
+    };
+    let filename_bytes = filename.php_string_bytes().unwrap_or_default();
+    if filename_bytes.is_empty() {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "Path must not be empty",
+        ));
+        return Ok(());
+    }
+    if filename_bytes.contains(&b'\0') {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            &format!("{function}(): Argument #1 ($filename) must not contain any null bytes"),
+        ));
+        return Ok(());
+    }
+    let filename = filename.as_str().unwrap_or_default();
+    let bytes = if filename == "php://memory" || filename == "php://temp" {
+        Vec::new()
+    } else {
+        let path = filename.strip_prefix("file://").unwrap_or(filename);
+        match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                report_internal_diagnostic(
+                    eg,
+                    ed,
+                    2,
+                    "Warning",
+                    &format!(
+                        "{function}({filename}): Failed to open stream: {}",
+                        digest_file_error_reason(&error)
+                    ),
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+                ret!(rv, Value::bool(false));
+            }
+        }
+    };
+    let digest = digest(&bytes);
+    if binary {
+        ret!(rv, php_byte_result(digest.to_vec(), true));
+    }
+    ret!(rv, Value::string(format_hex_digest(&digest)));
+}
+
+fn fn_md5_file(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    file_digest_builtin(ed, rv, eg, "md5_file", md5_digest)
+}
+
+fn fn_sha1_file(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    file_digest_builtin(ed, rv, eg, "sha1_file", sha1_digest)
 }
 
 fn fn_hash(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -23101,6 +23334,17 @@ fn fn_decbin(
         return Ok(());
     };
     ret!(rv, Value::string(format!("{:b}", number as u64)));
+}
+
+fn fn_dechex(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(number) = typed_internal_int_argument(ed, eg, "dechex", 0, "num")? else {
+        return Ok(());
+    };
+    ret!(rv, Value::string(format!("{:x}", number as u64)));
 }
 
 #[cfg(test)]

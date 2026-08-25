@@ -727,7 +727,7 @@ impl Parser {
         Ok((name, false))
     }
 
-    fn consume_use_alias_keyword(&mut self) -> bool {
+    fn consume_as_keyword(&mut self) -> bool {
         let is_alias = self.peek() == Token::As
             || matches!(self.peek(), Token::Identifier(name, _) if name.eq_ignore_ascii_case("as"));
         if is_alias {

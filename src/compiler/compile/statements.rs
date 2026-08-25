@@ -2132,11 +2132,14 @@ impl Compiler {
                 } else {
                     None
                 };
+                // AssignConcat owns the undefined-variable boundary as well
+                // as the in-place string fast path. It is therefore valid
+                // even when a prior re-entrant call invalidated the static CV
+                // definition proof; the actual destination read still occurs
+                // after RHS evaluation, in PHP order.
+                let direct_concat = direct_cv.filter(|_| *op == BinOp::Concat);
                 let direct_rhs = direct_cv.map(|_| self.compile_expr(expr));
-                if let Some(cv) = direct_cv
-                    && *op == BinOp::Concat
-                    && self.definitely_defined_cvs.contains(&cv)
-                {
+                if let Some(cv) = direct_concat {
                     let (right, right_type) = direct_rhs.expect("direct CV RHS was compiled");
                     let mut append = Instruction::new(OpCode::AssignConcat);
                     append.op1 = cv;

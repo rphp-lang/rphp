@@ -24,7 +24,11 @@ use super::*;
 /// The returned Vec must live as long as the EG (owns the InternalFunction structs).
 pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     eg.reserve_stdlib_capacity();
-    let mut funcs: Vec<Box<InternalFunction>> = Vec::with_capacity(128);
+    // The fixed PHP 8.5 surface currently owns fewer than 512 descriptors in
+    // every feature configuration. Reserve that stable envelope up front so
+    // cold registration does not repeatedly move the raw-pointer owners while
+    // growing through the legacy 128- and 256-entry capacities.
+    let mut funcs: Vec<Box<InternalFunction>> = Vec::with_capacity(512);
 
     // Register built-in exception classes first (Throwable, Error, TypeError, Exception)
     let class_funcs = register_builtin_classes(eg);
@@ -438,7 +442,57 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         eg.register_function("unpack", pointer).unwrap();
         funcs.push(function);
     }
-    reg!("md5", fn_md5, 2, 1, "string", "binary");
+    reg_typed!(
+        "md5",
+        fn_md5,
+        2,
+        1,
+        ["string", "binary"],
+        [ParamTypeHint::String, ParamTypeHint::Bool],
+        ParamTypeHint::String
+    );
+    reg_typed!(
+        "md5_file",
+        fn_md5_file,
+        2,
+        1,
+        ["filename", "binary"],
+        [ParamTypeHint::String, ParamTypeHint::Bool],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    reg_typed!(
+        "sha1",
+        fn_sha1,
+        2,
+        1,
+        ["string", "binary"],
+        [ParamTypeHint::String, ParamTypeHint::Bool],
+        ParamTypeHint::String
+    );
+    reg_typed!(
+        "sha1_file",
+        fn_sha1_file,
+        2,
+        1,
+        ["filename", "binary"],
+        [ParamTypeHint::String, ParamTypeHint::Bool],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    reg_typed!(
+        "crc32",
+        fn_crc32,
+        1,
+        1,
+        ["string"],
+        [ParamTypeHint::String],
+        ParamTypeHint::Int
+    );
     // S3 exposes md5, xxh128 and crc32, including binary output. The wider
     // algorithm catalogue stays explicit compatibility work rather than
     // returning invented digests.
@@ -1840,7 +1894,24 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "from_base",
         "to_base"
     );
-    reg!("decbin", fn_decbin, 1, 1, "num");
+    reg_typed!(
+        "decbin",
+        fn_decbin,
+        1,
+        1,
+        ["num"],
+        [ParamTypeHint::Int],
+        ParamTypeHint::String
+    );
+    reg_typed!(
+        "dechex",
+        fn_dechex,
+        1,
+        1,
+        ["num"],
+        [ParamTypeHint::Int],
+        ParamTypeHint::String
+    );
 
     // --- Environment / system ---
     reg!("getenv", fn_getenv, 1, 1, "name");

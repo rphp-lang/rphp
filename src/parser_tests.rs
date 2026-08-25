@@ -97,6 +97,16 @@ fn test_parse_foreach_value_reference() {
 }
 
 #[test]
+fn foreach_alias_keyword_is_case_insensitive_without_reclassifying_names() {
+    let tokens = Lexer::new(
+        "<?php class Names { const AS = 'name'; } foreach ([1] AS $value) {} echo Names::AS;",
+    )
+    .tokenize()
+    .unwrap();
+    Parser::new(tokens).parse().unwrap();
+}
+
+#[test]
 fn test_parse_foreach_destructuring_target() {
     let tokens = Lexer::new("<?php foreach ($rows as $key => [$left, $right]) {}")
         .tokenize()

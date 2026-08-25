@@ -404,7 +404,7 @@ impl Parser {
                         if nested_group {
                             return Err("Nested group use declaration is not allowed".to_string());
                         }
-                        let alias = if self.consume_use_alias_keyword() {
+                        let alias = if self.consume_as_keyword() {
                             match self.advance() {
                                 Token::Identifier(name, _) => name,
                                 other => {
@@ -440,7 +440,7 @@ impl Parser {
                 } else {
                     let mut fqn = first_name;
                     loop {
-                        let alias = if self.consume_use_alias_keyword() {
+                        let alias = if self.consume_as_keyword() {
                             match self.advance() {
                                 Token::Identifier(name, _) => name,
                                 other => {
@@ -983,7 +983,9 @@ impl Parser {
                 self.advance(); // consume 'foreach'
                 self.expect_lparen()?;
                 let array = self.parse_expr()?;
-                self.expect(&Token::As)?;
+                if !self.consume_as_keyword() {
+                    self.expect(&Token::As)?;
+                }
                 // foreach ($arr as $key => $val), foreach ($arr as $val),
                 // and the corresponding destructuring value forms.
                 let first_by_ref = if self.peek() == Token::Ampersand {
