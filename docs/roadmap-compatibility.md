@@ -2649,18 +2649,41 @@ default entity encoding, +0.196% for `double_encode=false`, -2.226% for default
 decoding, +1.419% for ordinary concatenation and -0.143% for startup, within
 +5%.
 
+The `html-entity-eucjp-big5` checkpoint closes `htmlentities23.phpt` and the
+remaining output divergence in `bug49785.phpt` against PHP 8.5.9. The
+basic-only entity path now recognizes EUC-JP and Big5 aliases, validates their
+distinct unit grammars and reproduces PHP's reject, `ENT_SUBSTITUTE` and
+`ENT_IGNORE` invalid-subpart recovery, including consume/restart boundaries.
+Two original E2E regressions and one unit test cover both functions, aliases,
+diagnostics, flag precedence and `double_encode=false`.
+
+The focused cluster moves from 0/2 to 2/2 and strings moves from 434 to 436
+pass (+2/-0), with 212 fail, 54 skip, 30 unsupported and the retained timeout.
+Array and Zend/lang classifications remain identical at 828/842 and
+4,202/5,599 pass. Three serial final runs have identical stable
+path/outcome/runner-control hashes
+`90fcff768d6bc500ba28d5cd55dbbc992029c4eac7ef49128f1d949133740d98`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `23b268c0c442d77064179a09e3a16664f45b191e58e390bdb88e661be65e3a73`.
+All five feature configurations, all-feature/all-target, formatting, HTML data,
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Exact-binary paired medians range from -1.459% to +2.621% across six relevant
+entity, decode, concatenation and startup workloads, within +5%.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 434 pass, 214 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 436 pass, 212 fail, 54 skip and 30 unsupported, with one retained timeout;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
-and invalid-UTF-8 recovery families are both 3/3. `Zend/tests` plus
+and invalid-UTF-8 recovery families are both 3/3; the EUC-JP/Big5 supplying
+pair is 2/2. `Zend/tests` plus
 `tests/lang` is 4,202 pass, 1,101 fail, 115 skip and 181 unsupported, with no
-timeout or crash. The next goal should close the EUC-JP/legacy multibyte
-boundary shared by `htmlentities23.phpt` and the remaining output divergence in
-`bug49785.phpt`; broader legacy multibyte behavior remains an explicit contract.
+timeout or crash. The next goal should first cluster and close the 13 visible
+byte-escaping failures shared by `addslashes()`, `stripslashes()`,
+`addcslashes()` and `stripcslashes()`; unknown entity-encoding warnings and
+broader legacy multibyte behavior remain explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,

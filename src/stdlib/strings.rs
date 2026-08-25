@@ -38,7 +38,14 @@ const ENT_HTML5: i64 = 48;
 enum HtmlTranslationEncoding {
     Utf8,
     Legacy(LegacyEncoding),
-    BasicOnly,
+    BasicOnly(BasicMultibyteEncoding),
+}
+
+#[derive(Clone, Copy)]
+enum BasicMultibyteEncoding {
+    Sjis,
+    EucJp,
+    Big5,
 }
 
 impl HtmlTranslationEncoding {
@@ -46,11 +53,14 @@ impl HtmlTranslationEncoding {
         if name.eq_ignore_ascii_case("UTF-8") {
             return Some(Self::Utf8);
         }
-        if matches!(
-            name.to_ascii_lowercase().as_str(),
-            "sjis" | "shift_jis" | "cp932"
-        ) {
-            return Some(Self::BasicOnly);
+        let basic = match name.to_ascii_lowercase().as_str() {
+            "sjis" | "shift_jis" | "cp932" => Some(BasicMultibyteEncoding::Sjis),
+            "euc-jp" | "eucjp" | "eucjp-win" => Some(BasicMultibyteEncoding::EucJp),
+            "big5" => Some(BasicMultibyteEncoding::Big5),
+            _ => None,
+        };
+        if let Some(encoding) = basic {
+            return Some(Self::BasicOnly(encoding));
         }
         LegacyEncoding::parse(name).map(Self::Legacy)
     }
@@ -58,7 +68,7 @@ impl HtmlTranslationEncoding {
     fn key(self, characters: &str) -> Option<String> {
         match self {
             Self::Utf8 => Some(characters.to_string()),
-            Self::BasicOnly => characters.is_ascii().then(|| characters.to_string()),
+            Self::BasicOnly(_) => characters.is_ascii().then(|| characters.to_string()),
             Self::Legacy(encoding) => {
                 let bytes = characters
                     .chars()
@@ -86,7 +96,7 @@ impl HtmlTranslationEncoding {
     }
 
     fn is_basic_only(self) -> bool {
-        matches!(self, Self::BasicOnly)
+        matches!(self, Self::BasicOnly(_))
     }
 }
 
@@ -410,12 +420,13 @@ pub(super) fn fn_htmlspecialchars(
                     .unwrap_or_default();
             ret!(rv, Value::binary_string_from_storage(encoded));
         }
-        Some(HtmlTranslationEncoding::BasicOnly) => {
+        Some(HtmlTranslationEncoding::BasicOnly(encoding)) => {
             let source = arg!(ed, 0)
                 .php_string_bytes()
                 .unwrap_or_else(|| Cow::Borrowed(string.as_bytes()));
-            let encoded = encode_html_entities_basic_multibyte(&source, flags, double_encode)
-                .unwrap_or_default();
+            let encoded =
+                encode_html_entities_basic_multibyte(&source, flags, double_encode, encoding)
+                    .unwrap_or_default();
             ret!(rv, Value::binary_string_from_storage(encoded));
         }
         None => {}
@@ -1134,6 +1145,7 @@ fn encode_html_entities_basic_multibyte(
     source: &[u8],
     flags: i64,
     double_encode: bool,
+    encoding: BasicMultibyteEncoding,
 ) -> Option<String> {
     let document = flags & ENT_DOCUMENT_MASK;
     let mut output = String::with_capacity(source.len());
@@ -1160,23 +1172,89 @@ fn encode_html_entities_basic_multibyte(
             position += 1;
             continue;
         }
-        if (0xa1..=0xdf).contains(&byte) {
-            output.push(char::from(byte));
-            position += 1;
+        let (valid, consumed) = basic_multibyte_unit(source, position, encoding);
+        if valid {
+            push_storage_bytes(&mut output, &source[position..position + consumed]);
+            position += consumed;
             continue;
         }
-        if matches!(byte, 0x81..=0x9f | 0xe0..=0xfc) {
-            let trail = *source.get(position + 1)?;
-            if matches!(trail, 0x40..=0x7e | 0x80..=0xfc) {
-                output.push(char::from(byte));
-                output.push(char::from(trail));
-                position += 2;
+        if !matches!(encoding, BasicMultibyteEncoding::Sjis) {
+            if flags & ENT_IGNORE != 0 {
+                position += consumed;
+                continue;
+            }
+            if flags & ENT_SUBSTITUTE != 0 {
+                output.push_str("&#xFFFD;");
+                position += consumed;
                 continue;
             }
         }
         return None;
     }
     Some(output)
+}
+
+fn basic_multibyte_unit(
+    source: &[u8],
+    position: usize,
+    encoding: BasicMultibyteEncoding,
+) -> (bool, usize) {
+    let byte = source[position];
+    match encoding {
+        BasicMultibyteEncoding::Sjis => {
+            if byte < 0x80 || (0xa1..=0xdf).contains(&byte) {
+                return (true, 1);
+            }
+            if matches!(byte, 0x81..=0x9f | 0xe0..=0xfc)
+                && source
+                    .get(position + 1)
+                    .is_some_and(|trail| matches!(trail, 0x40..=0x7e | 0x80..=0xfc))
+            {
+                return (true, 2);
+            }
+            (false, 1)
+        }
+        BasicMultibyteEncoding::EucJp => {
+            if byte < 0x80 || matches!(byte, 0x80..=0x8d | 0x90..=0x9f) {
+                return (true, 1);
+            }
+            let invalid_trail_width = |trail: Option<&u8>| {
+                1 + usize::from(trail.is_some_and(|trail| matches!(trail, 0xa0 | 0xff)))
+            };
+            if byte == 0x8e {
+                return match source.get(position + 1) {
+                    Some(0xa1..=0xdf) => (true, 2),
+                    trail => (false, invalid_trail_width(trail)),
+                };
+            }
+            if byte == 0x8f {
+                return match (source.get(position + 1), source.get(position + 2)) {
+                    (Some(0xa1..=0xfe), Some(0xa1..=0xfe)) => (true, 3),
+                    (Some(0xa1..=0xfe), _) => (false, 1),
+                    (trail, _) => (false, invalid_trail_width(trail)),
+                };
+            }
+            if (0xa1..=0xfe).contains(&byte) {
+                return match source.get(position + 1) {
+                    Some(0xa1..=0xfe) => (true, 2),
+                    trail => (false, invalid_trail_width(trail)),
+                };
+            }
+            (false, 1)
+        }
+        BasicMultibyteEncoding::Big5 => {
+            if !(0x81..=0xfe).contains(&byte) {
+                return (true, 1);
+            }
+            if source
+                .get(position + 1)
+                .is_some_and(|trail| matches!(trail, 0x40..=0x7e | 0xa1..=0xfe))
+            {
+                return (true, 2);
+            }
+            (false, 1)
+        }
+    }
 }
 
 /// get_html_translation_table($table = HTML_SPECIALCHARS,
@@ -1427,7 +1505,7 @@ pub(super) fn fn_htmlentities(
                 .unwrap_or_default();
             ret!(rv, Value::binary_string_from_storage(encoded));
         }
-        Some(HtmlTranslationEncoding::BasicOnly) => {
+        Some(HtmlTranslationEncoding::BasicOnly(encoding)) => {
             report_internal_diagnostic(
                 eg,
                 ed,
@@ -1441,8 +1519,9 @@ pub(super) fn fn_htmlentities(
             let source = arg!(ed, 0)
                 .php_string_bytes()
                 .unwrap_or_else(|| Cow::Borrowed(string.as_bytes()));
-            let encoded = encode_html_entities_basic_multibyte(&source, flags, double_encode)
-                .unwrap_or_default();
+            let encoded =
+                encode_html_entities_basic_multibyte(&source, flags, double_encode, encoding)
+                    .unwrap_or_default();
             ret!(rv, Value::binary_string_from_storage(encoded));
         }
         _ => {}
@@ -1711,8 +1790,9 @@ pub(super) fn fn_chunk_split(
 #[cfg(test)]
 mod tests {
     use super::{
-        ENT_HTML5, ENT_IGNORE, ENT_QUOTES_MASK, ENT_SUBSTITUTE, decode_html_special_references,
-        direct_chunk_split, sanitize_html_utf8,
+        BasicMultibyteEncoding, ENT_HTML5, ENT_IGNORE, ENT_QUOTES_MASK, ENT_SUBSTITUTE,
+        basic_multibyte_unit, decode_html_special_references, direct_chunk_split,
+        sanitize_html_utf8,
     };
     use crate::value::Value;
 
@@ -1757,5 +1837,20 @@ mod tests {
             Some("C")
         );
         assert!(sanitize_html_utf8(b"A\x80", ENT_QUOTES_MASK).is_none());
+    }
+
+    #[test]
+    fn legacy_multibyte_units_retain_restart_boundaries() {
+        let euc = BasicMultibyteEncoding::EucJp;
+        assert_eq!(basic_multibyte_unit(b"\x8e\xa1", 0, euc), (true, 2));
+        assert_eq!(basic_multibyte_unit(b"\x8f\xa1\xa1", 0, euc), (true, 3));
+        assert_eq!(basic_multibyte_unit(b"\x8f\xa0", 0, euc), (false, 2));
+        assert_eq!(basic_multibyte_unit(b"\x8f\xa1", 0, euc), (false, 1));
+        assert_eq!(basic_multibyte_unit(b"\xb2\xff", 0, euc), (false, 2));
+
+        let big5 = BasicMultibyteEncoding::Big5;
+        assert_eq!(basic_multibyte_unit(b"\x81\x40", 0, big5), (true, 2));
+        assert_eq!(basic_multibyte_unit(b"\x81\x7f", 0, big5), (false, 1));
+        assert_eq!(basic_multibyte_unit(b"\xff", 0, big5), (true, 1));
     }
 }
