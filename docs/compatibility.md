@@ -8,6 +8,86 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`path-decomposition-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. `basename()`, `dirname()` and `pathinfo()` now
+expose their typed PHP 8.5 signatures and share a handler-owned PHP-byte path
+engine. It covers empty, root, dot and dot-dot paths, relative and absolute
+paths, repeated and trailing separators, byte-exact suffix removal, dots and
+extension/filename decomposition. NUL, arbitrary high bytes and UTF-8 remain
+bytes rather than host paths; the observed PHP 8.5 `pathinfo()` NUL truncation
+is confined to its dirname component while `dirname()` retains the NUL.
+`dirname()` processes only the actual path depth, so `PHP_INT_MAX` levels
+saturate promptly at `/`, `.` or the empty result.
+
+Weak and strict scalar conversion, null and lossy-conversion deprecations,
+Stringable conversion, invalid levels, arity and named-argument errors,
+static, dynamic, first-class callback and `call_user_func*()` dispatch,
+Reflection, references, COW, binary provenance and argument side-effect order
+all enter the same handler-owned boundary. `pathinfo()` implements individual
+and combined flags, scalar selection priority, exact associative-field order
+and the absence of dirname or extension fields when PHP omits them.
+
+Three original E2Es and three byte-engine unit tests cover values, binary
+components and COW, weak/strict diagnostics, call shapes, Reflection and
+side-effect order. Five independent clean-room probes match PHP 8.5.9 byte for
+byte at SHA-256
+`0f67f449d690448fe952764dc6c39b06ed9a5a92934136242b10d7dbc023aa6d`,
+`e755d00f79d2afe81b14eb03af7780f01431f1cfaf4a94603a5e0618c2e322c4`,
+`574c87b628c18f43c791a895a6948184fdb14ca5e5825221d2f9f4ad297b5aaf`,
+`733fd2594d42c712476d5e7464e92dcc60412d57ac3b36ac18db8350a3588746`
+and `676b4949c3fb1494ec86f5f860238121de9c0344e35f437ce39b07fd1db74e50`.
+An independent exhaustive sweep covers 19,608 paths from seven separator,
+dot, NUL, ASCII, backslash and high-byte symbols through length five across
+all three functions, suffixes, dirname levels and pathinfo flags; its output
+matches exactly at
+`bc80f24ae7573078d4d328f9ba9b0bfa331bb933f14235978705dede20dcc6ae`.
+The final focused manifest is 6/6 at SHA-256
+`fdc76528ca954a733de8f9ae5ca55a68c3140dcca7f2759b0b5ae6ab33fe0e4e`.
+
+The complete 733-case strings audit moves from 563 to 569 passes, an exact
++6/-0 delta consisting only of `basename.phpt`, `basename_basic.phpt`,
+`basename_variation.phpt`, `dirname_multi.phpt`, `dirname_variation.phpt` and
+`pathinfo.phpt`. Five output failures and the only timeout become passes;
+80 failures, 54 skips and 30 unsupported cases remain, with zero timeout or
+crash. Array remains exactly 828 pass, 13 skip and one unsupported case.
+Zend/lang remains exactly 4,209 pass, 1,094 fail, 115 skip and 181 unsupported,
+with no timeout or crash. Repeated release runs and the final optimized rerun
+have identical sorted path/status/category maps at SHA-256
+`7cdae6059e5efd4df09bf2c0694a079ffdc044a6edf0c940a403f9cc5eeab6d1`,
+`7d4b397d553dbdf5875d928f8bcbe886db93d84ec8c172a08760faf969226a46`
+and `1ffb4abd73cbc929fb8386f8f808ac35c5f9ca16b745da864cecd9c1cda6d443`
+for strings, array and Zend/lang respectively. Their exact pass-set hashes are
+`f354fcd2828e018a387c6e2d6487a1360902d6a487d8b2a36399051c918dbcb4`,
+`1977b63ea5e33630f58b9f3b8ee609289b7d689b864a8e978b47ac80ffc78bc1`
+and `ea0f8211b08e79de7d4502c6b28d79abf46c26ddbbca67a506377b6b1c9a62f5`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML data, PHPT-runner and unsafe-policy checks, Composer 2.8.12
+S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at
+1,623 unsafe blocks and 289 unsafe functions, with 364 SAFETY annotations and
+seven `# Safety` sections. Exact-final-binary CPU-2-pinned balanced controls
+compare parent SHA-256
+`4d653b0f47f9caca65ae1233442fb67a38d6cce9957c8e46a112e7e327264ff7`
+with candidate
+`6e116097874d9a4d4e2a249fe7921181a7657e768aeed17af18352fca27371bd`.
+Ordinary `basename()`, `dirname()`, all-field `pathinfo()` and filename-only
+`pathinfo()` medians are -22.553%, -27.862%, -8.105% and -25.607%, with paired
+medians -22.500%, -28.000%, -8.100% and -25.600%; 200 empty processes over 40
+balanced pairs measure -1.953%, paired -1.700%. Every checksum matches and
+every median is below +5%.
+
+This checkpoint does not claim Windows separator semantics, filesystem
+canonicalization or existence checks, locale-aware paths, 32-bit execution or
+closure of the remaining 80 strings and wider Zend failures. The next
+risk-adjusted high-yield candidate is the eight-case deterministic byte-utility
+batch: `count_chars.phpt`, `count_chars_basic.phpt`, `metaphone.phpt`,
+`quotemeta_basic.phpt`, `quotemeta_basic_1.phpt`, `soundex.phpt`,
+`soundex_basic.phpt` and `str_rot13_basic.phpt`. Platform `crypt()` remains a
+separate portability and security contract.
+
+The source checkpoint is commit `bc941477`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `uuencode-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and validated
 against PHP 8.5.9. `convert_uuencode()` and `convert_uudecode()` now expose
 their typed PHP 8.5 signatures and operate on PHP bytes. The encoder emits

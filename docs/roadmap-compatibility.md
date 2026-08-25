@@ -3040,10 +3040,31 @@ and startup is +1.182%, all within +5% with matching outputs. Candidate-only
 UUencode throughput is recorded without a parent A/B claim because neither
 function existed in the parent.
 
+The `bc941477` `path-decomposition-byte-contract` checkpoint closes all six
+supplying basename, dirname and pathinfo cases against PHP 8.5.9. Typed
+handlers share one clean-room PHP-byte engine for empty, relative, absolute,
+root, dot, repeated/trailing-separator, suffix, extension, NUL and high-byte
+paths. `dirname()` saturates in actual path depth even for `PHP_INT_MAX`;
+`pathinfo()` owns PHP's flag priority, conditional fields and observed
+dirname-component NUL truncation. Weak/strict conversion, diagnostics, call
+shapes, Reflection, binary provenance, references, COW and side-effect order
+remain inside the same boundary. Three original E2Es, three unit tests, five
+clean-room probes and an exhaustive 19,608-path short sweep cover the contract.
+
+Strings moves from 563 to 569 pass (+6/-0), with no lost pass or unrelated
+outcome movement; the sole timeout becomes a 10 ms pass. Array remains exactly
+828/842 and Zend/lang exactly 4,209/5,599. Repeated release runs and the final
+optimized rerun have identical sorted classification maps. All five feature
+configurations, all-feature/all-target, formatting, HTML data, runner, unsafe,
+Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Exact-final-binary
+CPU-pinned `basename()`, `dirname()` and two `pathinfo()` controls range from
+-27.862% to -8.105%, and startup is -1.953%; paired results are likewise below
+zero, all comfortably within +5%, with matching checksums.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 563 pass, 85 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 569 pass, 80 fail, 54 skip and 30 unsupported, with no timeout or crash;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
@@ -3060,10 +3081,10 @@ related byte-search/window family is 79/79, and the direct split/join family is
 checksum/hash supplying clusters are both 8/8, the selected
 `base64_decode()` family is 6/6, and the visible quoted-printable family is
 5/5, while the visible UUencode family is 4/4. The next goal should close the
-six-case path decomposition cluster in `basename.phpt`, `basename_basic.phpt`,
-`basename_variation.phpt`, `dirname_variation.phpt`, the retained
-`dirname_multi.phpt` timeout and `pathinfo.phpt` through one shared byte-level
-path engine;
+eight-case deterministic byte-utility batch in `count_chars.phpt`,
+`count_chars_basic.phpt`, `metaphone.phpt`, `quotemeta_basic.phpt`,
+`quotemeta_basic_1.phpt`, `soundex.phpt`, `soundex_basic.phpt` and
+`str_rot13_basic.phpt` through handler-owned PHP-byte contracts;
 wider string-offset writes, typed-parameter and associative-key binary
 provenance, detached-callback alias spelling, unknown entity-encoding warnings,
 platform cryptography, tag parsing and broader legacy multibyte behavior remain
