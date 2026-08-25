@@ -563,13 +563,21 @@ fn report_incdec_diagnostic(
     opline: &Instruction,
     diagnostic: IncDecDiagnostic,
 ) -> Result<(), VmError> {
+    let suppressed = opline._pad & crate::vm::instruction::INCDEC_ERROR_SUPPRESS != 0;
     match diagnostic {
         IncDecDiagnostic::Warning(message) => {
-            report_php_warning(eg, frame, op_array, opline, message, false)
+            report_php_warning(eg, frame, op_array, opline, message, suppressed)
         }
-        IncDecDiagnostic::Deprecation(message) => {
-            report_php_deprecation(eg, frame, op_array, opline, message)
-        }
+        IncDecDiagnostic::Deprecation(message) => report_php_diagnostic(
+            eg,
+            frame,
+            op_array,
+            opline,
+            message,
+            8192,
+            "Deprecated",
+            suppressed,
+        ),
     }
 }
 
@@ -614,7 +622,7 @@ fn report_return_coercion_diagnostic(
     }
 }
 
-fn increment_php_alphanumeric_string(value: &str) -> String {
+pub(crate) fn increment_php_alphanumeric_string(value: &str) -> String {
     if value.is_empty() {
         return "1".to_string();
     }
@@ -6438,6 +6446,41 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     unsafe { (*frame).opline = opline_ptr.add(1) };
                     continue 'vm;
+                }
+                // Direct in-bounds string offset assignment is byte-oriented.
+                // Keep this narrow path ahead of array-key normalization:
+                // strings use positions rather than PHP array keys, and the
+                // replacement preserves ordinary string COW semantics.
+                if arr.value_type() == ValueType::String
+                    && idx_val.value_type() == ValueType::Long
+                    && cloned_val.value_type() == ValueType::String
+                    && opline._pad & crate::vm::instruction::ASSIGN_DIM_REFERENCE == 0
+                {
+                    let mut bytes = arr.php_string_bytes().unwrap_or_default().into_owned();
+                    let replacement = cloned_val.php_string_bytes().unwrap_or_default();
+                    let index = idx_val.as_long().unwrap_or_default();
+                    let position = if index >= 0 {
+                        Some(index as usize)
+                    } else {
+                        bytes.len().checked_add_signed(index as isize)
+                    };
+                    if replacement.len() == 1
+                        && let Some(position) = position
+                        && position < bytes.len()
+                    {
+                        bytes[position] = replacement[0];
+                        let binary = arr.is_binary_string() || cloned_val.is_binary_string();
+                        let result = if binary {
+                            Value::binary_string(&bytes)
+                        } else {
+                            String::from_utf8(bytes).map_or_else(
+                                |error| Value::binary_string(&error.into_bytes()),
+                                Value::string,
+                            )
+                        };
+                        *arr = result;
+                        break 'assign_dim;
+                    }
                 }
                 let mut key = array_key_owned_or_throw!(
                     idx_val,

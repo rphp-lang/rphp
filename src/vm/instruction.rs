@@ -93,6 +93,8 @@ pub const SEND_FLAG_INDIRECT_TEMPORARY: u16 = 1 << 5;
 /// FetchCvR flag: evaluate this read under PHP's `@` reporting mask. Custom
 /// handlers still run and observe the suppressed mask.
 pub const FETCH_CV_ERROR_SUPPRESS: u16 = 1;
+/// Direct increment/decrement executes inside an `@` suppression scope.
+pub const INCDEC_ERROR_SUPPRESS: u16 = 1;
 
 /// A source-level `goto` leaves a try/catch region with finally, while its
 /// zero-width target label shares the first executable offset of that region.

@@ -7,7 +7,79 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 PHP 8.5 contract checkpoint is `trim-charlist`,
+The latest measured AMD64 PHP 8.5 contract checkpoint is
+`string-increment-decrement`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. RPHP now exposes `str_increment()` and
+`str_decrement()` with PHP's alphanumeric-ASCII input boundary. Increment
+propagates carry through digit, uppercase and lowercase runs and may grow the
+result; decrement propagates borrow across the same classes, removes an
+exhausted leading position and rejects leading-zero or minimum single-byte
+underflow. Both functions preserve their input, PHP-byte provenance and exact
+length behavior.
+
+Empty, non-alphanumeric and non-ASCII inputs raise the canonical `ValueError`;
+decrement underflow includes the rejected source text. Weak scalar and
+stringable-object conversion, null deprecation and strict scalar rejection use
+the shared internal string boundary. The increment implementation reuses the
+existing operator carry engine, so PHP's documented polyfill has the same
+primitive behavior. Completing that polyfill also makes direct `@` suppression
+reach increment/decrement diagnostics while still invoking custom handlers,
+and admits the narrow general case of in-bounds integer string-offset writes
+with a one-byte string replacement, including negative offsets, copy-on-write
+and binary provenance.
+
+Three original E2E regressions cover carry, borrow, growth, underflow, all
+single-byte invalid classes, binary results, immutability, weak and strict
+calls, suppression, custom handlers and positive/negative byte-offset writes.
+An independent 14,760-row generated alphanumeric matrix matches PHP at SHA-256
+`527b6964d524e70307dc111629ec8f42da31fe0801191c169e15dc76f5c6f12d`.
+The complete one-byte/typed observations and strict-boundary probe match at
+`8f514f9bbeee5552fa73d95aced8fb411cbe633791e5fb2af6aa596962ff09ab`
+and `b9b204df1f4444f62f04e25e1aca14c6982ba0101c14c983d5b8a7d63e28914b`.
+The six supplying cases move from 0/6 to 6/6; their stable baseline, PHP-oracle
+and final-candidate hashes are
+`b764735c8842539f1f92e1545b2812e44633b1a5e5c6379b871086dda97819a5`,
+`f18d7c60958193fbd00bafd322f26e249f4f9493fc982aa37739b8da332732bf`
+and the same `f18d7c60958193fbd00bafd322f26e249f4f9493fc982aa37739b8da332732bf`.
+
+The complete 733-case strings audit moves from 461 to 467 passes, an exact
++6/-0 delta consisting only of the supplying cluster. There are 181 failures,
+54 skips, 30 unsupported cases, the retained `dirname_multi.phpt` timeout and
+zero crashes. Array remains exactly classified at 828 passes, 13 skips and one
+unsupported case. Zend/lang moves from 4,202 to 4,206 passes (+4/-0), with
+1,097 failures, 115 skips and 181 unsupported cases and no timeout or crash.
+The adjacent gains are `bug72943.phpt`,
+`list/list_destructuring_to_special_variables.phpt`,
+`switch/bug38623.phpt` and `tests/lang/engine_assignExecutionOrder_001.phpt`;
+all exercise the newly admitted general in-bounds string-offset write. No prior
+pass is lost and no other outcome changes. Three serial release runs have
+identical stable path/outcome/runner-control hashes
+`5428a813ea88c99ac7821a58b0a1098ffa20a1827ae4c0220ba72362222cfe1c`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `907bddc39e20247bdf412dc3de5fa6653912c1e7c0b0c542ff70af2cb3a896f8`
+for strings, array and Zend/lang respectively.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML data, PHPT-runner and unsafe-policy checks, Composer 2.8.12
+S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at
+1,622 unsafe blocks, 289 unsafe functions, 358 SAFETY annotations and seven
+`# Safety` sections. Exact-binary CPU-2-pinned balanced release A/B controls
+compare parent SHA-256
+`bc3fc4749fe82dd611b5d27194e52a32bf6ae0562633dd41af928037fba90767`
+with candidate
+`ff912856a80ffad4102b168fbd8b78a3d4ddf13437afaa923356e2705a510254`.
+Paired medians are +0.492% for three million indexed string-replacement-shaped
+array assignments, -1.240% for the established array workload, +0.840% for
+the established string workload and +1.608% for 200 empty processes. Every
+output/checksum matches and every median is below +5%.
+
+This checkpoint does not claim multi-byte, out-of-bounds, append, non-integer
+or reference string-offset writes, detached-callback alias spelling, 32-bit
+execution or the remaining strings/Zend failures. The next bounded high-yield
+candidate is the six-case `str_split()` cluster: byte chunking, empty input,
+length validation and weak/strict boundaries.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is `trim-charlist`,
 pinned to php-src 8.5 commit `fcc29c8` and validated against PHP 8.5.9.
 `trim()`, `ltrim()` and `rtrim()` now operate on PHP bytes with the exact
 default NUL/space/tab/newline/vertical-tab/carriage-return mask. Explicit

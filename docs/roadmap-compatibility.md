@@ -2717,21 +2717,46 @@ Exact-binary paired medians are -7.014% for default trim, -1.931% for explicit
 charlists, +4.703% for ordinary concatenation, +0.351% for callback dispatch
 and -6.300% for startup, within +5%.
 
+The `string-increment-decrement` checkpoint closes all six supplying
+`str_increment()` and `str_decrement()` cases against PHP 8.5.9. One validated
+ASCII engine covers carry, borrow, class boundaries, growth, leading-zero and
+single-byte underflow, exact `ValueError` diagnostics, PHP bytes and weak/strict
+calls. Three original E2E tests and independent 14,760-row, complete one-byte
+and strict-boundary observations cover the contract. The documented polyfill
+also establishes direct increment/decrement `@` suppression and the narrow
+general in-bounds integer/one-byte string-offset write, including negative
+positions and copy-on-write.
+
+The focused cluster moves from 0/6 to 6/6 and strings moves from 461 to 467
+pass (+6/-0). Array remains exactly 828/842. Zend/lang moves from 4,202 to
+4,206/5,599 (+4/-0) through four general string-offset-write gains, with every
+prior pass retained and no other outcome movement. Three serial release runs
+have identical stable strings/array/Zend hashes
+`5428a813ea88c99ac7821a58b0a1098ffa20a1827ae4c0220ba72362222cfe1c`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `907bddc39e20247bdf412dc3de5fa6653912c1e7c0b0c542ff70af2cb3a896f8`.
+All five feature configurations, all-feature/all-target, formatting, HTML data,
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Exact-final-binary CPU-pinned paired medians are +0.492% for the directly
+affected assignment control, -1.240% for the established array workload,
++0.840% for the established string workload and +1.608% for startup, within
++5%.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 461 pass, 187 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 467 pass, 181 fail, 54 skip and 30 unsupported, with one retained timeout;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
 and invalid-UTF-8 recovery families are both 3/3; the EUC-JP/Big5 supplying
 pair is 2/2 and the byte-escaping supplying family is 12/12. `Zend/tests` plus
-`tests/lang` is 4,202 pass, 1,101 fail, 115 skip and 181 unsupported, with no
-timeout or crash. The trim/charlist family is now 11/11. The next goal should
-first cluster and close the six visible `str_increment()`/`str_decrement()`
-failures; typed-parameter binary provenance, detached-callback alias spelling,
-unknown entity-encoding warnings and broader legacy multibyte behavior remain
-explicit contracts.
+`tests/lang` is 4,206 pass, 1,097 fail, 115 skip and 181 unsupported, with no
+timeout or crash. The trim/charlist family is 11/11 and the increment/decrement
+family is 6/6. The next goal should close the six visible `str_split()`
+failures; wider string-offset writes, typed-parameter binary provenance,
+detached-callback alias spelling, unknown entity-encoding warnings and broader
+legacy multibyte behavior remain explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,

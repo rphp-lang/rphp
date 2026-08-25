@@ -6377,6 +6377,112 @@ fn fn_strtoupper(
     ret!(rv, result);
 }
 
+fn alphanumeric_ascii_string_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+) -> Result<Option<Value>, VmError> {
+    let Some(string) =
+        typed_internal_string_value_argument_expected(ed, eg, function, 0, "string", "string")?
+    else {
+        return Ok(None);
+    };
+    let bytes = string.php_string_bytes().unwrap_or_default();
+    let message = if bytes.is_empty() {
+        Some(format!(
+            "{function}(): Argument #1 ($string) must not be empty"
+        ))
+    } else if bytes.iter().any(|byte| !byte.is_ascii_alphanumeric()) {
+        Some(format!(
+            "{function}(): Argument #1 ($string) must be composed only of alphanumeric ASCII characters"
+        ))
+    } else {
+        None
+    };
+    if let Some(message) = message {
+        eg.exception = Some(crate::value::make_error_value("ValueError", &message));
+        return Ok(None);
+    }
+    Ok(Some(string))
+}
+
+#[inline]
+fn string_result_preserving_bytes(source: &Value, result: String) -> Value {
+    if source.is_binary_string() {
+        Value::binary_string_from_storage(result)
+    } else {
+        Value::string(result)
+    }
+}
+
+fn fn_str_increment(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(string) = alphanumeric_ascii_string_argument(ed, eg, "str_increment")? else {
+        return Ok(());
+    };
+    let result =
+        crate::vm::execute::increment_php_alphanumeric_string(string.as_str().unwrap_or_default());
+    ret!(rv, string_result_preserving_bytes(&string, result));
+}
+
+fn decrement_php_alphanumeric_string(value: &str) -> Option<String> {
+    let mut bytes = value.as_bytes().to_vec();
+    if bytes.first() == Some(&b'0') {
+        return None;
+    }
+
+    let mut borrow = true;
+    for byte in bytes.iter_mut().rev() {
+        if !borrow {
+            break;
+        }
+        match *byte {
+            b'1'..=b'9' | b'B'..=b'Z' | b'b'..=b'z' => {
+                *byte -= 1;
+                borrow = false;
+            }
+            b'0' => *byte = b'9',
+            b'A' => *byte = b'Z',
+            b'a' => *byte = b'z',
+            _ => unreachable!("caller validates alphanumeric ASCII"),
+        }
+    }
+
+    if borrow {
+        if bytes.len() == 1 {
+            return None;
+        }
+        bytes.remove(0);
+    } else if bytes.len() > 1 && bytes[0] == b'0' {
+        bytes.remove(0);
+    }
+    Some(String::from_utf8(bytes).expect("ASCII decrement preserves UTF-8"))
+}
+
+fn fn_str_decrement(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(string) = alphanumeric_ascii_string_argument(ed, eg, "str_decrement")? else {
+        return Ok(());
+    };
+    let source = string.as_str().unwrap_or_default();
+    let Some(result) = decrement_php_alphanumeric_string(source) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            &format!(
+                "str_decrement(): Argument #1 ($string) \"{source}\" is out of decrement range"
+            ),
+        ));
+        return Ok(());
+    };
+    ret!(rv, string_result_preserving_bytes(&string, result));
+}
+
 const DEFAULT_TRIM_MASK: [bool; 256] = {
     let mut mask = [false; 256];
     mask[0] = true;

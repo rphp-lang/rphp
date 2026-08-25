@@ -524,6 +524,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         1,
         "string"
     );
+    reg!("str_increment", fn_str_increment, 1, 1, "string");
+    reg!("str_decrement", fn_str_decrement, 1, 1, "string");
     reg!("trim", fn_trim, 2, 1, "string", "characters");
     reg!("rtrim", fn_rtrim, 2, 1, "string", "characters");
     reg!("ltrim", fn_ltrim, 2, 1, "string", "characters");

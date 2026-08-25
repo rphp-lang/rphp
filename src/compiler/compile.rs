@@ -9654,6 +9654,11 @@ impl Compiler {
                         instruction._pad |= EVAL_FLAG_ERROR_SUPPRESS;
                     } else if instruction.opcode == OpCode::FetchCvR {
                         instruction._pad |= crate::vm::instruction::FETCH_CV_ERROR_SUPPRESS;
+                    } else if matches!(
+                        instruction.opcode,
+                        OpCode::PreInc | OpCode::PreDec | OpCode::PostInc | OpCode::PostDec
+                    ) {
+                        instruction._pad |= crate::vm::instruction::INCDEC_ERROR_SUPPRESS;
                     } else if instruction.opcode == OpCode::FetchDimR
                         && instruction._pad & FETCH_DIM_ISSET == 0
                     {
