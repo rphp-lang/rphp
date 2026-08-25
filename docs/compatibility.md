@@ -8,74 +8,79 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
-`str-getcsv-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and
-validated against PHP 8.5.9. `str_getcsv()` now exposes PHP 8.5's typed
-four-argument signature and parses PHP bytes with the shared CSV state machine.
-It covers separator/enclosure collisions, doubled enclosures, legacy and empty
-escape modes, empty and trailing fields, malformed enclosed input, embedded and
-terminal line endings, NUL, arbitrary high bytes and UTF-8 byte sequences.
-Returned fields retain byte provenance, are detached from the source and
-preserve references and copy-on-write aliases.
+`checksum-hash-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. `crc32()`, `sha1()`, `sha1_file()` and
+`md5_file()` now expose typed PHP 8.5 signatures and share handler-owned PHP
+byte boundaries. CRC-32 returns the positive unsigned 32-bit result on AMD64;
+SHA-1 and both file digests return exact lower-case hex or binary output.
+Empty, NUL, arbitrary high-byte, UTF-8 and multi-block inputs retain their PHP
+byte identity. File calls validate arguments before opening, cover ordinary
+and `file://` paths plus empty PHP memory streams, and reproduce the admitted
+empty, NUL and missing-file error order.
 
-Handler-owned string boundaries reproduce weak and strict scalar conversion,
-null deprecations, single-byte separator/enclosure validation, empty-or-one-byte
-escape validation and the PHP 8.5 default-escape deprecation in observable
-order. Static, dynamic, named and callback calls share the implementation;
-Reflection exposes one required and four total parameters, their string types
-and the array return type. A guarded allocation-direct path handles ordinary
-ASCII records, while binary, UTF-8, NUL, multiline and diagnostic inputs deopt
-to the canonical byte parser before any PHP-visible effect.
+Weak and strict scalar conversion, null and lossy-conversion deprecations,
+Stringable conversion, arity and named-argument errors, static, dynamic,
+callback and `call_user_func*()` dispatch, Reflection, references and COW share
+the canonical builtin path. Contextual case-insensitive `AS` parsing unlocks
+the supplying CRC case without turning class constant `AS` into a keyword.
+Direct-CV `.=` now owns its undefined-target warning and appends equal- or
+mixed-provenance strings in place; this preserves diagnostic/re-entry order and
+makes the supplying multi-block binary construction linear rather than
+quadratic. Proven `strlen()` reads the PHP byte length from either string
+representation.
 
-Three original E2E regressions and three parser unit regressions cover the byte
-state machine, weak/strict diagnostics, call shapes, Reflection, references and
-COW. Four independent clean-room probes match PHP 8.5.9 byte for byte at
-SHA-256
-`dd67852b84ca0c5269b02987113c6c077030d74059e58f3aee55967b15183bb8`,
-`c034ab0ff3340494aa2e7b24a6870908d74a0180f2e18f400cc2cb06b6301aa6`,
-`386239b930ad4b16b43cbfd4b301ebcdd6c6e9c5dee363c39a23888a227c5c8f`
-and `cac8210bc708b28601104c22b7f2ca1d3ee8e5f0208f145215c74a8d998880a8`.
-All eight supplying cases move from 0/8 to 8/8. A serial adjacent `fgetcsv()`
-selection gains `fgetcsv_variation1.phpt`, `fgetcsv_variation2.phpt` and
-`fgetcsv_variation6.phpt` without a lost pass.
+Three original checksum E2Es, two SHA/CRC unit tests, two compiler/compound-
+concat regressions and one parser regression cover bytes, diagnostics, file
+calls, call shapes, Reflection, references/COW, undefined writes and the
+512-byte append boundary.
+Four independent clean-room probes match PHP 8.5.9 byte for byte at SHA-256
+`d01c17de228783d7b6c2362775c00267db98f446f3dc6aeee83ba9c2cfa5c40e`,
+`742c4708e37f232d6e24e6163dd23d5c57c2c21d787c71dc5346b945214e1c10`,
+`0471a39b74028fbf0630ebcf8983f9b575ea8553f062e968456f66cde4f32c78`
+and `5ae8f5da35b9dc0bc0687fce86dba64ff41db16aea632bf144991dc34ccc375f`.
+All eight supplying cases move from 0/8 to 8/8.
 
-The complete 733-case strings audit moves from 533 to 541 passes, an exact
-+8/-0 delta consisting only of the supplying paths. There are 107 failures,
-54 skips, 30 unsupported cases, the retained `dirname_multi.phpt` timeout and
-zero crashes. Array remains exactly classified at 828 passes, 13 skips and one
-unsupported case. Zend/lang remains exactly 4,207 passes, 1,096 failures, 115
-skips and 181 unsupported cases, with no timeout or crash. Three serial release
-runs have identical stable path/outcome/runner-control hashes
-`7a8c316ac61c81054f811afa21ecf345b6d9cf9c2868f3e22692309f4e77c3ed`,
-`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
-and `7395473944b83035e48b985b944472f6b1d3bfb26884b5f437c1b390dbd876e4`
-for strings, array and Zend/lang respectively.
+The complete 733-case strings audit moves from 541 to 549 passes, an exact
++8/-0 delta consisting only of the supplying paths. There are 99 failures, 54
+skips, 30 unsupported cases, the retained `dirname_multi.phpt` timeout and zero
+crashes. Array remains exactly classified at 828 passes, 13 skips and one
+unsupported case. Zend/lang moves from 4,207 to 4,209 passes with 1,094
+failures, 115 skips and 181 unsupported cases. The exact +2/-0 adjacent gain is
+`Zend/tests/concat/concat_003.phpt` and
+`Zend/tests/foreach/bug68215.phpt`; there is no timeout or crash. Three release
+runs have identical stable classification hashes
+`6c3c2420eb069b8444e515dc737dac5413e183ace9a00605ee8827036fc79a7a`,
+`c44483c1e9f9360fe2a5c3751464f45530a95423469b2313f55cc1204f6aa1dc`
+and `4cbfc3ca3860426d78d04872a9956b65c26a2fc49743c844114b17fe8fde2c17`
+for strings, array and Zend/lang respectively. Their pass-set hashes are
+`3511a59035306d425f45b38dd056cd93280c5397e085fbb7f0c5a6300d397c8e`,
+`1977b63ea5e33630f58b9f3b8ee609289b7d689b864a8e978b47ac80ffc78bc1`
+and `ea0f8211b08e79de7d4502c6b28d79abf46c26ddbbca67a506377b6b1c9a62f5`.
 
 All five Cargo feature configurations, locked all-feature/all-target,
 formatting, HTML data, PHPT-runner and unsafe-policy checks, Composer 2.8.12
 S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at
-1,623 unsafe blocks and 289 unsafe functions, with 363 SAFETY annotations and
+1,623 unsafe blocks and 289 unsafe functions, with 364 SAFETY annotations and
 seven `# Safety` sections. Exact-final-binary CPU-2-pinned balanced controls
 compare parent SHA-256
-`53b6a48376eaa1aab585e731cd6fe191f0278eab079da1cff150a8b174a3285e`
+`31af8c97e1d85d73e012b274b2cb496f5c1405d765d3e3347e5f3a44565ebbd3`
 with candidate
-`31af8c97e1d85d73e012b274b2cb496f5c1405d765d3e3347e5f3a44565ebbd3`.
-Affected simple, quoted, control, dynamic, `fgetcsv()` and loop medians are
-+0.194%, +1.140%, -0.067%, +2.111%, +0.977% and +0.402%. Retained split/join
-controls range from -1.193% to +1.440%, retained byte-search controls from
--0.799% to +3.835%, and 200 empty processes measure -4.642%. Every checksum
+`5036f37bc06e1894cd036283eb9443032fe3e10534a1b9762b6cf0225a660259`.
+Two million existing `md5()` and `hash('xxh128')` calls measure +1.112% and
+-2.087%; call-RHS concat and binary append controls measure -97.569% and
+-69.274%, and 200 empty processes measure -4.297%. Every comparable checksum
 matches and every median is below +5%.
 
-This checkpoint does not claim general internal-Reflection default rendering,
-legacy decoder-to-typed-parameter binary provenance, exact OOM diagnostics,
-32-bit execution or broader CSV/file compatibility. The remaining 107 strings
-and wider Zend failures stay visible. The next risk-adjusted high-yield
-candidate is the eight-case checksum/hash cluster: `bug36306.phpt`,
-`crc32.phpt`, `crc32_basic.phpt`, `md5_file.phpt`, `sha1.phpt`,
-`sha1_basic.phpt`, `sha1_file.phpt` and `sha1raw.phpt`. It can reuse the
-existing byte-digest and stream boundaries without taking on platform
-`crypt()` behavior.
+This checkpoint does not claim general stream-wrapper digest support, exact
+directory-read diagnostics, high-byte filesystem paths, streaming digest I/O,
+32-bit CRC integer rendering, typed-parameter binary provenance, broader hash
+algorithms or platform `crypt()` behavior. The remaining 99 strings and wider
+Zend failures stay visible. The next risk-adjusted high-yield candidate is the
+five failing `base64_decode()` strict/invalid-byte cases: `bug24312.phpt`,
+`bug37244.phpt`, `bug72152.phpt`, `bug72263.phpt` and `bug72264.phpt`, while
+retaining the already passing `bug34214.phpt` whitespace boundary.
 
-The source checkpoint is commit `4a5808cb`.
+The source checkpoint is commit `22fb170a`.
 
 The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `split-join-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and validated
