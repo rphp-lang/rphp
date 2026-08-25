@@ -28,6 +28,23 @@ mod truncate;
 use csv::CsvParser;
 use temp::{TempStream, memory_limit as temp_memory_limit};
 
+/// Parse the complete byte string supplied to `str_getcsv()`. This shares the
+/// stream CSV state machine without giving embedded newlines stream-record
+/// semantics.
+#[cfg_attr(target_vendor = "apple", cold)]
+#[cfg_attr(target_vendor = "apple", inline(never))]
+#[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_csv"))]
+pub(super) fn parse_csv_string(
+    input: &[u8],
+    separator: u8,
+    enclosure: u8,
+    escape: Option<u8>,
+) -> io::Result<Vec<Option<Vec<u8>>>> {
+    let mut parser = CsvParser::new_string(separator, enclosure, escape);
+    parser.push_segment(input)?;
+    parser.finish(true)
+}
+
 #[cfg(target_vendor = "apple")]
 include!("stream/csv.rs");
 

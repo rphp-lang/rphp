@@ -16,10 +16,11 @@ use super::{
     html_entities::{HTML4_ENTITIES, HTML5_ENTITIES, html5_characters_for_entity},
     internal_call_source,
     legacy_encoding::LegacyEncoding,
-    owned_argument, percent_decode_bytes, php_string_to_bytes, push_percent_escape,
-    report_internal_diagnostic, string_position_builtin, typed_internal_bool_argument,
-    typed_internal_int_argument, typed_internal_string_argument,
-    typed_internal_string_argument_expected, typed_internal_string_value_argument_expected,
+    owned_argument, percent_decode_bytes, php_byte_result, php_string_to_bytes,
+    push_percent_escape, report_internal_deprecation, report_internal_diagnostic,
+    string_position_builtin, typed_internal_bool_argument, typed_internal_int_argument,
+    typed_internal_string_argument, typed_internal_string_argument_expected,
+    typed_internal_string_value_argument_expected,
 };
 
 // ============================================================================
@@ -1672,44 +1673,272 @@ pub(super) fn fn_substr_replace(
 }
 
 /// str_getcsv($string, $separator = ",", $enclosure = "\"", $escape = "\\"): array
+fn str_getcsv_array(
+    string: &Value,
+    separator: u8,
+    enclosure: u8,
+    escape: Option<u8>,
+) -> Result<PhpArray, VmError> {
+    let binary = string.is_binary_string();
+    let bytes = string.php_string_bytes().unwrap_or_default();
+    let fields = super::stream::parse_csv_string(&bytes, separator, enclosure, escape)
+        .map_err(|error| VmError::Fatal(error.to_string()))?;
+    let mut array = PhpArray::with_packed_capacity(fields.len());
+    for field in fields {
+        array.push(field.map_or_else(Value::null, |field| php_byte_result(field, binary)));
+    }
+    Ok(array)
+}
+
+#[derive(Clone, Copy)]
+enum TextCsvState {
+    FieldStart,
+    Unquoted,
+    Quoted,
+    AfterQuote,
+}
+
+/// Allocation-direct fast path for ordinary ASCII records. Binary, UTF-8,
+/// NUL, multiline and diagnostic inputs stay in the canonical shared parser.
+/// The guarded state transitions intentionally mirror that parser while
+/// materializing the packed PHP result without an intermediate field vector.
+fn str_getcsv_text_fast(
+    string: &Value,
+    separator: u8,
+    enclosure: u8,
+    escape: Option<u8>,
+) -> Option<PhpArray> {
+    if string.is_binary_string()
+        || !separator.is_ascii()
+        || !enclosure.is_ascii()
+        || separator == b'\0'
+        || enclosure == b'\0'
+        || escape.is_some_and(|escape| !escape.is_ascii() || escape == b'\0')
+    {
+        return None;
+    }
+    let source = string.as_str()?.as_bytes();
+    if source.is_empty() {
+        let mut array = PhpArray::with_packed_capacity(1);
+        array.push(Value::null());
+        return Some(array);
+    }
+
+    let mut array = PhpArray::with_packed_capacity(4);
+    let mut field = String::new();
+    let mut state = TextCsvState::FieldStart;
+    let mut index = 0usize;
+    while index < source.len() {
+        let byte = source[index];
+        // No PHP-visible work has happened yet: an ineligible later byte may
+        // discard this private partial result and restart canonically.
+        if !byte.is_ascii() || matches!(byte, b'\0' | b'\r' | b'\n') {
+            return None;
+        }
+        match state {
+            TextCsvState::FieldStart => {
+                if byte == enclosure {
+                    field.clear();
+                    state = TextCsvState::Quoted;
+                } else if byte == separator {
+                    array.push(Value::string(std::mem::take(&mut field)));
+                } else {
+                    field.push(char::from(byte));
+                    if !matches!(byte, b' ' | b'\t') {
+                        state = TextCsvState::Unquoted;
+                    }
+                }
+            }
+            TextCsvState::Unquoted => {
+                if byte == separator {
+                    array.push(Value::string(std::mem::take(&mut field)));
+                    state = TextCsvState::FieldStart;
+                } else {
+                    field.push(char::from(byte));
+                }
+            }
+            TextCsvState::Quoted => {
+                if byte == enclosure {
+                    if source.get(index + 1).copied() == Some(enclosure) {
+                        field.push(char::from(enclosure));
+                        index += 1;
+                    } else {
+                        state = TextCsvState::AfterQuote;
+                    }
+                } else if escape == Some(byte) {
+                    field.push(char::from(byte));
+                    if let Some(next) = source.get(index + 1).copied() {
+                        field.push(char::from(next));
+                        index += 1;
+                    }
+                } else {
+                    field.push(char::from(byte));
+                }
+            }
+            TextCsvState::AfterQuote => {
+                if byte == separator {
+                    array.push(Value::string(std::mem::take(&mut field)));
+                    state = TextCsvState::FieldStart;
+                } else {
+                    field.push(char::from(byte));
+                }
+            }
+        }
+        index += 1;
+    }
+    array.push(Value::string(field));
+    Some(array)
+}
+
 pub(super) fn fn_str_getcsv(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    let sep = arg_opt!(ed, 1)
-        .map(|v| v.echo_to_string().chars().next().unwrap_or(','))
-        .unwrap_or(',');
-    let enc = arg_opt!(ed, 2)
-        .map(|v| v.echo_to_string().chars().next().unwrap_or('"'))
-        .unwrap_or('"');
-
-    let mut arr = PhpArray::new();
-    let mut field = String::new();
-    let mut in_enclosure = false;
-    let mut chars = s.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c == enc {
-            if in_enclosure {
-                if chars.peek() == Some(&enc) {
-                    field.push(enc);
-                    chars.next();
-                } else {
-                    in_enclosure = false;
+    let exact_string = arg!(ed, 0);
+    if exact_string.value_type() == ValueType::String
+        && let (Some(exact_separator), Some(exact_enclosure), Some(exact_escape)) =
+            (arg_opt!(ed, 1), arg_opt!(ed, 2), arg_opt!(ed, 3))
+        && exact_separator.value_type() == ValueType::String
+        && exact_enclosure.value_type() == ValueType::String
+        && exact_escape.value_type() == ValueType::String
+    {
+        let separator = exact_separator.php_string_bytes().unwrap_or_default();
+        let enclosure = exact_enclosure.php_string_bytes().unwrap_or_default();
+        let escape = exact_escape.php_string_bytes().unwrap_or_default();
+        match (separator.as_ref(), enclosure.as_ref(), escape.as_ref()) {
+            ([separator], [enclosure], []) => {
+                if let Some(array) =
+                    str_getcsv_text_fast(exact_string, *separator, *enclosure, None)
+                {
+                    ret!(rv, Value::array(array));
                 }
-            } else {
-                in_enclosure = true;
+                ret!(
+                    rv,
+                    Value::array(str_getcsv_array(
+                        exact_string,
+                        *separator,
+                        *enclosure,
+                        None
+                    )?)
+                );
             }
-        } else if c == sep && !in_enclosure {
-            arr.push(Value::string(std::mem::take(&mut field)));
-        } else {
-            field.push(c);
+            ([separator], [enclosure], [escape]) => {
+                if let Some(array) =
+                    str_getcsv_text_fast(exact_string, *separator, *enclosure, Some(*escape))
+                {
+                    ret!(rv, Value::array(array));
+                }
+                ret!(
+                    rv,
+                    Value::array(str_getcsv_array(
+                        exact_string,
+                        *separator,
+                        *enclosure,
+                        Some(*escape)
+                    )?)
+                );
+            }
+            _ => {}
         }
     }
-    arr.push(Value::string(field));
-    ret!(rv, Value::array(arr));
+
+    let Some(string) =
+        typed_internal_string_value_argument_expected(ed, eg, "str_getcsv", 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let separator = if arg_opt!(ed, 1).is_some() {
+        let Some(separator) = typed_internal_string_value_argument_expected(
+            ed,
+            eg,
+            "str_getcsv",
+            1,
+            "separator",
+            "string",
+        )?
+        else {
+            return Ok(());
+        };
+        let bytes = separator.php_string_bytes().unwrap_or_default();
+        let [separator] = bytes.as_ref() else {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                "str_getcsv(): Argument #2 ($separator) must be a single character",
+            ));
+            return Ok(());
+        };
+        *separator
+    } else {
+        b','
+    };
+    let enclosure = if arg_opt!(ed, 2).is_some() {
+        let Some(enclosure) = typed_internal_string_value_argument_expected(
+            ed,
+            eg,
+            "str_getcsv",
+            2,
+            "enclosure",
+            "string",
+        )?
+        else {
+            return Ok(());
+        };
+        let bytes = enclosure.php_string_bytes().unwrap_or_default();
+        let [enclosure] = bytes.as_ref() else {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                "str_getcsv(): Argument #3 ($enclosure) must be a single character",
+            ));
+            return Ok(());
+        };
+        *enclosure
+    } else {
+        b'"'
+    };
+    let escape_supplied = arg_opt!(ed, 3).is_some();
+    let escape = if escape_supplied {
+        let Some(escape) = typed_internal_string_value_argument_expected(
+            ed,
+            eg,
+            "str_getcsv",
+            3,
+            "escape",
+            "string",
+        )?
+        else {
+            return Ok(());
+        };
+        let bytes = escape.php_string_bytes().unwrap_or_default();
+        match bytes.as_ref() {
+            [] => None,
+            [escape] => Some(*escape),
+            _ => {
+                eg.exception = Some(crate::value::make_error_value(
+                    "ValueError",
+                    "str_getcsv(): Argument #4 ($escape) must be empty or a single character",
+                ));
+                return Ok(());
+            }
+        }
+    } else {
+        Some(b'\\')
+    };
+    if !escape_supplied {
+        report_internal_deprecation(
+            eg,
+            ed,
+            "str_getcsv(): the $escape parameter must be provided as its default value will change",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+
+    ret!(
+        rv,
+        Value::array(str_getcsv_array(&string, separator, enclosure, escape)?)
+    );
 }
 
 const PHP_DEFAULT_MEMORY_LIMIT: usize = 128 * 1024 * 1024;

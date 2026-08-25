@@ -24,6 +24,7 @@ pub(super) struct CsvParser {
     pending_escape: bool,
     saw_non_eol_byte: bool,
     record_done: bool,
+    string_input: bool,
 }
 
 impl CsvParser {
@@ -34,14 +35,29 @@ impl CsvParser {
         Self {
             separator,
             enclosure,
-            escape,
+            // PHP accepts every single byte at the call boundary but its CSV
+            // scanner only treats the ASCII range as an active escape.
+            escape: escape.filter(u8::is_ascii),
             state: CsvState::FieldStart,
             field: Vec::new(),
             fields: Vec::new(),
             pending_escape: false,
             saw_non_eol_byte: false,
             record_done: false,
+            string_input: false,
         }
+    }
+
+    /// Build a parser for `str_getcsv()`. Unlike stream records, embedded
+    /// line endings belong to the supplied string; only its final line ending
+    /// terminates an unquoted record.
+    #[cfg_attr(target_vendor = "apple", cold)]
+    #[cfg_attr(target_vendor = "apple", inline(never))]
+    #[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_csv"))]
+    pub(super) fn new_string(separator: u8, enclosure: u8, escape: Option<u8>) -> Self {
+        let mut parser = Self::new(separator, enclosure, escape);
+        parser.string_input = true;
+        parser
     }
 
     #[cold]
@@ -52,6 +68,10 @@ impl CsvParser {
         let mut index = 0;
         while index < segment.len() {
             let byte = segment[index];
+            let final_string_line_feed = self.string_input
+                && byte == b'\n'
+                && index + 1 == segment.len()
+                && self.state != CsvState::Quoted;
             if byte != b'\r' && byte != b'\n' {
                 self.saw_non_eol_byte = true;
             }
@@ -65,15 +85,15 @@ impl CsvParser {
 
             match self.state {
                 CsvState::FieldStart => {
-                    if byte == b'\n' {
+                    if (byte == b'\n' && !self.string_input) || final_string_line_feed {
                         self.finish_record_at_line_end()?;
-                    } else if byte == self.separator {
-                        self.finish_field(false)?;
                     } else if byte == self.enclosure {
                         // PHP accepts an enclosure after leading horizontal
                         // whitespace and does not retain that whitespace.
                         self.field.clear();
                         self.state = CsvState::Quoted;
+                    } else if byte == self.separator {
+                        self.finish_field(false)?;
                     } else {
                         self.push_byte(byte)?;
                         if !matches!(byte, b' ' | b'\t') {
@@ -82,7 +102,7 @@ impl CsvParser {
                     }
                 }
                 CsvState::Unquoted => {
-                    if byte == b'\n' {
+                    if (byte == b'\n' && !self.string_input) || final_string_line_feed {
                         self.finish_record_at_line_end()?;
                     } else if byte == self.separator {
                         self.finish_field(false)?;
@@ -111,7 +131,7 @@ impl CsvParser {
                     }
                 }
                 CsvState::AfterQuote => {
-                    if byte == b'\n' {
+                    if (byte == b'\n' && !self.string_input) || final_string_line_feed {
                         self.finish_record_at_line_end()?;
                     } else if byte == self.separator {
                         self.finish_field(false)?;
@@ -180,6 +200,12 @@ impl CsvParser {
         if strip_carriage_return && self.field.last() == Some(&b'\r') {
             self.field.pop();
         }
+        // PHP 8.5 exposes its NUL escape sentinel for an otherwise empty,
+        // unterminated enclosed field. Keep the quirk bounded to that exact
+        // state; closed empty fields and every other escape remain empty.
+        if self.field.is_empty() && self.state == CsvState::Quoted && self.escape == Some(b'\0') {
+            self.push_byte(b'\0')?;
+        }
         let field = std::mem::take(&mut self.field);
         self.push_field(Some(field))?;
         self.state = CsvState::FieldStart;
@@ -225,6 +251,22 @@ mod csv_tests {
         for part in parts {
             parser.push_segment(part).unwrap();
         }
+        parser.finish(true).unwrap()
+    }
+
+    fn parse_with(
+        input: &[u8],
+        separator: u8,
+        enclosure: u8,
+        escape: Option<u8>,
+        string_input: bool,
+    ) -> Vec<Option<Vec<u8>>> {
+        let mut parser = if string_input {
+            CsvParser::new_string(separator, enclosure, escape)
+        } else {
+            CsvParser::new(separator, enclosure, escape)
+        };
+        parser.push_segment(input).unwrap();
         parser.finish(true).unwrap()
     }
 
@@ -283,5 +325,33 @@ mod csv_tests {
         let mut parser = CsvParser::new(b'\n', b'"', None);
         parser.push_segment(b"a,b\n").unwrap();
         assert_eq!(parser.finish(false).unwrap(), vec![Some(b"a,b".to_vec())]);
+    }
+
+    #[test]
+    fn enclosure_precedes_an_identical_separator_at_field_start() {
+        assert_eq!(
+            parse_with(b".red..blue.\n", b'.', b'.', Some(b'.'), false),
+            vec![Some(b"red.blue".to_vec())]
+        );
+    }
+
+    #[test]
+    fn non_ascii_escape_is_accepted_but_not_scanned_as_an_escape() {
+        assert_eq!(
+            parse_with(b"\"a\xfe\"b\",c\n", b',', b'"', Some(0xfe), false),
+            vec![Some(b"a\xfeb\"".to_vec()), Some(b"c".to_vec())]
+        );
+    }
+
+    #[test]
+    fn string_input_keeps_embedded_newlines_and_nul_escape_empty_quirk() {
+        assert_eq!(
+            parse_with(b"\"a\nb\",c\nd\r\n", b',', b'"', None, true),
+            vec![Some(b"a\nb".to_vec()), Some(b"c\nd".to_vec())]
+        );
+        assert_eq!(
+            parse_with(b"\0yy", b'y', b'y', Some(b'\0'), true),
+            vec![Some(vec![b'\0']), Some(vec![b'\0'])]
+        );
     }
 }

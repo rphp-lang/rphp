@@ -1635,15 +1635,25 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         eg.register_function("substr_replace", pointer).unwrap();
         funcs.push(function);
     }
-    reg!(
-        "str_getcsv",
-        fn_str_getcsv,
-        3,
-        1,
-        "string",
-        "separator",
-        "enclosure"
-    );
+    {
+        let mut function = Box::new(make_internal_function(
+            fn_str_getcsv,
+            4,
+            1,
+            pn!["string", "separator", "enclosure", "escape"],
+        ));
+        function.common.sig.param_type_hints = vec![
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+        ];
+        function.common.sig.return_type_hint = ParamTypeHint::Array;
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("str_getcsv", pointer).unwrap();
+        funcs.push(function);
+    }
     {
         let mut function = Box::new(make_internal_function(
             fn_chunk_split,
