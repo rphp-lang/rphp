@@ -8,6 +8,68 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`nl2br-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and validated
+against PHP 8.5.9. `nl2br()` now inserts exactly one `<br />` or `<br>` before
+each PHP newline sequence: CRLF and LFCR are paired, while standalone CR and LF
+remain independent. The original newline bytes stay in the result. Empty and
+newline-free strings, repeated/mixed sequences, embedded NUL, arbitrary high
+bytes and UTF-8 byte sequences preserve their exact PHP-byte content and do not
+mutate the source.
+
+The public signature exposes required `string $string`, optional
+`bool $use_xhtml` and `string` return metadata. Handler-owned internal
+boundaries reproduce weak scalar and stringable conversion, both null
+deprecations, strict rejection and array/resource/object diagnostics. Static,
+dynamic, named and callback calls share the same implementation and Reflection
+surface. A one-pass guarded ASCII path copies whole spans between CR/LF markers;
+binary, non-ASCII and coerced inputs deopt to the canonical byte engine.
+
+Three original E2E regressions cover every newline pairing, XHTML/HTML output,
+immutability, NUL/invalid/UTF-8 bytes, weak and strict conversions, diagnostics,
+call shapes and Reflection. Independent byte, weak/call and strict clean-room
+probes match the PHP oracle at SHA-256
+`f04331ded8392c909d58bc4824dc35f30e21a622e678dc1cf2cc82a85f25b8b2`,
+`7c2976007c4d5a55a3f55aafa935951abea50d95eceebf18dcdaf0cba6de30d2`
+and `7f49f1cf72000c2848eb1cb43a645fb5b888515e95f24bb74be867d0ddd82280`.
+The four supplying cases move from 0/4 to 4/4; their normalized baseline,
+PHP-oracle and final-candidate hashes are
+`08834d75507ef0f72d731c672264e7599cb46de90be8c242571f20f516609df5`,
+`004fe4934fb719b9474c07ec2f972414fbce0c75ea18310adfd477d60df639cd`
+and the same `004fe4934fb719b9474c07ec2f972414fbce0c75ea18310adfd477d60df639cd`.
+
+The complete 733-case strings audit moves from 495 to 499 passes, an exact
++4/-0 delta consisting only of the supplying cluster. There are 149 failures,
+54 skips, 30 unsupported cases, the retained `dirname_multi.phpt` timeout and
+zero crashes. Array remains exactly classified at 828 passes, 13 skips and one
+unsupported case. Zend/lang remains exactly classified at 4,206 passes, 1,097
+failures, 115 skips and 181 unsupported cases with no timeout or crash. Three
+serial release runs have identical stable path/outcome/runner-control hashes
+`646f38563eae4880aef240ec576538d7da6e9044e26112b02806aa1a86993f1f`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `907bddc39e20247bdf412dc3de5fa6653912c1e7c0b0c542ff70af2cb3a896f8`
+for strings, array and Zend/lang respectively.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML data, PHPT-runner and unsafe-policy checks, Composer 2.8.12
+S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at
+1,623 unsafe blocks, 289 unsafe functions, 361 SAFETY annotations and seven
+`# Safety` sections. Exact-binary CPU-2-pinned balanced controls compare parent
+SHA-256 `73c8ec7a3879ae851a95cda532157762cadd9d57c5c217f92f2a5488786b9e5d`
+with candidate
+`441f4421b71af63f4d13969e5768db091bbf04c7f5b2edbf18913bc3403d9a15`.
+Paired medians are -4.976%, -0.491% and -9.326% for default-newline,
+newline-free and dynamic `nl2br()` calls. Retained scalar `str_replace()`,
+scalar `str_ireplace()` and array replacement controls are -1.932%, -1.738%
+and -0.600%; 200 empty processes measure -0.721%. Every checksum matches and
+every median is below +5%.
+
+This checkpoint does not claim request-wide allocation accounting or exact OOM
+diagnostics, 32-bit execution, or the remaining strings/Zend failures. The next
+bounded high-yield candidate is the six visible `strtr()` cases, which need one
+PHP-byte translation contract across both the three-string and replacement-map
+forms plus typed, diagnostic and reference boundaries.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `substr-replace-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. `substr_replace()` now applies one PHP-byte splice
 contract to scalar or array subjects. Offset and length use PHP's saturating

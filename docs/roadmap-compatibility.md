@@ -2839,10 +2839,33 @@ for the three affected call shapes; retained `str_replace()` controls range
 from -14.858% to +0.568%, the retained array lane is -1.335%, and startup is
 -4.052%, all within +5%.
 
+The `4f91783c` `nl2br-byte-contract` checkpoint closes all four supplying
+`nl2br()` cases against PHP 8.5.9. One PHP-byte newline recognizer inserts a
+single XHTML or HTML break before CRLF, LFCR, standalone CR or standalone LF
+while retaining the original newline bytes. Handler-owned string/bool
+boundaries preserve weak/strict conversions, null deprecations, diagnostics,
+named/dynamic/callback behavior and Reflection. A guarded one-pass ASCII path
+copies whole spans between newline markers; binary, non-ASCII and coerced values
+deopt to the canonical byte engine. Three original E2E tests and independent
+byte, weak/call and strict probes cover the contract.
+
+The focused cluster moves from 0/4 to 4/4 and strings moves from 495 to 499
+pass (+4/-0), with no adjacent gain, lost pass or other outcome movement. Array
+remains exactly 828/842 and Zend/lang exactly 4,206/5,599. Three serial release
+runs have identical stable strings/array/Zend hashes
+`646f38563eae4880aef240ec576538d7da6e9044e26112b02806aa1a86993f1f`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `907bddc39e20247bdf412dc3de5fa6653912c1e7c0b0c542ff70af2cb3a896f8`.
+All five feature configurations, all-feature/all-target, formatting, HTML data,
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Exact-final-binary CPU-pinned paired medians are -4.976%, -0.491% and -9.326%
+for the three affected shapes; retained replacement controls range from
+-1.932% to -0.600%, and startup is -0.721%, all within +5%.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 495 pass, 153 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 499 pass, 149 fail, 54 skip and 30 unsupported, with one retained timeout;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
@@ -2852,12 +2875,13 @@ pair is 2/2 and the byte-escaping supplying family is 12/12. `Zend/tests` plus
 timeout or crash. The trim/charlist family is 11/11, increment/decrement is 6/6
 and both `str_split()` and `chunk_split()` are 6/6, while the complete
 `str_replace()`/`str_ireplace()` cluster is 8/8 and the selected
-`substr_replace()` family plus its four adjacent gains is 8/8. The next goal
-should close the four visible `nl2br()` failures through one PHP-byte newline
-recognizer with exact CR/LF/CRLF ordering, XHTML/HTML break selection and shared
-typed call metadata; wider string-offset writes, typed-parameter binary
-provenance, detached-callback alias spelling, unknown entity-encoding warnings
-and broader legacy multibyte behavior remain explicit contracts.
+`substr_replace()` family plus its four adjacent gains is 8/8; the complete
+`nl2br()` family is 5/5. The next goal should close the six visible `strtr()`
+failures through one PHP-byte translation contract for the three-string and
+replacement-map forms, longest-key ordering, diagnostics, references and typed
+call metadata; wider string-offset writes, typed-parameter binary provenance,
+detached-callback alias spelling, unknown entity-encoding warnings and broader
+legacy multibyte behavior remain explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,
