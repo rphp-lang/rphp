@@ -13,6 +13,10 @@ use crate::value::{PhpArray, Value, ValueType};
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 
+use super::{
+    php_byte_result, typed_internal_int_argument, typed_internal_string_value_argument_expected,
+};
+
 // ============================================================================
 // Filesystem functions
 // ============================================================================
@@ -230,8 +234,43 @@ pub(super) fn fn_dirname(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let path = arg_str!(ed, 0);
-    let levels = arg_opt!(ed, 1).and_then(Value::as_long).unwrap_or(1);
+    let exact_path = arg!(ed, 0);
+    let exact_levels = arg_opt!(ed, 1);
+    if exact_path.value_type() == ValueType::String
+        && exact_levels.is_none_or(|levels| levels.value_type() == ValueType::Long)
+    {
+        let levels = exact_levels.map_or(1, |levels| levels.as_long().unwrap_or(1));
+        if levels < 1 {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                "dirname(): Argument #2 ($levels) must be greater than or equal to 1",
+            ));
+            return Ok(());
+        }
+        let binary = exact_path.is_binary_string();
+        let path = exact_path.php_string_bytes().unwrap_or_default();
+        ret!(
+            rv,
+            php_byte_result(
+                crate::path_decomposition::dirname(&path, levels as u64),
+                binary
+            )
+        );
+    }
+
+    let Some(path) =
+        typed_internal_string_value_argument_expected(ed, eg, "dirname", 0, "path", "string")?
+    else {
+        return Ok(());
+    };
+    let levels = if arg_opt!(ed, 1).is_some() {
+        let Some(levels) = typed_internal_int_argument(ed, eg, "dirname", 1, "levels")? else {
+            return Ok(());
+        };
+        levels
+    } else {
+        1
+    };
     if levels < 1 {
         eg.exception = Some(crate::value::make_error_value(
             "ValueError",
@@ -239,40 +278,63 @@ pub(super) fn fn_dirname(
         ));
         return Ok(());
     }
-    let mut current = std::path::PathBuf::from(path.as_ref());
-    for _ in 0..levels {
-        let next = current.parent().map(std::path::Path::to_path_buf);
-        current = match next {
-            Some(parent) if !parent.as_os_str().is_empty() => parent,
-            Some(_) => std::path::PathBuf::from("."),
-            None if current.has_root() => current,
-            None => std::path::PathBuf::from("."),
-        };
-    }
-    ret!(rv, Value::string(current.to_string_lossy().into_owned()));
+    let binary = path.is_binary_string();
+    let path = path.php_string_bytes().unwrap_or_default();
+    ret!(
+        rv,
+        php_byte_result(
+            crate::path_decomposition::dirname(&path, levels as u64),
+            binary
+        )
+    );
 }
 
 /// basename($path, $suffix = ""): string
 pub(super) fn fn_basename(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let path = arg_str!(ed, 0);
-    let suffix = arg_opt!(ed, 1)
-        .map(|v| v.echo_to_string())
-        .unwrap_or_default();
-    let p = std::path::Path::new(path.as_ref());
-    let name = p
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let result = if !suffix.is_empty() && name.ends_with(&suffix) {
-        name[..name.len() - suffix.len()].to_string()
-    } else {
-        name
+    let exact_path = arg!(ed, 0);
+    let exact_suffix = arg_opt!(ed, 1);
+    if exact_path.value_type() == ValueType::String
+        && exact_suffix.is_none_or(|suffix| suffix.value_type() == ValueType::String)
+    {
+        let path = exact_path.php_string_bytes().unwrap_or_default();
+        let suffix = exact_suffix
+            .and_then(Value::php_string_bytes)
+            .unwrap_or_default();
+        ret!(
+            rv,
+            php_byte_result(
+                crate::path_decomposition::basename(&path, &suffix),
+                exact_path.is_binary_string()
+            )
+        );
+    }
+
+    let Some(path) =
+        typed_internal_string_value_argument_expected(ed, eg, "basename", 0, "path", "string")?
+    else {
+        return Ok(());
     };
-    ret!(rv, Value::string(result));
+    let suffix = if arg_opt!(ed, 1).is_some() {
+        let Some(suffix) = typed_internal_string_value_argument_expected(
+            ed, eg, "basename", 1, "suffix", "string",
+        )?
+        else {
+            return Ok(());
+        };
+        suffix.php_string_bytes().unwrap_or_default().into_owned()
+    } else {
+        Vec::new()
+    };
+    let binary = path.is_binary_string();
+    let path = path.php_string_bytes().unwrap_or_default();
+    ret!(
+        rv,
+        php_byte_result(crate::path_decomposition::basename(&path, &suffix), binary)
+    );
 }
 
 /// realpath($path): string|false
@@ -444,55 +506,73 @@ pub(super) fn fn_sys_get_temp_dir(
 pub(super) fn fn_pathinfo(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let path = arg_str!(ed, 0);
-    let p = std::path::Path::new(path.as_ref());
-    let dirname = p
-        .parent()
-        .map(|d| d.to_string_lossy().into_owned())
-        .unwrap_or_else(|| ".".to_string());
-    let dirname = if dirname.is_empty() {
-        ".".to_string()
-    } else {
-        dirname
-    };
-    let basename_str = p
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let extension = p
-        .extension()
-        .map(|e| e.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let filename = p
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let exact_path = arg!(ed, 0);
+    let exact_flags = arg_opt!(ed, 1);
+    if exact_path.value_type() == ValueType::String
+        && exact_flags.is_none_or(|flags| flags.value_type() == ValueType::Long)
+    {
+        let flags = exact_flags.map_or(crate::path_decomposition::PATHINFO_ALL, |flags| {
+            flags
+                .as_long()
+                .unwrap_or(crate::path_decomposition::PATHINFO_ALL)
+        });
+        let binary = exact_path.is_binary_string();
+        let path = exact_path.php_string_bytes().unwrap_or_default();
+        ret!(rv, pathinfo_value(&path, flags, binary));
+    }
 
-    let flags = arg_opt!(ed, 1).map_or(15, Value::to_long_val);
-    match flags {
-        1 => ret!(rv, Value::string(dirname)),
-        2 => ret!(rv, Value::string(basename_str)),
-        4 => ret!(rv, Value::string(extension)),
-        8 => ret!(rv, Value::string(filename)),
-        _ => {}
+    let Some(path) =
+        typed_internal_string_value_argument_expected(ed, eg, "pathinfo", 0, "path", "string")?
+    else {
+        return Ok(());
+    };
+    let flags = if arg_opt!(ed, 1).is_some() {
+        let Some(flags) = typed_internal_int_argument(ed, eg, "pathinfo", 1, "flags")? else {
+            return Ok(());
+        };
+        flags
+    } else {
+        crate::path_decomposition::PATHINFO_ALL
+    };
+    let binary = path.is_binary_string();
+    let path = path.php_string_bytes().unwrap_or_default();
+    ret!(rv, pathinfo_value(&path, flags, binary));
+}
+
+fn pathinfo_value(path: &[u8], flags: i64, binary: bool) -> Value {
+    let info = crate::path_decomposition::pathinfo(&path);
+
+    if flags != crate::path_decomposition::PATHINFO_ALL {
+        let selected = if flags & crate::path_decomposition::PATHINFO_DIRNAME != 0
+            && !info.dirname.is_empty()
+        {
+            info.dirname
+        } else if flags & crate::path_decomposition::PATHINFO_BASENAME != 0 {
+            info.basename
+        } else if flags & crate::path_decomposition::PATHINFO_EXTENSION != 0
+            && info.extension.is_some()
+        {
+            info.extension.unwrap_or_default()
+        } else if flags & crate::path_decomposition::PATHINFO_FILENAME != 0 {
+            info.filename
+        } else {
+            Vec::new()
+        };
+        return php_byte_result(selected, binary);
     }
 
     let mut arr = PhpArray::new();
-    if flags & 1 != 0 {
-        arr.set_str("dirname", Value::string(dirname));
+    if !info.dirname.is_empty() {
+        arr.set_str("dirname", php_byte_result(info.dirname, binary));
     }
-    if flags & 2 != 0 {
-        arr.set_str("basename", Value::string(basename_str));
+    arr.set_str("basename", php_byte_result(info.basename, binary));
+    if let Some(extension) = info.extension {
+        arr.set_str("extension", php_byte_result(extension, binary));
     }
-    if flags & 4 != 0 {
-        arr.set_str("extension", Value::string(extension));
-    }
-    if flags & 8 != 0 {
-        arr.set_str("filename", Value::string(filename));
-    }
-    ret!(rv, Value::array(arr));
+    arr.set_str("filename", php_byte_result(info.filename, binary));
+    Value::array(arr)
 }
 
 /// is_readable($filename): bool

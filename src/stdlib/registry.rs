@@ -1451,10 +1451,34 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("is_readable", fn_is_readable, 1, 1, "filename");
     reg!("is_writable", fn_is_writable, 1, 1, "filename");
     reg!("is_writeable", fn_is_writable, 1, 1, "filename");
-    reg!("dirname", fn_dirname, 2, 1, "path", "levels");
-    reg!("basename", fn_basename, 2, 1, "path", "suffix");
+    reg_typed!(
+        "dirname",
+        fn_dirname,
+        2,
+        1,
+        ["path", "levels"],
+        [ParamTypeHint::String, ParamTypeHint::Int],
+        ParamTypeHint::String
+    );
+    reg_typed!(
+        "basename",
+        fn_basename,
+        2,
+        1,
+        ["path", "suffix"],
+        [ParamTypeHint::String, ParamTypeHint::String],
+        ParamTypeHint::String
+    );
     reg!("realpath", fn_realpath, 1, 1, "path");
-    reg!("pathinfo", fn_pathinfo, 2, 1, "path", "flags");
+    reg_typed!(
+        "pathinfo",
+        fn_pathinfo,
+        2,
+        1,
+        ["path", "flags"],
+        [ParamTypeHint::String, ParamTypeHint::Int],
+        ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String])
+    );
     reg!("getcwd", fn_getcwd, 0, 0);
     reg!("chdir", fn_chdir, 1, 1, "directory");
     reg!("opendir", fn_opendir, 2, 1, "directory", "context");
