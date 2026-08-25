@@ -8,6 +8,71 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`string-search-byte-window-contract`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.9. `strpos()`, `strstr()`, `strrchr()`,
+`strspn()`, `strcspn()`, `substr_count()` and `substr_compare()` now share
+handler-owned typed string, integer and boolean boundaries while retaining
+their distinct return, search-direction, case-fold, span and comparison
+semantics. Offsets, lengths and returned positions use PHP bytes rather than
+Unicode scalar positions. Negative and zero-length windows, empty needles,
+the `strrchr()` first-byte and before-needle rules, non-overlapping counts and
+ASCII-only case folding match the PHP 8.5 oracle.
+
+The byte engine preserves NUL, arbitrary high bytes and UTF-8 byte sequences,
+references, copy-on-write and binary-result provenance. Weak and strict scalar
+conversion, nullable lengths, null deprecations, value errors and argument
+diagnostics are produced at the internal-function boundary. Static, dynamic,
+named and callback calls use the same implementation. Reflection exposes the
+real PHP 8.5 parameter and return types, including `int|false`, `string|false`
+and nullable `?int` lengths. Guarded exact-input paths retain the common string
+search, span, count and slice workloads; all other inputs deopt to the canonical
+byte contract without repeating observable conversions.
+
+Three original E2E regressions cover offsets and windows, empty needles,
+non-overlap, prefix/suffix results, case folding, NUL/high/UTF-8 bytes,
+references/COW, weak and strict diagnostics, call shapes and Reflection. Two
+independent clean-room probes match PHP 8.5.9 byte for byte at SHA-256
+`13d089bfb8285de6099df3aa6e4a41abf8c2c6530423184d3eab31b5c6f5f2ce`
+and `4a818cdc60905c3cd1ee89a6b55c50c501ae4099f170d061f38381b845b7fd7e`.
+All 19 supplying cases move from 0/19 to 19/19. The 79-case direct and related
+search/window selection is 79/79, a +15/-0 adjacent delta; the other four
+supplying bug cases account for the complete +19 gain.
+
+The complete 733-case strings audit moves from 505 to 524 passes, an exact
++19/-0 delta consisting only of the supplying paths. There are 124 failures,
+54 skips, 30 unsupported cases, the retained `dirname_multi.phpt` timeout and
+zero crashes. Array remains exactly classified at 828 passes, 13 skips and one
+unsupported case. Zend/lang remains exactly classified at 4,206 passes, 1,097
+failures, 115 skips and 181 unsupported cases with no timeout or crash. Three
+serial release runs have identical stable path/outcome/runner-control hashes
+`7c85dc5ac431bb69d7648463c5027fd6ee9d3395fa0b7107e24eebff95e242a1`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `907bddc39e20247bdf412dc3de5fa6653912c1e7c0b0c542ff70af2cb3a896f8`
+for strings, array and Zend/lang respectively.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML data, PHPT-runner and unsafe-policy checks, Composer 2.8.12
+S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at
+1,623 unsafe blocks and 289 unsafe functions, with 363 SAFETY annotations and
+seven `# Safety` sections. Exact-binary CPU-2-pinned balanced controls compare
+parent SHA-256
+`a2c1207f50d6bcb2b7e64fc14173a1f73f1bd052c03feefe91b3f7d1163ecfbb`
+with candidate
+`aa573059e7ec88155cf43f1d460cb63ffe29dec4ea106bcb8590b317556ea7ab`.
+Paired medians are +3.728%, -1.515%, -1.374%, -37.278% and -0.188% for
+position, span, count, slice and dynamic call shapes. Retained scalar
+`str_replace()`, scalar `str_ireplace()` and array replacement controls are
++4.423%, +1.972% and +1.313%; 200 empty processes measure -3.549%. Every
+checksum matches and every median is below +5%.
+
+This checkpoint does not claim request-wide allocation accounting, exact OOM
+diagnostics, 32-bit execution or closure of the remaining 124 strings and wider
+Zend failures. The next risk-adjusted high-yield candidate is the nine visible
+`explode()`/`implode()`/`join()` failures: they share typed string/array
+boundaries and byte-preserving split/join behavior without requiring the
+higher-risk platform cryptography or tag-parser clusters.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `strtr-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and validated
 against PHP 8.5.9. The three-string `strtr()` form now applies one positional
 PHP-byte table, lets the last duplicate source byte win and ignores an unmatched

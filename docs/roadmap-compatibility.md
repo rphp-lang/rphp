@@ -2887,10 +2887,35 @@ Exact-final-binary CPU-pinned paired medians are -64.500%, -6.972% and -8.701%
 for the three affected call shapes; retained replacement controls range from
 -0.480% to +1.136%, and startup is -7.453%, all within +5%.
 
+The `5ba04a0b` `string-search-byte-window-contract` checkpoint closes all 19
+supplying search/window cases against PHP 8.5.9. `strpos()`, `strstr()`,
+`strrchr()`, `strspn()`, `strcspn()`, `substr_count()` and `substr_compare()`
+share handler-owned typed boundaries and one PHP-byte model for offsets,
+lengths, windows, NUL/high bytes and UTF-8, while preserving their distinct
+empty-needle, before-needle, direction, span, non-overlap, return and ASCII-fold
+semantics. Guarded exact-input paths deopt all coerced or exceptional calls to
+the canonical engine. Three original E2E tests and two independent clean-room
+probes cover the contract, including references/COW, named/dynamic/callback
+calls, diagnostics and Reflection.
+
+The focused cluster moves from 0/19 to 19/19 and strings moves from 505 to 524
+pass (+19/-0), with no lost pass or other outcome movement. The 79-case direct
+and related family is 79/79. Array remains exactly 828/842 and Zend/lang exactly
+4,206/5,599. Three serial release runs have identical stable strings, array and
+Zend hashes
+`7c85dc5ac431bb69d7648463c5027fd6ee9d3395fa0b7107e24eebff95e242a1`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `907bddc39e20247bdf412dc3de5fa6653912c1e7c0b0c542ff70af2cb3a896f8`.
+All five feature configurations, all-feature/all-target, formatting, HTML data,
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Exact-final-binary CPU-pinned paired medians range from -37.278% to +3.728%
+across five affected shapes; retained replacement controls range from +1.313%
+to +4.423%, and startup is -3.549%, all within +5%.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 505 pass, 143 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 524 pass, 124 fail, 54 skip and 30 unsupported, with one retained timeout;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
@@ -2901,14 +2926,15 @@ timeout or crash. The trim/charlist family is 11/11, increment/decrement is 6/6
 and both `str_split()` and `chunk_split()` are 6/6, while the complete
 `str_replace()`/`str_ireplace()` cluster is 8/8 and the selected
 `substr_replace()` family plus its four adjacent gains is 8/8; the complete
-`nl2br()` family is 5/5 and the complete `strtr()` family is 16/16. The next
-goal should close the 19 visible byte-search/window failures spanning
-`strpos()`, `strstr()`, `strrchr()`, `strspn()`, `strcspn()`, `substr_count()`
-and `substr_compare()` through shared typed string/offset boundaries and exact
-PHP-byte windows while retaining each function's distinct search semantics;
+`nl2br()` family is 5/5, the complete `strtr()` family is 16/16 and the direct
+and related byte-search/window family is 79/79. The next goal should close the
+nine visible split/join failures in `explode()`,
+`implode()` and `join()` through shared typed string/array boundaries and exact
+PHP-byte separator, limit, conversion, ordering and diagnostic semantics;
 wider string-offset writes, typed-parameter and associative-key binary
-provenance, detached-callback alias spelling, unknown entity-encoding warnings
-and broader legacy multibyte behavior remain explicit contracts.
+provenance, detached-callback alias spelling, unknown entity-encoding warnings,
+platform cryptography, tag parsing and broader legacy multibyte behavior remain
+explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,
