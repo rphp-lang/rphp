@@ -3000,10 +3000,31 @@ CPU-pinned controls measure -6.452% for valid ASCII decode, -8.617% for the
 unchanged encoder, +3.105% for NUL-byte decode and -2.715% for startup, all
 within +5% with matching comparable checksums.
 
+The `51942676` `quoted-printable-byte-contract` checkpoint closes all five
+supplying quoted-printable cases against PHP 8.5.9. Typed handlers own weak and
+strict conversion, null diagnostics, call shapes and Reflection; one clean-room
+PHP-byte codec covers hex escapes, CRLF and soft breaks, trailing whitespace,
+75-column wrapping, malformed and terminal escapes, NUL/high bytes, binary
+output, references and COW. A general prerequisite fixes `str_repeat()` so
+binary PHP-byte inputs repeat without losing provenance while preserving its
+ordinary-string path. Three original E2Es, three unit tests, four clean-room
+probes and an exhaustive 30,941-input short sweep cover the combined contract.
+
+Strings moves from 554 to 559 pass (+5/-0), with no lost pass or other outcome
+movement. Array remains exactly 828/842 and Zend/lang exactly 4,209/5,599.
+Three release runs have identical path/status/category maps. All five feature
+configurations, all-feature/all-target, formatting, HTML data, runner, unsafe,
+Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Exact-final-binary
+CPU-pinned paired controls measure -0.221% for ordinary `str_repeat()`,
+-10.323% for retained Base64 encode, +0.135% for retained strict Base64 decode
+and -0.601% for startup, all within +5% with matching comparable checksums.
+Candidate-only quoted-printable throughput is recorded without a parent A/B
+claim because neither function existed in the parent.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 554 pass, 94 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 559 pass, 89 fail, 54 skip and 30 unsupported, with one retained timeout;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
@@ -3017,11 +3038,12 @@ and both `str_split()` and `chunk_split()` are 6/6, while the complete
 `nl2br()` family is 5/5, the complete `strtr()` family is 16/16, the direct and
 related byte-search/window family is 79/79, and the direct split/join family is
 19 pass plus one explicit unsupported case. `str_getcsv()` and the visible
-checksum/hash supplying clusters are both 8/8, and the selected
-`base64_decode()` family is 6/6. The next goal should close the five visible
-quoted-printable failures in `bug62462.phpt`, `bug64879.phpt`,
-`quoted_printable_decode_basic.phpt`, `quoted_printable_encode_001.phpt` and
-`quoted_printable_encode_002.phpt` through one shared PHP-byte codec contract;
+checksum/hash supplying clusters are both 8/8, the selected
+`base64_decode()` family is 6/6, and the visible quoted-printable family is
+5/5. The next goal should close the four visible UUencode failures in
+`bug67252.phpt`, `convert_uudecode_basic.phpt`,
+`convert_uuencode_basic.phpt` and `uuencode.phpt` through one shared PHP-byte
+codec contract;
 wider string-offset writes, typed-parameter and associative-key binary
 provenance, detached-callback alias spelling, unknown entity-encoding warnings,
 platform cryptography, tag parsing and broader legacy multibyte behavior remain

@@ -8,6 +8,81 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`quoted-printable-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. `quoted_printable_encode()` and
+`quoted_printable_decode()` now expose their typed PHP 8.5 signatures and
+operate on PHP bytes. The encoder covers upper-case hex escapes, CRLF
+preservation, lone CR/LF encoding, trailing whitespace and PHP-compatible
+75-column soft wrapping, including the observed high-byte preflight behavior.
+The decoder covers case-insensitive hex escapes, spaces or tabs before soft
+line breaks, malformed escapes, incomplete terminal escapes, NUL termination
+and binary decoded output.
+
+Weak and strict scalar conversion, null deprecations, Stringable conversion,
+arity and named-argument errors, static, dynamic, callback and
+`call_user_func*()` dispatch, Reflection, references and COW all enter the
+same handler-owned boundary in observable argument order. A required
+`str_repeat()` prerequisite now repeats the exact PHP-byte representation and
+retains binary provenance; its ordinary-string path remains unchanged. This
+lets general upstream binary producers feed the codecs without fixture-aware
+handling.
+
+Three original E2Es and three codec unit tests cover ASCII, NUL, high-byte,
+UTF-8, malformed, whitespace and multiline inputs, wrapping and round trips,
+diagnostics and conversion order, supported call shapes, Reflection,
+references and COW. Four independent clean-room probes match PHP 8.5.9 byte
+for byte at SHA-256
+`ed45897e714c13b39e911ca532c2a366c6c937bc064232ef361434867ef5c2ba`,
+`e09f5dbb0419024609c8927226d09df96cbb4fc58a45118d718059798a70b7c5`,
+`3777cb42bf66e9801ad870d084825208dbaf41dfcc60196dd31b8371c1312e68`
+and `e27f8b30e145d365a855e566a55e247a659e1bdfed7b199a5635f0a3b570cdef`.
+An independent exhaustive short-input sweep covers 30,941 inputs drawn from
+13 control, whitespace, punctuation, ASCII and high-byte symbols through
+length four, exercising both functions, and matches exactly at
+`f49c2aa512e7b2f719bcdd18c1460f1b43de61324b15d7de3cf4c0f2c8baa985`.
+All five supplying failures move from 0/5 to 5/5.
+
+The complete 733-case strings audit moves from 554 to 559 passes, an exact
++5/-0 delta consisting only of the supplying paths. There are 89 failures, 54
+skips, 30 unsupported cases, the retained `dirname_multi.phpt` timeout and zero
+crashes. Array remains exactly classified at 828 passes, 13 skips and one
+unsupported case. Zend/lang remains exactly classified at 4,209 passes, 1,094
+failures, 115 skips and 181 unsupported cases, with no timeout or crash. Three
+release runs have identical path/status/category maps at SHA-256
+`31a91ba066c27dfc6a05995c258875102b79621485603232b5ca5f81ab328271`,
+`7d4b397d553dbdf5875d928f8bcbe886db93d84ec8c172a08760faf969226a46`
+and `1ffb4abd73cbc929fb8386f8f808ac35c5f9ca16b745da864cecd9c1cda6d443`
+for strings, array and Zend/lang respectively. Their exact pass-set hashes are
+`d504a56c58ace01093b8f80504e55a6fc5f06f9cd924fa5ef3f82a6df8435414`,
+`1977b63ea5e33630f58b9f3b8ee609289b7d689b864a8e978b47ac80ffc78bc1`
+and `ea0f8211b08e79de7d4502c6b28d79abf46c26ddbbca67a506377b6b1c9a62f5`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML data, PHPT-runner and unsafe-policy checks, Composer 2.8.12
+S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at
+1,623 unsafe blocks and 289 unsafe functions, with 364 SAFETY annotations and
+seven `# Safety` sections. Exact-final-binary CPU-pinned balanced controls
+compare parent SHA-256
+`cc3dac0af238c024a43645fa8f49067e83a235c532745ea0a9a218681d912266`
+with candidate
+`ea436add59378a8e2b8664e8ce1a1b640ff5658dfffb96ab588e45907b9ac870`.
+Paired medians for ordinary `str_repeat()`, retained Base64 encode and strict
+decode, and startup are -0.221%, -10.323%, +0.135% and -0.601%; every
+comparable checksum matches and every median is below +5%. Because the parent
+does not implement the new functions, candidate-only exact-output throughput
+is reported without an A/B claim: 2.820 million encodes/s and 3.609 million
+decodes/s on the measured workloads.
+
+This checkpoint does not claim stream filters, MIME header Q encoding,
+incremental codecs, charset conversion, exact allocation-limit/OOM behavior,
+32-bit execution or closure of the remaining 89 strings and wider Zend
+failures. The next risk-adjusted high-yield candidate is the four visible
+UUencode failures: `bug67252.phpt`, `convert_uudecode_basic.phpt`,
+`convert_uuencode_basic.phpt` and `uuencode.phpt`.
+
+The source checkpoint is commit `51942676`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `base64-decode-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. `base64_decode()` now exposes its typed PHP 8.5
 signature and decodes PHP bytes rather than Unicode text. Its non-strict path
