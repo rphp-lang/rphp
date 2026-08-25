@@ -7560,19 +7560,130 @@ fn decode_hex_nibble(byte: u8) -> u8 {
     }
 }
 
+#[derive(Clone, Copy)]
+enum SprintfCall {
+    Variadic,
+    Array,
+}
+
+#[derive(Default)]
+struct SprintfFlags {
+    left: bool,
+    plus: bool,
+    zero: bool,
+    pad: Option<u8>,
+}
+
+enum SprintfOutput {
+    Text(String),
+    Bytes(Vec<u8>),
+}
+
+impl SprintfOutput {
+    fn len(&self) -> usize {
+        match self {
+            Self::Text(output) => output.len(),
+            Self::Bytes(output) => output.len(),
+        }
+    }
+
+    fn write_to(&self, eg: &ExecutorGlobals) {
+        match self {
+            Self::Text(output) => eg.write_output(output.as_bytes()),
+            Self::Bytes(output) => eg.write_output(output),
+        }
+    }
+
+    fn into_value(self) -> Value {
+        match self {
+            Self::Text(output) => Value::string(output),
+            Self::Bytes(output) => Value::binary_string(&output),
+        }
+    }
+}
+
+fn sprintf_type_error(
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    index: usize,
+    name: &str,
+    expected: &str,
+    value: &Value,
+) {
+    eg.exception = Some(crate::value::make_error_value(
+        "TypeError",
+        &format!(
+            "{function}(): Argument #{} (${name}) must be of type {expected}, {} given",
+            index + 1,
+            match value.dereferenced().value_type() {
+                ValueType::True => "true".into(),
+                ValueType::False => "false".into(),
+                _ => value.dereferenced().diagnostic_type_name(),
+            }
+        ),
+    ));
+}
+
+fn sprintf_format_argument<'a>(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+) -> Result<Option<Cow<'a, [u8]>>, VmError> {
+    let value = arg!(ed, 0).dereferenced();
+    if value.value_type() == ValueType::String {
+        return Ok(value.php_string_bytes());
+    }
+    if internal_call_is_strict(ed)
+        || matches!(
+            value.value_type(),
+            ValueType::Array | ValueType::Closure | ValueType::Resource
+        )
+    {
+        sprintf_type_error(eg, function, 0, "format", "string", value);
+        return Ok(None);
+    }
+    let value = value.clone();
+    let rendered = internal_value_to_string(ed, eg, &value)?;
+    if rendered.is_none() {
+        pin_sprintf_conversion_error_to_caller(ed, eg);
+    }
+    Ok(rendered.map(|rendered| Cow::Owned(rendered.into_bytes())))
+}
+
 fn fn_sprintf(
     ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let fmt = arg_str!(ed, 0);
-    // The VM materializes the variadic bucket as an array. Reuse the same
-    // zero-copy formatter as vsprintf instead of cloning its values.
-    let args = arg!(ed, 1).as_array();
-    let Some(result) = format_sprintf_values(ed, eg, &fmt, args.as_deref())? else {
+    let Some(format) = sprintf_format_argument(ed, eg, "sprintf")? else {
         return Ok(());
     };
-    ret!(rv, Value::string(result));
+    let args = arg!(ed, 1).as_array();
+    let Some(result) = format_sprintf_values(
+        ed,
+        eg,
+        &format,
+        args.as_deref(),
+        SprintfCall::Variadic,
+        "sprintf",
+    )?
+    else {
+        return Ok(());
+    };
+    ret!(rv, result.into_value());
+}
+
+fn sprintf_array_argument<'a>(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+) -> Option<&'a PhpArray> {
+    let value = arg!(ed, 1);
+    let Some(values) = value.as_array() else {
+        sprintf_type_error(eg, function, 1, "values", "array", value);
+        return None;
+    };
+    Some(values)
 }
 
 fn fn_vsprintf(
@@ -7580,12 +7691,18 @@ fn fn_vsprintf(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let fmt = arg_str!(ed, 0);
-    let args = arg!(ed, 1).as_array();
-    let Some(result) = format_sprintf_values(ed, eg, &fmt, args.as_deref())? else {
+    let Some(format) = sprintf_format_argument(ed, eg, "vsprintf")? else {
         return Ok(());
     };
-    ret!(rv, Value::string(result));
+    let Some(args) = sprintf_array_argument(ed, eg, "vsprintf") else {
+        return Ok(());
+    };
+    let Some(result) =
+        format_sprintf_values(ed, eg, &format, Some(args), SprintfCall::Array, "vsprintf")?
+    else {
+        return Ok(());
+    };
+    ret!(rv, result.into_value());
 }
 
 fn fn_printf(
@@ -7593,14 +7710,23 @@ fn fn_printf(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let fmt = arg_str!(ed, 0);
-    let args = arg!(ed, 1).as_array();
-    let Some(result) = format_sprintf_values(ed, eg, &fmt, args.as_deref())? else {
+    let Some(format) = sprintf_format_argument(ed, eg, "printf")? else {
         return Ok(());
     };
-    let bytes = result.as_bytes();
-    let length = bytes.len() as i64;
-    eg.write_output(bytes);
+    let args = arg!(ed, 1).as_array();
+    let Some(result) = format_sprintf_values(
+        ed,
+        eg,
+        &format,
+        args.as_deref(),
+        SprintfCall::Variadic,
+        "printf",
+    )?
+    else {
+        return Ok(());
+    };
+    let length = result.len() as i64;
+    result.write_to(eg);
     ret!(rv, Value::long(length));
 }
 
@@ -7609,162 +7735,875 @@ fn fn_vprintf(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let fmt = arg_str!(ed, 0);
-    let args = arg!(ed, 1).as_array();
-    let Some(result) = format_sprintf_values(ed, eg, &fmt, args.as_deref())? else {
+    let Some(format) = sprintf_format_argument(ed, eg, "vprintf")? else {
         return Ok(());
     };
-    let bytes = result.as_bytes();
-    let length = bytes.len() as i64;
-    eg.write_output(bytes);
+    let Some(args) = sprintf_array_argument(ed, eg, "vprintf") else {
+        return Ok(());
+    };
+    let Some(result) =
+        format_sprintf_values(ed, eg, &format, Some(args), SprintfCall::Array, "vprintf")?
+    else {
+        return Ok(());
+    };
+    let length = result.len() as i64;
+    result.write_to(eg);
     ret!(rv, Value::long(length));
 }
 
-#[inline(always)]
-fn append_sprintf_value(
+#[inline]
+fn parse_sprintf_decimal(bytes: &[u8], index: &mut usize) -> Option<usize> {
+    let start = *index;
+    let mut value = 0usize;
+    while let Some(digit @ b'0'..=b'9') = bytes.get(*index).copied() {
+        value = value
+            .saturating_mul(10)
+            .saturating_add(usize::from(digit - b'0'));
+        *index += 1;
+    }
+    (*index > start).then_some(value)
+}
+
+fn sprintf_value_error(eg: &mut ExecutorGlobals, message: impl AsRef<str>) {
+    eg.exception = Some(crate::value::make_error_value(
+        "ValueError",
+        message.as_ref(),
+    ));
+}
+
+fn pin_sprintf_conversion_error_to_caller(ed: *mut ExecuteData, eg: &mut ExecutorGlobals) {
+    let Some(exception) = eg.exception.as_ref() else {
+        return;
+    };
+    let missing_origin = exception.as_object().is_some_and(|object| {
+        object
+            .get_property("file")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+    });
+    if !missing_origin {
+        return;
+    }
+    let (file, line) = internal_call_source(ed);
+    if file.is_empty() || line == 0 {
+        return;
+    }
+    if let Some(mut object) = exception.as_object_mut() {
+        object.set_property("file", Value::string(file));
+        object.set_property("line", Value::long(line as i64));
+    }
+}
+
+fn take_sprintf_argument(
+    args: Option<&PhpArray>,
+    next: &mut usize,
+    position: Option<usize>,
+    call: SprintfCall,
+    eg: &mut ExecutorGlobals,
+) -> Option<Value> {
+    let index = position.unwrap_or_else(|| {
+        let index = *next;
+        *next += 1;
+        index
+    });
+    if let Some(value) = args.and_then(|args| args.get_value_at(index)) {
+        return Some(value.dereferenced().clone());
+    }
+    let count = args.map_or(0, PhpArray::len);
+    match call {
+        SprintfCall::Variadic => {
+            eg.exception = Some(crate::value::make_error_value(
+                "ArgumentCountError",
+                &format!("{} arguments are required, {} given", index + 2, count + 1),
+            ));
+        }
+        SprintfCall::Array => sprintf_value_error(
+            eg,
+            format!(
+                "The arguments array must contain {} items, {} given",
+                index + 1,
+                count
+            ),
+        ),
+    }
+    None
+}
+
+fn parse_sprintf_position(
+    bytes: &[u8],
+    index: &mut usize,
+    eg: &mut ExecutorGlobals,
+) -> Option<Result<Option<usize>, ()>> {
+    let start = *index;
+    let number = parse_sprintf_decimal(bytes, index);
+    if bytes.get(*index) != Some(&b'$') {
+        *index = start;
+        return Some(Ok(None));
+    }
+    *index += 1;
+    let Some(number) = number else {
+        sprintf_value_error(
+            eg,
+            "Argument number specifier must be greater than zero and less than 2147483647",
+        );
+        return Some(Err(()));
+    };
+    if number == 0 || number >= i32::MAX as usize {
+        sprintf_value_error(
+            eg,
+            "Argument number specifier must be greater than zero and less than 2147483647",
+        );
+        return Some(Err(()));
+    }
+    Some(Ok(Some(number - 1)))
+}
+
+fn sprintf_numeric_long(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
-    result: &mut String,
-    spec: char,
-    arg: Option<&Value>,
-) -> Result<bool, VmError> {
-    match spec {
-        's' => {
-            if let Some(arg) = arg {
-                if matches!(
-                    arg.dereferenced().value_type(),
-                    ValueType::Array | ValueType::Object | ValueType::Closure
-                ) {
-                    let Some(rendered) = internal_value_to_string(ed, eg, arg)? else {
-                        return Ok(false);
-                    };
-                    result.push_str(&rendered);
-                } else {
-                    arg.append_echo_to_with_precision(result, eg.precision);
+    value: &Value,
+) -> Result<Option<i64>, VmError> {
+    let number = explicit_long_conversion(value);
+    if let Some(message) = explicit_numeric_cast_warning(value, ExplicitNumericCastTarget::Int) {
+        report_internal_diagnostic(eg, ed, 2, "Warning", &message)?;
+        if eg.exception.is_some() {
+            return Ok(None);
+        }
+    }
+    Ok(Some(number))
+}
+
+fn sprintf_numeric_float(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    value: &Value,
+) -> Result<Option<f64>, VmError> {
+    let number = explicit_float_conversion(value);
+    if let Some(message) = explicit_numeric_cast_warning(value, ExplicitNumericCastTarget::Float) {
+        report_internal_diagnostic(eg, ed, 2, "Warning", &message)?;
+        if eg.exception.is_some() {
+            return Ok(None);
+        }
+    }
+    Ok(Some(number))
+}
+
+fn add_sprintf_sign(mut rendered: String, flags: &SprintfFlags, nonnegative: bool) -> String {
+    if flags.plus && nonnegative {
+        rendered.insert(0, '+');
+    }
+    rendered
+}
+
+fn normalize_sprintf_exponent(mut rendered: String, upper: bool) -> String {
+    if upper {
+        rendered = rendered.replace('e', "E");
+    }
+    let marker = if upper { 'E' } else { 'e' };
+    if let Some(position) = rendered.find(marker) {
+        let sign = position + 1;
+        if !matches!(rendered.as_bytes().get(sign), Some(b'+' | b'-')) {
+            rendered.insert(sign, '+');
+        }
+        let digits = sign + usize::from(matches!(rendered.as_bytes().get(sign), Some(b'+' | b'-')));
+        while rendered.len() > digits + 1 && rendered.as_bytes().get(digits) == Some(&b'0') {
+            rendered.remove(digits);
+        }
+    }
+    rendered
+}
+
+fn trim_sprintf_fraction(mut rendered: String) -> String {
+    while rendered.ends_with('0') {
+        rendered.pop();
+    }
+    if rendered.ends_with('.') {
+        rendered.pop();
+    }
+    rendered
+}
+
+fn render_sprintf_general(number: f64, precision: i64, upper: bool) -> String {
+    if !number.is_finite() {
+        return if number.is_nan() {
+            "NaN".to_string()
+        } else if number.is_sign_negative() {
+            "-INF".to_string()
+        } else {
+            "INF".to_string()
+        };
+    }
+    if number == 0.0 {
+        return if number.is_sign_negative() {
+            "-0".to_string()
+        } else {
+            "0".to_string()
+        };
+    }
+    let exponent = number.abs().log10().floor() as i32;
+    if precision < 0 {
+        if exponent < -4 || exponent >= 17 {
+            return normalize_sprintf_exponent(format!("{number:e}"), upper);
+        }
+        return number.to_string();
+    }
+    let significant = usize::try_from(precision.max(1)).unwrap_or(usize::MAX);
+    if exponent < -4 || exponent >= significant as i32 {
+        let decimals = significant.saturating_sub(1);
+        let mut rendered = format!("{number:.decimals$e}");
+        if decimals == 0
+            && let Some(position) = rendered.find('e')
+        {
+            rendered.insert_str(position, ".0");
+        } else if let Some(position) = rendered.find('e') {
+            let exponent_part = rendered.split_off(position);
+            rendered = trim_sprintf_fraction(rendered);
+            rendered.push_str(&exponent_part);
+        }
+        return normalize_sprintf_exponent(rendered, upper);
+    }
+    let decimals = (significant as i32 - exponent - 1).max(0) as usize;
+    trim_sprintf_fraction(format!("{number:.decimals$}"))
+}
+
+fn truncate_sprintf_string(rendered: &mut String, precision: usize) {
+    if rendered.len() <= precision {
+        return;
+    }
+    let mut end = precision;
+    while end != 0 && !rendered.is_char_boundary(end) {
+        end -= 1;
+    }
+    rendered.truncate(end);
+}
+
+fn render_sprintf_value(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    value: &Value,
+    specifier: u8,
+    precision: Option<i64>,
+    flags: &SprintfFlags,
+) -> Result<Option<Vec<u8>>, VmError> {
+    let rendered = match specifier {
+        b's' => {
+            if let Some(bytes) = value.php_string_bytes() {
+                let mut rendered = bytes.into_owned();
+                if let Some(precision) = precision {
+                    rendered.truncate(rendered.len().min(precision.max(0) as usize));
                 }
+                return Ok(Some(rendered));
+            }
+            let Some(mut rendered) = internal_value_to_string(ed, eg, value)? else {
+                pin_sprintf_conversion_error_to_caller(ed, eg);
+                return Ok(None);
+            };
+            if let Some(precision) = precision {
+                truncate_sprintf_string(&mut rendered, precision.max(0) as usize);
+            }
+            rendered.into_bytes()
+        }
+        b'c' => {
+            let Some(number) = sprintf_numeric_long(ed, eg, value)? else {
+                return Ok(None);
+            };
+            vec![(number & 0xff) as u8]
+        }
+        b'd' => {
+            let Some(number) = sprintf_numeric_long(ed, eg, value)? else {
+                return Ok(None);
+            };
+            add_sprintf_sign(number.to_string(), flags, number >= 0).into_bytes()
+        }
+        b'u' => {
+            let Some(number) = sprintf_numeric_long(ed, eg, value)? else {
+                return Ok(None);
+            };
+            (number as u64).to_string().into_bytes()
+        }
+        b'b' => {
+            if precision.is_some() {
+                return Ok(Some(Vec::new()));
+            }
+            let Some(number) = sprintf_numeric_long(ed, eg, value)? else {
+                return Ok(None);
+            };
+            format!("{number:b}").into_bytes()
+        }
+        b'o' => {
+            if precision.is_some() {
+                return Ok(Some(Vec::new()));
+            }
+            let Some(number) = sprintf_numeric_long(ed, eg, value)? else {
+                return Ok(None);
+            };
+            format!("{number:o}").into_bytes()
+        }
+        b'x' => {
+            if precision.is_some() {
+                return Ok(Some(Vec::new()));
+            }
+            let Some(number) = sprintf_numeric_long(ed, eg, value)? else {
+                return Ok(None);
+            };
+            format!("{number:x}").into_bytes()
+        }
+        b'X' => {
+            if precision.is_some() {
+                return Ok(Some(Vec::new()));
+            }
+            let Some(number) = sprintf_numeric_long(ed, eg, value)? else {
+                return Ok(None);
+            };
+            format!("{number:X}").into_bytes()
+        }
+        b'f' | b'F' => {
+            let Some(number) = sprintf_numeric_float(ed, eg, value)? else {
+                return Ok(None);
+            };
+            let precision = usize::try_from(precision.unwrap_or(6).max(0)).unwrap_or(usize::MAX);
+            let rendered = if number.is_nan() {
+                "NaN".to_string()
+            } else if number == f64::INFINITY {
+                "INF".to_string()
+            } else if number == f64::NEG_INFINITY {
+                "-INF".to_string()
+            } else {
+                format!("{number:.precision$}")
+            };
+            add_sprintf_sign(rendered, flags, number >= 0.0).into_bytes()
+        }
+        b'e' | b'E' => {
+            let Some(number) = sprintf_numeric_float(ed, eg, value)? else {
+                return Ok(None);
+            };
+            let precision = usize::try_from(precision.unwrap_or(6).max(0)).unwrap_or(usize::MAX);
+            let rendered = if number.is_nan() {
+                "NaN".to_string()
+            } else if number == f64::INFINITY {
+                "INF".to_string()
+            } else if number == f64::NEG_INFINITY {
+                "-INF".to_string()
+            } else {
+                normalize_sprintf_exponent(format!("{number:.precision$e}"), specifier == b'E')
+            };
+            add_sprintf_sign(rendered, flags, number >= 0.0).into_bytes()
+        }
+        b'g' | b'G' | b'h' | b'H' => {
+            let Some(number) = sprintf_numeric_float(ed, eg, value)? else {
+                return Ok(None);
+            };
+            add_sprintf_sign(
+                render_sprintf_general(
+                    number,
+                    precision.unwrap_or(6),
+                    matches!(specifier, b'G' | b'H'),
+                ),
+                flags,
+                number >= 0.0,
+            )
+            .into_bytes()
+        }
+        b'%' => vec![b'%'],
+        _ => unreachable!("validated sprintf specifier"),
+    };
+    Ok(Some(rendered))
+}
+
+fn apply_sprintf_width(
+    mut rendered: Vec<u8>,
+    width: usize,
+    flags: &SprintfFlags,
+    specifier: u8,
+) -> Vec<u8> {
+    if specifier == b'c' {
+        return rendered;
+    }
+    let padding = width.saturating_sub(rendered.len());
+    if padding == 0 {
+        return rendered;
+    }
+    let float = matches!(
+        specifier,
+        b'e' | b'E' | b'f' | b'F' | b'g' | b'G' | b'h' | b'H'
+    );
+    let string = matches!(specifier, b's' | b'%');
+    let pad = flags
+        .pad
+        .unwrap_or(if flags.zero && (!flags.left || float || string) {
+            b'0'
+        } else {
+            b' '
+        });
+    if flags.left {
+        rendered.extend(std::iter::repeat_n(pad, padding));
+        return rendered;
+    }
+    if pad == b'0' && !string && matches!(rendered.first(), Some(b'+' | b'-')) {
+        let sign = rendered.remove(0);
+        let mut padded = Vec::with_capacity(width);
+        padded.push(sign);
+        padded.extend(std::iter::repeat_n(pad, padding));
+        padded.extend_from_slice(&rendered);
+        return padded;
+    }
+    let mut padded = Vec::with_capacity(width);
+    padded.extend(std::iter::repeat_n(pad, padding));
+    padded.extend_from_slice(&rendered);
+    padded
+}
+
+fn parse_sprintf_star_argument(
+    bytes: &[u8],
+    index: &mut usize,
+    args: Option<&PhpArray>,
+    next: &mut usize,
+    call: SprintfCall,
+    label: &str,
+    eg: &mut ExecutorGlobals,
+) -> Option<i64> {
+    *index += 1;
+    let position = match parse_sprintf_position(bytes, index, eg)? {
+        Ok(position) => position,
+        Err(()) => return None,
+    };
+    let value = take_sprintf_argument(args, next, position, call, eg)?;
+    if value.value_type() != ValueType::Long {
+        sprintf_value_error(eg, format!("{label} must be an integer"));
+        return None;
+    }
+    value.as_long()
+}
+
+fn count_sprintf_arguments(format: &[u8]) -> usize {
+    fn record(position: Option<usize>, next: &mut usize, required: &mut usize) {
+        let index = position.unwrap_or_else(|| {
+            let index = *next;
+            *next = next.saturating_add(1);
+            index
+        });
+        *required = (*required).max(index.saturating_add(1));
+    }
+
+    fn position(format: &[u8], index: &mut usize) -> Option<usize> {
+        let start = *index;
+        let number = parse_sprintf_decimal(format, index);
+        if format.get(*index) != Some(&b'$') {
+            *index = start;
+            return None;
+        }
+        *index += 1;
+        number.and_then(|number| number.checked_sub(1))
+    }
+
+    let mut index = 0usize;
+    let mut next = 0usize;
+    let mut required = 0usize;
+    while index < format.len() {
+        if format[index] != b'%' {
+            index += 1;
+            continue;
+        }
+        index += 1;
+        if format.get(index) == Some(&b'%') {
+            index += 1;
+            continue;
+        }
+        let value_position = position(format, &mut index);
+        loop {
+            match format.get(index).copied() {
+                Some(b'-' | b'+' | b' ' | b'0') => index += 1,
+                Some(b'\'') => index = (index + 2).min(format.len()),
+                _ => break,
             }
         }
-        'd' => {
-            let _ = write!(
-                result,
-                "{}",
-                arg.map(|value| value.to_long_val()).unwrap_or(0)
-            );
+        if format.get(index) == Some(&b'*') {
+            index += 1;
+            let width_position = position(format, &mut index);
+            record(width_position, &mut next, &mut required);
+        } else {
+            let _ = parse_sprintf_decimal(format, &mut index);
         }
-        'u' => {
-            let value = arg.map(|value| value.to_long_val()).unwrap_or(0) as u64;
-            let _ = write!(result, "{value}");
+        if format.get(index) == Some(&b'.') {
+            index += 1;
+            if format.get(index) == Some(&b'*') {
+                index += 1;
+                let precision_position = position(format, &mut index);
+                record(precision_position, &mut next, &mut required);
+            } else {
+                let _ = parse_sprintf_decimal(format, &mut index);
+            }
         }
-        'f' => {
-            let value = arg.map(|value| value.to_float_val()).unwrap_or(0.0);
-            let _ = write!(result, "{value:.6}");
+        if format.get(index) == Some(&b'l') {
+            index += 1;
         }
-        'x' => {
-            let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
-            let _ = write!(result, "{value:x}");
-        }
-        'X' => {
-            let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
-            let _ = write!(result, "{value:X}");
-        }
-        'o' => {
-            let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
-            let _ = write!(result, "{value:o}");
-        }
-        'b' => {
-            let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
-            let _ = write!(result, "{value:b}");
-        }
-        'c' => {
-            let code = arg.map(|value| value.to_long_val()).unwrap_or(0);
-            result.push((code & 0xFF) as u8 as char);
-        }
-        _ => unreachable!("format specifier was validated by the caller"),
+        index = (index + 1).min(format.len());
+        record(value_position, &mut next, &mut required);
     }
-    Ok(true)
+    required
+}
+
+fn check_sprintf_argument_count(
+    format: &[u8],
+    args: Option<&PhpArray>,
+    call: SprintfCall,
+    eg: &mut ExecutorGlobals,
+) -> bool {
+    let required = count_sprintf_arguments(format);
+    let count = args.map_or(0, PhpArray::len);
+    if count >= required {
+        return true;
+    }
+    match call {
+        SprintfCall::Variadic => {
+            eg.exception = Some(crate::value::make_error_value(
+                "ArgumentCountError",
+                &format!(
+                    "{} arguments are required, {} given",
+                    required + 1,
+                    count + 1
+                ),
+            ));
+        }
+        SprintfCall::Array => sprintf_value_error(
+            eg,
+            format!("The arguments array must contain {required} items, {count} given"),
+        ),
+    }
+    false
+}
+
+#[inline]
+fn try_format_sprintf_simple(
+    format: &[u8],
+    args: Option<&PhpArray>,
+    call: SprintfCall,
+    precision: i32,
+    eg: &mut ExecutorGlobals,
+) -> Option<String> {
+    let format_text = str::from_utf8(format).ok()?;
+    let count = args.map_or(0, PhpArray::len);
+    let mut output = String::with_capacity(format.len().saturating_add(count * 8));
+    let mut index = 0usize;
+    let mut literal = 0usize;
+    let mut required = 0usize;
+    let mut missing = false;
+    while index < format.len() {
+        if format[index] != b'%' {
+            index += 1;
+            continue;
+        }
+        output.push_str(&format_text[literal..index]);
+        let specifier = *format.get(index + 1)?;
+        if specifier == b'%' {
+            output.push('%');
+            index += 2;
+            literal = index;
+            continue;
+        }
+        if !matches!(
+            specifier,
+            b's' | b'd' | b'u' | b'f' | b'F' | b'x' | b'X' | b'o' | b'b'
+        ) {
+            return None;
+        }
+        let argument_index = required;
+        required += 1;
+        let Some(value) = args
+            .and_then(|args| args.get_value_at(argument_index))
+            .map(Value::dereferenced)
+        else {
+            missing = true;
+            index += 2;
+            literal = index;
+            continue;
+        };
+        let value_type = value.value_type();
+        if matches!(
+            value_type,
+            ValueType::Array | ValueType::Object | ValueType::Closure
+        ) || value.is_binary_string()
+        {
+            return None;
+        }
+        if specifier != b's'
+            && value_type == ValueType::Double
+            && explicit_numeric_cast_warning(
+                value,
+                if matches!(specifier, b'f' | b'F') {
+                    ExplicitNumericCastTarget::Float
+                } else {
+                    ExplicitNumericCastTarget::Int
+                },
+            )
+            .is_some()
+        {
+            return None;
+        }
+        if matches!(specifier, b'f' | b'F')
+            && value.as_double().is_some_and(|number| !number.is_finite())
+        {
+            return None;
+        }
+        match specifier {
+            b's' => {
+                if let Some(text) = value.as_str() {
+                    output.push_str(text);
+                } else {
+                    value.append_echo_to_with_precision(&mut output, precision);
+                }
+            }
+            b'd' => {
+                let number = value
+                    .as_long()
+                    .unwrap_or_else(|| explicit_long_conversion(value));
+                let _ = write!(output, "{number}");
+            }
+            b'u' => {
+                let number = value
+                    .as_long()
+                    .unwrap_or_else(|| explicit_long_conversion(value));
+                let _ = write!(output, "{}", number as u64);
+            }
+            b'f' | b'F' => {
+                let number = value
+                    .as_double()
+                    .or_else(|| value.as_long().map(|number| number as f64))
+                    .unwrap_or_else(|| explicit_float_conversion(value));
+                let _ = write!(output, "{number:.6}");
+            }
+            b'x' => {
+                let number = value
+                    .as_long()
+                    .unwrap_or_else(|| explicit_long_conversion(value));
+                let _ = write!(output, "{number:x}");
+            }
+            b'X' => {
+                let number = value
+                    .as_long()
+                    .unwrap_or_else(|| explicit_long_conversion(value));
+                let _ = write!(output, "{number:X}");
+            }
+            b'o' => {
+                let number = value
+                    .as_long()
+                    .unwrap_or_else(|| explicit_long_conversion(value));
+                let _ = write!(output, "{number:o}");
+            }
+            b'b' => {
+                let number = value
+                    .as_long()
+                    .unwrap_or_else(|| explicit_long_conversion(value));
+                let _ = write!(output, "{number:b}");
+            }
+            _ => unreachable!("simple sprintf specifier was prevalidated"),
+        }
+        index += 2;
+        literal = index;
+    }
+    if missing || count < required {
+        let _ = check_sprintf_argument_count(format, args, call, eg);
+        return None;
+    }
+    output.push_str(&format_text[literal..]);
+    Some(output)
 }
 
 fn format_sprintf_values(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
-    fmt: &str,
+    format: &[u8],
     args: Option<&PhpArray>,
-) -> Result<Option<String>, VmError> {
-    let args_count = args.map_or(0, PhpArray::len);
-    let mut result = String::with_capacity(fmt.len().saturating_add(args_count * 8));
-    let bytes = fmt.as_bytes();
-    let mut literal_start = 0usize;
-    let mut index = 0usize;
-    let mut arg_idx = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            result.push_str(&fmt[literal_start..index]);
-            if index + 1 < bytes.len() {
-                if bytes[index + 1] == b'%' {
-                    result.push('%');
-                    index += 2;
-                    literal_start = index;
-                    continue;
-                }
-
-                let mut spec_index = index + 1;
-                let zero_pad = bytes.get(spec_index) == Some(&b'0');
-                if zero_pad {
-                    spec_index += 1;
-                }
-                let mut width = 0usize;
-                while let Some(digit @ b'0'..=b'9') = bytes.get(spec_index).copied() {
-                    width = width
-                        .saturating_mul(10)
-                        .saturating_add(usize::from(digit - b'0'));
-                    spec_index += 1;
-                }
-                if spec_index < bytes.len() {
-                    let spec = bytes[spec_index] as char;
-                    if !matches!(spec, 's' | 'd' | 'u' | 'f' | 'x' | 'X' | 'o' | 'b' | 'c') {
-                        result.push_str(&fmt[index..=spec_index]);
-                        index = spec_index + 1;
-                        literal_start = index;
-                        continue;
-                    }
-                    let arg = args.and_then(|args| args.get_value_at(arg_idx));
-                    arg_idx += 1;
-                    if width == 0 {
-                        if !append_sprintf_value(ed, eg, &mut result, spec, arg)? {
-                            return Ok(None);
-                        }
-                        index = spec_index + 1;
-                        literal_start = index;
-                        continue;
-                    }
-                    let mut formatted = String::new();
-                    if !append_sprintf_value(ed, eg, &mut formatted, spec, arg)? {
-                        return Ok(None);
-                    }
-                    let padding = width.saturating_sub(formatted.len());
-                    if padding != 0 {
-                        if zero_pad && formatted.starts_with('-') {
-                            result.push('-');
-                            result.extend(std::iter::repeat_n('0', padding));
-                            formatted.remove(0);
-                        } else {
-                            let padding_character = if zero_pad { '0' } else { ' ' };
-                            result.extend(std::iter::repeat_n(padding_character, padding));
-                        }
-                    }
-                    result.push_str(&formatted);
-                    index = spec_index + 1;
-                    literal_start = index;
-                    continue;
-                }
-            }
-            result.push_str(&fmt[index..]);
-            return Ok(Some(result));
-        }
-        index += 1;
+    call: SprintfCall,
+    function: &str,
+) -> Result<Option<SprintfOutput>, VmError> {
+    let bytes = format;
+    if let Some(output) = try_format_sprintf_simple(format, args, call, eg.precision, eg) {
+        return Ok(Some(SprintfOutput::Text(output)));
     }
-    result.push_str(&fmt[literal_start..]);
-    Ok(Some(result))
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    if !check_sprintf_argument_count(format, args, call, eg) {
+        return Ok(None);
+    }
+    let count = args.map_or(0, PhpArray::len);
+    let mut output = Vec::with_capacity(format.len().saturating_add(count * 8));
+    let mut index = 0usize;
+    let mut literal = 0usize;
+    let mut next = 0usize;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            index += 1;
+            continue;
+        }
+        output.extend_from_slice(&format[literal..index]);
+        index += 1;
+        if bytes.get(index) == Some(&b'%') {
+            output.push(b'%');
+            index += 1;
+            literal = index;
+            continue;
+        }
+        if index >= bytes.len() {
+            sprintf_value_error(eg, "Missing format specifier at end of string");
+            return Ok(None);
+        }
+
+        let position = match parse_sprintf_position(bytes, &mut index, eg).unwrap() {
+            Ok(position) => position,
+            Err(()) => return Ok(None),
+        };
+        let mut flags = SprintfFlags::default();
+        loop {
+            match bytes.get(index).copied() {
+                Some(b'-') => flags.left = true,
+                Some(b'+') => flags.plus = true,
+                Some(b' ') => {}
+                Some(b'0') => flags.zero = true,
+                Some(b'\'') => {
+                    index += 1;
+                    let Some(pad) = bytes.get(index).copied() else {
+                        sprintf_value_error(eg, "Missing padding character");
+                        return Ok(None);
+                    };
+                    flags.pad = Some(pad);
+                }
+                _ => break,
+            }
+            index += 1;
+        }
+
+        let width = if bytes.get(index) == Some(&b'*') {
+            let Some(width) =
+                parse_sprintf_star_argument(bytes, &mut index, args, &mut next, call, "Width", eg)
+            else {
+                return Ok(None);
+            };
+            if !(0..i32::MAX as i64).contains(&width) {
+                sprintf_value_error(eg, "Width must be between 0 and 2147483647");
+                return Ok(None);
+            }
+            width as usize
+        } else {
+            let width = parse_sprintf_decimal(bytes, &mut index).unwrap_or(0);
+            if width >= i32::MAX as usize {
+                sprintf_value_error(eg, "Width must be between 0 and 2147483647");
+                return Ok(None);
+            }
+            width
+        };
+
+        let mut precision = if bytes.get(index) == Some(&b'.') {
+            index += 1;
+            let precision = if bytes.get(index) == Some(&b'*') {
+                let Some(precision) = parse_sprintf_star_argument(
+                    bytes,
+                    &mut index,
+                    args,
+                    &mut next,
+                    call,
+                    "Precision",
+                    eg,
+                ) else {
+                    return Ok(None);
+                };
+                precision
+            } else {
+                let precision = parse_sprintf_decimal(bytes, &mut index).unwrap_or(0);
+                if precision >= i32::MAX as usize {
+                    sprintf_value_error(eg, "Precision must be between 0 and 2147483647");
+                    return Ok(None);
+                }
+                precision as i64
+            };
+            Some(precision)
+        } else {
+            None
+        };
+
+        if bytes.get(index) == Some(&b'l') {
+            index += 1;
+        }
+        let Some(specifier) = bytes.get(index).copied() else {
+            sprintf_value_error(eg, "Missing format specifier at end of string");
+            return Ok(None);
+        };
+        index += 1;
+        if !matches!(
+            specifier,
+            b'b' | b'c'
+                | b'd'
+                | b'e'
+                | b'E'
+                | b'f'
+                | b'F'
+                | b'g'
+                | b'G'
+                | b'h'
+                | b'H'
+                | b'o'
+                | b's'
+                | b'u'
+                | b'x'
+                | b'X'
+                | b'%'
+        ) {
+            sprintf_value_error(
+                eg,
+                format!("Unknown format specifier \"{}\"", specifier as char),
+            );
+            return Ok(None);
+        }
+        if precision.is_some_and(|precision| precision < -1) {
+            sprintf_value_error(eg, "Precision must be between -1 and 2147483647");
+            return Ok(None);
+        }
+        if precision.is_some_and(|precision| precision < 0)
+            && !matches!(specifier, b'g' | b'G' | b'h' | b'H')
+        {
+            sprintf_value_error(
+                eg,
+                format!(
+                    "Precision {} is only supported for %g, %G, %h and %H",
+                    precision.unwrap()
+                ),
+            );
+            return Ok(None);
+        }
+        if precision.is_some_and(|precision| precision > 53)
+            && matches!(
+                specifier,
+                b'e' | b'E' | b'f' | b'F' | b'g' | b'G' | b'h' | b'H'
+            )
+        {
+            report_internal_diagnostic(
+                eg,
+                ed,
+                8,
+                "Notice",
+                &format!(
+                    "{function}(): Requested precision of {} digits was truncated to PHP maximum of 53 digits",
+                    precision.unwrap()
+                ),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            precision = Some(53);
+        }
+        let Some(value) = take_sprintf_argument(args, &mut next, position, call, eg) else {
+            return Ok(None);
+        };
+        let Some(rendered) = render_sprintf_value(ed, eg, &value, specifier, precision, &flags)?
+        else {
+            return Ok(None);
+        };
+        output.extend_from_slice(&apply_sprintf_width(rendered, width, &flags, specifier));
+        literal = index;
+    }
+    output.extend_from_slice(&format[literal..]);
+    Ok(Some(SprintfOutput::Bytes(output)))
 }
 
 // ============================================================================
@@ -9634,13 +10473,27 @@ fn fn_var_dump(
     if eg.exception.is_some() {
         return Ok(());
     }
-    eg.write_output(first.as_bytes());
+    if first_value.is_binary_string() {
+        let bytes = first_value.php_string_bytes().unwrap_or_default();
+        eg.write_output(format!("string({}) \"", bytes.len()).as_bytes());
+        eg.write_output(&bytes);
+        eg.write_output(b"\"\n");
+    } else {
+        eg.write_output(first.as_bytes());
+    }
     for value in remaining {
         let output = var_dump_output_value(&value, eg, ed)?;
         if eg.exception.is_some() {
             return Ok(());
         }
-        eg.write_output(output.as_bytes());
+        if value.is_binary_string() {
+            let bytes = value.php_string_bytes().unwrap_or_default();
+            eg.write_output(format!("string({}) \"", bytes.len()).as_bytes());
+            eg.write_output(&bytes);
+            eg.write_output(b"\"\n");
+        } else {
+            eg.write_output(output.as_bytes());
+        }
     }
     Ok(())
 }

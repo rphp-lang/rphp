@@ -734,6 +734,68 @@ try {
 }
 
 #[test]
+fn printf_family_handles_positions_stars_custom_padding_and_raw_char_bytes() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$formatted = sprintf(
+    "%2\$*3\$.*4\$f|%1\$'#-8.4s|%5\$04.4x|%6\$.*7\$G",
+    "monkeys",
+    1.2345,
+    10,
+    2,
+    255,
+    1.2345678901234567,
+    10,
+);
+var_dump($formatted, strlen($formatted));
+echo bin2hex(sprintf("%c", -67)), "\n";
+try {
+    vsprintf("%s%s", ["one"]);
+} catch (ValueError $error) {
+    echo get_class($error), ":", $error->getMessage();
+}
+"#,
+        ),
+        concat!(
+            "string(35) \"      1.23|monk####|0000|1.23456789\"\n",
+            "int(35)\n",
+            "bd\n",
+            "ValueError:The arguments array must contain 2 items, 1 given",
+        ),
+    );
+}
+
+#[test]
+fn printf_family_preserves_conversion_diagnostics_and_internal_arity_trace() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($level, $message) {
+    echo $level, ':', $message, '|';
+    return true;
+});
+echo sprintf("%s|%d|%.2f", [], new stdClass(), new stdClass()), "\n";
+restore_error_handler();
+try {
+    sprintf();
+} catch (ArgumentCountError $error) {
+    $trace = $error->getTrace();
+    echo count($trace), ':', $trace[0]['function'];
+}
+"#,
+        ),
+        concat!(
+            "2:Array to string conversion|",
+            "2:Object of class stdClass could not be converted to int|",
+            "2:Object of class stdClass could not be converted to float|",
+            "Array|1|1.00\n",
+            "1:sprintf",
+        ),
+    );
+}
+
+#[test]
 fn binary_hex_conversions_round_trip_bytes_and_report_invalid_input() {
     assert_eq!(
         run_php(

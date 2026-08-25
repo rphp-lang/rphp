@@ -8,6 +8,76 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`printf-format-engine-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. `sprintf()`, `printf()`, `vsprintf()` and
+`vprintf()` now share one PHP-byte formatting engine with positional and
+sequential arguments, dynamic width and precision, left/plus/zero/custom-pad
+flags, the ignored legacy `l` modifier and the `s`, `c`, `d`, `u`, `b`, `o`,
+`x`, `X`, `f`, `F`, `e`, `E`, `g`, `G`, `h` and `H` conversions. The engine
+preflights missing arguments before conversion, preserves PHP's variadic and
+array-call exception classes/messages, reports conversion diagnostics at the
+caller, retains binary `%c` output and returns byte-accurate printed lengths.
+Internal arity failures now capture their pending internal boundary before
+frame cleanup, so caught `ArgumentCountError` traces retain the PHP call site.
+
+Two original E2E regressions cover positions, stars, custom padding, raw byte
+characters, array/object conversions, named metadata, missing arguments and
+the internal arity trace. The focused 101-case unmodified `printf*`,
+`sprintf*`, `vprintf*` and `vsprintf*` selection moves from 29 passes, 50
+failures and 22 skips to 79 passes, zero failures and 22 skips, exactly matching
+the PHP 8.5.9 oracle's attempted set. The PHPT runner also removes an incorrect
+local interpretation of `%%` in `EXPECTF`; an original runner regression keeps
+literal `%%` distinct from the `%0` NUL placeholder. Baseline, oracle and final
+focused manifest SHA-256 values are
+`0f070bb91f1b64a54cf4d28467782a6af95d2ce4e688ad59b377626094f13b24`,
+`9665c71e11a8d543cb7fcc4a9d8213ce937c37801b374a8fbaacbef6bb2451a4`
+and
+`d7d5a6d12af1b01c9dd88a92c52f2c5d69a12a90005b53d7a276b41f8201f47f`.
+
+The complete 733-case strings audit moves from 343 to 406 passes, an exact
++63/-0 delta, with 242 failures, 54 skips, 30 unsupported cases, the retained
+`dirname_multi.phpt` timeout and zero crashes. Fifty gains belong to the
+focused family and 13 are dependent formatting consumers. The complete array
+audit remains at 828 passes, zero failures, 13 skips and one unsupported case.
+Zend/lang moves from 4,201 to 4,202 passes, an exact +1/-0 delta supplied by
+`Zend/tests/float_prec_001.phpt`, with 1,101 failures, 115 skips, 181
+unsupported cases and no XFAIL, timeout or crash. Three independently produced
+final status/output manifests are byte-identical after removing duration-only
+fields. Their normalized strings, array and Zend/lang SHA-256 values are
+`669b99104a66b287ddc2637a173b46988d133a9d5ce6bba159a2b576a34b6f41`,
+`da4ac28d1398a8d2324d1cba58a2ef41f479a3249f2ef3fe4156ff0ea5eea35f`
+and
+`58f964c434be118ac09885d4223db8339aecc3b8f1766e4baf1d649e1692f973`.
+
+Ordinary simple formats use a general one-pass scalar path after the full
+engine's first implementation exceeded the performance gate; unsupported or
+diagnostic-bearing shapes fall back to the canonical formatter. All five Cargo
+feature configurations, locked all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four Symfony S1
+gates and PHP 8.5.9 S2/S3 pass. Production remains at 1,623 unsafe blocks, 289
+unsafe functions and 357 SAFETY annotations.
+
+Two independent CPU-2-pinned 32-pair default-release series after three
+warmups retain the `5388890` checksum for 500,000 ordinary
+`sprintf('%s:%d', ...)` calls. Paired median changes are +3.456%/+4.005%, below
+the +5% regression gate; 100-request startup controls are -4.179%/-4.453%.
+Baseline/candidate binary SHA-256 values are
+`2355aa12268aa19ef9f4574acd064996e69ec68ccb5d303db35cd6bd2f680e59` /
+`309320a77625705f845a3abc5fcd8393e9b2517752889de234e001324c7a7e9f`.
+The transient driver, workload and four accepted-log SHA-256 values are
+`593648765e07b980eabd088ebaa60d21f3909a3cf8a0bc0bf7a4599f4d6491a8`,
+`c6b41f49dbeb6129ac4ea9af622367971e759b62ca32ac83d658276d1786d557`,
+`b7043bfbd73eb6bed72550fb55ecf4ff2bab8acce3059eaf0e9be26a387b0be1`,
+`e2046b04e66f5bc60bba4a8dad581a333b71d253edd443238df0c2cab9a235ab`,
+`91a6314ab582ac53fd8386603b5ba8331efe4c397868ece7d2fa72b194235c13`
+and `c4526b2961b724ad3411e49e78bc099bdf596f6dd6ffb200aff39b4bb2f23728`.
+
+This checkpoint does not claim locale-specific formatting, 32-bit execution,
+the remaining 242 strings failures or 30 unsupported cases, the inherited
+strings timeout, the 1,101 remaining Zend/lang failures, optional string
+extensions or broader PHP compatibility.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `string-position-offset-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. `stripos()`, `strrpos()` and `strripos()` now
 share PHP-byte search, positive and negative offset bounds, empty-needle
@@ -76,7 +146,7 @@ failures or 30 unsupported cases, the inherited strings timeout, the 1,102
 remaining Zend/lang failures, optional string extensions or broader PHP
 compatibility.
 
-The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
+The checkpoint before that is the
 `array-suite-zero-failure-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. It closes the six ordinary failures in the
 complete recursive `ext/standard/tests/array` selection through shared runtime

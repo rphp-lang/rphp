@@ -627,9 +627,9 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
     reg!("ord", fn_ord, 1, 1, "character");
     reg!("chr", fn_chr, 1, 1, "codepoint");
-    reg_var!("sprintf", fn_sprintf, 1, "format");
+    reg_var!("sprintf", fn_sprintf, 1, "format", "values");
     reg!("vsprintf", fn_vsprintf, 2, 2, "format", "values");
-    reg_var!("printf", fn_printf, 1, "format");
+    reg_var!("printf", fn_printf, 1, "format", "values");
     reg!("vprintf", fn_vprintf, 2, 2, "format", "values");
     #[cfg(feature = "formatted-io")]
     {

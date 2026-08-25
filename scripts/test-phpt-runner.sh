@@ -127,6 +127,8 @@ if (classify_failure("Parse error: emitted by user code", 0) !== "output"
     || expectation_profile(["EXPECT" => "Error is ordinary user data"]) !== "ordinary"
     || expectation_profile(["EXPECTF" => "Fatal error: broken in %s on line %d"]) !== "diagnostic"
     || expectation_profile(["EXPECT" => "prefix\nWarning: broken"]) !== "diagnostic"
+    || preg_match("~\\A" . expectf_pattern("literal %% %0") . "\\z~sD", "literal %% \x00") !== 1
+    || preg_match("~\\A" . expectf_pattern("literal %% %0") . "\\z~sD", "literal % \x00") !== 0
 ) {
     fwrite(STDERR, "unexpected execution-phase classification\n");
     exit(1);

@@ -44,7 +44,6 @@ function expectf_pattern(string $expected): string
         '%f' => '[+-]?(?:\\d+|(?=\\.\\d))(?:\\.\\d+)?(?:[Ee][+-]?\\d+)?',
         '%c' => '.',
         '%0' => '\\x00',
-        '%%' => '%',
     ]);
 }
 

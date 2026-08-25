@@ -2524,16 +2524,37 @@ put paired medians at -0.251% for startup and +0.195% for multi-column
 schedule cases and throwing-comparison partial permutation remain explicit
 nonclaims.
 
+The `printf-format-engine-batch` checkpoint closes every attempted AMD64 case
+in the 101-case `printf*`/`sprintf*`/`vprintf*`/`vsprintf*` family. A shared
+PHP-byte engine now handles positions, dynamic widths and precisions, flags,
+custom padding, numeric/string/character conversions, binary output, preflight
+argument counts and caller-pinned diagnostics. The focused selection moves
+from 29 pass, 50 fail and 22 skip to 79 pass, zero fail and 22 skip, exactly
+matching PHP 8.5.9. An incorrect local `EXPECTF` interpretation of `%%` is
+removed and protected by an original runner regression.
+
+The complete strings audit moves from 343 to 406 passes (+63/-0), with 242
+failures, 54 skips, 30 unsupported and the retained timeout. Array remains
+byte-identical at 828 pass, zero fail, 13 skip and one unsupported. Zend/lang
+moves from 4,201 to 4,202 pass (+1/-0), with 1,101 fail, 115 skip and 181
+unsupported and no timeout or crash. Three independently produced normalized
+final manifests are byte-identical. All five Cargo configurations,
+all-feature/all-target, formatting, runner, unsafe, Composer S0, four Symfony
+S1 gates and PHP 8.5 S2/S3 pass. The unsafe inventory remains 1,623 blocks,
+289 functions and 357 annotations. Two CPU-pinned 32-pair controls put ordinary
+500,000-call `sprintf()` paired medians at +3.456%/+4.005% and startup at
+-4.179%/-4.453%, within the +5% gate.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 343 pass, 305 fail, 54 skip and 30 unsupported, with one retained timeout;
-the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38. `Zend/tests`
-plus `tests/lang` is 4,201 pass, 1,102 fail, 115 skip and 181 unsupported, with
-no timeout or crash. The next goal should take the highest-yield general root-
-cause cluster from the remaining strings or Zend/lang manifests rather than
-extending the already-zero array failure count or the closed position-search
-family.
+is 406 pass, 242 fail, 54 skip and 30 unsupported, with one retained timeout;
+the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
+attempted printf family is 79/79. `Zend/tests` plus `tests/lang` is 4,202 pass,
+1,101 fail, 115 skip and 181 unsupported, with no timeout or crash. The next
+goal should take the highest-yield general root-cause cluster from the
+remaining strings or Zend/lang manifests rather than extending the already-
+zero array failure count or the closed position-search/printf families.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,

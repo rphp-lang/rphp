@@ -3074,7 +3074,33 @@ fn too_few_arguments_error(
             "Too few arguments to function {name}(), {supplied} passed in {file} on line {line} and {relation} {required} expected"
         )
     };
-    make_error_value("ArgumentCountError", &message)
+    let error = make_error_value("ArgumentCountError", &message);
+    if internal_diagnostic {
+        let instruction_index = caller_op_array
+            .instructions
+            .iter()
+            .position(|instruction| std::ptr::eq(instruction, call_instruction))
+            .unwrap_or(0);
+        let line = caller_op_array.source_line(instruction_index).unwrap_or(0);
+        let file = if caller_op_array.source_file.is_empty() {
+            caller_op_array.name.clone()
+        } else {
+            caller_op_array.source_file.to_string()
+        };
+        if line != 0
+            && !file.is_empty()
+            && let Some(caller) = caller_frame_for_internal_call(call)
+            && let Some(mut object) = error.as_object_mut()
+        {
+            object.set_property("file", Value::string(file));
+            object.set_property("line", Value::long(line as i64));
+            object.set_property(
+                "trace",
+                Value::array(collect_internal_call_trace(call, caller, eg)),
+            );
+        }
+    }
+    error
 }
 
 fn argument_type_error(
