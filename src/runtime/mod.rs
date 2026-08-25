@@ -2,7 +2,10 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::io::Write;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::time::{Duration, Instant};
 
 use crate::compiler::compile::{
     ClassConstantDefinition, ClassDef, PropertyDefinition, ReboundTraitPropertyDefault,
@@ -363,13 +366,72 @@ pub(crate) struct StringUtilityState {
     pub(crate) shuffle_random: u64,
 }
 
+enum ExecutionTimerCommand {
+    Reset(u64),
+    Disable,
+}
+
+struct ExecutionTimer {
+    commands: Sender<ExecutionTimerCommand>,
+}
+
+impl ExecutionTimer {
+    fn start(vm_interrupt: Arc<AtomicBool>, timed_out: Arc<AtomicBool>) -> std::io::Result<Self> {
+        let (commands, receiver) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("rphp-execution-timer".to_string())
+            .spawn(move || {
+                let mut deadline: Option<Instant> = None;
+                loop {
+                    let command = if let Some(active_deadline) = deadline {
+                        match receiver
+                            .recv_timeout(active_deadline.saturating_duration_since(Instant::now()))
+                        {
+                            Ok(command) => command,
+                            Err(RecvTimeoutError::Timeout) => {
+                                timed_out.store(true, Ordering::Relaxed);
+                                vm_interrupt.store(true, Ordering::Relaxed);
+                                deadline = None;
+                                continue;
+                            }
+                            Err(RecvTimeoutError::Disconnected) => break,
+                        }
+                    } else {
+                        let Ok(command) = receiver.recv() else {
+                            break;
+                        };
+                        command
+                    };
+                    deadline = match command {
+                        ExecutionTimerCommand::Reset(seconds) => {
+                            Instant::now().checked_add(Duration::from_secs(seconds))
+                        }
+                        ExecutionTimerCommand::Disable => None,
+                    };
+                }
+            })?;
+        Ok(Self { commands })
+    }
+
+    fn reset(&self, seconds: u64) -> bool {
+        self.commands
+            .send(ExecutionTimerCommand::Reset(seconds))
+            .is_ok()
+    }
+
+    fn disable(&self) -> bool {
+        self.commands.send(ExecutionTimerCommand::Disable).is_ok()
+    }
+}
+
 pub struct ExecutorGlobals {
     pub vm_stack: VmStack,
     /// Compact argument-only activations for deferred pure-scalar calls.
     pub pending_call_stack: VmStack,
     pub current_execute_data: Cell<*mut ExecuteData>,
-    pub vm_interrupt: AtomicBool,
-    pub timed_out: AtomicBool,
+    pub vm_interrupt: Arc<AtomicBool>,
+    pub timed_out: Arc<AtomicBool>,
+    execution_timer: Option<ExecutionTimer>,
     /// Bounded request-local descriptors for structurally proven virtual
     /// call/return aggregates. The fixed array allocates nothing and RefCell
     /// mutation remains confined to the single VM execution thread.
@@ -658,6 +720,30 @@ pub(crate) enum ClassAliasRegistrationError {
 const PHP_82_SUPPRESSED_ERROR_REPORTING: i64 = 1 | 4 | 16 | 64 | 256 | 4096;
 
 impl ExecutorGlobals {
+    /// Reset the request-local execution timer used by `set_time_limit()`.
+    /// The worker is allocated only after the first positive limit; ordinary
+    /// requests and explicit disable calls retain no timer thread.
+    pub(crate) fn set_execution_time_limit(&mut self, seconds: i64) -> bool {
+        self.timed_out.store(false, Ordering::Relaxed);
+        if seconds <= 0 {
+            return self
+                .execution_timer
+                .as_ref()
+                .is_none_or(ExecutionTimer::disable);
+        }
+        if self.execution_timer.is_none() {
+            let Ok(timer) =
+                ExecutionTimer::start(Arc::clone(&self.vm_interrupt), Arc::clone(&self.timed_out))
+            else {
+                return false;
+            };
+            self.execution_timer = Some(timer);
+        }
+        self.execution_timer
+            .as_ref()
+            .is_some_and(|timer| timer.reset(seconds as u64))
+    }
+
     #[cold]
     pub(crate) fn register_reflection_attribute(
         &mut self,
@@ -1134,8 +1220,9 @@ impl ExecutorGlobals {
             vm_stack: VmStack::new(),
             pending_call_stack: VmStack::new_pending(),
             current_execute_data: Cell::new(std::ptr::null_mut()),
-            vm_interrupt: AtomicBool::new(false),
-            timed_out: AtomicBool::new(false),
+            vm_interrupt: Arc::new(AtomicBool::new(false)),
+            timed_out: Arc::new(AtomicBool::new(false)),
+            execution_timer: None,
             resolved_virtual_aggregate_cache: std::cell::RefCell::new(
                 [ResolvedVirtualAggregateCacheEntry::EMPTY; RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS],
             ),
@@ -1249,8 +1336,9 @@ impl ExecutorGlobals {
             vm_stack: VmStack::new(),
             pending_call_stack: VmStack::new_pending(),
             current_execute_data: Cell::new(std::ptr::null_mut()),
-            vm_interrupt: AtomicBool::new(false),
-            timed_out: AtomicBool::new(false),
+            vm_interrupt: Arc::new(AtomicBool::new(false)),
+            timed_out: Arc::new(AtomicBool::new(false)),
+            execution_timer: None,
             resolved_virtual_aggregate_cache: std::cell::RefCell::new(
                 [ResolvedVirtualAggregateCacheEntry::EMPTY; RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS],
             ),

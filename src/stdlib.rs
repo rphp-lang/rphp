@@ -8068,38 +8068,103 @@ fn fn_explode(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let d = arg_str!(ed, 0);
-    let s = arg_str!(ed, 1);
-    if d.is_empty() {
+    let exact_separator = arg!(ed, 0);
+    let exact_string = arg!(ed, 1);
+    let exact_limit = match arg_opt!(ed, 2) {
+        None => Some(i64::MAX),
+        Some(limit) if limit.value_type() == ValueType::Long => limit.as_long(),
+        Some(_) => None,
+    };
+    if exact_separator.value_type() == ValueType::String
+        && exact_string.value_type() == ValueType::String
+        && let Some(limit) = exact_limit
+    {
+        let separator = exact_separator.php_string_bytes().unwrap_or_default();
+        let string = exact_string.php_string_bytes().unwrap_or_default();
+        if separator.is_empty() {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                "explode(): Argument #1 ($separator) must not be empty",
+            ));
+            return Ok(());
+        }
+        let result = explode_php_bytes(&separator, &string, limit, exact_string.is_binary_string());
+        ret!(rv, Value::array(result));
+    }
+
+    let Some(separator) =
+        typed_internal_string_value_argument_expected(ed, eg, "explode", 0, "separator", "string")?
+    else {
+        return Ok(());
+    };
+    let Some(string) =
+        typed_internal_string_value_argument_expected(ed, eg, "explode", 1, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let limit = if arg_opt!(ed, 2).is_some() {
+        let Some(limit) = typed_internal_int_argument(ed, eg, "explode", 2, "limit")? else {
+            return Ok(());
+        };
+        limit
+    } else {
+        i64::MAX
+    };
+    let separator_bytes = separator.php_string_bytes().unwrap_or_default();
+    if separator_bytes.is_empty() {
         eg.exception = Some(crate::value::make_error_value(
             "ValueError",
-            "explode(): Argument #1 ($separator) cannot be empty",
+            "explode(): Argument #1 ($separator) must not be empty",
         ));
-        ret!(rv, Value::null());
+        return Ok(());
     }
-    let limit = arg_opt!(ed, 2).map(Value::to_long_val);
+    let string_bytes = string.php_string_bytes().unwrap_or_default();
+    let result = explode_php_bytes(
+        &separator_bytes,
+        &string_bytes,
+        limit,
+        string.is_binary_string(),
+    );
+    ret!(rv, Value::array(result));
+}
+
+fn explode_php_bytes(separator: &[u8], string: &[u8], limit: i64, binary: bool) -> PhpArray {
     let mut arr = PhpArray::new();
-    match limit {
-        None => {
-            for part in s.split(d.as_ref()) {
-                arr.push(Value::string(part));
+    if limit >= 0 {
+        let maximum_parts = usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
+        let mut start = 0usize;
+        for position in memchr::memmem::find_iter(string, separator) {
+            if arr.len().saturating_add(1) >= maximum_parts {
+                break;
             }
+            arr.push(php_byte_result(string[start..position].to_vec(), binary));
+            start = position + separator.len();
         }
-        Some(limit) if limit >= 0 => {
-            let limit = usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
-            for part in s.splitn(limit, d.as_ref()) {
-                arr.push(Value::string(part));
-            }
-        }
-        Some(limit) => {
-            let parts = s.split(d.as_ref()).collect::<Vec<_>>();
-            let retained = parts.len().saturating_sub(limit.unsigned_abs() as usize);
-            for part in parts.into_iter().take(retained) {
-                arr.push(Value::string(part));
-            }
+        arr.push(php_byte_result(string[start..].to_vec(), binary));
+        return arr;
+    }
+
+    let positions = memchr::memmem::find_iter(string, separator).collect::<Vec<_>>();
+    let retained = positions
+        .len()
+        .saturating_add(1)
+        .saturating_sub(usize::try_from(limit.unsigned_abs()).unwrap_or(usize::MAX));
+    if retained == 0 {
+        return arr;
+    }
+    let mut start = 0usize;
+    for index in 0..retained {
+        let end = if index + 1 == retained {
+            positions.get(index).copied().unwrap_or(string.len())
+        } else {
+            positions[index]
+        };
+        arr.push(php_byte_result(string[start..end].to_vec(), binary));
+        if index < positions.len() {
+            start = positions[index] + separator.len();
         }
     }
-    ret!(rv, Value::array(arr));
+    arr
 }
 
 fn fn_ucwords(
@@ -8143,28 +8208,25 @@ fn implode_or_join(
     eg: &mut ExecutorGlobals,
     function: &str,
 ) -> Result<(), VmError> {
-    let first = arg!(ed, 0);
-    let second = arg!(ed, 1);
-    if let (Some(glue), Some(pieces)) = (first.as_str(), second.as_array()) {
-        return implode_array(rv, eg, glue, pieces);
+    let first = arg!(ed, 0).dereferenced();
+    let second = arg!(ed, 1).dereferenced();
+    if first.value_type() == ValueType::String
+        && let Some(pieces) = second.as_array()
+    {
+        if !first.is_binary_string()
+            && let Some(result) = implode_text_fast(first.as_str().unwrap_or_default(), pieces, eg)
+        {
+            ret!(rv, Value::string(result));
+        }
+        return implode_array(ed, rv, eg, first, pieces);
     }
 
     if second.value_type() == ValueType::Undef {
         if let Some(pieces) = first.as_array() {
-            return implode_array(rv, eg, "", pieces);
-        }
-        if first.value_type() != ValueType::Null {
-            let converted = typed_internal_string_argument_expected(
-                ed,
-                eg,
-                function,
-                0,
-                "separator",
-                "array|string",
-            )?;
-            if converted.is_none() {
-                return Ok(());
+            if let Some(result) = implode_text_fast("", pieces, eg) {
+                ret!(rv, Value::string(result));
             }
+            return implode_array(ed, rv, eg, &Value::string(String::new()), pieces);
         }
         eg.exception = Some(crate::value::make_error_value(
             "TypeError",
@@ -8186,9 +8248,25 @@ fn implode_or_join(
         if eg.exception.is_some() {
             return Ok(());
         }
-        String::new()
+        Value::string(String::new())
     } else {
-        let Some(glue) = typed_internal_string_argument(ed, eg, function, 0, "separator")? else {
+        let expected = if matches!(
+            first.value_type(),
+            ValueType::Object | ValueType::Closure | ValueType::Resource
+        ) {
+            "array|string"
+        } else {
+            "string"
+        };
+        let Some(glue) = typed_internal_string_value_argument_expected(
+            ed,
+            eg,
+            function,
+            0,
+            "separator",
+            expected,
+        )?
+        else {
             return Ok(());
         };
         glue
@@ -8206,26 +8284,64 @@ fn implode_or_join(
         }
         return Ok(());
     };
-    implode_array(rv, eg, &glue, array)
+    implode_array(ed, rv, eg, &glue, array)
 }
 
 #[inline]
-fn implode_array(
-    rv: *mut Value,
-    eg: &ExecutorGlobals,
-    glue: &str,
-    pieces: &PhpArray,
-) -> Result<(), VmError> {
+fn implode_text_fast(glue: &str, pieces: &PhpArray, eg: &ExecutorGlobals) -> Option<String> {
     let glue_bytes = glue.len().saturating_mul(pieces.len().saturating_sub(1));
     let value_bytes = pieces.values().map(Value::echo_len_hint).sum::<usize>();
     let mut result = String::with_capacity(glue_bytes.saturating_add(value_bytes));
     for (index, value) in pieces.values().enumerate() {
+        let value = value.dereferenced();
         if index > 0 {
             result.push_str(glue);
         }
-        value.append_echo_to_with_precision(&mut result, eg.precision);
+        match value.value_type() {
+            ValueType::String if !value.is_binary_string() => {
+                result.push_str(value.as_str().unwrap_or_default());
+            }
+            ValueType::Array | ValueType::Object | ValueType::Closure | ValueType::String => {
+                return None;
+            }
+            _ => value.append_echo_to_with_precision(&mut result, eg.precision),
+        }
     }
-    ret!(rv, Value::string(result));
+    Some(result)
+}
+
+#[inline]
+fn implode_array(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    glue: &Value,
+    pieces: &PhpArray,
+) -> Result<(), VmError> {
+    let glue_bytes = glue.php_string_bytes().unwrap_or_default();
+    let glue_size = glue_bytes
+        .len()
+        .saturating_mul(pieces.len().saturating_sub(1));
+    let value_size = pieces
+        .values()
+        .map(|value| value.dereferenced().echo_len_hint())
+        .sum::<usize>();
+    let mut result = Vec::with_capacity(glue_size.saturating_add(value_size));
+    let mut binary = glue.is_binary_string();
+    for (index, value) in pieces.values().enumerate() {
+        if index > 0 {
+            result.extend_from_slice(&glue_bytes);
+        }
+        let Some(text) = replacement_item_text(ed, eg, value)? else {
+            return Ok(());
+        };
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        binary |= text.binary;
+        result.extend_from_slice(&text.bytes);
+    }
+    ret!(rv, php_byte_result(result, binary));
 }
 
 fn fn_str_repeat(
@@ -23923,6 +24039,17 @@ fn fn_gc_status(
 }
 
 /// PHP_INT_SIZE, PHP_INT_MAX etc. are handled as constants.
+fn fn_set_time_limit(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(seconds) = typed_internal_int_argument(ed, eg, "set_time_limit", 0, "seconds")? else {
+        return Ok(());
+    };
+    ret!(rv, Value::bool(eg.set_execution_time_limit(seconds)));
+}
+
 /// sleep($seconds): int
 fn fn_sleep(
     ed: *mut ExecuteData,

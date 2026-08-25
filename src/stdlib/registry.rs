@@ -625,9 +625,43 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("trim", fn_trim, 2, 1, "string", "characters");
     reg!("rtrim", fn_rtrim, 2, 1, "string", "characters");
     reg!("ltrim", fn_ltrim, 2, 1, "string", "characters");
-    reg!("explode", fn_explode, 3, 2, "separator", "string", "limit");
-    reg!("implode", fn_implode, 2, 1, "separator", "array");
-    reg!("join", fn_join, 2, 1, "separator", "array");
+    reg_typed!(
+        "explode",
+        fn_explode,
+        3,
+        2,
+        ["separator", "string", "limit"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::Int
+        ],
+        ParamTypeHint::Array
+    );
+    reg_typed!(
+        "implode",
+        fn_implode,
+        2,
+        1,
+        ["separator", "array"],
+        [
+            ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String]),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Array)),
+        ],
+        ParamTypeHint::String
+    );
+    reg_typed!(
+        "join",
+        fn_join,
+        2,
+        1,
+        ["separator", "array"],
+        [
+            ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String]),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Array)),
+        ],
+        ParamTypeHint::String
+    );
     reg!("str_repeat", fn_str_repeat, 2, 2, "string", "times");
     reg_typed!(
         "substr_count",
@@ -1870,6 +1904,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("gc_enabled", fn_gc_enabled, 0, 0);
     reg!("gc_enable", fn_gc_enable, 0, 0);
     reg!("gc_disable", fn_gc_disable, 0, 0);
+    reg_typed!(
+        "set_time_limit",
+        fn_set_time_limit,
+        1,
+        1,
+        ["seconds"],
+        [ParamTypeHint::Int],
+        ParamTypeHint::Bool
+    );
     reg!("sleep", fn_sleep, 1, 1, "seconds");
     reg!("usleep", fn_usleep, 1, 1, "microseconds");
 
