@@ -5434,15 +5434,77 @@ fn fn_substr_compare(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let haystack = arg_str!(ed, 0);
-    let needle = arg_str!(ed, 1);
-    let haystack_bytes = haystack.as_bytes();
-    let offset = arg_long!(ed, 2);
+    let Some(haystack) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "substr_compare",
+        0,
+        "haystack",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    let Some(needle) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "substr_compare",
+        1,
+        "needle",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    let Some(offset) = typed_internal_int_argument(ed, eg, "substr_compare", 2, "offset")? else {
+        return Ok(());
+    };
+    let length = match arg_opt!(ed, 3) {
+        None => None,
+        Some(value) if value.dereferenced().value_type() == ValueType::Null => None,
+        Some(_) => {
+            let Some(length) = typed_internal_int_argument_expected(
+                ed,
+                eg,
+                "substr_compare",
+                3,
+                "length",
+                "?int",
+            )?
+            else {
+                return Ok(());
+            };
+            Some(length)
+        }
+    };
+    let case_insensitive = if arg_opt!(ed, 4).is_some() {
+        let Some(case_insensitive) =
+            typed_internal_bool_argument(ed, eg, "substr_compare", 4, "case_insensitive")?
+        else {
+            return Ok(());
+        };
+        case_insensitive
+    } else {
+        false
+    };
+    if length.is_some_and(|length| length < 0) {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "substr_compare(): Argument #4 ($length) must be greater than or equal to 0",
+        ));
+        return Ok(());
+    }
+    if length == Some(0) {
+        ret!(rv, Value::long(0));
+    }
+
+    let haystack_bytes = haystack.php_string_bytes().unwrap_or_default();
+    let needle_bytes = needle.php_string_bytes().unwrap_or_default();
     let start = if offset < 0 {
         Some(
             haystack_bytes
                 .len()
-                .saturating_sub(offset.unsigned_abs() as usize),
+                .saturating_sub(usize::try_from(offset.unsigned_abs()).unwrap_or(usize::MAX)),
         )
     } else {
         usize::try_from(offset)
@@ -5458,26 +5520,16 @@ fn fn_substr_compare(
     };
 
     let available = haystack_bytes.len() - start;
-    let length = arg_opt!(ed, 3)
-        .filter(|value| !matches!(value.value_type(), ValueType::Null | ValueType::Undef))
-        .map(Value::to_long_val);
-    if length.is_some_and(|length| length <= 0) {
-        eg.exception = Some(crate::value::make_error_value(
-            "ValueError",
-            "substr_compare(): Argument #4 ($length) must be greater than 0",
-        ));
-        return Ok(());
-    }
     let compared_length = length
         .and_then(|length| usize::try_from(length).ok())
         .unwrap_or(available)
         .min(available);
     let left = &haystack_bytes[start..start + compared_length];
-    let right = &needle.as_bytes()[..length
+    let right = &needle_bytes[..length
         .and_then(|length| usize::try_from(length).ok())
-        .unwrap_or(needle.len())
-        .min(needle.len())];
-    let ordering = if arg_opt!(ed, 4).is_some_and(Value::is_truthy) {
+        .unwrap_or(needle_bytes.len())
+        .min(needle_bytes.len())];
+    let ordering = if case_insensitive {
         left.iter()
             .copied()
             .map(|byte| byte.to_ascii_lowercase())
@@ -5498,55 +5550,118 @@ fn fn_strpos(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let h = arg_str!(ed, 0);
-    let n = arg_str!(ed, 1);
-    let offset = arg_opt!(ed, 2).map(Value::to_long_val).unwrap_or(0);
-    let start = if offset < 0 {
-        h.len().checked_sub(offset.unsigned_abs() as usize)
-    } else {
-        usize::try_from(offset)
-            .ok()
-            .filter(|offset| *offset <= h.len())
+    let haystack = arg!(ed, 0);
+    let needle = arg!(ed, 1);
+    let exact_offset = match arg_opt!(ed, 2) {
+        None => Some(0),
+        Some(offset) if offset.value_type() == ValueType::Long => offset.as_long(),
+        Some(_) => None,
     };
-    let Some(start) = start else {
-        eg.exception = Some(crate::value::make_error_value(
-            "ValueError",
-            "strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)",
-        ));
-        return Ok(());
-    };
-    ret!(
-        rv,
-        match h[start..].find(n.as_ref()) {
-            Some(pos) => Value::long((start + pos) as i64),
-            None => Value::bool(false),
+    if haystack.value_type() == ValueType::String
+        && needle.value_type() == ValueType::String
+        && !haystack.is_binary_string()
+        && !needle.is_binary_string()
+        && let Some(offset) = exact_offset
+    {
+        let haystack = haystack.as_str().unwrap_or_default();
+        let needle = needle.as_str().unwrap_or_default();
+        let boundary = if offset < 0 {
+            usize::try_from(offset.unsigned_abs())
+                .ok()
+                .and_then(|distance| haystack.len().checked_sub(distance))
+        } else {
+            usize::try_from(offset)
+                .ok()
+                .filter(|offset| *offset <= haystack.len())
+        };
+        let Some(boundary) = boundary else {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                "strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)",
+            ));
+            return Ok(());
+        };
+        if haystack.is_char_boundary(boundary) {
+            let position = haystack[boundary..]
+                .find(needle)
+                .map(|position| boundary + position);
+            ret!(
+                rv,
+                position.map_or_else(
+                    || Value::bool(false),
+                    |position| Value::long(position as i64),
+                )
+            );
         }
-    );
+    }
+    string_position_builtin(ed, rv, eg, "strpos", StringSearchDirection::First, false)
 }
 
 fn fn_strstr(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let haystack = php_string_to_bytes(arg_str!(ed, 0).as_ref());
-    let needle = php_string_to_bytes(arg_str!(ed, 1).as_ref());
-    let position = if needle.is_empty() {
-        Some(0)
-    } else {
-        haystack
-            .windows(needle.len())
-            .position(|candidate| candidate == needle)
+    let exact_before_needle = match arg_opt!(ed, 2) {
+        None => Some(false),
+        Some(value) if matches!(value.value_type(), ValueType::True | ValueType::False) => {
+            Some(value.is_truthy())
+        }
+        Some(_) => None,
     };
+    let exact_haystack = arg!(ed, 0);
+    let exact_needle = arg!(ed, 1);
+    if exact_haystack.value_type() == ValueType::String
+        && exact_needle.value_type() == ValueType::String
+        && let Some(before_needle) = exact_before_needle
+    {
+        let binary = exact_haystack.is_binary_string();
+        let haystack = exact_haystack.php_string_bytes().unwrap_or_default();
+        let needle = exact_needle.php_string_bytes().unwrap_or_default();
+        let Some(position) = string_search_position(&haystack, &needle, false, false) else {
+            ret!(rv, Value::bool(false));
+        };
+        let bytes = if before_needle {
+            &haystack[..position]
+        } else {
+            &haystack[position..]
+        };
+        ret!(rv, php_byte_result(bytes.to_vec(), binary));
+    }
+
+    let Some(haystack) =
+        typed_internal_string_value_argument_expected(ed, eg, "strstr", 0, "haystack", "string")?
+    else {
+        return Ok(());
+    };
+    let Some(needle) =
+        typed_internal_string_value_argument_expected(ed, eg, "strstr", 1, "needle", "string")?
+    else {
+        return Ok(());
+    };
+    let before_needle = if arg_opt!(ed, 2).is_some() {
+        let Some(before_needle) =
+            typed_internal_bool_argument(ed, eg, "strstr", 2, "before_needle")?
+        else {
+            return Ok(());
+        };
+        before_needle
+    } else {
+        false
+    };
+    let binary = haystack.is_binary_string();
+    let haystack = haystack.php_string_bytes().unwrap_or_default();
+    let needle = needle.php_string_bytes().unwrap_or_default();
+    let position = string_search_position(&haystack, &needle, false, false);
     let Some(position) = position else {
         ret!(rv, Value::bool(false));
     };
-    let bytes = if arg_opt!(ed, 2).is_some_and(Value::is_truthy) {
+    let bytes = if before_needle {
         &haystack[..position]
     } else {
         &haystack[position..]
     };
-    ret!(rv, Value::string(bytes_to_php_string(bytes)));
+    ret!(rv, php_byte_result(bytes.to_vec(), binary));
 }
 
 fn typed_internal_argument_error(
@@ -5927,17 +6042,46 @@ fn string_position_builtin(
     direction: StringSearchDirection,
     ascii_fold: bool,
 ) -> Result<(), VmError> {
-    if arg_opt!(ed, 2).is_none() {
-        let haystack = arg!(ed, 0);
-        let needle = arg!(ed, 1);
-        if haystack.value_type() == ValueType::String && needle.value_type() == ValueType::String {
-            if !ascii_fold && !haystack.is_binary_string() && !needle.is_binary_string() {
-                let haystack = haystack.as_str().unwrap_or("");
-                let needle = needle.as_str().unwrap_or("");
-                let position = match direction {
-                    StringSearchDirection::First => haystack.find(needle),
-                    StringSearchDirection::Last => haystack.rfind(needle),
-                };
+    let exact_offset = match arg_opt!(ed, 2) {
+        None => Some(0),
+        Some(offset) if offset.value_type() == ValueType::Long => offset.as_long(),
+        Some(_) => None,
+    };
+    let exact_haystack = arg!(ed, 0);
+    let exact_needle = arg!(ed, 1);
+    if exact_haystack.value_type() == ValueType::String
+        && exact_needle.value_type() == ValueType::String
+        && let Some(offset) = exact_offset
+    {
+        if !ascii_fold
+            && matches!(direction, StringSearchDirection::First)
+            && !exact_haystack.is_binary_string()
+            && !exact_needle.is_binary_string()
+        {
+            let haystack = exact_haystack.as_str().unwrap_or_default();
+            let needle = exact_needle.as_str().unwrap_or_default();
+            let boundary = if offset < 0 {
+                usize::try_from(offset.unsigned_abs())
+                    .ok()
+                    .and_then(|distance| haystack.len().checked_sub(distance))
+            } else {
+                usize::try_from(offset)
+                    .ok()
+                    .filter(|offset| *offset <= haystack.len())
+            };
+            let Some(boundary) = boundary else {
+                eg.exception = Some(crate::value::make_error_value(
+                    "ValueError",
+                    &format!(
+                        "{function}(): Argument #3 ($offset) must be contained in argument #1 ($haystack)"
+                    ),
+                ));
+                return Ok(());
+            };
+            if haystack.is_char_boundary(boundary) {
+                let position = haystack[boundary..]
+                    .find(needle)
+                    .map(|position| boundary + position);
                 ret!(
                     rv,
                     position.map_or_else(
@@ -5946,25 +6090,32 @@ fn string_position_builtin(
                     )
                 );
             }
-
-            let haystack = haystack.php_string_bytes().unwrap_or_default();
-            let needle = needle.php_string_bytes().unwrap_or_default();
-            let position = string_position_at_offset(
-                haystack.as_ref(),
-                needle.as_ref(),
-                0,
-                direction,
-                ascii_fold,
-            )
-            .flatten();
-            ret!(
-                rv,
-                position.map_or_else(
-                    || Value::bool(false),
-                    |position| Value::long(position as i64),
-                )
-            );
         }
+
+        let haystack = exact_haystack.php_string_bytes().unwrap_or_default();
+        let needle = exact_needle.php_string_bytes().unwrap_or_default();
+        let Some(position) = string_position_at_offset(
+            haystack.as_ref(),
+            needle.as_ref(),
+            offset,
+            direction,
+            ascii_fold,
+        ) else {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                &format!(
+                    "{function}(): Argument #3 ($offset) must be contained in argument #1 ($haystack)"
+                ),
+            ));
+            return Ok(());
+        };
+        ret!(
+            rv,
+            position.map_or_else(
+                || Value::bool(false),
+                |position| Value::long(position as i64),
+            )
+        );
     }
 
     let Some(haystack) =
@@ -6072,34 +6223,96 @@ fn fn_strrpos(
 fn fn_strrchr(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let haystack = php_string_to_bytes(arg_str!(ed, 0).as_ref());
-    let needle = php_string_to_bytes(arg_str!(ed, 1).as_ref());
-    let Some(needle) = needle.first() else {
-        ret!(rv, Value::bool(false));
+    let exact_before_needle = match arg_opt!(ed, 2) {
+        None => Some(false),
+        Some(value) if matches!(value.value_type(), ValueType::True | ValueType::False) => {
+            Some(value.is_truthy())
+        }
+        Some(_) => None,
     };
+    let exact_haystack = arg!(ed, 0);
+    let exact_needle = arg!(ed, 1);
+    if exact_haystack.value_type() == ValueType::String
+        && exact_needle.value_type() == ValueType::String
+        && let Some(before_needle) = exact_before_needle
+    {
+        let binary = exact_haystack.is_binary_string();
+        let haystack = exact_haystack.php_string_bytes().unwrap_or_default();
+        let needle = exact_needle
+            .php_string_bytes()
+            .and_then(|bytes| bytes.first().copied())
+            .unwrap_or(0);
+        let value = haystack
+            .iter()
+            .rposition(|byte| *byte == needle)
+            .map_or_else(
+                || Value::bool(false),
+                |position| {
+                    let bytes = if before_needle {
+                        &haystack[..position]
+                    } else {
+                        &haystack[position..]
+                    };
+                    php_byte_result(bytes.to_vec(), binary)
+                },
+            );
+        ret!(rv, value);
+    }
+
+    let Some(haystack) =
+        typed_internal_string_value_argument_expected(ed, eg, "strrchr", 0, "haystack", "string")?
+    else {
+        return Ok(());
+    };
+    let Some(needle) =
+        typed_internal_string_value_argument_expected(ed, eg, "strrchr", 1, "needle", "string")?
+    else {
+        return Ok(());
+    };
+    let before_needle = if arg_opt!(ed, 2).is_some() {
+        let Some(before_needle) =
+            typed_internal_bool_argument(ed, eg, "strrchr", 2, "before_needle")?
+        else {
+            return Ok(());
+        };
+        before_needle
+    } else {
+        false
+    };
+    let binary = haystack.is_binary_string();
+    let haystack = haystack.php_string_bytes().unwrap_or_default();
+    let needle = needle
+        .php_string_bytes()
+        .and_then(|bytes| bytes.first().copied())
+        .unwrap_or(0);
     let value = haystack
         .iter()
-        .rposition(|byte| byte == needle)
+        .rposition(|byte| *byte == needle)
         .map_or_else(
             || Value::bool(false),
-            |position| Value::string(bytes_to_php_string(&haystack[position..])),
+            |position| {
+                let bytes = if before_needle {
+                    &haystack[..position]
+                } else {
+                    &haystack[position..]
+                };
+                php_byte_result(bytes.to_vec(), binary)
+            },
         );
     ret!(rv, value);
 }
 
-fn string_span_bounds(ed: *mut ExecuteData, byte_len: usize) -> (usize, usize) {
+fn string_span_bounds(byte_len: usize, raw_offset: i64, raw_length: Option<i64>) -> (usize, usize) {
     let len = byte_len as i64;
-    let raw_offset = arg_opt!(ed, 2).map_or(0, Value::to_long_val);
     let start = if raw_offset < 0 {
         (len + raw_offset).max(0)
     } else {
         raw_offset.min(len)
     };
-    let end = match arg_opt!(ed, 3) {
+    let end = match raw_length {
         Some(length) => {
-            let length = length.to_long_val();
             if length < 0 {
                 (len + length).max(start)
             } else {
@@ -6111,34 +6324,109 @@ fn string_span_bounds(ed: *mut ExecuteData, byte_len: usize) -> (usize, usize) {
     (start as usize, end as usize)
 }
 
-fn string_span(ed: *mut ExecuteData, accept_matches: bool) -> i64 {
-    let string = arg_str!(ed, 0);
-    let characters = arg_str!(ed, 1);
-    let (start, end) = string_span_bounds(ed, string.len());
+fn string_span_bytes(
+    string: &[u8],
+    characters: &[u8],
+    start: usize,
+    end: usize,
+    accept_matches: bool,
+) -> i64 {
     let mut accepted = [false; 256];
-    for byte in characters.bytes() {
-        accepted[byte as usize] = true;
+    for byte in characters {
+        accepted[*byte as usize] = true;
     }
-    string.as_bytes()[start..end]
+    string[start..end]
         .iter()
         .take_while(|byte| accepted[**byte as usize] == accept_matches)
         .count() as i64
 }
 
+fn string_span_builtin(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    accept_matches: bool,
+) -> Result<(), VmError> {
+    let exact_string = arg!(ed, 0);
+    let exact_characters = arg!(ed, 1);
+    if exact_string.value_type() == ValueType::String
+        && exact_characters.value_type() == ValueType::String
+        && arg_opt!(ed, 2).is_none()
+    {
+        let string = exact_string.php_string_bytes().unwrap_or_default();
+        let characters = exact_characters.php_string_bytes().unwrap_or_default();
+        ret!(
+            rv,
+            Value::long(string_span_bytes(
+                &string,
+                &characters,
+                0,
+                string.len(),
+                accept_matches,
+            ))
+        );
+    }
+
+    let Some(string) =
+        typed_internal_string_value_argument_expected(ed, eg, function, 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let Some(characters) =
+        typed_internal_string_value_argument_expected(ed, eg, function, 1, "characters", "string")?
+    else {
+        return Ok(());
+    };
+    let offset = if arg_opt!(ed, 2).is_some() {
+        let Some(offset) = typed_internal_int_argument(ed, eg, function, 2, "offset")? else {
+            return Ok(());
+        };
+        offset
+    } else {
+        0
+    };
+    let length = match arg_opt!(ed, 3) {
+        None => None,
+        Some(value) if value.dereferenced().value_type() == ValueType::Null => None,
+        Some(_) => {
+            let Some(length) =
+                typed_internal_int_argument_expected(ed, eg, function, 3, "length", "?int")?
+            else {
+                return Ok(());
+            };
+            Some(length)
+        }
+    };
+    let string = string.php_string_bytes().unwrap_or_default();
+    let characters = characters.php_string_bytes().unwrap_or_default();
+    let (start, end) = string_span_bounds(string.len(), offset, length);
+    ret!(
+        rv,
+        Value::long(string_span_bytes(
+            &string,
+            &characters,
+            start,
+            end,
+            accept_matches,
+        ))
+    );
+}
+
 fn fn_strspn(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::long(string_span(ed, true)));
+    string_span_builtin(ed, rv, eg, "strspn", true)
 }
 
 fn fn_strcspn(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::long(string_span(ed, false)));
+    string_span_builtin(ed, rv, eg, "strcspn", false)
 }
 
 fn fn_strpbrk(
@@ -7988,15 +8276,114 @@ fn fn_str_repeat(
 fn fn_substr_count(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let h = arg_str!(ed, 0);
-    let n = arg_str!(ed, 1);
-    let count = if n.is_empty() {
-        0
-    } else {
-        h.matches(n.as_ref()).count() as i64
+    let exact_haystack = arg!(ed, 0);
+    let exact_needle = arg!(ed, 1);
+    if exact_haystack.value_type() == ValueType::String
+        && exact_needle.value_type() == ValueType::String
+        && arg_opt!(ed, 2).is_none()
+    {
+        let haystack = exact_haystack.php_string_bytes().unwrap_or_default();
+        let needle = exact_needle.php_string_bytes().unwrap_or_default();
+        if needle.is_empty() {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                "substr_count(): Argument #2 ($needle) must not be empty",
+            ));
+            return Ok(());
+        }
+        let count = memchr::memmem::find_iter(&haystack, &needle).count() as i64;
+        ret!(rv, Value::long(count));
+    }
+
+    let Some(haystack) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "substr_count",
+        0,
+        "haystack",
+        "string",
+    )?
+    else {
+        return Ok(());
     };
+    let Some(needle) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "substr_count",
+        1,
+        "needle",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    let offset = if arg_opt!(ed, 2).is_some() {
+        let Some(offset) = typed_internal_int_argument(ed, eg, "substr_count", 2, "offset")? else {
+            return Ok(());
+        };
+        offset
+    } else {
+        0
+    };
+    let length = match arg_opt!(ed, 3) {
+        None => None,
+        Some(value) if value.dereferenced().value_type() == ValueType::Null => None,
+        Some(_) => {
+            let Some(length) =
+                typed_internal_int_argument_expected(ed, eg, "substr_count", 3, "length", "?int")?
+            else {
+                return Ok(());
+            };
+            Some(length)
+        }
+    };
+
+    let haystack = haystack.php_string_bytes().unwrap_or_default();
+    let needle = needle.php_string_bytes().unwrap_or_default();
+    if needle.is_empty() {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "substr_count(): Argument #2 ($needle) must not be empty",
+        ));
+        return Ok(());
+    }
+    let start = if offset < 0 {
+        usize::try_from(offset.unsigned_abs())
+            .ok()
+            .and_then(|distance| haystack.len().checked_sub(distance))
+    } else {
+        usize::try_from(offset)
+            .ok()
+            .filter(|offset| *offset <= haystack.len())
+    };
+    let Some(start) = start else {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "substr_count(): Argument #3 ($offset) must be contained in argument #1 ($haystack)",
+        ));
+        return Ok(());
+    };
+    let end = match length {
+        None => Some(haystack.len()),
+        Some(length) if length >= 0 => usize::try_from(length)
+            .ok()
+            .and_then(|length| start.checked_add(length))
+            .filter(|end| *end <= haystack.len()),
+        Some(length) => usize::try_from(length.unsigned_abs())
+            .ok()
+            .and_then(|distance| haystack.len().checked_sub(distance))
+            .filter(|end| *end >= start),
+    };
+    let Some(end) = end else {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "substr_count(): Argument #4 ($length) must be contained in argument #1 ($haystack)",
+        ));
+        return Ok(());
+    };
+    let count = memchr::memmem::find_iter(&haystack[start..end], &needle).count() as i64;
     ret!(rv, Value::long(count));
 }
 

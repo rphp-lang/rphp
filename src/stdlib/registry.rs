@@ -50,6 +50,31 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         }};
     }
 
+    macro_rules! reg_typed {
+        (
+            $name:expr,
+            $handler:expr,
+            $max_args:expr,
+            $min_args:expr,
+            [$($pname:expr),* $(,)?],
+            [$($hint:expr),* $(,)?],
+            $return_hint:expr
+        ) => {{
+            let mut function = Box::new(make_internal_function(
+                $handler,
+                $max_args,
+                $min_args,
+                pn![$($pname),*],
+            ));
+            function.common.sig.param_type_hints = vec![$($hint),*];
+            function.common.sig.return_type_hint = $return_hint;
+            function.handler_validates_types = true;
+            let pointer = &function.common as *const FunctionCommon;
+            eg.register_function($name, pointer).unwrap();
+            funcs.push(function);
+        }};
+    }
+
     macro_rules! reg_direct {
         ($name:expr, $handler:expr, $direct:expr, $max_args:expr, $min_args:expr, $($pnames:expr),*) => {{
             debug_assert_eq!(
@@ -460,26 +485,52 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "string1",
         "string2"
     );
-    reg!(
+    reg_typed!(
         "substr_compare",
         fn_substr_compare,
         5,
         3,
-        "haystack",
-        "needle",
-        "offset",
-        "length",
-        "case_insensitive"
+        ["haystack", "needle", "offset", "length", "case_insensitive"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+            ParamTypeHint::Bool,
+        ],
+        ParamTypeHint::Int
     );
-    reg!("strpos", fn_strpos, 3, 2, "haystack", "needle", "offset");
-    reg!(
+    reg_typed!(
+        "strpos",
+        fn_strpos,
+        3,
+        2,
+        ["haystack", "needle", "offset"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::Int
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Int,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    reg_typed!(
         "strstr",
         fn_strstr,
         3,
         2,
-        "haystack",
-        "needle",
-        "before_needle"
+        ["haystack", "needle", "before_needle"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::Bool,
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
     );
     reg!(
         "stristr",
@@ -491,7 +542,22 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "before_needle"
     );
     reg!("strrpos", fn_strrpos, 3, 2, "haystack", "needle", "offset");
-    reg!("strrchr", fn_strrchr, 2, 2, "haystack", "needle");
+    reg_typed!(
+        "strrchr",
+        fn_strrchr,
+        3,
+        2,
+        ["haystack", "needle", "before_needle"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::Bool,
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
     {
         let mut function = Box::new(make_internal_function(
             fn_strtr,
@@ -563,26 +629,47 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("implode", fn_implode, 2, 1, "separator", "array");
     reg!("join", fn_join, 2, 1, "separator", "array");
     reg!("str_repeat", fn_str_repeat, 2, 2, "string", "times");
-    reg!("substr_count", fn_substr_count, 2, 2, "haystack", "needle");
-    reg!(
+    reg_typed!(
+        "substr_count",
+        fn_substr_count,
+        4,
+        2,
+        ["haystack", "needle", "offset", "length"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+        ],
+        ParamTypeHint::Int
+    );
+    reg_typed!(
         "strspn",
         fn_strspn,
         4,
         2,
-        "string",
-        "characters",
-        "offset",
-        "length"
+        ["string", "characters", "offset", "length"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+        ],
+        ParamTypeHint::Int
     );
-    reg!(
+    reg_typed!(
         "strcspn",
         fn_strcspn,
         4,
         2,
-        "string",
-        "characters",
-        "offset",
-        "length"
+        ["string", "characters", "offset", "length"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+        ],
+        ParamTypeHint::Int
     );
     reg!("strpbrk", fn_strpbrk, 2, 2, "string", "characters");
     reg!("str_contains", fn_str_contains, 2, 2, "haystack", "needle");
