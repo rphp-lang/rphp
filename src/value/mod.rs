@@ -1836,7 +1836,13 @@ const ARRAY_CURSOR_PRISTINE: usize = 1usize << (usize::BITS - 1);
 // from one whose integer sequence was already initialized. Reuse a spare
 // cursor metadata bit instead of enlarging every PhpArray allocation.
 const ARRAY_INT_KEY_INITIALIZED: usize = 1usize << (usize::BITS - 2);
-const ARRAY_CURSOR_METADATA: usize = ARRAY_CURSOR_PRISTINE | ARRAY_INT_KEY_INITIALIZED;
+// Internal producers can materialize keys in an explicitly requested legacy
+// byte encoding. The key bridge stores those bytes losslessly as Latin-1
+// scalars; this marker restores byte provenance at observable boundaries
+// without enlarging PhpArray or changing ordinary key lookup.
+const ARRAY_EXTERNAL_BYTE_KEYS: usize = 1usize << (usize::BITS - 3);
+const ARRAY_CURSOR_METADATA: usize =
+    ARRAY_CURSOR_PRISTINE | ARRAY_INT_KEY_INITIALIZED | ARRAY_EXTERNAL_BYTE_KEYS;
 
 /// Fast deterministic hashing for integer-only PHP array keys.
 ///
@@ -2546,6 +2552,15 @@ impl PhpArray {
     #[inline]
     fn mark_mutated(&self) {
         self.cursor.set(self.cursor.get() & !ARRAY_CURSOR_PRISTINE);
+    }
+
+    pub(crate) fn mark_external_byte_keys(&self) {
+        self.cursor
+            .set(self.cursor.get() | ARRAY_EXTERNAL_BYTE_KEYS);
+    }
+
+    pub(crate) fn has_external_byte_keys(&self) -> bool {
+        self.cursor.get() & ARRAY_EXTERNAL_BYTE_KEYS != 0
     }
 
     /// Preserve Zend's literal-source ownership on the direct refcounted

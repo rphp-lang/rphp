@@ -5906,20 +5906,38 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         write_fetch_dim_result(frame, result_ptr, Value::null());
                     } else {
                         // String offset access: $s[0] — PHP strings are byte-oriented
-                        let bytes = s.as_bytes();
+                        let binary_source = arr_val.is_binary_string();
+                        let ordinary_bytes = s.as_bytes();
+                        let byte_len = if binary_source {
+                            s.chars().count()
+                        } else {
+                            ordinary_bytes.len()
+                        };
                         if let Some(idx) = idx_val.as_long() {
                         let pos = if idx >= 0 {
                             idx as usize
                         } else {
-                            let len = bytes.len() as i64;
+                            let len = byte_len as i64;
                             let p = len + idx;
                             if p >= 0 { p as usize } else { usize::MAX }
                         };
                         let val = if opline._pad & FETCH_DIM_ISSET != 0 {
-                            Value::bool(pos < bytes.len())
-                        } else if pos < bytes.len() {
+                            Value::bool(pos < byte_len)
+                        } else if pos < byte_len {
                             // Single byte as a string
-                            Value::string(String::from(bytes[pos] as char))
+                            let byte = if binary_source {
+                                s.chars()
+                                    .nth(pos)
+                                    .map(|character| character as u8)
+                                    .expect("binary string position is in range")
+                            } else {
+                                ordinary_bytes[pos]
+                            };
+                            if binary_source || !byte.is_ascii() {
+                                Value::binary_string(&[byte])
+                            } else {
+                                Value::string(String::from(char::from(byte)))
+                            }
                         } else if opline._pad & FETCH_DIM_SILENT != 0 {
                             Value::string("")
                         } else {

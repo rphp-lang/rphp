@@ -668,6 +668,15 @@ fn clone_foreach_value<const BY_REFERENCE_LOOP: bool>(value: &Value) -> Value {
 }
 
 #[inline]
+fn materialize_foreach_array_key(key: ArrayKey, external_byte_keys: bool) -> Value {
+    match key {
+        ArrayKey::Int(key) => Value::long(key),
+        ArrayKey::String(key) if external_byte_keys => Value::binary_string_from_storage(key),
+        ArrayKey::String(key) => Value::string(key),
+    }
+}
+
+#[inline]
 fn set_foreach_object_entry(array: &mut PhpArray, name: &str, value: Value) {
     if let Some(key) = canonical_decimal_array_key(name) {
         array.set_int(key, value);
@@ -1398,6 +1407,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
 
         if let Some(arr) = arr_val.dereferenced().as_array() {
             if pos < arr.len() {
+                let external_byte_keys = arr.has_external_byte_keys();
                 // SAFETY: the compiler validated all frame operands. The live
                 // owned-reference target and current array position remain
                 // request-owned throughout this synchronous opcode.
@@ -1419,10 +1429,8 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                                 .and_then(|array| array.get_at(pos))
                                 .map(|(_, key)| key)
                                 .expect("promoted foreach entry must retain its key");
-                            let key_value = match key {
-                                ArrayKey::Int(key) => Value::long(key),
-                                ArrayKey::String(key) => Value::string(key),
-                            };
+                            let key_value =
+                                materialize_foreach_array_key(key, external_byte_keys);
                             assign_foreach_cv(eg, frame, key_cv, key_value)?;
                         }
                     } else if key_encoded > 0 {
@@ -1439,10 +1447,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                             assign_foreach_cv(eg, frame, val_cv, val.clone())?;
                         }
                         let key_cv = key_encoded - 1;
-                        let key_val = match key {
-                            ArrayKey::Int(k) => Value::long(k),
-                            ArrayKey::String(k) => Value::string(k),
-                        };
+                        let key_val = materialize_foreach_array_key(key, external_byte_keys);
                         assign_foreach_cv(eg, frame, key_cv, key_val)?;
                     } else {
                         // Only value needed — use get_value_at() (avoids key clone)

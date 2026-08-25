@@ -13,9 +13,11 @@ use crate::vm::frame::ExecuteData;
 
 use super::{
     StringSearchDirection, bytes_to_php_string, direct_arg_opt, direct_arg_str,
-    legacy_encoding::LegacyEncoding, owned_argument, percent_decode_bytes, php_string_to_bytes,
-    push_percent_escape, report_internal_diagnostic, string_position_builtin,
-    typed_internal_bool_argument, typed_internal_int_argument, typed_internal_string_argument,
+    html_entities::{HTML4_ENTITIES, HTML5_ENTITIES},
+    legacy_encoding::LegacyEncoding,
+    owned_argument, percent_decode_bytes, php_string_to_bytes, push_percent_escape,
+    report_internal_diagnostic, string_position_builtin, typed_internal_bool_argument,
+    typed_internal_int_argument, typed_internal_string_argument,
     typed_internal_string_argument_expected,
 };
 
@@ -29,6 +31,62 @@ const ENT_DOCUMENT_MASK: i64 = 48;
 const ENT_XML1: i64 = 16;
 const ENT_XHTML: i64 = 32;
 const ENT_HTML5: i64 = 48;
+
+#[derive(Clone, Copy)]
+enum HtmlTranslationEncoding {
+    Utf8,
+    Legacy(LegacyEncoding),
+    BasicOnly,
+}
+
+impl HtmlTranslationEncoding {
+    fn parse(name: &str) -> Option<Self> {
+        if name.eq_ignore_ascii_case("UTF-8") {
+            return Some(Self::Utf8);
+        }
+        if matches!(
+            name.to_ascii_lowercase().as_str(),
+            "sjis" | "shift_jis" | "cp932"
+        ) {
+            return Some(Self::BasicOnly);
+        }
+        LegacyEncoding::parse(name).map(Self::Legacy)
+    }
+
+    fn key(self, characters: &str) -> Option<String> {
+        match self {
+            Self::Utf8 => Some(characters.to_string()),
+            Self::BasicOnly => characters.is_ascii().then(|| characters.to_string()),
+            Self::Legacy(encoding) => {
+                let bytes = characters
+                    .chars()
+                    .enumerate()
+                    .map(|(position, character)| {
+                        let codepoint = u32::from(character);
+                        encoding.encode(codepoint).or_else(|| {
+                            // PHP 8.5 retains the three HTML5 composite
+                            // inequality keys in ISO-8859-1. Their trailing
+                            // variation mark is represented by its low byte.
+                            (encoding == LegacyEncoding::Iso88591
+                                && position > 0
+                                && matches!(codepoint, 0x20d2 | 0x20e5))
+                            .then_some(codepoint as u8)
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some(bytes_to_php_string(&bytes))
+            }
+        }
+    }
+
+    fn has_external_byte_keys(self) -> bool {
+        matches!(self, Self::Legacy(_))
+    }
+
+    fn is_basic_only(self) -> bool {
+        matches!(self, Self::BasicOnly)
+    }
+}
 
 fn valid_html_entity(src: &str, document: i64) -> Option<usize> {
     let bytes = src.as_bytes();
@@ -181,6 +239,27 @@ fn html_encode_arguments(
         true
     };
     Ok(Some((string, flags, double_encode)))
+}
+
+fn html_translation_encoding_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+) -> Result<Option<String>, VmError> {
+    if arg_opt!(ed, 2).is_none() {
+        return Ok(Some("UTF-8".to_string()));
+    }
+    let argument = owned_argument(ed, 2);
+    if matches!(argument.dereferenced().value_type(), ValueType::Null) {
+        return Ok(Some("UTF-8".to_string()));
+    }
+    typed_internal_string_argument_expected(
+        ed,
+        eg,
+        "get_html_translation_table",
+        2,
+        "encoding",
+        "string",
+    )
 }
 
 /// htmlspecialchars($string, $flags = ENT_QUOTES|ENT_SUBSTITUTE,
@@ -596,6 +675,99 @@ pub(super) fn fn_html_entity_decode(
     let source = original_bytes.unwrap_or_else(|| string.into_bytes());
     let decoded = decode_html_entities_for_encoding(&source, flags, encoding);
     ret!(rv, html_entity_decoded_value(decoded));
+}
+
+fn html_translation_entries(table: i64, document: i64) -> &'static [(&'static str, &'static str)] {
+    if table == 0 || document == ENT_XML1 {
+        &HTML4_ENTITIES[..5]
+    } else if document == ENT_HTML5 {
+        HTML5_ENTITIES
+    } else {
+        HTML4_ENTITIES
+    }
+}
+
+/// get_html_translation_table($table = HTML_SPECIALCHARS,
+///     $flags = ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401,
+///     $encoding = null): array
+pub(super) fn fn_get_html_translation_table(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let table = if arg_opt!(ed, 0).is_some() {
+        let Some(table) =
+            typed_internal_int_argument(ed, eg, "get_html_translation_table", 0, "table")?
+        else {
+            return Ok(());
+        };
+        table
+    } else {
+        0
+    };
+    let flags = if arg_opt!(ed, 1).is_some() {
+        let Some(flags) =
+            typed_internal_int_argument(ed, eg, "get_html_translation_table", 1, "flags")?
+        else {
+            return Ok(());
+        };
+        flags
+    } else {
+        ENT_QUOTES_MASK | ENT_SUBSTITUTE
+    };
+    let Some(encoding_name) = html_translation_encoding_argument(ed, eg)? else {
+        return Ok(());
+    };
+    let encoding = if let Some(encoding) = HtmlTranslationEncoding::parse(&encoding_name) {
+        encoding
+    } else {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!(
+                "get_html_translation_table(): Charset \"{encoding_name}\" is not supported, assuming UTF-8"
+            ),
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        HtmlTranslationEncoding::Utf8
+    };
+
+    let document = flags & ENT_DOCUMENT_MASK;
+    let entries = if encoding.is_basic_only() {
+        &HTML4_ENTITIES[..5]
+    } else {
+        html_translation_entries(table, document)
+    };
+    let mut result = PhpArray::with_deferred_hash_capacity(entries.len());
+    for &(characters, mut entity) in entries {
+        if characters == "\"" && flags & 2 == 0 {
+            continue;
+        }
+        if characters == "'" {
+            if flags & 1 == 0 {
+                continue;
+            }
+            entity = if matches!(document, ENT_XML1 | ENT_HTML5)
+                || (table == 0 && document == ENT_XHTML)
+            {
+                "&apos;"
+            } else {
+                "&#039;"
+            };
+        }
+        let Some(key) = encoding.key(characters) else {
+            continue;
+        };
+        result.set_streamed_owned_str(key, Value::string(entity));
+    }
+    if encoding.has_external_byte_keys() {
+        result.mark_external_byte_keys();
+    }
+    ret!(rv, Value::array(result));
 }
 
 pub(super) fn fn_filter_var(

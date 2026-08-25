@@ -1345,6 +1345,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "flags",
         "encoding"
     );
+    reg!(
+        "get_html_translation_table",
+        fn_get_html_translation_table,
+        3,
+        0,
+        "table",
+        "flags",
+        "encoding"
+    );
     reg!("strip_tags", fn_strip_tags, 2, 1, "string", "allowed_tags");
     reg!(
         "highlight_string",

@@ -8,6 +8,66 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`html-translation-table-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. RPHP now exposes `HTML_SPECIALCHARS`,
+`HTML_ENTITIES` and `get_html_translation_table()` with PHP-compatible defaults,
+named and weakly typed arguments, quote/document flags, unsupported-charset
+warnings, UTF-8 tables and representability filtering for the existing
+single-byte encodings. `SJIS`, `Shift_JIS` and `CP932` retain PHP's basic-only
+table behavior. HTML4 and HTML5 canonical entity choices are generated from the
+public W3C HTML4 catalog and WHATWG entity data, then independently checked by
+`scripts/check-html-entity-data.py` against those sources and PHP 8.5. Legacy
+table arrays preserve raw byte keys through rendering, key-preserving sorts,
+user key callbacks and keyed `foreach` materialization without growing the
+`PhpArray` layout.
+
+Three original E2E regressions cover HTML4/XML1/XHTML/HTML5 table and quote
+combinations, canonical aliases and counts, legacy encodings, raw-byte key
+ordering/rendering/iteration, defaults, named arguments, warnings and type
+errors. The complete ordinary
+`get_html_translation_table_basic1..10.phpt` family moves from zero passes and
+ten runtime failures to 10/10 passes, matching the PHP 8.5.9 oracle. Normalized
+baseline, oracle and candidate manifest SHA-256 values are
+`4b5f9f13c850d1d66367ab97d6efe96792761f2b79a1a61e7402ae0abb9345dc`,
+`dc29011f91deb4b2d58856c9ffde5c03c369ff0af8bdb2af66f1398508d5b5ac`
+and
+`dc29011f91deb4b2d58856c9ffde5c03c369ff0af8bdb2af66f1398508d5b5ac`.
+
+The complete 733-case strings audit moves from 406 to 418 passes, an exact
++12/-0 delta, with 230 failures, 54 skips, 30 unsupported cases, the retained
+`dirname_multi.phpt` timeout and zero crashes. The gains are the ten supplying
+cases plus `bug54322.phpt` and `bug73817.phpt`. Resolving the constant advances
+`htmlentities_html4.phpt` from a runtime failure to its still-visible output
+divergence; it is not counted as a pass. Array remains at 828 passes, zero
+failures, 13 skips and one unsupported case. Zend/lang remains at 4,202 passes,
+1,101 failures, 115 skips and 181 unsupported cases, with no XFAIL, timeout or
+crash. Three independently produced final manifests have identical normalized
+strings, array and Zend/lang SHA-256 values:
+`a174305ac6fa8a2c83e87f87a7a85d73409bccb84803349886df9dc438cadb5e`,
+`ff41c1f1ea94aac84b3225be3cff2a51d9620d8fc7a4f7fbae371f41e62de700`
+and
+`58f964c434be118ac09885d4223db8339aecc3b8f1766e4baf1d649e1692f973`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at 1,623 unsafe
+blocks, 289 unsafe functions and 357 SAFETY annotations. The first string-offset
+implementation was rejected after a +20.236% regression and replaced with a
+binary-only Latin-1 bridge that leaves the ordinary ASCII path unchanged.
+CPU-2-pinned balanced release A/B controls against the exact retained parent
+put paired medians at +0.618% for ten million ASCII offset/`ord()` operations,
++0.821% for one million five-key `asort()` operations, +2.217% for five million
+keyed `foreach` iterations and -3.575% for 100 empty-process pairs. All outputs
+match and remain within the +5% gate. Baseline/candidate binary SHA-256 values
+are `309320a77625705f845a3abc5fcd8393e9b2517752889de234e001324c7a7e9f`
+and `afda7a89d2e3432b23e273e86aaf7d700662580e90e8313e4b4a9a64106c221a`.
+
+This checkpoint does not claim the broader `htmlentities()` or
+`html_entity_decode()` named-entity contracts, multibyte Shift-JIS entities,
+32-bit execution, the remaining strings/Zend failures, unsupported INI and
+extension cases, or broader PHP compatibility.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `printf-format-engine-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. `sprintf()`, `printf()`, `vsprintf()` and
 `vprintf()` now share one PHP-byte formatting engine with positional and

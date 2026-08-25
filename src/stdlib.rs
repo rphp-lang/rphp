@@ -190,6 +190,7 @@ mod fiber;
 mod filesystem;
 #[cfg(feature = "formatted-io")]
 mod formatted_io;
+mod html_entities;
 mod process;
 mod recursive_arrays;
 mod source_filters;
@@ -10478,6 +10479,11 @@ fn fn_var_dump(
         eg.write_output(format!("string({}) \"", bytes.len()).as_bytes());
         eg.write_output(&bytes);
         eg.write_output(b"\"\n");
+    } else if first_value
+        .as_array()
+        .is_some_and(PhpArray::has_external_byte_keys)
+    {
+        eg.write_output(&php_string_to_bytes(&first));
     } else {
         eg.write_output(first.as_bytes());
     }
@@ -10491,6 +10497,11 @@ fn fn_var_dump(
             eg.write_output(format!("string({}) \"", bytes.len()).as_bytes());
             eg.write_output(&bytes);
             eg.write_output(b"\"\n");
+        } else if value
+            .as_array()
+            .is_some_and(PhpArray::has_external_byte_keys)
+        {
+            eg.write_output(&php_string_to_bytes(&output));
         } else {
             eg.write_output(output.as_bytes());
         }
@@ -10535,10 +10546,18 @@ fn fn_print_r(
 ) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     let output = print_r_value(v, 0, eg);
+    let external_byte_keys = v.as_array().is_some_and(PhpArray::has_external_byte_keys);
     if arg_opt!(ed, 1).is_some_and(Value::is_truthy) {
+        if external_byte_keys {
+            ret!(rv, Value::binary_string_from_storage(output));
+        }
         ret!(rv, Value::string(output));
     }
-    eg.write_output(output.as_bytes());
+    if external_byte_keys {
+        eg.write_output(&php_string_to_bytes(&output));
+    } else {
+        eg.write_output(output.as_bytes());
+    }
     ret!(rv, Value::bool(true));
 }
 
@@ -19190,9 +19209,12 @@ fn fn_usort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
     ret!(rv, Value::bool(true));
 }
 
-fn array_key_value(key: &ArrayKey) -> Value {
+fn array_key_value(key: &ArrayKey, external_byte_keys: bool) -> Value {
     match key {
         ArrayKey::Int(value) => Value::long(*value),
+        ArrayKey::String(value) if external_byte_keys => {
+            Value::binary_string_from_storage(value.clone())
+        }
         ArrayKey::String(value) => Value::string(value.clone()),
     }
 }
@@ -19213,6 +19235,9 @@ fn fn_user_key_preserving_sort(
     function_name: &str,
 ) -> Result<(), VmError> {
     let callback = arg!(ed, 1).clone();
+    let external_byte_keys = arg!(ed, 0)
+        .as_array()
+        .is_some_and(PhpArray::has_external_byte_keys);
     let mut pairs = match arg!(ed, 0).as_array() {
         Some(array) => array
             .iter()
@@ -19231,7 +19256,12 @@ fn fn_user_key_preserving_sort(
 
     if pairs.len() < 6 {
         let completed = stable_sort_small_optional_checked(&mut pairs, |left, right| {
-            let keys = compare_keys.then(|| [array_key_value(&left.0), array_key_value(&right.0)]);
+            let keys = compare_keys.then(|| {
+                [
+                    array_key_value(&left.0, external_byte_keys),
+                    array_key_value(&right.0, external_byte_keys),
+                ]
+            });
             let (left, right) = keys
                 .as_ref()
                 .map_or_else(|| (&left.1, &right.1), |keys| (&keys[0], &keys[1]));
@@ -19246,8 +19276,8 @@ fn fn_user_key_preserving_sort(
             while current > 0 {
                 let keys = compare_keys.then(|| {
                     [
-                        array_key_value(&pairs[current - 1].0),
-                        array_key_value(&pairs[current].0),
+                        array_key_value(&pairs[current - 1].0, external_byte_keys),
+                        array_key_value(&pairs[current].0, external_byte_keys),
                     ]
                 });
                 let (left, right) = keys.as_ref().map_or_else(
@@ -19278,6 +19308,9 @@ fn fn_user_key_preserving_sort(
     let mut sorted = PhpArray::new();
     for (key, value) in pairs {
         sorted.set(key, user_sort_result_value(value));
+    }
+    if external_byte_keys {
+        sorted.mark_external_byte_keys();
     }
     arg_mut!(ed, 0, Value::array(sorted));
     ret!(rv, Value::bool(true));
@@ -20507,6 +20540,7 @@ fn fn_asort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
     let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
+        let external_byte_keys = php_arr.has_external_byte_keys();
         let mut pairs: Vec<(ArrayKey, Value)> = php_arr
             .iter()
             .map(|(key, value)| (key, array_sort_snapshot_value(value)))
@@ -20531,6 +20565,9 @@ fn fn_asort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
         for (key, value) in pairs {
             new_arr.set(key, array_projection_value(&value));
         }
+        if external_byte_keys {
+            new_arr.mark_external_byte_keys();
+        }
         *arr = Value::array(new_arr);
         ret!(rv, Value::bool(true));
     }
@@ -20546,6 +20583,7 @@ fn fn_arsort(
     let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
+        let external_byte_keys = php_arr.has_external_byte_keys();
         let mut pairs: Vec<(ArrayKey, Value)> = php_arr
             .iter()
             .map(|(key, value)| (key, array_sort_snapshot_value(value)))
@@ -20571,6 +20609,9 @@ fn fn_arsort(
         for (key, value) in pairs {
             new_arr.set(key, array_projection_value(&value));
         }
+        if external_byte_keys {
+            new_arr.mark_external_byte_keys();
+        }
         *arr = Value::array(new_arr);
         ret!(rv, Value::bool(true));
     }
@@ -20582,6 +20623,7 @@ fn fn_ksort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
     let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
+        let external_byte_keys = php_arr.has_external_byte_keys();
         let mut pairs: Vec<(ArrayKey, Value)> = php_arr
             .iter()
             .map(|(key, value)| (key, array_sort_snapshot_value(value)))
@@ -20595,6 +20637,9 @@ fn fn_ksort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
         let mut new_arr = PhpArray::new();
         for (key, value) in pairs {
             new_arr.set(key, array_projection_value(&value));
+        }
+        if external_byte_keys {
+            new_arr.mark_external_byte_keys();
         }
         *arr = Value::array(new_arr);
         ret!(rv, Value::bool(true));
@@ -20611,6 +20656,7 @@ fn fn_krsort(
     let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
+        let external_byte_keys = php_arr.has_external_byte_keys();
         let mut pairs: Vec<(ArrayKey, Value)> = php_arr
             .iter()
             .map(|(key, value)| (key, array_sort_snapshot_value(value)))
@@ -20625,6 +20671,9 @@ fn fn_krsort(
         let mut new_arr = PhpArray::new();
         for (key, value) in pairs {
             new_arr.set(key, array_projection_value(&value));
+        }
+        if external_byte_keys {
+            new_arr.mark_external_byte_keys();
         }
         *arr = Value::array(new_arr);
         ret!(rv, Value::bool(true));

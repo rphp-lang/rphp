@@ -2545,16 +2545,44 @@ S1 gates and PHP 8.5 S2/S3 pass. The unsafe inventory remains 1,623 blocks,
 500,000-call `sprintf()` paired medians at +3.456%/+4.005% and startup at
 -4.179%/-4.453%, within the +5% gate.
 
+The `html-translation-table-batch` checkpoint closes the complete ordinary
+`get_html_translation_table_basic1..10.phpt` family against PHP 8.5.9. A shared
+clean-room HTML4/HTML5 table module supplies canonical entity names for
+document and quote modes, while the existing encoding indexes filter keys for
+eight single-byte encodings and preserve PHP's basic-only SJIS aliases. A
+reproducible checker rebuilds the table from the public W3C/WHATWG data and
+validates PHP 8.5's canonical alias choices. Three original E2E regressions
+cover table counts, flags, encodings, raw byte keys, sorting, rendering,
+keyed iteration, defaults, named arguments and diagnostics.
+
+The focused family moves from zero pass and ten runtime failures to 10/10 pass.
+Strings moves from 406 to 418 pass (+12/-0), with 230 fail, 54 skip, 30
+unsupported and the retained timeout. Array remains 828 pass, zero fail, 13
+skip and one unsupported; Zend/lang remains 4,202 pass, 1,101 fail, 115 skip
+and 181 unsupported with no timeout or crash. Three independently produced
+normalized final manifests are identical, with strings/array/Zend SHA-256
+values `a174305ac6fa8a2c83e87f87a7a85d73409bccb84803349886df9dc438cadb5e`,
+`ff41c1f1ea94aac84b3225be3cff2a51d9620d8fc7a4f7fbae371f41e62de700`
+and `58f964c434be118ac09885d4223db8339aecc3b8f1766e4baf1d649e1692f973`.
+All five feature configurations, all-feature/all-target, formatting, runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. The first
+candidate's +20.236% string-offset regression was rejected. The accepted exact
+candidate keeps CPU-pinned paired medians at +0.618% for ASCII offsets, +0.821%
+for `asort()`, +2.217% for keyed `foreach` and -3.575% for startup, inside the
++5% gate. Broader named-entity encoding/decoding remains the next high-yield
+shared-table cluster.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 406 pass, 242 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 418 pass, 230 fail, 54 skip and 30 unsupported, with one retained timeout;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
-attempted printf family is 79/79. `Zend/tests` plus `tests/lang` is 4,202 pass,
-1,101 fail, 115 skip and 181 unsupported, with no timeout or crash. The next
-goal should take the highest-yield general root-cause cluster from the
-remaining strings or Zend/lang manifests rather than extending the already-
-zero array failure count or the closed position-search/printf families.
+attempted printf family is 79/79, while the ordinary translation-table family
+is 10/10. `Zend/tests` plus `tests/lang` is 4,202 pass, 1,101 fail, 115 skip and
+181 unsupported, with no timeout or crash. The next goal should reuse the
+shared entity data to close the highest-yield ordinary `htmlentities()` and
+`html_entity_decode()` cluster rather than extending the already-zero array
+failure count or the closed position-search/printf/translation-table families.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,

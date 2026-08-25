@@ -125,6 +125,8 @@ pub(crate) const BUILTIN_CONSTANT_NAMES: &[&str] = &[
     "STR_PAD_RIGHT",
     "STR_PAD_LEFT",
     "STR_PAD_BOTH",
+    "HTML_SPECIALCHARS",
+    "HTML_ENTITIES",
     "ENT_NOQUOTES",
     "ENT_COMPAT",
     "ENT_QUOTES",
@@ -358,6 +360,8 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "STR_PAD_RIGHT" => Some(value::Value::long(1)),
         "STR_PAD_LEFT" => Some(value::Value::long(0)),
         "STR_PAD_BOTH" => Some(value::Value::long(2)),
+        "HTML_SPECIALCHARS" => Some(value::Value::long(0)),
+        "HTML_ENTITIES" => Some(value::Value::long(1)),
 
         // Common extension constants used by portable framework code.
         "ENT_NOQUOTES" => Some(value::Value::long(0)),
