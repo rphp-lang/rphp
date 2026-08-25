@@ -5586,11 +5586,27 @@ fn typed_internal_string_argument_expected(
     parameter: &str,
     expected: &str,
 ) -> Result<Option<String>, VmError> {
+    Ok(
+        typed_internal_string_value_argument_expected(
+            ed, eg, function, index, parameter, expected,
+        )?
+        .map(|value| value.as_str().unwrap_or("").to_string()),
+    )
+}
+
+fn typed_internal_string_value_argument_expected(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    index: u32,
+    parameter: &str,
+    expected: &str,
+) -> Result<Option<Value>, VmError> {
     let argument = owned_argument(ed, index);
     let argument = argument.dereferenced();
     let strict = internal_call_is_strict(ed);
     let converted = match argument.value_type() {
-        ValueType::String => Some(argument.as_str().unwrap_or("").to_string()),
+        ValueType::String => Some(argument.clone()),
         ValueType::Null if !strict => {
             report_internal_deprecation(
                 eg,
@@ -5603,10 +5619,10 @@ fn typed_internal_string_argument_expected(
             if eg.exception.is_some() {
                 return Ok(None);
             }
-            Some(String::new())
+            Some(Value::string(String::new()))
         }
-        ValueType::False if !strict => Some(String::new()),
-        ValueType::True if !strict => Some("1".to_string()),
+        ValueType::False if !strict => Some(Value::string(String::new())),
+        ValueType::True if !strict => Some(Value::string("1")),
         ValueType::Long | ValueType::Double if !strict => {
             if argument.as_double().is_some_and(f64::is_nan) {
                 report_internal_diagnostic(
@@ -5620,7 +5636,9 @@ fn typed_internal_string_argument_expected(
                     return Ok(None);
                 }
             }
-            Some(argument.echo_to_string_with_precision(eg.precision))
+            Some(Value::string(
+                argument.echo_to_string_with_precision(eg.precision),
+            ))
         }
         ValueType::Object if !strict => {
             let rendered = crate::vm::execute::call_object_string_conversion(eg, argument)?;
@@ -5640,7 +5658,7 @@ fn typed_internal_string_argument_expected(
             };
             let rendered = rendered.dereferenced();
             match rendered.value_type() {
-                ValueType::String => Some(rendered.as_str().unwrap_or("").to_string()),
+                ValueType::String => Some(rendered.clone()),
                 ValueType::Long | ValueType::Double | ValueType::True | ValueType::False => {
                     if rendered.as_double().is_some_and(f64::is_nan) {
                         report_internal_diagnostic(
@@ -5654,7 +5672,9 @@ fn typed_internal_string_argument_expected(
                             return Ok(None);
                         }
                     }
-                    Some(rendered.echo_to_string_with_precision(eg.precision))
+                    Some(Value::string(
+                        rendered.echo_to_string_with_precision(eg.precision),
+                    ))
                 }
                 _ => {
                     let class_name = argument.diagnostic_type_name();
@@ -5753,6 +5773,238 @@ fn ascii_case_insensitive_position(haystack: &[u8], needle: &[u8]) -> Option<usi
     })
 }
 
+#[derive(Clone, Copy)]
+enum StringSearchDirection {
+    First,
+    Last,
+}
+
+#[inline]
+fn string_search_candidate_matches(candidate: &[u8], needle: &[u8], ascii_fold: bool) -> bool {
+    if ascii_fold {
+        candidate
+            .iter()
+            .zip(needle)
+            .all(|(left, right)| left.eq_ignore_ascii_case(right))
+    } else {
+        candidate == needle
+    }
+}
+
+#[inline]
+fn string_search_position(
+    haystack: &[u8],
+    needle: &[u8],
+    ascii_fold: bool,
+    reverse: bool,
+) -> Option<usize> {
+    if !ascii_fold {
+        return if reverse {
+            memchr::memmem::rfind(haystack, needle)
+        } else {
+            memchr::memmem::find(haystack, needle)
+        };
+    }
+
+    let maximum_start = haystack.len().checked_sub(needle.len())?;
+    let first = needle[0];
+    let folded = first.to_ascii_lowercase();
+    let other = first.to_ascii_uppercase();
+    let find_first = |bytes: &[u8]| {
+        if folded == other {
+            memchr::memchr(first, bytes)
+        } else {
+            memchr::memchr2(folded, other, bytes)
+        }
+    };
+    let find_last = |bytes: &[u8]| {
+        if folded == other {
+            memchr::memrchr(first, bytes)
+        } else {
+            memchr::memrchr2(folded, other, bytes)
+        }
+    };
+
+    if !reverse {
+        let mut start = 0;
+        while start <= maximum_start {
+            let position = start + find_first(&haystack[start..=maximum_start])?;
+            if string_search_candidate_matches(
+                &haystack[position..position + needle.len()],
+                needle,
+                true,
+            ) {
+                return Some(position);
+            }
+            start = position + 1;
+        }
+        return None;
+    }
+
+    let mut end = maximum_start + 1;
+    while end > 0 {
+        let position = find_last(&haystack[..end])?;
+        if string_search_candidate_matches(
+            &haystack[position..position + needle.len()],
+            needle,
+            true,
+        ) {
+            return Some(position);
+        }
+        end = position;
+    }
+    None
+}
+
+fn string_position_at_offset(
+    haystack: &[u8],
+    needle: &[u8],
+    offset: i64,
+    direction: StringSearchDirection,
+    ascii_fold: bool,
+) -> Option<Option<usize>> {
+    let boundary = if offset < 0 {
+        let distance = usize::try_from(offset.unsigned_abs()).ok()?;
+        haystack.len().checked_sub(distance)?
+    } else {
+        usize::try_from(offset)
+            .ok()
+            .filter(|offset| *offset <= haystack.len())?
+    };
+
+    if needle.is_empty() {
+        return Some(Some(match direction {
+            StringSearchDirection::First => boundary,
+            StringSearchDirection::Last if offset < 0 => boundary,
+            StringSearchDirection::Last => haystack.len(),
+        }));
+    }
+
+    let position = match direction {
+        StringSearchDirection::First => {
+            string_search_position(&haystack[boundary..], needle, ascii_fold, false)
+                .map(|position| boundary + position)
+        }
+        StringSearchDirection::Last if offset < 0 => {
+            let end = boundary.saturating_add(needle.len()).min(haystack.len());
+            string_search_position(&haystack[..end], needle, ascii_fold, true)
+                .filter(|position| *position <= boundary)
+        }
+        StringSearchDirection::Last => {
+            string_search_position(&haystack[boundary..], needle, ascii_fold, true)
+                .map(|position| boundary + position)
+        }
+    };
+    Some(position)
+}
+
+fn string_position_builtin(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    direction: StringSearchDirection,
+    ascii_fold: bool,
+) -> Result<(), VmError> {
+    if arg_opt!(ed, 2).is_none() {
+        let haystack = arg!(ed, 0);
+        let needle = arg!(ed, 1);
+        if haystack.value_type() == ValueType::String && needle.value_type() == ValueType::String {
+            if !ascii_fold && !haystack.is_binary_string() && !needle.is_binary_string() {
+                let haystack = haystack.as_str().unwrap_or("");
+                let needle = needle.as_str().unwrap_or("");
+                let position = match direction {
+                    StringSearchDirection::First => haystack.find(needle),
+                    StringSearchDirection::Last => haystack.rfind(needle),
+                };
+                ret!(
+                    rv,
+                    position.map_or_else(
+                        || Value::bool(false),
+                        |position| Value::long(position as i64),
+                    )
+                );
+            }
+
+            let haystack = haystack.php_string_bytes().unwrap_or_default();
+            let needle = needle.php_string_bytes().unwrap_or_default();
+            let position = string_position_at_offset(
+                haystack.as_ref(),
+                needle.as_ref(),
+                0,
+                direction,
+                ascii_fold,
+            )
+            .flatten();
+            ret!(
+                rv,
+                position.map_or_else(
+                    || Value::bool(false),
+                    |position| Value::long(position as i64),
+                )
+            );
+        }
+    }
+
+    let Some(haystack) =
+        typed_internal_string_value_argument_expected(ed, eg, function, 0, "haystack", "string")?
+    else {
+        return Ok(());
+    };
+    let Some(needle) =
+        typed_internal_string_value_argument_expected(ed, eg, function, 1, "needle", "string")?
+    else {
+        return Ok(());
+    };
+    let offset = if arg_opt!(ed, 2).is_some() {
+        let Some(offset) = typed_internal_int_argument(ed, eg, function, 2, "offset")? else {
+            return Ok(());
+        };
+        offset
+    } else {
+        0
+    };
+    if !ascii_fold && offset == 0 && !haystack.is_binary_string() && !needle.is_binary_string() {
+        let haystack = haystack.as_str().unwrap_or("");
+        let needle = needle.as_str().unwrap_or("");
+        let position = match direction {
+            StringSearchDirection::First => haystack.find(needle),
+            StringSearchDirection::Last => haystack.rfind(needle),
+        };
+        ret!(
+            rv,
+            position.map_or_else(
+                || Value::bool(false),
+                |position| Value::long(position as i64),
+            )
+        );
+    }
+    let haystack = haystack.php_string_bytes().unwrap_or_default();
+    let needle = needle.php_string_bytes().unwrap_or_default();
+    let Some(position) = string_position_at_offset(
+        haystack.as_ref(),
+        needle.as_ref(),
+        offset,
+        direction,
+        ascii_fold,
+    ) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            &format!(
+                "{function}(): Argument #3 ($offset) must be contained in argument #1 ($haystack)"
+            ),
+        ));
+        return Ok(());
+    };
+    ret!(
+        rv,
+        position.map_or_else(
+            || Value::bool(false),
+            |position| Value::long(position as i64)
+        )
+    );
+}
+
 fn fn_stristr(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -5791,17 +6043,9 @@ fn fn_stristr(
 fn fn_strrpos(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let h = arg_str!(ed, 0);
-    let n = arg_str!(ed, 1);
-    ret!(
-        rv,
-        match h.rfind(n.as_ref()) {
-            Some(pos) => Value::long(pos as i64),
-            None => Value::bool(false),
-        }
-    );
+    string_position_builtin(ed, rv, eg, "strrpos", StringSearchDirection::Last, false)
 }
 
 fn fn_strrchr(

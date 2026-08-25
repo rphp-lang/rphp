@@ -2526,11 +2526,14 @@ nonclaims.
 
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
-pass, zero fail, 13 skip and one unsupported. `Zend/tests` plus `tests/lang`
-is 4,201 pass, 1,102 fail, 115 skip and 181 unsupported, with no timeout or
-crash. The next goal should therefore move to the highest-fanout ordinary
-failure cluster in the strings or Zend/lang manifests rather than extending
-the already-zero array failure count.
+pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
+is 343 pass, 305 fail, 54 skip and 30 unsupported, with one retained timeout;
+the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38. `Zend/tests`
+plus `tests/lang` is 4,201 pass, 1,102 fail, 115 skip and 181 unsupported, with
+no timeout or crash. The next goal should take the highest-yield general root-
+cause cluster from the remaining strings or Zend/lang manifests rather than
+extending the already-zero array failure count or the closed position-search
+family.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,

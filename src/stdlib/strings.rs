@@ -12,10 +12,11 @@ use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 
 use super::{
-    bytes_to_php_string, direct_arg_opt, direct_arg_str, legacy_encoding::LegacyEncoding,
-    owned_argument, percent_decode_bytes, php_string_to_bytes, push_percent_escape,
-    report_internal_diagnostic, typed_internal_bool_argument, typed_internal_int_argument,
-    typed_internal_string_argument, typed_internal_string_argument_expected,
+    StringSearchDirection, bytes_to_php_string, direct_arg_opt, direct_arg_str,
+    legacy_encoding::LegacyEncoding, owned_argument, percent_decode_bytes, php_string_to_bytes,
+    push_percent_escape, report_internal_diagnostic, string_position_builtin,
+    typed_internal_bool_argument, typed_internal_int_argument, typed_internal_string_argument,
+    typed_internal_string_argument_expected,
 };
 
 // ============================================================================
@@ -837,40 +838,22 @@ pub(super) fn fn_base64_decode(
 // Missing common string functions
 // ============================================================================
 
-/// stripos($haystack, $needle): int|false
+/// stripos($haystack, $needle, $offset = 0): int|false
 pub(super) fn fn_stripos(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let hay = arg_str!(ed, 0);
-    let needle = arg_str!(ed, 1);
-    let hay_lower = hay.to_lowercase();
-    let needle_lower = needle.to_lowercase();
-    match hay_lower.find(&needle_lower) {
-        Some(pos) => {
-            // Convert byte offset to char offset for consistency
-            let char_pos = hay[..pos].chars().count();
-            ret!(rv, Value::long(char_pos as i64));
-        }
-        None => ret!(rv, Value::bool(false)),
-    }
+    string_position_builtin(ed, rv, eg, "stripos", StringSearchDirection::First, true)
 }
 
-/// strripos($haystack, $needle): int|false
+/// strripos($haystack, $needle, $offset = 0): int|false
 pub(super) fn fn_strripos(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let hay = arg_str!(ed, 0);
-    let needle = arg_str!(ed, 1);
-    let hay_lower = hay.to_lowercase();
-    let needle_lower = needle.to_lowercase();
-    match hay_lower.rfind(&needle_lower) {
-        Some(pos) => ret!(rv, Value::long(hay[..pos].chars().count() as i64)),
-        None => ret!(rv, Value::bool(false)),
-    }
+    string_position_builtin(ed, rv, eg, "strripos", StringSearchDirection::Last, true)
 }
 
 /// str_ireplace($search, $replace, $subject): string

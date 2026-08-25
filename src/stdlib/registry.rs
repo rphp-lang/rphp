@@ -490,7 +490,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "needle",
         "before_needle"
     );
-    reg!("strrpos", fn_strrpos, 2, 2, "haystack", "needle");
+    reg!("strrpos", fn_strrpos, 3, 2, "haystack", "needle", "offset");
     reg!("strrchr", fn_strrchr, 2, 2, "haystack", "needle");
     reg!("strtr", fn_strtr, 3, 2, "string", "from", "to");
     reg_ref!(
@@ -1387,8 +1387,16 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
 
     // --- Case-insensitive string functions ---
-    reg!("stripos", fn_stripos, 2, 2, "haystack", "needle");
-    reg!("strripos", fn_strripos, 2, 2, "haystack", "needle");
+    reg!("stripos", fn_stripos, 3, 2, "haystack", "needle", "offset");
+    reg!(
+        "strripos",
+        fn_strripos,
+        3,
+        2,
+        "haystack",
+        "needle",
+        "offset"
+    );
     reg!(
         "str_ireplace",
         fn_str_ireplace,

@@ -8,6 +8,75 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`string-position-offset-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. `stripos()`, `strrpos()` and `strripos()` now
+share PHP-byte search, positive and negative offset bounds, empty-needle
+behavior, weak/strict typed conversion, named arguments and function-specific
+`ValueError` diagnostics. Case-insensitive matching folds ASCII bytes only;
+non-ASCII and NUL bytes retain their exact values and offsets. Typed string
+conversion preserves the runtime's binary-string provenance across reentrant
+`__toString()` calls instead of silently changing the byte representation.
+
+Two original E2E regressions cover UTF-8 source-byte offsets, non-ASCII
+case boundaries, embedded NUL, forward and reverse negative offsets, empty
+needles, named arguments, weak scalars, strict errors, out-of-range errors and
+reentrant object conversion. The focused 38-case unmodified PHPT selection
+moves from four passes and 34 failures to 38 passes and zero failures, exactly
+matching the PHP 8.5.9 oracle. Its baseline and normalized oracle/candidate
+manifest SHA-256 values are
+`1dd065ada659a21c9f70ab65805bd6afbf2751071681d3d42e5f4318e6bcc055`
+and
+`821ab02bf6f9e6a1674847de46568ea0985d2852525f1414269cbd546040e171`.
+
+The complete 733-case strings audit moves from 309 to 343 passes, an exact
++34/-0 delta, with 305 failures, 54 skips, 30 unsupported cases, the retained
+`dirname_multi.phpt` timeout and zero crashes. Every changed path belongs to
+the focused `stripos`/`strrpos`/`strripos` selection; there is no lost pass or
+other status movement. Two final manifests produced before and after the hot-
+path refinement are byte-identical with SHA-256
+`b18fbca297ebe9061d2979edd86f70606a368e1ec1b2a54ae922e06c60d6ce46`.
+The complete array audit remains byte-identical at 828 passes, zero failures,
+13 skips and one unsupported case, with manifest SHA-256
+`d1d07b2537a5257a59d3d13c0839674fb7a35ba1f2470ff5d2218fb2eab0d746`.
+Zend/lang remains byte-identical at 4,201 passes, 1,102 failures, 115 skips and
+181 unsupported cases, with no XFAIL, timeout or crash and manifest SHA-256
+`cd2242198abe9df721424bbdf746902ce7c85143d64edc5cb16a4c84c3a19f44`.
+
+The byte matcher uses the already locked `memchr` crate as a direct dependency:
+exact searches use its general substring finder, while ASCII-insensitive
+searches use SIMD first-byte candidate scans followed by byte-exact validation.
+An offset-free direct-string path avoids conversion snapshots where no scalar
+or object conversion can run; typed and offset calls retain the canonical
+conversion path. This adds no opcode, unsafe code or frame/value/object layout
+growth. All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at 1,623 unsafe
+blocks, 289 unsafe functions and 357 SAFETY annotations.
+
+Two independent CPU-2-pinned 32-pair default-release series after three
+warmups retain exact checksums of `614400000` for 800,000 ordinary `strrpos()`
+calls and `510500000` for 250,000 paired `stripos()`/`strripos()` calls.
+Paired median changes are +3.741%/+3.697% for `strrpos()`, below the +5%
+regression gate, and -48.303%/-48.289% for ASCII-insensitive search. The
+100-request startup controls are -2.935%/-3.075%. Baseline/candidate binary
+SHA-256 values are
+`00016f466c9b74a6a09be1d21a4b15abaa296a33f99d05705b1adf30f31b12cb` /
+`2355aa12268aa19ef9f4574acd064996e69ec68ccb5d303db35cd6bd2f680e59`.
+The transient driver, reverse/folded workloads and accepted-log SHA-256 values
+are
+`4d485d34c63cb89aac883c535dda90131e7f26463613d894902fa05ad0b2f010`,
+`4926d2bfbf3510f8d1b5f1257e0fff1f161c5abf2c1d6d06d54b2786395da5fa`,
+`0d49c5e5e7471d2bfe55e3031511eeb9aa7cbe7cfb3a810f28430f384f75440f`,
+`61460f33de78e253140319a3eb8ef7d7da1f4203cbdbc66c4e9c0d8856a4e964`
+and `642927e801a494b288078a3b1e2b6571cd8be236ff10c15ec25310b5f0439a3a`.
+
+This checkpoint does not claim locale-aware or multibyte case folding, 32-bit
+execution, the independent `strpos()` family, the remaining 305 strings
+failures or 30 unsupported cases, the inherited strings timeout, the 1,102
+remaining Zend/lang failures, optional string extensions or broader PHP
+compatibility.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `array-suite-zero-failure-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. It closes the six ordinary failures in the
 complete recursive `ext/standard/tests/array` selection through shared runtime
@@ -77,7 +146,7 @@ remaining Zend/lang failures or broader PHP compatibility. The selected array
 suite has no ordinary failure, but its 13 architecture/capability skips and one
 unsupported case remain explicit rather than being counted as passes.
 
-The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is the
+The checkpoint preceding that is the
 `htmlspecialchars-decode-decbin-binary-batch`, pinned to php-src 8.5 commit
 `fcc29c8`. `htmlspecialchars_decode()` now decodes exactly one layer of the
 five special-character named and numeric references, applies

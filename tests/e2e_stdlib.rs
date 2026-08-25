@@ -1229,6 +1229,84 @@ fn strpos_supports_positive_and_negative_offsets() {
 }
 
 #[test]
+fn string_position_searches_use_php_byte_offsets_and_ascii_case_folding() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+var_dump(stripos("ÄaA\0bA", "a"));
+var_dump(stripos("ÄaA\0bA", "A", -3));
+var_dump(strrpos("abcabc", "bc", -1));
+var_dump(strrpos("abcabc", "bc", -3));
+var_dump(strripos("AaA", "a", -2));
+var_dump(stripos("Ää", "ä"));
+var_dump(stripos("Ää", "Ä"));
+var_dump(strripos("ÄäÄ", "ä"));
+var_dump(stripos("abcabc", "", -2));
+var_dump(strrpos("abcabc", "", 2));
+var_dump(strripos("abcabc", "", -2));
+var_dump(stripos("A\0a\0A", "\0A"));
+var_dump(strripos("A\0a\0A", "\0a"));
+"#,
+        ),
+        concat!(
+            "int(2)\nint(6)\nint(4)\nint(1)\nint(1)\n",
+            "int(2)\nint(0)\nint(2)\n",
+            "int(4)\nint(6)\nint(4)\n",
+            "int(1)\nint(3)\n",
+        )
+    );
+}
+
+#[test]
+fn string_position_searches_match_typed_named_and_reentrant_call_boundaries() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class PositionNeedle {
+    public function __toString(): string {
+        echo "cast:", strripos("AaA", "a", -2), "\n";
+        return "B";
+    }
+}
+var_dump(stripos(haystack: "aBb", needle: new PositionNeedle(), offset: 1));
+var_dump(strrpos(haystack: "abcabc", needle: "bc", offset: -1));
+var_dump(strrpos(12021, 2, offset: 1));
+foreach ([
+    ["stripos", "abc", "a", 4],
+    ["strrpos", "abc", "a", -4],
+    ["strripos", "abc", "a", 4],
+] as [$function, $haystack, $needle, $offset]) {
+    try { $function($haystack, $needle, $offset); }
+    catch (ValueError $error) { echo $error->getMessage(), "\n"; }
+}
+"#,
+        ),
+        concat!(
+            "cast:1\nint(1)\nint(4)\nint(3)\n",
+            "stripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n",
+            "strrpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n",
+            "strripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n",
+        )
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php declare(strict_types=1);
+foreach (["stripos", "strrpos", "strripos"] as $function) {
+    try { $function(123, "2"); }
+    catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+"#,
+        ),
+        concat!(
+            "stripos(): Argument #1 ($haystack) must be of type string, int given\n",
+            "strrpos(): Argument #1 ($haystack) must be of type string, int given\n",
+            "strripos(): Argument #1 ($haystack) must be of type string, int given\n",
+        )
+    );
+}
+
+#[test]
 fn strrchr_returns_the_suffix_at_the_last_first_byte_match() {
     assert_eq!(
         run_php(

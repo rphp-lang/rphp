@@ -48,6 +48,7 @@ include-path = ["stream-context", "file-contents", "file-write", "file-lines"]
 formatted-io = []
 
 [dependencies]
+memchr = "2.8.0"
 serde = "1.0.228"
 serde_json = "1.0.149"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
