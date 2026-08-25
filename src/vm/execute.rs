@@ -3385,26 +3385,31 @@ fn execute_full_call<'a>(
     // for the synchronous call and are selected only by the checked fn_type.
     // SAFETY: reading num_args and the optional raw handler does not outlive
     // that frame or cast an unverified user-function descriptor.
-    let (func_common, num_args, raw_variadic_handler) = unsafe {
+    // SAFETY: handler-owned validation metadata is read only after the same
+    // verified internal-function kind check as the raw handler tail.
+    let (func_common, num_args, raw_variadic_handler, handler_validates_types) = unsafe {
         let common = &*(*call).func;
-        let raw_handler = if common.fn_type == FunctionType::Internal
-            && common.sig.is_variadic
-            && pending_named.is_none()
-        {
-            let internal =
-                &*(common as *const FunctionCommon as *const super::function::InternalFunction);
+        let internal = (common.fn_type == FunctionType::Internal).then(|| {
+            &*(common as *const FunctionCommon as *const super::function::InternalFunction)
+        });
+        let raw_handler = if common.sig.is_variadic && pending_named.is_none() {
             // A single positional variadic value is already a stable call
             // slot. Multiple values normally retain the packed ABI; the
             // explicitly admitted scanf-style handlers snapshot their inputs
             // and therefore may consume every original by-reference slot.
             ((*call).num_args <= common.sig.public_arity().saturating_add(1)
-                || internal.raw_variadic_all_positional)
-                .then_some(internal.raw_variadic_handler)
-                .flatten()
+                || internal.is_some_and(|function| function.raw_variadic_all_positional))
+            .then(|| internal.and_then(|function| function.raw_variadic_handler))
+            .flatten()
         } else {
             None
         };
-        (common, (*call).num_args, raw_handler)
+        (
+            common,
+            (*call).num_args,
+            raw_handler,
+            internal.is_some_and(|function| function.handler_validates_types),
+        )
     };
     let public_max = func_common.sig.public_arity();
     if func_common.fn_type != FunctionType::User
@@ -3458,7 +3463,7 @@ fn execute_full_call<'a>(
     };
     let callee_class_ref = callee_class.as_deref();
 
-    if !func_common.sig.param_type_hints.is_empty() {
+    if !handler_validates_types && !func_common.sig.param_type_hints.is_empty() {
         let mut type_error = None;
         // SAFETY: `call` is the live callee frame and every param_cv_index in
         // this bounded loop names an initialized supplied-argument slot.

@@ -3098,7 +3098,7 @@ fn builtin_ref_args(name: &str) -> u64 {
         "settype" => 0b1,                         // arg 0
         "preg_match" | "preg_match_all" => 0b100, // arg 2 (&$matches)
         "preg_replace" | "preg_replace_callback" => 0b1_0000, // arg 4 (&$count)
-        "str_replace" => 0b1000,                  // arg 3 (&$count)
+        "str_replace" | "str_ireplace" => 0b1000, // arg 3 (&$count)
         "similar_text" => 0b100,                  // arg 2 (&$percent)
         "is_callable" => 0b100,                   // arg 2 (&$callable_name)
         "exec" => 0b110,                          // args 1 and 2 (&$output, &$result_code)

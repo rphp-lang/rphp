@@ -1867,6 +1867,11 @@ pub struct InternalFunction {
     /// This is reserved for handlers such as scanf whose variadic outputs are
     /// references and which snapshot all readable inputs before mutating them.
     pub raw_variadic_all_positional: bool,
+    /// The handler implements an internal function's PHP-specific ZPP
+    /// coercion and diagnostics while `param_type_hints` remain available to
+    /// Reflection. Ordinary call boundaries must not apply user-declaration
+    /// coercion to these parameters first.
+    pub handler_validates_types: bool,
 }
 
 /// Safe wrapper over function pointer — dispatch via fn_type().

@@ -5911,6 +5911,7 @@ pub fn make_internal_function(
         direct_handler: None,
         raw_variadic_handler: None,
         raw_variadic_all_positional: false,
+        handler_validates_types: false,
     }
 }
 
@@ -6203,6 +6204,7 @@ pub fn make_internal_method(
         direct_handler: None,
         raw_variadic_handler: None,
         raw_variadic_all_positional: false,
+        handler_validates_types: false,
     }
 }
 
@@ -6251,6 +6253,7 @@ pub fn make_internal_method_variadic(
         direct_handler: None,
         raw_variadic_handler: None,
         raw_variadic_all_positional: false,
+        handler_validates_types: false,
     }
 }
 
@@ -6311,6 +6314,7 @@ pub fn make_internal_function_ref(
         direct_handler: None,
         raw_variadic_handler: None,
         raw_variadic_all_positional: false,
+        handler_validates_types: false,
     }
 }
 
@@ -6355,6 +6359,7 @@ pub fn make_internal_function_variadic(
         direct_handler: None,
         raw_variadic_handler: None,
         raw_variadic_all_positional: false,
+        handler_validates_types: false,
     }
 }
 
@@ -6459,5 +6464,6 @@ pub fn make_internal_function_variadic_prefer_ref(
         direct_handler: None,
         raw_variadic_handler: None,
         raw_variadic_all_positional: false,
+        handler_validates_types: false,
     }
 }

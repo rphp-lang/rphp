@@ -1101,8 +1101,15 @@ where
         .then(|| Vec::with_capacity(num_args));
 
     // SAFETY: `frame` is a fresh compiler-sized activation. All argument and
-    // variadic destinations are uninitialized slots described by `func_ptr`.
+    // variadic destinations are uninitialized slots described by `func_ptr`;
+    // a non-null `trace_caller` is a live synchronous source activation.
     unsafe {
+        // Most engine callbacks use weak internal coercion. Only a source
+        // call_user_func_array() marker carries strictness into its detached
+        // native-ZPP target without changing adjacent callback contracts.
+        (*frame).set_detached_strict_call(
+            !trace_caller.is_null() && (*trace_caller).is_detached_strict_call(),
+        );
         (*frame).return_value = &mut return_value;
         // prev=null so Return exits execute_ex instead of continuing in caller
 

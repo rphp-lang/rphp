@@ -493,17 +493,29 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("strrpos", fn_strrpos, 3, 2, "haystack", "needle", "offset");
     reg!("strrchr", fn_strrchr, 2, 2, "haystack", "needle");
     reg!("strtr", fn_strtr, 3, 2, "string", "from", "to");
-    reg_ref!(
-        "str_replace",
-        fn_str_replace,
-        4,
-        3,
-        0b1000,
-        "search",
-        "replace",
-        "subject",
-        "count"
-    );
+    {
+        let array_or_string =
+            || ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String]);
+        let mut function = Box::new(make_internal_function_ref(
+            fn_str_replace,
+            4,
+            3,
+            0b1000,
+            pn!["search", "replace", "subject", "count"],
+        ));
+        function.common.sig.param_type_hints = vec![
+            array_or_string(),
+            array_or_string(),
+            array_or_string(),
+            ParamTypeHint::None,
+        ];
+        function.common.sig.return_type_hint = array_or_string();
+        function.handler_validates_types = true;
+        function.common.plan.call = crate::vm::function::CallStrategy::Fast;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("str_replace", pointer).unwrap();
+        funcs.push(function);
+    }
     reg!("addcslashes", fn_addcslashes, 2, 2, "string", "characters");
     reg!("addslashes", fn_addslashes, 1, 1, "string");
     reg!("stripslashes", fn_stripslashes, 1, 1, "string");
@@ -1423,15 +1435,29 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "needle",
         "offset"
     );
-    reg!(
-        "str_ireplace",
-        fn_str_ireplace,
-        3,
-        3,
-        "search",
-        "replace",
-        "subject"
-    );
+    {
+        let array_or_string =
+            || ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String]);
+        let mut function = Box::new(make_internal_function_ref(
+            fn_str_ireplace,
+            4,
+            3,
+            0b1000,
+            pn!["search", "replace", "subject", "count"],
+        ));
+        function.common.sig.param_type_hints = vec![
+            array_or_string(),
+            array_or_string(),
+            array_or_string(),
+            ParamTypeHint::None,
+        ];
+        function.common.sig.return_type_hint = array_or_string();
+        function.handler_validates_types = true;
+        function.common.plan.call = crate::vm::function::CallStrategy::Fast;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("str_ireplace", pointer).unwrap();
+        funcs.push(function);
+    }
     reg!(
         "substr_replace",
         fn_substr_replace,

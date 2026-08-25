@@ -5619,7 +5619,7 @@ fn typed_internal_string_value_argument_expected(
                 eg,
                 ed,
                 &format!(
-                    "{function}(): Passing null to parameter #{} (${parameter}) of type string is deprecated",
+                    "{function}(): Passing null to parameter #{} (${parameter}) of type {expected} is deprecated",
                     index + 1
                 ),
             )?;
@@ -6256,81 +6256,396 @@ fn fn_str_replace(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let search = arg!(ed, 0);
-    let replace = arg!(ed, 1);
-    let subject = arg!(ed, 2);
+    string_replace_builtin(ed, rv, eg, "str_replace", false)
+}
 
-    if search.as_array().is_none() && replace.as_array().is_some() {
+struct ReplacementText {
+    bytes: Vec<u8>,
+    binary: bool,
+}
+
+impl ReplacementText {
+    fn from_string_value(value: &Value) -> Self {
+        Self {
+            bytes: value.php_string_bytes().unwrap_or_default().into_owned(),
+            binary: value.is_binary_string(),
+        }
+    }
+
+    fn empty() -> Self {
+        Self {
+            bytes: Vec::new(),
+            binary: false,
+        }
+    }
+}
+
+fn replacement_item_text(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    value: &Value,
+) -> Result<Option<ReplacementText>, VmError> {
+    let value = value.dereferenced();
+    if value.value_type() == ValueType::String {
+        return Ok(Some(ReplacementText::from_string_value(value)));
+    }
+    if value.value_type() == ValueType::Array {
+        report_internal_diagnostic(eg, ed, 2, "Warning", "Array to string conversion")?;
+        if eg.exception.is_some() {
+            return Ok(None);
+        }
+        return Ok(Some(ReplacementText {
+            bytes: b"Array".to_vec(),
+            binary: false,
+        }));
+    }
+    if value.value_type() == ValueType::Closure {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "Object of class Closure could not be converted to string",
+        ));
+        return Ok(None);
+    }
+    if value.value_type() != ValueType::Object {
+        return Ok(Some(ReplacementText {
+            bytes: value
+                .echo_to_string_with_precision(eg.precision)
+                .into_bytes(),
+            binary: false,
+        }));
+    }
+
+    let class_name = value
+        .as_object()
+        .map(|object| object.class_name.to_string())
+        .unwrap_or_else(|| "object".to_string());
+    let rendered = crate::vm::execute::call_object_string_conversion(eg, value)?;
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    let Some(rendered) = rendered else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            &format!("Object of class {class_name} could not be converted to string"),
+        ));
+        return Ok(None);
+    };
+    let rendered = rendered.dereferenced();
+    if rendered.value_type() != ValueType::String {
         eg.exception = Some(crate::value::make_error_value(
             "TypeError",
-            "str_replace(): Argument #2 ($replace) must be of type string when argument #1 ($search) is a string",
+            &format!("{class_name}::__toString(): Return value must be of type string"),
+        ));
+        return Ok(None);
+    }
+    Ok(Some(ReplacementText::from_string_value(rendered)))
+}
+
+fn typed_internal_array_or_string_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    index: u32,
+    parameter: &str,
+) -> Result<Option<Value>, VmError> {
+    let argument = owned_argument(ed, index);
+    let argument = argument.dereferenced();
+    if matches!(argument.value_type(), ValueType::Array | ValueType::String) {
+        return Ok(Some(argument.clone()));
+    }
+    let strict = internal_call_is_strict(ed);
+    let converted = match argument.value_type() {
+        ValueType::Null if !strict => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                &format!(
+                    "{function}(): Passing null to parameter #{} (${parameter}) of type array|string is deprecated",
+                    index + 1
+                ),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            Some(Value::string(String::new()))
+        }
+        ValueType::False if !strict => Some(Value::string(String::new())),
+        ValueType::True if !strict => Some(Value::string("1")),
+        ValueType::Long | ValueType::Double if !strict => {
+            if argument.as_double().is_some_and(f64::is_nan) {
+                report_internal_diagnostic(
+                    eg,
+                    ed,
+                    2,
+                    "Warning",
+                    "unexpected NAN value was coerced to string",
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(None);
+                }
+            }
+            Some(Value::string(
+                argument.echo_to_string_with_precision(eg.precision),
+            ))
+        }
+        ValueType::Object if !strict => {
+            let rendered = crate::vm::execute::call_object_string_conversion(eg, argument)?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            let Some(rendered) = rendered else {
+                typed_internal_argument_error(
+                    eg,
+                    function,
+                    argument,
+                    index as usize + 1,
+                    parameter,
+                    "array|string",
+                );
+                return Ok(None);
+            };
+            let rendered = rendered.dereferenced();
+            if rendered.value_type() != ValueType::String {
+                let class_name = argument.diagnostic_type_name();
+                let actual = rendered.diagnostic_type_name();
+                eg.exception = Some(crate::value::make_error_value(
+                    "TypeError",
+                    &format!(
+                        "{class_name}::__toString(): Return value must be of type string, {actual} returned"
+                    ),
+                ));
+                return Ok(None);
+            }
+            Some(rendered.clone())
+        }
+        _ => {
+            typed_internal_argument_error(
+                eg,
+                function,
+                argument,
+                index as usize + 1,
+                parameter,
+                "array|string",
+            );
+            None
+        }
+    };
+    Ok(converted)
+}
+
+fn replace_php_bytes_once(
+    source: &[u8],
+    source_binary: bool,
+    search: &ReplacementText,
+    replacement: &ReplacementText,
+    case_insensitive: bool,
+    count: &mut usize,
+) -> (Vec<u8>, bool) {
+    if search.bytes.is_empty() || search.bytes.len() > source.len() {
+        return (source.to_vec(), source_binary);
+    }
+
+    let matches_at = |candidate: &[u8]| {
+        if case_insensitive {
+            candidate.eq_ignore_ascii_case(&search.bytes)
+        } else {
+            candidate == search.bytes
+        }
+    };
+    let mut result = Vec::with_capacity(source.len());
+    let mut position = 0;
+    let mut used_binary_replacement = false;
+    while position + search.bytes.len() <= source.len() {
+        let candidate = &source[position..position + search.bytes.len()];
+        if matches_at(candidate) {
+            result.extend_from_slice(&replacement.bytes);
+            *count = count.saturating_add(1);
+            used_binary_replacement |= replacement.binary;
+            position += search.bytes.len();
+        } else {
+            result.push(source[position]);
+            position += 1;
+        }
+    }
+    result.extend_from_slice(&source[position..]);
+    (
+        result,
+        source_binary || (used_binary_replacement && !replacement.bytes.is_empty()),
+    )
+}
+
+fn replace_php_bytes(
+    subject: ReplacementText,
+    replacements: &[(ReplacementText, ReplacementText)],
+    case_insensitive: bool,
+    count: &mut usize,
+) -> Value {
+    let mut bytes = subject.bytes;
+    let mut binary = subject.binary;
+    for (search, replacement) in replacements {
+        (bytes, binary) =
+            replace_php_bytes_once(&bytes, binary, search, replacement, case_insensitive, count);
+    }
+    if binary || !bytes.is_ascii() {
+        Value::binary_string(&bytes)
+    } else {
+        Value::string(String::from_utf8(bytes).expect("ASCII replacement result is valid UTF-8"))
+    }
+}
+
+fn replace_ascii_case_insensitive(
+    subject: &str,
+    search: &str,
+    replacement: &str,
+    count: &mut usize,
+) -> String {
+    if search.is_empty() {
+        return subject.to_string();
+    }
+    let source = subject.as_bytes();
+    let needle = search.as_bytes();
+    let first = needle[0];
+    let mut result = String::with_capacity(subject.len());
+    let mut copied = 0;
+    let mut scan = 0;
+    while scan + needle.len() <= source.len() {
+        let searchable_end = source.len() - needle.len() + 1;
+        let Some(relative) = source[scan..searchable_end]
+            .iter()
+            .position(|byte| byte.eq_ignore_ascii_case(&first))
+        else {
+            break;
+        };
+        let matched = scan + relative;
+        if source[matched..matched + needle.len()].eq_ignore_ascii_case(needle) {
+            result.push_str(&subject[copied..matched]);
+            result.push_str(replacement);
+            *count = count.saturating_add(1);
+            copied = matched + needle.len();
+            scan = copied;
+        } else {
+            scan = matched + 1;
+        }
+    }
+    result.push_str(&subject[copied..]);
+    result
+}
+
+fn string_replace_builtin(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    case_insensitive: bool,
+) -> Result<(), VmError> {
+    let Some(search) = typed_internal_array_or_string_argument(ed, eg, function, 0, "search")?
+    else {
+        return Ok(());
+    };
+    let Some(replace) = typed_internal_array_or_string_argument(ed, eg, function, 1, "replace")?
+    else {
+        return Ok(());
+    };
+    let Some(subject) = typed_internal_array_or_string_argument(ed, eg, function, 2, "subject")?
+    else {
+        return Ok(());
+    };
+
+    if search.value_type() == ValueType::String && replace.value_type() == ValueType::Array {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "{function}(): Argument #2 ($replace) must be of type string when argument #1 ($search) is a string"
+            ),
         ));
         return Ok(());
     }
 
-    let replacement_values = replace.as_array().map(|array| {
-        array
-            .values()
-            .map(Value::echo_to_string)
-            .collect::<Vec<_>>()
-    });
-    let scalar_replacement = replace
-        .as_array()
-        .is_none()
-        .then(|| replace.echo_to_string());
-    let searches = if let Some(searches) = search.as_array() {
-        searches
-            .values()
-            .enumerate()
-            .map(|(index, search)| {
-                let replacement = replacement_values
-                    .as_ref()
-                    .and_then(|values| values.get(index))
-                    .cloned()
-                    .or_else(|| scalar_replacement.clone())
-                    .unwrap_or_default();
-                (search.echo_to_string(), replacement)
-            })
-            .collect::<Vec<_>>()
-    } else {
-        vec![(
-            search.echo_to_string(),
-            scalar_replacement.unwrap_or_default(),
-        )]
-    };
+    if case_insensitive
+        && search.value_type() == ValueType::String
+        && replace.value_type() == ValueType::String
+        && subject.value_type() == ValueType::String
+        && !search.is_binary_string()
+        && !replace.is_binary_string()
+        && !subject.is_binary_string()
+        && search.as_str().is_some_and(str::is_ascii)
+        && replace.as_str().is_some_and(str::is_ascii)
+        && subject.as_str().is_some_and(str::is_ascii)
+    {
+        let mut count = 0;
+        let result = replace_ascii_case_insensitive(
+            subject.as_str().unwrap_or_default(),
+            search.as_str().unwrap_or_default(),
+            replace.as_str().unwrap_or_default(),
+            &mut count,
+        );
+        arg_mut!(ed, 3, Value::long(count as i64));
+        ret!(rv, Value::string(result));
+    }
 
-    fn replace_all(subject: &str, searches: &[(String, String)], count: &mut usize) -> String {
-        let mut result = subject.to_string();
-        for (search, replacement) in searches {
-            if search.is_empty() {
-                continue;
-            }
-            *count += result.matches(search).count();
-            result = result.replace(search, replacement);
+    let mut replacements = Vec::new();
+    if let Some(searches) = search.as_array() {
+        let replacement_values = replace
+            .as_array()
+            .map(|array| array.values().collect::<Vec<_>>());
+        let scalar_replacement = if replace.value_type() == ValueType::String {
+            Some(ReplacementText::from_string_value(&replace))
+        } else {
+            None
+        };
+        replacements.reserve(searches.len());
+        for (index, search) in searches.values().enumerate() {
+            let Some(search) = replacement_item_text(ed, eg, search)? else {
+                return Ok(());
+            };
+            let replacement = if let Some(values) = replacement_values.as_ref() {
+                match values.get(index) {
+                    Some(value) => {
+                        let Some(value) = replacement_item_text(ed, eg, value)? else {
+                            return Ok(());
+                        };
+                        value
+                    }
+                    None => ReplacementText::empty(),
+                }
+            } else {
+                scalar_replacement
+                    .as_ref()
+                    .map(|value| ReplacementText {
+                        bytes: value.bytes.clone(),
+                        binary: value.binary,
+                    })
+                    .unwrap_or_else(ReplacementText::empty)
+            };
+            replacements.push((search, replacement));
         }
-        result
+    } else {
+        replacements.push((
+            ReplacementText::from_string_value(&search),
+            ReplacementText::from_string_value(&replace),
+        ));
     }
 
     let mut count = 0;
     let result = if let Some(subjects) = subject.as_array() {
         let mut result = PhpArray::new();
         for (key, subject) in subjects.iter() {
+            let Some(subject) = replacement_item_text(ed, eg, subject)? else {
+                return Ok(());
+            };
             result.set(
                 key,
-                Value::string(replace_all(
-                    &subject.echo_to_string(),
-                    &searches,
-                    &mut count,
-                )),
+                replace_php_bytes(subject, &replacements, case_insensitive, &mut count),
             );
         }
         Value::array(result)
     } else {
-        Value::string(replace_all(
-            &subject.echo_to_string(),
-            &searches,
+        replace_php_bytes(
+            ReplacementText::from_string_value(&subject),
+            &replacements,
+            case_insensitive,
             &mut count,
-        ))
+        )
     };
 
     // Writing the omitted optional frame slot is unobservable. When &$count
@@ -11620,6 +11935,9 @@ fn internal_call_is_strict(ed: *mut ExecuteData) -> bool {
     // SAFETY: an internal handler executes synchronously beneath its live
     // caller, whose function header remains valid for the duration of the call.
     unsafe {
+        if (*ed).is_detached_strict_call() {
+            return true;
+        }
         let caller = (*ed).prev_execute_data;
         if caller.is_null() || (*caller).func.is_null() {
             return false;
@@ -18726,7 +19044,11 @@ pub(crate) fn invoke_call_user_func_array(
         }
     };
 
-    call_resolved_with_php_array(eg, resolved, args, true)
+    let caller = eg.current_execute_data.get();
+    let strict = user_execute_data_is_strict(caller);
+    with_detached_strict_call(caller, strict, || {
+        call_resolved_with_php_array(eg, resolved, args, true)
+    })
 }
 
 /// Invoke a callback already resolved at the consuming source boundary. This
@@ -18770,13 +19092,16 @@ pub(crate) fn invoke_resolved_call_user_func_array_from(
         ));
         return Ok(Value::null());
     };
-    call_resolved_with_php_array_at(
-        eg,
-        resolved,
-        args,
-        true,
-        Some((logical_caller, source_file, source_line)),
-    )
+    let strict = user_execute_data_is_strict(logical_caller);
+    with_detached_strict_call(logical_caller, strict, || {
+        call_resolved_with_php_array_at(
+            eg,
+            resolved,
+            args,
+            true,
+            Some((logical_caller, source_file, source_line)),
+        )
+    })
 }
 
 /// call_user_func($callback, ...$args)
@@ -22939,13 +23264,51 @@ fn fn_call_user_func_array(
     }
     let discarded = rv.is_null() || eg.detached_return_discarded();
     let previous_discarded = eg.replace_detached_return_discarded(discarded);
-    let result = invoke_resolved_call_user_func_array(resolved, args_val, eg);
+    let strict = internal_call_is_strict(ed);
+    let result = with_detached_strict_call(ed, strict, || {
+        invoke_resolved_call_user_func_array(resolved, args_val, eg)
+    });
     eg.replace_detached_return_discarded(previous_discarded);
     let result = result?;
     if eg.exception.is_some() {
         return Ok(());
     }
     ret!(rv, result);
+}
+
+fn user_execute_data_is_strict(ed: *mut ExecuteData) -> bool {
+    if ed.is_null() {
+        return false;
+    }
+    // SAFETY: callers supply the currently executing source frame or the
+    // compiler-lowered call_user_func_array opcode's live logical caller.
+    unsafe {
+        if (*ed).func.is_null() {
+            return false;
+        }
+        let function = Function::from_common_ptr((*ed).func);
+        function.fn_type() == FunctionType::User && function.as_user().op_array.strict_types
+    }
+}
+
+fn with_detached_strict_call<T>(
+    caller: *mut ExecuteData,
+    strict: bool,
+    callback: impl FnOnce() -> Result<T, VmError>,
+) -> Result<T, VmError> {
+    if caller.is_null() {
+        return callback();
+    }
+    // SAFETY: the caller activation remains live across this synchronous
+    // callback dispatch. Restore its pre-existing call-kind bit afterwards so
+    // adjacent engine callbacks keep their ordinary weak-call contract.
+    unsafe {
+        let previous = (*caller).is_detached_strict_call();
+        (*caller).set_detached_strict_call(strict);
+        let result = callback();
+        (*caller).set_detached_strict_call(previous);
+        result
+    }
 }
 
 /// function_exists($name): bool

@@ -1653,30 +1653,13 @@ pub(super) fn fn_strripos(
     string_position_builtin(ed, rv, eg, "strripos", StringSearchDirection::Last, true)
 }
 
-/// str_ireplace($search, $replace, $subject): string
+/// str_ireplace($search, $replace, $subject, &$count = null): array|string
 pub(super) fn fn_str_ireplace(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let search = arg_str!(ed, 0);
-    let replace = arg_str!(ed, 1);
-    let subject = arg_str!(ed, 2);
-    if search.is_empty() {
-        ret!(rv, Value::string(subject.into_owned()));
-    }
-    // Case-insensitive replace
-    let search_lower = search.to_lowercase();
-    let mut result = String::with_capacity(subject.len());
-    let subject_lower = subject.to_lowercase();
-    let mut start = 0;
-    while let Some(pos) = subject_lower[start..].find(&search_lower) {
-        result.push_str(&subject[start..start + pos]);
-        result.push_str(replace.as_ref());
-        start += pos + search.len();
-    }
-    result.push_str(&subject[start..]);
-    ret!(rv, Value::string(result));
+    super::string_replace_builtin(ed, rv, eg, "str_ireplace", true)
 }
 
 /// substr_replace($string, $replacement, $start, $length = null): string

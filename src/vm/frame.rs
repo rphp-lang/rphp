@@ -80,6 +80,7 @@ impl ExecuteData {
     const EMBEDDED_LATE_STATIC_SHIFT: u32 = 32;
     const DEFERRED_SCALAR_CALL: u8 = 1;
     const ORIGINAL_CONSTRUCTOR_CALL: u8 = 1 << 1;
+    const DETACHED_STRICT_CALL: u8 = 1 << 2;
 
     #[inline(always)]
     pub fn is_deferred_scalar_call(&self) -> bool {
@@ -110,6 +111,22 @@ impl ExecuteData {
     #[inline(always)]
     pub fn is_original_constructor_call(&self) -> bool {
         self.call_kind_flags & Self::ORIGINAL_CONSTRUCTOR_CALL != 0
+    }
+
+    /// Preserve the caller file's `strict_types` bit on a detached internal
+    /// activation whose physical predecessor must remain null.
+    #[inline(always)]
+    pub fn set_detached_strict_call(&mut self, enabled: bool) {
+        if enabled {
+            self.call_kind_flags |= Self::DETACHED_STRICT_CALL;
+        } else {
+            self.call_kind_flags &= !Self::DETACHED_STRICT_CALL;
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_detached_strict_call(&self) -> bool {
+        self.call_kind_flags & Self::DETACHED_STRICT_CALL != 0
     }
 
     /// Recover a late-called class stored in the unused half of the heap
