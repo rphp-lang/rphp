@@ -8,6 +8,83 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`split-join-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and validated
+against PHP 8.5.9. `explode()` now applies its separator and positive, zero or
+negative limit to PHP bytes, including empty fields, no-match inputs, NUL,
+arbitrary high bytes and UTF-8 byte sequences. `implode()` and its `join()`
+alias preserve array iteration order and convert each element lazily at its
+observable position. Nested arrays warn once per occurrence, Stringable objects
+run once per occurrence, an escaping conversion stops later work, and the input
+array, references and copy-on-write aliases remain unchanged.
+
+Handler-owned string, integer, `array|string` and nullable-array boundaries
+reproduce weak and strict scalar conversion, null and lossy-conversion
+deprecations, empty-separator errors, object/resource/array diagnostics and the
+one-argument join overload. Static, dynamic, named and callback calls share the
+implementation. Reflection exposes the real PHP 8.5 signatures and return
+types. Exact ordinary text joins retain a guarded single-allocation path;
+binary, nested, object and exceptional elements deopt to the canonical byte and
+conversion engine without repeating side effects.
+
+The supplying `bug20169.phpt` case also exposed an earlier missing
+`set_time_limit()` boundary. The admitted function now validates `int`, exposes
+its PHP 8.5 Reflection metadata, lazily creates a resettable request timer for a
+positive value, and disables it for zero or a negative value. Expiry enters the
+existing VM interrupt path, including optimized loops, rather than recognizing
+the fixture or silently succeeding.
+
+Three original E2E regressions cover byte limits and separators, lazy element
+conversion and exceptions, references/COW, weak and strict diagnostics, call
+shapes, Reflection, timer expiry and cancellation. Four independent clean-room
+probes match PHP 8.5.9 byte for byte at SHA-256
+`7f0f676b48e1d6986b8af8b6bd430e652315c4ad12995944172242de49c39232`,
+`eec6054d42d17a1a2fa33fcbb4a5f21d312746ce427ce3811450811d23fae852`,
+`d0620bec4cc65e3c502eceaf5249e7f8b8a66ea0c8c95e4045603840de74499d`
+and `a6c3479f6461f64bcfbbfd5cea9ec6eea003288129bcae316e17943125c7b8c3`.
+All nine supplying cases move from 0/9 to 9/9. The direct 20-case split/join
+selection is 19 pass with the pre-existing `memory_limit` case still explicitly
+unsupported, an exact +9/-0 delta.
+
+The complete 733-case strings audit moves from 524 to 533 passes, an exact
++9/-0 delta consisting only of the supplying paths. There are 115 failures,
+54 skips, 30 unsupported cases, the retained `dirname_multi.phpt` timeout and
+zero crashes. Array remains exactly classified at 828 passes, 13 skips and one
+unsupported case. Zend/lang moves from 4,206 to 4,207 passes with 1,096
+failures, 115 skips and 181 unsupported cases; `bug29890.phpt` is the sole
+adjacent gain from the general `set_time_limit()` availability, with no lost
+pass, timeout or crash. Three serial release runs have identical stable
+path/outcome/runner-control hashes
+`913d8beb4630b88357119fae421e330adac308d7b4654e68649c9629ae6ed657`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `7395473944b83035e48b985b944472f6b1d3bfb26884b5f437c1b390dbd876e4`
+for strings, array and Zend/lang respectively.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML data, PHPT-runner and unsafe-policy checks, Composer 2.8.12
+S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at
+1,623 unsafe blocks and 289 unsafe functions, with 363 SAFETY annotations and
+seven `# Safety` sections. Exact-binary CPU-2-pinned balanced controls compare
+parent SHA-256
+`aa573059e7ec88155cf43f1d460cb63ffe29dec4ea106bcb8590b317556ea7ab`
+with candidate
+`53b6a48376eaa1aab585e731cd6fe191f0278eab079da1cff150a8b174a3285e`.
+Paired medians are +2.415%, +1.603%, -4.842%, +2.510% and +0.582% for
+ordinary explode, negative-limit explode, implode, dynamic split/join and a
+pure loop. Retained scalar `str_replace()`, scalar `str_ireplace()` and array
+replacement controls are -1.219%, +2.594% and -0.511%; the five retained
+byte-search controls range from -5.640% to +0.982%, and 200 empty processes
+measure -3.344%. Every checksum matches and every median is below +5%.
+
+This checkpoint does not claim exact timeout-fatal wording/source locations,
+exclusion of blocking system time from the execution budget, sub-second timer
+scheduling, request-wide allocation accounting, exact OOM diagnostics, the
+unsupported `memory_limit` case or 32-bit execution. The remaining 115 strings
+and wider Zend failures stay visible. The next risk-adjusted high-yield
+candidate is the eight visible `str_getcsv()` failures: the existing scalar
+parser lacks PHP 8.5's fourth escape parameter and exact byte, multiline,
+malformed-enclosure and diagnostic contract.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `string-search-byte-window-contract`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. `strpos()`, `strstr()`, `strrchr()`,
 `strspn()`, `strcspn()`, `substr_count()` and `substr_compare()` now share

@@ -2912,25 +2912,53 @@ Exact-final-binary CPU-pinned paired medians range from -37.278% to +3.728%
 across five affected shapes; retained replacement controls range from +1.313%
 to +4.423%, and startup is -3.549%, all within +5%.
 
+The `6146d0ef` `split-join-byte-contract` checkpoint closes all nine supplying
+`explode()`/`implode()`/`join()` cases against PHP 8.5.9. One PHP-byte splitter
+covers positive, zero and negative limits; one ordered join engine preserves
+lazy nested-array warnings, Stringable calls, exceptions, references/COW and
+binary results. Handler-owned types and real Reflection metadata cover every
+call shape, while a guarded ordinary text path retains one allocation. The
+earlier `set_time_limit()` blocker now uses a lazily allocated resettable timer
+and the existing VM interrupt path. Three original E2E tests and four
+independent clean-room probes cover the combined contract.
+
+The focused cluster moves from 0/9 to 9/9 and strings moves from 524 to 533 pass
+(+9/-0), with no lost pass or other outcome movement. The direct 20-case family
+is 19 pass plus one unchanged `memory_limit` unsupported case. Array remains
+exactly 828/842. Zend/lang moves from 4,206 to 4,207/5,599 (+1/-0) through the
+adjacent `bug29890.phpt` timer-availability gain. Three serial release runs
+have identical stable strings, array and Zend hashes
+`913d8beb4630b88357119fae421e330adac308d7b4654e68649c9629ae6ed657`,
+`b83e4cc9f35137da0a07872e6abeb2722e0519b09c50cb962791a8e50c50c98c`
+and `7395473944b83035e48b985b944472f6b1d3bfb26884b5f437c1b390dbd876e4`.
+All five feature configurations, all-feature/all-target, formatting, HTML data,
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Exact-final-binary CPU-pinned paired medians range from -4.842% to +2.510%
+across five affected/control shapes; retained replacement and byte-search
+controls range from -5.640% to +2.594%, and startup is -3.344%, all within +5%.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 524 pass, 124 fail, 54 skip and 30 unsupported, with one retained timeout;
+is 533 pass, 115 fail, 54 skip and 30 unsupported, with one retained timeout;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
 and invalid-UTF-8 recovery families are both 3/3; the EUC-JP/Big5 supplying
 pair is 2/2 and the byte-escaping supplying family is 12/12. `Zend/tests` plus
-`tests/lang` is 4,206 pass, 1,097 fail, 115 skip and 181 unsupported, with no
+`tests/lang` is 4,207 pass, 1,096 fail, 115 skip and 181 unsupported, with no
 timeout or crash. The trim/charlist family is 11/11, increment/decrement is 6/6
 and both `str_split()` and `chunk_split()` are 6/6, while the complete
 `str_replace()`/`str_ireplace()` cluster is 8/8 and the selected
 `substr_replace()` family plus its four adjacent gains is 8/8; the complete
-`nl2br()` family is 5/5, the complete `strtr()` family is 16/16 and the direct
-and related byte-search/window family is 79/79. The next goal should close the
-nine visible split/join failures in `explode()`,
-`implode()` and `join()` through shared typed string/array boundaries and exact
-PHP-byte separator, limit, conversion, ordering and diagnostic semantics;
+`nl2br()` family is 5/5, the complete `strtr()` family is 16/16, the direct and
+related byte-search/window family is 79/79, and the direct split/join family is
+19 pass plus one explicit unsupported case. The next goal should close the
+eight visible `str_getcsv()` failures in `bug55674.phpt`, `bug65947.phpt`,
+`gh11982.phpt`, `gh12151.phpt`, `oss_fuzz_57392.phpt`, `str_getcsv_001.phpt`,
+`str_getcsv_002.phpt` and `str_getcsv_errors.phpt` through typed four-argument
+metadata and exact PHP-byte enclosure, escape, multiline, malformed-input and
+diagnostic semantics;
 wider string-offset writes, typed-parameter and associative-key binary
 provenance, detached-callback alias spelling, unknown entity-encoding warnings,
 platform cryptography, tag parsing and broader legacy multibyte behavior remain
