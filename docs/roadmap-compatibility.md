@@ -3061,10 +3061,31 @@ CPU-pinned `basename()`, `dirname()` and two `pathinfo()` controls range from
 -27.862% to -8.105%, and startup is -1.953%; paired results are likewise below
 zero, all comfortably within +5%, with matching checksums.
 
+The `cd08c7e1` `deterministic-byte-utilities-contract` checkpoint closes the
+eight supplying `count_chars()`, `metaphone()`, `quotemeta()`, `soundex()` and
+`str_rot13()` cases against PHP 8.5.9. Typed handlers own all modes and limits,
+weak/strict conversion, null diagnostics, invalid-bound `ValueError`s, call
+shapes, Reflection signature shape, binary provenance, references, COW and
+side-effect order. A clean-room PHP-byte engine covers NUL, arbitrary high
+bytes, exact escape/rotation alphabets and PHP's contextual Soundex/Metaphone
+rules. Three original E2Es, four unit tests, three bounded probes and an
+independent 590,791-record, 88,326,543-byte sweep cover the contract.
+
+Strings moves from 569 to 581 pass (+12/-0): all eight supplying cases and four
+adjacent historical Metaphone/ROT13 cases pass, with no lost pass or unrelated
+outcome movement. Array remains exactly 828/842 and Zend/lang exactly
+4,209/5,599. Repeated release runs have identical sorted classification maps.
+All five feature configurations, all-feature/all-target, formatting, HTML
+data, runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3
+pass. Exact-final-binary CPU-pinned `strlen()` is -0.491% and startup is
+-4.470%; paired results are -0.342% and -4.167%, all comfortably within +5%
+with matching checksums. Candidate-only throughput for the five newly admitted
+functions is recorded without a parent A/B claim.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 569 pass, 80 fail, 54 skip and 30 unsupported, with no timeout or crash;
+is 581 pass, 68 fail, 54 skip and 30 unsupported, with no timeout or crash;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
@@ -3080,11 +3101,12 @@ related byte-search/window family is 79/79, and the direct split/join family is
 19 pass plus one explicit unsupported case. `str_getcsv()` and the visible
 checksum/hash supplying clusters are both 8/8, the selected
 `base64_decode()` family is 6/6, and the visible quoted-printable family is
-5/5, while the visible UUencode family is 4/4. The next goal should close the
-eight-case deterministic byte-utility batch in `count_chars.phpt`,
-`count_chars_basic.phpt`, `metaphone.phpt`, `quotemeta_basic.phpt`,
-`quotemeta_basic_1.phpt`, `soundex.phpt`, `soundex_basic.phpt` and
-`str_rot13_basic.phpt` through handler-owned PHP-byte contracts;
+5/5, the visible UUencode family is 4/4 and the deterministic byte-utility
+batch is 12/12 including its four adjacent gains. The next goal should close
+the five-case word-boundary and line-formatting batch in
+`str_word_count.phpt`, `str_word_count1.phpt`, `wordwrap.phpt`,
+`wordwrap_basic.phpt` and `wordwrap_error.phpt` through handler-owned PHP-byte
+contracts;
 wider string-offset writes, typed-parameter and associative-key binary
 provenance, detached-callback alias spelling, unknown entity-encoding warnings,
 platform cryptography, tag parsing and broader legacy multibyte behavior remain

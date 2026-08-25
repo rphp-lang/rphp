@@ -8,6 +8,82 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`deterministic-byte-utilities-contract`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.9. `count_chars()`, `metaphone()`, `quotemeta()`,
+`soundex()` and `str_rot13()` now expose their typed PHP 8.5 signature shapes
+and share handler-owned PHP-byte boundaries. `count_chars()` implements all
+five modes with ascending byte keys/results and exact invalid-mode
+`ValueError`s. The transformations preserve NUL and arbitrary high bytes;
+`quotemeta()` escapes only PHP's eleven metacharacters and `str_rot13()` rotates
+ASCII letters only. `soundex()` implements PHP's four-byte ASCII code and
+separator behavior. `metaphone()` implements PHP's initial and contextual
+rules, NUL termination and output limits, including atomic `X` expansion.
+
+Weak and strict scalar conversion, null and lossy-conversion deprecations,
+Stringable conversion, negative limits, arity and named-argument errors,
+static, dynamic, first-class callback and `call_user_func*()` dispatch,
+Reflection signature shape, references, COW, binary provenance and argument
+side-effect order all enter the same handler-owned boundary. Four original
+byte-engine unit tests and three E2Es cover algorithms, modes and limits,
+empty/NUL/ASCII/UTF-8/high-byte values, weak and strict diagnostics, call
+shapes, Reflection, references, COW and side-effect order.
+
+Three bounded clean-room transcripts match PHP 8.5.9 byte for byte at SHA-256
+`dfcf8273dbfc863cb2b5284f6dadf2f482000af601fb653e7d539f33d19b1352`,
+`787a9e879680d9e25d7997d79b528dce1b3b1198ea6fa2f203f1b46b518704ee`
+and `b5a1abb3a0f61aafdea1326486bfa7681343ad50a22910a50ca2d5da3168465b`.
+An independent 590,791-record sweep covers every two-byte input across all
+five functions and `count_chars()` modes, every uppercase ASCII word through
+length four with three finite Metaphone limits, and 50,000 deterministic
+full-byte strings. Its 88,326,543-byte output matches exactly at
+`42060993a887146a35211b4031cdbaad3ad4e9f82c303583063fd2978f3d3602`.
+The final eight-case focused release manifest is 8/8 at SHA-256
+`8ac3cf5364ba2c41080a5c2cb17e6e100e042432cf9de2a528ede47bbaf01045`.
+
+The complete 733-case strings audit moves from 569 to 581 passes, an exact
++12/-0 delta: the eight supplying cases plus `bug20261.phpt`,
+`bug44242.phpt`, `bug47443.phpt` and `bug48709.phpt`. There are 68 failures,
+54 skips and 30 unsupported cases, with zero timeout or crash. Array remains
+exactly 828 pass, 13 skip and one unsupported case. Zend/lang remains exactly
+4,209 pass, 1,094 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Repeated release runs have identical sorted path/status/category maps at
+SHA-256 `f336510f36c7ca427c3b553c7594b39d9773fd396c5e6f2624a902fbced0668f`,
+`7d4b397d553dbdf5875d928f8bcbe886db93d84ec8c172a08760faf969226a46`
+and `1ffb4abd73cbc929fb8386f8f808ac35c5f9ca16b745da864cecd9c1cda6d443`
+for strings, array and Zend/lang respectively. Their exact pass-set hashes are
+`0ffc86396f5b0cd43b15fd92e000e6f5744f13ba4eb0b6f47e9944103416870c`,
+`1977b63ea5e33630f58b9f3b8ee609289b7d689b864a8e978b47ac80ffc78bc1`
+and `ea0f8211b08e79de7d4502c6b28d79abf46c26ddbbca67a506377b6b1c9a62f5`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML data, PHPT-runner and unsafe-policy checks, Composer 2.8.12
+S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at
+1,623 unsafe blocks and 289 unsafe functions, with 364 SAFETY annotations and
+seven `# Safety` sections. Exact-final-binary CPU-2-pinned balanced controls
+compare parent SHA-256
+`6e116097874d9a4d4e2a249fe7921181a7657e768aeed17af18352fca27371bd`
+with candidate
+`80c9c4ff1d77a5c7093bb718fe30dc1893ac6298fc17142916ae8a06d1cfd9ca`.
+Ordinary `strlen()` is -0.491%, paired -0.342%; 200 empty processes over 40
+balanced pairs are -4.470%, paired -4.167%. Comparable checksums match and both
+medians are below +5%. Because the parent does not implement the five new
+functions, candidate-only exact-output throughput is reported without an A/B
+claim: 0.934 million `count_chars()`, 4.345 million `metaphone()`, 2.021
+million `quotemeta()`, 5.080 million `soundex()` and 2.578 million
+`str_rot13()` calls per second on the measured workloads.
+
+This checkpoint does not claim locale-aware or Unicode phonetics, 32-bit
+execution, exact allocation-limit/OOM behavior, internal-function default
+values from Reflection's still-general default-metadata gap, platform
+`crypt()` behavior or closure of the remaining 68 strings and wider Zend
+failures. The next risk-adjusted candidate is the deterministic five-case
+word-boundary/line-formatting batch: `str_word_count.phpt`,
+`str_word_count1.phpt`, `wordwrap.phpt`, `wordwrap_basic.phpt` and
+`wordwrap_error.phpt`.
+
+The source checkpoint is commit `cd08c7e1`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `path-decomposition-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. `basename()`, `dirname()` and `pathinfo()` now
 expose their typed PHP 8.5 signatures and share a handler-owned PHP-byte path
@@ -87,7 +163,7 @@ separate portability and security contract.
 
 The source checkpoint is commit `bc941477`.
 
-The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
+An earlier measured AMD64 PHP 8.5 contract checkpoint is
 `uuencode-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and validated
 against PHP 8.5.9. `convert_uuencode()` and `convert_uudecode()` now expose
 their typed PHP 8.5 signatures and operate on PHP bytes. The encoder emits
