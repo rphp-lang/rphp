@@ -8,6 +8,84 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`printf-position-limit-contract`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. `sprintf()`, `vsprintf()`, `printf()` and
+`vprintf()` now share one positional-field boundary: a missing or zero index,
+index 2,147,483,647 or greater, and a decimal index that overflows AMD64
+`usize` raise `ValueError` with PHP's positional-specifier diagnostic. Index
+2,147,483,646 remains syntactically valid and reaches the ordinary missing-
+argument diagnostic when the corresponding value is absent. The same boundary
+applies to value, `*` width and `*` precision positions.
+
+The argument-count prepass validates every positional field before reporting
+a missing argument, including an invalid field after an earlier missing one.
+This preserves PHP's exception precedence and prevents release-mode count
+wraparound. `printf()` and `vprintf()` validate before publishing any partial
+output. Direct, array, dynamic, first-class and explicit callback calls share
+the contract; the established unknown-named-parameter boundary remains
+unchanged.
+
+Two original E2Es and two unit tests cover positive indices, the highest valid
+and first invalid indices, missing/zero/overflow decimals, value/width/
+precision positions, validation order, no-output failure, generated positions
+1 through 128 and the public call shapes. A 38-result clean-room oracle is
+byte-identical to PHP 8.5.9 at SHA-256
+`ebeda057fe8f2226db8aac16b01e5c053c756a5549411b53729380b0671a9dc5`.
+The unmodified supplying `bug69751.phpt` passes; its focused manifest and
+summary hash to
+`b43b3de338a7da46de5eca8af525f499cfc79a25b3fbb19bb449f771bb27c973`
+and `1cb3e9cca603e2b440881ce3603aaa8a63d9cde67e13e8ee5dededd1a99b85ef`.
+
+The complete 733-case strings audit moves from 616 to 617 passes, exactly
+`+1/-0`, with 32 failures, 54 skips, 30 unsupported cases and no timeout or
+crash. Two final exact-binary runs have byte-identical manifest and summary
+SHA-256 values
+`d28b59b07ea58096410c336d30a9040d341e3b6bfb53fb988e80137018d8fcbe`
+and `aa1dbe60cd3f49d943b33dccbb895547c5671152b25e95ad4c962506a1bb771d`.
+Only `ext/standard/tests/strings/bug69751.phpt` changes, from runtime failure to
+pass; the candidate strings pass set hashes to
+`3804d3a8eb8b1a29cc93a1547d0ec504a4af8114caa4f8b00e4d1f496f13d878`.
+
+The complete array audit remains byte-identical at 828 pass, 13 skip and one
+unsupported case; its manifest hashes to
+`d1d07b2537a5257a59d3d13c0839674fb7a35ba1f2470ff5d2218fb2eab0d746`.
+Zend/lang remains byte-identical at 4,211 pass, 1,092 fail, 115 skip and 181
+unsupported cases; its manifest hashes to
+`585e3c1f76c87ebad0b6fe19c801fe55a7791d1a5ccf248f018c8f8a7a5ea53e`.
+Repeated runs in all three selections are byte-identical, with no lost pass,
+new crash, timeout or unrelated outcome movement.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains within policy at 1,623 unsafe blocks and 289 unsafe
+functions, with 366 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+Two exact-final-binary CPU-2-pinned, order-balanced 32-pair release runs use the
+performance governor, four warmups and no excluded sample. They compare parent
+SHA-256 `4ee9fb2cf3983018adfc515bdbfffc4831ea58b48531c0e2579c8828eca614ce`
+with candidate
+`655ed0358b75a4910e1d49159497a24f3409739e2f553ea358b40551c23ed418`.
+Paired medians are -0.234%/+0.035% for 100 startups, +0.235%/+1.597% for five
+million retained `strlen()` calls, -1.277%/-1.282% for 200,000 ordinary
+`sprintf()` calls, -0.778%/-1.088% for 100,000 buffered `printf()` calls and
+-2.065%/-2.038% for 200,000 retained `sscanf()` calls. Comparable outputs
+match and all independent and order-specific medians remain below +5%. The raw
+TSVs hash to
+`5c6df10723e8586738f622d9d06d6d6064c3c52363ac6ed0bfc1402211d9f024`
+and `8b9c06be558137b16eeec0e509a387fdc5db6f765338161becdc7cfb5554fa77`.
+
+This checkpoint does not claim 32-bit behavior, allocation-limit/OOM
+equivalence, broader formatting or locale behavior, or closure of the
+remaining 32 strings and wider Zend failures. Risk-adjusted manifest triage
+selects the stale `${var}` interpolation deprecation shared by
+`strcasecmp.phpt`, `strcmp.phpt` and `strlen.phpt` as the next general PHP 8.5
+diagnostic cluster; platform `crypt()` and locale families remain deferred.
+
+The implementation checkpoint is commit `22acb607`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `sscanf-percent-n-contract`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. The shared scanf engine now returns every `%n`
 field as the integer count of PHP input bytes consumed so far without consuming

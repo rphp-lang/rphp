@@ -3156,27 +3156,28 @@ remains at 289 functions; no dependency or value/object/array layout changes.
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection is
-616 pass, 33 fail, 54 skip and 30 unsupported, with no timeout or crash.
+617 pass, 32 fail, 54 skip and 30 unsupported, with no timeout or crash.
 `Zend/tests` plus `tests/lang` is 4,211 pass, 1,092 fail, 115 skip and 181
-unsupported, also with no timeout or crash. The `8bb399e2`
-`sscanf-percent-n-contract` checkpoint adds exactly `bug21730.phpt` and the
-adjacent general reference-context gain `Zend/tests/gh12102_2.phpt`, both
-`+1/-0`, while array stays byte-identical and no prior pass moves. `%n` now
-counts consumed PHP bytes without consuming input, composes with the existing
-scanner grammar and writes through direct, named, dynamic, first-class and
-explicit callback references. NUL termination, high bytes, partial/input
-failure, nested array dimensions, COW and diagnostics are covered by original
-regressions and a byte-identical 140-combination PHP 8.5.9 oracle.
+unsupported, also with no timeout or crash. The `22acb607`
+`printf-position-limit-contract` checkpoint adds exactly `bug69751.phpt`
+`+1/-0`; array and Zend/lang stay byte-identical and no prior pass moves.
 
-All feature, unsafe, dependency and Symfony S0-S3 gates pass. Two exact-binary
-32-pair performance series keep startup, retained `strlen()`, ordinary
-`sscanf()` and `%n` scanning below the +5% regression budget; the accepted
-ASCII-borrowing scanner path replaced an earlier rejected pre-scan candidate.
-Manifest root-cause triage selects the isolated oversized positional-specifier
-diagnostic in `bug69751.phpt` next. Runtime-selected method/static array
-reference context, wider `fscanf()`/locale scanning, platform cryptography and
-locale groups, 32-bit behavior and allocation-limit/OOM equivalence remain
-explicit contracts.
+One shared positional-field validator now rejects missing, zero, 2,147,483,647
+or greater and overflowed decimal indices before argument-count diagnostics in
+`sprintf()`, `vsprintf()`, `printf()` and `vprintf()`. The highest valid index,
+positional value/width/precision fields, validation order, runtime call shapes
+and no-partial-output failures are covered by original regressions and a
+byte-identical 38-result PHP 8.5.9 oracle. All feature, unsafe, dependency and
+Symfony S0-S3 gates pass; two exact-binary 32-pair performance series keep
+startup, retained `strlen()`, ordinary `sprintf()`/`printf()` and retained
+`sscanf()` below the +5% regression budget.
+
+Manifest root-cause triage next groups the stale `${var}` interpolation
+deprecation visible in `strcasecmp.phpt`, `strcmp.phpt` and `strlen.phpt` into
+one general PHP 8.5 diagnostic checkpoint. Runtime-selected method/static
+array-reference context, broader formatting, platform cryptography and locale
+groups, 32-bit behavior and allocation-limit/OOM equivalence remain explicit
+contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,
