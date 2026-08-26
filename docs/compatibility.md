@@ -8,80 +8,81 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
-`word-boundary-wrap-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and
-validated against PHP 8.5.9. `str_word_count()` now exposes formats 0, 1 and 2,
-PHP byte-offset array keys, charlist ranges and invalid-range warnings.
-`wordwrap()` implements PHP's width, break, existing-break, space replacement
-and long-word-cut behavior. Both handlers operate on PHP bytes, so empty, NUL,
-ASCII, UTF-8 and arbitrary high-byte inputs do not cross through Rust Unicode
-or host-text semantics. The observed existing-break comparison that completes
-at a shared NUL, multi-byte break boundaries and terminal one-byte breaks are
-covered explicitly.
+`legacy-utf8-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. The deprecated `utf8_encode()` and
+`utf8_decode()` functions now expose their exact one-string-parameter and
+string-return signature. A clean-room PHP-byte engine maps every ISO-8859-1
+byte to UTF-8 and maps valid UTF-8 scalar values back to ISO-8859-1. Valid but
+unrepresentable scalars, overlong forms, surrogates, out-of-range sequences,
+invalid leads and truncated units produce PHP's observed `?` replacements and
+restart boundaries. Empty, NUL, ASCII, UTF-8 and arbitrary high-byte inputs
+remain bytes rather than Rust Unicode text.
 
-Weak and strict scalar conversion, null and lossy-conversion diagnostics,
-Stringable conversion, invalid format, empty-break and zero-width/cut
-`ValueError`s, arity and named-argument errors, static, dynamic, first-class
-callback and `call_user_func*()` dispatch, Reflection signature shape,
-references, COW, binary provenance and argument side-effect order all enter
-the same handler-owned boundary. Three byte-engine unit tests and three
-original E2Es cover values, formats, boundaries, diagnostics, calls,
-Reflection and ordering.
+Each attempted call emits the PHP 8.5 `E_DEPRECATED` diagnostic before arity
+or type validation, while an unknown named argument still fails before the
+deprecation. Weak and strict scalar conversion, null diagnostics, Stringable
+conversion, static, dynamic, first-class callback and `call_user_func*()`
+dispatch, references, COW and argument side-effect order enter the same
+handler-owned boundary. Reflection reports both functions as deprecated and
+synthesizes their exact `#[Deprecated(since: ..., message: ...)]` metadata.
+Top-level file and stdin lexing now preserve invalid source bytes in quoted,
+heredoc and inline-HTML strings; the adjacent `urlencode()` and
+`rawurlencode()` byte bridge retains those bytes without slowing their ordinary
+ASCII path.
 
-Four bounded clean-room transcripts match PHP 8.5.9 byte for byte at SHA-256
-`ba1f0b873af54af2fc2bb0c07740c763040899e31e712e9e3cf925b74368162f`,
-`938acdfa46006420a00d53103aa44aec6da53f462b507e4e28493b8599bfaff5`,
-`bbdc122f11720a99f92eb3a535f6a85a87daca7a038b381d481cdd72b1e78fd1`
-and `95e9774634e4087dd22e16fd20b44362a09d048ce001905cce5f975a3809901b`.
-An independent `str_word_count()` sweep covers 797,160 records through length
-five across ASCII letters, digits, apostrophe, hyphen, dot, space, NUL and a
-high byte, four charlists and all formats; it matches exactly at
-`1ba2dadcb5ecc6ea4f00c46f51097ac1c82b1104a64c2ad4666314b5190939ce`.
-Two independent `wordwrap()` sweeps cover 419,895 and 294,903 records with
-negative, zero and positive widths, cut modes, spaces, tabs, NUL, high bytes,
-single- and multi-byte breaks and terminal prefixes; they match exactly at
-`370e09223b311157eb70dc9026c17f5ab034d475abf1da3c54071da23fcbc900`
-and `8d53f5475563203004220f1c233bcfb2fd8d676b7119a614013461ea9b6e98c7`.
-The final five-case focused release manifest is 5/5 at SHA-256
-`dbd16c95abe30859a55219d11ae31f675b6295af99bfba96e6d5b2d709c6ffda`.
+Four original clean-room transcripts match PHP 8.5.9 byte for byte at SHA-256
+`9b986c3a1738afdef47ebc956e3d25fc0b69a3a96034de6fa75e115b831dbeee`,
+`63039ef5d5ab1702fc05f26f65dfe8492f6a40f226bff5f96745d6428b23dda0`,
+`2df50963f50a5fc82c0fe224e495bb6d38595bf6beae69b7b8a19bbe703e429a`
+and `ab53e4a62b9aa59fb21e8d24376312a49b6744d10c7e50f7906b211d9b34312a`.
+An independent 107,163-record, 2,418,469-byte sweep covers every one- and
+two-byte input plus structured invalid and valid sequences through length four
+for both conversions; it matches exactly at
+`e62c5c8cdbca03d0f4b9c0e3313909d1cab439ae6a425eb1f245f4da5805b858`.
+Three byte-engine unit tests, one URL-byte regression and three original E2Es
+cover algorithms, diagnostics, call shapes, Reflection, provenance and order.
+The final focused release manifest is 3/3 at SHA-256
+`2300527f54bd4e69b600b7190ba1e5755f9d0a2821e05a2ad2c04eda9b5bda96`.
 
-The complete 733-case strings audit moves from 581 to 586 passes, an exact
-+5/-0 delta consisting only of `str_word_count.phpt`, `str_word_count1.phpt`,
-`wordwrap.phpt`, `wordwrap_basic.phpt` and `wordwrap_error.phpt`. There are 63
-failures, 54 skips and 30 unsupported cases, with zero timeout or crash. Array
-remains exactly 828 pass, 13 skip and one unsupported case. Zend/lang remains
-exactly 4,209 pass, 1,094 fail, 115 skip and 181 unsupported, with no timeout
-or crash. Repeated release runs have identical sorted path/status/category
-maps at SHA-256
-`2dc2ed249687d483bc988313d7d8e956b06c06a740a8dcc8b0992b6727a78bb2`,
+The complete 733-case strings audit moves from 586 to 589 passes, an exact
++3/-0 delta consisting only of `utf8.phpt`, `bug43957.phpt` and
+`bug49687.phpt`. There are 60 failures, 54 skips and 30 unsupported cases,
+with zero timeout or crash. Array remains exactly 828 pass, 13 skip and one
+unsupported case. Zend/lang remains exactly 4,209 pass, 1,094 fail, 115 skip
+and 181 unsupported, with no timeout or crash. The final sorted
+path/status/category maps hash to SHA-256
+`9a6b20b364bf3f74ffbefe4a0560e0bf1bc26246b95309068a1b238dc2f4e17a`,
 `7d4b397d553dbdf5875d928f8bcbe886db93d84ec8c172a08760faf969226a46`
 and `1ffb4abd73cbc929fb8386f8f808ac35c5f9ca16b745da864cecd9c1cda6d443`
 for strings, array and Zend/lang respectively. The sorted strings pass paths
-hash to `018429aef24e3dca8768b25920b9e8fd5471bf404bad57c6f2d9e1a29c0c2e90`.
+hash to `7adb6a74ce07d10b87492754aa4559614b2f432c0a38148332a8476e20f37325`;
+no prior pass or unrelated outcome moved.
 
 All five Cargo feature configurations, locked all-feature/all-target,
 formatting, HTML data, PHPT-runner and unsafe-policy checks, Composer 2.8.12
 S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at
 1,623 unsafe blocks and 289 unsafe functions, with 364 SAFETY annotations and
-seven `# Safety` sections. Exact-final-binary CPU-2-pinned balanced controls
-compare parent SHA-256
-`80c9c4ff1d77a5c7093bb718fe30dc1893ac6298fc17142916ae8a06d1cfd9ca`
+seven `# Safety` sections. Two exact-final-binary CPU-2-pinned balanced
+32-pair runs compare parent SHA-256
+`3dccd66b4f812a3bea16af9b7a5c181360998cd2ac51c44a49deee31b438b04a`
 with candidate
-`3dccd66b4f812a3bea16af9b7a5c181360998cd2ac51c44a49deee31b438b04a`.
-One-parameter `str_word_count()` is -3.144%, ordinary `wordwrap()` is +4.169%
-and retained `strlen()` is +0.987%; 200 empty processes over 40 balanced pairs
-measure -4.125%. Comparable checksums match and every result remains below
-+5%.
+`e2df33b5af14d57362d61f186ff3c95c38732058e9fd96e835a23cae143e9193`.
+Paired medians are -3.333%/-4.410% for startup, -0.246%/+0.349% for retained
+`strlen()`, -6.873%/-6.358% for ASCII `urlencode()` and +4.191%/+4.471% for
+detached callbacks. Comparable checksums match and every result remains below
++5%. Candidate-only throughput is recorded without a parent A/B claim because
+neither legacy conversion existed in the parent.
 
-This checkpoint does not claim locale-aware word classification, Unicode or
-multibyte wrapping, 32-bit execution, exact allocation-limit/OOM behavior,
-internal-function default values from Reflection's still-general
-default-metadata gap, platform `crypt()` behavior, the `strip_tags()` parser or
-closure of the remaining 63 strings and wider Zend failures. Root-cause triage
-selects the deterministic three-case legacy Latin-1 conversion cluster in
-`utf8.phpt`, `bug43957.phpt` and `bug49687.phpt` as the next risk-adjusted
+This checkpoint does not claim `mbstring` or `iconv`, general Unicode
+normalization, locale behavior, raw-byte preservation through include/eval,
+32-bit execution, exact allocation-limit/OOM behavior, platform `crypt()`
+behavior, the `strip_tags()` parser or closure of the remaining 60 strings and
+wider Zend failures. Root-cause triage selects the four-case invalid-byte-input
+diagnostic cluster in `hex2bin_error.phpt`, `bug61660.phpt`,
+`ord_not_1_byte.phpt` and `strpbrk_error.phpt` as the next risk-adjusted
 candidate.
 
-The source checkpoint is commit `95199942`.
+The source checkpoint is commit `818a9f6d`.
 
 The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `deterministic-byte-utilities-contract`, pinned to php-src 8.5 commit `fcc29c8`

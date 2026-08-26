@@ -3106,10 +3106,36 @@ balanced controls measure `str_word_count()` at -3.144%, `wordwrap()` at
 +4.169%, retained `strlen()` at +0.987% and startup at -4.125%; comparable
 checksums match and every result remains below +5%.
 
+The `818a9f6d` `legacy-utf8-byte-contract` checkpoint closes `utf8.phpt`,
+`bug43957.phpt` and `bug49687.phpt` against PHP 8.5.9. Deprecated
+`utf8_encode()` and `utf8_decode()` expose their exact signatures and share a
+clean-room PHP-byte engine for ISO-8859-1 encoding, valid UTF-8 decoding,
+unrepresentable scalars and PHP's invalid, overlong, surrogate, out-of-range,
+truncated and restart-boundary replacements. Generic internal-function
+deprecation metadata owns attempted-call order and Reflection's synthesized
+`#[Deprecated]` attribute. Top-level file/stdin lexing retains raw source bytes,
+and the adjacent URL encoders preserve their binary provenance. Weak/strict
+conversion, null diagnostics, Stringable, call shapes, references, COW and
+side-effect order remain inside the same boundary. Three original E2Es, four
+unit regressions, four clean-room transcripts and an independent
+107,163-record sweep cover the contract.
+
+Strings moves from 586 to 589 pass (+3/-0), consisting only of the supplying
+cases, with no lost pass or unrelated outcome movement. Array remains exactly
+828/842 and Zend/lang exactly 4,209/5,599. The final sorted classification maps
+are deterministic. All five feature configurations, all-feature/all-target,
+formatting, HTML data, runner, unsafe, Composer S0, four Symfony S1 gates and
+PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-2-pinned balanced 32-pair
+runs put paired medians at -3.333%/-4.410% for startup, -0.246%/+0.349% for
+retained `strlen()`, -6.873%/-6.358% for ASCII `urlencode()` and
++4.191%/+4.471% for detached callbacks, all within +5% with matching
+comparable checksums. Candidate-only legacy-conversion throughput is recorded
+without a parent A/B claim because neither function existed in the parent.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 586 pass, 63 fail, 54 skip and 30 unsupported, with no timeout or crash;
+is 589 pass, 60 fail, 54 skip and 30 unsupported, with no timeout or crash;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
@@ -3127,13 +3153,14 @@ checksum/hash supplying clusters are both 8/8, the selected
 `base64_decode()` family is 6/6, and the visible quoted-printable family is
 5/5, the visible UUencode family is 4/4 and the deterministic byte-utility
 batch is 12/12 including its four adjacent gains. The word-boundary and
-line-formatting batch is 5/5. Manifest root-cause triage selects the next
-bounded candidate as the three-case `utf8_encode()`/`utf8_decode()` legacy
-Latin-1 byte cluster in `utf8.phpt`, `bug43957.phpt` and `bug49687.phpt`;
-wider string-offset writes, typed-parameter and associative-key binary
-provenance, detached-callback alias spelling, unknown entity-encoding warnings,
-platform cryptography, tag parsing and broader legacy multibyte behavior remain
-explicit contracts.
+line-formatting batch is 5/5 and the legacy UTF-8 conversion batch is 3/3.
+Manifest root-cause triage selects the next bounded candidate as the four-case
+invalid-byte-input diagnostic cluster in `hex2bin_error.phpt`,
+`bug61660.phpt`, `ord_not_1_byte.phpt` and `strpbrk_error.phpt`; wider
+string-offset writes, typed-parameter and associative-key binary provenance,
+detached-callback alias spelling, unknown entity-encoding warnings, platform
+cryptography, tag parsing and broader legacy multibyte behavior remain explicit
+contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,
