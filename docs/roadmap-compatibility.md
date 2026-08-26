@@ -3406,12 +3406,31 @@ CPU-pinned 32-pair runs keep startup, retained `strlen()`, 250 named readonly
 declarations and one million readonly object constructions below +5%, with
 matching outputs.
 
-The monitored supported debt is now 1,056 failures: 18 strings, zero array and
-1,038 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
+The `38232b5f` `readonly-member-declaration-diagnostics` checkpoint then moves
+Zend/lang from 4,265 to 4,269 pass, exactly `+4/-0`; strings stay 631/733 and
+array stays 828/842 with no other status or category movement. Direct and
+trait-alias readonly method modifiers now publish PHP's located compile fatal.
+Explicitly readonly and readonly-class-implied promoted properties without a
+type publish the declaring class/property diagnostic. Typed promotions,
+ordinary methods and normal trait aliases remain valid. Five formerly
+duplicated trait-alias parsing paths are centralized without token, AST,
+bytecode, VM or runtime-layout changes.
+
+Two exact-final-binary Zend/lang audits have byte-identical compact manifests
+and summaries; repeated serial strings/array outcome projections also match
+the exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep
+startup, retained `strlen()`, 250 readonly member declaration groups and one
+million typed readonly promotion instances below +5%, with matching outputs.
+
+The monitored supported debt is now 1,052 failures: 18 strings, zero array and
+1,034 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
 the portability contract and remains deferred. Read-only manifest triage next
-selects four readonly member declaration diagnostics: direct and trait-alias
-readonly methods plus explicit and class-implied readonly promoted properties
-without a type.
+selects six constructor-promotion declaration validations with one shared
+front-end boundary: promotion outside constructors, promotion in abstract and
+interface constructors, variadic promotion and explicit/promoted property
+redeclaration.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
 suppression-wrapped destructuring, exhaustive object/array/resource
