@@ -10,6 +10,7 @@ use super::directory::*;
 use super::filesystem::*;
 #[cfg(feature = "formatted-io")]
 use super::formatted_io::*;
+use super::hebrew::*;
 use super::process::*;
 use super::recursive_arrays::*;
 use super::source_filters::*;
@@ -1007,6 +1008,23 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         funcs.push(function);
     }
     reg!("strrev", fn_strrev, 1, 1, "string");
+    reg_typed!(
+        "hebrev",
+        fn_hebrev,
+        2,
+        1,
+        ["string", "max_chars_per_line"],
+        [ParamTypeHint::String, ParamTypeHint::Int],
+        ParamTypeHint::String
+    );
+    let hebrev = eg
+        .find_function("hebrev")
+        .expect("hebrev was just registered");
+    eg.register_internal_function_reflection_metadata(
+        hebrev,
+        vec![None, Some(Value::long(0))],
+        "standard",
+    );
     reg!(
         "number_format",
         fn_number_format,

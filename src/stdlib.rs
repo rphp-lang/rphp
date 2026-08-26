@@ -191,6 +191,7 @@ mod fiber;
 mod filesystem;
 #[cfg(feature = "formatted-io")]
 mod formatted_io;
+mod hebrew;
 mod html_entities;
 mod process;
 mod recursive_arrays;
