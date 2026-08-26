@@ -105,6 +105,7 @@ impl Parser {
                 Token::This(token_line)
                 | Token::Variable(_, token_line)
                 | Token::LBracket(token_line)
+                | Token::LBrace(token_line)
                 | Token::ParseError(_, token_line)
                 | Token::MagicConstant {
                     line: token_line, ..
@@ -125,7 +126,7 @@ impl Parser {
             };
 
             match token {
-                Token::LParen(_) | Token::LBrace | Token::LBracket(_) => {
+                Token::LParen(_) | Token::LBrace(_) | Token::LBracket(_) => {
                     depth += 1;
                     if depth > max_depth {
                         max_depth = depth;
@@ -220,7 +221,7 @@ impl Parser {
                 }
                 Ok(Stmt::HaltCompiler { offset, line })
             }
-            Token::LBrace => {
+            Token::LBrace(_) => {
                 self.advance();
                 let mut body = Vec::new();
                 while self.peek() != Token::RBrace && !self.at_eof() {
@@ -284,7 +285,7 @@ impl Parser {
                 };
                 self.expect(&Token::RParen)?;
                 let invalid_strict_block = directive.eq_ignore_ascii_case("strict_types")
-                    && self.peek() == Token::LBrace;
+                    && matches!(self.peek(), Token::LBrace(_));
                 if invalid_strict_block {
                     let _ = self.compile_error(
                         "strict_types declaration must not use block mode",
@@ -292,7 +293,7 @@ impl Parser {
                     );
                 }
                 if (invalid_strict_placement || invalid_strict_block)
-                    && self.peek() == Token::LBrace
+                    && matches!(self.peek(), Token::LBrace(_))
                 {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
@@ -313,12 +314,12 @@ impl Parser {
                 // The bracketed global namespace has no name: `namespace { ... }`.
                 // Keep the empty spelling in the AST so compilation can restore
                 // global resolution while retaining the namespace block boundary.
-                let name = if self.peek() == Token::LBrace {
+                let name = if matches!(self.peek(), Token::LBrace(_)) {
                     String::new()
                 } else {
                     self.parse_qualified_name()?
                 };
-                if self.peek() == Token::LBrace {
+                if matches!(self.peek(), Token::LBrace(_)) {
                     // Braced namespace: namespace App\Models { ... }
                     self.advance(); // consume '{'
                     let mut body = Vec::new();
@@ -502,6 +503,12 @@ impl Parser {
                         break;
                     }
                     self.advance();
+                }
+                if let Token::LBrace(line) = self.peek() {
+                    return Err(self.source_error(
+                        "syntax error, unexpected token \"{\", expecting \",\" or \";\"",
+                        line,
+                    ));
                 }
                 self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::Const {
@@ -851,7 +858,7 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
                 let alternative = match self.peek() {
-                    Token::LBrace => {
+                    Token::LBrace(_) => {
                         self.advance();
                         false
                     }
@@ -1100,7 +1107,7 @@ impl Parser {
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
                 let return_type = self.parse_return_type(line, false)?;
-                self.expect(&Token::LBrace)?;
+                self.expect(&Token::LBrace(0))?;
                 let mut body = Vec::new();
                 while self.peek() != Token::RBrace && !self.at_eof() {
                     body.push(self.parse_stmt_in_scope(false)?);
@@ -1259,7 +1266,7 @@ impl Parser {
                         },
                         Token::Dollar(_) => {
                             self.advance();
-                            let name = if self.peek() == Token::LBrace {
+                            let name = if matches!(self.peek(), Token::LBrace(_)) {
                                 self.advance();
                                 let name = self.parse_expr()?;
                                 self.expect(&Token::RBrace)?;
@@ -1646,7 +1653,7 @@ impl Parser {
 
     /// Parse either { stmts } or a single stmt
     fn parse_block_or_stmt(&mut self) -> Result<Vec<Stmt>, String> {
-        if self.peek() == Token::LBrace {
+        if matches!(self.peek(), Token::LBrace(_)) {
             self.advance(); // consume {
             let mut stmts = Vec::new();
             while self.peek() != Token::RBrace && !self.at_eof() {

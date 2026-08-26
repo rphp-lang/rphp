@@ -57,7 +57,7 @@ impl Parser {
         &mut self,
         property: &mut ClassProperty,
     ) -> Result<Vec<ClassMethod>, String> {
-        self.expect(&Token::LBrace)?;
+        self.expect(&Token::LBrace(0))?;
         let mut hook_methods = Vec::new();
         if self.peek() == Token::RBrace {
             self.compile_error("Property hook list must not be empty", property.line);
@@ -181,7 +181,7 @@ impl Parser {
                 };
                 (body, false)
             } else {
-                self.expect(&Token::LBrace)?;
+                self.expect(&Token::LBrace(0))?;
                 let mut body = Vec::new();
                 while self.peek() != Token::RBrace && !self.at_eof() {
                     body.push(self.parse_stmt_in_scope(false)?);
@@ -256,7 +256,7 @@ impl Parser {
             }
             self.advance();
         }
-        if self.peek() == Token::LBrace {
+        if matches!(self.peek(), Token::LBrace(_)) {
             if properties.len() != 1 {
                 return Err("Hooked properties cannot declare multiple properties".into());
             }
@@ -391,7 +391,7 @@ impl Parser {
                     };
                     (body, false)
                 } else {
-                    self.expect(&Token::LBrace)?;
+                    self.expect(&Token::LBrace(0))?;
                     let mut body = Vec::new();
                     while self.peek() != Token::RBrace && !self.at_eof() {
                         body.push(self.parse_stmt_in_scope(false)?);
@@ -456,7 +456,7 @@ impl Parser {
                 };
                 let (trait_uses, _) = self.parse_trait_ancestor_list(use_line)?;
                 uses.extend(trait_uses);
-                if self.peek() == Token::LBrace {
+                if matches!(self.peek(), Token::LBrace(_)) {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
                         let (trait_name, method) = self.parse_trait_method_reference()?;
@@ -569,7 +569,7 @@ impl Parser {
     /// Parse try { } catch (Type $e) { } finally { }
     fn parse_try_catch(&mut self) -> Result<Stmt, String> {
         self.advance(); // consume 'try'
-        self.expect(&Token::LBrace)?;
+        self.expect(&Token::LBrace(0))?;
         let mut try_body = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
             try_body.push(self.parse_stmt_in_scope(false)?);
@@ -621,7 +621,7 @@ impl Parser {
                 }
             };
             self.expect(&Token::RParen)?;
-            self.expect(&Token::LBrace)?;
+            self.expect(&Token::LBrace(0))?;
             let mut body = Vec::new();
             while self.peek() != Token::RBrace && !self.at_eof() {
                 body.push(self.parse_stmt_in_scope(false)?);
@@ -632,7 +632,7 @@ impl Parser {
 
         let finally_body = if self.peek() == Token::Finally {
             self.advance();
-            self.expect(&Token::LBrace)?;
+            self.expect(&Token::LBrace(0))?;
             let mut body = Vec::new();
             while self.peek() != Token::RBrace && !self.at_eof() {
                 body.push(self.parse_stmt_in_scope(false)?);
@@ -711,7 +711,7 @@ impl Parser {
         } else {
             Vec::new()
         };
-        self.expect(&Token::LBrace)?;
+        self.expect(&Token::LBrace(0))?;
 
         let mut properties = Vec::new();
         let mut constants = Vec::new();
@@ -734,7 +734,7 @@ impl Parser {
                 let (trait_uses, adaptation_line) =
                     self.parse_trait_ancestor_list(use_line)?;
                 uses.extend(trait_uses);
-                if self.peek() == Token::LBrace {
+                if matches!(self.peek(), Token::LBrace(_)) {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
                         let (trait_name, method) = self.parse_trait_method_reference()?;
@@ -898,7 +898,7 @@ impl Parser {
         let (name, line) = self.parse_classlike_declaration_name("trait")?;
         let generic_params = self.parse_generic_parameters()?;
         self.push_generic_scope(&generic_params);
-        self.expect(&Token::LBrace)?;
+        self.expect(&Token::LBrace(0))?;
 
         let mut properties = Vec::new();
         let mut constants = Vec::new();
@@ -917,7 +917,7 @@ impl Parser {
                 let (trait_uses, adaptation_line) =
                     self.parse_trait_ancestor_list(use_line)?;
                 uses.extend(trait_uses);
-                if self.peek() == Token::LBrace {
+                if matches!(self.peek(), Token::LBrace(_)) {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
                         let (trait_name, method) = self.parse_trait_method_reference()?;
@@ -1079,7 +1079,7 @@ impl Parser {
         } else {
             Vec::new()
         };
-        self.expect(&Token::LBrace)?;
+        self.expect(&Token::LBrace(0))?;
 
         let mut properties = Vec::new();
         let mut constants = Vec::new();
@@ -1202,7 +1202,7 @@ impl Parser {
         } else {
             Vec::new()
         };
-        self.expect(&Token::LBrace)?;
+        self.expect(&Token::LBrace(0))?;
 
         let mut cases = Vec::new();
         let mut properties = Vec::new();
@@ -1223,7 +1223,7 @@ impl Parser {
                 };
                 let (trait_uses, _) = self.parse_trait_ancestor_list(use_line)?;
                 uses.extend(trait_uses);
-                if self.peek() == Token::LBrace {
+                if matches!(self.peek(), Token::LBrace(_)) {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
                         let (trait_name, method) = self.parse_trait_method_reference()?;
@@ -1305,7 +1305,7 @@ impl Parser {
                     let params = self.parse_param_list()?;
                     self.expect(&Token::RParen)?;
                     let return_type = self.parse_return_type(line, false)?;
-                    self.expect(&Token::LBrace)?;
+                    self.expect(&Token::LBrace(0))?;
                     let mut body = Vec::new();
                     while self.peek() != Token::RBrace && !self.at_eof() {
                         body.push(self.parse_stmt_in_scope(false)?);
@@ -1577,7 +1577,7 @@ impl Parser {
                 self.advance();
                 return Ok(Vec::new());
             }
-            self.expect(&Token::LBrace)?;
+            self.expect(&Token::LBrace(0))?;
             let mut body = Vec::new();
             while self.peek() != Token::RBrace && !self.at_eof() {
                 body.push(self.parse_stmt_in_scope(false)?);
@@ -1601,7 +1601,7 @@ impl Parser {
             self.expect(&Token::Semicolon(0))?;
             return Ok(Vec::new());
         }
-        self.expect(&Token::LBrace)?;
+        self.expect(&Token::LBrace(0))?;
         let mut body = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
             body.push(self.parse_stmt_in_scope(false)?);
@@ -1619,7 +1619,7 @@ impl Parser {
         self.expect_lparen()?;
         let expr = self.parse_expr()?;
         self.expect(&Token::RParen)?;
-        self.expect(&Token::LBrace)?;
+        self.expect(&Token::LBrace(0))?;
 
         let mut arms = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
@@ -2075,7 +2075,7 @@ impl Parser {
 
         let return_type = self.parse_return_type(line, true)?;
 
-        self.expect(&Token::LBrace)?;
+        self.expect(&Token::LBrace(0))?;
         let mut body = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
             body.push(self.parse_stmt_in_scope(false)?);

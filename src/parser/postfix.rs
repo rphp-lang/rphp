@@ -47,7 +47,7 @@ impl Parser {
             Token::Dollar(line) => line,
             token => return Err(format!("Expected dynamic static member, got {token:?}")),
         };
-        let name = if self.peek() == Token::LBrace {
+        let name = if matches!(self.peek(), Token::LBrace(_)) {
             self.advance();
             let name = self.parse_expr()?;
             self.expect(&Token::RBrace)?;
@@ -77,7 +77,7 @@ impl Parser {
                 Token::Arrow | Token::NullSafe => {
                     let nullsafe = matches!(self.peek(), Token::NullSafe);
                     self.advance();
-                    if self.peek() == Token::LBrace {
+                    if matches!(self.peek(), Token::LBrace(_)) {
                         self.advance();
                         let property = self.parse_expr()?;
                         self.expect(&Token::RBrace)?;
@@ -241,7 +241,7 @@ impl Parser {
     /// postfix loop in `parse_power` continues the resulting expression.
     fn parse_named_static_access(&mut self, class_name: String) -> Result<Expr, String> {
         self.expect(&Token::DoubleColon)?;
-        if self.peek() == Token::LBrace {
+        if matches!(self.peek(), Token::LBrace(_)) {
             self.advance();
             let constant = self.parse_expr()?;
             self.expect(&Token::RBrace)?;
@@ -567,7 +567,7 @@ impl Parser {
                         }
                         continue;
                     }
-                    let dynamic_name = self.peek() == Token::LBrace;
+                    let dynamic_name = matches!(self.peek(), Token::LBrace(_));
                     let constant = if dynamic_name {
                         self.advance();
                         let constant = self.parse_expr()?;
@@ -605,7 +605,7 @@ impl Parser {
                 Token::Arrow | Token::NullSafe => {
                     let nullsafe = matches!(self.peek(), Token::NullSafe);
                     self.advance();
-                    if self.peek() == Token::LBrace {
+                    if matches!(self.peek(), Token::LBrace(_)) {
                         self.advance();
                         let member = self.parse_expr()?;
                         self.expect(&Token::RBrace)?;

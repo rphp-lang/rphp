@@ -160,7 +160,7 @@ pub enum Token {
     Semicolon(usize), // ; with source line
     LParen(usize),    // ( with source line
     RParen,           // )
-    LBrace,           // {
+    LBrace(usize),    // { with source line
     RBrace,           // }
     Comma(usize),     // , with source line
     LBracket(usize),  // [ with source line
@@ -660,7 +660,8 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                 }
                 b'{' => {
-                    tokens.push(Token::LBrace);
+                    let line = self.punctuation_source_line();
+                    tokens.push(Token::LBrace(line));
                     self.pos += 1;
                 }
                 b'}' => {
@@ -1194,7 +1195,7 @@ impl<'a> Lexer<'a> {
     fn finish_php_segment(&mut self, tokens: &mut Vec<Token>) -> Result<(), String> {
         if !matches!(
             tokens.last(),
-            Some(Token::Semicolon(_) | Token::LBrace | Token::RBrace)
+            Some(Token::Semicolon(_) | Token::LBrace(_) | Token::RBrace)
         ) {
             tokens.push(Token::Semicolon(
                 self.source_line_at(self.pos.saturating_sub(1)),
@@ -1686,7 +1687,7 @@ mod tests {
                 Token::LessEqual,
                 Token::Integer(10),
                 Token::RParen,
-                Token::LBrace,
+                Token::LBrace(1),
                 echo(1),
                 Token::Variable("x".into(), 1),
                 Token::Semicolon(1),

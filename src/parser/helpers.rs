@@ -10,6 +10,7 @@ impl Parser {
                 | Token::Dollar(line)
                 | Token::LParen(line)
                 | Token::LBracket(line)
+                | Token::LBrace(line)
                 | Token::Fn(line)
                 | Token::Use(line)
                 | Token::Static(line)
@@ -495,6 +496,13 @@ impl Parser {
             Ok(())
         } else if let Token::ParseError(message, line) = &tok {
             Err(self.source_error(message, *line))
+        } else if let Token::LBrace(line) = tok
+            && matches!(expected, Token::RParen)
+        {
+            Err(self.source_error(
+                "syntax error, unexpected token \"{\", expecting \")\"",
+                line,
+            ))
         } else if let Token::Identifier(name, line) = &tok
             && self.source_name.is_some()
         {
@@ -505,9 +513,14 @@ impl Parser {
         } else {
             let expected = match expected {
                 Token::Semicolon(_) => "Semicolon".to_string(),
+                Token::LBrace(_) => "LBrace".to_string(),
                 token => format!("{token:?}"),
             };
-            Err(format!("Expected {expected}, got {tok:?}"))
+            let actual = match tok {
+                Token::LBrace(_) => "LBrace".to_string(),
+                token => format!("{token:?}"),
+            };
+            Err(format!("Expected {expected}, got {actual}"))
         }
     }
 
@@ -702,7 +715,7 @@ impl Parser {
         };
         while self.peek() == Token::Backslash {
             self.advance();
-            if self.peek() == Token::LBrace {
+            if matches!(self.peek(), Token::LBrace(_)) {
                 self.advance();
                 let mut prefix = parts.join("\\");
                 if leading_backslash {
@@ -1250,7 +1263,7 @@ impl Parser {
         } else {
             None
         };
-        let has_hooks = self.peek() == Token::LBrace;
+        let has_hooks = matches!(self.peek(), Token::LBrace(_));
         if has_hooks && promotion.is_none() {
             promotion = Some((Visibility::Public, None, false));
         }

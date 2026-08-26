@@ -1130,7 +1130,7 @@ impl Parser {
             Token::Dollar(line) => {
                 self.advance();
                 self.last_primary_line = Some(line);
-                let name = if self.peek() == Token::LBrace {
+                let name = if matches!(self.peek(), Token::LBrace(_)) {
                     self.advance();
                     let name = self.parse_expr()?;
                     self.expect(&Token::RBrace)?;
@@ -1664,7 +1664,7 @@ impl Parser {
                     } else {
                         Vec::new()
                     };
-                    self.expect(&Token::LBrace)?;
+                    self.expect(&Token::LBrace(0))?;
                     let (properties, constants, methods, uses, trait_aliases) =
                         self.parse_anonymous_class_body()?;
                     let expression = Expr::AnonymousNew {

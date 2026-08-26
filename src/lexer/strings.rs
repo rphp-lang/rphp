@@ -1001,6 +1001,19 @@ impl<'a> Lexer<'a> {
         }
         tokens.remove(0);
         tokens.pop();
+        if let Some(index) = tokens.windows(2).position(|pair| {
+            matches!(
+                pair[0],
+                Token::Variable(_, _) | Token::This(_) | Token::Identifier(_, _) | Token::RBracket
+            ) && matches!(pair[1], Token::LBrace(_))
+        }) && let Token::LBrace(line) = tokens[index + 1]
+        {
+            tokens[index + 1] = Token::ParseError(
+                "syntax error, unexpected token \"{\", expecting \"->\" or \"?->\" or \"[\""
+                    .to_string(),
+                line,
+            );
+        }
         let mut diagnostics = Vec::new();
         tokens.retain(|token| match token {
             Token::CompileWarning(message, line) => {
@@ -1199,7 +1212,7 @@ impl<'a> Lexer<'a> {
 
     fn emit_dynamic_variable_tokens(tokens: &mut Vec<Token>, expression: &[Token], line: usize) {
         tokens.push(Token::Dollar(line));
-        tokens.push(Token::LBrace);
+        tokens.push(Token::LBrace(line));
         tokens.extend(expression.iter().cloned());
         tokens.push(Token::RBrace);
     }

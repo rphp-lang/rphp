@@ -888,6 +888,64 @@ fn noncanonical_cast_deprecations_survive_dead_code_and_real_is_removed() {
 }
 
 #[test]
+fn removed_curly_string_offsets_have_contextual_parse_diagnostics() {
+    for (source, expected) in [
+        (
+            "<?php\n$value = 'text';\nconsume($value\n{0});",
+            "syntax error, unexpected token \"{\", expecting \")\" in /virtual/curly-offset.php on line 4",
+        ),
+        (
+            "<?php\nconst VALUE = 'text'\n{0};",
+            "syntax error, unexpected token \"{\", expecting \",\" or \";\" in /virtual/curly-offset.php on line 3",
+        ),
+        (
+            "<?php\n\"{$value\n{'key'}}\";",
+            "syntax error, unexpected token \"{\", expecting \"->\" or \"?->\" or \"[\" in /virtual/curly-offset.php on line 3",
+        ),
+    ] {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let error = Parser::new(tokens)
+            .with_source_name("/virtual/curly-offset.php")
+            .parse()
+            .unwrap_err();
+        assert_eq!(error, expected);
+    }
+}
+
+#[test]
+fn bracket_offsets_blocks_and_dynamic_interpolated_properties_remain_valid() {
+    for source in [
+        "<?php $value = 'text'; consume($value[0]);",
+        "<?php const VALUE = 'text'[0];",
+        "<?php if (true) { echo 'block'; }",
+        "<?php \"{$object->{$property}}\";",
+        "<?php \"{$value[0]}\";",
+    ] {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        Parser::new(tokens)
+            .parse()
+            .unwrap_or_else(|error| panic!("unexpected parse error for {source}: {error}"));
+    }
+}
+
+#[test]
+fn source_aware_braces_keep_the_existing_internal_fallback_text() {
+    let tokens = Lexer::new("<?php declare(ticks=1) {}").tokenize().unwrap();
+    assert_eq!(
+        Parser::new(tokens).parse().unwrap_err(),
+        "Expected Semicolon, got LBrace"
+    );
+
+    let tokens = Lexer::new("<?php trait Example extends Base {}")
+        .tokenize()
+        .unwrap();
+    assert_eq!(
+        Parser::new(tokens).parse().unwrap_err(),
+        "Expected LBrace, got Extends"
+    );
+}
+
+#[test]
 fn document_string_parse_tokens_receive_the_parser_source_location() {
     let tokens = Lexer::new("<?php\necho <<<DOC\n  first\nsecond\n  DOC;")
         .tokenize()
