@@ -3369,12 +3369,29 @@ S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep startup,
 retained `strlen()`, 20,000 valid braced lex/parse/eval programs and 20,000
 valid interpolated programs below +5%, with matching outputs.
 
-The monitored supported debt is now 1,062 failures: 18 strings, zero array and
-1,044 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
+The `2bb2de65` `unparenthesized-elvis-full-ternary-diagnostic` checkpoint then
+moves Zend/lang from 4,259 to 4,260 pass, exactly `+1/-0`; strings stay 631/733
+and array stays 828/842 with no other status or category movement. The parser
+consumes the complete forbidden `a ?: b ? c : d` tail and publishes PHP's
+distinct compile fatal with both exact parenthesization suggestions. Both
+explicitly grouped forms remain valid. The accepted helper preserves token and
+AST layout and the standard-stack all-feature gate; an earlier recursive
+line-payload design was rejected after that gate exposed a stack overflow.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical compact
+manifests and summaries; repeated strings/array outcome projections also
+match. All five Cargo configurations, all-feature/all-target, formatting, HTML
+data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9
+S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep startup,
+retained `strlen()`, five million parenthesized Elvis/full ternary iterations
+and 20,000 repeated parenthesized lex/parse/eval programs below +5%, with
+matching outputs.
+
+The monitored supported debt is now 1,061 failures: 18 strings, zero array and
+1,043 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
 the portability contract and remains deferred. Read-only manifest triage next
-selects the last unparenthesized ternary diagnostic:
-`Zend/tests/ternary_associativity_2.phpt` needs the distinct
-`a ?: b ? c : d` compile fatal.
+selects five readonly declaration-modifier diagnostics: duplicate readonly
+classes, readonly enums/interfaces/traits and readonly class constants.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
 suppression-wrapped destructuring, exhaustive object/array/resource
