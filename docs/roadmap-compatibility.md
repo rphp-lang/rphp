@@ -3082,10 +3082,34 @@ pass. Exact-final-binary CPU-pinned `strlen()` is -0.491% and startup is
 with matching checksums. Candidate-only throughput for the five newly admitted
 functions is recorded without a parent A/B claim.
 
+The `95199942` `word-boundary-wrap-byte-contract` checkpoint closes the five
+supplying `str_word_count.phpt`, `str_word_count1.phpt`, `wordwrap.phpt`,
+`wordwrap_basic.phpt` and `wordwrap_error.phpt` cases against PHP 8.5.9.
+Typed handlers own `str_word_count()` formats 0/1/2, byte-offset array keys,
+charlist ranges and warnings, and `wordwrap()` width, break, existing-break,
+space-replacement and long-word-cut behavior. The shared PHP-byte engine covers
+empty, NUL, ASCII, UTF-8 and arbitrary high bytes, including PHP's observed
+shared-NUL existing-break comparison and terminal-break boundaries. Weak and
+strict scalar conversion, null and lossy-conversion diagnostics, Stringable
+conversion, `ValueError` boundaries, call shapes, Reflection signature shape,
+binary provenance, references, COW and side-effect order stay inside the same
+boundary. Three original E2Es, three unit tests, four bounded transcripts and
+three independent exhaustive sweeps cover the contract.
+
+Strings moves from 581 to 586 pass (+5/-0), consisting only of the supplying
+cases, with no lost pass or unrelated outcome movement. Array remains exactly
+828/842 and Zend/lang exactly 4,209/5,599. Repeated release runs have identical
+sorted classification maps. All five feature configurations,
+all-feature/all-target, formatting, HTML data, runner, unsafe, Composer S0,
+four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Exact-final-binary CPU-2-pinned
+balanced controls measure `str_word_count()` at -3.144%, `wordwrap()` at
++4.169%, retained `strlen()` at +0.987% and startup at -4.125%; comparable
+checksums match and every result remains below +5%.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 581 pass, 68 fail, 54 skip and 30 unsupported, with no timeout or crash;
+is 586 pass, 63 fail, 54 skip and 30 unsupported, with no timeout or crash;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
@@ -3102,11 +3126,10 @@ related byte-search/window family is 79/79, and the direct split/join family is
 checksum/hash supplying clusters are both 8/8, the selected
 `base64_decode()` family is 6/6, and the visible quoted-printable family is
 5/5, the visible UUencode family is 4/4 and the deterministic byte-utility
-batch is 12/12 including its four adjacent gains. The next goal should close
-the five-case word-boundary and line-formatting batch in
-`str_word_count.phpt`, `str_word_count1.phpt`, `wordwrap.phpt`,
-`wordwrap_basic.phpt` and `wordwrap_error.phpt` through handler-owned PHP-byte
-contracts;
+batch is 12/12 including its four adjacent gains. The word-boundary and
+line-formatting batch is 5/5. Manifest root-cause triage selects the next
+bounded candidate as the three-case `utf8_encode()`/`utf8_decode()` legacy
+Latin-1 byte cluster in `utf8.phpt`, `bug43957.phpt` and `bug49687.phpt`;
 wider string-offset writes, typed-parameter and associative-key binary
 provenance, detached-callback alias spelling, unknown entity-encoding warnings,
 platform cryptography, tag parsing and broader legacy multibyte behavior remain
