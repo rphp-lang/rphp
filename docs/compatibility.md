@@ -8,6 +8,72 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`class-like-link-kind-location-diagnostics`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. Class registration now appends the
+child declaration source and line when rejecting inheritance from a userland
+enum. Ambiguous inherited-constant errors identify their receiving class-like
+declaration as `Interface`, `Enum` or `Class` instead of always saying
+`Class`; constant and owner names remain exact. The location is built lazily
+on the invalid enum-inheritance path, and valid linking keeps its allocation
+path.
+
+Original CLI regressions fix exact message, class-like kind, owner and
+constant spelling, source, line, stderr and status 255 for user-enum extension
+and ambiguous constants received by an interface, enum and ordinary class. A
+positive regression preserves distinct interface constants inherited by a
+class, an interface and an enum. All three supplying php-src cases now pass:
+`extending-user-error.phpt`, `final_const12.phpt` and `gh7792_3.phpt`. The
+complete 165-case neighboring final-constant/enum audit changes only those
+three outcomes.
+
+The complete combined audit covers 7,174 cases: 5,742 pass, 1,038 fail, 182
+skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
+fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
+and one unsupported. Zend/lang moves from 4,280 to 4,283 pass, exactly
+`+3/-0`, with 1,020 failures, 115 skips and 181 unsupported cases. Only the
+three named cases move from `fail/runtime` to pass; no remaining outcome
+changes status or category. Two exact-final-binary Zend/lang runs have
+byte-identical manifests and summaries, whose SHA-256 values are respectively
+`d3c996b260172c9bfb4e85108a3c43d4a82f30c3b1c5fcfd8836aec690266413`
+and `6f29f2abb7d08dae8d38626874d68028efcfe40ba4b5ddff3d79300a0938222b`.
+Repeated serial strings and array outcome projections are byte-identical and
+retain SHA-256 values
+`06c231b7032faaece97ae32cac251aa7740e317ea4e169ca1f21223f6aea5d38`
+and `84e2007e9e6b16edab2bf9786966aedf44791151a15f2188960711d4f8f4347b`;
+each has zero outcome delta from the exact parent binary.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass. The
+matrix cleanup hook recovered filesystem capacity between configurations.
+Production remains at 1,622 unsafe blocks, 289 unsafe functions, 366 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony
+S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The change adds
+no dependency and changes no token, AST, bytecode, class/runtime layout or
+valid-link allocation path.
+
+Two exact-final-binary CPU-2-pinned, performance-governor, order-balanced
+32-pair release runs with four warmups compare parent SHA-256
+`2e55096686446b6348d947c03983284709457272f2f5f765d529628b004a1767`
+with candidate
+`076e6b654b24193e136e8684a168548b21e124242855d133ee38003d101c9863`.
+Paired medians are -3.675%/-3.755% for 100 startups,
+-0.245%/+0.146% for 500 valid class-like constant-link declarations,
+-0.465%/-0.432% for five million inherited constant reads and
+-2.104%/-0.925% for five million retained `strlen()` calls. Comparable
+outputs match and every paired median remains below +5%. The raw TSVs hash to
+`f25bfe0815908e59a2923c736b66ad3de8ffeb6fe48f1086b86d55795e3b4b69`
+and `f46b7ce9478b7e9a1e3d52677c206f7c95bba82b40debdbf424071782b7bc797`.
+
+This checkpoint does not claim built-in enum inheritance, enum abstract-method
+wording, trait-relation diagnostics or generic runtime fatal stack traces.
+The monitored supported debt is now 1,038 failures: 18 strings, zero array and
+1,020 Zend/lang. Read-only manifest and raw-output triage select two adjacent
+variadic-declaration diagnostics next: a variadic parameter cannot have a
+default and only the last parameter may be variadic.
+
+The implementation checkpoint is commit `354ba8bf`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `class-inheritance-link-diagnostics`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. Class registration now appends the child's
 declaration source and line when rejecting inheritance from a final internal

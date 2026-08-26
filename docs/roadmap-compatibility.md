@@ -3458,12 +3458,31 @@ and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep
 startup, retained `strlen()`, 500 valid inheritance declarations and one
 million inherited method calls below +5%, with matching outputs.
 
-The monitored supported debt is now 1,041 failures: 18 strings, zero array and
-1,023 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
-the portability contract and remains deferred. Read-only manifest triage next
-selects three adjacent class-like link diagnostics: declaration location when
-extending a user enum and class-like `Interface`/`Enum` wording for ambiguous
-inherited-constant errors.
+The `354ba8bf` `class-like-link-kind-location-diagnostics` checkpoint then
+moves Zend/lang from 4,280 to 4,283 pass, exactly `+3/-0`; strings stay 631/733
+and array stays 828/842 with no other status or category movement. User-enum
+extension now appends the child declaration location, while ambiguous
+inherited-constant errors name their receiving kind as `Interface`, `Enum` or
+`Class`. Exact owners, constants, stderr and status remain unchanged. Valid
+class/interface/enum constant inheritance keeps the same representation and
+allocation path.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical compact
+manifests and summaries; repeated serial strings/array outcome projections
+also match the exact parent. All five Cargo configurations,
+all-feature/all-target, formatting, HTML data, PHPT runner, unsafe, Composer S0,
+four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Two exact-final-binary
+CPU-pinned 32-pair runs keep startup, retained `strlen()`, 500 valid class-like
+constant links and five million inherited constant reads below +5%, with
+matching outputs.
+
+The monitored supported debt is now 1,038 failures: 18 strings, zero array and
+1,020 Zend/lang. Read-only manifest and raw-output triage next select the two
+adjacent variadic-declaration diagnostics for a defaulted variadic parameter
+and a variadic parameter that is not last. The attempted 14-case `crypt()`
+platform approach did not meet the portability contract and remains deferred.
+Reference binding and variadic type enforcement remain separate semantic
+clusters.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
 suppression-wrapped destructuring, exhaustive object/array/resource
