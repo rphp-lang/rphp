@@ -4688,6 +4688,15 @@ impl Compiler {
                 // Add promoted properties
                 for promoted in &promoted_props {
                     let property_is_readonly = *is_readonly || promoted.is_readonly;
+                    if property_is_readonly && promoted.type_hint.is_none() {
+                        return Err(self.goto_error(
+                            &format!(
+                                "Readonly property {}::${} must have type",
+                                name, promoted.name
+                            ),
+                            promoted.line,
+                        ));
+                    }
                     if property_is_readonly
                         && (promoted.has_get_hook || promoted.has_set_hook)
                     {

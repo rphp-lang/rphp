@@ -974,6 +974,29 @@ fn readonly_classlike_modifiers_have_php_declaration_diagnostics() {
 }
 
 #[test]
+fn readonly_method_modifiers_are_located_deferred_compile_errors() {
+    for (source, expected_line) in [
+        (
+            "<?php\nclass Example {\nreadonly\nfunction method() {}\n}",
+            3,
+        ),
+        (
+            "<?php\nclass Example {\nuse MissingTrait { method as\nreadonly; }\n}",
+            4,
+        ),
+    ] {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        assert!(matches!(
+            statements.last(),
+            Some(Stmt::ExprStmt(Expr::CompileError { message, line }))
+                if message == "Cannot use the readonly modifier on a method"
+                    && *line == expected_line
+        ));
+    }
+}
+
+#[test]
 fn source_aware_punctuation_keeps_the_existing_internal_fallback_text() {
     let tokens = Lexer::new("<?php declare(ticks=1) {}").tokenize().unwrap();
     assert_eq!(

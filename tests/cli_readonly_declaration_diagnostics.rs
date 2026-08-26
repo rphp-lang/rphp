@@ -73,3 +73,57 @@ echo (new Box(42))->value;
     assert_eq!(stdout, "42");
     assert_eq!(stderr, "");
 }
+
+#[test]
+fn invalid_readonly_members_are_located_compile_fatals() {
+    for (source, expected) in [
+        (
+            "<?php\nclass Example {\n    readonly function method() {}\n}\n",
+            "Fatal error: Cannot use the readonly modifier on a method in Standard input code on line 3\n",
+        ),
+        (
+            "<?php\nclass Example {\n    use MissingTrait { method as readonly; }\n}\n",
+            "Fatal error: Cannot use the readonly modifier on a method in Standard input code on line 3\n",
+        ),
+        (
+            "<?php\nclass Example {\n    public function __construct(public readonly $value) {}\n}\n",
+            "Fatal error: Readonly property Example::$value must have type in Standard input code on line 3\n",
+        ),
+        (
+            "<?php\nreadonly class Example {\n    public function __construct(public $value) {}\n}\n",
+            "Fatal error: Readonly property Example::$value must have type in Standard input code on line 3\n",
+        ),
+    ] {
+        let (status, stdout, stderr) = run_stdin(source);
+        assert_eq!(status, 255);
+        assert_eq!(stdout, "");
+        assert_eq!(stderr, expected);
+    }
+}
+
+#[test]
+fn typed_readonly_promotions_methods_and_trait_aliases_remain_executable() {
+    let (status, stdout, stderr) = run_stdin(
+        r#"<?php
+trait MethodSource {
+    public function original(): string { return 'trait'; }
+}
+readonly class ExplicitBox {
+    use MethodSource { original as public renamed; }
+    public function __construct(public readonly int $value) {}
+    public function method(): string { return 'method'; }
+}
+readonly class ImpliedBox {
+    public function __construct(public int $value) {}
+}
+$explicit = new ExplicitBox(40);
+$implied = new ImpliedBox(2);
+echo $explicit->value + $implied->value, '|';
+echo $explicit->method(), '|', $explicit->renamed();
+"#,
+    );
+
+    assert_eq!(status, 0);
+    assert_eq!(stdout, "42|method|trait");
+    assert_eq!(stderr, "");
+}

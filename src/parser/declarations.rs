@@ -55,6 +55,57 @@ impl Parser {
         }
     }
 
+    fn defer_method_modifier_diagnostics(
+        &mut self,
+        modifiers: &MemberModifiers,
+        method_line: usize,
+    ) {
+        self.defer_duplicate_member_modifier(modifiers, method_line);
+        if modifiers.is_readonly {
+            let line = modifiers.readonly_line.unwrap_or(method_line);
+            let _ = self.compile_error("Cannot use the readonly modifier on a method", line);
+        }
+    }
+
+    fn parse_trait_alias_adaptation(
+        &mut self,
+        trait_name: Option<String>,
+        method: String,
+    ) -> Result<TraitAlias, String> {
+        self.expect(&Token::As)?;
+        let visibility = match self.peek() {
+            Token::Public => Some(Visibility::Public),
+            Token::Protected => Some(Visibility::Protected),
+            Token::Private => Some(Visibility::Private),
+            _ => None,
+        };
+        if visibility.is_some() {
+            self.advance();
+        }
+        if let Token::Identifier(ref modifier, line) = self.peek()
+            && modifier.eq_ignore_ascii_case("readonly")
+        {
+            self.advance();
+            let _ = self.compile_error("Cannot use the readonly modifier on a method", line);
+        }
+        let alias = if matches!(self.peek(), Token::Semicolon(_)) {
+            None
+        } else {
+            let token = self.advance();
+            Some(
+                Self::token_as_named_arg_label(&token)
+                    .ok_or_else(|| format!("Expected trait method alias, got {token:?}"))?,
+            )
+        };
+        self.expect(&Token::Semicolon(0))?;
+        Ok(TraitAlias {
+            trait_name,
+            method,
+            alias,
+            visibility,
+        })
+    }
+
     pub(super) fn parse_promoted_property_hook_list(
         &mut self,
         property: &mut ClassProperty,
@@ -462,31 +513,8 @@ impl Parser {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
                         let (trait_name, method) = self.parse_trait_method_reference()?;
-                        self.expect(&Token::As)?;
-                        let visibility = match self.peek() {
-                            Token::Public => Some(Visibility::Public),
-                            Token::Protected => Some(Visibility::Protected),
-                            Token::Private => Some(Visibility::Private),
-                            _ => None,
-                        };
-                        if visibility.is_some() {
-                            self.advance();
-                        }
-                        let alias = if matches!(self.peek(), Token::Semicolon(_)) {
-                            None
-                        } else {
-                            let token = self.advance();
-                            Some(Self::token_as_named_arg_label(&token).ok_or_else(|| {
-                                format!("Expected trait method alias, got {token:?}")
-                            })?)
-                        };
-                        self.expect(&Token::Semicolon(0))?;
-                        trait_aliases.push(TraitAlias {
-                            trait_name,
-                            method,
-                            alias,
-                            visibility,
-                        });
+                        trait_aliases
+                            .push(self.parse_trait_alias_adaptation(trait_name, method)?);
                     }
                     self.expect(&Token::RBrace)?;
                 } else {
@@ -500,7 +528,7 @@ impl Parser {
                     Token::Function(line) => line,
                     _ => unreachable!("method parser starts at function"),
                 };
-                self.defer_duplicate_member_modifier(&modifiers, line);
+                self.defer_method_modifier_diagnostics(&modifiers, line);
                 // PHP permits functions and methods to declare a reference
                 // return with an ampersand before the name. The runtime's
                 // return-reference contract is a separate compatibility
@@ -771,31 +799,8 @@ impl Parser {
                             });
                             continue;
                         }
-                        self.expect(&Token::As)?;
-                        let visibility = match self.peek() {
-                            Token::Public => Some(Visibility::Public),
-                            Token::Protected => Some(Visibility::Protected),
-                            Token::Private => Some(Visibility::Private),
-                            _ => None,
-                        };
-                        if visibility.is_some() {
-                            self.advance();
-                        }
-                        let alias = if matches!(self.peek(), Token::Semicolon(_)) {
-                            None
-                        } else {
-                            let token = self.advance();
-                            Some(Self::token_as_named_arg_label(&token).ok_or_else(|| {
-                                format!("Expected trait method alias, got {token:?}")
-                            })?)
-                        };
-                        self.expect(&Token::Semicolon(0))?;
-                        trait_aliases.push(TraitAlias {
-                            trait_name,
-                            method,
-                            alias,
-                            visibility,
-                        });
+                        trait_aliases
+                            .push(self.parse_trait_alias_adaptation(trait_name, method)?);
                     }
                     self.expect(&Token::RBrace)?;
                 } else {
@@ -812,7 +817,7 @@ impl Parser {
                     Token::Function(line) => line,
                     _ => unreachable!("method parser starts at function"),
                 };
-                self.defer_duplicate_member_modifier(&modifiers, line);
+                self.defer_method_modifier_diagnostics(&modifiers, line);
                 let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
                 let token = self.advance();
@@ -954,31 +959,8 @@ impl Parser {
                             });
                             continue;
                         }
-                        self.expect(&Token::As)?;
-                        let visibility = match self.peek() {
-                            Token::Public => Some(Visibility::Public),
-                            Token::Protected => Some(Visibility::Protected),
-                            Token::Private => Some(Visibility::Private),
-                            _ => None,
-                        };
-                        if visibility.is_some() {
-                            self.advance();
-                        }
-                        let alias = if matches!(self.peek(), Token::Semicolon(_)) {
-                            None
-                        } else {
-                            let token = self.advance();
-                            Some(Self::token_as_named_arg_label(&token).ok_or_else(|| {
-                                format!("Expected trait method alias, got {token:?}")
-                            })?)
-                        };
-                        self.expect(&Token::Semicolon(0))?;
-                        trait_aliases.push(TraitAlias {
-                            trait_name,
-                            method,
-                            alias,
-                            visibility,
-                        });
+                        trait_aliases
+                            .push(self.parse_trait_alias_adaptation(trait_name, method)?);
                     }
                     self.expect(&Token::RBrace)?;
                 } else {
@@ -993,7 +975,7 @@ impl Parser {
                     Token::Function(line) => line,
                     _ => unreachable!("method parser starts at function"),
                 };
-                self.defer_duplicate_member_modifier(&modifiers, line);
+                self.defer_method_modifier_diagnostics(&modifiers, line);
                 let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
                 let token = self.advance();
@@ -1106,7 +1088,7 @@ impl Parser {
                     Token::Function(line) => line,
                     _ => unreachable!("method parser starts at function"),
                 };
-                self.defer_duplicate_member_modifier(&modifiers, line);
+                self.defer_method_modifier_diagnostics(&modifiers, line);
                 let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
                 let token = self.advance();
@@ -1235,31 +1217,8 @@ impl Parser {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
                         let (trait_name, method) = self.parse_trait_method_reference()?;
-                        self.expect(&Token::As)?;
-                        let visibility = match self.peek() {
-                            Token::Public => Some(Visibility::Public),
-                            Token::Protected => Some(Visibility::Protected),
-                            Token::Private => Some(Visibility::Private),
-                            _ => None,
-                        };
-                        if visibility.is_some() {
-                            self.advance();
-                        }
-                        let alias = if matches!(self.peek(), Token::Semicolon(_)) {
-                            None
-                        } else {
-                            let token = self.advance();
-                            Some(Self::token_as_named_arg_label(&token).ok_or_else(|| {
-                                format!("Expected trait method alias, got {token:?}")
-                            })?)
-                        };
-                        self.expect(&Token::Semicolon(0))?;
-                        trait_aliases.push(TraitAlias {
-                            trait_name,
-                            method,
-                            alias,
-                            visibility,
-                        });
+                        trait_aliases
+                            .push(self.parse_trait_alias_adaptation(trait_name, method)?);
                     }
                     self.expect(&Token::RBrace)?;
                 } else {
@@ -1299,7 +1258,7 @@ impl Parser {
                         Token::Function(line) => line,
                         _ => unreachable!("method parser starts at function"),
                     };
-                    self.defer_duplicate_member_modifier(&modifiers, line);
+                    self.defer_method_modifier_diagnostics(&modifiers, line);
                     let returns_by_ref = self.peek() == Token::Ampersand;
                     self.consume_reference_return_marker();
                     let token = self.advance();
