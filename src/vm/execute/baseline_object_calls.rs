@@ -1118,6 +1118,24 @@ fn op_fetch_obj_r_slow<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
+    let suppressed = opline._pad & FETCH_OBJ_ERROR_SUPPRESS != 0;
+    if suppressed {
+        eg.begin_error_suppression(frame as usize);
+    }
+    let result = op_fetch_obj_r_slow_inner(eg, frame, op_array, opline);
+    if suppressed {
+        eg.end_error_suppression(frame as usize);
+    }
+    result
+}
+
+#[inline(never)]
+fn op_fetch_obj_r_slow_inner<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
     // SAFETY: dispatch supplies a live frame and compiler-emitted operands and
     // result slot; none of these borrows escape this non-reentrant opcode.
     let (obj_val, prop_name, result_ptr) = unsafe {
@@ -2886,6 +2904,23 @@ fn op_bind_array_dim_ref<'a>(
 }
 
 fn op_assign_obj_prop<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    let suppressed = opline._pad & ASSIGN_OBJ_ERROR_SUPPRESS != 0;
+    if suppressed {
+        eg.begin_error_suppression(frame as usize);
+    }
+    let result = op_assign_obj_prop_inner(eg, frame, op_array, opline);
+    if suppressed {
+        eg.end_error_suppression(frame as usize);
+    }
+    result
+}
+
+fn op_assign_obj_prop_inner<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &'a crate::compiler::OpArray,

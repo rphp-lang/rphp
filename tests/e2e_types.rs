@@ -1150,6 +1150,22 @@ $returned =& invalid();"#;
 }
 
 #[test]
+fn discarded_nonvariable_reference_returns_still_emit_notices() {
+    let file = "/virtual/discarded-reference-return.php";
+    let source = r#"<?php
+function &invalid_discarded_reference() { return 2; }
+invalid_discarded_reference();
+invalid_discarded_reference();"#;
+
+    assert_eq!(
+        run_php_with_source_context(source, file, "/virtual"),
+        format!(
+            "\nNotice: Only variable references should be returned by reference in {file} on line 2\n\nNotice: Only variable references should be returned by reference in {file} on line 2\n"
+        )
+    );
+}
+
+#[test]
 fn by_value_reads_separate_reference_returning_call_results() {
     let source = r#"<?php
 function &expose(&$slot) { return $slot; }

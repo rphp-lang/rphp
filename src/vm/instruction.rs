@@ -222,6 +222,9 @@ pub const PROPERTY_INCDEC_INCREMENT: u16 = 1 << 2;
 /// Instance/static property writeback follows a decrement that underflowed a
 /// PHP integer. This shares the assignment-only flag space above.
 pub const PROPERTY_INCDEC_DECREMENT: u16 = 1 << 3;
+/// An instance-property assignment performed under PHP's `@` reporting mask.
+/// Magic setters and user handlers still run and observe the suppressed mask.
+pub const ASSIGN_OBJ_ERROR_SUPPRESS: u16 = 1 << 4;
 /// A standalone property assignment has no observable expression result. Its
 /// TMP/VAR source can be transferred into property storage instead of leaving
 /// a compiler-only object handle alive until frame teardown.
@@ -350,6 +353,9 @@ pub const ASSIGN_DIM_RESULT_VALUE: u16 = 1 << 2;
 /// conversion diagnostic. Compound/incdec writeback must normalize again but
 /// must not publish a duplicate warning or deprecation.
 pub const ASSIGN_DIM_KEY_ALREADY_NORMALIZED: u16 = 1 << 3;
+/// A dimension assignment performed under PHP's `@` reporting mask. String
+/// offset conversions and object protocol calls still execute under that mask.
+pub const ASSIGN_DIM_ERROR_SUPPRESS: u16 = 1 << 4;
 /// UnsetDim addresses the leaf of a multi-dimensional path. String parents use
 /// PHP's nested-offset diagnostic rather than the flat string-unset message.
 pub const UNSET_DIM_NESTED: u16 = 1;

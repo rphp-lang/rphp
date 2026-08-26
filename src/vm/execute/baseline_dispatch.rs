@@ -1163,6 +1163,42 @@ fn throw_illegal_offset_type<'a>(
     throw_in_frame(eg, frame, error)
 }
 
+#[derive(Debug)]
+enum StringOffsetKey {
+    Exact(i64),
+    Cast(i64),
+    Illegal(String, i64),
+    Invalid,
+}
+
+/// Normalize the scalar keys accepted by PHP string-offset operations while
+/// retaining the warning class that must be published before the access.
+fn string_offset_key(value: &Value) -> StringOffsetKey {
+    let value = value.dereferenced();
+    match value.value_type() {
+        ValueType::Long => StringOffsetKey::Exact(value.as_long().unwrap()),
+        ValueType::Double => StringOffsetKey::Cast(value.as_double().unwrap() as i64),
+        ValueType::True => StringOffsetKey::Cast(1),
+        ValueType::False | ValueType::Null | ValueType::Undef => StringOffsetKey::Cast(0),
+        ValueType::Resource => StringOffsetKey::Cast(value.as_resource_id().unwrap()),
+        ValueType::String => {
+            let text = value.as_str().unwrap_or("");
+            let Some((parsed, complete)) = parse_php_numeric_prefix(text) else {
+                return StringOffsetKey::Invalid;
+            };
+            let Some(integer) = parsed.integer else {
+                return StringOffsetKey::Invalid;
+            };
+            if complete {
+                StringOffsetKey::Exact(integer)
+            } else {
+                StringOffsetKey::Illegal(text.to_string(), integer)
+            }
+        }
+        _ => StringOffsetKey::Invalid,
+    }
+}
+
 #[cold]
 #[inline(never)]
 fn throw_operator_error<'a>(
@@ -6099,42 +6135,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } else {
                             ordinary_bytes.len()
                         };
-                        if let Some(idx) = idx_val.as_long() {
-                        let pos = if idx >= 0 {
-                            idx as usize
-                        } else {
-                            let len = byte_len as i64;
-                            let p = len + idx;
-                            if p >= 0 { p as usize } else { usize::MAX }
-                        };
-                        let val = if opline._pad & FETCH_DIM_ISSET != 0 {
-                            Value::bool(pos < byte_len)
-                        } else if pos < byte_len {
-                            // Single byte as a string
-                            let byte = if binary_source {
-                                s.chars()
-                                    .nth(pos)
-                                    .map(|character| character as u8)
-                                    .expect("binary string position is in range")
-                            } else {
-                                ordinary_bytes[pos]
-                            };
-                            if binary_source || !byte.is_ascii() {
-                                Value::binary_string(&[byte])
-                            } else {
-                                Value::string(String::from(char::from(byte)))
-                            }
-                        } else if opline._pad & FETCH_DIM_SILENT != 0 {
-                            Value::string("")
-                        } else {
-                            report_php_warning(
-                                eg,
-                                frame,
-                                op_array,
-                                opline,
-                                &format!("Uninitialized string offset {idx}"),
-                                opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
-                            )?;
+                        macro_rules! finish_string_offset_warning {
+                            () => {
                             if let Some(exception) = eg.exception.take() {
                                 match throw_in_frame(eg, frame, exception)? {
                                     ThrowResult::Handled(new_frame, new_op_array) => {
@@ -6148,19 +6150,118 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     }
                                 }
                             }
-                            Value::string("")
+                            };
+                        }
+                        let suppressed = opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0;
+                        let idx = match string_offset_key(idx_val) {
+                            StringOffsetKey::Exact(index) => Some(index),
+                            StringOffsetKey::Cast(index) => {
+                                if opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_SILENT) == 0 {
+                                    report_php_warning(
+                                        eg,
+                                        frame,
+                                        op_array,
+                                        opline,
+                                        "String offset cast occurred",
+                                        suppressed,
+                                    )?;
+                                    finish_string_offset_warning!();
+                                }
+                                Some(index)
+                            }
+                            StringOffsetKey::Illegal(text, index) => {
+                                if opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_SILENT) == 0 {
+                                    report_php_warning(
+                                        eg,
+                                        frame,
+                                        op_array,
+                                        opline,
+                                        &format!("Illegal string offset \"{text}\""),
+                                        suppressed,
+                                    )?;
+                                    finish_string_offset_warning!();
+                                }
+                                Some(index)
+                            }
+                            StringOffsetKey::Invalid => None,
                         };
-                        write_fetch_dim_result(frame, result_ptr, val);
-                        } else {
-                            write_fetch_dim_result(
-                                frame,
-                                result_ptr,
-                                if opline._pad & FETCH_DIM_ISSET != 0 {
-                                    Value::bool(false)
+                        if let Some(idx) = idx {
+                            let pos = if idx >= 0 {
+                                idx as usize
+                            } else {
+                                let len = byte_len as i64;
+                                let p = len + idx;
+                                if p >= 0 { p as usize } else { usize::MAX }
+                            };
+                            let val = if opline._pad & FETCH_DIM_ISSET != 0 {
+                                Value::bool(pos < byte_len)
+                            } else if pos < byte_len {
+                                // Single byte as a string
+                                let byte = if binary_source {
+                                    s.chars()
+                                        .nth(pos)
+                                        .map(|character| character as u8)
+                                        .expect("binary string position is in range")
                                 } else {
-                                    Value::null()
-                                },
-                            );
+                                    ordinary_bytes[pos]
+                                };
+                                if binary_source || !byte.is_ascii() {
+                                    Value::binary_string(&[byte])
+                                } else {
+                                    Value::string(String::from(char::from(byte)))
+                                }
+                            } else if opline._pad & FETCH_DIM_SILENT != 0 {
+                                Value::string("")
+                            } else {
+                                report_php_warning(
+                                    eg,
+                                    frame,
+                                    op_array,
+                                    opline,
+                                    &format!("Uninitialized string offset {idx}"),
+                                    suppressed,
+                                )?;
+                                finish_string_offset_warning!();
+                                Value::string("")
+                            };
+                            write_fetch_dim_result(frame, result_ptr, val);
+                        } else {
+                            if opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_SILENT) != 0 {
+                                write_fetch_dim_result(
+                                    frame,
+                                    result_ptr,
+                                    if opline._pad & FETCH_DIM_ISSET != 0 {
+                                        Value::bool(false)
+                                    } else {
+                                        Value::null()
+                                    },
+                                );
+                            } else {
+                                let instruction_index = (opline as *const Instruction as usize
+                                    - op_array.instructions.as_ptr() as usize)
+                                    / std::mem::size_of::<Instruction>();
+                                let message = format!(
+                                    "Cannot access offset of type {} on string",
+                                    idx_val.diagnostic_type_name()
+                                );
+                                match throw_illegal_offset_type(
+                                    eg,
+                                    frame,
+                                    op_array,
+                                    instruction_index,
+                                    &message,
+                                )? {
+                                    ThrowResult::Handled(new_frame, new_op_array) => {
+                                        frame = new_frame;
+                                        op_array = new_op_array;
+                                        continue 'vm;
+                                    }
+                                    ThrowResult::Unhandled(exception) => {
+                                        eg.exception = Some(exception);
+                                        return Ok(());
+                                    }
+                                }
+                            }
                         }
                     }
                 } else if matches!(arr_val.value_type(), ValueType::Object | ValueType::Closure) {
@@ -6571,13 +6672,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if matches!(arr.value_type(), ValueType::Object | ValueType::Closure) {
                     let receiver = arr.clone();
                     let args = [idx_val.clone(), cloned_val];
+                    let suppressed = opline._pad & ASSIGN_DIM_ERROR_SUPPRESS != 0;
+                    if suppressed {
+                        eg.begin_error_suppression(frame as usize);
+                    }
                     let handled = crate::stdlib::call_object_protocol_method(
                         eg,
                         &receiver,
                         "ArrayAccess",
                         "offsetSet",
                         &args,
-                    )?;
+                    );
+                    if suppressed {
+                        eg.end_error_suppression(frame as usize);
+                    }
+                    let handled = handled?;
                     if handled.is_none() {
                         let instruction_index = (opline_ptr as usize
                             - op_array.instructions.as_ptr() as usize)
@@ -6616,40 +6725,150 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe { (*frame).opline = opline_ptr.add(1) };
                     continue 'vm;
                 }
-                // Direct in-bounds string offset assignment is byte-oriented.
-                // Keep this narrow path ahead of array-key normalization:
-                // strings use positions rather than PHP array keys, and the
-                // replacement preserves ordinary string COW semantics.
+                // String offset assignment is byte-oriented and has its own
+                // scalar-key conversion contract, separate from array keys.
                 if arr.value_type() == ValueType::String
-                    && idx_val.value_type() == ValueType::Long
                     && cloned_val.value_type() == ValueType::String
                     && opline._pad & crate::vm::instruction::ASSIGN_DIM_REFERENCE == 0
                 {
+                    macro_rules! finish_string_assignment_warning {
+                        () => {
+                            if let Some(exception) = eg.exception.take() {
+                                match throw_in_frame(eg, frame, exception)? {
+                                    ThrowResult::Handled(new_frame, new_op_array) => {
+                                        frame = new_frame;
+                                        op_array = new_op_array;
+                                        continue 'vm;
+                                    }
+                                    ThrowResult::Unhandled(exception) => {
+                                        eg.exception = Some(exception);
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                        };
+                    }
+                    let suppressed = opline._pad & ASSIGN_DIM_ERROR_SUPPRESS != 0;
+                    let index = match string_offset_key(idx_val) {
+                        StringOffsetKey::Exact(index) => index,
+                        StringOffsetKey::Cast(index) => {
+                            report_php_warning(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                "String offset cast occurred",
+                                suppressed,
+                            )?;
+                            finish_string_assignment_warning!();
+                            index
+                        }
+                        StringOffsetKey::Illegal(text, index) => {
+                            report_php_warning(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                &format!("Illegal string offset \"{text}\""),
+                                suppressed,
+                            )?;
+                            finish_string_assignment_warning!();
+                            index
+                        }
+                        StringOffsetKey::Invalid => {
+                            let instruction_index = (opline as *const Instruction as usize
+                                - op_array.instructions.as_ptr() as usize)
+                                / std::mem::size_of::<Instruction>();
+                            let message = format!(
+                                "Cannot access offset of type {} on string",
+                                idx_val.diagnostic_type_name()
+                            );
+                            match throw_illegal_offset_type(
+                                eg,
+                                frame,
+                                op_array,
+                                instruction_index,
+                                &message,
+                            )? {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    };
                     let mut bytes = arr.php_string_bytes().unwrap_or_default().into_owned();
                     let replacement = cloned_val.php_string_bytes().unwrap_or_default();
-                    let index = idx_val.as_long().unwrap_or_default();
+                    if replacement.is_empty() {
+                        let instruction_index = (opline as *const Instruction as usize
+                            - op_array.instructions.as_ptr() as usize)
+                            / std::mem::size_of::<Instruction>();
+                        match throw_array_dimension_error(
+                            eg,
+                            frame,
+                            op_array,
+                            instruction_index,
+                            "Cannot assign an empty string to a string offset",
+                        )? {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue 'vm;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
+                    if replacement.len() > 1 {
+                        report_php_warning(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            "Only the first byte will be assigned to the string offset",
+                            suppressed,
+                        )?;
+                        finish_string_assignment_warning!();
+                    }
                     let position = if index >= 0 {
                         Some(index as usize)
                     } else {
                         bytes.len().checked_add_signed(index as isize)
                     };
-                    if replacement.len() == 1
-                        && let Some(position) = position
-                        && position < bytes.len()
-                    {
-                        bytes[position] = replacement[0];
-                        let binary = arr.is_binary_string() || cloned_val.is_binary_string();
-                        let result = if binary {
-                            Value::binary_string(&bytes)
-                        } else {
-                            String::from_utf8(bytes).map_or_else(
-                                |error| Value::binary_string(&error.into_bytes()),
-                                Value::string,
-                            )
-                        };
-                        *arr = result;
+                    let Some(position) = position else {
+                        report_php_warning(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            &format!("Illegal string offset {index}"),
+                            suppressed,
+                        )?;
+                        finish_string_assignment_warning!();
                         break 'assign_dim;
+                    };
+                    if position >= bytes.len() {
+                        bytes.resize(position + 1, b' ');
                     }
+                    bytes[position] = replacement[0];
+                    let binary = arr.is_binary_string() || cloned_val.is_binary_string();
+                    let result = if binary {
+                        Value::binary_string(&bytes)
+                    } else {
+                        String::from_utf8(bytes).map_or_else(
+                            |error| Value::binary_string(&error.into_bytes()),
+                            Value::string,
+                        )
+                    };
+                    *arr = result;
+                    break 'assign_dim;
                 }
                 let mut key = array_key_owned_or_throw!(
                     idx_val,
@@ -8908,10 +9127,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if opline.op1_type != OpType::Unused {
                         // SAFETY: Return executes with a live frame and its caller-provided slot.
                         let return_target = unsafe { (*frame).return_value };
-                        if return_target.is_null()
-                            && prepared_return.is_some()
-                            && func_common_ret.sig.returns_reference
-                        {
+                        if return_target.is_null() && func_common_ret.sig.returns_reference {
                             let (_, warn_non_variable) = prepare_typed_user_return_value(
                                 frame,
                                 op_array,
@@ -9013,10 +9229,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if opline.op1_type != OpType::Unused {
                     // SAFETY: Return executes with a live frame and its caller-provided slot.
                     let return_target = unsafe { (*frame).return_value };
-                    if return_target.is_null()
-                        && prepared_return.is_some()
-                        && func_common_ret.sig.returns_reference
-                    {
+                    if return_target.is_null() && func_common_ret.sig.returns_reference {
                         let (_, warn_non_variable) = prepare_typed_user_return_value(
                             frame,
                             op_array,

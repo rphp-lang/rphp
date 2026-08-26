@@ -83,11 +83,15 @@ impl Parser {
     }
 
     fn finish_assignment_tail(&mut self, expr: Expr) -> Result<Expr, String> {
-        if self.peek() == Token::Assign && self.peek_at(1) == Token::Ampersand {
+        let (target, suppressed) = match expr {
+            Expr::ErrorSuppress(inner) => (*inner, true),
+            target => (target, false),
+        };
+        let assignment = if self.peek() == Token::Assign && self.peek_at(1) == Token::Ampersand {
             // Reference assignment has lower precedence than bitwise AND. It
             // must be recognized before parse_bitwise_and consumes `&` as an
             // infix operator and asks for an expression after `$left =`.
-            self.finish_assignment_expression(expr)
+            self.finish_assignment_expression(target)?
         } else if self.is_empty_array_dimension_suffix()
             && Self::compound_assign_op(&self.peek_at(2)).is_some()
         {
@@ -95,21 +99,30 @@ impl Parser {
             self.expect(&Token::RBracket)?;
             let line = self.last_primary_line.unwrap_or(bracket_line);
             self.finish_compound_assignment_expression(Expr::ArrayAppendArgument {
-                target: Box::new(expr),
+                target: Box::new(target),
                 line,
-            })
+            })?
         } else if self.is_array_append_suffix() {
-            self.finish_array_append_assignment_expression(expr)
+            self.finish_array_append_assignment_expression(target)?
         } else if self.peek() == Token::QuestionQuestionAssign {
-            self.finish_coalesce_assignment_expression(expr)
+            self.finish_coalesce_assignment_expression(target)?
         } else if self.peek() == Token::Assign {
             // Handle assignment as expression: $var = expr
-            self.finish_assignment_expression(expr)
+            self.finish_assignment_expression(target)?
         } else if Self::compound_assign_op(&self.peek()).is_some() {
-            self.finish_compound_assignment_expression(expr)
+            self.finish_compound_assignment_expression(target)?
         } else {
-            Ok(expr)
-        }
+            return Ok(if suppressed {
+                Expr::ErrorSuppress(Box::new(target))
+            } else {
+                target
+            });
+        };
+        Ok(if suppressed {
+            Expr::ErrorSuppress(Box::new(assignment))
+        } else {
+            assignment
+        })
     }
 
     fn finish_array_append_assignment_expression(
