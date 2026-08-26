@@ -720,60 +720,128 @@ fn highlight_source(source: &str, colors: &HighlightColors) -> String {
     output
 }
 
-fn parse_allowed_tag_list(value: &str, names: &mut HashSet<String>) {
-    let bytes = value.as_bytes();
-    let mut index = 0usize;
-    let mut found_bracketed = false;
-    while index < bytes.len() {
-        if bytes[index] != b'<' {
-            index += 1;
+fn normalized_allowed_name(value: &[u8]) -> Option<Vec<u8>> {
+    if value.is_empty()
+        || value[0] == b'/'
+        || value
+            .iter()
+            .any(|byte| ascii_whitespace(*byte) || matches!(byte, b'<' | b'>' | 0))
+    {
+        return None;
+    }
+    Some(value.iter().map(u8::to_ascii_lowercase).collect())
+}
+
+fn parse_allowed_tag_list(value: &[u8], names: &mut HashSet<Vec<u8>>) {
+    for (start, byte) in value.iter().enumerate() {
+        if *byte != b'<' {
             continue;
         }
-        found_bracketed = true;
-        index += 1;
-        if bytes.get(index) == Some(&b'/') {
-            index += 1;
-        }
-        let start = index;
-        while bytes
-            .get(index)
-            .is_some_and(|byte| byte.is_ascii_alphanumeric())
-        {
-            index += 1;
-        }
-        if index > start {
-            names.insert(value[start..index].to_ascii_lowercase());
-        }
-    }
-    if !found_bracketed {
-        let value = value.trim().trim_start_matches('/');
-        let end = value
-            .bytes()
-            .position(|byte| !byte.is_ascii_alphanumeric())
-            .unwrap_or(value.len());
-        if end != 0 {
-            names.insert(value[..end].to_ascii_lowercase());
+        let Some(relative_end) = value[start + 1..].iter().position(|byte| *byte == b'>') else {
+            continue;
+        };
+        let end = start + 1 + relative_end;
+        if let Some(name) = normalized_allowed_name(&value[start + 1..end]) {
+            names.insert(name);
         }
     }
 }
 
-fn allowed_tag_names(value: Option<&Value>) -> HashSet<String> {
+fn insert_allowed_array_item(value: &[u8], names: &mut HashSet<Vec<u8>>) {
+    if value.contains(&b'<') {
+        parse_allowed_tag_list(value, names);
+    } else if let Some(name) = normalized_allowed_name(value) {
+        names.insert(name);
+    }
+}
+
+fn allowed_item_bytes(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    value: &Value,
+) -> Result<Option<Vec<u8>>, VmError> {
+    let value = value.dereferenced();
+    if value.value_type() == ValueType::String {
+        return Ok(Some(
+            value.php_string_bytes().unwrap_or_default().into_owned(),
+        ));
+    }
+    if value.value_type() == ValueType::Array {
+        super::report_internal_diagnostic(eg, ed, 2, "Warning", "Array to string conversion")?;
+        if eg.exception.is_some() {
+            return Ok(None);
+        }
+        return Ok(Some(b"Array".to_vec()));
+    }
+    if value.value_type() == ValueType::Closure {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "Object of class Closure could not be converted to string",
+        ));
+        return Ok(None);
+    }
+    if value.value_type() != ValueType::Object {
+        return Ok(Some(
+            value
+                .echo_to_string_with_precision(eg.precision)
+                .into_bytes(),
+        ));
+    }
+
+    let class_name = value
+        .as_object()
+        .map(|object| object.class_name.to_string())
+        .unwrap_or_else(|| "object".to_string());
+    let rendered = crate::vm::execute::call_object_string_conversion(eg, value)?;
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    let Some(rendered) = rendered else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            &format!("Object of class {class_name} could not be converted to string"),
+        ));
+        return Ok(None);
+    };
+    let rendered = rendered.dereferenced();
+    if rendered.value_type() != ValueType::String {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!("{class_name}::__toString(): Return value must be of type string"),
+        ));
+        return Ok(None);
+    }
+    Ok(Some(
+        rendered.php_string_bytes().unwrap_or_default().into_owned(),
+    ))
+}
+
+fn allowed_tag_names(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    value: Option<&Value>,
+) -> Result<Option<HashSet<Vec<u8>>>, VmError> {
     let mut names = HashSet::new();
     let Some(value) = value else {
-        return names;
+        return Ok(Some(names));
     };
+    let value = value.dereferenced();
     if value.value_type() == ValueType::Array {
-        if let Some(array) = value.as_array() {
-            for (_, item) in array.iter() {
-                if let Some(item) = item.dereferenced().as_str() {
-                    parse_allowed_tag_list(item, &mut names);
-                }
-            }
+        let items = value
+            .as_array()
+            .map(|array| array.values().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for item in &items {
+            let Some(item) = allowed_item_bytes(ed, eg, item)? else {
+                return Ok(None);
+            };
+            insert_allowed_array_item(&item, &mut names);
         }
-    } else if let Some(value) = value.as_str() {
-        parse_allowed_tag_list(value, &mut names);
+    } else if value.value_type() == ValueType::String {
+        let bytes = value.php_string_bytes().unwrap_or_default();
+        parse_allowed_tag_list(bytes.as_ref(), &mut names);
     }
-    names
+    Ok(Some(names))
 }
 
 fn tag_end(bytes: &[u8], start: usize) -> Option<usize> {
@@ -783,10 +851,10 @@ fn tag_end(bytes: &[u8], start: usize) -> Option<usize> {
     while index < bytes.len() {
         let byte = bytes[index];
         if let Some(active_quote) = quote {
-            if byte == active_quote {
+            if byte == active_quote && bytes.get(index.wrapping_sub(1)) != Some(&b'\\') {
                 quote = None;
             }
-        } else if matches!(byte, b'\'' | b'"') {
+        } else if matches!(byte, b'\'' | b'"') && bytes.get(index.wrapping_sub(1)) != Some(&b'\\') {
             quote = Some(byte);
         } else if byte == b'<' {
             depth += 1;
@@ -801,67 +869,118 @@ fn tag_end(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
-fn strip_tags_text(source: &str, allowed: &HashSet<String>) -> String {
-    let source: String = source
-        .chars()
-        .filter(|character| *character != '\0')
-        .collect();
-    let bytes = source.as_bytes();
-    let mut output = String::with_capacity(source.len());
-    let mut index = 0usize;
+fn quoted_delimiter_end(bytes: &[u8], start: usize, delimiter: &[u8]) -> Option<usize> {
+    let mut index = start;
+    let mut quote = None;
     while index < bytes.len() {
-        if bytes[index] != b'<' {
-            let length = source[index..].chars().next().map_or(1, char::len_utf8);
-            output.push_str(&source[index..index + length]);
-            index += length;
-            continue;
-        }
-        if bytes[index..].starts_with(b"<!--") {
-            index = bytes[index + 4..]
-                .windows(3)
-                .position(|window| window == b"-->")
-                .map_or(bytes.len(), |offset| index + 4 + offset + 3);
-            continue;
-        }
-        if bytes[index..].starts_with(b"<?") {
-            index = bytes[index + 2..]
-                .windows(2)
-                .position(|window| window == b"?>")
-                .map_or(bytes.len(), |offset| index + 2 + offset + 2);
-            continue;
-        }
-        if bytes[index..].starts_with(b"<%") {
-            index = bytes[index + 2..]
-                .windows(2)
-                .position(|window| window == b"%>")
-                .map_or(bytes.len(), |offset| index + 2 + offset + 2);
-            continue;
-        }
-        let mut name_start = index + 1;
-        if bytes.get(name_start) == Some(&b'/') {
-            name_start += 1;
-        }
-        if bytes
-            .get(name_start)
-            .map_or(true, |byte| !byte.is_ascii_alphabetic())
-        {
-            output.push('<');
+        let byte = bytes[index];
+        if let Some(active_quote) = quote {
+            if byte == active_quote && bytes.get(index.wrapping_sub(1)) != Some(&b'\\') {
+                quote = None;
+            }
             index += 1;
             continue;
         }
-        let mut name_end = name_start + 1;
-        while bytes
-            .get(name_end)
-            .is_some_and(|byte| byte.is_ascii_alphanumeric())
-        {
-            name_end += 1;
+        if matches!(byte, b'\'' | b'"' | b'`') && bytes.get(index.wrapping_sub(1)) != Some(&b'\\') {
+            quote = Some(byte);
+            index += 1;
+            continue;
         }
-        let Some(end) = tag_end(bytes, name_end) else {
+        if bytes[index..].starts_with(delimiter) {
+            return Some(index + delimiter.len());
+        }
+        index += 1;
+    }
+    None
+}
+
+fn effective_tag_bounds(bytes: &[u8], start: usize, end: usize) -> (usize, usize) {
+    let leading = bytes[start..end]
+        .iter()
+        .take_while(|byte| **byte == b'<')
+        .count()
+        .max(1);
+    (start + leading - 1, end.saturating_sub(leading - 1))
+}
+
+fn normalized_tag_name(tag: &[u8]) -> Option<Vec<u8>> {
+    let mut index = usize::from(tag.first() == Some(&b'<'));
+    if tag.get(index) == Some(&b'/') {
+        index += 1;
+    }
+    let start = index;
+    while tag
+        .get(index)
+        .is_some_and(|byte| !ascii_whitespace(*byte) && *byte != b'>')
+    {
+        index += 1;
+    }
+    if index == start {
+        return None;
+    }
+    if tag.get(index.wrapping_sub(1)) == Some(&b'/') {
+        index -= 1;
+    }
+    normalized_allowed_name(&tag[start..index])
+}
+
+fn strip_tags_bytes(bytes: &[u8], allowed: &HashSet<Vec<u8>>) -> Vec<u8> {
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] != b'<' {
+            output.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        if bytes
+            .get(index + 1)
+            .is_some_and(|byte| ascii_whitespace(*byte))
+        {
+            output.push(b'<');
+            index += 1;
+            continue;
+        }
+        if bytes[index..].starts_with(b"<!--") {
+            index = if bytes.get(index + 4) == Some(&b'>') {
+                index + 5
+            } else {
+                bytes[index + 4..]
+                    .windows(3)
+                    .position(|window| window == b"-->")
+                    .map_or(bytes.len(), |offset| index + 4 + offset + 3)
+            };
+            continue;
+        }
+        if bytes[index..].starts_with(b"<?") {
+            if bytes[index..].starts_with(b"<?>") {
+                index += 3;
+            } else if bytes
+                .get(index + 2..index + 5)
+                .is_some_and(|name| name.eq_ignore_ascii_case(b"xml"))
+            {
+                index = quoted_delimiter_end(bytes, index + 2, b"?>")
+                    .or_else(|| tag_end(bytes, index + 2))
+                    .unwrap_or(bytes.len());
+            } else {
+                index = quoted_delimiter_end(bytes, index + 2, b"?>").unwrap_or(bytes.len());
+            }
+            continue;
+        }
+        if bytes[index..].starts_with(b"<%") {
+            index = tag_end(bytes, index + 2).unwrap_or(bytes.len());
+            continue;
+        }
+        let Some(end) = tag_end(bytes, index + 1) else {
             break;
         };
-        let name = source[name_start..name_end].to_ascii_lowercase();
-        if allowed.contains(&name) {
-            output.push_str(&source[index..end]);
+        if bytes.get(index + 1) != Some(&b'!') {
+            let (tag_start, tag_end) = effective_tag_bounds(bytes, index, end);
+            if normalized_tag_name(&bytes[tag_start..tag_end])
+                .is_some_and(|name| allowed.contains(&name))
+            {
+                output.extend_from_slice(&bytes[tag_start..tag_end]);
+            }
         }
         index = end;
     }
@@ -990,34 +1109,56 @@ pub(super) fn fn_strip_tags(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(source) = super::typed_internal_string_argument(ed, eg, "strip_tags", 0, "string")?
+    let Some(source) = super::typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "strip_tags",
+        0,
+        "string",
+        "string",
+    )?
     else {
         return Ok(());
     };
-    let allowed_value = arg_opt!(ed, 1);
-    let allowed = if allowed_value.is_some_and(|value| {
-        !matches!(
-            value.value_type(),
-            ValueType::Null | ValueType::Array | ValueType::String
-        )
-    }) {
-        let Some(value) = super::typed_internal_string_argument_expected(
-            ed,
-            eg,
-            "strip_tags",
-            1,
-            "allowed_tags",
-            "array|string|null",
-        )?
-        else {
-            return Ok(());
-        };
-        let value = Value::string(value);
-        allowed_tag_names(Some(&value))
-    } else {
-        allowed_tag_names(allowed_value.filter(|value| value.value_type() != ValueType::Null))
+    let allowed_argument = arg_opt!(ed, 1).cloned();
+    let allowed_value = match allowed_argument.as_ref().map(Value::dereferenced) {
+        None => None,
+        Some(value) if value.value_type() == ValueType::Null => None,
+        Some(value) if matches!(value.value_type(), ValueType::Array | ValueType::String) => {
+            Some(value.clone())
+        }
+        Some(_) => {
+            let Some(value) = super::typed_internal_string_value_argument_expected(
+                ed,
+                eg,
+                "strip_tags",
+                1,
+                "allowed_tags",
+                "array|string|null",
+            )?
+            else {
+                return Ok(());
+            };
+            Some(value)
+        }
     };
-    ret!(rv, Value::string(strip_tags_text(&source, &allowed)));
+    let Some(allowed) = allowed_tag_names(ed, eg, allowed_value.as_ref())? else {
+        return Ok(());
+    };
+    let source_bytes = source.php_string_bytes().unwrap_or_default();
+    if !source_bytes.contains(&b'<') && !source_bytes.contains(&0) {
+        ret!(rv, source);
+    }
+    let cleaned = source_bytes
+        .iter()
+        .copied()
+        .filter(|byte| *byte != 0)
+        .collect::<Vec<_>>();
+    let result = strip_tags_bytes(&cleaned, &allowed);
+    ret!(
+        rv,
+        super::php_byte_result(result, source.is_binary_string())
+    );
 }
 
 pub(super) fn fn_highlight_string(
@@ -1251,12 +1392,42 @@ mod tests {
 
     #[test]
     fn tag_filter_keeps_only_named_tags_and_removes_nuls() {
-        let allowed = HashSet::from(["b".to_string()]);
+        let allowed = HashSet::from([b"b".to_vec()]);
+        let source = b"a\0<p>one <B title=\">\">two</B></p>\0z"
+            .iter()
+            .copied()
+            .filter(|byte| *byte != 0)
+            .collect::<Vec<_>>();
         assert_eq!(
-            strip_tags_text("a\0<p>one <B title=\">\">two</B></p>\0z", &allowed),
-            "aone <B title=\">\">two</B>z"
+            strip_tags_bytes(&source, &allowed),
+            b"aone <B title=\">\">two</B>z"
         );
-        assert_eq!(strip_tags_text("<foo<>bar>", &HashSet::new()), "");
+        assert_eq!(strip_tags_bytes(b"<foo<>bar>", &HashSet::new()), b"");
+    }
+
+    #[test]
+    fn tag_filter_distinguishes_declarations_processing_instructions_and_literal_angles() {
+        assert_eq!(
+            strip_tags_bytes(
+                b"A<!DOCTYPE q '>'>B<!-- I've gone -->C<?xml:n p=1 />D",
+                &HashSet::new(),
+            ),
+            b"ABCD"
+        );
+        assert_eq!(
+            strip_tags_bytes(b"A<?= '<?= 1 ?>' ?>B< ax", &HashSet::new()),
+            b"AB< ax"
+        );
+    }
+
+    #[test]
+    fn tag_filter_normalizes_nested_and_exact_allowed_names() {
+        let mut allowed = HashSet::new();
+        parse_allowed_tag_list(b"junk<a><<html>><a-b>", &mut allowed);
+        assert_eq!(
+            strip_tags_bytes(b"A<<HtMl>>B<</HtMl>><a.>C</.a><a-b>D</a-b><a/b>E", &allowed,),
+            b"A<HtMl>B</HtMl>C<a-b>D</a-b>E"
+        );
     }
 
     #[test]

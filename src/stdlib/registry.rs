@@ -1729,7 +1729,22 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "flags",
         "encoding"
     );
-    reg!("strip_tags", fn_strip_tags, 2, 1, "string", "allowed_tags");
+    reg_typed!(
+        "strip_tags",
+        fn_strip_tags,
+        2,
+        1,
+        ["string", "allowed_tags"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Union(vec![
+                ParamTypeHint::Array,
+                ParamTypeHint::String,
+                ParamTypeHint::ClassName("null".to_string()),
+            ]),
+        ],
+        ParamTypeHint::String
+    );
     reg_typed!(
         "highlight_string",
         fn_highlight_string,
@@ -1779,6 +1794,11 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         );
         eg.register_internal_function_extension(function, "standard".to_string());
     }
+    let strip_tags = eg
+        .find_function("strip_tags")
+        .expect("strip_tags was just registered");
+    eg.register_internal_function_parameter_defaults(strip_tags, vec![None, Some(Value::null())]);
+    eg.register_internal_function_extension(strip_tags, "standard".to_string());
     let strip_whitespace = eg
         .find_function("php_strip_whitespace")
         .expect("php_strip_whitespace was just registered");

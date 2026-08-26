@@ -104,6 +104,13 @@ impl<'a> Lexer<'a> {
         let opener = self.pos;
         let opener_line = self.source_line_at(opener);
         self.pos += 3;
+        while self
+            .src
+            .get(self.pos)
+            .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+        {
+            self.pos += 1;
+        }
 
         let quote = match self.src.get(self.pos).copied() {
             Some(b'\'') | Some(b'"') => {
@@ -326,6 +333,12 @@ impl<'a> Lexer<'a> {
 
     fn document_opener_at(source: &[u8], opener: usize) -> Option<(&[u8], usize, bool)> {
         let mut cursor = opener + 3;
+        while source
+            .get(cursor)
+            .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+        {
+            cursor += 1;
+        }
         let quote = match source.get(cursor).copied() {
             Some(b'\'' | b'"') => {
                 let quote = source[cursor];
@@ -476,6 +489,13 @@ impl<'a> Lexer<'a> {
     pub(super) fn document_start_display(&self) -> String {
         let start = self.pos;
         let mut cursor = start + 3;
+        while self
+            .src
+            .get(cursor)
+            .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+        {
+            cursor += 1;
+        }
         if matches!(self.src.get(cursor), Some(b'\'' | b'"')) {
             cursor += 1;
         }

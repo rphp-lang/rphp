@@ -1958,6 +1958,19 @@ mod tests {
     }
 
     #[test]
+    fn document_strings_accept_horizontal_space_before_quoted_or_bare_labels() {
+        for source in [
+            "<?php echo <<<   DOC\nvalue\nDOC;",
+            "<?php echo <<< \t \"DOC\"\nvalue\nDOC;",
+            "<?php echo <<<\t'DOC'\nvalue\nDOC;",
+        ] {
+            let tokens = Lexer::new(source).tokenize().unwrap();
+            assert!(tokens.contains(&Token::StringLiteral("value".into())));
+            assert_eq!(tokens.last(), Some(&Token::Eof));
+        }
+    }
+
+    #[test]
     fn quoted_simple_interpolation_offsets_are_parse_errors() {
         let tokens = Lexer::new("<?php\necho <<<DOC\n$items['name']\nDOC;")
             .tokenize()
