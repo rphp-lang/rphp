@@ -40,6 +40,13 @@ impl Parser {
             .unwrap_or(1)
     }
 
+    fn following_semicolon_source_line(&self) -> Option<usize> {
+        self.tokens[self.pos..].iter().find_map(|token| match token {
+            Token::Semicolon(line) => Some(*line),
+            _ => None,
+        })
+    }
+
     /// Consume PHP's marker for a function or method returning by reference.
     pub(super) fn consume_reference_return_marker(&mut self) {
         if self.peek() == Token::Ampersand {

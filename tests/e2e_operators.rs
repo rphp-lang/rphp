@@ -204,8 +204,27 @@ fn test_e2e_nested_ternary_error() {
 }
 
 #[test]
+fn test_e2e_elvis_followed_by_full_ternary_error() {
+    let tokens = Lexer::new("<?php\n\n1 ?: 2 ? 3 : 4;").tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    assert!(
+        matches!(
+            statements.last(),
+            Some(Stmt::ExprStmt(Expr::CompileError { message, line }))
+                if message == "Unparenthesized `a ?: b ? c : d` is not supported. Use either `(a ?: b) ? c : d` or `a ?: (b ? c : d)`"
+                    && *line == 3
+        ),
+        "unexpected AST: {statements:#?}"
+    );
+}
+
+#[test]
 fn test_e2e_parenthesized_ternary_ok() {
     assert_eq!(run_php("<?php echo (1 ? 2 : 0) ? 4 : 5;"), "4");
+    assert_eq!(
+        run_php("<?php echo (1 ?: 2) ? 3 : 4, '|', 0 ?: (2 ? 3 : 4);"),
+        "3|3"
+    );
 }
 
 // === Compound assignment ===

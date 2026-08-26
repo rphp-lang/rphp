@@ -929,7 +929,7 @@ fn bracket_offsets_blocks_and_dynamic_interpolated_properties_remain_valid() {
 }
 
 #[test]
-fn source_aware_braces_keep_the_existing_internal_fallback_text() {
+fn source_aware_punctuation_keeps_the_existing_internal_fallback_text() {
     let tokens = Lexer::new("<?php declare(ticks=1) {}").tokenize().unwrap();
     assert_eq!(
         Parser::new(tokens).parse().unwrap_err(),
@@ -942,6 +942,12 @@ fn source_aware_braces_keep_the_existing_internal_fallback_text() {
     assert_eq!(
         Parser::new(tokens).parse().unwrap_err(),
         "Expected LBrace, got Extends"
+    );
+
+    let tokens = Lexer::new("<?php declare(ticks=1) ?").tokenize().unwrap();
+    assert_eq!(
+        Parser::new(tokens).parse().unwrap_err(),
+        "Expected Semicolon, got Question"
     );
 }
 

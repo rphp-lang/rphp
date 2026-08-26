@@ -453,9 +453,10 @@ impl Parser {
 
     fn parse_ternary(&mut self) -> Result<Expr, String> {
         let expr = self.parse_null_coalesce()?;
-        let ternary_line = self
-            .last_primary_line
-            .unwrap_or_else(|| self.closest_token_source_line());
+        let ternary_line = self.last_primary_line.unwrap_or_else(|| {
+            self.following_semicolon_source_line()
+                .unwrap_or_else(|| self.closest_token_source_line())
+        });
 
         if self.peek() == Token::Question {
             self.advance(); // consume ?
@@ -476,6 +477,14 @@ impl Parser {
                         left: Box::new(result),
                         right: Box::new(right),
                     };
+                }
+                if self.peek() == Token::Question {
+                    let error = self.compile_error(
+                        "Unparenthesized `a ?: b ? c : d` is not supported. Use either `(a ?: b) ? c : d` or `a ?: (b ? c : d)`",
+                        ternary_line,
+                    );
+                    self.consume_full_ternary_tail()?;
+                    return Ok(error);
                 }
                 return Ok(result);
             }
@@ -521,6 +530,16 @@ impl Parser {
         } else {
             Ok(expr)
         }
+    }
+
+    fn consume_full_ternary_tail(&mut self) -> Result<(), String> {
+        self.advance(); // consume ?
+        let then_expr = self.parse_ternary()?;
+        let _ = self.finish_assignment_tail(then_expr)?;
+        self.expect(&Token::Colon)?;
+        let else_expr = self.parse_null_coalesce()?;
+        let _ = self.finish_assignment_tail(else_expr)?;
+        Ok(())
     }
 
     /// Null coalesce: ?? (right-associative)

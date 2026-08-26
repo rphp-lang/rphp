@@ -33,6 +33,10 @@ fn unparenthesized_nested_ternaries_have_distinct_compile_fatals() {
             "$condition ? 2 : 3 ?: 4",
             "Unparenthesized `a ? b : c ?: d` is not supported. Use either `(a ? b : c) ?: d` or `a ? b : (c ?: d)`",
         ),
+        (
+            "1 ?: 2 ? 3 : 4",
+            "Unparenthesized `a ?: b ? c : d` is not supported. Use either `(a ?: b) ? c : d` or `a ?: (b ? c : d)`",
+        ),
     ] {
         let source = format!("<?php\n$condition = true;\n{expression};\n");
         let (status, stdout, stderr) = run_stdin(&source);
@@ -52,11 +56,13 @@ fn explicitly_parenthesized_nested_ternaries_remain_valid() {
 echo (1 ? 2 : 3) ? 4 : 5, '|';
 echo 0 ? 2 : (3 ? 4 : 5), '|';
 echo (1 ? 2 : 3) ?: 4, '|';
-echo 0 ? 2 : (3 ?: 4);
+echo 0 ? 2 : (3 ?: 4), '|';
+echo (1 ?: 2) ? 3 : 4, '|';
+echo 0 ?: (2 ? 3 : 4);
 "#,
     );
 
     assert_eq!(status, 0);
-    assert_eq!(stdout, "4|4|2|3");
+    assert_eq!(stdout, "4|4|2|3|3|3");
     assert_eq!(stderr, "");
 }
