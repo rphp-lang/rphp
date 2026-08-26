@@ -3529,12 +3529,30 @@ CPU-pinned 32-pair runs keep startup, retained `strlen()`, 500 by-reference
 variadic declarations and one million by-reference variadic calls below +5%,
 with matching outputs.
 
-The monitored supported debt is now 1,028 failures: 18 strings, zero array and
-1,010 Zend/lang. Read-only small-cluster triage next selects the two remaining
-`this-reserved` failures, `this_as_global.phpt` and
-`this_as_lexical_var_error.phpt`, as one dedicated `$this` parser-diagnostic
-boundary. The attempted 14-case `crypt()` platform approach did not meet the
-portability contract and remains deferred.
+The `a7ebc564` `this-reserved-parser-diagnostics` checkpoint then moves
+Zend/lang from 4,293 to 4,295 pass, exactly `+2/-0`; strings stay 631/733 and
+array stays 828/842 with no other status or category movement. The parser
+stages illegal `$this` global declarations and explicit closure captures as
+compile errors and publishes PHP 8.5's dedicated global/lexical role, source
+and line with status 255. Implicit instance-method and closure `$this`,
+ordinary globals and ordinary lexical captures remain valid.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical manifests
+and summaries; repeated serial strings/array outcome projections also match
+the exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep
+startup, retained `strlen()`, 500 global declarations and 500 lexical-capture
+declarations below +5%, with matching outputs.
+
+The monitored supported debt is now 1,026 failures: 18 strings, zero array and
+1,008 Zend/lang. Read-only small-cluster triage next joins
+`switch/034.phpt` and `match/038.phpt` at their common duplicate-default
+compile-validation boundary. The switch case already produces the correct
+words at the wrong parser stage and without location; the match case currently
+executes instead of publishing PHP 8.5's located fatal. The attempted 14-case
+`crypt()` platform approach did not meet the portability contract and remains
+deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
 suppression-wrapped destructuring, exhaustive object/array/resource
