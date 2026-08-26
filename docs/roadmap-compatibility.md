@@ -3351,12 +3351,30 @@ Two exact-final-binary CPU-pinned 32-pair runs keep startup, retained `strlen()`
 five million ternary iterations and 20,000 repeated parenthesized ternary
 lex/parse/eval programs below +5%.
 
-The monitored supported debt is now 1,065 failures: 18 strings, zero array and
-1,047 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
+The `cebc4fe1` `removed-curly-string-offset-diagnostics` checkpoint then moves
+Zend/lang from 4,256 to 4,259 pass, exactly `+3/-0`; strings stay 631/733 and
+array stays 828/842 with no other status, stage or category movement. Opening
+braces now retain their exact source line, ordinary-call and constant
+declaration contexts publish their distinct expected-token lists, and complex
+interpolation preserves its `"->" or "?->" or "["` expectation. The removed
+syntax remains rejected; blocks, dynamic interpolated properties and `[]`
+offsets remain valid. Stable token fallback rendering prevents unrelated
+remaining diagnostics from acquiring internal line payloads.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical compact
+manifests and summaries; repeated strings/array outcome projections also
+match. All five Cargo configurations, all-feature/all-target, formatting, HTML
+data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9
+S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep startup,
+retained `strlen()`, 20,000 valid braced lex/parse/eval programs and 20,000
+valid interpolated programs below +5%, with matching outputs.
+
+The monitored supported debt is now 1,062 failures: 18 strings, zero array and
+1,044 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
 the portability contract and remains deferred. Read-only manifest triage next
-selects the removed curly string-offset diagnostic boundary: three cases need
-context-specific parse errors for runtime, constant and interpolated string
-forms.
+selects the last unparenthesized ternary diagnostic:
+`Zend/tests/ternary_associativity_2.phpt` needs the distinct
+`a ?: b ? c : d` compile fatal.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
 suppression-wrapped destructuring, exhaustive object/array/resource

@@ -8,6 +8,66 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`removed-curly-string-offset-diagnostics`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. Opening-brace tokens now retain
+their exact source line. The parser uses that metadata to reject removed
+`$value{offset}` syntax with PHP's context-specific expected-token text in
+ordinary calls and constant declarations, while complex string interpolation
+retains its distinct `"->" or "?->" or "["` expectation. The syntax remains
+unsupported; valid blocks, dynamic interpolated properties and square-bracket
+offsets keep their existing behavior.
+
+Original parser regressions cover all three messages with the brace on a later
+line, stable internal fallback rendering and valid neighboring grammar.
+Original CLI tests additionally cover stdout/stderr, status 255 and successful
+execution of blocks, `[]` offsets and dynamic interpolated properties. All
+three php-src cases now pass:
+`alternative_offset_syntax_compile_error_outside_const_expr.phpt`,
+`alternative_offset_syntax_compile_error_in_const_expr.phpt` and
+`alternative_offset_syntax_in_encaps_string.phpt`.
+
+The complete combined audit covers 7,174 cases: 5,718 pass, 1,062 fail, 182
+skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
+fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
+and one unsupported. Zend/lang moves from 4,256 to 4,259 pass, exactly
+`+3/-0`, with 1,044 failures, 115 skips and 181 unsupported cases. Only the
+three named cases move from `fail/parse` to pass; no remaining failure changes
+stage or category. Two serial exact-final-binary Zend/lang runs have
+byte-identical compact manifests and summaries, whose SHA-256 values are
+respectively
+`04e00a962bb147e79931ca93d88b0e1ab28f8788d4f40362024aef06cbfd43fd`
+and `3a113c08b104018df179ac5bea2dbda6269ae2aef95089d2b23331a71510b933`.
+Repeated strings and array outcome projections are byte-identical.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at 1,622 unsafe blocks, 289 unsafe functions, 366 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony
+S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The change adds
+no dependency and does not touch the compiler, VM or runtime execution layout.
+
+Two exact-final-binary CPU-2-pinned, order-balanced 32-pair release runs compare
+parent SHA-256
+`9a4a8696a6c3db68e3cad48f622c70e5dcf7e9c5340569dbd134c773e6ac0012`
+with candidate
+`6ff60190e4fdd94c294c1c3b7d0eada1ad47bd93df7b832a5c13e514dd6adb18`.
+Paired medians are -0.181%/-0.285% for 100 startups,
+-0.443%/-0.099% for 20,000 repeated valid braced lex/parse/eval programs,
+-0.137%/-0.289% for 20,000 repeated valid interpolated programs and
+-0.607%/+0.385% for five million retained `strlen()` calls. Comparable outputs
+match and every paired median remains below +5%. The raw TSVs hash to
+`c13d72fd24905940a228f19d27df78972c00cb99e250f55004bc93f19e456e79`
+and `dd011a534a3c896acd8577e0e7b7e5ab82e8c39b43323587f60e05e98dacefa8`.
+
+This checkpoint does not re-enable curly string offsets or claim every
+punctuation diagnostic. The monitored supported debt is now 1,062 failures:
+18 strings, zero array and 1,044 Zend/lang. Read-only manifest triage selects
+the final unparenthesized ternary diagnostic next:
+`a ?: b ? c : d`.
+
+The implementation checkpoint is commit `cebc4fe1`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `unparenthesized-ternary-diagnostic`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. The parser now accepts and fully consumes both
 forbidden left-associated shapes, preserving them as deferred compile errors
