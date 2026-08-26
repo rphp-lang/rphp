@@ -28,8 +28,8 @@ use crate::vm::function::{
     CapturedTypedLongFunctionPlan, IndirectScalarLongCallable, IndirectScalarLongFunctionPlan,
 };
 use crate::vm::instruction::{
-    InlineCache, Instruction, KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE, OpType,
-    SEND_FLAG_YIELD_SNAPSHOT,
+    FETCH_DIM_FUNC_ARG, InlineCache, Instruction, KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE,
+    OpType, SEND_FLAG_YIELD_SNAPSHOT,
 };
 use crate::vm::opcode::OpCode;
 use crate::vm::planner::{BlockInfo, BlockPlan};
@@ -185,6 +185,12 @@ impl OpArray {
                 | OpCode::BindArrayDimRef
                 | OpCode::BindGlobalRef
                     if instruction.result_type == OpType::Cv =>
+                {
+                    mark(instruction.result)
+                }
+                OpCode::FetchDimR
+                    if instruction._pad & FETCH_DIM_FUNC_ARG != 0
+                        && instruction.result_type == OpType::Cv =>
                 {
                     mark(instruction.result)
                 }

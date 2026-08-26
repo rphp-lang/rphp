@@ -255,6 +255,24 @@ pub const FETCH_DIM_EMPTY: u16 = 1 << 4;
 /// yields null elements without the ordinary scalar-offset warning.
 pub const FETCH_DIM_DESTRUCTURE: u16 = 1 << 5;
 
+/// `FetchDimR` evaluates an array dimension used as a runtime-resolved call
+/// argument. The pending signature selects ordinary read semantics for a
+/// by-value parameter or binds the result CV directly to the array element for
+/// a by-reference parameter. `extended_value` stores the one-based public
+/// parameter index, or a one-based name-literal index when the named flag is
+/// also present.
+pub const FETCH_DIM_FUNC_ARG: u16 = 1 << 6;
+
+/// The runtime function-argument selector in `extended_value` is a named
+/// argument literal rather than a positional parameter index.
+pub const FETCH_DIM_FUNC_ARG_NAMED: u16 = 1 << 7;
+
+/// This function-argument dimension is rooted directly at a source CV. A
+/// runtime-selected by-value read of an undefined root reports the ordinary
+/// undefined-variable warning before probing its offset; a by-reference
+/// parameter instead autovivifies the root silently.
+pub const FETCH_DIM_FUNC_ARG_ROOT_CV: u16 = 1 << 8;
+
 /// `FetchDynamicVar` reads the symbol-table entry without reporting an
 /// undefined-variable diagnostic. Unlike `FETCH_DIM_ISSET`, the fetched value
 /// is preserved; this is required by `??=` and by mutations rooted at a

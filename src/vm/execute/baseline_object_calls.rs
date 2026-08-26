@@ -2649,6 +2649,8 @@ fn op_bind_array_dim_ref<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
+    let internal_result = opline._pad & REFERENCE_RESULT_INTERNAL != 0
+        || opline._pad & FETCH_DIM_FUNC_ARG != 0;
     // SAFETY: the compiler emits mutable array/CV operands owned by this live
     // frame. Promoting the element to an Rc-backed cell makes both aliases
     // independent of subsequent array storage reallocations.
@@ -2726,7 +2728,7 @@ fn op_bind_array_dim_ref<'a>(
                 )?;
                 Value::owned_reference(returned)
             };
-            if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+            if internal_result {
                 binding.mark_internal_reference_alias();
             }
             let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
@@ -2874,7 +2876,7 @@ fn op_bind_array_dim_ref<'a>(
             *element = binding.clone_owned_reference_alias();
             binding
         };
-        if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+        if internal_result {
             binding.mark_internal_reference_alias();
         }
         let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;

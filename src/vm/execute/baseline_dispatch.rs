@@ -4584,47 +4584,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let call = unsafe { (*frame).call };
                 debug_assert!(!call.is_null());
                 let param_idx = opline.extended_value;
-                // SAFETY: call is the live pending frame. Closure's explicit
-                // forwarding methods mark their variadic wrapper parameters
-                // prefer-reference so writable arguments can retain aliases;
-                // consult the wrapped closure signature before materializing
-                // one for an ordinary by-value parameter.
-                let is_ref = unsafe {
-                    let func_common = &*(*call).func;
-                    let forwarded_index = if func_common.fn_type == FunctionType::Internal
-                        && func_common.sig.this_offset == 1
-                        && func_common.sig.ref_args == func_common.sig.prefer_ref_args
-                    {
-                        if func_common.sig.prefer_ref_args == u64::MAX {
-                            Some(param_idx)
-                        } else if func_common.sig.prefer_ref_args == u64::MAX << 1
-                            && param_idx > 0
-                        {
-                            Some(param_idx - 1)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-                    if let Some(target_index) = forwarded_index {
-                        let receiver = (*call).cv(0).dereferenced();
-                        receiver.as_closure().is_some_and(|closure| {
-                            let signature = &(*closure.func).sig;
-                            let reference_index =
-                                if target_index < signature.public_arity() {
-                                    target_index
-                                } else if signature.is_variadic {
-                                    signature.public_arity()
-                                } else {
-                                    target_index
-                                };
-                            signature.is_param_by_ref(reference_index)
-                        })
-                    } else {
-                        func_common.sig.is_param_by_ref(param_idx)
-                    }
-                };
+                let is_ref = pending_call_argument_is_ref(
+                    frame,
+                    RuntimeCallArgument::Position(param_idx),
+                );
 
                 let yield_snapshot =
                     opline._pad & crate::vm::instruction::SEND_FLAG_YIELD_SNAPSHOT != 0;
@@ -5768,8 +5731,103 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::FetchDimR => 'fetch_dim: {
+                if opline._pad & FETCH_DIM_FUNC_ARG != 0 {
+                    if fetch_dim_function_argument_is_ref(frame, op_array, opline) {
+                        match op_bind_array_dim_ref(eg, frame, op_array, opline)? {
+                            ColdResult::NewFrame(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue 'vm;
+                            }
+                            ColdResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                            ColdResult::Done => break 'fetch_dim,
+                            ColdResult::Continue | ColdResult::Return => {
+                                unreachable!(
+                                    "function-argument dimension binding cannot suspend execution"
+                                )
+                            }
+                        }
+                    }
+
+                    // SAFETY: both operands are compiler-selected slots in the
+                    // live frame. The result pointer remains valid across the
+                    // synchronous diagnostics because the frame stays active.
+                    let (undefined_root, func_arg_result) = unsafe {
+                        let undefined_root = opline._pad & FETCH_DIM_FUNC_ARG_ROOT_CV != 0
+                            && {
+                            (&*(*frame).get_op_ptr(
+                                opline.op1 as u32,
+                                opline.op1_type,
+                                op_array,
+                            ))
+                                .dereferenced()
+                                .value_type()
+                                == ValueType::Undef
+                            };
+                        (
+                            undefined_root,
+                            (*frame).get_op_mut(opline.result as u32, opline.result_type),
+                        )
+                    };
+                    if undefined_root {
+                        let name = op_array
+                            .all_cvs
+                            .iter()
+                            .find(|(cv, _)| *cv == u32::from(opline.op1))
+                            .map(|(_, name)| name.as_str())
+                            .unwrap_or("");
+                        report_undefined_variable_name(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            name,
+                            opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
+                        )?;
+                        if let Some(exception) = eg.exception.take() {
+                            match throw_in_frame(eg, frame, exception)? {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        report_php_warning(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            "Trying to access array offset on null",
+                            opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
+                        )?;
+                        if let Some(exception) = eg.exception.take() {
+                            match throw_in_frame(eg, frame, exception)? {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        write_fetch_dim_result(frame, func_arg_result, Value::null());
+                        break 'fetch_dim;
+                    }
+                }
+
                 #[cfg(feature = "quick-loops")]
-                if opline._pad & FETCH_DIM_ISSET == 0
+                if opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_FUNC_ARG) == 0
                     && opline._pad & FETCH_DIM_MUTABLE == 0
                     && opline.extended_value != 0
                     && unsafe {

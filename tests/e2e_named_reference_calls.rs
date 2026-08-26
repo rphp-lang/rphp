@@ -79,3 +79,34 @@ echo $value;
         "12",
     );
 }
+
+#[test]
+fn runtime_calls_select_array_read_or_reference_context_from_the_signature() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function(int $level, string $message) {
+    echo "warning:$message\n";
+});
+function replace_runtime(&$target) { $target = 'set'; }
+function observe_runtime($value) { echo gettype($value), "\n"; }
+function runtime_key() { echo "key\n"; return 'leaf'; }
+
+$values = []; $copy = $values; $call = 'replace_runtime';
+$call($values['outer'][runtime_key()]);
+echo $values['outer']['leaf'], ':', count($copy), "\n";
+
+$values = []; $call = replace_runtime(...);
+$call($values[2]);
+echo $values[2], "\n";
+
+$values = []; $call = 'observe_runtime';
+$call($values['missing']);
+echo count($values), "\n";
+
+$call($undefined['missing']);
+"#,
+        ),
+        "key\nset:0\nset\nwarning:Undefined array key \"missing\"\nNULL\n0\nwarning:Undefined variable $undefined\nwarning:Trying to access array offset on null\nNULL\n",
+    );
+}

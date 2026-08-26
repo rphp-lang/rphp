@@ -873,8 +873,7 @@ fn scan_conversion(
             while *position < limit && !is_scan_whitespace(input[*position]) {
                 *position += 1;
             }
-            (*position > start)
-                .then(|| Value::string(super::bytes_to_php_string(&input[start..*position])))
+            (*position > start).then(|| scan_string_value(&input[start..*position]))
         }
         ScanKind::Character => {
             let width = if conversion.width == usize::MAX {
@@ -890,7 +889,7 @@ fn scan_conversion(
                 while *position < limit && !is_scan_whitespace(input[*position]) {
                     *position += 1;
                 }
-                let value = Value::string(super::bytes_to_php_string(&input[start..*position]));
+                let value = scan_string_value(&input[start..*position]);
                 Some(value)
             }
         }
@@ -909,15 +908,24 @@ fn scan_conversion(
             while *position < limit && accepted[input[*position] as usize] {
                 *position += 1;
             }
-            (*position > start)
-                .then(|| Value::string(super::bytes_to_php_string(&input[start..*position])))
+            (*position > start).then(|| scan_string_value(&input[start..*position]))
         }
+    }
+}
+
+#[inline]
+fn scan_string_value(bytes: &[u8]) -> Value {
+    if bytes.is_ascii() {
+        Value::string(super::bytes_to_php_string(bytes))
+    } else {
+        Value::binary_string(bytes)
     }
 }
 
 struct ScanOutcome {
     values: Vec<Option<Value>>,
     matched: usize,
+    input_failure: bool,
 }
 
 enum ScanTargets {
@@ -944,6 +952,7 @@ impl ScanTargets {
 fn scan_input(input: &[u8], format: &ScanFormat) -> ScanOutcome {
     let mut position = 0usize;
     let mut failed = false;
+    let mut input_failure = false;
     let mut matched = 0usize;
     let mut values: Vec<Option<Value>> = (0..format.fields).map(|_| None).collect();
     for token in &format.tokens {
@@ -956,11 +965,13 @@ fn scan_input(input: &[u8], format: &ScanFormat) -> ScanOutcome {
                 if input.get(position) == Some(expected) {
                     position += 1;
                 } else {
+                    input_failure = position >= input.len();
                     failed = true;
                 }
             }
             ScanToken::Conversion(conversion) => {
                 let Some(value) = scan_conversion(input, &mut position, conversion) else {
+                    input_failure = position >= input.len();
                     failed = true;
                     continue;
                 };
@@ -971,7 +982,11 @@ fn scan_input(input: &[u8], format: &ScanFormat) -> ScanOutcome {
             }
         }
     }
-    ScanOutcome { values, matched }
+    ScanOutcome {
+        values,
+        matched,
+        input_failure,
+    }
 }
 
 #[cold]
@@ -990,6 +1005,17 @@ fn validate_scan_targets(fields: usize, targets: usize, eg: &mut ExecutorGlobals
 
 #[cold]
 fn finish_scan(return_pointer: *mut Value, targets: Option<ScanTargets>, outcome: ScanOutcome) {
+    if outcome.input_failure && outcome.matched == 0 {
+        super::write_return_value(
+            return_pointer,
+            if targets.is_some() {
+                Value::long(-1)
+            } else {
+                Value::null()
+            },
+        );
+        return;
+    }
     if let Some(mut targets) = targets {
         for (index, value) in outcome.values.into_iter().enumerate() {
             if let Some(value) = value {
@@ -1048,7 +1074,15 @@ fn scan_string_call(
     {
         return Ok(());
     }
-    let outcome = scan_input(&super::php_string_to_bytes(&input), &format);
+    let converted_input;
+    let input = if input.is_ascii() {
+        input.as_bytes()
+    } else {
+        converted_input = super::php_string_to_bytes(&input);
+        converted_input.as_slice()
+    };
+    let input = memchr::memchr(0, input).map_or(input, |end| &input[..end]);
+    let outcome = scan_input(input, &format);
     finish_scan(return_pointer, targets, outcome);
     Ok(())
 }
@@ -1158,7 +1192,15 @@ fn scan_stream_call(
         if let Some(slot) = conversion.slot {
             values[slot] = Some(Value::string(""));
         }
-        finish_scan(return_pointer, targets, ScanOutcome { values, matched: 1 });
+        finish_scan(
+            return_pointer,
+            targets,
+            ScanOutcome {
+                values,
+                matched: 1,
+                input_failure: false,
+            },
+        );
         return Ok(());
     }
     let outcome = scan_input(&input, &format);

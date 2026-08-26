@@ -52,6 +52,68 @@ catch (ValueError $error) { echo $error->getMessage(); }
 }
 
 #[test]
+fn sscanf_count_tracks_php_bytes_nul_termination_and_partial_matches() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$values = sscanf(" 12 XY", "%n%d %2s%n");
+echo implode(':', $values), "\n";
+
+$values = sscanf("A" . chr(255) . "B", "%c%c%n%c%n");
+echo ord($values[0]), ':', ord($values[1]), ':', $values[2], ':',
+    ord($values[3]), ':', $values[4], "\n";
+
+var_dump(sscanf("A\0B", "%c%n%c%n"));
+
+$first = 'old'; $second = 'old';
+echo sscanf("ax", "a%nz%n", $first, $second), ':', $first, ':', $second;
+"#,
+        ),
+        "0:12:XY:6\n65:255:2:66:3\narray(4) {\n  [0]=>\n  string(1) \"A\"\n  [1]=>\n  int(1)\n  [2]=>\n  NULL\n  [3]=>\n  NULL\n}\n1:1:old"
+    );
+}
+
+#[test]
+fn sscanf_reference_targets_work_across_direct_and_runtime_call_forms() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function(int $level, string $message) {
+    echo "warning:$message\n";
+});
+
+$direct = []; $copy = $direct;
+echo sscanf("ABC = DEF", "%s = %s %n", $direct[0], $direct[1], $direct[2]),
+    ':', implode(':', $direct), ':', count($copy), "\n";
+
+$dynamic = 'sscanf'; $values = [];
+echo $dynamic('7', '%n%d', $values[0], $values[1]),
+    ':', implode(':', $values), "\n";
+
+$firstClass = sscanf(...); $values = [];
+echo $firstClass('8', '%n%d', $values[0], $values[1]),
+    ':', implode(':', $values), "\n";
+
+$values = [];
+$arguments = ['9', '%n%d', &$values[0], &$values[1]];
+echo call_user_func_array('sscanf', $arguments),
+    ':', implode(':', $values), "\n";
+
+$values = [];
+try {
+    sscanf(string: '7', format: '%n', vars: $values[0]);
+} catch (Throwable $error) {
+    echo get_class($error), ':',
+        array_key_exists(0, $values) ? '1' : '0', ':',
+        is_null($values[0]) ? '1' : '0';
+}
+"#,
+        ),
+        "3:ABC:DEF:9:0\n2:0:7\n2:0:8\n2:0:9\nArgumentCountError:1:1"
+    );
+}
+
+#[test]
 fn fscanf_consumes_physical_lines_handles_blank_input_and_reaches_eof() {
     assert_eq!(
         run_php(

@@ -1464,6 +1464,101 @@ fn snapshot_runtime_send_rvalue(
     Ok(snapshot)
 }
 
+enum RuntimeCallArgument<'a> {
+    Position(u32),
+    Name(&'a str),
+}
+
+/// Resolve the pending callable's reference contract after call initialization
+/// selected the exact signature and before PHP evaluates the argument value.
+fn pending_call_argument_is_ref(
+    frame: *mut ExecuteData,
+    argument: RuntimeCallArgument<'_>,
+) -> bool {
+    // SAFETY: dispatch invokes this helper only while `frame->call` owns the
+    // live pending call frame. Its function and receiver slots stay initialized
+    // until argument evaluation either completes or unwinds that pending call.
+    unsafe {
+        let call = (*frame).call;
+        debug_assert!(!call.is_null());
+        let common = &*(*call).func;
+
+        if let RuntimeCallArgument::Name(name) = argument {
+            if let Some(index) = common
+                .sig
+                .param_names
+                .iter()
+                .position(|parameter| parameter == name)
+            {
+                return common.sig.is_param_by_ref(index as u32);
+            }
+            return common.sig.is_variadic
+                && common
+                    .sig
+                    .is_param_by_ref(common.sig.param_names.len().saturating_sub(1) as u32);
+        }
+
+        let RuntimeCallArgument::Position(parameter_index) = argument else {
+            unreachable!("named runtime argument returned before positional dispatch")
+        };
+        let forwarded_index = if common.fn_type == FunctionType::Internal
+            && common.sig.this_offset == 1
+            && common.sig.ref_args == common.sig.prefer_ref_args
+        {
+            if common.sig.prefer_ref_args == u64::MAX {
+                Some(parameter_index)
+            } else if common.sig.prefer_ref_args == u64::MAX << 1 && parameter_index > 0 {
+                Some(parameter_index - 1)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(target_index) = forwarded_index {
+            let receiver = (*call).cv(0).dereferenced();
+            receiver.as_closure().is_some_and(|closure| {
+                let signature = &(*closure.func).sig;
+                let reference_index = if target_index < signature.public_arity() {
+                    target_index
+                } else if signature.is_variadic {
+                    signature.public_arity()
+                } else {
+                    target_index
+                };
+                signature.is_param_by_ref(reference_index)
+            })
+        } else {
+            common.sig.is_param_by_ref(parameter_index)
+        }
+    }
+}
+
+/// Resolve the pending callable's reference contract for a dimension fetch
+/// compiled in runtime `FUNC_ARG` context.
+fn fetch_dim_function_argument_is_ref(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> bool {
+    debug_assert!(opline._pad & FETCH_DIM_FUNC_ARG != 0);
+    if opline._pad & FETCH_DIM_FUNC_ARG_NAMED != 0 {
+        let literal = opline.extended_value.saturating_sub(1) as usize;
+        let name = op_array
+            .literals()
+            .get(literal)
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        return pending_call_argument_is_ref(frame, RuntimeCallArgument::Name(name));
+    }
+
+    let parameter_index = opline.extended_value.saturating_sub(1);
+    // Closure forwarding methods publish a prefer-reference wrapper
+    // signature. Match SendVarEx by consulting the wrapped callable before
+    // deciding whether this source expression enters l-value context.
+    pending_call_argument_is_ref(frame, RuntimeCallArgument::Position(parameter_index))
+}
+
 #[inline(never)]
 fn op_check_generic_args(
     eg: &mut ExecutorGlobals,

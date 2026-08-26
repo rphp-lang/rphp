@@ -39,9 +39,10 @@ use crate::vm::instruction::{
     CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_CALL_OWNER,
     CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES,
     EVAL_FLAG_ERROR_SUPPRESS, FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_ERROR_SUPPRESS,
-    FETCH_DIM_ISSET, FETCH_DIM_MUTABLE, FETCH_DIM_SILENT, FETCH_DYNAMIC_ERROR_SUPPRESS,
-    FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS,
-    FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT,
+    FETCH_DIM_FUNC_ARG, FETCH_DIM_FUNC_ARG_NAMED, FETCH_DIM_FUNC_ARG_ROOT_CV, FETCH_DIM_ISSET,
+    FETCH_DIM_MUTABLE, FETCH_DIM_SILENT, FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME,
+    FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC,
+    FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT,
     INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
     NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
     OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OpType, PROPERTY_INCDEC_DECREMENT,
@@ -9256,8 +9257,13 @@ impl Compiler {
                                 CallArg::Positional(expr)
                                     if index < 64 && ref_args & (1u64 << index) != 0 =>
                                 {
-                                    match self.compile_foreach_reference_source(expr, false, false)
-                                    {
+                                    let silent_array_fetch =
+                                        matches!(expr, Expr::ArrayAccess { .. });
+                                    match self.compile_foreach_reference_source(
+                                        expr,
+                                        silent_array_fetch,
+                                        false,
+                                    ) {
                                         Ok((op, op_type, writeback)) => {
                                             reference_writebacks.push((writeback, op, op_type));
                                             (op, op_type, None, None)
@@ -12117,6 +12123,32 @@ impl Compiler {
                     }
                     self.instructions.push(send);
                 }
+                CallArg::Positional(expr @ Expr::ArrayAccess { .. })
+                    if use_var_ex && cv_offset == 0 =>
+                {
+                    if let Some(source) = self.compile_runtime_call_array_argument(expr, i, None) {
+                        let mut send = Instruction::new(OpCode::SendVarEx);
+                        send.op1 = source;
+                        send.op1_type = OpType::Cv;
+                        send.op2 = (i as u32 + cv_offset) as u16;
+                        if set_extended_value {
+                            send.extended_value = i as u32;
+                        }
+                        self.instructions.push(send);
+                    } else {
+                        let (op, op_type) = self.compile_expr(expr);
+                        let mut send = Instruction::new(Self::positional_opcode(
+                            ref_args, i, op_type, use_var_ex,
+                        ));
+                        send.op1 = op;
+                        send.op1_type = op_type;
+                        send.op2 = (i as u32 + cv_offset) as u16;
+                        if set_extended_value {
+                            send.extended_value = i as u32;
+                        }
+                        self.instructions.push(send);
+                    }
+                }
                 CallArg::Positional(expr) | CallArg::Unpack(expr) => {
                     let (op, op_type) = self.compile_expr(expr);
                     let nonreferenceable_line = self.nonreferenceable_call_argument_line(expr);
@@ -12182,8 +12214,15 @@ impl Compiler {
                     }
                 }
                 CallArg::Named { name, value } => {
-                    let (op, op_type) = self.compile_expr(value);
                     let name_idx = self.add_literal(Value::string(name.clone()));
+                    let (op, op_type) = if cv_offset == 0
+                        && matches!(value, Expr::ArrayAccess { .. })
+                    {
+                        self.compile_runtime_call_array_argument(value, i, Some(name_idx))
+                            .map_or_else(|| self.compile_expr(value), |source| (source, OpType::Cv))
+                    } else {
+                        self.compile_expr(value)
+                    };
                     let mut send = Instruction::new(OpCode::SendNamed);
                     send.op1 = op;
                     send.op1_type = op_type;
@@ -12212,6 +12251,58 @@ impl Compiler {
                 }
             }
         }
+    }
+
+    /// Compile a variable-rooted array path in PHP's runtime `FUNC_ARG`
+    /// context. Dynamic/first-class function calls resolve their signature
+    /// before evaluating arguments, so every dimension can choose between an
+    /// ordinary read and a stable element reference without evaluating a key
+    /// twice or creating a missing by-value element. Method/static sends keep
+    /// their existing planner-visible projections until their guarded call
+    /// regions can model a runtime-selected reference result directly.
+    fn compile_runtime_call_array_argument(
+        &mut self,
+        expression: &Expr,
+        parameter_index: usize,
+        name_literal: Option<u16>,
+    ) -> Option<u16> {
+        let mut root = expression;
+        let mut reversed_dimensions = Vec::new();
+        while let Expr::ArrayAccess { array, index, line } = root {
+            reversed_dimensions.push((index.as_ref(), *line));
+            root = array.as_ref();
+        }
+        let Expr::Variable { name, .. } = root else {
+            return None;
+        };
+        reversed_dimensions.reverse();
+
+        let mut current = self.resolve_cv(name);
+        for (dimension, (index, line)) in reversed_dimensions.into_iter().enumerate() {
+            let (key, key_type) = self.compile_expr(index);
+            let result =
+                self.resolve_cv(&format!("\0function_argument_dimension_{}", self.next_cv));
+            let mut fetch = Instruction::new(OpCode::FetchDimR);
+            fetch.op1 = current;
+            fetch.op1_type = OpType::Cv;
+            fetch.op2 = key;
+            fetch.op2_type = key_type;
+            fetch.result = result;
+            fetch.result_type = OpType::Cv;
+            fetch._pad |= FETCH_DIM_FUNC_ARG;
+            if dimension == 0 {
+                fetch._pad |= FETCH_DIM_FUNC_ARG_ROOT_CV;
+            }
+            fetch.extended_value = if let Some(name_literal) = name_literal {
+                fetch._pad |= FETCH_DIM_FUNC_ARG_NAMED;
+                u32::from(name_literal) + 1
+            } else {
+                u32::try_from(parameter_index).unwrap_or(u32::MAX - 1) + 1
+            };
+            self.push_instruction_at_line(fetch, line);
+            current = result;
+        }
+        Some(current)
     }
 
     /// Evaluate arguments that precede a later `yield` into stable operands.
