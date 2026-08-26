@@ -8,6 +8,80 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`unserialize-malformed-reference-boundary`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. The general `unserialize()` parser
+now reports the first malformed boundary with PHP's byte offset and emits
+`Unexpected end of serialized data` when a counted array or object closes
+early. Legacy `C:` Serializable payloads retain nested callback/warning order,
+and forbidden internal classes remain forbidden on both object encodings.
+
+Uppercase serialized `R:` references now share one durable PHP storage cell
+instead of cloning the referenced value. Selective pre-discovery reserves cells
+only for referenced slots, preserves mutation and visible refcounts through
+array/object materialization, rejects self/forward references, and leaves the
+ordinary no-`R:` path on a compact parser specialization. Throwable rendering
+reads reference-backed `message`, `file`, `line`, `trace` and `previous`
+properties through their cells, which also repairs serialized and explicitly
+by-reference exception state.
+
+Four original E2Es cover general malformed offsets, nested legacy payload
+diagnostics, uppercase-reference mutation/refcount, invalid `R:1;` and
+reference-backed Throwable formatting. The four supplying
+strings PHPTs plus six adjacent Zend prohibition/reference/exception controls
+pass 10/10; their focused manifest and summary hash to
+`e7de9a969cbfc491b3423135c0b7f36393d9e7b06af500a1049c64a5c723d45a`
+and `787bb838f8c91d3b48c9d24a675e609a8dc6193d086da1dc52cab2ed2241f792`.
+
+The complete 733-case strings audit moves from 624 to 628 passes, exactly
+`+4/-0`, with 21 failures, 54 skips, 30 unsupported cases and no timeout or
+crash. Only `bug72433.phpt`, `bug72434.phpt`, `bug72663.phpt` and
+`bug72663_3.phpt` become passes. Array remains byte-identical at 828 pass, zero
+fail, 13 skip and one unsupported. Zend/lang moves from 4,211 to 4,214 passes,
+exactly `+3/-0`, with 1,089 failures, 115 skips and 181 unsupported cases; only
+`bug63882_2.phpt`, `exception_with_by_ref_message.phpt` and `gh16188.phpt`
+move. No prior pass or other outcome category moves. Two serial final runs are
+identical in status, category, output hash, expected hash, exit status and
+reason; their strings, array and Zend/lang projection SHA-256 values are
+respectively `7851e6196ac4789c7c7c1857162c74319580627977b55c4ec94c618130d87bfe`,
+`b45f09b2e3a1c86d2f9022c98c8229c47656753b9c0c3f86cabdd21097c268f9`
+and `df0487c43bc955974817b8a5a20bbe70d68fb2a39492ffb87caedec11803c90a`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains within policy at 1,623 unsafe blocks and 289 unsafe
+functions, with 366 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+Two exact-final-binary CPU-2-pinned, order-balanced 32-pair release runs use the
+performance governor, four warmups and no excluded sample. They compare parent
+SHA-256 `6746cd9112692608d17cea8531b2bd1951cd14456472ed8659bde5e9995e1b07`
+with candidate
+`8b5c3cecab2662d64eafd3e05cfac135de53eb12dfb8271f73817501c4b6371c`.
+Paired medians are -7.897%/-8.298% for 100 startups, -3.217%/-2.283% for five
+million retained `strlen()` calls, -1.260%/-2.528% for 200,000 ordinary
+`serialize()` calls and +4.749%/+3.440% for 200,000 ordinary no-`R:`
+`unserialize()` calls. Comparable outputs match and every paired median remains
+below +5%. The raw TSVs hash to
+`f633d12c4e9264bfe4a90ca3ef007ec6aa6f5ffcd0f60841ac086c79210acf96`
+and `ca716c71aadcc6391d0cf02a4728196aa96863f45019d040965c25160c144aa9`.
+An eager reference-cell design regressed ordinary decoding by roughly 2.8x and
+was rejected. A later generic marker scan remained just outside the +5% gate;
+the accepted safe word-at-a-time scan and specialized success epilog restore
+the budget without weakening reference semantics.
+
+This checkpoint does not claim malformed-data warning equivalence outside the
+audited grammar, resource/allocation-limit equivalence, object graphs requiring
+unsupported classes, 32-bit behavior, host cryptography or broader host-locale
+behavior. The monitored supported debt is now 1,110 failures: 21 strings, zero
+array and 1,089 Zend/lang. The 14-case `crypt()` family remains deferred because
+the attempted platform approach did not meet the portability contract. The
+next risk-adjusted portable cluster is `parse_url()` authority/path ambiguity,
+starting with the sole remaining output failure `url_t.phpt`.
+
+The implementation checkpoint is commit `181e9c2d`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `setlocale-scalar-boundary-contract`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. `setlocale()` now owns PHP's handler-level
 signature boundary: `category` is an `int`, the required `locales` value and
@@ -90,7 +164,7 @@ policy.
 
 The implementation checkpoint is commit `d0b6d3bc`.
 
-The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
+The checkpoint before that is
 `string-scalar-byte-boundary-contract`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. The original `${var}` triage premise was
 rejected: PHP 8.5.9 still emits that deprecation, and RPHP continues to do so.

@@ -3176,9 +3176,31 @@ All feature, unsafe, dependency and Symfony S0-S3 gates pass. Two exact-binary
 `setlocale()` below +5%; an initial +132%/+93% always-normalizing candidate was
 rejected and replaced by an exact-string fast path.
 
-Risk-adjusted manifest triage next selects the 14-case `crypt()` family, the
-largest remaining shared string root, behind an explicit platform crypto and
-portability contract. Host locale discovery/switching, `system()`,
+The `181e9c2d` `unserialize-malformed-reference-boundary` checkpoint then moves
+strings from 624 to 628 pass and Zend/lang from 4,211 to 4,214 pass, an exact
+combined `+7/-0`; array stays 828/842 and no other outcome moves. General
+malformed offsets, early counted-container diagnostics, legacy `C:` payload
+callback order and real uppercase `R:` storage identity now agree with PHP
+8.5.9 across the supplying and adjacent reference/Throwable cases. Invalid
+self/forward references are rejected, ordinary values remain on a specialized
+no-`R:` path, and Throwable formatting reads reference-backed properties.
+
+Two complete final audits have identical result projections. All five Cargo
+configurations, all-feature/all-target, formatting, HTML data, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Two
+exact-final-binary CPU-pinned 32-pair runs put paired medians at
+-7.897%/-8.298% for startup, -3.217%/-2.283% for retained `strlen()`,
+-1.260%/-2.528% for ordinary `serialize()` and +4.749%/+3.440% for ordinary
+no-`R:` `unserialize()`, all within +5% with matching outputs. The initial
+eager-cell representation regressed ordinary decoding by roughly 2.8x and was
+rejected; the accepted selective word scan preserves the hot-path budget.
+
+The monitored supported debt is now 1,110 failures: 21 strings, zero array and
+1,089 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
+the portability contract and remains deferred. Risk-adjusted triage next
+selects the portable `parse_url()` authority/path ambiguity exposed by
+`url_t.phpt`; clean-room comparison shows five general mismatch classes rather
+than a fixture-specific one-off. Host locale discovery/switching, `system()`,
 `nl_langinfo()`, `strcoll()`, runtime-selected method/static array-reference
 context, broader binary-string propagation, 32-bit behavior and allocation-
 limit/OOM equivalence remain explicit contracts.
