@@ -29,14 +29,14 @@ use crate::value::{
     ArrayKey, ClosureStaticVars, PhpArray, PhpClosure, PhpObject, Value, ValueType,
 };
 use crate::vm::execute::{
-    ArrayKeyError, ExplicitNumericCastTarget, ScalarLongReferenceMutationCallback,
-    ScalarLongSortOrder, VmError, arithmetic_operator_operand, call_function, call_function_iter,
-    call_function_iter_with_context, call_function_owned_iter,
+    ArrayKeyError, CallArgumentPreparation, ExplicitNumericCastTarget,
+    ScalarLongReferenceMutationCallback, ScalarLongSortOrder, VmError, arithmetic_operator_operand,
+    call_function, call_function_iter, call_function_iter_with_context, call_function_owned_iter,
     call_function_owned_iter_readback_arg0_with_context, call_function_owned_iter_with_context,
     call_function_owned_iter_with_context_and_named, call_object_property_get_hook,
     call_object_property_magic_get, call_object_property_magic_isset, check_type_hint,
     explicit_float_conversion, explicit_long_conversion, explicit_numeric_cast_warning,
-    php_numeric_string_to_float, prepare_scalar_long_callback,
+    php_numeric_string_to_float, prepare_call_argument, prepare_scalar_long_callback,
     prepare_scalar_long_reference_mutation_callback, try_execute_scalar_long_callback,
     value_to_array_key, values_equal_checked_with_precision, values_identical_checked,
 };
@@ -20885,7 +20885,7 @@ fn source_unpack_argument(
     value: &Value,
     source_file: &str,
     strict_types: bool,
-) -> Option<Value> {
+) -> Result<Option<Value>, VmError> {
     let signature = resolved.signature();
     let reference_index = if public_index < signature.public_arity() as usize {
         public_index
@@ -20894,7 +20894,7 @@ fn source_unpack_argument(
     } else {
         public_index
     };
-    let prepared = if !signature.is_param_by_ref(reference_index as u32) {
+    let mut prepared = if !signature.is_param_by_ref(reference_index as u32) {
         value.clone()
     } else if value.is_traversable_unpack_value() {
         eg.write_output(
@@ -20928,39 +20928,51 @@ fn source_unpack_argument(
                 parameter_name,
             ),
         ));
-        return None;
+        return Ok(None);
     };
 
     if let Some(hint) = signature.param_type_hints.get(reference_index)
         && !matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed)
-        && !check_type_hint(
-            prepared.dereferenced(),
-            hint,
-            eg,
-            strict_types,
-            eg.declaring_class_of(resolved.func_ptr),
-        )
     {
-        let parameter_name = signature
-            .param_names
-            .get(reference_index)
-            .map(String::as_str)
-            .unwrap_or("unknown");
-        eg.exception = Some(crate::value::make_error_value(
-            "TypeError",
-            &format!(
-                "{}(): Argument #{} (${}) must be of type {}, {} given, called in {} on line 0",
-                function_name,
-                public_index + 1,
-                parameter_name,
-                hint.display_name(),
-                prepared.dereferenced().type_name(),
-                source_file,
-            ),
-        ));
-        return None;
+        let original = prepared.dereferenced().clone();
+        let callee_class = eg.declaring_class_of(resolved.func_ptr).map(str::to_string);
+        match prepare_call_argument(&original, hint, eg, strict_types, callee_class.as_deref())? {
+            CallArgumentPreparation::Exact => {}
+            CallArgumentPreparation::Coerced(value) => {
+                if prepared.is_reference() {
+                    prepared.assign_dereferenced(value);
+                } else {
+                    prepared = value;
+                }
+            }
+            CallArgumentPreparation::Invalid => {
+                let parameter = if signature.is_variadic
+                    && reference_index == signature.public_arity() as usize
+                {
+                    String::new()
+                } else {
+                    signature
+                        .param_names
+                        .get(reference_index)
+                        .map(|name| format!(" (${name})"))
+                        .unwrap_or_default()
+                };
+                eg.exception = Some(crate::value::make_error_value(
+                    "TypeError",
+                    &format!(
+                        "{}(): Argument #{}{parameter} must be of type {}, {} given, called in {} on line 0",
+                        function_name,
+                        public_index + 1,
+                        hint.diagnostic_display_name(),
+                        original.diagnostic_type_name(),
+                        source_file,
+                    ),
+                ));
+                return Ok(None);
+            }
+        }
     }
-    Some(prepared)
+    Ok(Some(prepared))
 }
 
 fn call_resolved_with_source_unpack(
@@ -20994,7 +21006,8 @@ fn call_resolved_with_source_unpack(
                     value,
                     source_file,
                     strict_types,
-                ) else {
+                )?
+                else {
                     return Ok(Value::null());
                 };
                 if public_index < fixed_count {
@@ -21036,7 +21049,8 @@ fn call_resolved_with_source_unpack(
                             value,
                             source_file,
                             strict_types,
-                        ) else {
+                        )?
+                        else {
                             return Ok(Value::null());
                         };
                         fixed[index] = value;
@@ -21059,7 +21073,8 @@ fn call_resolved_with_source_unpack(
                             value,
                             source_file,
                             strict_types,
-                        ) else {
+                        )?
+                        else {
                             return Ok(Value::null());
                         };
                         named_extras.push((name, value));
@@ -21081,7 +21096,8 @@ fn call_resolved_with_source_unpack(
                         value,
                         source_file,
                         strict_types,
-                    ) else {
+                    )?
+                    else {
                         return Ok(Value::null());
                     };
                     named_extras.push((name, value));

@@ -639,6 +639,25 @@ pub(crate) fn check_type_hint(
     check_type_hint_in_scopes(val, hint, eg, strict, callee_class, callee_class)
 }
 
+#[inline(always)]
+fn exact_call_argument_matches(
+    value: &Value,
+    hint: &crate::vm::function::ParamTypeHint,
+    eg: &ExecutorGlobals,
+    callee_class: Option<&str>,
+) -> bool {
+    use crate::vm::function::ParamTypeHint;
+    match hint {
+        ParamTypeHint::None | ParamTypeHint::Mixed => true,
+        ParamTypeHint::Int => value.value_type() == ValueType::Long,
+        ParamTypeHint::Float => value.value_type() == ValueType::Double,
+        ParamTypeHint::String => value.value_type() == ValueType::String,
+        ParamTypeHint::Bool => matches!(value.value_type(), ValueType::True | ValueType::False),
+        ParamTypeHint::Array => value.value_type() == ValueType::Array,
+        _ => check_type_hint_in_scopes(value, hint, eg, true, callee_class, callee_class),
+    }
+}
+
 /// Check a type hint with distinct lexical and late-static class scopes.
 fn check_type_hint_in_scopes(
     val: &Value,
@@ -1305,7 +1324,7 @@ pub(crate) fn prepare_call_argument(
     // Test exact members first even for weak callers. In particular, an int
     // remains an int for `int|float`; widening is considered only when no
     // member already matches the runtime value.
-    if check_type_hint(value, hint, eg, true, callee_class) {
+    if exact_call_argument_matches(value.dereferenced(), hint, eg, callee_class) {
         return Ok(CallArgumentPreparation::Exact);
     }
     if strict {
@@ -3206,6 +3225,7 @@ fn argument_type_error(
     function: *const FunctionCommon,
     call: *mut ExecuteData,
     common: &FunctionCommon,
+    argument_index: usize,
     parameter_index: usize,
     hint: &ParamTypeHint,
     value: &Value,
@@ -3219,9 +3239,17 @@ fn argument_type_error(
         .get(parameter_index)
         .map(String::as_str)
         .unwrap_or("unknown");
+    let parameter = if common.fn_type == FunctionType::User
+        && common.sig.is_variadic
+        && parameter_index == common.sig.public_arity() as usize
+    {
+        String::new()
+    } else {
+        format!(" (${parameter})")
+    };
     let mut message = format!(
-        "{name}(): Argument #{} (${parameter}) must be of type {}, {} given",
-        parameter_index + 1,
+        "{name}(): Argument #{}{parameter} must be of type {}, {} given",
+        argument_index + 1,
         hint.diagnostic_display_name(),
         declared_type_error_value_name(value)
     );
@@ -3499,15 +3527,21 @@ fn execute_full_call<'a>(
         // SAFETY: `call` is the live callee frame and every param_cv_index in
         // this bounded loop names an initialized supplied-argument slot.
         unsafe {
-            for (i, hint) in func_common.sig.param_type_hints.iter().enumerate() {
+            for argument_index in 0..num_args as usize {
+                let parameter_index =
+                    if func_common.sig.is_variadic && argument_index >= public_max as usize {
+                        public_max as usize
+                    } else {
+                        argument_index
+                    };
+                let Some(hint) = func_common.sig.param_type_hints.get(parameter_index) else {
+                    continue;
+                };
                 if matches!(hint, ParamTypeHint::None) {
                     continue;
                 }
-                if (i as u32) >= num_args {
-                    break;
-                }
-                let cv_idx = func_common.sig.param_cv_index(i as u32);
-                let value = (&*(*call).cv(cv_idx)).dereferenced().clone();
+                let cv_idx = func_common.sig.param_cv_index(argument_index as u32);
+                let value = (&*(*call).cv(cv_idx)).dereferenced();
                 if value.is_undef() {
                     continue;
                 }
@@ -3552,6 +3586,10 @@ fn execute_full_call<'a>(
                         }
                     }
                 }
+                if exact_call_argument_matches(value, hint, eg, callee_class_ref) {
+                    continue;
+                }
+                let value = value.clone();
                 match prepare_call_argument(
                     &value,
                     hint,
@@ -3596,7 +3634,8 @@ fn execute_full_call<'a>(
                     (*call).func,
                     call,
                     func_common,
-                    i,
+                    argument_index,
+                    parameter_index,
                     hint,
                     &value,
                     op_array,
@@ -3609,6 +3648,28 @@ fn execute_full_call<'a>(
                 if function.fn_type() == FunctionType::User
                     && !is_synthesized_enum_method(eg, (*call).func)
                 {
+                    if func_common.sig.is_variadic {
+                        let fixed = func_common.sig.public_arity();
+                        let extra_count = num_args.saturating_sub(fixed);
+                        let mut arguments = PhpArray::with_packed_capacity(extra_count as usize);
+                        for index in 0..extra_count {
+                            arguments.push(
+                                (*call)
+                                    .cv(func_common.sig.param_cv_index(fixed + index))
+                                    .clone(),
+                            );
+                        }
+                        if let Some(named) = pending_named.as_ref() {
+                            for (name, value) in named {
+                                arguments.set_str(name, value.clone());
+                            }
+                        }
+                        frame_slot_set(
+                            call,
+                            (*call).cv_mut(func_common.sig.variadic_cv_index),
+                            Value::array(arguments),
+                        );
+                    }
                     let callee_op_array = &function.as_user().op_array;
                     if let Some(declaration_line) = callee_op_array.declaration_line()
                         && !callee_op_array.source_file.is_empty()
@@ -3766,26 +3827,43 @@ fn execute_full_call<'a>(
         }
         if let Some(named_extras) = pending_named {
             let variadic_hint = func_common.sig.param_type_hints.get(public_max as usize);
-            for (name, val) in named_extras {
+            for (name, mut val) in named_extras {
                 if let Some(hint) = variadic_hint {
-                    if !matches!(hint, ParamTypeHint::None)
-                        && !check_type_hint(&val, hint, eg, op_array.strict_types, callee_class_ref)
-                    {
-                        let type_err = make_error_value(
-                            "TypeError",
-                            &format!(
-                                "Named parameter ${} must be of type {}, {} given",
-                                name,
-                                hint.display_name(),
-                                val.type_name()
-                            ),
-                        );
-                        unsafe { cleanup_frame_slots(call) };
-                        pop_vm_call_frame(eg, call);
-                        return Ok(match throw_in_frame(eg, frame, type_err)? {
-                            ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
-                            ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
-                        });
+                    if !matches!(hint, ParamTypeHint::None) {
+                        let original = val.dereferenced().clone();
+                        match prepare_call_argument(
+                            &original,
+                            hint,
+                            eg,
+                            op_array.strict_types,
+                            callee_class_ref,
+                        )? {
+                            CallArgumentPreparation::Exact => {}
+                            CallArgumentPreparation::Coerced(prepared) => {
+                                if val.is_reference() {
+                                    val.assign_dereferenced(prepared);
+                                } else {
+                                    val = prepared;
+                                }
+                            }
+                            CallArgumentPreparation::Invalid => {
+                                let type_err = make_error_value(
+                                    "TypeError",
+                                    &format!(
+                                        "Named parameter ${} must be of type {}, {} given",
+                                        name,
+                                        hint.display_name(),
+                                        original.type_name()
+                                    ),
+                                );
+                                unsafe { cleanup_frame_slots(call) };
+                                pop_vm_call_frame(eg, call);
+                                return Ok(match throw_in_frame(eg, frame, type_err)? {
+                                    ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+                                    ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
+                                });
+                            }
+                        }
                     }
                 }
                 variadic_arr.set_str(&name, val);

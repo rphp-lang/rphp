@@ -51,6 +51,7 @@ fn test_named_args_typed_variadic_fail() {
     assert_eq!(
         run_php(
             r#"<?php
+declare(strict_types=1);
 function f(string ...$rest) { echo "ok"; }
 try {
     f(rest: 1);
