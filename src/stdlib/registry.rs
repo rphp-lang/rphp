@@ -2322,7 +2322,23 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "version2",
         "operator"
     );
-    reg_var!("setlocale", fn_setlocale, 2, "category", "locales");
+    {
+        let mut function = Box::new(make_internal_function_variadic(
+            fn_setlocale,
+            2,
+            pn!["category", "locales", "rest"],
+        ));
+        function.common.sig.param_type_hints =
+            vec![ParamTypeHint::Int, ParamTypeHint::None, ParamTypeHint::None];
+        function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string()),
+        ]);
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("setlocale", pointer).unwrap();
+        funcs.push(function);
+    }
     reg!("extension_loaded", fn_extension_loaded, 1, 1, "extension");
     reg!("headers_sent", fn_headers_sent, 2, 0, "filename", "line");
     reg!(

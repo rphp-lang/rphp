@@ -24595,31 +24595,227 @@ fn fn_version_compare(
 
 /// Portable locale subset. Unsupported host locales return false, allowing
 /// callers and PHPT setup sections to detect the unavailable capability.
+enum SetLocaleCandidate {
+    Query,
+    Name(Value),
+}
+
+enum SetLocaleArgument {
+    Scalar(SetLocaleCandidate),
+    Array(Vec<Value>),
+}
+
+fn setlocale_scalar_candidate(
+    eg: &mut ExecutorGlobals,
+    argument: &Value,
+    strict: bool,
+    position: usize,
+    parameter: &str,
+) -> Result<Option<SetLocaleCandidate>, VmError> {
+    let argument = argument.dereferenced();
+    let converted = match argument.value_type() {
+        ValueType::Null => return Ok(Some(SetLocaleCandidate::Query)),
+        ValueType::String => argument.clone(),
+        ValueType::False if !strict => Value::string(String::new()),
+        ValueType::True if !strict => Value::string("1"),
+        ValueType::Long | ValueType::Double if !strict => {
+            Value::string(argument.echo_to_string_with_precision(eg.precision))
+        }
+        ValueType::Object if !strict => {
+            let rendered = crate::vm::execute::call_object_string_conversion(eg, argument)?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            let Some(rendered) = rendered else {
+                typed_internal_argument_error(
+                    eg,
+                    "setlocale",
+                    argument,
+                    position,
+                    parameter,
+                    "array|string|null",
+                );
+                return Ok(None);
+            };
+            let rendered = rendered.dereferenced();
+            match rendered.value_type() {
+                ValueType::String => rendered.clone(),
+                ValueType::Long | ValueType::Double | ValueType::True | ValueType::False => {
+                    Value::string(rendered.echo_to_string_with_precision(eg.precision))
+                }
+                _ => {
+                    let class_name = argument.diagnostic_type_name();
+                    let actual = rendered.diagnostic_type_name();
+                    eg.exception = Some(crate::value::make_error_value(
+                        "TypeError",
+                        &format!(
+                            "{class_name}::__toString(): Return value must be of type string, {actual} returned"
+                        ),
+                    ));
+                    return Ok(None);
+                }
+            }
+        }
+        _ => {
+            typed_internal_argument_error(
+                eg,
+                "setlocale",
+                argument,
+                position,
+                parameter,
+                "array|string|null",
+            );
+            return Ok(None);
+        }
+    };
+    let bytes = converted.php_string_bytes().unwrap_or_default();
+    if bytes.as_ref() == b"0" {
+        Ok(Some(SetLocaleCandidate::Query))
+    } else {
+        Ok(Some(SetLocaleCandidate::Name(converted)))
+    }
+}
+
+fn setlocale_try_name(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    locale: &Value,
+) -> Result<Option<Value>, VmError> {
+    let bytes = locale.php_string_bytes().unwrap_or_default();
+    if bytes.len() >= 255 {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            "setlocale(): Specified locale name is too long",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(None);
+        }
+        return Ok(None);
+    }
+    if bytes.as_ref() == b"C" || bytes.eq_ignore_ascii_case(b"POSIX") {
+        return Ok(Some(Value::string("C")));
+    }
+    Ok(None)
+}
+
+fn setlocale_normalize_argument(
+    eg: &mut ExecutorGlobals,
+    argument: &Value,
+    strict: bool,
+    position: usize,
+    parameter: &str,
+) -> Result<Option<SetLocaleArgument>, VmError> {
+    if let Some(locales) = argument.dereferenced().as_array() {
+        return Ok(Some(SetLocaleArgument::Array(
+            locales.iter().map(|(_, locale)| locale.clone()).collect(),
+        )));
+    }
+
+    let Some(candidate) = setlocale_scalar_candidate(eg, argument, strict, position, parameter)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(SetLocaleArgument::Scalar(candidate)))
+}
+
+fn setlocale_try_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    argument: &SetLocaleArgument,
+    position: usize,
+    parameter: &str,
+) -> Result<Option<Value>, VmError> {
+    match argument {
+        SetLocaleArgument::Scalar(SetLocaleCandidate::Query) => Ok(Some(Value::string("C"))),
+        SetLocaleArgument::Scalar(SetLocaleCandidate::Name(locale)) => {
+            setlocale_try_name(ed, eg, locale)
+        }
+        SetLocaleArgument::Array(locales) => {
+            for locale in locales {
+                let Some(candidate) =
+                    setlocale_scalar_candidate(eg, locale, false, position, parameter)?
+                else {
+                    return Ok(None);
+                };
+                match candidate {
+                    SetLocaleCandidate::Query => return Ok(Some(Value::string("C"))),
+                    SetLocaleCandidate::Name(locale) => {
+                        if let Some(result) = setlocale_try_name(ed, eg, &locale)? {
+                            return Ok(Some(result));
+                        }
+                        if eg.exception.is_some() {
+                            return Ok(None);
+                        }
+                    }
+                }
+            }
+            Ok(None)
+        }
+    }
+}
+
 fn fn_setlocale(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let requested = arg!(ed, 1);
-    if let Some(locales) = requested.as_array() {
-        for (_, locale) in locales.iter() {
-            let locale = locale.echo_to_string();
-            if locale == "C" || locale.eq_ignore_ascii_case("POSIX") {
+    if arg!(ed, 0).value_type() == ValueType::Long {
+        let first = arg!(ed, 1);
+        if arg!(ed, 2).as_array().is_some_and(PhpArray::is_empty) {
+            if first.value_type() == ValueType::Null {
                 ret!(rv, Value::string("C"));
             }
+            if first.value_type() == ValueType::String {
+                let bytes = first.php_string_bytes().unwrap_or_default();
+                if bytes.as_ref() == b"0"
+                    || bytes.as_ref() == b"C"
+                    || bytes.eq_ignore_ascii_case(b"POSIX")
+                {
+                    ret!(rv, Value::string("C"));
+                }
+            }
         }
-    } else {
-        let locale = requested.echo_to_string();
-        if locale == "C" || locale.eq_ignore_ascii_case("POSIX") {
-            ret!(rv, Value::string("C"));
+    } else if typed_internal_int_argument(ed, eg, "setlocale", 0, "category")?.is_none() {
+        return Ok(());
+    }
+
+    let strict = internal_call_is_strict(ed);
+    let first = owned_argument(ed, 1);
+    let Some(first) = setlocale_normalize_argument(eg, &first, strict, 2, "locales")? else {
+        return Ok(());
+    };
+
+    let mut normalized = Vec::new();
+    let rest = owned_argument(ed, 2);
+    if let Some(rest) = rest.as_array() {
+        let rest = rest
+            .iter()
+            .map(|(_, locale)| locale.clone())
+            .collect::<Vec<_>>();
+        for (index, locale) in rest.iter().enumerate() {
+            let Some(locale) = setlocale_normalize_argument(eg, locale, strict, index + 3, "")?
+            else {
+                return Ok(());
+            };
+            normalized.push(locale);
         }
     }
-    if let Some(locales) = arg!(ed, 2).as_array() {
-        for (_, locale) in locales.iter() {
-            let locale = locale.echo_to_string();
-            if locale == "C" || locale.eq_ignore_ascii_case("POSIX") {
-                ret!(rv, Value::string("C"));
-            }
+
+    if let Some(result) = setlocale_try_argument(ed, eg, &first, 2, "locales")? {
+        ret!(rv, result);
+    }
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    for (index, locale) in normalized.iter().enumerate() {
+        if let Some(result) = setlocale_try_argument(ed, eg, locale, index + 3, "")? {
+            ret!(rv, result);
+        }
+        if eg.exception.is_some() {
+            return Ok(());
         }
     }
     ret!(rv, Value::bool(false));
