@@ -933,6 +933,27 @@ impl Parser {
                 })
             }
             Token::LParen(line) => {
+                // `(unset)` was removed as a cast in PHP 8.0. Keep
+                // recognizing its complete grammar shape so valid source
+                // reaches PHP's compile-time diagnostic instead of failing
+                // generically while parsing the `unset` keyword.
+                let removed_unset_keyword = match self.tokens.get(self.pos + 1) {
+                    Some(Token::Unset) => true,
+                    Some(Token::Identifier(name, _)) => name.eq_ignore_ascii_case("unset"),
+                    _ => false,
+                };
+                if removed_unset_keyword
+                    && self.tokens.get(self.pos + 2) == Some(&Token::RParen)
+                {
+                    self.advance(); // (
+                    self.advance(); // unset
+                    self.advance(); // )
+                    let error = self.compile_error("The (unset) cast is no longer supported", line);
+                    // Validate and consume the operand while retaining the
+                    // removed-cast diagnostic as the first compile error.
+                    let _ = self.parse_unary()?;
+                    return Ok(error);
+                }
                 // Check for a PHP type cast, including PHP 8.5's explicit
                 // discard marker `(void)`.
                 let next = self.tokens.get(self.pos + 1).cloned().unwrap_or(Token::Eof);

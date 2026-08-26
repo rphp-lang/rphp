@@ -689,6 +689,25 @@ fn invalid_isset_results_are_deferred_compile_errors() {
 }
 
 #[test]
+fn removed_unset_cast_is_a_deferred_compile_error_in_all_expression_contexts() {
+    for source in [
+        "<?php\n$value = (unset) source();",
+        "<?php\n$value = (UnSeT) source();",
+        "<?php\nif (false) { $value = (unset) source(); }",
+        "<?php\nclass C { public $value = (unset) C::class; }",
+    ] {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+
+        assert!(matches!(
+            statements.last(),
+            Some(Stmt::ExprStmt(Expr::CompileError { message, line: 2 }))
+                if message == "The (unset) cast is no longer supported"
+        ));
+    }
+}
+
+#[test]
 fn positional_after_named_is_a_deferred_compile_error() {
     let tokens = Lexer::new("<?php\nif (false) {\n    dispatch(first: 1, $second, third: 3);\n}")
         .tokenize()
