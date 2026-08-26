@@ -6,23 +6,23 @@ fn named_argument_reference_error(
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
+    call: *mut ExecuteData,
     func_common: &FunctionCommon,
     parameter_index: u32,
 ) -> Value {
-    let parameter_name = func_common
+    let parameter = func_common
         .sig
-        .param_names
-        .get(parameter_index as usize)
-        .map(String::as_str)
-        .unwrap_or("unknown");
-    let function_name = registered_function_name(eg, func_common as *const FunctionCommon);
+        .diagnostic_parameter_name(parameter_index)
+        .map(|name| format!(" (${name})"))
+        .unwrap_or_default();
+    let function_name = displayed_frame_function_name(eg, call);
     let error = make_error_value(
         "Error",
         &format!(
-            "{}(): Argument #{} (${}) could not be passed by reference",
+            "{}(): Argument #{}{} could not be passed by reference",
             function_name,
             parameter_index + 1,
-            parameter_name
+            parameter
         ),
     );
     let instruction_index = call_argument_diagnostic_origin_index(op_array, opline);
@@ -211,6 +211,7 @@ fn op_send_named<'a>(
                         frame,
                         op_array,
                         opline,
+                        call,
                         func_common,
                         variadic_index,
                     );
@@ -226,6 +227,7 @@ fn op_send_named<'a>(
                         frame,
                         op_array,
                         opline,
+                        call,
                         func_common,
                         variadic_index,
                     );
@@ -302,6 +304,7 @@ fn op_send_named<'a>(
                                 frame,
                                 op_array,
                                 opline,
+                                call,
                                 func_common,
                                 idx,
                             );
@@ -317,6 +320,7 @@ fn op_send_named<'a>(
                                 frame,
                                 op_array,
                                 opline,
+                                call,
                                 func_common,
                                 idx,
                             );

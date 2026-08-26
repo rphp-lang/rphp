@@ -2910,6 +2910,12 @@ struct GotoPatch {
     line: usize,
 }
 
+#[derive(Clone, Copy)]
+struct KnownRefArgs {
+    mask: u64,
+    variadic_start: Option<usize>,
+}
+
 pub struct Compiler {
     instructions: Vec<Instruction>,
     instruction_source_lines: Vec<(u32, u32)>,
@@ -2963,8 +2969,10 @@ pub struct Compiler {
     compile_deprecations: Rc<RefCell<Vec<CompileDeprecation>>>,
     /// Deferred error from compile_expr (which can't return Result)
     deferred_error: Option<String>,
-    /// ref_args for functions known from parent scope (inherited by child compilers)
-    known_ref_args: HashMap<String, u64>,
+    /// Reference signatures for functions known from parent scope (inherited
+    /// by child compilers). The repeated-tail boundary is compiler-only data
+    /// for call positions beyond the ordinary 64-bit runtime mask.
+    known_ref_args: HashMap<String, KnownRefArgs>,
     /// Parameter names for functions whose declarations are visible throughout
     /// the compilation unit. Together with `known_ref_args`, this lets named
     /// arguments select the same FUNC_ARG l-value context before or after the
@@ -4101,7 +4109,7 @@ impl Compiler {
     fn prescan_function_signatures_pass(
         stmts: &[Stmt],
         namespace: Option<&str>,
-        ref_args: &mut HashMap<String, u64>,
+        ref_args: &mut HashMap<String, KnownRefArgs>,
         param_names: &mut HashMap<String, Vec<String>>,
     ) {
         for statement in stmts {
@@ -4116,13 +4124,24 @@ impl Compiler {
                             .iter()
                             .enumerate()
                             .fold(0_u64, |mask, (index, param)| {
-                                if param.is_ref && index < u64::BITS as usize {
-                                    mask | (1_u64 << index)
+                                if !param.is_ref || index >= u64::BITS as usize {
+                                    return mask;
+                                }
+                                if param.is_variadic {
+                                    mask | (u64::MAX << index)
                                 } else {
-                                    mask
+                                    mask | (1_u64 << index)
                                 }
                             });
-                    ref_args.entry(key.clone()).or_insert(references);
+                    let variadic_start = params
+                        .iter()
+                        .enumerate()
+                        .find(|(_, param)| param.is_variadic && param.is_ref)
+                        .map(|(index, _)| index);
+                    ref_args.entry(key.clone()).or_insert(KnownRefArgs {
+                        mask: references,
+                        variadic_start,
+                    });
                     param_names
                         .entry(key)
                         .or_insert_with(|| params.iter().map(|param| param.name.clone()).collect());
@@ -4522,12 +4541,12 @@ impl Compiler {
             }
         }
         // Check inherited known functions (from parent scope)
-        if let Some((_, &ra)) = self
+        if let Some((_, known)) = self
             .known_ref_args
             .iter()
             .find(|(function, _)| function.eq_ignore_ascii_case(name))
         {
-            return ra;
+            return known.mask;
         }
         // Fall back to builtin table
         builtin_ref_args(name)
@@ -4543,6 +4562,23 @@ impl Compiler {
                     .iter()
                     .find(|(function, _)| function.eq_ignore_ascii_case(name))
                     .map(|(_, names)| names.as_slice())
+            })
+    }
+
+    fn lookup_variadic_ref_start(&self, name: &str) -> Option<usize> {
+        self.functions
+            .iter()
+            .find(|(function, _)| function.eq_ignore_ascii_case(name))
+            .and_then(|(_, function)| {
+                let signature = &function.common.sig;
+                (signature.is_variadic && signature.is_param_by_ref(signature.public_arity()))
+                    .then_some(signature.public_arity() as usize)
+            })
+            .or_else(|| {
+                self.known_ref_args
+                    .iter()
+                    .find(|(function, _)| function.eq_ignore_ascii_case(name))
+                    .and_then(|(_, known)| known.variadic_start)
             })
     }
 
@@ -4569,7 +4605,7 @@ impl Compiler {
                 self.known_ref_args
                     .iter()
                     .find(|(function, _)| function.eq_ignore_ascii_case(name))
-                    .map(|(_, reference_args)| *reference_args)
+                    .map(|(_, reference_args)| reference_args.mask)
             })
             == Some(0)
     }
@@ -4746,10 +4782,19 @@ impl Compiler {
 
     /// Build a snapshot of all currently known function ref_args
     /// (own functions + inherited known_ref_args) to pass to child compilers.
-    fn build_known_ref_args(&self) -> HashMap<String, u64> {
+    fn build_known_ref_args(&self) -> HashMap<String, KnownRefArgs> {
         let mut map = self.known_ref_args.clone();
         for (fname, uf) in &self.functions {
-            map.insert(fname.clone(), uf.common.sig.ref_args);
+            let signature = &uf.common.sig;
+            map.insert(
+                fname.clone(),
+                KnownRefArgs {
+                    mask: signature.ref_args,
+                    variadic_start: (signature.is_variadic
+                        && signature.is_param_by_ref(signature.public_arity()))
+                    .then_some(signature.public_arity() as usize),
+                },
+            );
         }
         map
     }
@@ -6501,7 +6546,11 @@ impl Compiler {
                 _ => {}
             }
             if param.is_ref && i < 64 {
-                ref_args |= 1u64 << i;
+                ref_args |= if param.is_variadic {
+                    u64::MAX << i
+                } else {
+                    1u64 << i
+                };
             }
             // PHP 8.5 accepts legacy `T $value = null` declarations while
             // deprecating their spelling. The callable contract itself is
@@ -8978,6 +9027,7 @@ impl Compiler {
                     // then use the same named-argument protocol as a sole unpack.
                     let resolved = self.resolve_function_name(name);
                     let ref_args = self.lookup_ref_args(&resolved);
+                    let variadic_ref_start = self.lookup_variadic_ref_start(&resolved);
                     let name_idx = self.add_literal(Value::string(resolved));
                     let fallback_idx = if self.current_namespace.is_some()
                         && !name.contains('\\')
@@ -8987,8 +9037,11 @@ impl Compiler {
                     } else {
                         0
                     };
-                    let (arguments, arguments_type) =
-                        self.compile_mixed_unpacked_call_arguments(args, ref_args);
+                    let (arguments, arguments_type) = self.compile_mixed_unpacked_call_arguments(
+                        args,
+                        ref_args,
+                        variadic_ref_start,
+                    );
                     let tmp = self.alloc_tmp();
                     let mut call = Instruction::new(OpCode::CallUserFuncArray);
                     call.op1 = name_idx;
@@ -9191,6 +9244,7 @@ impl Compiler {
                         resolved_refs
                     }
                 };
+                let variadic_ref_start = self.lookup_variadic_ref_start(&resolved);
                 let name_idx = self.add_literal(Value::string(resolved.clone()));
 
                 // For unqualified function calls in a namespace, PHP falls back to global.
@@ -9216,8 +9270,11 @@ impl Compiler {
                     .collect();
 
                 let has_reference_lvalue = args.iter().enumerate().any(|(index, arg)| {
-                    (index < 64
-                        && ref_args & (1u64 << index) != 0
+                    (Self::positional_argument_is_ref(
+                        ref_args,
+                        variadic_ref_start,
+                        index,
+                    )
                         && matches!(
                             arg,
                             CallArg::Positional(
@@ -9244,7 +9301,12 @@ impl Compiler {
                             .map(|(index, arg)| match arg {
                                 CallArg::Positional(Expr::ArrayAppendArgument {
                                     target, ..
-                                }) if index < 64 && ref_args & (1u64 << index) != 0 => {
+                                }) if Self::positional_argument_is_ref(
+                                    ref_args,
+                                    variadic_ref_start,
+                                    index,
+                                ) =>
+                                {
                                     match self.compile_array_append_argument_reference(target, &[])
                                     {
                                         Ok((result, result_type)) => {
@@ -9257,7 +9319,11 @@ impl Compiler {
                                     }
                                 }
                                 CallArg::Positional(expr)
-                                    if index < 64 && ref_args & (1u64 << index) != 0 =>
+                                    if Self::positional_argument_is_ref(
+                                        ref_args,
+                                        variadic_ref_start,
+                                        index,
+                                    ) =>
                                 {
                                     let silent_array_fetch =
                                         matches!(expr, Expr::ArrayAccess { .. });
@@ -9327,7 +9393,8 @@ impl Compiler {
                             .collect(),
                     )
                 } else {
-                    contains_yield.then(|| self.compile_call_args(args, ref_args, false))
+                    contains_yield
+                        .then(|| self.compile_call_args(args, ref_args, variadic_ref_start, false))
                 };
 
                 let runtime_generic_check = self.emit_generic_check(
@@ -9359,11 +9426,12 @@ impl Compiler {
                         compiled_args,
                         0,
                         ref_args,
+                        variadic_ref_start,
                         false,
                         false,
                     );
                 } else {
-                    self.emit_call_args(args, 0, ref_args, false, false);
+                    self.emit_call_args(args, 0, ref_args, variadic_ref_start, false, false);
                 }
 
                 if compiled_args.is_none()
@@ -10277,7 +10345,7 @@ impl Compiler {
                         .any(|argument| matches!(argument, CallArg::Unpack(_)))
                 {
                     let (arguments, arguments_type) =
-                        self.compile_mixed_unpacked_call_arguments(args, 0);
+                        self.compile_mixed_unpacked_call_arguments(args, 0, None);
                     let (resolved_class, dynamic_static_scope) =
                         self.resolve_static_member_owner(class_name);
                     let name_idx = self.add_literal(Value::string(resolved_class));
@@ -10301,7 +10369,7 @@ impl Compiler {
                 // Compile args, tracking which are named for SendNamed emission
                 let compiled_args: Vec<CompiledCallArg> =
                     if args.iter().any(CallArg::contains_yield) {
-                        self.compile_call_args(args, 0, true)
+                        self.compile_call_args(args, 0, None, true)
                     } else {
                         args.iter()
                             .map(|arg| match arg {
@@ -10377,7 +10445,7 @@ impl Compiler {
                     .any(|argument| matches!(argument, CallArg::Unpack(_)))
                 {
                     let (arguments, arguments_type) =
-                        self.compile_mixed_unpacked_call_arguments(args, 0);
+                        self.compile_mixed_unpacked_call_arguments(args, 0, None);
                     let tmp = self.alloc_tmp();
                     let mut new_obj = Instruction::new(OpCode::NewObj);
                     new_obj.op1 = class_operand;
@@ -10392,7 +10460,7 @@ impl Compiler {
                 }
                 let compiled_args: Vec<CompiledCallArg> =
                     if args.iter().any(CallArg::contains_yield) {
-                        self.compile_call_args(args, 0, true)
+                        self.compile_call_args(args, 0, None, true)
                     } else {
                         args.iter()
                             .map(|arg| match arg {
@@ -10445,10 +10513,10 @@ impl Compiler {
                 let unpacked_arguments = args
                     .iter()
                     .any(|argument| matches!(argument, CallArg::Unpack(_)))
-                    .then(|| self.compile_mixed_unpacked_call_arguments(args, 0));
+                    .then(|| self.compile_mixed_unpacked_call_arguments(args, 0, None));
                 let compiled_args: Vec<CompiledCallArg> =
                     if unpacked_arguments.is_none() && args.iter().any(CallArg::contains_yield) {
-                        self.compile_call_args(args, 0, true)
+                        self.compile_call_args(args, 0, None, true)
                     } else {
                         args.iter()
                             .filter(|_| unpacked_arguments.is_none())
@@ -10652,7 +10720,7 @@ impl Compiler {
                     method_element.op2_type = OpType::Const;
                     self.instructions.push(method_element);
                     let (arguments, arguments_type) =
-                        self.compile_mixed_unpacked_call_arguments(args, 0);
+                        self.compile_mixed_unpacked_call_arguments(args, 0, None);
                     let mut call = Instruction::new(OpCode::CallUserFuncArray);
                     call.op1 = callback;
                     call.op1_type = OpType::Tmp;
@@ -10703,7 +10771,7 @@ impl Compiler {
                     } else {
                         None
                     };
-                    let compiled_args = self.compile_call_args(args, 0, true);
+                    let compiled_args = self.compile_call_args(args, 0, None, true);
                     let result = self.compile_method_call_from_operands(
                         obj_op,
                         obj_type,
@@ -10763,7 +10831,7 @@ impl Compiler {
                 let init_index = self.instructions.len();
                 self.push_instruction_at_line(init, *line);
 
-                self.emit_call_args(args, 1, 0, true, true);
+                self.emit_call_args(args, 1, 0, None, true, true);
 
                 if args.iter().all(|arg| matches!(arg, CallArg::Positional(_)))
                     && self.instructions.len() > init_index + 1 + args.len()
@@ -10826,7 +10894,7 @@ impl Compiler {
                         self.instructions.push(add);
                     }
                     let (arguments, arguments_type) =
-                        self.compile_mixed_unpacked_call_arguments(args, 0);
+                        self.compile_mixed_unpacked_call_arguments(args, 0, None);
                     let tmp = self.alloc_tmp();
                     let mut call = Instruction::new(OpCode::CallUserFuncArray);
                     call.op1 = callback;
@@ -10857,7 +10925,7 @@ impl Compiler {
                 let compiled_args = args
                     .iter()
                     .any(CallArg::contains_yield)
-                    .then(|| self.compile_call_args(args, 0, true));
+                    .then(|| self.compile_call_args(args, 0, None, true));
                 let dynamic_static_scope = (self.relative_scope_is_dynamic()
                     && matches!(pseudo_class.as_str(), "self" | "parent"))
                     || pseudo_class == "static";
@@ -10911,9 +10979,17 @@ impl Compiler {
                 self.instructions.push(init);
 
                 if let Some(compiled_args) = compiled_args.as_deref() {
-                    self.emit_precompiled_runtime_call_args(args, compiled_args, 1, 0, true, true);
+                    self.emit_precompiled_runtime_call_args(
+                        args,
+                        compiled_args,
+                        1,
+                        0,
+                        None,
+                        true,
+                        true,
+                    );
                 } else {
-                    self.emit_call_args(args, 1, 0, true, true);
+                    self.emit_call_args(args, 1, 0, None, true, true);
                 }
                 self.emit_reified_argument_check(runtime_generic_check);
 
@@ -11979,10 +12055,26 @@ impl Compiler {
     /// - `RefAware`: compile-time ref check (FunctionCall with known ref_args)
     /// - `ValOnly`: always SendVal (New — constructor ref_args unknown at compile time)
     /// - `VarEx`: runtime ref check via SendVarEx (MethodCall, StaticCall, DynamicCall)
-    fn positional_opcode(ref_args: u64, index: usize, op_type: OpType, use_var_ex: bool) -> OpCode {
+    #[inline]
+    fn positional_argument_is_ref(
+        ref_args: u64,
+        variadic_ref_start: Option<usize>,
+        index: usize,
+    ) -> bool {
+        (index < 64 && ref_args & (1u64 << index) != 0)
+            || variadic_ref_start.is_some_and(|start| index >= start)
+    }
+
+    fn positional_opcode(
+        ref_args: u64,
+        variadic_ref_start: Option<usize>,
+        index: usize,
+        op_type: OpType,
+        use_var_ex: bool,
+    ) -> OpCode {
         if ref_args != 0 && !use_var_ex {
             // RefAware mode (FunctionCall)
-            let is_ref = index < 64 && (ref_args & (1u64 << index)) != 0;
+            let is_ref = Self::positional_argument_is_ref(ref_args, variadic_ref_start, index);
             if is_ref && matches!(op_type, OpType::Cv | OpType::Tmp | OpType::Var) {
                 OpCode::SendRef
             } else {
@@ -12007,6 +12099,7 @@ impl Compiler {
         args: &[CallArg],
         cv_offset: u32,
         ref_args: u64,
+        variadic_ref_start: Option<usize>,
         use_var_ex: bool,
         set_extended_value: bool,
     ) {
@@ -12014,7 +12107,7 @@ impl Compiler {
             match arg {
                 CallArg::Positional(Expr::ArrayAccess { array, index, .. })
                     if matches!(array.as_ref(), Expr::ArrayAppendArgument { .. })
-                        && (i >= 64 || ref_args & (1u64 << i) == 0) =>
+                        && !Self::positional_argument_is_ref(ref_args, variadic_ref_start, i) =>
                 {
                     let Expr::ArrayAppendArgument { target, .. } = array.as_ref() else {
                         unreachable!();
@@ -12051,7 +12144,8 @@ impl Compiler {
                     self.instructions.push(send);
                 }
                 CallArg::Positional(Expr::Variable { name, .. })
-                    if !use_var_ex && i < 64 && ref_args & (1u64 << i) != 0 =>
+                    if !use_var_ex
+                        && Self::positional_argument_is_ref(ref_args, variadic_ref_start, i) =>
                 {
                     let cv = self.resolve_cv(name);
                     let mut send = Instruction::new(OpCode::SendRef);
@@ -12083,8 +12177,7 @@ impl Compiler {
                 }
                 CallArg::Positional(expr)
                     if (!use_var_ex
-                        && i < 64
-                        && ref_args & (1u64 << i) != 0
+                        && Self::positional_argument_is_ref(ref_args, variadic_ref_start, i)
                         && matches!(
                             expr,
                             Expr::DynamicVariable { .. }
@@ -12151,7 +12244,11 @@ impl Compiler {
                     } else {
                         let (op, op_type) = self.compile_expr(expr);
                         let mut send = Instruction::new(Self::positional_opcode(
-                            ref_args, i, op_type, use_var_ex,
+                            ref_args,
+                            variadic_ref_start,
+                            i,
+                            op_type,
+                            use_var_ex,
                         ));
                         send.op1 = op;
                         send.op1_type = op_type;
@@ -12175,7 +12272,13 @@ impl Compiler {
                     } else if indirect_temporary_line.is_some() {
                         OpCode::SendVarEx
                     } else {
-                        Self::positional_opcode(ref_args, i, op_type, use_var_ex)
+                        Self::positional_opcode(
+                            ref_args,
+                            variadic_ref_start,
+                            i,
+                            op_type,
+                            use_var_ex,
+                        )
                     };
                     let mut send = Instruction::new(opcode);
                     send.op1 = op;
@@ -12351,6 +12454,7 @@ impl Compiler {
         &mut self,
         args: &[CallArg],
         ref_args: u64,
+        variadic_ref_start: Option<usize>,
         runtime_reference_check: bool,
     ) -> Vec<CompiledCallArg> {
         args.iter()
@@ -12372,8 +12476,7 @@ impl Compiler {
                 let positional = matches!(arg, CallArg::Positional(_) | CallArg::Unpack(_));
                 let known_reference = positional
                     && !runtime_reference_check
-                    && index < 64
-                    && ref_args & (1u64 << index) != 0;
+                    && Self::positional_argument_is_ref(ref_args, variadic_ref_start, index);
                 if op_type == OpType::Cv && !known_reference {
                     let original_cv = op;
                     let (name, line) = match arg.expr() {
@@ -12404,6 +12507,7 @@ impl Compiler {
         &mut self,
         args: &[CallArg],
         ref_args: u64,
+        variadic_ref_start: Option<usize>,
     ) -> (u16, OpType) {
         let arguments = self.alloc_tmp();
         let mut init = Instruction::new(OpCode::InitArray);
@@ -12439,8 +12543,7 @@ impl Compiler {
                     // ordinary by-value read. Once an unpack was seen, runtime
                     // arity makes this compile-time mapping ambiguous.
                     let (value, value_type) = if !saw_unpack
-                        && index < 64
-                        && ref_args & (1u64 << index) != 0
+                        && Self::positional_argument_is_ref(ref_args, variadic_ref_start, index)
                         && let Expr::Variable { name, .. } = expression
                     {
                         (self.resolve_cv(name), OpType::Cv)
@@ -12502,7 +12605,7 @@ impl Compiler {
         init.op2_type = OpType::Const;
         init.extended_value = args.len() as u32;
         self.push_instruction_at_line(init, line);
-        self.emit_precompiled_runtime_call_args(args, compiled_args, 1, 0, true, true);
+        self.emit_precompiled_runtime_call_args(args, compiled_args, 1, 0, None, true, true);
         self.emit_reified_argument_check(runtime_generic_check);
 
         let mut do_fcall = Instruction::new(OpCode::DoFcall);
@@ -12555,7 +12658,8 @@ impl Compiler {
                 .iter()
                 .any(|argument| matches!(argument, CallArg::Unpack(_)))
         {
-            let (arguments, arguments_type) = self.compile_mixed_unpacked_call_arguments(args, 0);
+            let (arguments, arguments_type) =
+                self.compile_mixed_unpacked_call_arguments(args, 0, None);
             let result = self.alloc_tmp();
             let mut call = Instruction::new(OpCode::CallUserFuncArray);
             call.op1 = callable;
@@ -12572,7 +12676,7 @@ impl Compiler {
         let compiled_args = args
             .iter()
             .any(CallArg::contains_yield)
-            .then(|| self.compile_call_args(args, 0, true));
+            .then(|| self.compile_call_args(args, 0, None, true));
         let runtime_generic_check = self.emit_generic_check(
             OpCode::CheckGenericArgs,
             GenericDeclarationKind::Function,
@@ -12589,9 +12693,9 @@ impl Compiler {
         init.extended_value = args.len() as u32;
         self.push_instruction_at_line(init, line);
         if let Some(compiled_args) = compiled_args.as_deref() {
-            self.emit_precompiled_runtime_call_args(args, compiled_args, 0, 0, true, true);
+            self.emit_precompiled_runtime_call_args(args, compiled_args, 0, 0, None, true, true);
         } else {
-            self.emit_call_args(args, 0, 0, true, true);
+            self.emit_call_args(args, 0, 0, None, true, true);
         }
         self.emit_reified_argument_check(runtime_generic_check);
         let result = self.alloc_tmp();
@@ -12670,6 +12774,7 @@ impl Compiler {
         compiled_args: &[CompiledCallArg],
         cv_offset: u32,
         ref_args: u64,
+        variadic_ref_start: Option<usize>,
         use_var_ex: bool,
         set_extended_value: bool,
     ) {
@@ -12691,7 +12796,13 @@ impl Compiler {
                     } else if yield_snapshot || indirect_temporary_line.is_some() {
                         OpCode::SendVarEx
                     } else {
-                        Self::positional_opcode(ref_args, index, *op_type, use_var_ex)
+                        Self::positional_opcode(
+                            ref_args,
+                            variadic_ref_start,
+                            index,
+                            *op_type,
+                            use_var_ex,
+                        )
                     };
                     let mut send = Instruction::new(opcode);
                     send.op1 = *op;

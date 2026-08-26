@@ -126,20 +126,19 @@ fn report_send_user_reference_warning(
             displayed_function_name(eg, func_common as *const FunctionCommon)
         }
     };
-    let parameter_name = func_common
+    let parameter = func_common
         .sig
-        .param_names
-        .get(reference_index)
-        .map(String::as_str)
-        .unwrap_or("unknown");
+        .diagnostic_parameter_name(reference_index as u32)
+        .map(|name| format!(" (${name})"))
+        .unwrap_or_default();
     report_php_warning(
         eg,
         frame,
         op_array,
         opline,
         &format!(
-            "{callback_name}(): Argument #{} (${parameter_name}) must be passed by reference, value given",
-            reference_index + 1,
+            "{callback_name}(): Argument #{}{parameter} must be passed by reference, value given",
+            public_index + 1,
         ),
         false,
     )

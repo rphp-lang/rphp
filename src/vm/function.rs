@@ -1273,12 +1273,33 @@ impl SignatureInfo {
     /// Whether public parameter at 0-based index `idx` is pass-by-reference.
     #[inline]
     pub fn is_param_by_ref(&self, idx: u32) -> bool {
+        let idx = if self.is_variadic && idx >= self.public_arity() {
+            self.public_arity()
+        } else {
+            idx
+        };
         idx < 64 && (self.ref_args & (1u64 << idx)) != 0
     }
 
     #[inline]
     pub fn is_param_prefer_ref(&self, idx: u32) -> bool {
+        let idx = if self.is_variadic && idx >= self.public_arity() {
+            self.public_arity()
+        } else {
+            idx
+        };
         idx < 64 && (self.prefer_ref_args & (1u64 << idx)) != 0
+    }
+
+    /// PHP omits the declared parameter name from diagnostics for every
+    /// element collected by a variadic parameter.
+    #[inline]
+    pub fn diagnostic_parameter_name(&self, idx: u32) -> Option<&str> {
+        if self.is_variadic && idx >= self.public_arity() {
+            None
+        } else {
+            self.param_names.get(idx as usize).map(String::as_str)
+        }
     }
 
     /// CV index for a public parameter at 0-based index `idx`.

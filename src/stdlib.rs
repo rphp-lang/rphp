@@ -35,10 +35,11 @@ use crate::vm::execute::{
     call_function_owned_iter_readback_arg0_with_context, call_function_owned_iter_with_context,
     call_function_owned_iter_with_context_and_named, call_object_property_get_hook,
     call_object_property_magic_get, call_object_property_magic_isset, check_type_hint,
-    explicit_float_conversion, explicit_long_conversion, explicit_numeric_cast_warning,
-    php_numeric_string_to_float, prepare_call_argument, prepare_scalar_long_callback,
-    prepare_scalar_long_reference_mutation_callback, try_execute_scalar_long_callback,
-    value_to_array_key, values_equal_checked_with_precision, values_identical_checked,
+    displayed_function_name, explicit_float_conversion, explicit_long_conversion,
+    explicit_numeric_cast_warning, php_numeric_string_to_float, prepare_call_argument,
+    prepare_scalar_long_callback, prepare_scalar_long_reference_mutation_callback,
+    try_execute_scalar_long_callback, value_to_array_key, values_equal_checked_with_precision,
+    values_identical_checked,
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
@@ -20867,16 +20868,6 @@ fn call_resolved_with_php_array(
     call_resolved_with_php_array_at(eg, resolved, args, preserve_reference_aliases, None)
 }
 
-fn source_unpack_function_name<'a>(
-    eg: &'a ExecutorGlobals,
-    function: *const FunctionCommon,
-) -> &'a str {
-    eg.function_table
-        .iter()
-        .find_map(|(name, pointer)| std::ptr::eq(*pointer, function).then_some(name.as_str()))
-        .unwrap_or("internal function")
-}
-
 fn source_unpack_argument(
     eg: &mut ExecutorGlobals,
     resolved: &ResolvedCallback,
@@ -20914,18 +20905,17 @@ fn source_unpack_argument(
         // detached call, so a borrowed alias cannot outlive its target.
         Value::reference(unsafe { value.as_ref_ptr() })
     } else {
-        let parameter_name = signature
-            .param_names
-            .get(reference_index)
-            .map(String::as_str)
-            .unwrap_or("unknown");
+        let parameter = signature
+            .diagnostic_parameter_name(public_index as u32)
+            .map(|name| format!(" (${name})"))
+            .unwrap_or_default();
         eg.exception = Some(crate::value::make_error_value(
             "Error",
             &format!(
-                "{}(): Argument #{} (${}) could not be passed by reference",
+                "{}(): Argument #{}{} could not be passed by reference",
                 function_name,
                 public_index + 1,
-                parameter_name,
+                parameter,
             ),
         ));
         return Ok(None);
@@ -20983,7 +20973,7 @@ fn call_resolved_with_source_unpack(
     strict_types: bool,
 ) -> Result<Value, VmError> {
     let signature = resolved.signature();
-    let function_name = source_unpack_function_name(eg, resolved.func_ptr).to_string();
+    let function_name = displayed_function_name(eg, resolved.func_ptr);
     let fixed_count = signature.public_arity() as usize;
     let required = signature.required_num_args as usize;
     let is_variadic = signature.is_variadic;
@@ -21456,13 +21446,12 @@ pub(crate) fn callback_reference_warning_messages(
             continue;
         }
         let parameter = signature
-            .param_names
-            .get(reference_index)
-            .map(String::as_str)
-            .unwrap_or("unknown");
+            .diagnostic_parameter_name(reference_index as u32)
+            .map(|name| format!(" (${name})"))
+            .unwrap_or_default();
         warnings.push(format!(
-            "{display_name}(): Argument #{} (${parameter}) must be passed by reference, value given",
-            reference_index + 1,
+            "{display_name}(): Argument #{}{parameter} must be passed by reference, value given",
+            parameter_index + 1,
         ));
     }
     warnings

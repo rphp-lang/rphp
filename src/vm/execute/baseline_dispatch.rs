@@ -4425,20 +4425,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 .sig
                                 .is_param_prefer_ref(parameter_index as u32)
                         {
-                            let parameter_name = common
+                            let parameter = common
                                 .sig
-                                .param_names
-                                .get(parameter_index)
-                                .map(String::as_str)
-                                .unwrap_or("unknown");
-                            let function_name = registered_function_name(eg, (*call).func);
+                                .diagnostic_parameter_name(parameter_index as u32)
+                                .map(|name| format!(" (${name})"))
+                                .unwrap_or_default();
+                            let function_name = displayed_frame_function_name(eg, call);
                             let error = make_error_value(
                                 "Error",
                                 &format!(
-                                    "{}(): Argument #{} (${}) could not be passed by reference",
+                                    "{}(): Argument #{}{} could not be passed by reference",
                                     function_name,
                                     parameter_index + 1,
-                                    parameter_name
+                                    parameter
                                 ),
                             );
                             attach_call_argument_throwable_origin(
@@ -4554,20 +4553,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             (*frame).opline = opline_ptr.add(1);
                             continue 'vm;
                         }
-                        let parameter_name = common
+                        let parameter = common
                             .sig
-                            .param_names
-                            .get(parameter_index)
-                            .map(String::as_str)
-                            .unwrap_or("unknown");
-                        let function_name = registered_function_name(eg, (*call).func);
+                            .diagnostic_parameter_name(parameter_index as u32)
+                            .map(|name| format!(" (${name})"))
+                            .unwrap_or_default();
+                        let function_name = displayed_frame_function_name(eg, call);
                         let error = make_error_value(
                             "Error",
                             &format!(
-                                "{}(): Argument #{} (${}) could not be passed by reference",
+                                "{}(): Argument #{}{} could not be passed by reference",
                                 function_name,
                                 parameter_index + 1,
-                                parameter_name
+                                parameter
                             ),
                         );
                         attach_call_argument_throwable_origin(

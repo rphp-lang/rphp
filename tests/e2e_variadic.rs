@@ -207,3 +207,91 @@ check(1, 2);
         "yes"
     );
 }
+
+#[test]
+fn by_reference_variadic_tail_preserves_each_positional_named_and_unpacked_alias() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function rewrite($base, &...$slots) {
+    $next = $base;
+    foreach ($slots as &$slot) { $slot = $next++; }
+}
+class VariadicWriter {
+    public function rewrite($base, &...$slots) {
+        $next = $base;
+        foreach ($slots as &$slot) { $slot = $next++; }
+    }
+}
+$closure = function ($base, &...$slots) {
+    $next = $base;
+    foreach ($slots as &$slot) { $slot = $next++; }
+};
+
+$a = 1; $b = 2; $c = 3;
+rewrite(10, $a, $b, $c);
+$d = 4; $e = 5;
+(new VariadicWriter())->rewrite(20, $d, $e);
+$f = 6; $g = 7;
+$closure(30, $f, $g);
+$h = 8; $i = 9;
+rewrite(40, left: $h, right: $i);
+$packed = [10, 11];
+rewrite(50, ...$packed);
+echo "$a,$b,$c|$d,$e|$f,$g|$h,$i|", implode(',', $packed);
+"#,
+        ),
+        "10,11,12|20,21|30,31|40,41|50,51"
+    );
+}
+
+#[test]
+fn by_reference_variadic_tail_remains_reference_aware_beyond_the_mask_width() {
+    let declarations = (0..66)
+        .map(|index| format!("$value{index} = {index};"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let arguments = (0..66)
+        .map(|index| format!("$value{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        "<?php\n{declarations}\nrewrite({arguments});\necho \"$value0:$value63:$value64:$value65\";\nfunction rewrite(&...$slots) {{ foreach ($slots as $index => &$slot) {{ $slot = 100 + $index; }} }}\n"
+    );
+
+    assert_eq!(run_php(&source), "100:163:164:165");
+}
+
+#[test]
+fn by_reference_variadic_errors_omit_the_bucket_name_across_call_forms() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function reject($fixed, &...$values) {}
+class VariadicRejector { public static function reject($fixed, &...$values) {} }
+$closure = function ($fixed, &...$values) {};
+$slot = 0;
+
+try { reject('direct', $slot, 1); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+try { VariadicRejector::reject('method', $slot, 1); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+try { $closure('closure', $slot, 1); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+try { reject(fixed: 'named', left: $slot, right: 1); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+
+set_error_handler(function ($_level, $message) { echo "warning:$message\n"; });
+call_user_func('reject', 'callback', 1, 2);
+"#,
+        ),
+        concat!(
+            "reject(): Argument #3 could not be passed by reference\n",
+            "VariadicRejector::reject(): Argument #3 could not be passed by reference\n",
+            "{closure}(): Argument #3 could not be passed by reference\n",
+            "reject(): Argument #2 could not be passed by reference\n",
+            "warning:reject(): Argument #2 must be passed by reference, value given\n",
+            "warning:reject(): Argument #3 must be passed by reference, value given\n",
+        )
+    );
+}

@@ -3807,21 +3807,17 @@ fn execute_full_call<'a>(
 
     if func_common.sig.is_variadic && raw_variadic_handler.is_none() {
         let extra_count = num_args.saturating_sub(public_max);
-        let mut variadic_arr = PhpArray::new();
+        let mut variadic_arr = PhpArray::with_packed_capacity(extra_count as usize);
         let cv_start = func_common.sig.variadic_cv_index;
-        let variadic_by_reference = func_common.sig.is_param_by_ref(public_max);
         for i in 0..extra_count {
             // SAFETY: the compiler-sized pending call frame contains the
-            // complete supplied variadic prefix through `num_args`.
-            let argument = unsafe { (*call).cv(cv_start + i) };
-            let arg = if variadic_by_reference && argument.is_owned_reference() {
-                argument.clone_owned_reference_alias()
-            } else if variadic_by_reference && argument.is_reference() {
-                // SAFETY: the source call-frame argument remains live while
-                // the packed variadic array is built and invoked synchronously.
-                Value::reference(unsafe { argument.as_ref_ptr() })
-            } else {
-                argument.clone()
+            // complete supplied variadic prefix through `num_args`. Packing
+            // consumes each temporary call slot exactly once; transferring
+            // its Value preserves an owned or borrowed reference alias without
+            // an extra retain/release pair.
+            let arg = unsafe {
+                let argument = (*call).cv_mut(cv_start + i) as *mut Value;
+                frame_tmp_take!(call, argument)
             };
             variadic_arr.push(arg);
         }
@@ -3870,6 +3866,9 @@ fn execute_full_call<'a>(
             }
         }
         let variadic_slot = unsafe { (*call).cv_mut(cv_start) };
+        // SAFETY: packing consumed every initialized positional tail slot and
+        // cleared its heap bit. `variadic_slot` is replaced exactly once with
+        // the completed bucket before the callee body starts.
         unsafe {
             frame_slot_set(
                 call,
