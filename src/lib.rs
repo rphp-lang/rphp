@@ -411,10 +411,6 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "PATHINFO_EXTENSION" => Some(value::Value::long(4)),
         "PATHINFO_FILENAME" => Some(value::Value::long(8)),
         "PATHINFO_ALL" => Some(value::Value::long(15)),
-        "INI_USER" => Some(value::Value::long(1)),
-        "INI_PERDIR" => Some(value::Value::long(2)),
-        "INI_SYSTEM" => Some(value::Value::long(4)),
-        "INI_ALL" => Some(value::Value::long(7)),
         "INI_SCANNER_NORMAL" => Some(value::Value::long(0)),
         "INI_SCANNER_RAW" => Some(value::Value::long(1)),
         "INI_SCANNER_TYPED" => Some(value::Value::long(2)),
@@ -522,6 +518,18 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         #[cfg(feature = "file-lines")]
         "FILE_SKIP_EMPTY_LINES" => Some(value::Value::long(4)),
 
+        _ => builtin_ini_access_constant(name),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn builtin_ini_access_constant(name: &str) -> Option<value::Value> {
+    match name {
+        "INI_USER" => Some(value::Value::long(1)),
+        "INI_PERDIR" => Some(value::Value::long(2)),
+        "INI_SYSTEM" => Some(value::Value::long(4)),
+        "INI_ALL" => Some(value::Value::long(7)),
         _ => None,
     }
 }
