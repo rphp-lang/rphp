@@ -4370,8 +4370,10 @@ impl ExecutorGlobals {
             if let Some(parent) = self.class_table.get(parent_name.as_str()) {
                 if parent.is_enum {
                     return Err(format!(
-                        "Class {} cannot extend enum {}",
-                        class_name, parent_name
+                        "Class {} cannot extend enum {}{}",
+                        class_name,
+                        parent_name,
+                        declaration_location()
                     ));
                 }
                 if parent.is_final {
@@ -4842,6 +4844,15 @@ impl ExecutorGlobals {
         // Interface constants are inherited without being copied into source
         // declarations. Flatten them once at class registration so reads and
         // their inline caches are an indexed lookup thereafter.
+        let class_like_kind = || {
+            if class_def.is_interface {
+                "Interface"
+            } else if class_def.is_enum {
+                "Enum"
+            } else {
+                "Class"
+            }
+        };
         for interface_name in &class_def.implements {
             // A small set of built-in interface contracts is registered by
             // the stdlib without a userland ClassDef. They have no userland
@@ -4851,6 +4862,7 @@ impl ExecutorGlobals {
             };
             let mut constants = std::mem::take(&mut class_def.constants);
             let result = merge_interface_constant_definitions(
+                class_like_kind(),
                 &class_name,
                 &mut constants,
                 &interface.constants,

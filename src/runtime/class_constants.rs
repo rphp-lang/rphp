@@ -192,6 +192,7 @@ fn merge_trait_constant_definitions(
 }
 
 fn merge_interface_constant_definitions(
+    owner_kind: &str,
     owner: &str,
     target: &mut Vec<ClassConstantDefinition>,
     interface_constants: &[ClassConstantDefinition],
@@ -239,7 +240,8 @@ fn merge_interface_constant_definitions(
                 }
             } else if existing.declaring_class != inherited.declaring_class {
                 return Err(format!(
-                    "Class {} inherits both {}::{} and {}::{}, which is ambiguous{}",
+                    "{} {} inherits both {}::{} and {}::{}, which is ambiguous{}",
+                    owner_kind,
                     owner,
                     existing.declaring_class,
                     existing.name,
