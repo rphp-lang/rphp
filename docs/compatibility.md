@@ -8,6 +8,93 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`sscanf-percent-n-contract`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. The shared scanf engine now returns every `%n`
+field as the integer count of PHP input bytes consumed so far without consuming
+another byte. Multiple counts compose with literals, format whitespace, field
+widths, suppression, scansets and partial matches. The first input NUL is the
+logical end of an `sscanf()` record; arbitrary high bytes remain lossless, and
+input failure before any conversion returns null without targets or `-1` with
+variadic targets.
+
+Direct known by-reference array arguments now enter silent l-value context
+without suppressing ordinary property magic. Named and dynamic/first-class
+function arguments rooted in arrays consult the already initialized runtime
+signature before choosing a value read or stable element alias, so missing
+by-reference dimensions autovivify while by-value reads retain their warnings
+and COW behavior. The signature query is shared with `SendVarEx`; method/static
+call regions retain their established planner-visible argument path.
+
+Two original formatted-I/O E2Es and one runtime-call E2E cover byte counts,
+NUL/high-byte input, success and partial failure, multiple/suppressed fields,
+direct/named/dynamic/first-class/callback calls, nested array dimensions,
+warnings, references and COW. A clean-room 10-input by 14-format matrix is
+byte-identical to PHP 8.5.9 at SHA-256
+`a1e6c6528694c8732171c4d32c9218fa586e07e4f8f8a1241752a283d6aff95c`.
+The unmodified supplying `bug21730.phpt` passes with focused manifest SHA-256
+`a917e116a6df71bf9b8e5be256d2823bcbc44da5a69a49ef83fe903505ed634c`;
+its expected and actual outputs both hash to
+`4b9d595d7f1a155fce0a744767423e8b37f25b12f845625c85121bbc11094d3e`.
+
+The complete 733-case strings audit moves from 615 to 616 passes, exactly
+`+1/-0`, with 33 failures, 54 skips, 30 unsupported cases and no timeout or
+crash. Two final serial exact-binary runs have byte-identical manifest and
+summary SHA-256 values
+`4ecd65edc7a3280998c401e8f1bb2adfc09f19ae61e7b9f9bf40babeb5e011d3`
+and `1ff761b7241dde8f8281ea2e18df8f715b574a8c0880b8fb52e1e0c6f601da75`.
+The parent/candidate status maps hash to
+`aeab64e2a22ac645de774342f1ef509f3c847deaf6a49239377eeb0e877b51ce`
+and `30c955b4d75e076d0bf907421382d2eb41bad61bc963b07e21665b1cda35350b`;
+the candidate pass set hashes to
+`482997328e6f83d29742c9ac873e3532c7c1744af5d2370008f337670d53283f`.
+
+The complete array audit remains byte-identical at 828 pass, 13 skip and one
+unsupported case; its final manifest/summary SHA-256 values are
+`d1d07b2537a5257a59d3d13c0839674fb7a35ba1f2470ff5d2218fb2eab0d746`
+and `701c2257de276dab57ed038fd36b0b251a261d7e24d0449fe541a1f7c4c1bc81`.
+Zend/lang moves from 4,210 to 4,211 pass and from 1,093 to 1,092 fail, exactly
+`+1/-0`, because `Zend/tests/gh12102_2.phpt` reaches the corrected general
+reference-argument path. Its two final serial manifests/summaries are
+byte-identical at
+`585e3c1f76c87ebad0b6fe19c801fe55a7791d1a5ccf248f018c8f8a7a5ea53e`
+and `58454cd3e5d7b9c63c003be1704344c54ecd18f0168a6c61a7852fad79b14778`.
+The candidate Zend/lang pass set hashes to
+`59804fe5273d0ebe0835392694509a8d55c6e3bcc5fb2f03ed9aedea2b315a79`;
+no previous pass or unrelated outcome moves.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains within policy at 1,623 unsafe blocks and 289 unsafe
+functions, with 366 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+Two exact-final-binary CPU-2-pinned, order-balanced 32-pair release runs use the
+performance governor, four warmups and no excluded sample. They compare parent
+SHA-256 `95e2a8c6345c8e151c2e1cfee283e5a50f4b797b6ef9b4ec4e5494b535c03a9d`
+with candidate
+`4ee9fb2cf3983018adfc515bdbfffc4831ea58b48531c0e2579c8828eca614ce`.
+Paired medians are -6.074%/-5.195% for 100 startups, -1.384%/-2.842% for five
+million retained `strlen()` calls, -2.892%/-2.065% for 200,000 ordinary
+`sscanf()` calls and -0.884%/-0.813% for 200,000 `%n` scans. Independent and
+order-specific medians, outputs and checksums also remain below +5%. The raw
+TSVs hash to
+`7a661275e648540e0283decb4cc165ebc9f9a8ae2ac52a375929344cf37b73ff`
+and `645ff28f5dc408889b8c98b4532c058879693b3416253898e88f101ded628caf`.
+An initial always-copying NUL pre-scan candidate exceeded the scanner gate and
+was rejected; the accepted path borrows ASCII input, uses `memchr` for NUL and
+materializes the lossless byte bridge only for non-ASCII data.
+
+This checkpoint does not claim runtime-selected array-reference context for
+method/static sends, broader `fscanf()` stream semantics, locale-dependent
+numeric scanning, 32-bit behavior or allocation-limit/OOM equivalence. The
+remaining 33 string failures include explicit platform cryptography and locale
+groups. Risk-adjusted triage selects the isolated oversized positional-specifier
+diagnostic in `bug69751.phpt` next.
+
+The implementation checkpoint is commit `8bb399e2`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `parse-ini-terminal-empty-contract`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. The shared `parse_ini_string()`/
 `parse_ini_file()` scanner now treats the first NUL as end of input and

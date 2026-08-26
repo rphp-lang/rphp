@@ -1,6 +1,6 @@
 # RPHP engineering roadmap
 
-Status: active coordination map, 2026-08-25
+Status: active coordination map, 2026-08-26
 
 This document coordinates two independent engineering workstreams. It stays
 short and current; detailed plans live in the workstream roadmaps, while the
@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5 AMD64 UUencode checkpoint closes all four visible failures with typed PHP-byte encode/decode handlers for exact line framing, padding, malformed data, diagnostics, calls, Reflection and binary COW. Strings reaches 563/733 (+4/-0); array remains 828/842 and Zend/lang remains 4,209/5,599, with no lost pass, new timeout or crash. All five feature configurations, unsafe, Composer S0, Symfony S1 and PHP 8.5.9 S2/S3 pass. Exact-final-binary CPU-pinned retained quoted-printable and startup controls range from -1.420% to +3.307%, below +5%; new-codec throughput is recorded separately without an unavailable parent A/B claim. The six-case basename/dirname/pathinfo cluster, including the retained dirname timeout, is next; full uuencoded file containers, stream filters, platform cryptography and remaining strings/Zend gaps stay explicit work. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5 AMD64 `sscanf()` `%n` checkpoint reaches 616/733 strings and 4,211/5,599 Zend/lang, exactly +1/-0 in each suite, while array remains 828/842 byte-identically. Consumed-byte counts, NUL/high-byte inputs, partial failure and direct/named/dynamic/first-class reference targets share one general scanner/call contract. All feature, unsafe, Composer/Symfony S0-S3 and exact-final-binary performance gates pass; startup, retained `strlen()`, ordinary `sscanf()` and `%n` paired medians are all below +5%. The isolated oversized positional-specifier diagnostic in `bug69751.phpt` is next; platform cryptography/locale groups, runtime-selected method/static array-reference context and the remaining strings/Zend gaps stay explicit work. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,

@@ -3155,32 +3155,27 @@ remains at 289 functions; no dependency or value/object/array layout changes.
 
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
-pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 599 pass, 50 fail, 54 skip and 30 unsupported, with no timeout or crash;
-the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
-attempted printf family is 79/79, while the ordinary translation-table family
-is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
-and invalid-UTF-8 recovery families are both 3/3; the EUC-JP/Big5 supplying
-pair is 2/2 and the byte-escaping supplying family is 12/12. `Zend/tests` plus
-`tests/lang` is 4,210 pass, 1,093 fail, 115 skip and 181 unsupported, with no
-timeout or crash. The trim/charlist family is 11/11, increment/decrement is 6/6
-and both `str_split()` and `chunk_split()` are 6/6, while the complete
-`str_replace()`/`str_ireplace()` cluster is 8/8 and the selected
-`substr_replace()` family plus its four adjacent gains is 8/8; the complete
-`nl2br()` family is 5/5, the complete `strtr()` family is 16/16, the direct and
-related byte-search/window family is 79/79, and the direct split/join family is
-19 pass plus one explicit unsupported case. `str_getcsv()` and the visible
-checksum/hash supplying clusters are both 8/8, the selected
-`base64_decode()` family is 6/6, and the visible quoted-printable family is
-5/5, the visible UUencode family is 4/4 and the deterministic byte-utility
-batch is 12/12 including its four adjacent gains. The word-boundary and
-line-formatting batch is 5/5, the legacy UTF-8 conversion batch is 3/3, the
-byte-input diagnostic batch is 4/4 and the source-highlighting/output-handler
-batch is 6/6. Manifest root-cause triage selects the next bounded candidate as
-the nine-case `strip_tags()` scanner cluster and its space-after-heredoc fixture
-dependency; wider string-offset writes, typed-parameter and associative-key
-binary provenance, detached-callback alias spelling, unknown entity-encoding
-warnings, platform cryptography and broader legacy multibyte behavior remain
+pass, zero fail, 13 skip and one unsupported. The 733-case strings selection is
+616 pass, 33 fail, 54 skip and 30 unsupported, with no timeout or crash.
+`Zend/tests` plus `tests/lang` is 4,211 pass, 1,092 fail, 115 skip and 181
+unsupported, also with no timeout or crash. The `8bb399e2`
+`sscanf-percent-n-contract` checkpoint adds exactly `bug21730.phpt` and the
+adjacent general reference-context gain `Zend/tests/gh12102_2.phpt`, both
+`+1/-0`, while array stays byte-identical and no prior pass moves. `%n` now
+counts consumed PHP bytes without consuming input, composes with the existing
+scanner grammar and writes through direct, named, dynamic, first-class and
+explicit callback references. NUL termination, high bytes, partial/input
+failure, nested array dimensions, COW and diagnostics are covered by original
+regressions and a byte-identical 140-combination PHP 8.5.9 oracle.
+
+All feature, unsafe, dependency and Symfony S0-S3 gates pass. Two exact-binary
+32-pair performance series keep startup, retained `strlen()`, ordinary
+`sscanf()` and `%n` scanning below the +5% regression budget; the accepted
+ASCII-borrowing scanner path replaced an earlier rejected pre-scan candidate.
+Manifest root-cause triage selects the isolated oversized positional-specifier
+diagnostic in `bug69751.phpt` next. Runtime-selected method/static array
+reference context, wider `fscanf()`/locale scanning, platform cryptography and
+locale groups, 32-bit behavior and allocation-limit/OOM equivalence remain
 explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
