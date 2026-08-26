@@ -3320,12 +3320,28 @@ Two exact-final-binary CPU-pinned 32-pair runs keep startup, retained `strlen()`
 five million parenthesized arithmetic iterations and 20,000 repeated
 parenthesized lex/parse/eval expressions below +5%.
 
-The monitored supported debt is now 1,069 failures: 18 strings, zero array and
-1,051 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
+The `ba184f33` `foreach-key-reference-diagnostic` checkpoint then moves
+Zend/lang from 4,252 to 4,254 pass, exactly `+2/-0`; strings stay 631/733 and
+array stays 828/842 with no other outcome movement. Invalid reference key
+targets now retain their complete foreach AST and publish PHP's compile-time
+`Key element cannot be a reference` fatal at the source/`as` boundary.
+Ordinary key/value and both keyed and keyless reference-value loops remain
+valid with unchanged writeback behavior.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical manifests
+and summaries; repeated strings/array outcome projections also match. All five
+Cargo configurations, all-feature/all-target, formatting, HTML data, PHPT
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Two exact-final-binary CPU-pinned 32-pair runs keep startup, retained `strlen()`,
+five million foreach iterations and 10,000 repeated foreach lex/parse/eval
+programs below +5%.
+
+The monitored supported debt is now 1,067 failures: 18 strings, zero array and
+1,049 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
 the portability contract and remains deferred. Read-only manifest triage next
-selects the foreach key-reference diagnostic boundary: two cases currently
-emit a parser-internal message instead of PHP 8.5's compile-time `Key element
-cannot be a reference` fatal.
+selects the unparenthesized ternary diagnostic boundary: two cases need
+distinct PHP compile fatals for full and Elvis right operands instead of the
+current generic parse error.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
 suppression-wrapped destructuring, exhaustive object/array/resource
