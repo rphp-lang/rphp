@@ -988,12 +988,17 @@ impl Parser {
                 }
                 // foreach ($arr as $key => $val), foreach ($arr as $val),
                 // and the corresponding destructuring value forms.
-                let first_by_ref = if self.peek() == Token::Ampersand {
+                let first_reference_line = if self.peek() == Token::Ampersand {
+                    // PHP locates the invalid key-reference diagnostic at the
+                    // source/as boundary, including when the key starts on a
+                    // following line.
+                    let line = self.closest_token_source_line();
                     self.advance();
-                    true
+                    Some(line)
                 } else {
-                    false
+                    None
                 };
+                let first_by_ref = first_reference_line.is_some();
                 if let Some(targets) = self.parse_foreach_destructure()? {
                     if first_by_ref {
                         return Err("Foreach destructuring target cannot be a reference".into());
@@ -1015,8 +1020,8 @@ impl Parser {
                 let first_expr = self.parse_foreach_target_expression()?;
                 let first = self.into_foreach_target(first_expr)?;
                 let (key, value, by_ref) = if self.peek() == Token::DoubleArrow {
-                   if first_by_ref {
-                       return Err("Foreach key cannot be a reference".into());
+                   if let Some(line) = first_reference_line {
+                       let _ = self.compile_error("Key element cannot be a reference", line);
                     }
                     self.advance(); // consume '=>'
                     let by_ref = if self.peek() == Token::Ampersand {
