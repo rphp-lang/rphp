@@ -3156,28 +3156,31 @@ remains at 289 functions; no dependency or value/object/array layout changes.
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection is
-617 pass, 32 fail, 54 skip and 30 unsupported, with no timeout or crash.
+620 pass, 29 fail, 54 skip and 30 unsupported, with no timeout or crash.
 `Zend/tests` plus `tests/lang` is 4,211 pass, 1,092 fail, 115 skip and 181
-unsupported, also with no timeout or crash. The `22acb607`
-`printf-position-limit-contract` checkpoint adds exactly `bug69751.phpt`
-`+1/-0`; array and Zend/lang stay byte-identical and no prior pass moves.
+unsupported, also with no timeout or crash. The `3f85605b`
+`string-scalar-byte-boundary-contract` checkpoint adds exactly
+`strcasecmp.phpt`, `strcmp.phpt` and `strlen.phpt`, `+3/-0`; array and
+Zend/lang stay byte-identical and no previous or unrelated pass moves.
 
-One shared positional-field validator now rejects missing, zero, 2,147,483,647
-or greater and overflowed decimal indices before argument-count diagnostics in
-`sprintf()`, `vsprintf()`, `printf()` and `vprintf()`. The highest valid index,
-positional value/width/precision fields, validation order, runtime call shapes
-and no-partial-output failures are covered by original regressions and a
-byte-identical 38-result PHP 8.5.9 oracle. All feature, unsafe, dependency and
-Symfony S0-S3 gates pass; two exact-binary 32-pair performance series keep
-startup, retained `strlen()`, ordinary `sprintf()`/`printf()` and retained
-`sscanf()` below the +5% regression budget.
+The `${var}` deprecation exposed by the original triage is required by PHP
+8.5.9 and remains intact. The actual shared roots were request-precision float
+conversion in `strlen()`, raw byte provenance across scalar comparison and
+nested `print_r()`, and typed bounded-comparison validation order. Original
+regressions cover all byte pairs, public call shapes, weak/strict failures,
+references and COW; three clean-room transcripts are byte-identical to PHP
+8.5.9. All feature, unsafe, dependency and Symfony S0-S3 gates pass. Two
+exact-binary 32-pair performance series keep startup and eight relevant runtime
+lanes below the +5% regression budget; an over-budget non-inlined comparison
+candidate was rejected.
 
-Manifest root-cause triage next groups the stale `${var}` interpolation
-deprecation visible in `strcasecmp.phpt`, `strcmp.phpt` and `strlen.phpt` into
-one general PHP 8.5 diagnostic checkpoint. Runtime-selected method/static
-array-reference context, broader formatting, platform cryptography and locale
-groups, 32-bit behavior and allocation-limit/OOM equivalence remain explicit
-contracts.
+Risk-adjusted manifest triage next groups `gh18823_strict.phpt`,
+`gh18823_weak.phpt`, `gh19070.phpt` and `setlocale_error.phpt` around the
+existing `setlocale()` scalar/long-name boundary. The 14-case `crypt()` family
+has the largest raw test yield but requires an explicit platform crypto and
+portability contract, so it follows as its own checkpoint. Runtime-selected
+method/static array-reference context, broader binary-string propagation,
+32-bit behavior and allocation-limit/OOM equivalence remain explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,
