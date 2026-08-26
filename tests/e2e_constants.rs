@@ -1863,7 +1863,7 @@ fn test_error_constants_are_available_in_property_defaults() {
         run_php(
             "<?php class ErrorLevels { public array $levels = [E_ERROR, E_DEPRECATED, E_ALL]; } echo implode('|', (new ErrorLevels())->levels);"
         ),
-        "1|8192|32767"
+        "1|8192|30719"
     );
 }
 

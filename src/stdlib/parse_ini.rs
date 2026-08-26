@@ -640,10 +640,8 @@ impl IniIntegerExpression<'_> {
         }
         let operand = &self.source[start..self.offset];
         operand.parse::<i64>().ok().or_else(|| {
-            // PHP's INI grammar retains its historical E_ALL value excluding
-            // E_STRICT even though ordinary PHP code exposes the current mask.
             if operand.eq_ignore_ascii_case("E_ALL") {
-                Some(30_719)
+                Some(crate::PHP_E_ALL)
             } else {
                 crate::builtin_constant(operand).and_then(|value| value.as_long())
             }

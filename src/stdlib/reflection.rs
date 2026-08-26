@@ -1125,6 +1125,33 @@ pub(crate) fn report_deprecated_global_constant_use(
     use_site: &DeprecatedUseSite,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if name == "E_STRICT" {
+        let identity = "constant:E_STRICT".to_string();
+        return guarded_deprecated_symbol(identity, eg, |eg| {
+            let message = "Constant E_STRICT is deprecated since 8.4, the error level was removed";
+            let handled = crate::stdlib::dispatch_php_error(
+                eg,
+                use_site.frame,
+                8_192,
+                message,
+                &use_site.file,
+                use_site.line,
+            )?;
+            if !handled {
+                eg.record_last_error(8_192, message, &use_site.file, use_site.line);
+            }
+            if !handled && eg.error_reporting & 8_192 != 0 {
+                eg.write_output(
+                    format!(
+                        "\nDeprecated: {message} in {} on line {}\n",
+                        use_site.file, use_site.line
+                    )
+                    .as_bytes(),
+                );
+            }
+            Ok(())
+        });
+    }
     let attributes = eg
         .constant_attributes
         .get(name)

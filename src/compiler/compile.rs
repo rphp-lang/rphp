@@ -9660,6 +9660,8 @@ impl Compiler {
                         instruction._pad |= EVAL_FLAG_ERROR_SUPPRESS;
                     } else if instruction.opcode == OpCode::FetchCvR {
                         instruction._pad |= crate::vm::instruction::FETCH_CV_ERROR_SUPPRESS;
+                    } else if instruction.opcode == OpCode::FetchConst {
+                        instruction._pad |= crate::vm::instruction::FETCH_CONST_ERROR_SUPPRESS;
                     } else if matches!(
                         instruction.opcode,
                         OpCode::PreInc | OpCode::PreDec | OpCode::PostInc | OpCode::PostDec
@@ -11514,6 +11516,8 @@ impl Compiler {
                 }
                 // Fetch a named constant at runtime
                 let (runtime_name, fallback) = self.resolve_constant_name(name);
+                let deprecated_e_strict =
+                    runtime_name == "E_STRICT" || fallback.as_deref() == Some("E_STRICT");
                 let name_idx = self.add_literal(Value::string(runtime_name));
                 let tmp = self.alloc_tmp();
                 let mut instr = Instruction::new(OpCode::FetchConst);
@@ -11525,6 +11529,9 @@ impl Compiler {
                     instr.op2 = self.add_literal(Value::string(fallback));
                     instr.op2_type = OpType::Const;
                     instr.extended_value = 2;
+                }
+                if deprecated_e_strict {
+                    instr._pad |= crate::vm::instruction::FETCH_CONST_DEPRECATED_E_STRICT;
                 }
                 instr.result = tmp;
                 instr.result_type = OpType::Tmp;

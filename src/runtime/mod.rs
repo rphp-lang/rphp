@@ -1197,17 +1197,21 @@ impl ExecutorGlobals {
             .rposition(|(candidate, _)| *candidate == frame)
         {
             let (_, reporting) = self.error_suppression_frames.remove(index);
-            self.error_reporting = reporting;
+            // Zend restores the saved mask only while the current mask still
+            // contains fatal classes exclusively. A user change that enables
+            // any non-fatal class therefore survives `@`, while zero and
+            // fatal-only changes remain part of the suppressed scope.
+            let current_is_fatal_only =
+                self.error_reporting & !PHP_82_SUPPRESSED_ERROR_REPORTING == 0;
+            let saved_is_fatal_only = reporting & !PHP_82_SUPPRESSED_ERROR_REPORTING == 0;
+            if current_is_fatal_only && !saved_is_fatal_only {
+                self.error_reporting = reporting;
+            }
         }
     }
 
     pub(crate) fn set_error_reporting(&mut self, level: i64) {
         self.error_reporting = level;
-        // An explicit error_reporting() call inside @ persists after every
-        // active suppression scope is restored, as it does in PHP.
-        for (_, reporting) in &mut self.error_suppression_frames {
-            *reporting = level;
-        }
     }
 
     /// Reserve the stable built-in registry envelope immediately before stdlib
@@ -1293,12 +1297,12 @@ impl ExecutorGlobals {
             clone_with_readonly_updates: Vec::new(),
             lazy_objects: None,
             assertion_state: AssertionState::default(),
-            error_reporting: 32767,
+            error_reporting: crate::PHP_E_ALL,
             precision: 14,
             serialize_precision: -1,
             error_suppression_frames: Vec::new(),
             error_handler: None,
-            error_handler_levels: 32767,
+            error_handler_levels: crate::PHP_E_ALL,
             error_handler_stack: Vec::new(),
             last_error: None,
             handling_error: false,
@@ -1411,12 +1415,12 @@ impl ExecutorGlobals {
             clone_with_readonly_updates: Vec::new(),
             lazy_objects: None,
             assertion_state: AssertionState::default(),
-            error_reporting: 32767,
+            error_reporting: crate::PHP_E_ALL,
             precision: 14,
             serialize_precision: -1,
             error_suppression_frames: Vec::new(),
             error_handler: None,
-            error_handler_levels: 32767,
+            error_handler_levels: crate::PHP_E_ALL,
             error_handler_stack: Vec::new(),
             last_error: None,
             handling_error: false,
@@ -7414,6 +7418,28 @@ mod stdlib_capacity_tests {
             "fixed stdlib registration must not grow a reserved registry"
         );
         assert!(!functions.is_empty());
+    }
+
+    #[test]
+    fn suppressed_reporting_restores_only_fatal_only_changes() {
+        let mut eg = ExecutorGlobals::new();
+
+        eg.begin_error_suppression(1);
+        assert_eq!(eg.error_reporting, 4_437);
+        eg.set_error_reporting(0);
+        eg.end_error_suppression(1);
+        assert_eq!(eg.error_reporting, crate::PHP_E_ALL);
+
+        eg.begin_error_suppression(2);
+        eg.set_error_reporting(8);
+        eg.end_error_suppression(2);
+        assert_eq!(eg.error_reporting, 8);
+
+        eg.begin_error_suppression(3);
+        assert_eq!(eg.error_reporting, 0);
+        eg.set_error_reporting(crate::PHP_E_ALL);
+        eg.end_error_suppression(3);
+        assert_eq!(eg.error_reporting, crate::PHP_E_ALL);
     }
 }
 

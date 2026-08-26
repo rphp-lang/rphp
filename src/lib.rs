@@ -267,6 +267,8 @@ pub(crate) const BUILTIN_CONSTANT_NAMES: &[&str] = &[
     "FILE_SKIP_EMPTY_LINES",
 ];
 
+pub(crate) const PHP_E_ALL: i64 = 30_719;
+
 pub fn builtin_constant(name: &str) -> Option<value::Value> {
     match name {
         // Boolean / null (case-insensitive names handled by parser, but belt-and-suspenders)
@@ -397,7 +399,7 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "E_RECOVERABLE_ERROR" => Some(value::Value::long(4096)),
         "E_DEPRECATED" => Some(value::Value::long(8192)),
         "E_USER_DEPRECATED" => Some(value::Value::long(16_384)),
-        "E_ALL" => Some(value::Value::long(32_767)),
+        "E_ALL" => Some(value::Value::long(PHP_E_ALL)),
         "DEBUG_BACKTRACE_PROVIDE_OBJECT" => Some(value::Value::long(1)),
         "DEBUG_BACKTRACE_IGNORE_ARGS" => Some(value::Value::long(2)),
         "PATHINFO_DIRNAME" => Some(value::Value::long(1)),

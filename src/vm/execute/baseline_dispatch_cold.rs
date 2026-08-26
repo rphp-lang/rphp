@@ -4442,7 +4442,32 @@ fn op_fetch_const(
             ));
             return Ok(());
         };
-        if eg.constant_deprecation_metadata_present {
+        if opline._pad & crate::vm::instruction::FETCH_CONST_DEPRECATED_E_STRICT != 0 {
+            let resolved_name = if eg.find_constant(name).is_some() {
+                name
+            } else {
+                op_array
+                    .literals()
+                    .get(opline.op2 as usize)
+                    .and_then(Value::as_str)
+                    .unwrap_or(name)
+            };
+            let use_site = deprecated_use_site(frame, op_array, opline);
+            let suppressed =
+                opline._pad & crate::vm::instruction::FETCH_CONST_ERROR_SUPPRESS != 0;
+            if suppressed {
+                eg.begin_error_suppression(frame as usize);
+            }
+            let reported = crate::stdlib::reflection::report_deprecated_global_constant_use(
+                resolved_name,
+                &use_site,
+                eg,
+            );
+            if suppressed {
+                eg.end_error_suppression(frame as usize);
+            }
+            reported?;
+        } else if eg.constant_deprecation_metadata_present {
             // SAFETY: `opline` belongs to this op-array and its same-index
             // cache entry remains stable for single-threaded opcode execution.
             let cache = unsafe {

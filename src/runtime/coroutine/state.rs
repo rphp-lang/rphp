@@ -99,7 +99,7 @@ impl CoroutineExecutionState {
             function_arguments: HashMap::new(),
             active_generator: None,
             pending_invoke_this: None,
-            error_reporting: 32767,
+            error_reporting: crate::PHP_E_ALL,
             error_suppression_frames: Vec::new(),
         }
     }

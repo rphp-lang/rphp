@@ -1398,13 +1398,25 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("isset_func", fn_isset_func, 1, 1, "value");
     reg!("empty_func", fn_empty_func, 1, 1, "value");
     reg!("unset_func", fn_unset_func, 1, 1, "value");
-    reg!(
+    reg_typed!(
         "set_error_handler",
         fn_set_error_handler,
         2,
         1,
-        "callback",
-        "error_levels"
+        ["callback", "error_levels"],
+        [
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Callable)),
+            ParamTypeHint::Int
+        ],
+        ParamTypeHint::None
+    );
+    let set_error_handler = eg
+        .find_function("set_error_handler")
+        .expect("set_error_handler was just registered");
+    eg.register_internal_function_reflection_metadata(
+        set_error_handler,
+        vec![None, Some(Value::long(crate::PHP_E_ALL))],
+        "Core",
     );
     reg!("restore_error_handler", fn_restore_error_handler, 0, 0);
     reg!("get_error_handler", fn_get_error_handler, 0, 0);
@@ -1446,7 +1458,23 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         1,
         "callback"
     );
-    reg!("error_reporting", fn_error_reporting, 1, 0, "error_level");
+    reg_typed!(
+        "error_reporting",
+        fn_error_reporting,
+        1,
+        0,
+        ["error_level"],
+        [ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int))],
+        ParamTypeHint::Int
+    );
+    let error_reporting = eg
+        .find_function("error_reporting")
+        .expect("error_reporting was just registered");
+    eg.register_internal_function_reflection_metadata(
+        error_reporting,
+        vec![Some(Value::null())],
+        "Core",
+    );
     reg!(
         "error_log",
         fn_error_log,

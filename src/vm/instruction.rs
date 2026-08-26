@@ -96,6 +96,13 @@ pub const FETCH_CV_ERROR_SUPPRESS: u16 = 1;
 /// Direct increment/decrement executes inside an `@` suppression scope.
 pub const INCDEC_ERROR_SUPPRESS: u16 = 1;
 
+/// FetchConst flag: this exact read resolves PHP's deprecated built-in
+/// `E_STRICT` constant and must emit its PHP 8.5 use-site diagnostic.
+pub const FETCH_CONST_DEPRECATED_E_STRICT: u16 = 1;
+/// FetchConst flag: the read is inside `@`; a deprecation handler still runs
+/// but observes PHP's fatal-only reporting mask.
+pub const FETCH_CONST_ERROR_SUPPRESS: u16 = 1 << 1;
+
 /// A source-level `goto` leaves a try/catch region with finally, while its
 /// zero-width target label shares the first executable offset of that region.
 pub const JMP_FLAG_TARGET_OUTSIDE_TRY: u16 = 1;

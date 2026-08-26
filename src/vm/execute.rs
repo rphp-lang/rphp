@@ -3709,25 +3709,36 @@ fn execute_full_call<'a>(
         && num_args > public_max)
         .then(|| {
             let mut arguments = Vec::with_capacity(num_args as usize);
-            for index in 0..num_args {
-                let cv_index = if func_common.sig.is_variadic && index >= public_max {
-                    func_common.sig.variadic_cv_index + index - public_max
-                } else {
-                    func_common.sig.param_cv_index(index)
-                };
-                // SAFETY: the live call frame reserves the complete supplied
-                // argument prefix, and cv_index maps one member of that prefix.
-                let value = unsafe { (*call).cv(cv_index) };
-                let value = if value.is_reference() {
-                    unsafe { &*value.as_ref_ptr() }
-                } else {
-                    value
-                };
-                arguments.push(if value.is_undef() {
-                    Value::null()
-                } else {
-                    value.clone()
-                });
+            // SAFETY: the live call frame reserves the complete supplied
+            // argument prefix. Each cv_index below maps one member of that
+            // prefix, and referenced values remain live while they are cloned.
+            // Once snapshotted, overlapping extra-argument slots are still
+            // owned by this frame and may be retired before its body starts.
+            unsafe {
+                for index in 0..num_args {
+                    let cv_index = func_common.sig.param_cv_index(index);
+                    let value = (*call).cv(cv_index);
+                    let value = if value.is_reference() {
+                        &*value.as_ref_ptr()
+                    } else {
+                        value
+                    };
+                    arguments.push(if value.is_undef() {
+                        Value::null()
+                    } else {
+                        value.clone()
+                    });
+                }
+
+                // Extra positional arguments are retained in
+                // `function_arguments` for func_get_arg(s), but their
+                // temporary slots may overlap the callee's first locals.
+                for index in public_max..num_args {
+                    let cv_index = func_common.sig.param_cv_index(index);
+                    if cv_index < func_common.frame.num_cvs {
+                        frame_slot_set(call, (*call).cv_mut(cv_index), Value::undef());
+                    }
+                }
             }
             arguments
         });

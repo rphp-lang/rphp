@@ -907,7 +907,7 @@ fn error_reporting_is_request_local_and_uses_namespaced_function_fallback() {
         run_php(
             "<?php namespace App; echo error_reporting(), ':'; echo error_reporting(5), ':'; echo error_reporting();"
         ),
-        "32767:32767:5"
+        "30719:30719:5"
     );
 }
 
@@ -917,7 +917,7 @@ fn error_suppression_follows_a_called_frame_and_restores_the_request_mask() {
         run_php(
             "<?php error_reporting(E_ALL); function inspectMaskedWarning() { echo $forgotten; throw new RuntimeException('stop'); } try { @inspectMaskedWarning(); } catch (RuntimeException $error) {} echo 'mask=', error_reporting();"
         ),
-        "mask=32767"
+        "mask=30719"
     );
 }
 
@@ -1171,7 +1171,7 @@ fn explicit_reporting_change_inside_suppressed_call_reenables_warning_and_persis
         output.contains("Warning: Undefined variable $forgotten"),
         "{output}"
     );
-    assert!(output.ends_with("mask=32767"), "{output}");
+    assert!(output.ends_with("mask=30719"), "{output}");
 }
 
 #[test]

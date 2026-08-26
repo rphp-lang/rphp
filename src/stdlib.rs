@@ -13823,11 +13823,21 @@ fn fn_set_error_handler(
     else {
         return Ok(());
     };
+    let levels = if arg_opt!(ed, 1).is_some() {
+        let Some(levels) =
+            typed_internal_int_argument(ed, eg, "set_error_handler", 1, "error_levels")?
+        else {
+            return Ok(());
+        };
+        levels
+    } else {
+        crate::PHP_E_ALL
+    };
     let previous = eg.error_handler.clone().unwrap_or_else(Value::null);
     eg.error_handler_stack
         .push((eg.error_handler.take(), eg.error_handler_levels));
     eg.error_handler = handler;
-    eg.error_handler_levels = arg_opt!(ed, 1).map_or(32767, Value::to_long_val);
+    eg.error_handler_levels = levels;
     ret!(rv, previous);
 }
 
@@ -14269,7 +14279,19 @@ fn fn_error_reporting(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let previous = eg.error_reporting;
-    if let Some(level) = arg_opt!(ed, 0).and_then(Value::as_long) {
+    let argument = arg_opt!(ed, 0).map(Value::dereferenced);
+    if argument.is_some_and(|value| value.value_type() != ValueType::Null) {
+        let Some(level) = typed_internal_int_argument_expected(
+            ed,
+            eg,
+            "error_reporting",
+            0,
+            "error_level",
+            "?int",
+        )?
+        else {
+            return Ok(());
+        };
         eg.set_error_reporting(level);
     }
     ret!(rv, Value::long(previous));
