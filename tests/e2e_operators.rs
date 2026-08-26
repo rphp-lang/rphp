@@ -4,7 +4,7 @@ use common::{run_php, run_php_expect_error_with_source_context, run_php_with_sou
 
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
-use rphp::parser::Parser;
+use rphp::parser::{Expr, Parser, Stmt};
 
 // === Logical operators ===
 
@@ -195,9 +195,12 @@ fn test_e2e_nested_ternary_error() {
     let tokens = Lexer::new("<?php echo 1 ? 2 : 3 ? 4 : 5;")
         .tokenize()
         .unwrap();
-    let result = Parser::new(tokens).parse();
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Unparenthesized"));
+    let statements = Parser::new(tokens).parse().unwrap();
+    assert!(matches!(
+        statements.last(),
+        Some(Stmt::ExprStmt(Expr::CompileError { message, .. }))
+            if message == "Unparenthesized `a ? b : c ? d : e` is not supported. Use either `(a ? b : c) ? d : e` or `a ? b : (c ? d : e)`"
+    ));
 }
 
 #[test]

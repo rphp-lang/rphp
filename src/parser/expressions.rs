@@ -453,6 +453,9 @@ impl Parser {
 
     fn parse_ternary(&mut self) -> Result<Expr, String> {
         let expr = self.parse_null_coalesce()?;
+        let ternary_line = self
+            .last_primary_line
+            .unwrap_or_else(|| self.closest_token_source_line());
 
         if self.peek() == Token::Question {
             self.advance(); // consume ?
@@ -488,7 +491,26 @@ impl Parser {
             let else_expr = self.finish_assignment_tail(else_expr)?;
 
             if self.peek() == Token::Question {
-                return Err("Unparenthesized `a ? b : c ? d : e` is not supported. Use explicit parentheses.".into());
+                let nested_elvis = self.peek_at(1) == Token::Colon;
+                let message = if nested_elvis {
+                    "Unparenthesized `a ? b : c ?: d` is not supported. Use either `(a ? b : c) ?: d` or `a ? b : (c ?: d)`"
+                } else {
+                    "Unparenthesized `a ? b : c ? d : e` is not supported. Use either `(a ? b : c) ? d : e` or `a ? b : (c ? d : e)`"
+                };
+                let error = self.compile_error(message, ternary_line);
+                self.advance(); // consume the second ?
+                if nested_elvis {
+                    self.advance(); // consume :
+                    let right = self.parse_null_coalesce()?;
+                    let _ = self.finish_assignment_tail(right)?;
+                } else {
+                    let then_expr = self.parse_ternary()?;
+                    let _ = self.finish_assignment_tail(then_expr)?;
+                    self.expect(&Token::Colon)?;
+                    let else_expr = self.parse_null_coalesce()?;
+                    let _ = self.finish_assignment_tail(else_expr)?;
+                }
+                return Ok(error);
             }
 
             Ok(Expr::Ternary {
