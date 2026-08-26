@@ -8,6 +8,75 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`variadic-reference-binding`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. Known direct calls now mark every positional
+element of a by-reference variadic tail as a reference argument, including
+positions beyond the ordinary 64-bit signature mask. Canonical runtime
+signature queries map every repeated position back to the declared variadic
+parameter. Variadic packing transfers the prepared call slots into the bucket,
+preserving each owned or borrowed alias without a redundant retain/release
+pair or leaving an argument reference in a slot that overlaps a callee local.
+
+PHP 8.5 diagnostics now omit the declared bucket name for a failed variadic
+reference element and retain the public callable identity and actual argument
+ordinal across direct functions, methods, closures, named arguments,
+source-unpack and callback warnings. Original regressions cover multiple
+positional aliases, methods, closures, named and array-unpacked arguments, a
+66-argument call before its declaration, write-through and exact caught error
+or warning text. `variadic/by_ref.phpt` and `variadic/by_ref_error.phpt` now
+pass; the full audit also discovers the same-root
+`closures/closure_019.phpt` pass.
+
+The complete combined audit covers 7,174 cases: 5,752 pass, 1,028 fail, 182
+skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
+fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
+and one unsupported. Zend/lang moves from 4,290 to 4,293 pass, exactly
+`+3/-0`, with 1,010 failures, 115 skips and 181 unsupported cases. Only the
+three named cases move from `fail/output` or `fail/runtime` to pass; no other
+outcome changes status or category. Two exact-final-binary Zend/lang runs have
+byte-identical manifests and summaries, whose SHA-256 values are respectively
+`f11c8d3f35465bdb845830563f9da90d04a8053aaa1b2ca3ce801ccaeaea51d4`
+and `07a2c5b3568a43c64189804201174d0f8fd08672233aa15880d26ab6b2daa849`.
+Repeated serial strings and array outcome projections are byte-identical and
+retain SHA-256 values
+`06c231b7032faaece97ae32cac251aa7740e317ea4e169ca1f21223f6aea5d38`
+and `84e2007e9e6b16edab2bf9786966aedf44791151a15f2188960711d4f8f4347b`;
+each has zero outcome delta from the exact parent binary.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass. The
+matrix cleanup hook recovered filesystem capacity between configurations.
+Production remains at 1,621 unsafe blocks, 289 unsafe functions, 366 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The
+change adds no dependency and changes no token, AST, bytecode, frame, Value or
+runtime layout; compiler-only reference signature entries grow by one optional
+tail index.
+
+Two exact-final-binary CPU-2-pinned, performance-governor, order-balanced
+32-pair release runs with four warmups compare parent SHA-256
+`4444f04d7b8a3765aa41b3fc29419e4b8d7c3904c38d35bfb6db8fad7370037a`
+with candidate
+`d38bf1af2cdb138b4d0d414103e17c13df816ea34eb5803f0b9c78bfdf420500`.
+Paired medians are -9.777%/-1.138% for 100 startups,
++2.317%/+2.329% for 500 by-reference variadic declarations,
+-8.647%/-7.947% for one million by-reference variadic calls and
+-0.165%/+0.511% for five million retained `strlen()` calls. Comparable
+outputs match and every paired median remains below +5%. The raw TSVs hash to
+`7d0ea83ef8df4bd681fd4c1d2e25db8f3ebf131c5052e0db24dd8a9e59978446`
+and `caf4ad74942ca11b0067840fcd81712e6dd813c662647ea8e4974a58eb72e73d`.
+
+This checkpoint does not claim complete internal by-reference variadic
+handler behavior, every Traversable/callback reference-provenance combination
+or broader named/unpacked argument completeness. The monitored supported debt
+is now 1,028 failures: 18 strings, zero array and 1,010 Zend/lang. Read-only
+cluster triage selects the two remaining `this-reserved` failures next:
+`this_as_global.phpt` and `this_as_lexical_var_error.phpt` currently stop at
+generic parser errors instead of PHP 8.5's dedicated located fatals.
+
+The implementation checkpoint is commit `bbfab662`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `variadic-element-type-validation`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. Canonical user-call preparation now validates
 and weakly coerces every positional, named or source-unpacked variadic element

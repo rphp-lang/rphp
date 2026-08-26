@@ -3511,12 +3511,30 @@ CPU-pinned 32-pair runs keep startup, retained `strlen()`, 500 typed variadic
 declarations and one million typed variadic calls below +5%, with matching
 outputs.
 
-The monitored supported debt is now 1,031 failures: 18 strings, zero array and
-1,013 Zend/lang. Read-only neighborhood triage next selects the only two
-remaining variadic-directory failures, `by_ref.phpt` and `by_ref_error.phpt`,
-as the adjacent variadic reference-binding and diagnostic boundary. The
-attempted 14-case `crypt()` platform approach did not meet the portability
-contract and remains deferred.
+The `bbfab662` `variadic-reference-binding` checkpoint then moves Zend/lang
+from 4,290 to 4,293 pass, exactly `+3/-0`; strings stay 631/733 and array stays
+828/842 with no other status or category movement. Known direct calls preserve
+every positional by-reference variadic tail alias, including arguments beyond
+the 64-bit signature mask. Runtime packing transfers prepared slots into the
+bucket without redundant reference retains or overlap with callee locals, and
+direct, method, closure, named, unpacked and callback diagnostics publish the
+PHP 8.5 ordinal, callable identity and omitted variadic bucket name.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical compact
+manifests and summaries; repeated serial strings/array outcome projections
+also match the exact parent. All five Cargo configurations,
+all-feature/all-target, formatting, HTML data, PHPT runner, unsafe, Composer S0,
+four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Two exact-final-binary
+CPU-pinned 32-pair runs keep startup, retained `strlen()`, 500 by-reference
+variadic declarations and one million by-reference variadic calls below +5%,
+with matching outputs.
+
+The monitored supported debt is now 1,028 failures: 18 strings, zero array and
+1,010 Zend/lang. Read-only small-cluster triage next selects the two remaining
+`this-reserved` failures, `this_as_global.phpt` and
+`this_as_lexical_var_error.phpt`, as one dedicated `$this` parser-diagnostic
+boundary. The attempted 14-case `crypt()` platform approach did not meet the
+portability contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
 suppression-wrapped destructuring, exhaustive object/array/resource
