@@ -25705,134 +25705,275 @@ fn fn_is_scalar(
     ret!(rv, Value::bool(scalar));
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ParsedUrl<'a> {
+    scheme: Option<&'a str>,
+    host: Option<&'a str>,
+    port: Option<i64>,
+    user: Option<&'a str>,
+    pass: Option<&'a str>,
+    path: Option<&'a str>,
+    query: Option<&'a str>,
+    fragment: Option<&'a str>,
+}
+
+#[inline]
+fn parse_url_port(port: &str) -> Option<i64> {
+    if port.len() > 5 {
+        return None;
+    }
+    let bytes = port.as_bytes();
+    let mut position = bytes
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    let negative = match bytes.get(position) {
+        Some(b'+') => {
+            position += 1;
+            false
+        }
+        Some(b'-') => {
+            position += 1;
+            true
+        }
+        _ => false,
+    };
+    let start = position;
+    let mut value = 0i64;
+    while let Some(digit @ b'0'..=b'9') = bytes.get(position).copied() {
+        value = value * 10 + i64::from(digit - b'0');
+        position += 1;
+    }
+    (position > start && !negative && value <= 65_535).then_some(value)
+}
+
+/// PHP treats `name:123/path` as a schemeless authority when the decimal
+/// field has at most five digits. A five-digit overflow is an invalid URL,
+/// while six or more digits remain an opaque scheme path.
+fn schemeless_port(after_colon: &str) -> Option<Result<i64, ()>> {
+    let digit_count = after_colon.bytes().take_while(u8::is_ascii_digit).count();
+    if digit_count == 0 || digit_count > 5 {
+        return None;
+    }
+    if !matches!(after_colon.as_bytes().get(digit_count), None | Some(b'/')) {
+        return None;
+    }
+    Some(parse_url_port(&after_colon[..digit_count]).ok_or(()))
+}
+
+fn parse_url_parts(input: &str) -> Option<ParsedUrl<'_>> {
+    let mut parsed = ParsedUrl::default();
+    let mut rest = input;
+    let has_authority;
+
+    if let Some(protocol_relative) = rest.strip_prefix("//") {
+        rest = protocol_relative;
+        has_authority = true;
+    } else if let Some(colon) = rest.find(':') {
+        let candidate = &rest[..colon];
+        let after_colon = &rest[colon + 1..];
+        if let Some(port) = schemeless_port(after_colon) {
+            port.ok()?;
+            has_authority = true;
+        } else if !candidate.is_empty()
+            && candidate
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'.' | b'-'))
+        {
+            parsed.scheme = Some(candidate);
+            if let Some(authority) = after_colon.strip_prefix("//") {
+                rest = authority;
+                has_authority = true;
+            } else {
+                rest = after_colon;
+                has_authority = false;
+            }
+        } else {
+            has_authority = false;
+        }
+    } else {
+        has_authority = false;
+    }
+
+    if let Some(index) = rest.find('#') {
+        parsed.fragment = Some(&rest[index + 1..]);
+        rest = &rest[..index];
+    }
+    if let Some(index) = rest.find('?') {
+        parsed.query = Some(&rest[index + 1..]);
+        rest = &rest[..index];
+    }
+
+    if !has_authority {
+        if !rest.is_empty() || input.is_empty() {
+            parsed.path = Some(rest);
+        }
+        return Some(parsed);
+    }
+
+    let (authority, path) = rest
+        .find('/')
+        .map_or((rest, None), |index| (&rest[..index], Some(&rest[index..])));
+    parsed.path = path.map(|path| {
+        if parsed.scheme == Some("file")
+            && path.as_bytes().first() == Some(&b'/')
+            && path.as_bytes().get(2) == Some(&b':')
+        {
+            &path[1..]
+        } else {
+            path
+        }
+    });
+
+    let (userinfo, hostport) = authority.rfind('@').map_or((None, authority), |index| {
+        (Some(&authority[..index]), &authority[index + 1..])
+    });
+    if let Some(userinfo) = userinfo {
+        if let Some(index) = userinfo.find(':') {
+            parsed.user = Some(&userinfo[..index]);
+            parsed.pass = Some(&userinfo[index + 1..]);
+        } else {
+            parsed.user = Some(userinfo);
+        }
+    }
+
+    if let Some(bracketed) = hostport.strip_prefix('[') {
+        let close = bracketed.find(']')? + 1;
+        parsed.host = Some(&hostport[..=close]);
+        let trailing = &hostport[close + 1..];
+        if let Some(port) = trailing.strip_prefix(':') {
+            if !port.is_empty() {
+                parsed.port = Some(parse_url_port(port)?);
+            }
+        } else if !trailing.is_empty() {
+            return None;
+        }
+    } else if let Some(index) = hostport.rfind(':') {
+        let host = &hostport[..index];
+        let port = &hostport[index + 1..];
+        if host.is_empty() {
+            return None;
+        }
+        parsed.host = Some(host);
+        if !port.is_empty() {
+            parsed.port = Some(parse_url_port(port)?);
+        }
+    } else if !hostport.is_empty() {
+        parsed.host = Some(hostport);
+    }
+
+    if parsed.host.is_none()
+        && !(parsed.scheme == Some("file") && parsed.path.is_some() && userinfo.is_none())
+    {
+        return None;
+    }
+    Some(parsed)
+}
+
+#[cfg(test)]
+mod parse_url_contract_tests {
+    use super::{ParsedUrl, parse_url_parts};
+
+    #[test]
+    fn separates_empty_paths_schemeless_ports_and_opaque_schemes() {
+        assert_eq!(
+            parse_url_parts(""),
+            Some(ParsedUrl {
+                path: Some(""),
+                ..ParsedUrl::default()
+            })
+        );
+        assert_eq!(
+            parse_url_parts("host:80/path"),
+            Some(ParsedUrl {
+                host: Some("host"),
+                port: Some(80),
+                path: Some("/path"),
+                ..ParsedUrl::default()
+            })
+        );
+        assert_eq!(
+            parse_url_parts("host:999999"),
+            Some(ParsedUrl {
+                scheme: Some("host"),
+                path: Some("999999"),
+                ..ParsedUrl::default()
+            })
+        );
+        assert_eq!(parse_url_parts("host:65536/path"), None);
+    }
+
+    #[test]
+    fn strips_empty_ports_and_validates_authorities() {
+        assert_eq!(
+            parse_url_parts("http://1.2.3.4:/path"),
+            Some(ParsedUrl {
+                scheme: Some("http"),
+                host: Some("1.2.3.4"),
+                path: Some("/path"),
+                ..ParsedUrl::default()
+            })
+        );
+        assert_eq!(parse_url_parts("http://host:65536/path"), None);
+        assert_eq!(
+            parse_url_parts("x://::6.5"),
+            Some(ParsedUrl {
+                scheme: Some("x"),
+                host: Some(":"),
+                port: Some(6),
+                ..ParsedUrl::default()
+            })
+        );
+        assert_eq!(parse_url_parts("http:///path"), None);
+        assert_eq!(
+            parse_url_parts("file:///path"),
+            Some(ParsedUrl {
+                scheme: Some("file"),
+                path: Some("/path"),
+                ..ParsedUrl::default()
+            })
+        );
+        assert_eq!(
+            parse_url_parts("file:///a:/"),
+            Some(ParsedUrl {
+                scheme: Some("file"),
+                path: Some("a:/"),
+                ..ParsedUrl::default()
+            })
+        );
+    }
+}
+
 /// parse_url($url, $component = -1): mixed
 fn fn_parse_url(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let url = arg_str!(ed, 0);
     let component = arg_opt!(ed, 1).map(|v| v.to_long_val()).unwrap_or(-1);
-
-    // Manual URL parse — matches PHP's parse_url() behavior.
-    // Handles:  scheme://[user[:pass]@]host[:port][/path][?query][#fragment]
-    //           scheme:opaque_path[?query][#fragment]   (mailto:, tel:, news:, …)
-    //           //host/path  (protocol-relative)
-    //           /path?query  (relative)
-    let s = url.as_ref();
-    let mut rest = s;
-
-    // Detect scheme — a sequence of [A-Za-z][A-Za-z0-9+.-]* followed by ':'
-    let (scheme, has_authority) = if let Some(colon) = rest.find(':') {
-        let candidate = &rest[..colon];
-        let valid_scheme = !candidate.is_empty()
-            && candidate.as_bytes()[0].is_ascii_alphabetic()
-            && candidate
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'.' || b == b'-');
-        if valid_scheme {
-            let after_colon = &rest[colon + 1..];
-            if after_colon.starts_with("//") {
-                // scheme://authority...
-                rest = &after_colon[2..];
-                (Some(candidate.to_string()), true)
-            } else {
-                // Opaque scheme (mailto:path, tel:number, etc.)
-                rest = after_colon;
-                (Some(candidate.to_string()), false)
-            }
-        } else if rest.starts_with("//") {
-            rest = &rest[2..];
-            (None, true)
-        } else {
-            (None, false)
-        }
-    } else if rest.starts_with("//") {
-        rest = &rest[2..];
-        (None, true)
-    } else {
-        (None, false)
+    let Some(parsed) = parse_url_parts(&url) else {
+        ret!(rv, Value::bool(false));
     };
-
-    // Fragment (split early — # can appear in query too, but PHP splits on first #)
-    let fragment = if let Some(idx) = rest.find('#') {
-        let f = rest[idx + 1..].to_string();
-        rest = &rest[..idx];
-        Some(f)
-    } else {
-        None
-    };
-
-    // Query
-    let query = if let Some(idx) = rest.find('?') {
-        let q = rest[idx + 1..].to_string();
-        rest = &rest[..idx];
-        Some(q)
-    } else {
-        None
-    };
-
-    // Authority vs path
-    let (user, pass, host, port, path);
-    if has_authority {
-        // Split authority from path at first /
-        let (authority, p) = if let Some(idx) = rest.find('/') {
-            (&rest[..idx], Some(rest[idx..].to_string()))
-        } else {
-            (rest, None)
-        };
-        path = p;
-
-        // user:pass@host:port
-        let (userinfo, hostport) = if let Some(idx) = authority.rfind('@') {
-            (Some(&authority[..idx]), &authority[idx + 1..])
-        } else {
-            (None, authority)
-        };
-
-        if let Some(ui) = userinfo {
-            if let Some(idx) = ui.find(':') {
-                user = Some(ui[..idx].to_string());
-                pass = Some(ui[idx + 1..].to_string());
-            } else {
-                user = Some(ui.to_string());
-                pass = None;
-            }
-        } else {
-            user = None;
-            pass = None;
-        }
-
-        // host[:port]
-        if let Some(idx) = hostport.rfind(':') {
-            let port_str = &hostport[idx + 1..];
-            if let Ok(p) = port_str.parse::<i64>() {
-                host = Some(hostport[..idx].to_string());
-                port = Some(p);
-            } else {
-                host = Some(hostport.to_string());
-                port = None;
-            }
-        } else {
-            host = if hostport.is_empty() {
-                None
-            } else {
-                Some(hostport.to_string())
-            };
-            port = None;
-        }
-    } else {
-        // No authority — rest is the path (opaque URI or relative)
-        user = None;
-        pass = None;
-        host = None;
-        port = None;
-        path = if rest.is_empty() {
-            None
-        } else {
-            Some(rest.to_string())
-        };
+    if component > 7 {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            &format!(
+                "parse_url(): Argument #2 ($component) must be a valid URL component identifier, {component} given"
+            ),
+        ));
+        return Ok(());
     }
+    let ParsedUrl {
+        scheme,
+        host,
+        port,
+        user,
+        pass,
+        path,
+        query,
+        fragment,
+    } = parsed;
 
     // PHP_URL_* constants
     const PHP_URL_SCHEME: i64 = 0;
