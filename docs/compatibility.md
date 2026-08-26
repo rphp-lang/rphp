@@ -8,6 +8,66 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`predefined-ini-access-constants`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. RPHP now exposes the standard INI access masks
+`INI_USER=1`, `INI_PERDIR=2`, `INI_SYSTEM=4` and `INI_ALL=7` through its
+canonical built-in constant inventory. Direct and fully qualified reads,
+namespaced fallback and local shadowing, function default expressions,
+`constant()`/first-class callbacks, `defined()`, flat `get_defined_constants()`
+and `ReflectionConstant::getValue()` share the same values.
+
+One original E2E covers all four constants and those compile-time, runtime,
+namespace, callback, Reflection and inventory paths. Its clean-room transcript
+is byte-identical to PHP 8.5.9 at SHA-256
+`bb0bb32aa013c74c87877b8b5679e3a096f813c997af2dd343b93bbcc92276f0`.
+All five supplying namespace PHPTs pass, up from zero: `ns_044`, `ns_045`,
+`ns_047`, `ns_051` and `ns_052`.
+
+The complete combined audit covers 7,174 cases: 5,692 pass, 1,088 fail, 182
+skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
+fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
+and one unsupported. Zend/lang moves from 4,228 to 4,233 pass, exactly
+`+5/-0`, with 1,070 failures, 115 skips and 181 unsupported cases. Only the
+five named namespace cases move from `fail/runtime` to pass; no other status,
+stage or category changes. Two serial exact-final-binary runs have byte-
+identical manifests and summaries, whose SHA-256 values are respectively
+`865485e842d8cbae4f56ced8e7d9b4857a537965879b61917f4989d822718bcb`
+and `c89295b99200b3a7d3a827f66a9fc39acd1c70fab018bdb4178329e151e74ae8`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at 1,622 unsafe blocks, 289 unsafe functions, 366 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony
+S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The change adds
+no dependency and changes no public runtime layout.
+
+Two exact-final-binary CPU-2-pinned, order-balanced 32-pair release runs use the
+performance governor, four warmups and no excluded sample. They compare parent
+SHA-256 `e83f7cdabf1769a57846f12435f4addb3c1a801a91fddf005acbd9ef586df3b2`
+with candidate
+`0c89aa94228a51e28d6f85d28b31352b1e19770ca7572e59a756a94d16470459`.
+Paired medians are +1.869%/+2.372% for 100 startups, +0.098%/+0.312% for five
+million retained `strlen()` calls, +0.168%/-0.204% for five million retained
+direct `INI_SCANNER_*` reads and -2.556%/-2.686% for one million retained
+dynamic groups of the same constants. Comparable outputs match and every
+paired median remains below +5%. The raw TSVs hash to
+`0752b9449dacd0989a91fec52024ff0dbca368604a46338c44b96dde3ce9d20d`
+and `1ace902c3365db4dbce00fc086a72c4c60646d71a37337e6a44250b889876d54`.
+An initial inline-match candidate was rejected after two runs reproduced
+startup medians of +5.245%/+5.278%; the accepted cold fallback restores the
+gate without changing the constant contract.
+
+This checkpoint does not claim PHP's complete extension/category partition in
+`get_defined_constants(true)`, all `ReflectionConstant` extension metadata,
+32-bit behavior or unrelated INI directive mutability. The monitored supported
+debt is now 1,088 failures: 18 strings, zero array and 1,070 Zend/lang.
+Read-only manifest triage selects the suppressed-write parser boundary next:
+four remaining cases reject assignment through an `@`-wrapped variable, array
+offset or property before execution.
+
+The implementation checkpoint is commit `c1c26a69`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `error-reporting-mask-boundary`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. RPHP now uses PHP 8.5's `E_ALL=30719` mask for
 request, coroutine and error-handler defaults while retaining `E_STRICT=2048`

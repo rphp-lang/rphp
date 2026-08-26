@@ -3254,15 +3254,30 @@ Two exact-final-binary CPU-pinned 32-pair runs keep startup, retained
 `strlen()`, five million `error_reporting()` reads and 20,000 suppressed throws
 below +5%, with matching outputs.
 
-The monitored supported debt is now 1,093 failures: 18 strings, zero array and
-1,075 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
+The `c1c26a69` `predefined-ini-access-constants` checkpoint then moves
+Zend/lang from 4,228 to 4,233 pass, exactly `+5/-0`; strings stay 631/733 and
+array stays 828/842 with no other status, stage or category movement. The
+canonical constant inventory now exposes `INI_USER=1`, `INI_PERDIR=2`,
+`INI_SYSTEM=4` and `INI_ALL=7` through direct, qualified, namespace fallback,
+default-expression, callback, Reflection and flat inventory paths.
+
+Two complete final audits are byte-identical through their merged manifests
+and summaries. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep
+startup, retained `strlen()` and direct/dynamic `INI_SCANNER_*` controls below
+the +5% ceiling. An inline-match candidate that repeatedly exceeded the startup
+ceiling was rejected; the accepted cold fallback preserves the established hot
+match.
+
+The monitored supported debt is now 1,088 failures: 18 strings, zero array and
+1,070 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
 the portability contract and remains deferred. Read-only manifest triage next
-selects the predefined INI access constants: five namespace tests exercise
-`INI_ALL=7` through fallback, fully qualified, runtime `constant()` and
-default-expression paths. Suppressed write targets, remaining deprecated-
-constant activation sites, generator extra-argument visibility, isolated/mixed
-standalone CR, broader binary-string propagation, 32-bit behavior and
-allocation-limit/OOM equivalence remain explicit contracts.
+selects the suppressed-write parser boundary: four cases reject assignment
+through an `@`-wrapped variable, array offset or property before execution.
+Remaining deprecated-constant activation sites, generator extra-argument
+visibility, isolated/mixed standalone CR, broader binary-string propagation,
+32-bit behavior and allocation-limit/OOM equivalence remain explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,
