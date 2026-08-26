@@ -4357,6 +4357,13 @@ impl ExecutorGlobals {
         // `None` denotes a declaration composed by this class and therefore a
         // fresh slot. Inherited entries carry the parent's canonical slot.
         let mut static_property_slots = vec![None; class_def.static_properties.len()];
+        let declaration_location = || {
+            declaration_file
+                .as_deref()
+                .map_or_else(String::new, |file| {
+                    format!(" in {file} on line {declaration_line}")
+                })
+        };
 
         // Enums and final classes cannot be used as parents.
         if let Some(parent_name) = &class_def.parent {
@@ -4369,20 +4376,26 @@ impl ExecutorGlobals {
                 }
                 if parent.is_final {
                     return Err(format!(
-                        "Class {} cannot extend final class {}",
-                        class_name, parent_name
+                        "Class {} cannot extend final class {}{}",
+                        class_name,
+                        parent_name,
+                        declaration_location()
                     ));
                 }
                 if class_def.is_readonly != parent.is_readonly {
                     return Err(if class_def.is_readonly {
                         format!(
-                            "Readonly class {} cannot extend non-readonly class {}",
-                            class_name, parent_name
+                            "Readonly class {} cannot extend non-readonly class {}{}",
+                            class_name,
+                            parent_name,
+                            declaration_location()
                         )
                     } else {
                         format!(
-                            "Non-readonly class {} cannot extend readonly class {}",
-                            class_name, parent_name
+                            "Non-readonly class {} cannot extend readonly class {}{}",
+                            class_name,
+                            parent_name,
+                            declaration_location()
                         )
                     });
                 }
