@@ -3210,15 +3210,29 @@ unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Two
 exact-final-binary CPU-pinned 32-pair runs keep startup, retained `strlen()` and
 500,000 successful `parse_url()` calls below +5%, with matching outputs.
 
-The monitored supported debt is now 1,109 failures: 20 strings, zero array and
+The `166bf23f` `get-meta-tags-html-boundary` checkpoint then moves strings from
+629 to 630 pass, exactly `+1/-0`; array stays 828/842 and Zend/lang stays
+4,214/5,599 with no other outcome movement. A typed standard
+`get_meta_tags()` surface now shares local files, `file://` URIs and include
+paths with the existing stream layer. Its clean-room byte parser covers PHP's
+case-insensitive tags/attributes, key normalization, duplicate overwrite,
+quoted/unquoted content, exact `</head>` stop and malformed nested-marker
+recovery. A 39-case differential transcript is byte-identical to PHP 8.5.9.
+
+Two complete final audits have identical result projections. All five Cargo
+configurations, all-feature/all-target, formatting, HTML data, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Two
+exact-final-binary CPU-pinned 32-pair runs keep startup, retained `strlen()` and
+50,000 retained file reads below +5%, with matching outputs.
+
+The monitored supported debt is now 1,108 failures: 19 strings, zero array and
 1,089 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
 the portability contract and remains deferred. Risk-adjusted triage next
-selects portable `get_meta_tags()` because its file/HTML metadata contract has
-more dependency utility than legacy `hebrev()`, while host locale discovery,
+selects the pure legacy `hebrev()` byte transform. Host locale discovery,
 `nl_langinfo()`, `strcoll()`, the deliberate `str_pad(PHP_INT_MAX)` allocation
 failure, runtime-selected method/static array-reference context, broader
-binary-string propagation, 32-bit behavior and allocation-limit/OOM equivalence
-remain explicit contracts.
+binary-string propagation, 32-bit behavior and allocation-limit/OOM
+equivalence remain explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,

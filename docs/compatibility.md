@@ -8,6 +8,76 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`get-meta-tags-html-boundary`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. RPHP now registers the typed standard
+`get_meta_tags(string $filename, bool $use_include_path = false): array|false`
+surface and extracts `name`/`content` metadata through a separate clean-room
+byte parser. Tag and attribute names are ASCII-case-insensitive, PHP's metadata
+key punctuation is normalized and duplicate keys overwrite in place. Attribute
+order, quoted/unquoted values, empty content, numeric keys, exact `</head>`
+termination and PHP's deliberately simple `>` boundary all hold. Nested and
+unterminated malformed markers recover without recognizing fixture names.
+
+Local paths, local `file://` URIs and the request include path share the
+existing stream and resolver layers. Empty/NUL paths, missing files, warning
+suppression or throwing handlers, weak/strict conversion and Stringable side
+effects retain PHP's error precedence. Four original E2Es plus three unit tests
+cover ordinary and malformed metadata, comments/scripts, duplicate attributes,
+direct/dynamic/first-class/callback/named/spread calls, Reflection defaults,
+references, copy-on-write, include paths and file failures. A 39-case
+clean-room transcript is byte-identical to PHP 8.5.9 at SHA-256
+`462eb674c57a42dce9a986318528eb7d2d58d6a20f4224c07a0e5e0df52b6f57`.
+The supplying PHPT passes 1/1; its focused merged manifest and summary have
+SHA-256 values
+`9334c2af8313deebf123ceba5e946b2292e1102a243d282a5d21983bec48f703`
+and `1f74c14af846f1edcc81a16fa97447ac5a71c1d763f5eb7e748ca824783b099c`.
+
+The complete 733-case strings audit moves from 629 to 630 passes, exactly
+`+1/-0`, with 19 failures, 54 skips, 30 unsupported cases and no timeout or
+crash. Only `ext/standard/tests/strings/get_meta_tags.phpt` moves from
+`fail/runtime` to pass. Array remains classification-identical at 828 pass,
+zero fail, 13 skip and one unsupported. Zend/lang remains
+classification-identical at 4,214 pass, 1,089 fail, 115 skip and 181
+unsupported. Two serial final runs are identical in
+status, category, expected hash, exit status and reason. Actual-output hashes
+differ only for 22 pre-existing random-output or unordered-debug cases (three
+strings, 12 array and seven Zend/lang); the target is stable. The strings,
+array and Zend/lang classification projection SHA-256 values are respectively
+`38f2693c57205dfa05625e4a70dcac66a2c6cbc5589b3120feca86106bca124b`,
+`b45f09b2e3a1c86d2f9022c98c8229c47656753b9c0c3f86cabdd21097c268f9`
+and `df0487c43bc955974817b8a5a20bbe70d68fb2a39492ffb87caedec11803c90a`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at 1,623 unsafe blocks, 289 unsafe functions, 366 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony
+S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The change adds
+no dependency and changes no public runtime layout.
+
+Two exact-final-binary CPU-2-pinned, order-balanced 32-pair release runs use the
+performance governor, four warmups and no excluded sample. They compare parent
+SHA-256 `0963865436ae5a1d0ecc19f4a21784137919a6f799727220658d5569da379da2`
+with candidate
+`ecd1c7b093f149d6ac40286e61d841d99bc9fba87ea2acff0d4e42508fca301e`.
+Paired medians are -0.920%/-1.320% for 100 startups, +1.470%/+0.024% for five
+million retained `strlen()` calls and +0.363%/+0.264% for 50,000 retained
+`file_get_contents()` calls. Comparable outputs match and every paired median
+remains below +5%. The raw TSVs hash to
+`bada0b14259ab8ff7445c5e8bedff99fc5692daab5371ceb69e5b20e61c99594`
+and `9d7e0ff363b5d7217c6053bff0db5ce92fb9930f9b232675de6f4c6d7e93c094`.
+
+This checkpoint does not claim a general HTML DOM parser, entity/charset
+decoding, remote or user-defined stream wrappers, 32-bit behavior or host
+locale/cryptography behavior. The monitored supported debt is now 1,108
+failures: 19 strings, zero array and 1,089 Zend/lang. Fourteen strings failures
+remain in the deferred non-portable `crypt()` family. The pure legacy
+`hebrev()` byte transform is the next risk-adjusted portable checkpoint;
+`nl_langinfo()`, `strcoll()`, broader locale switching and the deliberate
+`str_pad(PHP_INT_MAX)` allocation failure remain separate contracts.
+
+The implementation checkpoint is commit `166bf23f`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `parse-url-authority-boundary`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. `parse_url()` now distinguishes opaque scheme
 paths from PHP's schemeless `host:port[/path]` form, retains an empty input as
