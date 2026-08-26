@@ -3304,11 +3304,28 @@ Two exact-final-binary CPU-pinned 32-pair runs keep startup, retained `strlen()`
 five million comparisons and 20,000 repeated lex/parse/eval expressions with
 `<` below +5%.
 
-The monitored supported debt is now 1,071 failures: 18 strings, zero array and
-1,053 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
+The `e1e6d31a` `removed-unset-cast-diagnostic` checkpoint then moves Zend/lang
+from 4,250 to 4,252 pass, exactly `+2/-0`; strings stay 631/733 and array stays
+828/842 with no other outcome movement. The parser recognizes lowercase and
+mixed-case `(unset)` cast shapes, consumes their operands and preserves PHP's
+first compile-time `The (unset) cast is no longer supported` fatal through
+ordinary, dead-code and constant-expression contexts. Valid `unset(...)`
+statements and identifier grouping remain unaffected.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical manifests
+and summaries; repeated strings/array outcome projections also match. All five
+Cargo configurations, all-feature/all-target, formatting, HTML data, PHPT
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Two exact-final-binary CPU-pinned 32-pair runs keep startup, retained `strlen()`,
+five million parenthesized arithmetic iterations and 20,000 repeated
+parenthesized lex/parse/eval expressions below +5%.
+
+The monitored supported debt is now 1,069 failures: 18 strings, zero array and
+1,051 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
 the portability contract and remains deferred. Read-only manifest triage next
-selects the removed `(unset)` cast diagnostic boundary: two cases currently
-emit a generic expression parse error instead of PHP 8.5's compile-time fatal.
+selects the foreach key-reference diagnostic boundary: two cases currently
+emit a parser-internal message instead of PHP 8.5's compile-time `Key element
+cannot be a reference` fatal.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
 suppression-wrapped destructuring, exhaustive object/array/resource

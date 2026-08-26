@@ -8,6 +8,64 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`removed-unset-cast-diagnostic`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. The parser now recognizes the complete removed
+`(unset)` cast shape, including case-insensitive keyword spelling, in ordinary,
+dead-code and constant-expression contexts. It validates and consumes the
+operand but registers PHP's first compile-time fatal before doing so:
+`The (unset) cast is no longer supported`. Generic parse errors no longer hide
+that diagnostic, while malformed operands can still fail syntactically.
+
+One original parser regression verifies deferred compile-error preservation
+across assignment, dead code, property defaults and mixed-case spelling. Two
+original CLI tests cover fatal status, stream, filename/line presentation and
+the valid neighboring `unset(...)` statement plus identifier grouping. Both
+supplying Zend cases now pass: `ast/gh21072.phpt` and
+`unset/unset_cast_removed.phpt`.
+
+The complete combined audit covers 7,174 cases: 5,711 pass, 1,069 fail, 182
+skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
+fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
+and one unsupported. Zend/lang moves from 4,250 to 4,252 pass, exactly
+`+2/-0`, with 1,051 failures, 115 skips and 181 unsupported cases. Only the
+two named cases move from `fail/parse` to pass. Two serial exact-final-binary
+Zend/lang runs have byte-identical manifests and summaries, whose SHA-256
+values are respectively
+`892d3e481b519d666d3030f73c90852e395ac95bf4511261ec60a426705433ed`
+and `e43ffa5bebb6be8d68eeff10cdeca9537d7f5855adf37aed2245de6add13773e`.
+Repeated strings and array runs have identical outcome projections.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at 1,622 unsafe blocks, 289 unsafe functions, 366 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony
+S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The change adds
+no dependency and changes no compiler, VM or public runtime layout.
+
+Two exact-final-binary CPU-2-pinned, order-balanced 32-pair release runs use the
+performance governor, four warmups and no excluded sample. They compare parent
+SHA-256 `1e0196038cb5b2d696277bceee18311c6375a188fd130fb04a12673f82e3e305`
+with candidate
+`0fa3de58984eb08d72423b84ea4db7d8d57fb662d581005a2a38700e30996c1c`.
+Paired medians are -6.663%/-2.199% for 100 startups,
+-1.372%/-2.104% for five million retained `strlen()` calls,
+-1.077%/-0.721% for five million parenthesized arithmetic iterations and
+-0.253%/-0.285% for 20,000 repeated parenthesized lex/parse/eval expressions.
+Comparable outputs match and every paired median remains below +5%. The raw
+TSVs hash to
+`fea45e92ce6cf89b3ff78758115e0fcdbd74c68bd7f95979ab3c837c62055a3b`
+and `277b43d120f7e01a70d4974292ab6477cbc83e75ec5f302744f8a023925ede13`.
+
+This checkpoint does not claim general case-insensitive keyword repair outside
+the removed-cast shape or unrelated removed syntax diagnostics. The monitored
+supported debt is now 1,069 failures: 18 strings, zero array and 1,051
+Zend/lang. Read-only manifest triage selects the foreach key-reference
+diagnostic boundary next: two cases currently emit a parser-internal message
+instead of PHP 8.5's compile-time `Key element cannot be a reference` fatal.
+
+The implementation checkpoint is commit `e1e6d31a`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `alternate-not-equal-operator`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. The lexer now recognizes PHP's alternate `<>`
 not-equal spelling as the same `NotEqual` token used by `!=`. It therefore
