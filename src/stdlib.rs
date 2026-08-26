@@ -5483,39 +5483,84 @@ fn php_crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
+#[inline]
+fn substr_bounds(byte_len: usize, offset: i64, length: Option<i64>) -> (usize, usize) {
+    let start = if offset < 0 {
+        usize::try_from(offset.unsigned_abs())
+            .ok()
+            .and_then(|distance| byte_len.checked_sub(distance))
+            .unwrap_or(0)
+    } else {
+        usize::try_from(offset)
+            .ok()
+            .unwrap_or(usize::MAX)
+            .min(byte_len)
+    };
+    let end = match length {
+        None => byte_len,
+        Some(length) if length >= 0 => usize::try_from(length)
+            .ok()
+            .and_then(|length| start.checked_add(length))
+            .unwrap_or(usize::MAX)
+            .min(byte_len),
+        Some(length) => usize::try_from(length.unsigned_abs())
+            .ok()
+            .and_then(|distance| byte_len.checked_sub(distance))
+            .unwrap_or(0)
+            .max(start),
+    };
+    (start, end)
+}
+
 fn fn_substr(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    let bytes = s.as_bytes();
-    let len = bytes.len() as i64;
-    let start_raw = arg_long!(ed, 1);
-    let start = if start_raw < 0 {
-        (len + start_raw).max(0) as usize
-    } else {
-        start_raw as usize
+    let exact_string = arg!(ed, 0);
+    let exact_offset = arg!(ed, 1);
+    let exact_length = match arg_opt!(ed, 2) {
+        None => Some(None),
+        Some(value) if value.value_type() == ValueType::Null => Some(None),
+        Some(value) if value.value_type() == ValueType::Long => value.as_long().map(Some),
+        Some(_) => None,
     };
-    let end = match arg_opt!(ed, 2) {
-        Some(v) => {
-            let l = v.to_long_val();
-            if l < 0 {
-                ((len + l).max(0) as usize).max(start).min(bytes.len())
-            } else {
-                (start + l as usize).min(bytes.len())
-            }
-        }
-        None => bytes.len(),
-    };
-    if start >= bytes.len() {
-        ret!(rv, Value::string(""));
-    } else {
-        ret!(
-            rv,
-            Value::string(String::from_utf8_lossy(&bytes[start..end]).into_owned())
-        );
+    if exact_string.value_type() == ValueType::String
+        && exact_offset.value_type() == ValueType::Long
+        && let Some(offset) = exact_offset.as_long()
+        && let Some(length) = exact_length
+    {
+        let binary = exact_string.is_binary_string();
+        let bytes = exact_string.php_string_bytes().unwrap_or_default();
+        let (start, end) = substr_bounds(bytes.len(), offset, length);
+        ret!(rv, php_byte_result(bytes[start..end].to_vec(), binary));
     }
+
+    let Some(string) =
+        typed_internal_string_value_argument_expected(ed, eg, "substr", 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let Some(offset) = typed_internal_int_argument(ed, eg, "substr", 1, "offset")? else {
+        return Ok(());
+    };
+    let length = match arg_opt!(ed, 2) {
+        None => None,
+        Some(value) if value.dereferenced().value_type() == ValueType::Null => None,
+        Some(_) => {
+            let Some(length) =
+                typed_internal_int_argument_expected(ed, eg, "substr", 2, "length", "?int")?
+            else {
+                return Ok(());
+            };
+            Some(length)
+        }
+    };
+
+    let binary = string.is_binary_string();
+    let bytes = string.php_string_bytes().unwrap_or_default();
+    let (start, end) = substr_bounds(bytes.len(), offset, length);
+    ret!(rv, php_byte_result(bytes[start..end].to_vec(), binary));
 }
 
 fn natural_compare(left: &[u8], right: &[u8], case_insensitive: bool) -> std::cmp::Ordering {

@@ -561,7 +561,29 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "code",
         "flags"
     );
-    reg!("substr", fn_substr, 3, 2, "string", "offset", "length");
+    reg_typed!(
+        "substr",
+        fn_substr,
+        3,
+        2,
+        ["string", "offset", "length"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+        ],
+        ParamTypeHint::String
+    );
+    const SUBSTR_DEFAULT_DIAGNOSTICS: &[Option<&str>] = &[None, None, Some("null")];
+    let substr = eg
+        .find_function("substr")
+        .expect("substr was just registered");
+    eg.register_internal_function_reflection_metadata_with_diagnostics(
+        substr,
+        vec![None, None, Some(Value::null())],
+        SUBSTR_DEFAULT_DIAGNOSTICS,
+        "standard",
+    );
     reg!("strcmp", fn_strcmp, 2, 2, "string1", "string2");
     reg!("strncmp", fn_strncmp, 3, 3, "string1", "string2", "length");
     reg!("strcasecmp", fn_strcasecmp, 2, 2, "string1", "string2");
