@@ -776,6 +776,34 @@ fn literal_this_write_targets_are_deferred_compile_errors() {
 }
 
 #[test]
+fn literal_this_global_and_lexical_bindings_are_deferred_compile_errors() {
+    for (source, expected_message, expected_line) in [
+        (
+            "<?php\nfunction invalid() {\n    global $this;\n}",
+            "Cannot use $this as global variable",
+            3,
+        ),
+        (
+            "<?php\n$invalid = function () use (\n    $this\n) {};",
+            "Cannot use $this as lexical variable",
+            3,
+        ),
+    ] {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+
+        assert!(
+            matches!(
+                statements.last(),
+                Some(Stmt::ExprStmt(Expr::CompileError { message, line }))
+                    if message == expected_message && *line == expected_line
+            ),
+            "unexpected AST for {source}: {statements:#?}"
+        );
+    }
+}
+
+#[test]
 fn misplaced_strict_types_declarations_are_deferred_compile_errors() {
     for (source, expected_line) in [
         ("<?php\nfunction earlier() {}\ndeclare(strict_types=1);", 3),

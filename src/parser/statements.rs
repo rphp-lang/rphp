@@ -1285,6 +1285,12 @@ impl Parser {
                             }
                             _ => unreachable!(),
                         },
+                        Token::This(line) => {
+                            self.advance();
+                            vars.push(GlobalTarget::Variable(
+                                self.invalid_this_binding("global", line),
+                            ));
+                        }
                         Token::Dollar(_) => {
                             self.advance();
                             let name = if matches!(self.peek(), Token::LBrace(_)) {
@@ -1327,8 +1333,7 @@ impl Parser {
                     let var_name = match self.advance() {
                         Token::Variable(name, _) => name,
                         Token::This(this_line) => {
-                            self.compile_error("Cannot use $this as static variable", this_line);
-                            "this".to_string()
+                            self.invalid_this_binding("static", this_line)
                         }
                         other => {
                             return Err(format!(

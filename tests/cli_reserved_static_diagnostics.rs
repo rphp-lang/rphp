@@ -61,6 +61,34 @@ fn this_cannot_be_declared_as_a_static_variable() {
 }
 
 #[test]
+fn this_global_and_explicit_lexical_bindings_are_located_compile_fatals() {
+    for (source, message, line) in [
+        (
+            "<?php\nfunction invalid() {\n    global $this;\n}\n",
+            "Cannot use $this as global variable",
+            3,
+        ),
+        (
+            "<?php\nclass Subject {\n    public function invalid() {\n        global $valid, $this, $later;\n    }\n}\n",
+            "Cannot use $this as global variable",
+            4,
+        ),
+        (
+            "<?php\n$invalid = function () use ($this) {};\n",
+            "Cannot use $this as lexical variable",
+            2,
+        ),
+        (
+            "<?php\nclass Subject {\n    public function invalid() {\n        $valid = 1;\n        return static function () use ($valid, &$this) {};\n    }\n}\n",
+            "Cannot use $this as lexical variable",
+            5,
+        ),
+    ] {
+        assert_compile_fatal(source, message, line);
+    }
+}
+
+#[test]
 fn reserved_static_reports_the_classlike_relationship_role() {
     for (source, message, line) in [
         (
@@ -137,5 +165,15 @@ fn ordinary_static_forms_and_classlike_relationships_stay_valid() {
     );
     assert_eq!(status, 0);
     assert_eq!(stdout, "trait");
+    assert_eq!(stderr, "");
+}
+
+#[test]
+fn implicit_this_and_ordinary_global_or_lexical_bindings_stay_valid() {
+    let (status, stdout, stderr) = run_stdin(
+        "<?php\n$shared = 'global';\nfunction capture_shared() {\n    global $shared;\n    return function () use ($shared) { return $shared; };\n}\nclass Subject {\n    public int $value = 7;\n    public function captureThis() {\n        return function () { return $this->value; };\n    }\n}\n$subject = new Subject();\necho capture_shared()(), '|', ($subject->captureThis())();\n",
+    );
+    assert_eq!(status, 0);
+    assert_eq!(stdout, "global|7");
     assert_eq!(stderr, "");
 }

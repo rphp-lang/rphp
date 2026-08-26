@@ -2021,6 +2021,9 @@ impl Parser {
             };
             let (v, line) = match self.advance() {
                 Token::Variable(n, line) => (n, line),
+                Token::This(line) => {
+                    (self.invalid_this_binding("lexical", line), line)
+                }
                 other => return Err(format!("Expected variable in use, got {:?}", other)),
             };
             if v == "GLOBALS" {
@@ -2037,6 +2040,9 @@ impl Parser {
                 };
                 let (v, line) = match self.advance() {
                     Token::Variable(n, line) => (n, line),
+                    Token::This(line) => {
+                        (self.invalid_this_binding("lexical", line), line)
+                    }
                     other => return Err(format!("Expected variable in use, got {:?}", other)),
                 };
                 if v == "GLOBALS" {

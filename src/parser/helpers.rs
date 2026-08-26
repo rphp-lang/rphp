@@ -1326,6 +1326,18 @@ impl Parser {
         Expr::CompileError { message, line }
     }
 
+    #[cold]
+    #[inline(never)]
+    fn invalid_this_binding(&mut self, role: &str, line: usize) -> String {
+        // Reuse the established static-binding diagnostic storage and replace
+        // only its role on this invalid path. Keeping message construction
+        // outlined avoids enlarging ordinary statement/closure parser blocks.
+        let mut message = "Cannot use $this as static variable".to_string();
+        message.replace_range(20..26, role);
+        self.compile_error(message, line);
+        "this".to_string()
+    }
+
     fn globals_modification_error(&mut self, line: usize) -> Expr {
         self.compile_error(
             "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
