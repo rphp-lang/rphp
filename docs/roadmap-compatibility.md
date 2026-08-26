@@ -3493,13 +3493,30 @@ four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Two exact-final-binary
 CPU-pinned 32-pair runs keep startup, retained `strlen()`, 500 valid variadic
 declarations and one million variadic calls below +5%, with matching outputs.
 
-The monitored supported debt is now 1,036 failures: 18 strings, zero array and
-1,018 Zend/lang. Read-only manifest and raw-output triage next select the three
-adjacent variadic element-type cases for weak string coercion and ordinary or
-caught array-type rejection. The attempted 14-case `crypt()` platform approach
-did not meet the portability contract and remains deferred. Multi-argument
-reference binding and the by-reference call diagnostic remain separate
-semantic clusters.
+The `ed519db9` `variadic-element-type-validation` checkpoint then moves
+Zend/lang from 4,285 to 4,290 pass, exactly `+5/-0`; strings stay 631/733 and
+array stays 828/842 with no other status or category movement. Canonical user-
+call preparation validates and weakly coerces each positional, named or source-
+unpacked variadic element before bucket construction, preserves the actual
+argument ordinal and diagnostic metadata, and writes unpack coercions through
+references. Exact primitive matches use an inline fast branch; the compact
+nonvariadic call path and layout remain unchanged.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical compact
+manifests and summaries; repeated serial strings/array outcome projections
+also match the exact parent. All five Cargo configurations,
+all-feature/all-target, formatting, HTML data, PHPT runner, unsafe, Composer S0,
+four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Two exact-final-binary
+CPU-pinned 32-pair runs keep startup, retained `strlen()`, 500 typed variadic
+declarations and one million typed variadic calls below +5%, with matching
+outputs.
+
+The monitored supported debt is now 1,031 failures: 18 strings, zero array and
+1,013 Zend/lang. Read-only neighborhood triage next selects the only two
+remaining variadic-directory failures, `by_ref.phpt` and `by_ref_error.phpt`,
+as the adjacent variadic reference-binding and diagnostic boundary. The
+attempted 14-case `crypt()` platform approach did not meet the portability
+contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
 suppression-wrapped destructuring, exhaustive object/array/resource
