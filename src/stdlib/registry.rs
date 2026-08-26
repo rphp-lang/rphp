@@ -1784,21 +1784,21 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String],
         ParamTypeHint::String
     );
-    for function_name in ["highlight_string", "highlight_file", "show_source"] {
+    for (function_name, default_value) in [
+        ("highlight_string", Value::bool(false)),
+        ("highlight_file", Value::bool(false)),
+        ("show_source", Value::bool(false)),
+        ("strip_tags", Value::null()),
+    ] {
         let function = eg
             .find_function(function_name)
-            .expect("source-highlighting function was just registered");
-        eg.register_internal_function_parameter_defaults(
+            .expect("source-filter function was just registered");
+        eg.register_internal_function_reflection_metadata(
             function,
-            vec![None, Some(Value::bool(false))],
+            vec![None, Some(default_value)],
+            "standard".to_string(),
         );
-        eg.register_internal_function_extension(function, "standard".to_string());
     }
-    let strip_tags = eg
-        .find_function("strip_tags")
-        .expect("strip_tags was just registered");
-    eg.register_internal_function_parameter_defaults(strip_tags, vec![None, Some(Value::null())]);
-    eg.register_internal_function_extension(strip_tags, "standard".to_string());
     let strip_whitespace = eg
         .find_function("php_strip_whitespace")
         .expect("php_strip_whitespace was just registered");

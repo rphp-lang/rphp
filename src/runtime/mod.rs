@@ -1650,21 +1650,6 @@ impl ExecutorGlobals {
     }
 
     #[cold]
-    pub(crate) fn register_internal_function_parameter_defaults(
-        &mut self,
-        function: *const FunctionCommon,
-        defaults: Vec<Option<Value>>,
-    ) {
-        if defaults.iter().any(Option::is_some) {
-            self.internal_function_reflection_metadata
-                .get_or_insert_with(|| Box::new(HashMap::new()))
-                .entry(function)
-                .or_insert_with(|| (Vec::new(), None))
-                .0 = defaults;
-        }
-    }
-
-    #[cold]
     pub(crate) fn register_internal_function_extension(
         &mut self,
         function: *const FunctionCommon,
@@ -1675,6 +1660,22 @@ impl ExecutorGlobals {
             .entry(function)
             .or_insert_with(|| (Vec::new(), None))
             .1 = Some(extension);
+    }
+
+    #[cold]
+    pub(crate) fn register_internal_function_reflection_metadata(
+        &mut self,
+        function: *const FunctionCommon,
+        defaults: Vec<Option<Value>>,
+        extension: String,
+    ) {
+        let metadata = self
+            .internal_function_reflection_metadata
+            .get_or_insert_with(|| Box::new(HashMap::new()))
+            .entry(function)
+            .or_insert_with(|| (Vec::new(), None));
+        metadata.0 = defaults;
+        metadata.1 = Some(extension);
     }
 
     pub(crate) fn internal_function_parameter_default(
