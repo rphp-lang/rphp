@@ -396,12 +396,13 @@ pub(crate) fn try_direct_chunk_split1(argument: &Value) -> Option<Value> {
 pub(crate) fn invoke_direct_internal1(
     kind: crate::builtin_metadata::DirectInternalKind,
     argument: &Value,
+    precision: i32,
 ) -> Result<Value, VmError> {
     use crate::builtin_metadata::DirectInternalKind;
 
     let args = std::slice::from_ref(argument);
     match kind {
-        DirectInternalKind::Strlen => direct_strlen(args),
+        DirectInternalKind::Strlen => direct_strlen(args, precision),
         DirectInternalKind::Strtolower => direct_strtolower(args),
         DirectInternalKind::Strtoupper => direct_strtoupper(args),
         DirectInternalKind::Ord => direct_ord(args),
@@ -4771,7 +4772,7 @@ fn fn_compact(
 // ============================================================================
 
 #[inline(always)]
-pub(crate) fn direct_strlen_len(argument: &Value) -> i64 {
+pub(crate) fn direct_strlen_len(argument: &Value, precision: i32) -> i64 {
     let argument = if argument.is_reference() {
         unsafe { &*argument.as_ref_ptr() }
     } else {
@@ -4779,13 +4780,13 @@ pub(crate) fn direct_strlen_len(argument: &Value) -> i64 {
     };
     match argument.php_string_len() {
         Some(length) => length as i64,
-        None => argument.echo_to_string().len() as i64,
+        None => argument.echo_to_string_with_precision(precision).len() as i64,
     }
 }
 
 #[inline(always)]
-fn direct_strlen(args: &[Value]) -> Result<Value, VmError> {
-    Ok(Value::long(direct_strlen_len(&args[0])))
+fn direct_strlen(args: &[Value], precision: i32) -> Result<Value, VmError> {
+    Ok(Value::long(direct_strlen_len(&args[0], precision)))
 }
 
 fn fn_strlen(
@@ -4803,10 +4804,11 @@ fn fn_strlen(
             "strlen(): Passing null to parameter #1 ($string) of type string is deprecated",
         )?;
     }
-    let result = direct_strlen(std::slice::from_ref(arg!(ed, 0)))?;
+    let result = direct_strlen(std::slice::from_ref(arg!(ed, 0)), eg.precision)?;
     ret!(rv, result);
 }
 
+#[inline(always)]
 fn compare_php_strings(left: &[u8], right: &[u8], length: usize, fold_ascii_case: bool) -> i64 {
     let compared_length = left.len().min(right.len()).min(length);
     for index in 0..compared_length {
@@ -4831,40 +4833,146 @@ fn compare_php_strings(left: &[u8], right: &[u8], length: usize, fold_ascii_case
     }
 }
 
+#[cfg(test)]
+mod scalar_string_boundary_tests {
+    use super::{compare_php_strings, direct_strlen_len};
+    use crate::value::Value;
+
+    #[test]
+    fn byte_comparison_matches_unsigned_php_difference_for_every_pair() {
+        for left in 0_u8..=u8::MAX {
+            for right in 0_u8..=u8::MAX {
+                assert_eq!(
+                    compare_php_strings(&[left], &[right], usize::MAX, false),
+                    i64::from(left) - i64::from(right)
+                );
+                assert_eq!(
+                    compare_php_strings(&[left], &[right], usize::MAX, true),
+                    i64::from(left.to_ascii_lowercase()) - i64::from(right.to_ascii_lowercase())
+                );
+            }
+        }
+        assert_eq!(compare_php_strings(b"a", b"z", 0, false), 0);
+        assert_eq!(compare_php_strings(b"a", b"aa", usize::MAX, false), -1);
+        assert_eq!(compare_php_strings(b"aa", b"a", usize::MAX, false), 1);
+    }
+
+    #[test]
+    fn direct_strlen_uses_request_precision_and_php_byte_length() {
+        assert_eq!(direct_strlen_len(&Value::double(1.23456789012345), 12), 13);
+        assert_eq!(direct_strlen_len(&Value::double(1.23456789012345), 3), 4);
+        assert_eq!(
+            direct_strlen_len(&Value::binary_string(&[0, 128, 255]), 14),
+            3
+        );
+        assert_eq!(direct_strlen_len(&Value::string("Ž"), 14), 2);
+    }
+}
+
+#[inline(always)]
+fn compare_php_string_arguments(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function_name: &str,
+    bounded: bool,
+    fold_ascii_case: bool,
+) -> Result<Option<i64>, VmError> {
+    {
+        let left = arg!(ed, 0).dereferenced();
+        let right = arg!(ed, 1).dereferenced();
+        if left.value_type() == ValueType::String && right.value_type() == ValueType::String {
+            let left = left.php_string_bytes().unwrap_or_default();
+            let right = right.php_string_bytes().unwrap_or_default();
+            let Some(length) = compare_php_string_length(ed, eg, function_name, bounded)? else {
+                return Ok(None);
+            };
+            return Ok(Some(compare_php_strings(
+                &left,
+                &right,
+                length,
+                fold_ascii_case,
+            )));
+        }
+    }
+
+    let Some(left) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        function_name,
+        0,
+        "string1",
+        "string",
+    )?
+    else {
+        return Ok(None);
+    };
+    let Some(right) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        function_name,
+        1,
+        "string2",
+        "string",
+    )?
+    else {
+        return Ok(None);
+    };
+    let left = left.php_string_bytes().unwrap_or_default();
+    let right = right.php_string_bytes().unwrap_or_default();
+    let Some(length) = compare_php_string_length(ed, eg, function_name, bounded)? else {
+        return Ok(None);
+    };
+    Ok(Some(compare_php_strings(
+        &left,
+        &right,
+        length,
+        fold_ascii_case,
+    )))
+}
+
+#[inline(always)]
+fn compare_php_string_length(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function_name: &str,
+    bounded: bool,
+) -> Result<Option<usize>, VmError> {
+    if !bounded {
+        return Ok(Some(usize::MAX));
+    }
+    let Some(length) = typed_internal_int_argument(ed, eg, function_name, 2, "length")? else {
+        return Ok(None);
+    };
+    if length < 0 {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            &format!("{function_name}(): Argument #3 ($length) must be greater than or equal to 0"),
+        ));
+        return Ok(None);
+    }
+    Ok(Some(usize::try_from(length).unwrap_or(usize::MAX)))
+}
+
 fn fn_strcmp(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let left = arg_str!(ed, 0);
-    let right = arg_str!(ed, 1);
-    ret!(
-        rv,
-        Value::long(compare_php_strings(
-            left.as_bytes(),
-            right.as_bytes(),
-            usize::MAX,
-            false
-        ))
-    );
+    let Some(result) = compare_php_string_arguments(ed, eg, "strcmp", false, false)? else {
+        return Ok(());
+    };
+    ret!(rv, Value::long(result));
 }
 
 fn fn_strcasecmp(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let left = arg_str!(ed, 0);
-    let right = arg_str!(ed, 1);
-    ret!(
-        rv,
-        Value::long(compare_php_strings(
-            left.as_bytes(),
-            right.as_bytes(),
-            usize::MAX,
-            true
-        ))
-    );
+    let Some(result) = compare_php_string_arguments(ed, eg, "strcasecmp", false, true)? else {
+        return Ok(());
+    };
+    ret!(rv, Value::long(result));
 }
 
 fn compare_php_strings_with_length(
@@ -4874,26 +4982,11 @@ fn compare_php_strings_with_length(
     function_name: &str,
     fold_ascii_case: bool,
 ) -> Result<(), VmError> {
-    let length = arg_long!(ed, 2);
-    if length < 0 {
-        eg.exception = Some(crate::value::make_error_value(
-            "ValueError",
-            &format!("{function_name}(): Argument #3 ($length) must be greater than or equal to 0"),
-        ));
+    let Some(result) = compare_php_string_arguments(ed, eg, function_name, true, fold_ascii_case)?
+    else {
         return Ok(());
-    }
-    let left = arg_str!(ed, 0);
-    let right = arg_str!(ed, 1);
-    let length = usize::try_from(length).unwrap_or(usize::MAX);
-    ret!(
-        rv,
-        Value::long(compare_php_strings(
-            left.as_bytes(),
-            right.as_bytes(),
-            length,
-            fold_ascii_case
-        ))
-    );
+    };
+    ret!(rv, Value::long(result));
 }
 
 fn fn_strncmp(
@@ -13316,18 +13409,10 @@ fn fn_print_r(
 ) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     let output = print_r_value(v, 0, eg);
-    let external_byte_keys = v.as_array().is_some_and(PhpArray::has_external_byte_keys);
     if arg_opt!(ed, 1).is_some_and(Value::is_truthy) {
-        if external_byte_keys {
-            ret!(rv, Value::binary_string_from_storage(output));
-        }
-        ret!(rv, Value::string(output));
+        ret!(rv, php_byte_result(output, false));
     }
-    if external_byte_keys {
-        eg.write_output(&php_string_to_bytes(&output));
-    } else {
-        eg.write_output(output.as_bytes());
-    }
+    eg.write_output(&output);
     ret!(rv, Value::bool(true));
 }
 
@@ -17188,7 +17273,7 @@ fn var_dump_property_slots(eg: &ExecutorGlobals, class_id: u32) -> Vec<usize> {
     eg.instance_property_slots_in_iteration_order(class_id)
 }
 
-fn print_r_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
+fn print_r_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> Vec<u8> {
     let mut visited_arrays = std::collections::HashSet::new();
     let mut visited_objects = std::collections::HashSet::new();
     print_r_value_inner(val, indent, eg, &mut visited_arrays, &mut visited_objects)
@@ -17200,59 +17285,67 @@ fn print_r_value_inner(
     eg: &ExecutorGlobals,
     visited_arrays: &mut std::collections::HashSet<usize>,
     visited_objects: &mut std::collections::HashSet<usize>,
-) -> String {
+) -> Vec<u8> {
     let val = val.dereferenced();
     match val.value_type() {
-        ValueType::Null => String::new(),
-        ValueType::True => "1".to_string(),
-        ValueType::False => String::new(),
-        ValueType::Long => val.as_long().unwrap().to_string(),
-        ValueType::Double => val.echo_to_string_with_precision(eg.precision),
-        ValueType::String => val.as_str().unwrap().to_string(),
+        ValueType::Null => Vec::new(),
+        ValueType::True => b"1".to_vec(),
+        ValueType::False => Vec::new(),
+        ValueType::Long => val.as_long().unwrap().to_string().into_bytes(),
+        ValueType::Double => val.echo_to_string_with_precision(eg.precision).into_bytes(),
+        ValueType::String => val.php_string_bytes().unwrap_or_default().into_owned(),
         ValueType::Array => {
             let arr = val.as_array().unwrap();
             let identity = val
                 .array_identity()
                 .expect("live print_r array must retain an identity");
             if !visited_arrays.insert(identity) {
-                return "Array\n *RECURSION*".to_string();
+                return b"Array\n *RECURSION*".to_vec();
             }
             // print_r() indents a nested array's body relative to both the
             // containing key and its `=>` value column.
             let prefix = "    ".repeat(indent * 2);
             let inner = "    ".repeat(indent * 2 + 1);
-            let mut out = "Array\n".to_string();
-            out.push_str(&format!("{}(\n", prefix));
+            let mut out = b"Array\n".to_vec();
+            out.extend_from_slice(prefix.as_bytes());
+            out.extend_from_slice(b"(\n");
             for (key, v) in arr.iter() {
-                let key_str = match &key {
-                    ArrayKey::Int(k) => format!("{}", k),
-                    ArrayKey::String(k) => k.clone(),
+                let key_bytes = match &key {
+                    ArrayKey::Int(k) => k.to_string().into_bytes(),
+                    ArrayKey::String(k) if arr.has_external_byte_keys() => php_string_to_bytes(k),
+                    ArrayKey::String(k) => k.as_bytes().to_vec(),
                 };
-                out.push_str(&format!(
-                    "{}[{}] => {}",
-                    inner,
-                    key_str,
-                    print_r_value_inner(v, indent + 1, eg, visited_arrays, visited_objects,)
+                out.extend_from_slice(inner.as_bytes());
+                out.push(b'[');
+                out.extend_from_slice(&key_bytes);
+                out.extend_from_slice(b"] => ");
+                out.extend_from_slice(&print_r_value_inner(
+                    v,
+                    indent + 1,
+                    eg,
+                    visited_arrays,
+                    visited_objects,
                 ));
-                out.push('\n');
+                out.push(b'\n');
             }
-            out.push_str(&format!("{})\n", prefix));
+            out.extend_from_slice(prefix.as_bytes());
+            out.extend_from_slice(b")\n");
             visited_arrays.remove(&identity);
             out
         }
         ValueType::Object => {
             let Some(object) = val.as_object() else {
-                return String::new();
+                return Vec::new();
             };
             if object.class_name.as_ref() == "SensitiveParameterValue" {
-                return "SensitiveParameterValue Object\n(\n)\n".to_string();
+                return b"SensitiveParameterValue Object\n(\n)\n".to_vec();
             }
             let Some(class) = eg.class_by_id(object.class_id) else {
-                return String::new();
+                return Vec::new();
             };
             if class.is_enum {
                 let Some(name) = object.get_property("name").and_then(Value::as_str) else {
-                    return String::new();
+                    return Vec::new();
                 };
                 let prefix = "    ".repeat(indent * 2);
                 let inner = "    ".repeat(indent * 2 + 1);
@@ -17262,16 +17355,31 @@ fn print_r_value_inner(
                     ValueType::String => ":string",
                     _ => "",
                 });
-                let mut out = format!("{} Enum{}\n{}(\n", object.class_name, backing, prefix);
-                out.push_str(&format!("{}[name] => {}\n", inner, name));
+                let mut out = Vec::new();
+                out.extend_from_slice(object.class_name.as_bytes());
+                out.extend_from_slice(b" Enum");
+                out.extend_from_slice(backing.as_bytes());
+                out.push(b'\n');
+                out.extend_from_slice(prefix.as_bytes());
+                out.extend_from_slice(b"(\n");
+                out.extend_from_slice(inner.as_bytes());
+                out.extend_from_slice(b"[name] => ");
+                out.extend_from_slice(name.as_bytes());
+                out.push(b'\n');
                 if let Some(value) = value {
-                    out.push_str(&format!(
-                        "{}[value] => {}\n",
-                        inner,
-                        value.echo_to_string_with_precision(eg.precision)
-                    ));
+                    out.extend_from_slice(inner.as_bytes());
+                    out.extend_from_slice(b"[value] => ");
+                    if let Some(bytes) = value.php_string_bytes() {
+                        out.extend_from_slice(&bytes);
+                    } else {
+                        out.extend_from_slice(
+                            value.echo_to_string_with_precision(eg.precision).as_bytes(),
+                        );
+                    }
+                    out.push(b'\n');
                 }
-                out.push_str(&format!("{})\n", prefix));
+                out.extend_from_slice(prefix.as_bytes());
+                out.extend_from_slice(b")\n");
                 return out;
             }
 
@@ -17283,12 +17391,17 @@ fn print_r_value_inner(
                 .object_identity()
                 .expect("live print_r object must retain an identity");
             if !visited_objects.insert(identity) {
-                return format!("{display_class} Object\n *RECURSION*");
+                let mut out = display_class.as_bytes().to_vec();
+                out.extend_from_slice(b" Object\n *RECURSION*");
+                return out;
             }
 
             let prefix = "    ".repeat(indent * 2);
             let inner = "    ".repeat(indent * 2 + 1);
-            let mut out = format!("{display_class} Object\n{prefix}(\n");
+            let mut out = display_class.as_bytes().to_vec();
+            out.extend_from_slice(b" Object\n");
+            out.extend_from_slice(prefix.as_bytes());
+            out.extend_from_slice(b"(\n");
             for slot in var_dump_property_slots(eg, object.class_id) {
                 let definition = &class.properties[slot];
                 if definition.is_virtual_hook_property() {
@@ -17300,32 +17413,42 @@ fn print_r_value_inner(
                 if value.value_type() == ValueType::Undef {
                     continue;
                 }
-                out.push_str(&format!(
-                    "{}{} => {}",
-                    inner,
-                    print_r_property_key(definition),
-                    print_r_value_inner(value, indent + 1, eg, visited_arrays, visited_objects,)
+                out.extend_from_slice(inner.as_bytes());
+                out.extend_from_slice(print_r_property_key(definition).as_bytes());
+                out.extend_from_slice(b" => ");
+                out.extend_from_slice(&print_r_value_inner(
+                    value,
+                    indent + 1,
+                    eg,
+                    visited_arrays,
+                    visited_objects,
                 ));
-                out.push('\n');
+                out.push(b'\n');
             }
             object.for_each_dynamic_property(|name, value| {
                 if value.value_type() == ValueType::Undef {
                     return;
                 }
-                out.push_str(&format!(
-                    "{}[{}] => {}",
-                    inner,
-                    name,
-                    print_r_value_inner(value, indent + 1, eg, visited_arrays, visited_objects,)
+                out.extend_from_slice(inner.as_bytes());
+                out.push(b'[');
+                out.extend_from_slice(name.as_bytes());
+                out.extend_from_slice(b"] => ");
+                out.extend_from_slice(&print_r_value_inner(
+                    value,
+                    indent + 1,
+                    eg,
+                    visited_arrays,
+                    visited_objects,
                 ));
-                out.push('\n');
+                out.push(b'\n');
             });
-            out.push_str(&format!("{})\n", prefix));
+            out.extend_from_slice(prefix.as_bytes());
+            out.extend_from_slice(b")\n");
             visited_objects.remove(&identity);
             out
         }
-        ValueType::Resource => val.echo_to_string(),
-        _ => String::new(),
+        ValueType::Resource => val.echo_to_string().into_bytes(),
+        _ => Vec::new(),
     }
 }
 

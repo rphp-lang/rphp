@@ -3855,7 +3855,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         result
                     }
                 } else {
-                    crate::stdlib::invoke_direct_internal1(kind, argument)?
+                    crate::stdlib::invoke_direct_internal1(kind, argument, eg.precision)?
                 };
 
                 if opline.result_type != OpType::Unused {
@@ -3914,7 +3914,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         "strlen(): Passing null to parameter #1 ($string) of type string is deprecated",
                     )?;
                 }
-                let length = crate::stdlib::direct_strlen_len(argument);
+                let length = crate::stdlib::direct_strlen_len(argument, eg.precision);
 
                 if opline.result_type != OpType::Unused {
                     let result_ptr = unsafe {
@@ -3939,7 +3939,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         "strlen(): Passing null to parameter #1 ($string) of type string is deprecated",
                     )?;
                 }
-                let length = crate::stdlib::direct_strlen_len(argument);
+                let length = crate::stdlib::direct_strlen_len(argument, eg.precision);
 
                 if opline.result_type != OpType::Unused {
                     let result_ptr = unsafe {
@@ -4041,7 +4041,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 op_array,
                             )
                         };
-                        let result = crate::stdlib::invoke_direct_internal1(kind, argument)?;
+                        let result = crate::stdlib::invoke_direct_internal1(
+                            kind,
+                            argument,
+                            eg.precision,
+                        )?;
                         if next2.result_type != OpType::Unused {
                             let result_ptr = unsafe {
                                 (*frame).get_op_mut(
