@@ -3239,16 +3239,30 @@ Two exact-final-binary CPU-pinned 32-pair runs keep startup, retained `strlen()`
 500,000 `strrev()` calls and 500,000 `wordwrap()` calls below +5%, with
 matching outputs.
 
-The monitored supported debt is now 1,107 failures: 18 strings, zero array and
-1,089 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
-the portability contract and remains deferred. The other portable string cases
-are host-locale or deliberate allocation-failure contracts. Manifest triage
-instead selects the general PHP 8.5 error-reporting mask boundary: 11
-Zend/lang failures directly expose obsolete `E_ALL=32767` state where PHP 8.5
-uses 30719. Isolated/mixed standalone CR, degenerate `hebrev()` wrapping,
-runtime-selected method/static array-reference context, broader binary-string
-propagation, 32-bit behavior and allocation-limit/OOM equivalence remain
-explicit contracts.
+The `43cd97a0` `error-reporting-mask-boundary` checkpoint then moves Zend/lang
+from 4,214 to 4,228 pass, exactly `+14/-0`; strings stay 631/733 and array stays
+828/842 with no lost pass, stage regression, timeout or crash. Request,
+coroutine and handler defaults now use PHP 8.5's `E_ALL=30719`; deprecated
+`E_STRICT` reads, suppression restoration, callable signatures and extra user
+arguments agree with PHP 8.5.9 through the measured direct, dynamic,
+Reflection, throwing and reentrant boundaries.
+
+Two complete final audits have byte-identical manifests and summaries. All
+five Cargo configurations, all-feature/all-target, formatting, HTML data, PHPT
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Two exact-final-binary CPU-pinned 32-pair runs keep startup, retained
+`strlen()`, five million `error_reporting()` reads and 20,000 suppressed throws
+below +5%, with matching outputs.
+
+The monitored supported debt is now 1,093 failures: 18 strings, zero array and
+1,075 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
+the portability contract and remains deferred. Read-only manifest triage next
+selects the predefined INI access constants: five namespace tests exercise
+`INI_ALL=7` through fallback, fully qualified, runtime `constant()` and
+default-expression paths. Suppressed write targets, remaining deprecated-
+constant activation sites, generator extra-argument visibility, isolated/mixed
+standalone CR, broader binary-string propagation, 32-bit behavior and
+allocation-limit/OOM equivalence remain explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,

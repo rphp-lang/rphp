@@ -8,6 +8,79 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`error-reporting-mask-boundary`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. RPHP now uses PHP 8.5's `E_ALL=30719` mask for
+request, coroutine and error-handler defaults while retaining `E_STRICT=2048`
+as a deprecated constant outside that aggregate. Direct, fully qualified and
+namespaced-fallback reads emit PHP 8.5's deprecation through the ordinary
+handler, suppression, reentrancy and exception machinery; introspection by
+`defined()` and `get_defined_constants()` remains quiet.
+
+The `@` boundary now saves and conditionally restores error-reporting state as
+PHP does: fatal-only changes made while suppressed are restored on normal and
+exceptional exits, while a mask that enables any non-fatal level survives.
+`error_reporting()` and `set_error_handler()` expose PHP-compatible argument,
+weak/strict coercion and Reflection metadata. Extra positional user-function
+arguments remain visible to `func_get_args()` without occupying unrelated
+compiled locals.
+
+Five original E2Es plus focused unit coverage exercise mask defaults, handler
+defaults, direct/dynamic constant reads, all relevant `@` transitions,
+throwing and reentrant handlers, weak/strict calls, Reflection and extra-
+argument lifetime. Four clean-room transcripts are byte-identical to PHP 8.5.9:
+weak calls at SHA-256
+`baca59b6d08cb312e60384c30cda29bfc9a0412585ebb5a0da8bbe371a9d877d`,
+strict calls at
+`12443c01715d0d030ad4b0fda6a6b7a85e21713ea3a5bfd785d5efc54ae7c1f3`,
+extra arguments at
+`7fe7d8b9c01e1097995876e5f9fd806e266755aa424b0454fb2240f9364664b8`
+and throwing/reentrant `E_STRICT` handling at
+`50f10eaf222cd6b11aaec6136da2668b6460145b80fd0658d9dbfb190923d955`.
+
+The complete combined audit covers 7,174 cases: 5,687 pass, 1,093 fail, 182
+skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
+fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
+and one unsupported. Zend/lang moves from 4,214 to 4,228 pass, exactly
+`+14/-0`, with 1,075 failures, 115 skips and 181 unsupported cases. The gains
+are `e_strict-deprecated.phpt`, twelve `error_reporting` cases and
+`throw/leaks.phpt`; no pass is lost and no stage or category regresses. Two
+serial final runs have identical manifests and summaries, whose SHA-256 values
+are respectively
+`968cca9d8736b6155e1baaf04b130dd018a15dc1a70bea8a80ce9f19be425aff`
+and `ef011b520619a397c57837da7c74f612386f32dab60f757056ad73b10ba620f0`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production is at 1,622 unsafe blocks, 289 unsafe functions, 366 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony
+S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The change adds
+no dependency and changes no public runtime layout.
+
+Two exact-final-binary CPU-2-pinned, order-balanced 32-pair release runs use the
+performance governor, four warmups and no excluded sample. They compare parent
+SHA-256 `f13f8e6e1b212f948732fe02318d7c7bb1a4acd2af077db3dc906b2207cae04d`
+with candidate
+`e83f7cdabf1769a57846f12435f4addb3c1a801a91fddf005acbd9ef586df3b2`.
+Paired medians are -0.431%/-0.682% for 100 startups, +0.790%/+0.382% for five
+million retained `strlen()` calls, +2.619%/+2.755% for five million retained
+`error_reporting()` reads and +0.204%/+0.261% for 20,000 suppressed throws.
+Comparable outputs match and every paired median remains below +5%. The raw
+TSVs hash to
+`34b73495d91ea0f8cc3d856e47e031ffdc8f0415cbccfa3100bdb9fa18c14e1c`
+and `bb2d9eae1be2a1c72cc1826e3a39013c2e06671cacd450a397b450f732e76a34`.
+
+This checkpoint does not claim deprecated-constant activation from every
+constant/property/default-expression site, generator visibility of extra
+arguments, the independent suppressed-write parser boundary, 32-bit behavior
+or allocation-limit/OOM equivalence. The monitored supported debt is now
+1,093 failures: 18 strings, zero array and 1,075 Zend/lang. Read-only manifest
+triage selects the missing predefined INI access constants next: five
+namespaced Zend tests exercise `INI_ALL=7` through fallback, fully qualified,
+runtime `constant()` and default-expression paths.
+
+The implementation checkpoint is commit `43cd97a0`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `hebrev-byte-boundary`, pinned to php-src 8.5 commit `fcc29c8` and validated
 against PHP 8.5.9. RPHP now registers the typed standard
 `hebrev(string $string, int $max_chars_per_line = 0): string` surface. Its
