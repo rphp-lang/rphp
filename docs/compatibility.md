@@ -8,6 +8,98 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`source-highlighting-contract`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. `highlight_string()` now exposes
+`(string $string, bool $return = false): string|true`, while
+`highlight_file()` and its `show_source()` alias expose
+`(string $filename, bool $return = false): string|bool` and
+`php_strip_whitespace()` exposes `(string $filename): string`. Their sparse
+internal Reflection metadata reports the real `standard` extension provenance,
+false defaults and exact string forms without enlarging the common function
+descriptor.
+
+The independent source scanner now matches PHP's HTML wrapper, escaping,
+configured colors and token boundaries for open and close tags, CR/LF/CRLF,
+comments, attributes, keywords and literal constants, casts, numeric forms,
+operators, variables, single- and double-quoted strings, backticks,
+interpolation, heredoc and nowdoc. The file pair shares exact print/return,
+missing-path diagnostics and byte-preserving behavior. The whitespace scanner
+keeps attributes, removes comments without joining tokens and applies PHP's
+heredoc-terminator newline normalization. Ordinary UTF-8 output stays on the
+extra-allocation-free text result path; only legacy high-byte sources enter byte
+re-encoding, and non-cast parentheses no longer allocate while probing casts.
+
+The four functions share the PHP 8.5 weak/strict scalar, null, Stringable,
+named/dynamic/first-class and `call_user_func*()` boundary. Source helpers are
+forbidden while an output display handler is active. Final output-buffer
+handlers retain that lock while captured roots are released, request-owned
+objects remain destructor-capable through the final flush, and binary
+`ob_get_*()` results preserve their bytes. This implements the general
+handler/destructor re-entry rule exercised by GH-20906 rather than recognizing
+the supplied fixtures.
+
+Five original E2Es and five scanner unit tests cover exact UTF-8 output,
+generated token/byte boundaries, file and binary behavior, failures,
+Reflection, strict types and the physical re-entry callsite. Independent
+clean-room transcripts match PHP 8.5.9 at SHA-256
+`c75715ff2c5697c3c270860db1bcf0a462da2e9ace33106c1d35ca519543c5e2`,
+`354cbd8527670fb5cd20890293b9346a284723b215e2ac5403b3dad7263a314a`
+and `0c6392a0f37c15d566bd33044e292ce399da037f009b72dc19787159785b799c`.
+A separate 31-record token/highlight/whitespace sweep is exact at
+`f290944e0ff3bf67023a43d02326bc29eedf3c55cf17ed0de2839b586d1bc708`,
+and the ordinary UTF-8 highlighted output is byte-identical at
+`130f46d8bde02131a4946c15bec720a13b6472667393838c1844c487318c09c8`.
+The exact six-case focused manifest hashes to
+`3abcb55277ab6b56fec980bba3a62239d1d96f6e895d1d6c27db60c3da0008f7`.
+
+The complete 733-case strings audit moves from 593 to 599 passes, an exact
++6/-0 delta consisting only of `show_source_basic.phpt`,
+`show_source_variation1.phpt`, `show_source_variation2.phpt` and
+`gh20906_1.phpt` through `gh20906_3.phpt`. There are 50 failures, 54 skips and
+30 unsupported cases, with zero timeout or crash. Array remains exactly 828
+pass, 13 skip and one unsupported case. Zend/lang remains exactly 4,210 pass,
+1,093 fail, 115 skip and 181 unsupported, with no timeout or crash. Three
+independent audits produce byte-identical path/status/category maps. The
+final manifests hash to SHA-256
+`9c755db605c0b02c523e75333f838932be2b9e4f1a0e707bda5dd40325ffbf6e`,
+`d1d07b2537a5257a59d3d13c0839674fb7a35ba1f2470ff5d2218fb2eab0d746`
+and `8d3afc26468335d657f15fc7251437f9d1561fae1c36f934672fa4e5f7fc024b`
+for strings, array and Zend/lang. Their sorted maps hash to
+`e3f19d5812b0dc0442585c800ee9edff1f286c151af6e4291d65ff510b38a977`,
+`7d4b397d553dbdf5875d928f8bcbe886db93d84ec8c172a08760faf969226a46`
+and `97b4cdd8ac93ad1fd53db7a4523f6bd825a72d00c796f3b1d8c692bcd4960f28`;
+the corresponding pass-set hashes are
+`26fed9e32516b73f6e3ca82b7489672d92ae384b255c2a49cdc437d94c2c208e`,
+`dc1c73b2a6cb2d4abe11ee43b826acc12e47ddf2f2b30c7610c818b43ec38117`
+and `9f521e5ef6460c8c9c708364938362c563717f1eb01bcd95b230f2a2b6c8aa4e`.
+No prior pass or unrelated outcome moved.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks, Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at 1,622 unsafe
+blocks and 289 unsafe functions, with 365 SAFETY annotations and seven
+`# Safety` sections. Two exact-final-binary CPU-2-pinned balanced 32-pair runs
+compare parent SHA-256
+`d9a6337ae10eb64dad92be0df018e7f2b03d35e47fe7e98f30d1887bfa9e6705`
+with candidate
+`b57bfb65d6ad953d87229df1bc371b43890edbede1471b3ae0df63ceea081e63`.
+Paired medians are -4.596%/-4.649% for 100 startups, +0.447%/+0.100% for five
+million retained `strlen()` calls, -0.037%/+0.063% for 200,000 ordinary
+`highlight_string()` calls and -1.783%/-1.632% for 500,000 display-handler
+buffer flushes. Comparable checksums match and every result remains below
++5%. An initial eager byte-conversion result that regressed the ordinary
+highlighter lane by 35% was rejected before this checkpoint.
+
+This checkpoint does not claim `ext/tokenizer`, a general IDE highlighter,
+include/eval semantics, locale behavior, platform `crypt()` behavior, the
+`strip_tags()` parser or closure of the remaining strings and wider Zend
+failures. Risk-adjusted triage selects the remaining `strip_tags()` scanner
+cluster, including its space-after-heredoc fixture dependency, as the next
+bounded candidate.
+
+The source checkpoint is commit `7edcaf86`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `byte-input-diagnostics-contract`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. `hex2bin()`, `ord()` and `strpbrk()` now expose
 their exact PHP 8.5 parameter and return-type shapes and share handler-owned
@@ -86,7 +178,7 @@ as the next bounded candidate.
 
 The source checkpoint is commit `a4bacec3`.
 
-The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
+The preceding measured AMD64 PHP 8.5 contract checkpoint is
 `deterministic-byte-utilities-contract`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. `count_chars()`, `metaphone()`, `quotemeta()`,
 `soundex()` and `str_rot13()` now expose their typed PHP 8.5 signature shapes

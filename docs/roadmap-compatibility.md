@@ -3156,7 +3156,7 @@ remains at 289 functions; no dependency or value/object/array layout changes.
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 593 pass, 56 fail, 54 skip and 30 unsupported, with no timeout or crash;
+is 599 pass, 50 fail, 54 skip and 30 unsupported, with no timeout or crash;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
@@ -3174,14 +3174,14 @@ checksum/hash supplying clusters are both 8/8, the selected
 `base64_decode()` family is 6/6, and the visible quoted-printable family is
 5/5, the visible UUencode family is 4/4 and the deterministic byte-utility
 batch is 12/12 including its four adjacent gains. The word-boundary and
-line-formatting batch is 5/5, the legacy UTF-8 conversion batch is 3/3 and the
-byte-input diagnostic batch is 4/4. Manifest root-cause triage selects the next
-bounded candidate as the six-case source-highlighting cluster spanning the
-three `show_source*` cases and the three `gh20906_*` cases; wider
-string-offset writes, typed-parameter and associative-key binary provenance,
-detached-callback alias spelling, unknown entity-encoding warnings, platform
-cryptography, tag parsing and broader legacy multibyte behavior remain explicit
-contracts.
+line-formatting batch is 5/5, the legacy UTF-8 conversion batch is 3/3, the
+byte-input diagnostic batch is 4/4 and the source-highlighting/output-handler
+batch is 6/6. Manifest root-cause triage selects the next bounded candidate as
+the nine-case `strip_tags()` scanner cluster and its space-after-heredoc fixture
+dependency; wider string-offset writes, typed-parameter and associative-key
+binary provenance, detached-callback alias spelling, unknown entity-encoding
+warnings, platform cryptography and broader legacy multibyte behavior remain
+explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,
