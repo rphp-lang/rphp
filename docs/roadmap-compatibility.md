@@ -3225,14 +3225,30 @@ unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Two
 exact-final-binary CPU-pinned 32-pair runs keep startup, retained `strlen()` and
 50,000 retained file reads below +5%, with matching outputs.
 
-The monitored supported debt is now 1,108 failures: 19 strings, zero array and
+The `99b4e423` `hebrev-byte-boundary` checkpoint then moves strings from 630 to
+631 pass, exactly `+1/-0`; array stays 828/842 and Zend/lang stays 4,214/5,599
+with no other outcome movement. The typed standard surface uses a clean-room
+byte transformer for legacy directional runs, previous-direction punctuation,
+mirroring, line boundaries and observed wrapping. A 21-case transcript and an
+exhaustive 20,736-combination oracle are byte-identical to PHP 8.5.9.
+
+Two complete final audits are identical through actual-output hashes. All five
+Cargo configurations, all-feature/all-target, formatting, HTML data, PHPT
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Two exact-final-binary CPU-pinned 32-pair runs keep startup, retained `strlen()`,
+500,000 `strrev()` calls and 500,000 `wordwrap()` calls below +5%, with
+matching outputs.
+
+The monitored supported debt is now 1,107 failures: 18 strings, zero array and
 1,089 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
-the portability contract and remains deferred. Risk-adjusted triage next
-selects the pure legacy `hebrev()` byte transform. Host locale discovery,
-`nl_langinfo()`, `strcoll()`, the deliberate `str_pad(PHP_INT_MAX)` allocation
-failure, runtime-selected method/static array-reference context, broader
-binary-string propagation, 32-bit behavior and allocation-limit/OOM
-equivalence remain explicit contracts.
+the portability contract and remains deferred. The other portable string cases
+are host-locale or deliberate allocation-failure contracts. Manifest triage
+instead selects the general PHP 8.5 error-reporting mask boundary: 11
+Zend/lang failures directly expose obsolete `E_ALL=32767` state where PHP 8.5
+uses 30719. Isolated/mixed standalone CR, degenerate `hebrev()` wrapping,
+runtime-selected method/static array-reference context, broader binary-string
+propagation, 32-bit behavior and allocation-limit/OOM equivalence remain
+explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,
