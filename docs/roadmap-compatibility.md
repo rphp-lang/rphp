@@ -3289,11 +3289,26 @@ five million string-offset reads, two million writes and one million magic
 property groups below +5%. A full-string-cloning read candidate was rejected at
 +16.869%; the accepted byte-view path restores the performance gate.
 
-The monitored supported debt is now 1,073 failures: 18 strings, zero array and
-1,055 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
+The `0be9d6d1` `alternate-not-equal-operator` checkpoint then moves Zend/lang
+from 4,248 to 4,250 pass, exactly `+2/-0`; strings stay 631/733 and array stays
+828/842 with no other outcome movement. The lexer maps PHP's alternate `<>`
+spelling onto the existing `NotEqual` token, preserving maximal munch against
+`<=>`, `<=` and `<<` and reusing established precedence, compiler, VM and JIT
+paths. Both supplying AMD64 lang operator cases now pass.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical manifests
+and summaries; repeated strings/array outcome projections also match. All five
+Cargo configurations, all-feature/all-target, formatting, HTML data, PHPT
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Two exact-final-binary CPU-pinned 32-pair runs keep startup, retained `strlen()`,
+five million comparisons and 20,000 repeated lex/parse/eval expressions with
+`<` below +5%.
+
+The monitored supported debt is now 1,071 failures: 18 strings, zero array and
+1,053 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
 the portability contract and remains deferred. Read-only manifest triage next
-selects PHP's alternate `<>` not-equal lexer boundary: exactly two AMD64 lang
-cases currently reject the second token before execution.
+selects the removed `(unset)` cast diagnostic boundary: two cases currently
+emit a generic expression parse error instead of PHP 8.5's compile-time fatal.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
 suppression-wrapped destructuring, exhaustive object/array/resource

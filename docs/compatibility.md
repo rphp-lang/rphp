@@ -8,6 +8,63 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`alternate-not-equal-operator`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. The lexer now recognizes PHP's alternate `<>`
+not-equal spelling as the same `NotEqual` token used by `!=`. It therefore
+inherits the established comparison precedence, assignment-on-the-right
+parsing, compiler lowering, mixed-type semantics and optimized execution
+without adding a second downstream path.
+
+An original maximal-munch lexer regression separates `<>` from `<=>`, `<=`
+and `<<`. An original E2E covers equality and inequality across integer and
+numeric-string operands, additive precedence, equivalence with `!=` and an
+assignment expression on the comparison's right side. Both supplying AMD64
+lang cases now pass: `operator_notequals_basic.phpt` and
+`operator_notequals_variation_64bit.phpt`.
+
+The complete combined audit covers 7,174 cases: 5,709 pass, 1,071 fail, 182
+skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
+fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
+and one unsupported. Zend/lang moves from 4,248 to 4,250 pass, exactly
+`+2/-0`, with 1,053 failures, 115 skips and 181 unsupported cases. Only the
+two named cases move from `fail/parse` to pass. Two serial exact-final-binary
+Zend/lang runs have byte-identical manifests and summaries, whose SHA-256
+values are respectively
+`2b9bb7ae04d4b12340a7c5586b7dd61a0b2d1ca902e21f8bb6699bd75732377f`
+and `520710b05129603e8c1b31875615bce7e81d52d3ff052e7c0bb897e76aeec9b1`.
+Repeated strings and array runs have identical outcome projections.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at 1,622 unsafe blocks, 289 unsafe functions, 366 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony
+S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The change adds
+no dependency and changes no compiler, VM or public runtime layout.
+
+Two exact-final-binary CPU-2-pinned, order-balanced 32-pair release runs use the
+performance governor, four warmups and no excluded sample. They compare parent
+SHA-256 `9a494ac959c2cc2db2b4937a55a9aa5e89f0708bc8156e3b68138a74b4fd81ed`
+with candidate
+`1e0196038cb5b2d696277bceee18311c6375a188fd130fb04a12673f82e3e305`.
+Paired medians are -9.191%/-7.867% for 100 startups,
+-3.450%/-2.458% for five million retained `strlen()` calls,
+-0.973%/-1.229% for five million retained comparisons and
+-0.099%/-0.467% for 20,000 repeated lex/parse/eval expressions containing
+`<`. Comparable outputs match and every paired median remains below +5%. The
+raw TSVs hash to
+`ac3705745549a869b0a757d398d2148a299dc9b9153f2bcaf282eadd7e96bbab`
+and `b9c02f247a70d291770b7e2789814f2262158804923ae3036e1685801dab793b`.
+
+This checkpoint does not claim a distinct AST/opcode identity for `<>`, because
+PHP defines it as the same not-equal operation, or unrelated comparison and
+numeric-string edge cases. The monitored supported debt is now 1,071 failures:
+18 strings, zero array and 1,053 Zend/lang. Read-only manifest triage selects
+the removed `(unset)` cast diagnostic boundary next: two cases currently stop
+at a generic expression parse error instead of PHP 8.5's compile-time fatal.
+
+The implementation checkpoint is commit `0be9d6d1`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `suppressed-write-target`, pinned to php-src 8.5 commit `fcc29c8` and validated
 against PHP 8.5.9. The parser now treats an outer `@` as part of the complete
 assignment expression for value, reference, compound, coalescing and append
