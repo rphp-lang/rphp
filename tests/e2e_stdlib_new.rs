@@ -796,6 +796,85 @@ try {
 }
 
 #[test]
+fn printf_position_limits_precede_missing_arguments_and_partial_output() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function position_attempt(string $label, Closure $operation): void {
+    ob_start();
+    try {
+        $operation();
+        echo $label, ':unexpected', "\n";
+    } catch (Throwable $error) {
+        $printed = ob_get_clean();
+        echo $label, ':', get_class($error), ':', bin2hex($printed), ':', $error->getMessage(), "\n";
+    }
+}
+
+position_attempt('missing', fn() => sprintf('%$s', 'a', 'b'));
+position_attempt('zero', fn() => vsprintf('%0$s', ['a', 'b']));
+position_attempt('limit', fn() => sprintf('%2147483647$s', 'a', 'b'));
+position_attempt('overflow', fn() => vsprintf('%999999999999999999999999999999$s', ['a', 'b']));
+position_attempt('later', fn() => sprintf('%3$s %2147483648$s', 'a', 'b'));
+position_attempt('printf', fn() => printf('prefix:%2147483648$s', 'a', 'b'));
+position_attempt('vprintf', fn() => vprintf('prefix:%0$s', ['a', 'b']));
+"#,
+        ),
+        concat!(
+            "missing:ValueError::Argument number specifier must be greater than zero and less than 2147483647\n",
+            "zero:ValueError::Argument number specifier must be greater than zero and less than 2147483647\n",
+            "limit:ValueError::Argument number specifier must be greater than zero and less than 2147483647\n",
+            "overflow:ValueError::Argument number specifier must be greater than zero and less than 2147483647\n",
+            "later:ValueError::Argument number specifier must be greater than zero and less than 2147483647\n",
+            "printf:ValueError::Argument number specifier must be greater than zero and less than 2147483647\n",
+            "vprintf:ValueError::Argument number specifier must be greater than zero and less than 2147483647\n",
+        ),
+    );
+}
+
+#[test]
+fn printf_position_limits_cover_stars_boundaries_and_runtime_call_shapes() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function position_error(Closure $operation): string {
+    try {
+        $operation();
+        return 'unexpected';
+    } catch (Throwable $error) {
+        return get_class($error) . ':' . $error->getMessage();
+    }
+}
+
+echo sprintf('%2$s/%1$s', 'left', 'right'), "\n";
+echo position_error(fn() => sprintf('%2147483646$s', 'a', 'b')), "\n";
+echo position_error(fn() => vsprintf('%2147483646$s', ['a', 'b'])), "\n";
+foreach (['%*2147483647$s', '%.*999999999999999999999999999999$s'] as $format) {
+    echo position_error(fn() => sprintf($format, 2, 'x')), "\n";
+}
+$dynamic = 'sprintf';
+echo position_error(fn() => $dynamic('%2147483648$s', 'x')), "\n";
+$firstClass = sprintf(...);
+echo position_error(fn() => $firstClass('%2147483648$s', 'x')), "\n";
+echo position_error(fn() => call_user_func_array('sprintf', ['%2147483648$s', 'x'])), "\n";
+echo position_error(fn() => sprintf(format: '%2147483648$s', values: 'x'));
+"#,
+        ),
+        concat!(
+            "right/left\n",
+            "ArgumentCountError:2147483647 arguments are required, 3 given\n",
+            "ValueError:The arguments array must contain 2147483646 items, 2 given\n",
+            "ValueError:Argument number specifier must be greater than zero and less than 2147483647\n",
+            "ValueError:Argument number specifier must be greater than zero and less than 2147483647\n",
+            "ValueError:Argument number specifier must be greater than zero and less than 2147483647\n",
+            "ValueError:Argument number specifier must be greater than zero and less than 2147483647\n",
+            "ValueError:Argument number specifier must be greater than zero and less than 2147483647\n",
+            "ArgumentCountError:sprintf() does not accept unknown named parameters",
+        ),
+    );
+}
+
+#[test]
 fn binary_hex_conversions_round_trip_bytes_and_report_invalid_input() {
     assert_eq!(
         run_php(

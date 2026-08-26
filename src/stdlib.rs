@@ -10484,6 +10484,17 @@ fn parse_sprintf_decimal(bytes: &[u8], index: &mut usize) -> Option<usize> {
     (*index > start).then_some(value)
 }
 
+const SPRINTF_POSITION_ERROR: &str =
+    "Argument number specifier must be greater than zero and less than 2147483647";
+
+#[inline]
+fn normalize_sprintf_position(number: Option<usize>) -> Result<usize, ()> {
+    match number {
+        Some(number) if number > 0 && number < i32::MAX as usize => Ok(number - 1),
+        _ => Err(()),
+    }
+}
+
 fn sprintf_value_error(eg: &mut ExecutorGlobals, message: impl AsRef<str>) {
     eg.exception = Some(crate::value::make_error_value(
         "ValueError",
@@ -10561,21 +10572,13 @@ fn parse_sprintf_position(
         return Some(Ok(None));
     }
     *index += 1;
-    let Some(number) = number else {
-        sprintf_value_error(
-            eg,
-            "Argument number specifier must be greater than zero and less than 2147483647",
-        );
-        return Some(Err(()));
-    };
-    if number == 0 || number >= i32::MAX as usize {
-        sprintf_value_error(
-            eg,
-            "Argument number specifier must be greater than zero and less than 2147483647",
-        );
-        return Some(Err(()));
+    match normalize_sprintf_position(number) {
+        Ok(position) => Some(Ok(Some(position))),
+        Err(()) => {
+            sprintf_value_error(eg, SPRINTF_POSITION_ERROR);
+            Some(Err(()))
+        }
     }
-    Some(Ok(Some(number - 1)))
 }
 
 fn sprintf_numeric_long(
@@ -10895,7 +10898,7 @@ fn parse_sprintf_star_argument(
     value.as_long()
 }
 
-fn count_sprintf_arguments(format: &[u8]) -> usize {
+fn count_sprintf_arguments(format: &[u8]) -> Result<usize, ()> {
     fn record(position: Option<usize>, next: &mut usize, required: &mut usize) {
         let index = position.unwrap_or_else(|| {
             let index = *next;
@@ -10905,15 +10908,15 @@ fn count_sprintf_arguments(format: &[u8]) -> usize {
         *required = (*required).max(index.saturating_add(1));
     }
 
-    fn position(format: &[u8], index: &mut usize) -> Option<usize> {
+    fn position(format: &[u8], index: &mut usize) -> Result<Option<usize>, ()> {
         let start = *index;
         let number = parse_sprintf_decimal(format, index);
         if format.get(*index) != Some(&b'$') {
             *index = start;
-            return None;
+            return Ok(None);
         }
         *index += 1;
-        number.and_then(|number| number.checked_sub(1))
+        normalize_sprintf_position(number).map(Some)
     }
 
     let mut index = 0usize;
@@ -10929,7 +10932,7 @@ fn count_sprintf_arguments(format: &[u8]) -> usize {
             index += 1;
             continue;
         }
-        let value_position = position(format, &mut index);
+        let value_position = position(format, &mut index)?;
         loop {
             match format.get(index).copied() {
                 Some(b'-' | b'+' | b' ' | b'0') => index += 1,
@@ -10939,7 +10942,7 @@ fn count_sprintf_arguments(format: &[u8]) -> usize {
         }
         if format.get(index) == Some(&b'*') {
             index += 1;
-            let width_position = position(format, &mut index);
+            let width_position = position(format, &mut index)?;
             record(width_position, &mut next, &mut required);
         } else {
             let _ = parse_sprintf_decimal(format, &mut index);
@@ -10948,7 +10951,7 @@ fn count_sprintf_arguments(format: &[u8]) -> usize {
             index += 1;
             if format.get(index) == Some(&b'*') {
                 index += 1;
-                let precision_position = position(format, &mut index);
+                let precision_position = position(format, &mut index)?;
                 record(precision_position, &mut next, &mut required);
             } else {
                 let _ = parse_sprintf_decimal(format, &mut index);
@@ -10960,7 +10963,43 @@ fn count_sprintf_arguments(format: &[u8]) -> usize {
         index = (index + 1).min(format.len());
         record(value_position, &mut next, &mut required);
     }
-    required
+    Ok(required)
+}
+
+#[cfg(test)]
+mod sprintf_position_tests {
+    use super::count_sprintf_arguments;
+
+    #[test]
+    fn positional_count_accepts_the_documented_amd64_range() {
+        assert_eq!(count_sprintf_arguments(b"%1$s"), Ok(1));
+        assert_eq!(count_sprintf_arguments(b"%2147483646$s"), Ok(2_147_483_646));
+
+        for position in 1..=128 {
+            let format = format!("%{position}$s");
+            assert_eq!(count_sprintf_arguments(format.as_bytes()), Ok(position));
+        }
+    }
+
+    #[test]
+    fn positional_count_rejects_missing_zero_limit_and_decimal_overflow() {
+        for format in [
+            "%$s",
+            "%0$s",
+            "%2147483647$s",
+            "%2147483648$s",
+            "%999999999999999999999999999999999999$s",
+            "%3$s %2147483648$s",
+            "%*2147483647$s",
+            "%.*999999999999999999999999999999$s",
+        ] {
+            assert_eq!(
+                count_sprintf_arguments(format.as_bytes()),
+                Err(()),
+                "{format}"
+            );
+        }
+    }
 }
 
 fn check_sprintf_argument_count(
@@ -10969,7 +11008,13 @@ fn check_sprintf_argument_count(
     call: SprintfCall,
     eg: &mut ExecutorGlobals,
 ) -> bool {
-    let required = count_sprintf_arguments(format);
+    let required = match count_sprintf_arguments(format) {
+        Ok(required) => required,
+        Err(()) => {
+            sprintf_value_error(eg, SPRINTF_POSITION_ERROR);
+            return false;
+        }
+    };
     let count = args.map_or(0, PhpArray::len);
     if count >= required {
         return true;
