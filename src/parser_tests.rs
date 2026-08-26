@@ -929,6 +929,51 @@ fn bracket_offsets_blocks_and_dynamic_interpolated_properties_remain_valid() {
 }
 
 #[test]
+fn readonly_classlike_modifiers_have_php_declaration_diagnostics() {
+    for (keyword, expected) in [
+        ("enum", "enum"),
+        ("interface", "interface"),
+        ("trait", "trait"),
+    ] {
+        let source = format!("<?php\nreadonly {keyword} Example {{}}");
+        let tokens = Lexer::new(&source).tokenize().unwrap();
+        let error = Parser::new(tokens)
+            .with_source_name("/virtual/readonly-declaration.php")
+            .parse()
+            .unwrap_err();
+        assert_eq!(
+            error,
+            format!(
+                "syntax error, unexpected token \"{expected}\", expecting \"abstract\" or \"final\" or \"readonly\" or \"class\" in /virtual/readonly-declaration.php on line 2"
+            )
+        );
+    }
+
+    for (source, message, line) in [
+        (
+            "<?php\nreadonly\nreadonly class Example {}",
+            "Multiple readonly modifiers are not allowed",
+            3,
+        ),
+        (
+            "<?php\nclass Example {\nreadonly\nconst VALUE = 1;\n}",
+            "Cannot use the readonly modifier on a class constant",
+            3,
+        ),
+    ] {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        assert!(matches!(
+            statements.last(),
+            Some(Stmt::ExprStmt(Expr::CompileError {
+                message: actual,
+                line: actual_line,
+            })) if actual == message && *actual_line == line
+        ));
+    }
+}
+
+#[test]
 fn source_aware_punctuation_keeps_the_existing_internal_fallback_text() {
     let tokens = Lexer::new("<?php declare(ticks=1) {}").tokenize().unwrap();
     assert_eq!(

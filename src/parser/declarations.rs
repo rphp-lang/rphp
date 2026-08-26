@@ -28,6 +28,7 @@ struct MemberModifiers {
     is_static: bool,
     is_final: bool,
     is_readonly: bool,
+    readonly_line: Option<usize>,
     is_abstract: bool,
 }
 
@@ -41,6 +42,7 @@ impl Default for MemberModifiers {
             is_static: false,
             is_final: false,
             is_readonly: false,
+            readonly_line: None,
             is_abstract: false,
         }
     }
@@ -670,8 +672,14 @@ impl Parser {
                     self.advance();
                     is_final = true;
                 }
-                Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("readonly") => {
+                Token::Identifier(ref name, line) if name.eq_ignore_ascii_case("readonly") => {
                     self.advance();
+                    if is_readonly {
+                        let _ = self.compile_error(
+                            "Multiple readonly modifiers are not allowed",
+                            line,
+                        );
+                    }
                     is_readonly = true;
                 }
                 _ => break,
@@ -1470,12 +1478,13 @@ impl Parser {
                     }
                     modifiers.is_abstract = true;
                 }
-                Token::Identifier(ref s, _) if s.eq_ignore_ascii_case("readonly") => {
+                Token::Identifier(ref s, line) if s.eq_ignore_ascii_case("readonly") => {
                     self.advance();
                     if modifiers.is_readonly {
                         record_duplicate(&mut modifiers, DuplicateMemberModifier::Readonly);
                     }
                     modifiers.is_readonly = true;
+                    modifiers.readonly_line.get_or_insert(line);
                 }
                 _ => break,
             }
@@ -1496,7 +1505,13 @@ impl Parser {
             return Err("Class constants cannot be declared abstract".into());
         }
         if modifiers.is_readonly {
-            return Err("Class constants cannot be declared readonly".into());
+            let line = modifiers
+                .readonly_line
+                .unwrap_or_else(|| self.closest_token_source_line());
+            let _ = self.compile_error(
+                "Cannot use the readonly modifier on a class constant",
+                line,
+            );
         }
         if modifiers.is_final && modifiers.visibility == Visibility::Private {
             return Err("Private class constants cannot be final".into());

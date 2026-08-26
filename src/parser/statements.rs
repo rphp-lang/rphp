@@ -1181,6 +1181,26 @@ impl Parser {
             }
             Token::Identifier(ref name, _)
                 if name.eq_ignore_ascii_case("readonly")
+                    && matches!(
+                        self.peek_at(1),
+                        Token::Enum | Token::Interface | Token::Trait
+                    ) =>
+            {
+                let (unexpected, line) = match (self.peek_at(1), self.peek()) {
+                    (Token::Enum, Token::Identifier(_, line)) => ("enum", line),
+                    (Token::Interface, Token::Identifier(_, line)) => ("interface", line),
+                    (Token::Trait, Token::Identifier(_, line)) => ("trait", line),
+                    _ => unreachable!("guarded readonly class-like diagnostic"),
+                };
+                Err(self.source_error(
+                    &format!(
+                        "syntax error, unexpected token \"{unexpected}\", expecting \"abstract\" or \"final\" or \"readonly\" or \"class\""
+                    ),
+                    line,
+                ))
+            }
+            Token::Identifier(ref name, _)
+                if name.eq_ignore_ascii_case("readonly")
                     && (matches!(
                         self.peek_at(1),
                         Token::Class | Token::Abstract | Token::Final
@@ -1188,6 +1208,7 @@ impl Parser {
                         self.peek_at(1),
                         Token::Identifier(ref keyword, _)
                             if keyword.eq_ignore_ascii_case("class")
+                                || keyword.eq_ignore_ascii_case("readonly")
                     )) =>
             {
                 self.parse_class()

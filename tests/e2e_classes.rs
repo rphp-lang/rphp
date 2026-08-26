@@ -373,6 +373,34 @@ var_dump($dynamic->value);
 }
 
 #[test]
+fn valid_named_readonly_modifier_orders_and_neighboring_classlikes_remain_valid() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+readonly class PlainBox {
+    public function __construct(public int $value) {}
+}
+final readonly class FinalFirstBox {
+    public function __construct(public int $value) {}
+}
+readonly final class ReadonlyFirstBox {
+    public function __construct(public int $value) {}
+}
+abstract readonly class AbstractBox {}
+readonly abstract class ReadonlyAbstractBox {}
+enum NeighboringEnum { case Value; }
+interface NeighboringInterface {}
+trait NeighboringTrait {}
+echo (new PlainBox(1))->value, '|';
+echo (new FinalFirstBox(2))->value, '|';
+echo (new ReadonlyFirstBox(3))->value;
+"#,
+        ),
+        "1|2|3"
+    );
+}
+
+#[test]
 fn allow_dynamic_properties_rejects_non_dynamic_class_targets() {
     for (source, expected) in [
         (
