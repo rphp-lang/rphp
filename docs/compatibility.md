@@ -8,6 +8,97 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`html-string-boundary-contract`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. `htmlspecialchars()`, `htmlentities()`,
+`htmlspecialchars_decode()`, `html_entity_decode()` and
+`get_html_translation_table()` now expose their exact typed signatures,
+defaults, return types and `standard` extension provenance through Reflection.
+Sparse internal-function metadata carries exact symbolic default diagnostics
+without enlarging the common function descriptor or allocating extension and
+diagnostic strings per request.
+
+The encoder pair validates all four typed arguments before charset resolution.
+Unknown charset labels emit the PHP warning and fall back to UTF-8 unless a
+warning handler throws; numeric labels follow weak scalar conversion, explicit
+null and empty labels select UTF-8, and charset lookup stops at the first NUL.
+The input bytes and converted arguments are retained before a re-entrant warning
+handler can mutate caller-visible values. UTF-8 fallback preserves NUL, applies
+the requested invalid-byte policy and retains PHP byte-string result identity;
+the admitted legacy 1252 lane keeps its byte semantics. The translation-table
+boundary independently keeps its non-null string type, including weak-null
+deprecation and strict-null rejection.
+
+With `double_encode=false`, named references keep their bounded lookup while
+numeric decimal and hexadecimal references accept arbitrarily many leading
+zeroes. The numeric scanner saturates invalid values while continuing to the
+semicolon, so overflows, surrogates and out-of-range code points remain escaped
+without imposing the named-reference length cap. One unit test and four
+original E2Es cover generated zero runs through 4,096 bytes, invalid references,
+binary NUL/high-byte inputs, warnings and throwing handlers, weak/strict and
+Stringable conversion, named/dynamic/first-class/callback calls, references,
+copy-on-write, side-effect order and all five Reflection projections.
+
+The exact three-case focused gate passes `bug44703.phpt`, `bug60965.phpt` and
+`bug61116.phpt`; its compact manifest and summary hash to
+`5e2cfdc3935b8d747de7a1803ac6c48f698340bc49993910baec61f2df3d31f5`
+and `5cbbb6a480c2eaf9d698e781f3291fa6fd3712d8f7e220dfb1a4f449e92c78b5`.
+An independent 57-case HTML-string selection has 38 passes, 19 explicit
+runtime-CLI-INI unsupported outcomes and no ordinary failure, timeout or crash;
+its manifest/summary pair is
+`7b8cffab8f81b47810fcf7307313cd44c58003047d5a0ee091a1265aae4f86a5`
+and `a3862f80303472936c6b914177c41efca43b9b8bc484120a77cf4cf2dce812e3`.
+
+The complete 733-case strings audit moves from 608 to 611 passes, exactly
++3/-0, with 38 failures, 54 skips, 30 unsupported cases and no timeout or
+crash. Two final runs have byte-identical manifests and summaries at SHA-256
+`ecf3bbc4e43dc034dfc5430ae7b6cc4ee0d25c13975bc8598f880d9407fa8a23`
+and `caf2ef06e3e1a87c0369e31f31c9c9fd1025f51fda07e2001c19640eb3ed5b6c`.
+The parent/candidate canonical maps hash to
+`4bb355575f91123e9858ead472e719d234522bc70593f13698ca60094febefa1`
+and `a4034a69bb17c4dd444712fba7b390a6ff111c9d7fd9879849fc169b35757f2f`;
+their pass sets hash to
+`112e4482499101dd6b4f14aa1dee490a3362661932a3bc803150191e74a8a98d`
+and `287d69f1bf8a7356a948161ff1ff45b63a410441704b8f4853d3a8cea13502da`.
+
+The complete array audit remains byte-identical at 828 pass, 13 skip and one
+unsupported case, and Zend/lang remains byte-identical at 4,210 pass, 1,093
+fail, 115 skip and 181 unsupported cases. Neither has an XFAIL, timeout or
+crash. Their exact final manifests remain
+`d1d07b2537a5257a59d3d13c0839674fb7a35ba1f2470ff5d2218fb2eab0d746`
+and `8d3afc26468335d657f15fc7251437f9d1561fae1c36f934672fa4e5f7fc024b`.
+No previous pass or unrelated outcome moved.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks, Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production
+remains at 1,622 unsafe blocks and 289 unsafe functions, with 365 SAFETY
+annotations and seven `# Safety` sections. Two exact-final-binary CPU-2-pinned,
+order-balanced 32-pair release runs use the performance governor, four warmups,
+no excluded sample and disabled JIT/quick loops. They compare parent SHA-256
+`d4a1d8a59f14df1d7c45636c6a3e4656c2b3f8b625c2e74fd81aa79dc6648c25`
+with candidate
+`bd69f8de7cfb5b3d1fc08baf23cc648784baa3ec7dedd60c93910df5f3ab36bc`.
+Paired medians are -2.495%/-2.066% for 100 startups, +0.912%/+1.426% for five
+million retained `strlen()` calls, -2.774%/-2.384% for 500,000 ordinary
+`htmlentities()` calls and +3.805%/+3.742% for 500,000 entity-heavy encoder
+pairs with `double_encode=false`. Independent and order-balanced medians,
+outputs and checksums also remain below +5%. The raw TSVs hash to
+`c0745ce2200903db85288d68b0c10fd953a644d19a4f639975a29add2dbb2658`
+and `deb757630d47ca3d5b878af24e3e3066c312b88ff5410e87892f062dbc1c855f`.
+
+This checkpoint does not admit configurable `default_charset`,
+`output_handler`, `internal_encoding`, filter or mbstring INI behavior, broader
+legacy charset coverage, HTML parsing or sanitization guarantees, 32-bit or
+allocation-limit/OOM equivalence, platform `crypt()`/locale behavior, or
+closure of the remaining 38 strings and wider Zend failures. Risk-adjusted
+triage leaves the 13 platform-dependent crypt cases grouped for a dedicated
+portability checkpoint and selects the two malformed/nested `parse_str()`
+failures `parse_str_basic4.phpt` and `bug77439.phpt` as the next small,
+non-platform checkpoint.
+
+The implementation checkpoint is commit `45aeedb8`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `strip-tags-scanner-contract`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. `strip_tags()` now exposes the exact typed
 `(string $string, array|string|null $allowed_tags = null): string` boundary,
