@@ -6662,27 +6662,74 @@ fn fn_strcspn(
     string_span_builtin(ed, rv, eg, "strcspn", false)
 }
 
+#[inline]
+fn strpbrk_result(string: &Value, characters: &Value) -> Result<Value, ()> {
+    let string_bytes = string.php_string_bytes().unwrap_or_default();
+    let character_bytes = characters.php_string_bytes().unwrap_or_default();
+    if character_bytes.is_empty() {
+        return Err(());
+    }
+    let mut accepted = [false; 256];
+    for byte in character_bytes.iter().copied() {
+        accepted[byte as usize] = true;
+    }
+    Ok(
+        match string_bytes
+            .iter()
+            .position(|byte| accepted[*byte as usize])
+        {
+            Some(position) => php_byte_result(string_bytes[position..].to_vec(), false),
+            None => Value::bool(false),
+        },
+    )
+}
+
 fn fn_strpbrk(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let string = arg_str!(ed, 0);
-    let characters = arg_str!(ed, 1);
-    let mut accepted = [false; 256];
-    for byte in characters.bytes() {
-        accepted[byte as usize] = true;
+    let exact_string = arg!(ed, 0);
+    let exact_characters = arg!(ed, 1);
+    if exact_string.value_type() == ValueType::String
+        && exact_characters.value_type() == ValueType::String
+    {
+        match strpbrk_result(exact_string, exact_characters) {
+            Ok(result) => ret!(rv, result),
+            Err(()) => {
+                eg.exception = Some(crate::value::make_error_value(
+                    "ValueError",
+                    "strpbrk(): Argument #2 ($characters) must be a non-empty string",
+                ));
+                return Ok(());
+            }
+        }
     }
-    let position = string
-        .as_bytes()
-        .iter()
-        .position(|byte| accepted[*byte as usize]);
-    match position {
-        Some(position) => ret!(
-            rv,
-            Value::string(String::from_utf8_lossy(&string.as_bytes()[position..]).into_owned())
-        ),
-        None => ret!(rv, Value::bool(false)),
+    let Some(string) =
+        typed_internal_string_value_argument_expected(ed, eg, "strpbrk", 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let Some(characters) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "strpbrk",
+        1,
+        "characters",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    match strpbrk_result(&string, &characters) {
+        Ok(result) => ret!(rv, result),
+        Err(()) => {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                "strpbrk(): Argument #2 ($characters) must be a non-empty string",
+            ));
+            Ok(())
+        }
     }
 }
 
@@ -9948,19 +9995,35 @@ fn direct_ord(args: &[Value]) -> Result<Value, VmError> {
     Ok(Value::long(i64::from(byte)))
 }
 
+#[inline(always)]
+pub(crate) fn try_direct_ord_string(argument: &Value) -> Option<(u8, usize)> {
+    let bytes = argument.php_string_bytes()?;
+    Some((bytes.first().copied().unwrap_or(0), bytes.len()))
+}
+
 fn fn_ord(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    if reject_strict_internal_string(eg, ed, arg!(ed, 0), "ord", "character") {
+    let Some(character) =
+        typed_internal_string_value_argument_expected(ed, eg, "ord", 0, "character", "string")?
+    else {
         return Ok(());
-    }
-    if arg!(ed, 0).dereferenced().value_type() == ValueType::Null {
+    };
+    let bytes = character.php_string_bytes().unwrap_or_default();
+    if bytes.is_empty() {
+        report_internal_deprecation(eg, ed, "ord(): Providing an empty string is deprecated")?;
+    } else if bytes.len() != 1 {
         report_internal_deprecation(
             eg,
             ed,
-            "ord(): Passing null to parameter #1 ($character) of type string is deprecated",
+            "ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead",
         )?;
     }
-    let result = direct_ord(std::slice::from_ref(arg!(ed, 0)))?;
-    ret!(rv, result);
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    ret!(
+        rv,
+        Value::long(i64::from(bytes.first().copied().unwrap_or(0)))
+    );
 }
 
 fn fn_chr(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -10036,8 +10099,12 @@ fn fn_hex2bin(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let input = arg_str!(ed, 0);
-    let bytes = input.as_bytes();
+    let Some(input) =
+        typed_internal_string_value_argument_expected(ed, eg, "hex2bin", 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let bytes = input.php_string_bytes().unwrap_or_default();
     let invalid_message = if bytes.len() % 2 != 0 {
         Some("hex2bin(): Hexadecimal input string must have an even length")
     } else if bytes.iter().any(|byte| !byte.is_ascii_hexdigit()) {
@@ -10046,7 +10113,10 @@ fn fn_hex2bin(
         None
     };
     if let Some(message) = invalid_message {
-        let _ = dispatch_php_error(eg, ed, 2, message, "", 0)?;
+        report_internal_diagnostic(eg, ed, 2, "Warning", message)?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
         ret!(rv, Value::bool(false));
     }
 
@@ -10056,7 +10126,7 @@ fn fn_hex2bin(
         let low = decode_hex_nibble(pair[1]);
         output.push((high << 4) | low);
     }
-    ret!(rv, Value::string(bytes_to_php_string(&output)));
+    ret!(rv, php_byte_result(output, false));
 }
 
 fn emit_pack_warnings(

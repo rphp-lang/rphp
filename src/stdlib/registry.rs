@@ -415,7 +415,18 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("str_shuffle", fn_str_shuffle, 1, 1, "string");
     reg!("random_bytes", fn_random_bytes, 1, 1, "length");
     reg!("bin2hex", fn_bin2hex, 1, 1, "string");
-    reg!("hex2bin", fn_hex2bin, 1, 1, "string");
+    reg_typed!(
+        "hex2bin",
+        fn_hex2bin,
+        1,
+        1,
+        ["string"],
+        [ParamTypeHint::String],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
     {
         let mut function = Box::new(make_internal_function_variadic(
             fn_pack,
@@ -765,7 +776,18 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         ParamTypeHint::Int
     );
-    reg!("strpbrk", fn_strpbrk, 2, 2, "string", "characters");
+    reg_typed!(
+        "strpbrk",
+        fn_strpbrk,
+        2,
+        2,
+        ["string", "characters"],
+        [ParamTypeHint::String, ParamTypeHint::String],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
     reg!("str_contains", fn_str_contains, 2, 2, "haystack", "needle");
     reg!(
         "str_starts_with",
@@ -946,7 +968,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "decimal_separator",
         "thousands_separator"
     );
-    reg!("ord", fn_ord, 1, 1, "character");
+    reg_typed!(
+        "ord",
+        fn_ord,
+        1,
+        1,
+        ["character"],
+        [ParamTypeHint::String],
+        ParamTypeHint::Int
+    );
     reg!("chr", fn_chr, 1, 1, "codepoint");
     reg_var!("sprintf", fn_sprintf, 1, "format", "values");
     reg!("vsprintf", fn_vsprintf, 2, 2, "format", "values");

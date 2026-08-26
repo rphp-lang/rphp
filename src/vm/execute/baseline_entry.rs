@@ -563,6 +563,38 @@ where
     Ok(return_value)
 }
 
+/// Invoke a registered internal function from a source opcode that already
+/// owns the call boundary. The detached activation is linked to the source
+/// frame only while its native handler runs, so diagnostics retain the
+/// physical callsite without changing callback or nullsafe trace behavior.
+pub(crate) fn call_internal_function_iter_from_current_site<'a, I>(
+    eg: &mut ExecutorGlobals,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = &'a Value>,
+{
+    let logical_caller = eg.current_execute_data.get();
+    let (return_value, _) = call_function_value_iter::<_, false>(
+        eg,
+        func_ptr,
+        num_args,
+        args.cloned(),
+        0,
+        None,
+        0,
+        None,
+        None,
+        logical_caller,
+        false,
+        true,
+        None,
+    )?;
+    Ok(return_value)
+}
+
 /// Closure-aware detached callback entry. Captures remain ordinary trailing
 /// arguments, while bound `$this` and lexical scope are frame metadata rather
 /// than public parameters.
@@ -1332,13 +1364,28 @@ where
             eg.current_execute_data.set(frame);
             execute_ex(eg, frame)
         }
-        FunctionType::Internal => {
-            let internal = unsafe {
-                &*(func_ptr as *const super::function::InternalFunction)
-            };
-            unsafe { std::ptr::drop_in_place(&mut return_value as *mut Value) };
-            (internal.handler)(frame, &mut return_value, eg)
-        }
+        FunctionType::Internal => unsafe {
+            // SAFETY: `function_type` was read from this live registered
+            // descriptor above, so the InternalFunction tail is valid. The
+            // VM-stack frame remains live for the synchronous handler; its
+            // prior caller link is restored before the detached cleanup path.
+            let internal = &*(func_ptr as *const super::function::InternalFunction);
+            std::ptr::drop_in_place(&mut return_value as *mut Value);
+            // A source opcode that invokes an internal handler through the
+            // detached boundary still owns the handler's diagnostic origin.
+            // Link that caller only for the synchronous native handler: the
+            // frame remains detached for user-code execution and cleanup.
+            let previous_caller = (*frame).prev_execute_data;
+            if trace_caller_at_current_site
+                && !publish_live_trace_caller
+                && !trace_caller.is_null()
+            {
+                (*frame).prev_execute_data = trace_caller;
+            }
+            let result = (internal.handler)(frame, &mut return_value, eg);
+            (*frame).prev_execute_data = previous_caller;
+            result
+        },
         FunctionType::Undef => {
             eg.exception = Some(make_error_value("Error", "Call to undefined function"));
             Ok(())

@@ -656,7 +656,11 @@ var_dump(assert(false));
 fn strict_internal_string_calls_reject_scalars_without_weakening_ordinary_calls() {
     assert_eq!(
         run_php("<?php echo strlen(1.5), ':', ord(65), \"\\n\";"),
-        "3:54\n"
+        concat!(
+            "3:\n",
+            "Deprecated: ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead in <main> on line 1\n",
+            "54\n",
+        )
     );
     assert_eq!(
         run_php(
@@ -1146,7 +1150,7 @@ fn test_e2e_strlen_number() {
 }
 
 #[test]
-fn null_scalar_builtin_contracts_report_and_throw_like_php_82() {
+fn null_scalar_builtin_contracts_report_and_throw_like_php_85() {
     assert_eq!(
         run_php_with_source_context(
             r#"<?php
@@ -1173,6 +1177,7 @@ foreach ([
             "8192:strlen(): Passing null to parameter #1 ($string) of type string is deprecated:4\n",
             "int(0)\n",
             "8192:ord(): Passing null to parameter #1 ($character) of type string is deprecated:5\n",
+            "8192:ord(): Providing an empty string is deprecated:5\n",
             "int(0)\n",
             "8192:defined(): Passing null to parameter #1 ($constant_name) of type string is deprecated:6\n",
             "bool(false)\n",

@@ -3799,18 +3799,45 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         "Invalid direct internal handler ID".into(),
                     ));
                 };
-                if kind == crate::builtin_metadata::DirectInternalKind::Ord
-                    && argument.dereferenced().value_type() == ValueType::Null
-                {
-                    report_php_deprecation(
-                        eg,
-                        frame,
-                        op_array,
-                        opline,
-                        "ord(): Passing null to parameter #1 ($character) of type string is deprecated",
-                    )?;
-                }
-                let result = if kind == crate::builtin_metadata::DirectInternalKind::ChunkSplit {
+                let result = if kind == crate::builtin_metadata::DirectInternalKind::Ord {
+                    if let Some((first_byte, byte_length)) =
+                        crate::stdlib::try_direct_ord_string(argument)
+                    {
+                        if byte_length == 0 {
+                            report_php_deprecation(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                "ord(): Providing an empty string is deprecated",
+                            )?;
+                            resume_pending_exception!();
+                        } else if byte_length != 1 {
+                            report_php_deprecation(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                "ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead",
+                            )?;
+                            resume_pending_exception!();
+                        }
+                        Value::long(i64::from(first_byte))
+                    } else {
+                        let argument = argument.clone();
+                        let function = eg
+                            .find_function("ord")
+                            .ok_or_else(|| VmError::Fatal("Unknown function ord".into()))?;
+                        let result = call_internal_function_iter_from_current_site(
+                            eg,
+                            function,
+                            1,
+                            std::iter::once(&argument),
+                        )?;
+                        resume_pending_exception!();
+                        result
+                    }
+                } else if kind == crate::builtin_metadata::DirectInternalKind::ChunkSplit {
                     if let Some(result) = crate::stdlib::try_direct_chunk_split1(argument) {
                         result
                     } else {
@@ -3995,8 +4022,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             .filter(|spec| {
                                 spec.required_args <= 1
                                     && spec.max_args >= 1
-                                    && spec.kind
-                                        != crate::builtin_metadata::DirectInternalKind::ChunkSplit
+                                    && !matches!(
+                                        spec.kind,
+                                        crate::builtin_metadata::DirectInternalKind::ChunkSplit
+                                            | crate::builtin_metadata::DirectInternalKind::Ord
+                                    )
                                     && spec.kind.lowering()
                                         != crate::builtin_metadata::DirectInternalLowering::Generic2
                             })
