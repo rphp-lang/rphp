@@ -63,6 +63,28 @@ fn test_e2e_if_not_equal() {
 }
 
 #[test]
+fn alternate_not_equal_matches_standard_not_equal_and_precedence() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$value = 2;
+var_dump(1 <> $value, 1 <> "1", 1 + 2 <> 3, (1 <> 2) === (1 != 2));
+$assigned = false;
+var_dump(false <> $assigned = true, $assigned);
+"#,
+        ),
+        concat!(
+            "bool(true)\n",
+            "bool(false)\n",
+            "bool(false)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+        )
+    );
+}
+
+#[test]
 fn test_e2e_if_greater_equal() {
     assert_eq!(run_php("<?php $x = 10; if ($x >= 10) echo 42;"), "42");
 }

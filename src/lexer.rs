@@ -126,7 +126,7 @@ pub enum Token {
     MinusMinus,             // --
     EqualEqual,             // ==
     IdenticalEqual,         // ===
-    NotEqual,               // !=
+    NotEqual,               // != or <>
     NotIdentical,           // !==
     Less,                   // <
     LessEqual,              // <=
@@ -439,6 +439,11 @@ impl<'a> Lexer<'a> {
                                 self.pos = self.src.len();
                             }
                         }
+                    } else if self.peek_next() == Some(b'>') {
+                        // PHP's alternate not-equal spelling has exactly the
+                        // same token, precedence and semantics as `!=`.
+                        tokens.push(Token::NotEqual);
+                        self.pos += 2;
                     } else if self.peek_next() == Some(b'=') {
                         if self.src.get(self.pos + 2) == Some(&b'>') {
                             tokens.push(Token::Spaceship);
@@ -1686,6 +1691,31 @@ mod tests {
                 Token::Variable("x".into(), 1),
                 Token::Semicolon(1),
                 Token::RBrace,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn alternate_not_equal_uses_the_standard_comparison_token() {
+        let tokens = Lexer::new("<?php 1 <> 2 <=> 3 <= 4 << 1;")
+            .tokenize()
+            .unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                Token::Integer(1),
+                Token::NotEqual,
+                Token::Integer(2),
+                Token::Spaceship,
+                Token::Integer(3),
+                Token::LessEqual,
+                Token::Integer(4),
+                Token::ShiftLeft,
+                Token::Integer(1),
+                Token::Semicolon(1),
                 Token::Eof,
             ]
         );
