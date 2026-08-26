@@ -635,6 +635,35 @@ fn report_user_call_diagnostic(
     Ok(())
 }
 
+#[cold]
+fn report_deprecated_internal_call(
+    eg: &mut ExecutorGlobals,
+    caller: *mut ExecuteData,
+    function: *const FunctionCommon,
+    deprecation: &crate::vm::function::InternalFunctionDeprecation,
+    source_override: Option<(&str, usize)>,
+) -> Result<(), VmError> {
+    let name = displayed_function_name(eg, function);
+    let noun = if name.contains("::") { "Method" } else { "Function" };
+    let mut diagnostic = format!("{noun} {name}() is deprecated");
+    if !deprecation.since.is_empty() {
+        diagnostic.push_str(" since ");
+        diagnostic.push_str(deprecation.since);
+    }
+    if !deprecation.message.is_empty() {
+        diagnostic.push_str(", ");
+        diagnostic.push_str(deprecation.message);
+    }
+    report_user_call_diagnostic(
+        eg,
+        caller,
+        source_override,
+        &diagnostic,
+        8192,
+        "Deprecated",
+    )
+}
+
 /// Materialize PHP's built-in `#[Deprecated]` attribute and report the
 /// declaration-specific E_USER_DEPRECATED diagnostic before call validation.
 /// Attribute arguments may depend on runtime constants, so this stays on the

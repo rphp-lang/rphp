@@ -3391,14 +3391,16 @@ fn execute_full_call<'a>(
     // that frame or cast an unverified user-function descriptor.
     // SAFETY: handler-owned validation metadata is read only after the same
     // verified internal-function kind check as the raw handler tail.
-    // SAFETY: exact-arity metadata shares that registered InternalFunction
-    // tail and is read only while the live call retains its function entry.
+    // SAFETY: exact-arity and deprecation metadata share that registered
+    // InternalFunction tail and are read only while the live call retains its
+    // function entry.
     let (
         func_common,
         num_args,
         raw_variadic_handler,
         handler_validates_types,
         exact_arity_diagnostics,
+        internal_deprecation,
     ) = unsafe {
         let common = &*(*call).func;
         let internal = (common.fn_type == FunctionType::Internal).then(|| {
@@ -3422,8 +3424,21 @@ fn execute_full_call<'a>(
             raw_handler,
             internal.is_some_and(|function| function.handler_validates_types),
             internal.is_some_and(|function| function.exact_arity_diagnostics),
+            internal.and_then(|function| function.deprecation),
         )
     };
+    if let Some(deprecation) = internal_deprecation {
+        report_deprecated_internal_call(
+            eg,
+            frame,
+            func_common as *const FunctionCommon,
+            deprecation,
+            None,
+        )?;
+        if let Some(exception) = eg.exception.take() {
+            return cleanup_named_call_and_throw(eg, frame, call, exception);
+        }
+    }
     let public_max = func_common.sig.public_arity();
     if func_common.fn_type != FunctionType::User
         && !func_common.sig.is_variadic

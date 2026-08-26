@@ -1535,28 +1535,41 @@ pub(super) fn fn_htmlentities(
 }
 
 /// urlencode($string): string
+#[inline]
+fn url_byte_is_safe(byte: u8, raw: bool) -> bool {
+    matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.')
+        || raw && byte == b'~'
+}
+
+fn percent_encode_url_bytes(bytes: &[u8], raw: bool) -> String {
+    let Some(first_changed) = bytes.iter().position(|byte| !url_byte_is_safe(*byte, raw)) else {
+        // Every retained byte is ASCII, so this conversion cannot fail.
+        return String::from_utf8(bytes.to_vec()).unwrap_or_default();
+    };
+    let headroom = bytes.len().saturating_mul(2).min(64);
+    let mut output = String::with_capacity(bytes.len().saturating_add(headroom));
+    output.extend(bytes[..first_changed].iter().map(|byte| char::from(*byte)));
+    for byte in bytes[first_changed..].iter().copied() {
+        if url_byte_is_safe(byte, raw) {
+            output.push(char::from(byte));
+        } else if !raw && byte == b' ' {
+            output.push('+');
+        } else {
+            push_percent_escape(&mut output, byte);
+        }
+    }
+    output
+}
+
 pub(super) fn fn_urlencode(
     ed: *mut ExecuteData,
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    let extra_bytes = s
-        .bytes()
-        .filter(
-            |b| !matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b' '),
-        )
-        .count()
-        * 2;
-    let mut out = String::with_capacity(s.len() + extra_bytes);
-    for b in s.as_bytes() {
-        match *b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => out.push(*b as char),
-            b' ' => out.push('+'),
-            _ => push_percent_escape(&mut out, *b),
-        }
-    }
-    ret!(rv, Value::string(out));
+    let bytes = arg!(ed, 0)
+        .php_string_bytes()
+        .unwrap_or_else(|| Cow::Owned(arg_str!(ed, 0).into_owned().into_bytes()));
+    ret!(rv, Value::string(percent_encode_url_bytes(&bytes, false)));
 }
 
 /// urldecode($string): string
@@ -1575,24 +1588,10 @@ pub(super) fn fn_rawurlencode(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    let extra_bytes = s
-        .bytes()
-        .filter(
-            |b| !matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~'),
-        )
-        .count()
-        * 2;
-    let mut out = String::with_capacity(s.len() + extra_bytes);
-    for b in s.as_bytes() {
-        match *b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(*b as char)
-            }
-            _ => push_percent_escape(&mut out, *b),
-        }
-    }
-    ret!(rv, Value::string(out));
+    let bytes = arg!(ed, 0)
+        .php_string_bytes()
+        .unwrap_or_else(|| Cow::Owned(arg_str!(ed, 0).into_owned().into_bytes()));
+    ret!(rv, Value::string(percent_encode_url_bytes(&bytes, true)));
 }
 
 /// rawurldecode($string): string
@@ -2206,7 +2205,8 @@ mod tests {
     use super::{
         BasicMultibyteEncoding, ENT_HTML5, ENT_IGNORE, ENT_QUOTES_MASK, ENT_SUBSTITUTE,
         PHP_DEFAULT_MEMORY_LIMIT, basic_multibyte_unit, chunk_split_php_bytes,
-        chunk_split_result_length, decode_html_special_references, sanitize_html_utf8,
+        chunk_split_result_length, decode_html_special_references, percent_encode_url_bytes,
+        sanitize_html_utf8,
     };
     use crate::value::Value;
 
@@ -2227,6 +2227,19 @@ mod tests {
             decode_html_special_references(source, ENT_QUOTES_MASK | ENT_HTML5),
             "&lt;|\"|\"|'|'|<|<|&#65;"
         );
+    }
+
+    #[test]
+    fn url_encoders_preserve_safe_ascii_and_escape_php_bytes() {
+        assert_eq!(
+            percent_encode_url_bytes(b"a b~\0\xff", false),
+            "a+b%7E%00%FF"
+        );
+        assert_eq!(
+            percent_encode_url_bytes(b"a b~\0\xff", true),
+            "a%20b~%00%FF"
+        );
+        assert_eq!(percent_encode_url_bytes(b"AZaz09-_.", false), "AZaz09-_.");
     }
 
     #[test]

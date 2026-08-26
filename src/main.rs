@@ -147,18 +147,18 @@ fn exit_after_pending_shutdown(eg: &mut ExecutorGlobals, default_code: i32) -> !
     }
 }
 
-fn read_source(action: CliAction) -> Result<String, String> {
+fn read_source(action: CliAction) -> Result<Vec<u8>, String> {
     match action {
         CliAction::Inline(code) => {
             if code.starts_with("<?php") || code.starts_with("<?") {
-                Ok(code)
+                Ok(code.into_bytes())
             } else {
-                Ok(format!("<?php {code}"))
+                Ok(format!("<?php {code}").into_bytes())
             }
         }
-        CliAction::File(file) => std::fs::read(&file)
-            .map(|bytes| rphp::lexer::decode_php_source(&bytes))
-            .map_err(|error| format!("could not read file '{file}': {error}")),
+        CliAction::File(file) => {
+            std::fs::read(&file).map_err(|error| format!("could not read file '{file}': {error}"))
+        }
         CliAction::Stdin => read_stdin(),
         CliAction::Help | CliAction::Version | CliAction::InteractiveUnavailable => {
             unreachable!("handled before reading input")
@@ -166,13 +166,13 @@ fn read_source(action: CliAction) -> Result<String, String> {
     }
 }
 
-fn read_stdin() -> Result<String, String> {
+fn read_stdin() -> Result<Vec<u8>, String> {
     use std::io::Read;
     let mut buf = Vec::new();
     std::io::stdin()
         .read_to_end(&mut buf)
         .map_err(|error| format!("could not read standard input: {error}"))?;
-    Ok(rphp::lexer::decode_php_source(&buf))
+    Ok(buf)
 }
 
 fn main() {
@@ -236,7 +236,7 @@ fn main() {
         stats::reset();
     }
 
-    let tokens = Lexer::new(&source)
+    let tokens = Lexer::new_bytes(&source)
         .with_source_offset_base(source_offset_base)
         .tokenize()
         .unwrap_or_else(|e| {
@@ -470,11 +470,11 @@ mod tests {
     fn inline_code_gets_an_opening_tag_when_needed() {
         assert_eq!(
             read_source(CliAction::Inline("echo 42;".to_string())),
-            Ok("<?php echo 42;".to_string())
+            Ok(b"<?php echo 42;".to_vec())
         );
         assert_eq!(
             read_source(CliAction::Inline("<?php echo 42;".to_string())),
-            Ok("<?php echo 42;".to_string())
+            Ok(b"<?php echo 42;".to_vec())
         );
     }
 }

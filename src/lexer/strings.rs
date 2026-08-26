@@ -30,37 +30,48 @@ impl StringLexError {
 }
 
 impl<'a> Lexer<'a> {
-    pub(super) fn read_string(&mut self, quote: u8) -> Result<String, String> {
+    pub(super) fn read_string(&mut self, quote: u8) -> Result<(String, bool), String> {
         self.pos += 1;
-        let mut result = String::new();
+        let mut result = Vec::new();
+        let mut binary = false;
         while self.pos < self.src.len() && self.src[self.pos] != quote {
             if self.src[self.pos] == b'\\' && self.pos + 1 < self.src.len() {
                 self.pos += 1;
                 let escaped = self.src[self.pos];
                 match (quote, escaped) {
-                    (b'"', b'n') => result.push('\n'),
-                    (b'"', b'r') => result.push('\r'),
-                    (b'"', b't') => result.push('\t'),
-                    (b'"', b'\\') => result.push('\\'),
-                    (b'"', b'$') => result.push('$'),
-                    (b'"', b'"') => result.push('"'),
-                    (b'\'', b'\\') => result.push('\\'),
-                    (b'\'', b'\'') => result.push('\''),
+                    (b'"', b'n') => result.push(b'\n'),
+                    (b'"', b'r') => result.push(b'\r'),
+                    (b'"', b't') => result.push(b'\t'),
+                    (b'"', b'\\') => result.push(b'\\'),
+                    (b'"', b'$') => result.push(b'$'),
+                    (b'"', b'"') => result.push(b'"'),
+                    (b'\'', b'\\') => result.push(b'\\'),
+                    (b'\'', b'\'') => result.push(b'\''),
                     _ => {
-                        result.push('\\');
-                        result.push(escaped as char);
+                        result.push(b'\\');
+                        result.push(escaped);
+                        binary |= escaped >= 0x80;
                     }
                 }
                 self.pos += 1;
             } else {
-                Self::push_utf8_char(self.src, &mut self.pos, &mut result)?;
+                binary |= Self::push_utf8_bytes(self.src, &mut self.pos, &mut result)?;
             }
         }
         if self.pos >= self.src.len() {
             return Err("Unterminated string literal".into());
         }
         self.pos += 1;
-        Ok(result)
+        if binary {
+            return Ok((result.into_iter().map(char::from).collect(), true));
+        }
+        match String::from_utf8(result) {
+            Ok(result) => Ok((result, false)),
+            Err(error) => Ok((
+                error.into_bytes().into_iter().map(char::from).collect(),
+                true,
+            )),
+        }
     }
 
     pub(super) fn read_double_quoted_string(
@@ -645,16 +656,15 @@ impl<'a> Lexer<'a> {
                     _ => {
                         current.push(b'\\');
                         let escaped_offset = pos;
-                        Self::push_utf8_bytes(content, &mut pos, &mut current).map_err(
-                            |message| {
+                        current_is_binary |= Self::push_utf8_bytes(content, &mut pos, &mut current)
+                            .map_err(|message| {
                                 Self::string_lex_error_at(
                                     content,
                                     escaped_offset,
                                     source_line,
                                     message,
                                 )
-                            },
-                        )?;
+                            })?;
                     }
                 }
             } else if content[pos] == b'$' {
@@ -880,9 +890,10 @@ impl<'a> Lexer<'a> {
                 }
             } else {
                 let character_offset = pos;
-                Self::push_utf8_bytes(content, &mut pos, &mut current).map_err(|message| {
-                    Self::string_lex_error_at(content, character_offset, source_line, message)
-                })?;
+                current_is_binary |= Self::push_utf8_bytes(content, &mut pos, &mut current)
+                    .map_err(|message| {
+                        Self::string_lex_error_at(content, character_offset, source_line, message)
+                    })?;
             }
         }
 
@@ -961,10 +972,10 @@ impl<'a> Lexer<'a> {
         expression: &[u8],
         source_line: usize,
     ) -> Result<(Vec<Token>, Vec<DeferredCompileDiagnostic>), String> {
-        let decoded = decode_php_source(expression);
         let line_prefix = "\n".repeat(source_line.saturating_sub(1));
-        let source = format!("<?php {line_prefix}{decoded}");
-        let mut tokens = Lexer::new(&source).tokenize()?;
+        let mut source = format!("<?php {line_prefix}").into_bytes();
+        source.extend_from_slice(expression);
+        let mut tokens = Lexer::new_bytes(&source).tokenize()?;
         if tokens.first() != Some(&Token::OpenTag) || tokens.last() != Some(&Token::Eof) {
             return Err("Invalid complex string interpolation".into());
         }
@@ -1010,30 +1021,11 @@ impl<'a> Lexer<'a> {
             .map_err(|_| "Interpolated variable name is not valid UTF-8".to_string())
     }
 
-    fn push_utf8_char(bytes: &[u8], pos: &mut usize, output: &mut String) -> Result<(), String> {
-        let rest = &bytes[*pos..];
-        match std::str::from_utf8(rest) {
-            Ok(valid) => {
-                let character = valid.chars().next().unwrap();
-                output.push(character);
-                *pos += character.len_utf8();
-                Ok(())
-            }
-            Err(error) if error.valid_up_to() > 0 => {
-                let valid = std::str::from_utf8(&rest[..error.valid_up_to()]).unwrap();
-                let character = valid.chars().next().unwrap();
-                output.push(character);
-                *pos += character.len_utf8();
-                Ok(())
-            }
-            Err(_) => Err(format!(
-                "Invalid UTF-8 byte 0x{:02x} in string at position {}",
-                bytes[*pos], *pos
-            )),
-        }
-    }
-
-    fn push_utf8_bytes(bytes: &[u8], pos: &mut usize, output: &mut Vec<u8>) -> Result<(), String> {
+    fn push_utf8_bytes(
+        bytes: &[u8],
+        pos: &mut usize,
+        output: &mut Vec<u8>,
+    ) -> Result<bool, String> {
         let rest = &bytes[*pos..];
         let valid = match std::str::from_utf8(rest) {
             Ok(valid) => valid,
@@ -1041,10 +1033,9 @@ impl<'a> Lexer<'a> {
                 std::str::from_utf8(&rest[..error.valid_up_to()]).unwrap()
             }
             Err(_) => {
-                return Err(format!(
-                    "Invalid UTF-8 byte 0x{:02x} in string at position {}",
-                    bytes[*pos], *pos
-                ));
+                output.push(bytes[*pos]);
+                *pos += 1;
+                return Ok(true);
             }
         };
         let length = valid
@@ -1054,7 +1045,7 @@ impl<'a> Lexer<'a> {
             .len_utf8();
         output.extend_from_slice(&rest[..length]);
         *pos += length;
-        Ok(())
+        Ok(false)
     }
 
     fn hex_value(byte: u8) -> Option<u8> {

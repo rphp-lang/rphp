@@ -29,8 +29,9 @@ use crate::value::{
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::{
-    ATTRIBUTE_PUBLIC_TARGET_MASK, ATTRIBUTE_TARGET_PROPERTY_HOOK, AttributeDefinition,
-    AttributeEvaluationScope, FunctionCommon, FunctionType, ParamTypeHint, UserFunction,
+    ATTRIBUTE_PUBLIC_TARGET_MASK, ATTRIBUTE_TARGET_PROPERTY_HOOK, AttributeArgument,
+    AttributeDefinition, AttributeEvaluationScope, FunctionCommon, FunctionType, InternalFunction,
+    InternalFunctionDeprecation, ParamTypeHint, UserFunction,
 };
 
 pub(super) use registry::register;
@@ -324,6 +325,45 @@ fn reflected_user_function(ed: *mut ExecuteData) -> Option<&'static UserFunction
     reflected_user_function_from_common(function)
 }
 
+fn reflected_internal_function(ed: *mut ExecuteData) -> Option<&'static InternalFunction> {
+    let function = reflected_function(ed)?;
+    reflected_invocation_metadata(function, None).1
+}
+
+fn internal_deprecated_attribute(deprecation: &InternalFunctionDeprecation) -> AttributeDefinition {
+    AttributeDefinition {
+        name: "Deprecated".to_string(),
+        arguments: vec![
+            AttributeArgument {
+                name: Some("since".to_string()),
+                value: Ok(Value::string(deprecation.since)),
+                deferred_expression: None,
+            },
+            AttributeArgument {
+                name: Some("message".to_string()),
+                value: Ok(Value::string(deprecation.message)),
+                deferred_expression: None,
+            },
+        ],
+        evaluation_scope: Rc::new(AttributeEvaluationScope::default()),
+        target: 2,
+        source_file: String::new(),
+        source_line: 0,
+        strict_types: false,
+    }
+}
+
+fn reflected_function_attributes(ed: *mut ExecuteData) -> Vec<AttributeDefinition> {
+    if let Some(function) = reflected_user_function(ed) {
+        return function.attributes.clone();
+    }
+    reflected_internal_function(ed)
+        .and_then(|function| function.deprecation)
+        .map(internal_deprecated_attribute)
+        .into_iter()
+        .collect()
+}
+
 fn reflected_user_function_from_common(
     function: &'static FunctionCommon,
 ) -> Option<&'static UserFunction> {
@@ -333,15 +373,22 @@ fn reflected_user_function_from_common(
 fn reflected_invocation_metadata<'a>(
     function: &'static FunctionCommon,
     receiver: Option<&'a Value>,
-) -> (Option<&'static UserFunction>, Option<(u32, &'a str)>) {
+) -> (
+    Option<&'static UserFunction>,
+    Option<&'static InternalFunction>,
+    Option<(u32, &'a str)>,
+) {
     let user = function.fn_type == FunctionType::User;
+    let internal = function.fn_type == FunctionType::Internal;
     let object = receiver.filter(|value| value.value_type() == ValueType::Object);
     // SAFETY: FunctionCommon is the first field of every repr(C) UserFunction
-    // and the discriminant proves that allocation kind. The checked Object
-    // tag similarly proves its stable request-owned PhpObject payload.
+    // and InternalFunction, and each discriminant proves its allocation kind.
+    // The checked Object tag similarly proves its stable request-owned
+    // PhpObject payload.
     unsafe {
         (
             user.then(|| &*(function as *const FunctionCommon as *const UserFunction)),
+            internal.then(|| &*(function as *const FunctionCommon as *const InternalFunction)),
             object.map(|object| {
                 (
                     object.object_class_id_unchecked(),
@@ -394,18 +441,14 @@ fn reflected_attribute_definitions(
 ) -> Vec<AttributeDefinition> {
     match receiver_class_name(ed).as_deref() {
         Some("ReflectionFunction") => {
-            let mut definitions = reflected_user_function(ed)
-                .map(|function| function.attributes.clone())
-                .unwrap_or_default();
+            let mut definitions = reflected_function_attributes(ed);
             let called_class = reflected_property(ed, "__reflection_closure_called_class")
                 .and_then(|value| value.as_str().map(str::to_owned));
             rebind_attribute_evaluation_scope(&mut definitions, called_class.as_deref(), eg);
             definitions
         }
         Some("ReflectionMethod") => {
-            let mut definitions = reflected_user_function(ed)
-                .map(|function| function.attributes.clone())
-                .unwrap_or_default();
+            let mut definitions = reflected_function_attributes(ed);
             let called_class = reflected_function_attribute_scope(ed);
             rebind_attribute_evaluation_scope(&mut definitions, called_class.as_deref(), eg);
             definitions
@@ -2701,7 +2744,8 @@ fn function_is_deprecated(
             .attributes
             .iter()
             .any(|attribute| attribute.name.eq_ignore_ascii_case("Deprecated"))
-    });
+    }) || reflected_internal_function(ed)
+        .is_some_and(|function| function.deprecation.is_some());
     return_value(rv, Value::bool(deprecated))
 }
 
@@ -5889,7 +5933,7 @@ fn invoke_reflected_method(
         ));
         return Ok(());
     }
-    let (user, receiver_class) = reflected_invocation_metadata(function, Some(&receiver));
+    let (user, _, receiver_class) = reflected_invocation_metadata(function, Some(&receiver));
     let is_static = if let Some(user) = user {
         user.common.plan.is_static_method()
     } else {

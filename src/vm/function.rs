@@ -1848,6 +1848,12 @@ pub type RawVariadicInternalFunctionHandler = fn(
     supplied_num_args: u32,
 ) -> Result<(), crate::vm::execute::VmError>;
 
+#[derive(Debug, Clone, Copy)]
+pub struct InternalFunctionDeprecation {
+    pub since: &'static str,
+    pub message: &'static str,
+}
+
 /// Frame-free ABI for pure, read-only built-ins.
 ///
 /// A direct handler borrows positional arguments, returns an owned PHP value,
@@ -1876,6 +1882,17 @@ pub struct InternalFunction {
     /// the reflected minimum/maximum range. This models overloaded internals
     /// such as `strtr()` whose admitted calls have distinct parameter shapes.
     pub exact_arity_diagnostics: bool,
+    /// Built-in deprecation metadata shared by attempted-call diagnostics and
+    /// Reflection. Static descriptors keep ordinary internal functions
+    /// allocation-free and leave FunctionCommon unchanged.
+    pub deprecation: Option<&'static InternalFunctionDeprecation>,
+}
+
+impl InternalFunction {
+    pub fn set_deprecation(&mut self, deprecation: &'static InternalFunctionDeprecation) {
+        self.deprecation = Some(deprecation);
+        self.common.plan.call = CallStrategy::Full;
+    }
 }
 
 /// Safe wrapper over function pointer — dispatch via fn_type().

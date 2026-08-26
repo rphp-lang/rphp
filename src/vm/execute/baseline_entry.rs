@@ -899,17 +899,25 @@ where
     let saved_execute_data = eg.current_execute_data.get();
     // SAFETY: the detached-call boundary receives a resolved registered
     // function descriptor that remains live for the synchronous invocation.
-    // SAFETY: exact-arity metadata is read only after the descriptor's
-    // internal kind has selected its registered InternalFunction tail.
-    let (user_callee, signature, function_type, exact_arity_diagnostics) = unsafe {
+    // SAFETY: exact-arity and deprecation metadata are read only after the
+    // descriptor's internal kind has selected its registered InternalFunction
+    // tail.
+    let (
+        user_callee,
+        signature,
+        function_type,
+        exact_arity_diagnostics,
+        internal_deprecation,
+    ) = unsafe {
         let function_type = (*func_ptr).fn_type;
+        let internal = (function_type == FunctionType::Internal)
+            .then(|| &*(func_ptr as *const super::function::InternalFunction));
         (
             (function_type == FunctionType::User).then(|| &*(func_ptr as *const UserFunction)),
             &(*func_ptr).sig,
             function_type,
-            (function_type == FunctionType::Internal)
-                .then(|| &*(func_ptr as *const super::function::InternalFunction))
-                .is_some_and(|function| function.exact_arity_diagnostics),
+            internal.is_some_and(|function| function.exact_arity_diagnostics),
+            internal.and_then(|function| function.deprecation),
         )
     };
     // `call_user_func*()` executes the resolved callback through this detached
@@ -995,6 +1003,23 @@ where
         .as_ref()
         .is_some_and(|(_, _, _, capture)| *capture);
     let mut generated_preentry_error = None;
+    if supplied_preentry_error.is_none()
+        && let Some(deprecation) = internal_deprecation
+    {
+        let source_override = trace_origin
+            .as_ref()
+            .map(|(file, line, _, _)| (file.as_str(), *line));
+        report_deprecated_internal_call(
+            eg,
+            saved_execute_data,
+            func_ptr,
+            deprecation,
+            source_override,
+        )?;
+        if eg.exception.is_some() {
+            return Ok((Value::null(), None));
+        }
+    }
     if supplied_preentry_error.is_none()
         && arity_num_args < signature.required_num_args as usize
     {

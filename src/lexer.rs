@@ -307,8 +307,12 @@ fn overflowing_radix_literal_to_float(digits: &[u8], radix: u32) -> f64 {
 
 impl<'a> Lexer<'a> {
     pub fn new(source: &'a str) -> Self {
+        Self::new_bytes(source.as_bytes())
+    }
+
+    pub fn new_bytes(source: &'a [u8]) -> Self {
         Self {
-            src: source.as_bytes(),
+            src: source,
             pos: 0,
             source_offset_base: 0,
             punctuation_scan_pos: 0,
@@ -575,8 +579,12 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 b'\'' => {
-                    let s = self.read_string(b'\'')?;
-                    tokens.push(Token::StringLiteral(s));
+                    let (string, binary) = self.read_string(b'\'')?;
+                    tokens.push(if binary {
+                        Token::BinaryStringLiteral(string)
+                    } else {
+                        Token::StringLiteral(string)
+                    });
                 }
                 b'"' => match self.read_double_quoted_string() {
                     Ok(interpolated) => {
@@ -1201,14 +1209,18 @@ impl<'a> Lexer<'a> {
             .map(|offset| inline_start + offset);
         let inline_end = next_open.unwrap_or(self.src.len());
         if inline_end > inline_start {
-            let inline = std::str::from_utf8(&self.src[inline_start..inline_end])
-                .map_err(|_| "Inline HTML is not valid UTF-8".to_string())?;
+            let inline = &self.src[inline_start..inline_end];
             let line = 1 + self.src[..inline_start]
                 .iter()
                 .filter(|byte| **byte == b'\n')
                 .count();
             tokens.push(Token::Echo { line });
-            tokens.push(Token::StringLiteral(inline.to_string()));
+            tokens.push(match std::str::from_utf8(inline) {
+                Ok(inline) => Token::StringLiteral(inline.to_string()),
+                Err(_) => {
+                    Token::BinaryStringLiteral(inline.iter().copied().map(char::from).collect())
+                }
+            });
             tokens.push(Token::Semicolon(
                 self.source_line_at(inline_end.saturating_sub(1)),
             ));
@@ -2074,6 +2086,28 @@ mod tests {
 
         assert!(tokens.contains(&Token::Identifier("©".into(), 1)));
         assert!(tokens.contains(&Token::StringLiteral("©".into())));
+    }
+
+    #[test]
+    fn raw_source_bytes_remain_distinct_from_utf8_text_in_quoted_strings() {
+        let raw = Lexer::new_bytes(b"<?php echo \"\xe6\", '\xe6';")
+            .tokenize()
+            .unwrap();
+        assert_eq!(
+            raw.iter()
+                .filter(|token| matches!(token, Token::BinaryStringLiteral(_)))
+                .count(),
+            2
+        );
+        assert!(raw.contains(&Token::BinaryStringLiteral("æ".into())));
+
+        let utf8 = Lexer::new("<?php echo \"æ\", 'æ';").tokenize().unwrap();
+        assert_eq!(
+            utf8.iter()
+                .filter(|token| matches!(token, Token::StringLiteral(value) if value == "æ"))
+                .count(),
+            2
+        );
     }
 
     #[test]

@@ -15,6 +15,12 @@ use super::recursive_arrays::*;
 use super::source_filters::*;
 use super::strings::*;
 use super::*;
+use crate::vm::function::InternalFunctionDeprecation;
+
+static LEGACY_UTF8_DEPRECATION: InternalFunctionDeprecation = InternalFunctionDeprecation {
+    since: "8.2",
+    message: "visit the php.net documentation for various alternatives",
+};
 
 // ============================================================================
 // Registration
@@ -848,6 +854,25 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String],
         ParamTypeHint::String
     );
+    for (name, handler) in [
+        (
+            "utf8_encode",
+            fn_utf8_encode as crate::vm::function::InternalFunctionHandler,
+        ),
+        (
+            "utf8_decode",
+            fn_utf8_decode as crate::vm::function::InternalFunctionHandler,
+        ),
+    ] {
+        let mut function = Box::new(make_internal_function(handler, 1, 1, pn!["string"]));
+        function.common.sig.param_type_hints = vec![ParamTypeHint::String];
+        function.common.sig.return_type_hint = ParamTypeHint::String;
+        function.handler_validates_types = true;
+        function.set_deprecation(&LEGACY_UTF8_DEPRECATION);
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function(name, pointer).unwrap();
+        funcs.push(function);
+    }
     reg_typed!(
         "str_word_count",
         fn_str_word_count,

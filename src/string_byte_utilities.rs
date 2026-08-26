@@ -31,6 +31,100 @@ pub fn str_rot13(input: &[u8]) -> Vec<u8> {
         .collect()
 }
 
+pub fn utf8_encode_latin1(input: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(input.len().saturating_mul(2));
+    for byte in input.iter().copied() {
+        if byte < 0x80 {
+            output.push(byte);
+        } else {
+            output.push(0xc0 | byte >> 6);
+            output.push(0x80 | byte & 0x3f);
+        }
+    }
+    output
+}
+
+fn utf8_restart_byte(byte: u8) -> bool {
+    byte < 0x80 || matches!(byte, 0xc2..=0xf4)
+}
+
+pub fn utf8_decode_latin1(input: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(input.len());
+    let mut position = 0usize;
+    while position < input.len() {
+        let lead = input[position];
+        if lead < 0x80 {
+            output.push(lead);
+            position += 1;
+            continue;
+        }
+
+        let expected = match lead {
+            0xc2..=0xdf => 2,
+            0xe0..=0xef => 3,
+            0xf0..=0xf4 => 4,
+            _ => {
+                output.push(b'?');
+                position += 1;
+                continue;
+            }
+        };
+        let mut consumed = 1usize;
+        let mut structurally_valid = true;
+        while consumed < expected {
+            let Some(byte) = input.get(position + consumed).copied() else {
+                structurally_valid = false;
+                break;
+            };
+            if matches!(byte, 0x80..=0xbf) {
+                consumed += 1;
+            } else if utf8_restart_byte(byte) {
+                structurally_valid = false;
+                break;
+            } else {
+                structurally_valid = false;
+                consumed += 1;
+            }
+        }
+        if !structurally_valid || consumed != expected {
+            output.push(b'?');
+            position += consumed;
+            continue;
+        }
+
+        let scalar_boundary_valid = match (lead, input[position + 1]) {
+            (0xe0, second) => second >= 0xa0,
+            (0xed, second) => second <= 0x9f,
+            (0xf0, second) => second >= 0x90,
+            (0xf4, second) => second <= 0x8f,
+            _ => true,
+        };
+        let codepoint = match expected {
+            2 => (u32::from(lead & 0x1f) << 6) | u32::from(input[position + 1] & 0x3f),
+            3 => {
+                (u32::from(lead & 0x0f) << 12)
+                    | (u32::from(input[position + 1] & 0x3f) << 6)
+                    | u32::from(input[position + 2] & 0x3f)
+            }
+            4 => {
+                (u32::from(lead & 0x07) << 18)
+                    | (u32::from(input[position + 1] & 0x3f) << 12)
+                    | (u32::from(input[position + 2] & 0x3f) << 6)
+                    | u32::from(input[position + 3] & 0x3f)
+            }
+            _ => unreachable!("UTF-8 legacy decoder accepts two to four-byte leads"),
+        };
+        output.push(
+            scalar_boundary_valid
+                .then(|| u8::try_from(codepoint).ok())
+                .flatten()
+                .unwrap_or(b'?'),
+        );
+        position += expected;
+    }
+    output
+}
+
 fn is_str_word_byte(input: &[u8], position: usize, additional: &[bool; 256]) -> bool {
     let byte = input[position];
     byte.is_ascii_alphabetic()
@@ -415,7 +509,7 @@ pub fn metaphone(input: &[u8], max_phonemes: usize) -> Vec<u8> {
 mod tests {
     use super::{
         count_chars, metaphone, quotemeta, soundex, str_rot13, str_word_count, str_word_ranges,
-        wordwrap,
+        utf8_decode_latin1, utf8_encode_latin1, wordwrap,
     };
 
     #[test]
@@ -506,5 +600,34 @@ mod tests {
         );
         assert_eq!(wordwrap(b"a|", 1, b"|", true).0, b"a||");
         assert_eq!(wordwrap(b"a |", 2, b"|", false).0, b"a |");
+    }
+
+    #[test]
+    fn legacy_latin1_encoder_maps_every_byte_to_utf8() {
+        assert_eq!(
+            utf8_encode_latin1(b"A\0\x7f\x80\xbf\xc0\xff"),
+            b"A\0\x7f\xc2\x80\xc2\xbf\xc3\x80\xc3\xbf"
+        );
+    }
+
+    #[test]
+    fn legacy_latin1_decoder_replaces_non_latin1_and_invalid_units() {
+        assert_eq!(
+            utf8_decode_latin1(b"A\0\xc2\x80\xc3\xbf\xc4\x80\xe0\xa0\x80\xf0\x90\x80\x80"),
+            b"A\0\x80\xff???"
+        );
+        assert_eq!(
+            utf8_decode_latin1(b"\xc0\x80\xe0\x80\x80\xed\xa0\x80\xf4\x90\x80\x80"),
+            b"?????"
+        );
+    }
+
+    #[test]
+    fn legacy_latin1_decoder_preserves_restart_points() {
+        assert_eq!(utf8_decode_latin1(b"\xe0\xa0A\xe0\xa0\xc2\x80"), b"?A?\x80");
+        assert_eq!(utf8_decode_latin1(b"\xc2\xffA"), b"?A");
+        assert_eq!(utf8_decode_latin1(b"\xe0\xc0\x80A"), b"?A");
+        assert_eq!(utf8_decode_latin1(b"\xf5\x80\x80\x80"), b"????");
+        assert_eq!(utf8_decode_latin1(b"\xf0\x90\x80"), b"?");
     }
 }

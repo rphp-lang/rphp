@@ -9486,6 +9486,61 @@ fn fn_str_rot13(
     );
 }
 
+fn legacy_utf8_transform(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    transform: fn(&[u8]) -> Vec<u8>,
+) -> Result<(), VmError> {
+    let input = arg!(ed, 0);
+    if input.value_type() == ValueType::String {
+        let bytes = input.php_string_bytes().unwrap_or_default();
+        if bytes.is_ascii() {
+            ret!(rv, input.clone());
+        }
+        ret!(rv, php_byte_result(transform(&bytes), false));
+    }
+    let Some(input) =
+        typed_internal_string_value_argument_expected(ed, eg, function, 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let bytes = input.php_string_bytes().unwrap_or_default();
+    if bytes.is_ascii() {
+        ret!(rv, input);
+    }
+    ret!(rv, php_byte_result(transform(&bytes), false));
+}
+
+fn fn_utf8_encode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    legacy_utf8_transform(
+        ed,
+        rv,
+        eg,
+        "utf8_encode",
+        crate::string_byte_utilities::utf8_encode_latin1,
+    )
+}
+
+fn fn_utf8_decode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    legacy_utf8_transform(
+        ed,
+        rv,
+        eg,
+        "utf8_decode",
+        crate::string_byte_utilities::utf8_decode_latin1,
+    )
+}
+
 fn fn_str_word_count(
     ed: *mut ExecuteData,
     rv: *mut Value,
