@@ -3195,15 +3195,30 @@ no-`R:` `unserialize()`, all within +5% with matching outputs. The initial
 eager-cell representation regressed ordinary decoding by roughly 2.8x and was
 rejected; the accepted selective word scan preserves the hot-path budget.
 
-The monitored supported debt is now 1,110 failures: 21 strings, zero array and
+The `f1cde894` `parse-url-authority-boundary` checkpoint then moves strings
+from 628 to 629 pass, exactly `+1/-0`; array stays 828/842 and Zend/lang stays
+4,214/5,599 with no other outcome movement. The general parser distinguishes
+schemeless host/port forms from opaque scheme paths, preserves empty paths,
+validates PHP's five-byte port boundary, handles empty ports and bracketed IPv6,
+and applies the `file:///` drive-letter rule. All 14 executable upstream
+`parse_url` cases now pass, up from two, while one extension-dependent case
+remains skipped.
+
+Two complete final audits have identical result projections. All five Cargo
+configurations, all-feature/all-target, formatting, HTML data, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Two
+exact-final-binary CPU-pinned 32-pair runs keep startup, retained `strlen()` and
+500,000 successful `parse_url()` calls below +5%, with matching outputs.
+
+The monitored supported debt is now 1,109 failures: 20 strings, zero array and
 1,089 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
 the portability contract and remains deferred. Risk-adjusted triage next
-selects the portable `parse_url()` authority/path ambiguity exposed by
-`url_t.phpt`; clean-room comparison shows five general mismatch classes rather
-than a fixture-specific one-off. Host locale discovery/switching, `system()`,
-`nl_langinfo()`, `strcoll()`, runtime-selected method/static array-reference
-context, broader binary-string propagation, 32-bit behavior and allocation-
-limit/OOM equivalence remain explicit contracts.
+selects portable `get_meta_tags()` because its file/HTML metadata contract has
+more dependency utility than legacy `hebrev()`, while host locale discovery,
+`nl_langinfo()`, `strcoll()`, the deliberate `str_pad(PHP_INT_MAX)` allocation
+failure, runtime-selected method/static array-reference context, broader
+binary-string propagation, 32-bit behavior and allocation-limit/OOM equivalence
+remain explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,

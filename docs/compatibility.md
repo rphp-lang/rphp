@@ -8,6 +8,69 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`parse-url-authority-boundary`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. `parse_url()` now distinguishes opaque scheme
+paths from PHP's schemeless `host:port[/path]` form, retains an empty input as
+an empty path, strips an explicit empty authority port, validates the complete
+five-byte port field and preserves PHP's six-or-more-digit opaque-path rule.
+The same parser handles bracketed IPv6 authorities, rejects empty non-`file`
+authorities and applies PHP's one-byte drive-letter rule to `file:///` paths.
+Invalid URL syntax still returns false before an out-of-range component raises
+`ValueError`.
+
+Two original unit tests and two original E2Es cover the positive and negative
+authority boundaries, empty components, ports at 0/65535/65536, opaque paths,
+IPv6, `file` paths, direct/dynamic/first-class/callback/named/spread calls,
+Reflection, references, copy-on-write and component-error precedence. All 14
+executable upstream `parse_url` cases pass, up from two, with the one
+extension-dependent case still skipped and no loss. The focused merged
+manifest and summary hash to
+`f460d1ff1e8f1af173c9ac437750fa2bc44d9259ac87cda624e77ceb68081dce`
+and `5f1b90bdbbfb3565fcf5501f58f8ffe4dead2c9b1a6b70d0342a0efc0af0493c`.
+
+The complete 733-case strings audit moves from 628 to 629 passes, exactly
+`+1/-0`, with 20 failures, 54 skips, 30 unsupported cases and no timeout or
+crash. Only `ext/standard/tests/strings/url_t.phpt` moves from `fail/output` to
+pass. Array remains byte-identical at 828 pass, zero fail, 13 skip and one
+unsupported. Zend/lang remains byte-identical at 4,214 pass, 1,089 fail, 115
+skip and 181 unsupported. Two serial final runs are identical in status,
+category, output hash, expected hash, exit status and reason; their strings,
+array and Zend/lang classification projection SHA-256 values are respectively
+`d5f53fcac07985f324ca406b7282265d179e6af18b0784df2c2feecf0de16d5d`,
+`b45f09b2e3a1c86d2f9022c98c8229c47656753b9c0c3f86cabdd21097c268f9`
+and `df0487c43bc955974817b8a5a20bbe70d68fb2a39492ffb87caedec11803c90a`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at 1,623 unsafe blocks, 289 unsafe functions, 366 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony
+S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The change adds
+no dependency and changes no public runtime layout.
+
+Two exact-final-binary CPU-2-pinned, order-balanced 32-pair release runs use the
+performance governor, four warmups and no excluded sample. They compare parent
+SHA-256 `8b5c3cecab2662d64eafd3e05cfac135de53eb12dfb8271f73817501c4b6371c`
+with candidate
+`0963865436ae5a1d0ecc19f4a21784137919a6f799727220658d5569da379da2`.
+Paired medians are -4.276%/-3.765% for 100 startups, -2.308%/+0.182% for five
+million retained `strlen()` calls and -0.964%/-0.383% for 500,000 successful
+`parse_url()` calls. Comparable outputs match and every paired median remains
+below +5%. The raw TSVs hash to
+`b0e23346ea57008dcd2dad5886c5b22c6e95a042ef2e229cd2aa3b2ac4f7363b`
+and `677806cf03b4cca0f1f3e7f19bfeeefbf2bff6c3a71a355505501600b748a3d4`.
+
+This checkpoint does not claim URL validation beyond the audited PHP parser
+grammar, URI normalization, IDNA/DNS behavior, 32-bit equivalence or host
+locale/cryptography behavior. The monitored supported debt is now 1,109
+failures: 20 strings, zero array and 1,089 Zend/lang. Fourteen strings failures
+remain in the deferred non-portable `crypt()` family. Of the six portable
+singletons, `get_meta_tags()` has the best dependency utility and is the next
+bounded target; legacy `hebrev()`, host-locale functions and the deliberate
+`str_pad(PHP_INT_MAX)` allocation failure remain separate contracts.
+
+The implementation checkpoint is commit `f1cde894`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `unserialize-malformed-reference-boundary`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. The general `unserialize()` parser
 now reports the first malformed boundary with PHP's byte offset and emits
