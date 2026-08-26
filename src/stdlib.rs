@@ -50,6 +50,7 @@ use crate::vm::opcode::OpCode;
 pub(crate) mod include_path;
 mod json_decode;
 mod legacy_encoding;
+mod meta_tags;
 mod pack;
 mod parse_ini;
 mod random;

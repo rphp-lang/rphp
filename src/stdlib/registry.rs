@@ -1671,6 +1671,26 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "flags",
         "context"
     );
+    reg_typed!(
+        "get_meta_tags",
+        meta_tags::fn_get_meta_tags,
+        2,
+        1,
+        ["filename", "use_include_path"],
+        [ParamTypeHint::String, ParamTypeHint::Bool],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    let get_meta_tags = eg
+        .find_function("get_meta_tags")
+        .expect("get_meta_tags was just registered");
+    eg.register_internal_function_reflection_metadata(
+        get_meta_tags,
+        vec![None, Some(Value::bool(false))],
+        "standard",
+    );
     reg!("mkdir", fn_mkdir, 3, 1, "pathname", "mode", "recursive");
     reg!("rmdir", fn_rmdir, 1, 1, "dirname");
     reg!("unlink", fn_unlink, 1, 1, "filename");
