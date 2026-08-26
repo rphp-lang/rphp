@@ -25498,8 +25498,7 @@ fn hex_nibble(byte: u8) -> Option<u8> {
     }
 }
 
-fn percent_decode_bytes(s: &str, plus_as_space: bool) -> String {
-    let bytes = s.as_bytes();
+fn percent_decode_php_bytes(bytes: &[u8], plus_as_space: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
@@ -25519,60 +25518,101 @@ fn percent_decode_bytes(s: &str, plus_as_space: bool) -> String {
             i += 1;
         }
     }
-    match String::from_utf8(out) {
+    out
+}
+
+fn percent_decode_bytes(value: &str, plus_as_space: bool) -> String {
+    let decoded = percent_decode_php_bytes(value.as_bytes(), plus_as_space);
+    match String::from_utf8(decoded) {
         Ok(decoded) => decoded,
         Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
     }
 }
 
-/// Helper: decode an application/x-www-form-urlencoded string.
-fn percent_decode(s: &str) -> String {
-    percent_decode_bytes(s, true)
-}
-
-/// PHP normalizes dots and spaces in top-level query variable names to underscores.
-fn parse_str_normalize_key(key: &str) -> String {
-    key.chars()
-        .map(|c| if c == '.' || c == ' ' { '_' } else { c })
+fn parse_str_normalize_key(key: &[u8], malformed_bracket: bool) -> Vec<u8> {
+    let key = &key[key.iter().take_while(|byte| **byte == b' ').count()..];
+    key.iter()
+        .map(|byte| {
+            if matches!(*byte, b'.' | b' ') || malformed_bracket && *byte == b'[' {
+                b'_'
+            } else {
+                *byte
+            }
+        })
         .collect()
 }
 
-/// Parse bracket segments from a key like `a[b][c][]`.
-/// Returns (base_key, vec_of_segments) where each segment is Some("key") or None for [].
-fn parse_str_brackets(full_key: &str) -> (String, Vec<Option<String>>) {
-    if let Some(bracket_pos) = full_key.find('[') {
-        let base = parse_str_normalize_key(&full_key[..bracket_pos]);
-        let rest = &full_key[bracket_pos..];
-        let mut segments = Vec::new();
-        let mut i = 0;
-        let bytes = rest.as_bytes();
-        while i < bytes.len() {
-            if bytes[i] == b'[' {
-                if let Some(close) = rest[i + 1..].find(']') {
-                    let inner = &rest[i + 1..i + 1 + close];
-                    if inner.is_empty() {
-                        segments.push(None); // []
-                    } else {
-                        segments.push(Some(inner.to_string()));
-                    }
-                    i = i + 2 + close;
-                } else {
-                    // Malformed — no closing bracket; treat rest as literal
-                    segments.push(Some(rest[i..].to_string()));
-                    break;
-                }
-            } else {
-                i += 1;
+fn parse_str_key(bytes: &[u8]) -> ArrayKey {
+    let storage = bytes_to_php_string(bytes);
+    crate::value::canonical_decimal_array_key(&storage)
+        .map_or_else(|| ArrayKey::String(storage), ArrayKey::Int)
+}
+
+/// Parse PHP's query-variable key boundary. A first unmatched `[` is a
+/// top-level underscore, while an unmatched later segment is ignored after the
+/// last complete segment. Bytes after a complete segment that do not start the
+/// next adjacent segment are suffix data and are ignored.
+fn parse_str_brackets(full_key: &[u8]) -> Option<(ArrayKey, Vec<Option<ArrayKey>>)> {
+    let full_key = full_key.split(|byte| *byte == 0).next().unwrap_or_default();
+    let leading_spaces = full_key.iter().take_while(|byte| **byte == b' ').count();
+    let full_key = &full_key[leading_spaces..];
+    if full_key.is_empty() {
+        return None;
+    }
+
+    let Some(first_bracket) = full_key.iter().position(|byte| *byte == b'[') else {
+        let key = parse_str_normalize_key(full_key, false);
+        return (!key.is_empty()).then(|| (parse_str_key(&key), Vec::new()));
+    };
+    let base = parse_str_normalize_key(&full_key[..first_bracket], false);
+    if base.is_empty() {
+        return None;
+    }
+
+    let mut segments = Vec::new();
+    let mut position = first_bracket;
+    while position < full_key.len() && full_key[position] == b'[' {
+        let Some(relative_close) = full_key[position + 1..]
+            .iter()
+            .position(|byte| *byte == b']')
+        else {
+            if segments.is_empty() {
+                let key = parse_str_normalize_key(full_key, true);
+                return Some((parse_str_key(&key), Vec::new()));
             }
+            break;
+        };
+        let close = position + 1 + relative_close;
+        let inner = &full_key[position + 1..close];
+        segments.push(if inner.is_empty() {
+            None
+        } else {
+            Some(parse_str_key(inner))
+        });
+        position = close + 1;
+    }
+    Some((parse_str_key(&base), segments))
+}
+
+fn parse_str_array_get<'a>(array: &'a PhpArray, key: &ArrayKey) -> Option<&'a Value> {
+    match key {
+        ArrayKey::Int(key) => array.get_int(*key),
+        ArrayKey::String(key) => array.get_str(key),
+    }
+}
+
+fn parse_str_array_set(array: &mut PhpArray, key: &ArrayKey, value: Value) {
+    match key {
+        ArrayKey::Int(key) => array.set_int(*key, value),
+        ArrayKey::String(key) => {
+            array.mark_external_byte_keys();
+            array.set_str(key, value);
         }
-        (base, segments)
-    } else {
-        (parse_str_normalize_key(full_key), vec![])
     }
 }
 
 /// Recursively set a value in a nested PhpArray given a chain of bracket segments.
-fn parse_str_set_nested(arr: &mut PhpArray, segments: &[Option<String>], val: Value) {
+fn parse_str_set_nested(arr: &mut PhpArray, segments: &[Option<ArrayKey>], val: Value) {
     if segments.is_empty() {
         // Should not happen — caller handles the leaf case
         return;
@@ -25586,9 +25626,7 @@ fn parse_str_set_nested(arr: &mut PhpArray, segments: &[Option<String>], val: Va
             None => {
                 arr.push(val);
             }
-            Some(k) => {
-                arr.set_str(k, val);
-            }
+            Some(key) => parse_str_array_set(arr, key, val),
         }
     } else {
         // Intermediate: get-or-create sub-array, then recurse
@@ -25599,14 +25637,14 @@ fn parse_str_set_nested(arr: &mut PhpArray, segments: &[Option<String>], val: Va
                 parse_str_set_nested(&mut sub, remaining, val);
                 arr.push(Value::array(sub));
             }
-            Some(k) => {
-                let mut sub = if let Some(existing) = arr.get_str(k) {
+            Some(key) => {
+                let mut sub = if let Some(existing) = parse_str_array_get(arr, key) {
                     existing.as_array().cloned().unwrap_or_else(PhpArray::new)
                 } else {
                     PhpArray::new()
                 };
                 parse_str_set_nested(&mut sub, remaining, val);
-                arr.set_str(k, Value::array(sub));
+                parse_str_array_set(arr, key, Value::array(sub));
             }
         }
     }
@@ -25618,39 +25656,45 @@ fn parse_str_set_nested(arr: &mut PhpArray, segments: &[Option<String>], val: Va
 fn fn_parse_str(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let input = arg_str!(ed, 0);
+    let Some(input) =
+        typed_internal_string_value_argument_expected(ed, eg, "parse_str", 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let input = input.php_string_bytes().unwrap_or_default();
     let out_ptr = arg_mut!(ed, 1);
 
     let mut arr = PhpArray::new();
     if !input.is_empty() {
-        for pair in input.as_ref().split('&') {
+        for pair in input.as_ref().split(|byte| *byte == b'&') {
             if pair.is_empty() {
                 continue;
             }
-            let (raw_key, val) = if let Some(idx) = pair.find('=') {
+            let (raw_key, value) = if let Some(index) = pair.iter().position(|byte| *byte == b'=') {
                 (
-                    percent_decode(&pair[..idx]),
-                    percent_decode(&pair[idx + 1..]),
+                    percent_decode_php_bytes(&pair[..index], true),
+                    percent_decode_php_bytes(&pair[index + 1..], true),
                 )
             } else {
-                (percent_decode(pair), String::new())
+                (percent_decode_php_bytes(pair, true), Vec::new())
             };
 
-            let (base, segments) = parse_str_brackets(&raw_key);
+            let Some((base, segments)) = parse_str_brackets(&raw_key) else {
+                continue;
+            };
+            let value = php_byte_result(value, false);
             if segments.is_empty() {
-                // Simple key — no brackets
-                arr.set_str(&base, Value::string(val));
+                parse_str_array_set(&mut arr, &base, value);
             } else {
-                // Nested key — get-or-create the base sub-array, then recurse
-                let mut sub = if let Some(existing) = arr.get_str(&base) {
+                let mut sub = if let Some(existing) = parse_str_array_get(&arr, &base) {
                     existing.as_array().cloned().unwrap_or_else(PhpArray::new)
                 } else {
                     PhpArray::new()
                 };
-                parse_str_set_nested(&mut sub, &segments, Value::string(val));
-                arr.set_str(&base, Value::array(sub));
+                parse_str_set_nested(&mut sub, &segments, value);
+                parse_str_array_set(&mut arr, &base, Value::array(sub));
             }
         }
     }

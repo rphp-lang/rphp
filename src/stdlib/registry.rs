@@ -139,6 +139,33 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         }};
     }
 
+    macro_rules! reg_typed_ref {
+        (
+            $name:expr,
+            $handler:expr,
+            $max_args:expr,
+            $min_args:expr,
+            $ref_args:expr,
+            [$($pname:expr),* $(,)?],
+            [$($hint:expr),* $(,)?],
+            $return_hint:expr
+        ) => {{
+            let mut function = Box::new(make_internal_function_ref(
+                $handler,
+                $max_args,
+                $min_args,
+                $ref_args,
+                pn![$($pname),*],
+            ));
+            function.common.sig.param_type_hints = vec![$($hint),*];
+            function.common.sig.return_type_hint = $return_hint;
+            function.handler_validates_types = true;
+            let pointer = &function.common as *const FunctionCommon;
+            eg.register_function($name, pointer).unwrap();
+            funcs.push(function);
+        }};
+    }
+
     macro_rules! reg_var {
         ($name:expr, $handler:expr, $min_args:expr, $($pnames:expr),*) => {{
             let f = Box::new(make_internal_function_variadic($handler, $min_args, pn![$($pnames),*]));
@@ -1633,7 +1660,20 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- URL / query ---
     reg!("parse_url", fn_parse_url, 2, 1, "url", "component");
-    reg_ref!("parse_str", fn_parse_str, 2, 2, 0b10, "string", "result");
+    reg_typed_ref!(
+        "parse_str",
+        fn_parse_str,
+        2,
+        2,
+        0b10,
+        ["string", "result"],
+        [ParamTypeHint::String],
+        ParamTypeHint::Void
+    );
+    let parse_str = eg
+        .find_function("parse_str")
+        .expect("parse_str was just registered");
+    eg.register_internal_function_extension(parse_str, "standard");
     reg!(
         "http_build_query",
         fn_http_build_query,
