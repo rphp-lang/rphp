@@ -3441,13 +3441,29 @@ and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep
 startup, retained `strlen()`, 250 promotion declaration scans and one million
 promoted-property instances below +5%, with matching outputs.
 
-The monitored supported debt is now 1,046 failures: 18 strings, zero array and
-1,028 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
+The `1928014b` `class-inheritance-link-diagnostics` checkpoint then moves
+Zend/lang from 4,275 to 4,280 pass, exactly `+5/-0`; strings stay 631/733 and
+array stays 828/842 with no other status or category movement. Final-class and
+readonly-mismatch registration errors now append the child's declaration
+source and line while preserving their already-correct message and status.
+The location suffix is lazy on the error path; valid ordinary, readonly, final
+and deferred runtime inheritance keep the same representation and allocation
+path.
+
+Two exact-final-binary Zend/lang audits have byte-identical compact manifests
+and summaries; repeated serial strings/array outcome projections also match
+the exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep
+startup, retained `strlen()`, 500 valid inheritance declarations and one
+million inherited method calls below +5%, with matching outputs.
+
+The monitored supported debt is now 1,041 failures: 18 strings, zero array and
+1,023 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
 the portability contract and remains deferred. Read-only manifest triage next
-selects five class-inheritance diagnostics that already have the exact message
-and status but lack declaration source and line: final `Generator`,
-`WeakReference` and readonly classes plus both readonly/non-readonly
-inheritance mismatches.
+selects three adjacent class-like link diagnostics: declaration location when
+extending a user enum and class-like `Interface`/`Enum` wording for ambiguous
+inherited-constant errors.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
 suppression-wrapped destructuring, exhaustive object/array/resource
