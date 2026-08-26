@@ -8,6 +8,72 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`duplicate-default-compile-diagnostics`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. Each parsed `switch` statement and
+`match` expression now owns an independent one-default invariant. Encountering
+a second `default` records the first source-unit compile error at that token’s
+line, finishes syntactic parsing and lets the established compiler preflight
+publish PHP’s located fatal with status 255 before any source expression or
+earlier statement executes. Brace and alternative `switch` syntax share the
+same rule; nested switch and match nodes retain independent valid defaults.
+
+Original parser, CLI and control-flow regressions cover separated and adjacent
+defaults, brace and alternative syntax, nested duplicate and valid nodes,
+exact source/line/stderr/status, and zero evaluation side effects. The combined
+47-case `Zend/tests/switch` and `Zend/tests/match` neighborhood is now 44 pass
+and three fail. `switch/034.phpt` moves from a location-free parser error to
+the required compile fatal, while `match/038.phpt` no longer executes an
+invalid expression; these are the only full-audit transitions.
+
+The complete combined audit covers 7,174 cases: 5,756 pass, 1,024 fail, 182
+skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
+fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
+and one unsupported. Zend/lang moves from 4,295 to 4,297 pass, exactly
+`+2/-0`, with 1,006 failures, 115 skips and 181 unsupported cases. Only the
+two named cases move from `fail/output` or `fail/parse` to pass; no other
+outcome changes status or category. Two exact-final-binary Zend/lang runs have
+byte-identical manifests and summaries, whose SHA-256 values are respectively
+`68b5e1ded1006bdae0d8db10ff3505d36f3e166872ab2c3f3888268ce5301cdf`
+and `7cd78efd7723d616f7d9b3c4d7feb83a1499f79897d4ebffa75e241ed1132185`.
+Repeated serial strings and array outcome projections are byte-identical and
+retain SHA-256 values
+`06c231b7032faaece97ae32cac251aa7740e317ea4e169ca1f21223f6aea5d38`
+and `84e2007e9e6b16edab2bf9786966aedf44791151a15f2188960711d4f8f4347b`;
+each has zero outcome delta from the exact parent binary.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass. Matrix
+cleanup recovered 12.1–14.8 GiB between retained configurations. Production
+remains at 1,621 unsafe blocks, 289 unsafe functions, 366 SAFETY annotations
+and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates
+and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The change adds no
+dependency and changes no token, AST, bytecode, frame, Value or runtime layout.
+
+Two exact-final-binary CPU-2-pinned, performance-governor, order-balanced
+32-pair release runs with four warmups compare a fresh bit-identical parent
+rebuild SHA-256
+`19587de433faa8ad667977857d72e78a4ea56ad09564c1c873f6c172b3e3bc8a`
+with candidate
+`6737ba8155d42dbddf394d288f5e5a09dd25b9d61d74b654930d9ecd6e9f13fa`.
+Paired medians are +2.712%/+2.614% for 100 startups,
++0.229%/+0.271% for 500 valid switch declarations, +0.343%/+0.447% for
+500 valid match declarations and +0.208%/+0.740% for five million retained
+`strlen()` calls. Comparable outputs match and every paired median remains
+below +5%. The raw TSVs hash to
+`fba02510f1e9dc1566f283565f592e5ed3e4065f60d8d07d18f0386678468b4c`
+and `62955babb95f30175c430675065b603bb5854d21193c6a1e9a18e044e6cb1886`.
+
+This checkpoint does not claim `continue`-target warnings, unmatched-enum
+rendering, match cleanup or broader switch/match completeness. The monitored
+supported debt is now 1,024 failures: 18 strings, zero array and 1,006
+Zend/lang. Read-only expected-message clustering selects five cross-directory
+failures that all omit PHP 8.5’s compile warning for a non-compound `use` name:
+`bug69388.phpt`, `bug69388_2.phpt`, `namespaces/ns_033.phpt` and the two
+`use_function/ns_end_resets_seen_symbols` cases.
+
+The implementation checkpoint is commit `be5dcd50`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `this-reserved-parser-diagnostics`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. The parser now admits the lexer’s existing
 reserved `$this` token only far enough in `global` declarations and explicit

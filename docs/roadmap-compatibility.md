@@ -3545,12 +3545,28 @@ and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep
 startup, retained `strlen()`, 500 global declarations and 500 lexical-capture
 declarations below +5%, with matching outputs.
 
-The monitored supported debt is now 1,026 failures: 18 strings, zero array and
-1,008 Zend/lang. Read-only small-cluster triage next joins
-`switch/034.phpt` and `match/038.phpt` at their common duplicate-default
-compile-validation boundary. The switch case already produces the correct
-words at the wrong parser stage and without location; the match case currently
-executes instead of publishing PHP 8.5's located fatal. The attempted 14-case
+The `be5dcd50` `duplicate-default-compile-diagnostics` checkpoint then moves
+Zend/lang from 4,295 to 4,297 pass, exactly `+2/-0`; strings stay 631/733 and
+array stays 828/842 with no other status or category movement. Each switch or
+match parser node now owns one independent default invariant. A second default
+is staged as the source unit's first located compile error, so brace,
+alternative and nested forms publish PHP 8.5's exact switch-clause or
+match-arm fatal before execution while valid nested defaults remain separate.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical manifests
+and summaries; repeated serial strings/array outcome projections also match
+the exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep
+startup, retained `strlen()`, 500 switch declarations and 500 match
+declarations below +5%, with matching outputs.
+
+The monitored supported debt is now 1,024 failures: 18 strings, zero array and
+1,006 Zend/lang. Read-only expected-message clustering next joins five
+cross-directory failures at the omitted compile warning for non-compound `use`
+names: `bug69388.phpt`, `bug69388_2.phpt`, `namespaces/ns_033.phpt` and both
+`use_function/ns_end_resets_seen_symbols` cases. Their current programs and
+namespace/import resolution otherwise match the oracle. The attempted 14-case
 `crypt()` platform approach did not meet the portability contract and remains
 deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
