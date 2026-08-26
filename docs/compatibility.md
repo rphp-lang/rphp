@@ -8,6 +8,63 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`unparenthesized-ternary-diagnostic`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.9. The parser now accepts and fully consumes both
+forbidden left-associated shapes, preserving them as deferred compile errors
+instead of generic parser failures. Full `a ? b : c ? d : e` and Elvis
+`a ? b : c ?: d` suffixes receive their distinct PHP messages and both
+suggested parenthesized alternatives. The original condition line is captured
+before either arm is parsed.
+
+The existing nested-ternary parser regression now asserts the exact deferred
+compile error. Two original CLI tests cover both messages, fatal status, stream
+and source line plus all four explicitly left- or right-parenthesized full and
+Elvis variants. Both supplying cases now pass:
+`ternary_associativity_1.phpt` and `ternary_associativity_3.phpt`.
+
+The complete combined audit covers 7,174 cases: 5,715 pass, 1,065 fail, 182
+skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
+fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
+and one unsupported. Zend/lang moves from 4,254 to 4,256 pass, exactly
+`+2/-0`, with 1,047 failures, 115 skips and 181 unsupported cases. Only the
+two named cases move from `fail/parse` to pass. Two serial exact-final-binary
+Zend/lang runs have byte-identical manifests and summaries, whose SHA-256
+values are respectively
+`c9da58176ad07b460d62e7bde0612c940b3e2d9f585d9d39880f3191ad7c32b8`
+and `db7feca546d6ac68999c758509534297525ff3503427584ad463172187348b27`.
+Repeated strings and array runs have identical outcome projections.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at 1,622 unsafe blocks, 289 unsafe functions, 366 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony
+S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The change adds
+no dependency and changes no compiler, VM or public runtime layout.
+
+Two exact-final-binary CPU-2-pinned, order-balanced 32-pair release runs use the
+performance governor, four warmups and no excluded sample. They compare parent
+SHA-256 `92d974bc111d470035c873e8f089a4c1f866c0915a0c13bb6d5afa871b25c0a7`
+with candidate
+`9a4a8696a6c3db68e3cad48f622c70e5dcf7e9c5340569dbd134c773e6ac0012`.
+Paired medians are -0.512%/+0.142% for 100 startups,
+-0.730%/-0.705% for five million retained `strlen()` calls,
++0.553%/-0.701% for five million valid ternary iterations and
++0.781%/+0.247% for 20,000 repeated parenthesized ternary lex/parse/eval
+programs. Comparable outputs match and every paired median remains below +5%.
+The raw TSVs hash to
+`87f0402708f61fb7ed4a04173475f25e728e6a36ecb857bc5d1a0a3356d42bd9`
+and `ac271bc0babe9151c87ba0a256c38f98b0b8a4c606a15d8ba4077be852878453`.
+
+This checkpoint does not claim every ternary diagnostic or unrelated
+conditional-expression edge case. The monitored supported debt is now 1,065
+failures: 18 strings, zero array and 1,047 Zend/lang. Read-only manifest triage
+selects the removed curly string-offset diagnostic boundary next: three cases
+need context-specific parse errors for runtime, constant and interpolated
+string forms.
+
+The implementation checkpoint is commit `fc7a7801`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `foreach-key-reference-diagnostic`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. The parser now accepts the complete invalid
 `foreach ($source as &$key => $value)` grammar shape, records PHP's

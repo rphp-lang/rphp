@@ -3336,12 +3336,27 @@ Two exact-final-binary CPU-pinned 32-pair runs keep startup, retained `strlen()`
 five million foreach iterations and 10,000 repeated foreach lex/parse/eval
 programs below +5%.
 
-The monitored supported debt is now 1,067 failures: 18 strings, zero array and
-1,049 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
+The `fc7a7801` `unparenthesized-ternary-diagnostic` checkpoint then moves
+Zend/lang from 4,254 to 4,256 pass, exactly `+2/-0`; strings stay 631/733 and
+array stays 828/842 with no other outcome movement. The full and Elvis
+left-associated nested shapes are fully parsed into distinct deferred compile
+fatals with PHP's exact two parenthesization suggestions. Explicit left and
+right grouping remains valid.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical manifests
+and summaries; repeated strings/array outcome projections also match. All five
+Cargo configurations, all-feature/all-target, formatting, HTML data, PHPT
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Two exact-final-binary CPU-pinned 32-pair runs keep startup, retained `strlen()`,
+five million ternary iterations and 20,000 repeated parenthesized ternary
+lex/parse/eval programs below +5%.
+
+The monitored supported debt is now 1,065 failures: 18 strings, zero array and
+1,047 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
 the portability contract and remains deferred. Read-only manifest triage next
-selects the unparenthesized ternary diagnostic boundary: two cases need
-distinct PHP compile fatals for full and Elvis right operands instead of the
-current generic parse error.
+selects the removed curly string-offset diagnostic boundary: three cases need
+context-specific parse errors for runtime, constant and interpolated string
+forms.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
 suppression-wrapped destructuring, exhaustive object/array/resource
