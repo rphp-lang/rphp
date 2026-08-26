@@ -8,81 +8,83 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
-`legacy-utf8-byte-contract`, pinned to php-src 8.5 commit `fcc29c8` and
-validated against PHP 8.5.9. The deprecated `utf8_encode()` and
-`utf8_decode()` functions now expose their exact one-string-parameter and
-string-return signature. A clean-room PHP-byte engine maps every ISO-8859-1
-byte to UTF-8 and maps valid UTF-8 scalar values back to ISO-8859-1. Valid but
-unrepresentable scalars, overlong forms, surrogates, out-of-range sequences,
-invalid leads and truncated units produce PHP's observed `?` replacements and
-restart boundaries. Empty, NUL, ASCII, UTF-8 and arbitrary high-byte inputs
-remain bytes rather than Rust Unicode text.
+`byte-input-diagnostics-contract`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. `hex2bin()`, `ord()` and `strpbrk()` now expose
+their exact PHP 8.5 parameter and return-type shapes and share handler-owned
+PHP-byte validation. `hex2bin()` distinguishes odd-length from nonhexadecimal
+input and emits its exact warning before returning false. `ord()` returns the
+first byte and emits the PHP 8.5 empty or non-one-byte deprecation, including
+both ordered diagnostics for null. `strpbrk()` searches an arbitrary 256-byte
+alphabet, preserves the exact binary suffix and throws the exact `ValueError`
+for an empty character set.
 
-Each attempted call emits the PHP 8.5 `E_DEPRECATED` diagnostic before arity
-or type validation, while an unknown named argument still fails before the
-deprecation. Weak and strict scalar conversion, null diagnostics, Stringable
-conversion, static, dynamic, first-class callback and `call_user_func*()`
-dispatch, references, COW and argument side-effect order enter the same
-handler-owned boundary. Reflection reports both functions as deprecated and
-synthesizes their exact `#[Deprecated(since: ..., message: ...)]` metadata.
-Top-level file and stdin lexing now preserve invalid source bytes in quoted,
-heredoc and inline-HTML strings; the adjacent `urlencode()` and
-`rawurlencode()` byte bridge retains those bytes without slowing their ordinary
-ASCII path.
+Weak and strict scalar conversion, null diagnostics, Stringable conversion,
+NUL and arbitrary high bytes, named and dynamic calls, first-class callbacks,
+`call_user_func*()` dispatch, throwing error handlers, Reflection signature
+shape, references, COW and argument side-effect order all enter the same
+boundary. The direct `ord()` lowering preserves its common one-byte path while
+falling back to the canonical native handler for conversion and diagnostics;
+native diagnostics retain the physical source callsite without publishing a
+new live callback frame.
 
-Four original clean-room transcripts match PHP 8.5.9 byte for byte at SHA-256
-`9b986c3a1738afdef47ebc956e3d25fc0b69a3a96034de6fa75e115b831dbeee`,
-`63039ef5d5ab1702fc05f26f65dfe8492f6a40f226bff5f96745d6428b23dda0`,
-`2df50963f50a5fc82c0fe224e495bb6d38595bf6beae69b7b8a19bbe703e429a`
-and `ab53e4a62b9aa59fb21e8d24376312a49b6744d10c7e50f7906b211d9b34312a`.
-An independent 107,163-record, 2,418,469-byte sweep covers every one- and
-two-byte input plus structured invalid and valid sequences through length four
-for both conversions; it matches exactly at
-`e62c5c8cdbca03d0f4b9c0e3313909d1cab439ae6a425eb1f245f4da5805b858`.
-Three byte-engine unit tests, one URL-byte regression and three original E2Es
-cover algorithms, diagnostics, call shapes, Reflection, provenance and order.
-The final focused release manifest is 3/3 at SHA-256
-`2300527f54bd4e69b600b7190ba1e5755f9d0a2821e05a2ad2c04eda9b5bda96`.
+Five original clean-room transcripts match PHP 8.5.9 byte for byte at SHA-256
+`4de5a2442229b0b0f4134e499da1dbcee226ed2a686b14bf426cf99f4dd9f56f`,
+`57e2be0c08985d2d5de2147b1a54cb2a5c1cdc7ae6e97d08c506624feffbaf49`,
+`15c925eaaa806a0e9291843535e96c49063b73ff44657d1f57ab6491ad7358be`,
+`a4d25bb4c2c56a6b8dbc14edb2fa923d97cf0de5fb3b5af8afddd12e67ecaf3d`
+and `b2f73cb7500f2ff8601d2af4190d235fdc73fbbce4696c1f4a99abcb2db2b691`.
+An independent 36,522-record, 1,265,606-byte sweep covers conversions,
+diagnostic precedence and byte algorithms and matches exactly at
+`c236e2df92d722027cfffe68c7bf09b6f8792202cbf49d0fcd8bf8f16b225dfa`.
+Three original E2Es cover algorithms, diagnostics, call shapes, Reflection,
+provenance and order. The final focused release manifest is 4/4 at SHA-256
+`c7902be3211edb760fd733b2064aff65a9238320da38983bf82ee56dc1157912`.
 
-The complete 733-case strings audit moves from 586 to 589 passes, an exact
-+3/-0 delta consisting only of `utf8.phpt`, `bug43957.phpt` and
-`bug49687.phpt`. There are 60 failures, 54 skips and 30 unsupported cases,
-with zero timeout or crash. Array remains exactly 828 pass, 13 skip and one
-unsupported case. Zend/lang remains exactly 4,209 pass, 1,094 fail, 115 skip
-and 181 unsupported, with no timeout or crash. The final sorted
-path/status/category maps hash to SHA-256
-`9a6b20b364bf3f74ffbefe4a0560e0bf1bc26246b95309068a1b238dc2f4e17a`,
+The complete 733-case strings audit moves from 589 to 593 passes, an exact
++4/-0 delta consisting only of `hex2bin_error.phpt`, `bug61660.phpt`,
+`ord_not_1_byte.phpt` and `strpbrk_error.phpt`. There are 56 failures, 54
+skips and 30 unsupported cases, with zero timeout or crash. Array remains
+exactly 828 pass, 13 skip and one unsupported case. Zend/lang moves from 4,209
+to 4,210 passes (+1/-0), with 1,093 failures, 115 skips and 181 unsupported
+cases: the only adjacent movement is `Zend/tests/nullsafe_operator/013.phpt`,
+whose direct `ord(null)` now emits both PHP 8.5 deprecations. The final
+manifests hash to SHA-256
+`c13090cda11bcaaff252ce5228f5f6ef83df2cab812027c63c86e4c92e36dfb1`,
+`d1d07b2537a5257a59d3d13c0839674fb7a35ba1f2470ff5d2218fb2eab0d746`
+and `8d3afc26468335d657f15fc7251437f9d1561fae1c36f934672fa4e5f7fc024b`
+for strings, array and Zend/lang. Their sorted path/status/category maps hash
+to `56c68a62c805b2f6427ef3cc033cdde29f833f26690b3cd66cc2e1fbac3a425e`,
 `7d4b397d553dbdf5875d928f8bcbe886db93d84ec8c172a08760faf969226a46`
-and `1ffb4abd73cbc929fb8386f8f808ac35c5f9ca16b745da864cecd9c1cda6d443`
-for strings, array and Zend/lang respectively. The sorted strings pass paths
-hash to `7adb6a74ce07d10b87492754aa4559614b2f432c0a38148332a8476e20f37325`;
-no prior pass or unrelated outcome moved.
+and `97b4cdd8ac93ad1fd53db7a4523f6bd825a72d00c796f3b1d8c692bcd4960f28`;
+the corresponding pass-set hashes are
+`734ff0117583e55bbe84de783d400d75903982fc73013f409b21ab3d7d11027a`,
+`dc1c73b2a6cb2d4abe11ee43b826acc12e47ddf2f2b30c7610c818b43ec38117`
+and `9f521e5ef6460c8c9c708364938362c563717f1eb01bcd95b230f2a2b6c8aa4e`.
+No prior pass or unrelated outcome moved.
 
 All five Cargo feature configurations, locked all-feature/all-target,
 formatting, HTML data, PHPT-runner and unsafe-policy checks, Composer 2.8.12
-S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at
-1,623 unsafe blocks and 289 unsafe functions, with 364 SAFETY annotations and
-seven `# Safety` sections. Two exact-final-binary CPU-2-pinned balanced
-32-pair runs compare parent SHA-256
-`3dccd66b4f812a3bea16af9b7a5c181360998cd2ac51c44a49deee31b438b04a`
+S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production is at 1,622
+unsafe blocks and 289 unsafe functions, with 365 SAFETY annotations and seven
+`# Safety` sections. Two exact-final-binary CPU-2-pinned balanced 32-pair runs
+compare parent SHA-256
+`e2df33b5af14d57362d61f186ff3c95c38732058e9fd96e835a23cae143e9193`
 with candidate
-`e2df33b5af14d57362d61f186ff3c95c38732058e9fd96e835a23cae143e9193`.
-Paired medians are -3.333%/-4.410% for startup, -0.246%/+0.349% for retained
-`strlen()`, -6.873%/-6.358% for ASCII `urlencode()` and +4.191%/+4.471% for
-detached callbacks. Comparable checksums match and every result remains below
-+5%. Candidate-only throughput is recorded without a parent A/B claim because
-neither legacy conversion existed in the parent.
+`d9a6337ae10eb64dad92be0df018e7f2b03d35e47fe7e98f30d1887bfa9e6705`.
+Paired medians are -3.220%/-3.527% for startup, +0.539%/+0.558% for `ord()`,
++1.109%/+1.525% for `hex2bin()`, +0.257%/+0.177% for `strpbrk()` and
++0.756%/+0.303% for retained `strlen()`. Comparable checksums match and every
+result remains below +5%. No dependency or value/object/array layout changed.
 
-This checkpoint does not claim `mbstring` or `iconv`, general Unicode
-normalization, locale behavior, raw-byte preservation through include/eval,
-32-bit execution, exact allocation-limit/OOM behavior, platform `crypt()`
-behavior, the `strip_tags()` parser or closure of the remaining 60 strings and
-wider Zend failures. Root-cause triage selects the four-case invalid-byte-input
-diagnostic cluster in `hex2bin_error.phpt`, `bug61660.phpt`,
-`ord_not_1_byte.phpt` and `strpbrk_error.phpt` as the next risk-adjusted
-candidate.
+This checkpoint does not claim `mbstring` or `iconv`, general Unicode grapheme
+behavior, locale behavior, 32-bit execution, exact allocation-limit/OOM
+behavior, platform `crypt()` behavior, the `strip_tags()` parser, source
+highlighting or closure of the remaining 56 strings and wider Zend failures.
+Risk-adjusted triage selects the six-case `show_source()`/`highlight_file()`/
+`highlight_string()` and `php_strip_whitespace()` source-highlighting cluster
+as the next bounded candidate.
 
-The source checkpoint is commit `818a9f6d`.
+The source checkpoint is commit `a4bacec3`.
 
 The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `deterministic-byte-utilities-contract`, pinned to php-src 8.5 commit `fcc29c8`

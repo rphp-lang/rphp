@@ -3132,16 +3132,37 @@ retained `strlen()`, -6.873%/-6.358% for ASCII `urlencode()` and
 comparable checksums. Candidate-only legacy-conversion throughput is recorded
 without a parent A/B claim because neither function existed in the parent.
 
+The `a4bacec3` `byte-input-diagnostics-contract` checkpoint closes
+`hex2bin_error.phpt`, `bug61660.phpt`, `ord_not_1_byte.phpt` and
+`strpbrk_error.phpt` against PHP 8.5.9. Typed handler-owned boundaries give
+`hex2bin()`, `ord()` and `strpbrk()` their exact signature, byte validation,
+warning/deprecation/`ValueError` precedence and binary result behavior across
+weak/strict conversion, null, Stringable, call shapes, Reflection, throwing
+handlers, references, COW and side-effect order. The common direct `ord()` path
+retains one-byte throughput and the canonical fallback retains source-line
+diagnostics.
+
+Strings moves from 589 to 593 pass (+4/-0), consisting only of the supplying
+cases. Array remains exactly 828/842. Zend/lang moves from 4,209 to 4,210 pass
+(+1/-0), solely because the adjacent nullsafe test observes the corrected
+`ord(null)` diagnostic sequence. No prior pass or unrelated outcome moves.
+All five Cargo configurations, all-feature/all-target, formatting, HTML data,
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Two exact-final-binary CPU-2-pinned balanced 32-pair runs put startup and all
+four runtime lanes below +5%; the largest paired median is `hex2bin()` at
++1.525%, with matching checksums. Production unsafe falls to 1,622 blocks and
+remains at 289 functions; no dependency or value/object/array layout changes.
+
 The current retained AMD64 PHP 8.5 selection baseline has no array-suite
 process hazard or ordinary array failure: `ext/standard/tests/array` is 828
 pass, zero fail, 13 skip and one unsupported. The 733-case strings selection
-is 589 pass, 60 fail, 54 skip and 30 unsupported, with no timeout or crash;
+is 593 pass, 56 fail, 54 skip and 30 unsupported, with no timeout or crash;
 the complete `stripos()`/`strrpos()`/`strripos()` cluster is 38/38 and the
 attempted printf family is 79/79, while the ordinary translation-table family
 is 10/10, the ordinary named-entity family is 5/5 and the `ENT_DISALLOWED`
 and invalid-UTF-8 recovery families are both 3/3; the EUC-JP/Big5 supplying
 pair is 2/2 and the byte-escaping supplying family is 12/12. `Zend/tests` plus
-`tests/lang` is 4,209 pass, 1,094 fail, 115 skip and 181 unsupported, with no
+`tests/lang` is 4,210 pass, 1,093 fail, 115 skip and 181 unsupported, with no
 timeout or crash. The trim/charlist family is 11/11, increment/decrement is 6/6
 and both `str_split()` and `chunk_split()` are 6/6, while the complete
 `str_replace()`/`str_ireplace()` cluster is 8/8 and the selected
@@ -3153,10 +3174,10 @@ checksum/hash supplying clusters are both 8/8, the selected
 `base64_decode()` family is 6/6, and the visible quoted-printable family is
 5/5, the visible UUencode family is 4/4 and the deterministic byte-utility
 batch is 12/12 including its four adjacent gains. The word-boundary and
-line-formatting batch is 5/5 and the legacy UTF-8 conversion batch is 3/3.
-Manifest root-cause triage selects the next bounded candidate as the four-case
-invalid-byte-input diagnostic cluster in `hex2bin_error.phpt`,
-`bug61660.phpt`, `ord_not_1_byte.phpt` and `strpbrk_error.phpt`; wider
+line-formatting batch is 5/5, the legacy UTF-8 conversion batch is 3/3 and the
+byte-input diagnostic batch is 4/4. Manifest root-cause triage selects the next
+bounded candidate as the six-case source-highlighting cluster spanning the
+three `show_source*` cases and the three `gh20906_*` cases; wider
 string-offset writes, typed-parameter and associative-key binary provenance,
 detached-callback alias spelling, unknown entity-encoding warnings, platform
 cryptography, tag parsing and broader legacy multibyte behavior remain explicit
