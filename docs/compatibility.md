@@ -8,6 +8,73 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`suppressed-write-target`, pinned to php-src 8.5 commit `fcc29c8` and validated
+against PHP 8.5.9. The parser now treats an outer `@` as part of the complete
+assignment expression for value, reference, compound, coalescing and append
+writes instead of rejecting the wrapped target. Compiler flags carry that
+boundary through dimension and property writes, so string-offset diagnostics,
+`ArrayAccess::offsetSet()` and magic `__get()`/`__set()` handlers observe PHP's
+suppressed reporting mask and the caller mask is restored afterward.
+
+The same vertical slice completes the exercised PHP 8.5 string-offset key
+contract: integer-compatible scalar keys, partial numeric-string warnings,
+invalid-key `TypeError`, negative and out-of-range writes, space padding, empty
+replacement errors and multi-byte replacement warnings. Discarded calls to a
+function declared to return by reference also retain PHP's non-variable return
+notice. Three original suppressed-write E2Es and a focused return-reference
+regression cover successful, diagnostic, magic-handler, restoration and
+invalid-lvalue paths.
+
+The complete combined audit covers 7,174 cases: 5,707 pass, 1,073 fail, 182
+skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
+fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
+and one unsupported. Zend/lang moves from 4,233 to 4,248 pass, exactly
+`+15/-0`, with 1,055 failures, 115 skips and 181 unsupported cases. The gains
+are `bug31098`, `bug39018`, `bug71572`, `bug80972`, `bug81159`,
+`const_dereference_002`, `error_reporting05`, `isset/bug29883`,
+`isset/bug74836`, `numeric_strings/string_offset`, `str_offset_004`,
+`str_offset_008`, `tests/lang/bug19943`, `tests/lang/bug22510` and
+`tests/lang/bug29566`. No previous pass, stage or category regresses. Two
+serial exact-final-binary Zend/lang runs have byte-identical manifests and
+summaries, whose SHA-256 values are respectively
+`33f2771901ca7f9ee92ee11ab0cc942fc383bc7b423a8b61031d5eb79c9ece0b`
+and `a26dfa5c2f4ef7eec5ab99e4402b5bdca8393c2a5619f3ca7919bb547df212ca`.
+Repeated strings and array runs have identical outcome projections.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production is at 1,622 unsafe blocks, 289 unsafe functions, 366 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony
+S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The change adds
+no dependency and changes no public runtime layout.
+
+Two exact-final-binary CPU-2-pinned, order-balanced 32-pair release runs use the
+performance governor, four warmups and no excluded sample. They compare parent
+SHA-256 `0c89aa94228a51e28d6f85d28b31352b1e19770ca7572e59a756a94d16470459`
+with candidate
+`9a494ac959c2cc2db2b4937a55a9aa5e89f0708bc8156e3b68138a74b4fd81ed`.
+Paired medians are -6.582%/-5.697% for 100 startups,
+-1.565%/-2.136% for five million retained `strlen()` calls,
++2.280%/+3.161% for five million string-offset reads,
++2.965%/+3.099% for two million string-offset writes and
++1.266%/-0.175% for one million magic-property read/write groups. Comparable
+outputs match and every paired median remains below +5%. The raw TSVs hash to
+`7e1b6b75596347fc097ce48a2b357e90ce42b3f3350df20064cd71b110299293`
+and `04b23eb00176def90e2868a094e4d2c11dbdcd212cc83cc918aa748ac5de45ff`.
+An initial candidate that cloned the complete source string for every offset
+read was rejected at +16.869%; the accepted byte-view path removes that
+allocation and restores the gate.
+
+This checkpoint does not claim suppression-wrapped destructuring, exhaustive
+object/array/resource string-offset conversions, 32-bit behavior or
+allocation-limit/OOM equivalence. The monitored supported debt is now 1,073
+failures: 18 strings, zero array and 1,055 Zend/lang. Read-only manifest triage
+selects PHP's alternate `<>` not-equal lexer boundary next: the only two
+supplying AMD64 lang cases currently reject the second token before execution.
+
+The implementation checkpoint is commit `eeb6bd5d`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `predefined-ini-access-constants`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. RPHP now exposes the standard INI access masks
 `INI_USER=1`, `INI_PERDIR=2`, `INI_SYSTEM=4` and `INI_ALL=7` through its

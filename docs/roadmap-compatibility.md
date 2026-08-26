@@ -3270,14 +3270,35 @@ the +5% ceiling. An inline-match candidate that repeatedly exceeded the startup
 ceiling was rejected; the accepted cold fallback preserves the established hot
 match.
 
-The monitored supported debt is now 1,088 failures: 18 strings, zero array and
-1,070 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
+The `eeb6bd5d` `suppressed-write-target` checkpoint then moves Zend/lang from
+4,233 to 4,248 pass, exactly `+15/-0`; strings stay 631/733 and array stays
+828/842 with no lost pass, stage regression, timeout or crash. An outer `@`
+now remains attached to completed value, reference, compound, coalescing and
+append writes. Dimension/property instruction flags preserve the suppressed
+mask through string-offset diagnostics, `ArrayAccess::offsetSet()` and magic
+property handlers. The exercised PHP 8.5 scalar string-offset conversions,
+padding, replacement diagnostics and discarded non-variable reference-return
+notices also match.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical manifests
+and summaries; repeated strings/array outcome projections also match. All five
+Cargo configurations, all-feature/all-target, formatting, HTML data, PHPT
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Two exact-final-binary CPU-pinned 32-pair runs keep startup, retained `strlen()`,
+five million string-offset reads, two million writes and one million magic
+property groups below +5%. A full-string-cloning read candidate was rejected at
++16.869%; the accepted byte-view path restores the performance gate.
+
+The monitored supported debt is now 1,073 failures: 18 strings, zero array and
+1,055 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
 the portability contract and remains deferred. Read-only manifest triage next
-selects the suppressed-write parser boundary: four cases reject assignment
-through an `@`-wrapped variable, array offset or property before execution.
+selects PHP's alternate `<>` not-equal lexer boundary: exactly two AMD64 lang
+cases currently reject the second token before execution.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
-32-bit behavior and allocation-limit/OOM equivalence remain explicit contracts.
+suppression-wrapped destructuring, exhaustive object/array/resource
+string-offset conversions, 32-bit behavior and allocation-limit/OOM equivalence
+remain explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,
