@@ -848,7 +848,19 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String],
         ParamTypeHint::String
     );
-    reg!("str_word_count", fn_str_word_count, 1, 1, "string");
+    reg_typed!(
+        "str_word_count",
+        fn_str_word_count,
+        3,
+        1,
+        ["string", "format", "characters"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::String))
+        ],
+        ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::Int])
+    );
     reg!(
         "levenshtein",
         fn_levenshtein,
@@ -870,15 +882,19 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "string2",
         "percent"
     );
-    reg!(
+    reg_typed!(
         "wordwrap",
         fn_wordwrap,
         4,
         1,
-        "string",
-        "width",
-        "break_str",
-        "cut_long_words"
+        ["string", "width", "break", "cut_long_words"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::String,
+            ParamTypeHint::Bool
+        ],
+        ParamTypeHint::String
     );
     {
         let mut function = Box::new(make_internal_function(

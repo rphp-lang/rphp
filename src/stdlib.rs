@@ -9489,55 +9489,213 @@ fn fn_str_rot13(
 fn fn_str_word_count(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    ret!(rv, Value::long(s.split_whitespace().count() as i64));
+    let Some(string) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "str_word_count",
+        0,
+        "string",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    let format = if arg_opt!(ed, 1).is_some() {
+        let Some(format) = typed_internal_int_argument(ed, eg, "str_word_count", 1, "format")?
+        else {
+            return Ok(());
+        };
+        format
+    } else {
+        0
+    };
+    if !(0..=2).contains(&format) {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "str_word_count(): Argument #2 ($format) must be a valid format value",
+        ));
+        return Ok(());
+    }
+
+    let characters = match arg_opt!(ed, 2) {
+        None => None,
+        Some(value) if value.dereferenced().value_type() == ValueType::Null => None,
+        Some(_) => {
+            let Some(characters) = typed_internal_string_value_argument_expected(
+                ed,
+                eg,
+                "str_word_count",
+                2,
+                "characters",
+                "?string",
+            )?
+            else {
+                return Ok(());
+            };
+            Some(characters)
+        }
+    };
+    let mut additional = [false; 256];
+    if let Some(characters) = characters {
+        let characters = characters.php_string_bytes().unwrap_or_default();
+        let (mask, warnings) = php_charlist_mask(&characters);
+        for warning in warnings {
+            report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("str_word_count(): {warning}"),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+        }
+        additional = mask;
+    }
+
+    let binary = string.is_binary_string();
+    let bytes = string.php_string_bytes().unwrap_or_default();
+    if format == 0 {
+        let count = crate::string_byte_utilities::str_word_count(&bytes, &additional);
+        ret!(rv, Value::long(count as i64));
+    }
+    let ranges = crate::string_byte_utilities::str_word_ranges(&bytes, &additional);
+    let mut result = PhpArray::new();
+    for (start, end) in ranges {
+        let word = php_byte_result(bytes[start..end].to_vec(), binary);
+        if format == 1 {
+            result.push(word);
+        } else {
+            result.set_int(start as i64, word);
+        }
+    }
+    ret!(rv, Value::array(result));
 }
 
 fn fn_wordwrap(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    let width = match arg_opt!(ed, 1) {
-        Some(v) => v.to_long_val().max(1) as usize,
-        None => 75,
+    let exact_string = arg!(ed, 0);
+    let exact_width = match arg_opt!(ed, 1) {
+        None => Some(75),
+        Some(width) if width.value_type() == ValueType::Long => width.as_long(),
+        Some(_) => None,
     };
-    let brk = match arg_opt!(ed, 2) {
-        Some(v) => v.as_str().unwrap_or("\n").to_string(),
-        None => "\n".to_string(),
+    let exact_line_break = arg_opt!(ed, 2);
+    let exact_cut = match arg_opt!(ed, 3) {
+        None => Some(false),
+        Some(value) if value.value_type() == ValueType::True => Some(true),
+        Some(value) if value.value_type() == ValueType::False => Some(false),
+        Some(_) => None,
     };
-    let cut = match arg_opt!(ed, 3) {
-        Some(v) => v.is_truthy(),
-        None => false,
-    };
-    let mut result = String::with_capacity(s.len() + s.len() / width);
-    let mut line_len = 0;
-    for word in s.split(' ') {
-        if cut && word.len() > width {
-            for ch in word.chars() {
-                if line_len >= width {
-                    result.push_str(&brk);
-                    line_len = 0;
-                }
-                result.push(ch);
-                line_len += 1;
-            }
-        } else {
-            if line_len > 0 && line_len + 1 + word.len() > width {
-                result.push_str(&brk);
-                line_len = 0;
-            } else if line_len > 0 {
-                result.push(' ');
-                line_len += 1;
-            }
-            result.push_str(word);
-            line_len += word.len();
+    if exact_string.value_type() == ValueType::String
+        && exact_line_break.is_none_or(|line_break| line_break.value_type() == ValueType::String)
+        && let Some(width) = exact_width
+        && let Some(cut) = exact_cut
+    {
+        let (break_bytes, break_binary) = match exact_line_break {
+            Some(line_break) => (
+                line_break.php_string_bytes().unwrap_or_default(),
+                line_break.is_binary_string(),
+            ),
+            None => (std::borrow::Cow::Borrowed(&b"\n"[..]), false),
+        };
+        if break_bytes.is_empty() {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                "wordwrap(): Argument #3 ($break) must not be empty",
+            ));
+            return Ok(());
         }
+        if width == 0 && cut {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                "wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0",
+            ));
+            return Ok(());
+        }
+        let input = exact_string.php_string_bytes().unwrap_or_default();
+        let (result, inserted_break) =
+            crate::string_byte_utilities::wordwrap(&input, width, &break_bytes, cut);
+        if !inserted_break {
+            ret!(rv, exact_string.clone());
+        }
+        ret!(
+            rv,
+            php_byte_result(
+                result,
+                exact_string.is_binary_string() || (inserted_break && break_binary),
+            )
+        );
     }
-    ret!(rv, Value::string(result));
+
+    let Some(string) =
+        typed_internal_string_value_argument_expected(ed, eg, "wordwrap", 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let width = if arg_opt!(ed, 1).is_some() {
+        let Some(width) = typed_internal_int_argument(ed, eg, "wordwrap", 1, "width")? else {
+            return Ok(());
+        };
+        width
+    } else {
+        75
+    };
+    let line_break = if arg_opt!(ed, 2).is_some() {
+        let Some(line_break) = typed_internal_string_value_argument_expected(
+            ed, eg, "wordwrap", 2, "break", "string",
+        )?
+        else {
+            return Ok(());
+        };
+        line_break
+    } else {
+        Value::string("\n")
+    };
+    let cut = if arg_opt!(ed, 3).is_some() {
+        let Some(cut) = typed_internal_bool_argument(ed, eg, "wordwrap", 3, "cut_long_words")?
+        else {
+            return Ok(());
+        };
+        cut
+    } else {
+        false
+    };
+    let break_bytes = line_break.php_string_bytes().unwrap_or_default();
+    if break_bytes.is_empty() {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "wordwrap(): Argument #3 ($break) must not be empty",
+        ));
+        return Ok(());
+    }
+    if width == 0 && cut {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0",
+        ));
+        return Ok(());
+    }
+
+    let input = string.php_string_bytes().unwrap_or_default();
+    let (result, inserted_break) =
+        crate::string_byte_utilities::wordwrap(&input, width, &break_bytes, cut);
+    if !inserted_break {
+        ret!(rv, string);
+    }
+    ret!(
+        rv,
+        php_byte_result(
+            result,
+            string.is_binary_string() || (inserted_break && line_break.is_binary_string()),
+        )
+    );
 }
 
 fn fn_nl2br(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {

@@ -31,6 +31,152 @@ pub fn str_rot13(input: &[u8]) -> Vec<u8> {
         .collect()
 }
 
+fn is_str_word_byte(input: &[u8], position: usize, additional: &[bool; 256]) -> bool {
+    let byte = input[position];
+    byte.is_ascii_alphabetic()
+        || additional[usize::from(byte)]
+        || (byte == b'\'' && position != 0)
+        || (byte == b'-' && position != 0 && position + 1 < input.len())
+}
+
+pub fn str_word_ranges(input: &[u8], additional: &[bool; 256]) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut position = 0usize;
+    while position < input.len() {
+        let start = position;
+        while position < input.len() && is_str_word_byte(input, position, additional) {
+            position += 1;
+        }
+        if position != start {
+            ranges.push((start, position));
+        } else {
+            position += 1;
+        }
+    }
+    ranges
+}
+
+pub fn str_word_count(input: &[u8], additional: &[bool; 256]) -> usize {
+    let mut count = 0usize;
+    let mut position = 0usize;
+    while position < input.len() {
+        if is_str_word_byte(input, position, additional) {
+            count += 1;
+            position += 1;
+            while position < input.len() && is_str_word_byte(input, position, additional) {
+                position += 1;
+            }
+        } else {
+            position += 1;
+        }
+    }
+    count
+}
+
+fn wordwrap_has_existing_break(input: &[u8], position: usize, line_break: &[u8]) -> bool {
+    for (offset, expected) in line_break.iter().copied().enumerate() {
+        let actual = input.get(position + offset).copied().unwrap_or(0);
+        if actual != expected {
+            return false;
+        }
+        if actual == 0 {
+            return true;
+        }
+    }
+    true
+}
+
+pub fn wordwrap(input: &[u8], width: i64, line_break: &[u8], cut: bool) -> (Vec<u8>, bool) {
+    let mut output = Vec::with_capacity(input.len());
+    let mut current = 0usize;
+    let mut line_length = 0i128;
+    let mut last_start = 0usize;
+    let mut last_space = 0usize;
+    let mut last_space_output = None;
+    let mut inserted_break = false;
+    let width = i128::from(width);
+
+    while current < input.len() {
+        if current.saturating_add(line_break.len()) < input.len()
+            && wordwrap_has_existing_break(input, current, line_break)
+        {
+            let next = current.saturating_add(line_break.len()).min(input.len());
+            output.extend_from_slice(&input[current..next]);
+            current = next;
+            line_length = 0;
+            last_start = current;
+            last_space = current;
+            last_space_output = None;
+            continue;
+        }
+
+        if !cut
+            && line_break.len() == 1
+            && current + 1 == input.len()
+            && input[current] == line_break[0]
+        {
+            output.push(input[current]);
+            current += 1;
+            line_length += 1;
+            continue;
+        }
+
+        if input[current] == b' ' {
+            if (current - last_start) as i128 >= width {
+                output.extend_from_slice(line_break);
+                inserted_break = true;
+                current += 1;
+                line_length = 0;
+                last_start = current;
+                last_space = current;
+                last_space_output = None;
+            } else {
+                last_space = current;
+                last_space_output = Some(output.len());
+                output.push(b' ');
+                current += 1;
+                line_length += 1;
+            }
+            continue;
+        }
+
+        if line_length >= width && last_start != last_space {
+            let output_position =
+                last_space_output.expect("usable wordwrap space has an output position");
+            if line_break.len() == 1 {
+                output[output_position] = line_break[0];
+            } else {
+                output.splice(
+                    output_position..output_position + 1,
+                    line_break.iter().copied(),
+                );
+            }
+            inserted_break = true;
+            line_length = (current - last_space) as i128;
+            last_start = last_space + 1;
+            last_space = last_start;
+            last_space_output = None;
+            output.push(input[current]);
+            current += 1;
+        } else if cut && line_length >= width {
+            output.extend_from_slice(line_break);
+            output.push(input[current]);
+            inserted_break = true;
+            line_length = 1;
+            last_start = current;
+            last_space = current;
+            last_space_output = None;
+            current += 1;
+        } else {
+            output.push(input[current]);
+            current += 1;
+            line_length += 1;
+        }
+    }
+
+    (output, inserted_break)
+}
+
 fn ascii_upper(byte: u8) -> u8 {
     byte.to_ascii_uppercase()
 }
@@ -267,7 +413,10 @@ pub fn metaphone(input: &[u8], max_phonemes: usize) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{count_chars, metaphone, quotemeta, soundex, str_rot13};
+    use super::{
+        count_chars, metaphone, quotemeta, soundex, str_rot13, str_word_count, str_word_ranges,
+        wordwrap,
+    };
 
     #[test]
     fn byte_transforms_preserve_non_ascii_and_escape_only_metacharacters() {
@@ -303,5 +452,59 @@ mod tests {
         assert_eq!(metaphone(b"ghost", 0), b"FST");
         assert_eq!(metaphone(b"laugh", 0), b"LF");
         assert_eq!(metaphone(b"AXA", 2), b"AKS");
+    }
+
+    #[test]
+    fn word_ranges_follow_php_byte_and_punctuation_boundaries() {
+        let none = [false; 256];
+        assert_eq!(
+            str_word_ranges(b"can't -dash tail- 12a A\0B\xffC", &none),
+            vec![
+                (0, 5),
+                (6, 11),
+                (12, 17),
+                (20, 21),
+                (22, 23),
+                (24, 25),
+                (26, 27)
+            ]
+        );
+        assert_eq!(str_word_ranges(b"'' --", &none), vec![(1, 2), (3, 4)]);
+        assert_eq!(str_word_count(b"can't -dash tail- 12a A\0B\xffC", &none), 7);
+
+        let mut digits = [false; 256];
+        for byte in b'0'..=b'9' {
+            digits[usize::from(byte)] = true;
+        }
+        assert_eq!(str_word_ranges(b"12_ab", &digits), vec![(0, 2), (3, 5)]);
+    }
+
+    #[test]
+    fn wordwrap_replaces_spaces_cuts_words_and_respects_existing_breaks() {
+        assert_eq!(
+            wordwrap(b"The quick brown fox", 10, b"\n", false).0,
+            b"The quick\nbrown fox"
+        );
+        assert_eq!(
+            wordwrap(b" one  two   three ", 5, b"|", false).0,
+            b" one |two  |three|"
+        );
+        assert_eq!(wordwrap(b"abcdefgh ij", 3, b"|", true).0, b"abc|def|gh|ij");
+        assert_eq!(
+            wordwrap(b"ab<>cdef<>gh", 3, b"<>", true).0,
+            b"ab<>cde<>f<>gh"
+        );
+        assert_eq!(wordwrap(b"one two", -2, b"|", true).0, b"|o|n|e||t|w|o");
+    }
+
+    #[test]
+    fn wordwrap_existing_break_comparison_stops_at_a_shared_nul() {
+        assert_eq!(wordwrap(b"A\0B CDE F", 3, b"\0|", true).0, b"A\0B CD\0|E F");
+        assert_eq!(
+            wordwrap(b"A|\0B CDE F", 3, b"|\0", true).0,
+            b"A|\0B|\0CDE|\0F"
+        );
+        assert_eq!(wordwrap(b"a|", 1, b"|", true).0, b"a||");
+        assert_eq!(wordwrap(b"a |", 2, b"|", false).0, b"a |");
     }
 }
