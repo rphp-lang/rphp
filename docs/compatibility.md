@@ -8,6 +8,82 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`parse-ini-terminal-empty-contract`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.9. The shared `parse_ini_string()`/
+`parse_ini_file()` scanner now treats the first NUL as end of input and
+recognizes CR, LF and CRLF as distinct line terminators. Empty terminal values
+are admitted with or without a final line ending rather than becoming syntax
+errors.
+
+NORMAL and TYPED modes preserve trailing horizontal whitespace on the final,
+unterminated nonempty value, while line-terminated values discard line padding.
+RAW mode discards that padding in both forms. Leading value whitespace,
+comment boundaries, quoted values, section routing and error line numbers keep
+their existing behavior. One allocation-free iterator uses `memchr2()` to
+retain the line-termination fact without slowing the common multi-line path.
+
+Two parser unit tests and three original E2Es cover empty/NUL inputs, NUL at
+the beginning and within a record, terminal and terminated spaces/tabs, all
+three scanner modes, section processing, CR/LF/CRLF, malformed-line numbering,
+named/dynamic/callback calls, references and COW. A generated 48-combination
+line-ending/padding matrix plus three NUL positions is exact at MD5
+`a50b77ed25b9d7f21267be37525928d1`; the broader 120-line clean-room oracle
+transcript matches PHP 8.5.9 at SHA-256
+`f8c1715661c199a49cf99a372e7c1575548690ee87a95442b3d405a1b8198f60`.
+
+The focused `bug51899.phpt` gate passes; its final manifest/summary pair hashes
+to `0fde756ee8fd8f2fc8728f9a9a090a2dbf2e378bdcb45d2624ed03bc047e72d3`
+and `a306d60a325fb985cba9fcbe7281139e99e5b3cb2f52fa58075ed2a5668f67b6`.
+The complete 733-case strings audit moves from 614 to 615 passes, exactly
++1/-0, with 34 failures, 54 skips, 30 unsupported cases and no timeout or
+crash. Two exact-final-binary runs have byte-identical manifests and summaries
+at SHA-256
+`e8bf378f0b6fdd6f0043346d8e35694f5479ef8c708c934bdb9cfacd95617569`
+and `e3910df321bedf31f0c96863eafd2596b7f7338cc38d3fb40e9c8e1411f4c487`.
+The parent/candidate canonical maps hash to
+`7f6ca927e46e26edd0ac7a95a3e88baca2eeefcafa3e3262d58de64b4ffdee67`
+and `6b60200df22a3bc18c6a8d9b65b79a6eb0583e0095a1b82305fc49f2796f8508`;
+their pass sets hash to
+`c9a3e70a966d28ff87f12c68b29b43d30b7ebc4fd28e94a94313e104c55435d5`
+and `a223652e3890e8db70f4c158f38accf1f04ca216969c36040abc6e583c26a52b`.
+
+The complete array audit remains byte-identical at 828 pass, 13 skip and one
+unsupported case, and Zend/lang remains byte-identical at 4,210 pass, 1,093
+fail, 115 skip and 181 unsupported cases. Neither has an XFAIL, timeout or
+crash. Their exact final manifests remain
+`d1d07b2537a5257a59d3d13c0839674fb7a35ba1f2470ff5d2218fb2eab0d746`
+and `8d3afc26468335d657f15fc7251437f9d1561fae1c36f934672fa4e5f7fc024b`.
+No previous pass or unrelated outcome moved.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks, Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production
+remains at 1,622 unsafe blocks and 289 unsafe functions, with 365 SAFETY
+annotations and seven `# Safety` sections. Two exact-final-binary CPU-2-pinned,
+order-balanced 32-pair release runs use the performance governor, four warmups
+and no excluded sample. They compare parent SHA-256
+`a6b5ec748756df0a2ca21ca64fc45d0c38d1be5dcae44e28d3a070ec4dacb8c9`
+with candidate
+`95e2a8c6345c8e151c2e1cfee283e5a50f4b797b6ef9b4ec4e5494b535c03a9d`.
+Paired medians are -5.080%/-4.935% for 100 startups, -2.400%/-1.168% for five
+million retained `strlen()` calls, +1.084%/+1.099% for 200,000 ordinary INI
+parses and +3.678%/+2.266% for one million terminal-value parses. Independent
+and order-balanced medians, outputs and checksums also remain below +5%. The raw
+TSVs hash to
+`21eab6c3f5cc26b27126c8f14544baac3f158aa99a057a10d76cc22a75d6fa22`
+and `c32d3abb36f4725f875bbef4694892514dfb2070ca28ba8be59eb6181c001f07`.
+
+This checkpoint does not admit wider filesystem/stream-wrapper behavior for
+`parse_ini_file()`, broader interpolation or constant-expression semantics,
+32-bit behavior, allocation-limit/OOM equivalence, platform `crypt()`/locale
+behavior, or closure of the remaining 34 strings and wider Zend failures. The
+platform groups remain deferred; risk-adjusted triage selects the isolated
+`sscanf()` `%n` consumed-byte result in `bug21730.phpt` as the next small,
+non-platform scanner checkpoint.
+
+The implementation checkpoint is commit `5d760f6b`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `substr-null-length-contract`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. `substr()` now exposes the exact internal
 `(string $string, int $offset, ?int $length = null): string` signature and
