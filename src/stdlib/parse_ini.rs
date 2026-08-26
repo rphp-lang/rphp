@@ -378,11 +378,12 @@ struct ParseError {
 fn parse_ini(source: &str, process_sections: bool, mode: i64) -> Result<PhpArray, ParseError> {
     let mut result = PhpArray::new();
     let mut current_section: Option<ArrayKey> = None;
+    let source = source.split_once('\0').map_or(source, |(prefix, _)| prefix);
 
-    for (index, raw_line) in source.lines().enumerate() {
+    for (index, (raw_line, terminated)) in IniLines::new(source).enumerate() {
         let line_number = index + 1;
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+        let line = raw_line.trim_start();
+        if line.trim_end().is_empty() || line.starts_with(';') || line.starts_with('#') {
             continue;
         }
         if line.starts_with('[') {
@@ -428,7 +429,7 @@ fn parse_ini(source: &str, process_sections: bool, mode: i64) -> Result<PhpArray
             });
         }
         let (key, offset) = parse_entry_key(raw_key, line_number)?;
-        let value = parse_value(&line[equals + 1..], mode, line_number)?;
+        let value = parse_value(&line[equals + 1..], mode, line_number, terminated)?;
         let destination = if let Some(section) = current_section.as_ref() {
             array_at_mut(&mut result, section)
         } else {
@@ -437,6 +438,40 @@ fn parse_ini(source: &str, process_sections: bool, mode: i64) -> Result<PhpArray
         set_entry(destination, key, offset, value);
     }
     Ok(result)
+}
+
+struct IniLines<'a> {
+    source: &'a str,
+    offset: usize,
+}
+
+impl<'a> IniLines<'a> {
+    fn new(source: &'a str) -> Self {
+        Self { source, offset: 0 }
+    }
+}
+
+impl<'a> Iterator for IniLines<'a> {
+    type Item = (&'a str, bool);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset >= self.source.len() {
+            return None;
+        }
+        let start = self.offset;
+        let bytes = self.source.as_bytes();
+        let relative_end = memchr::memchr2(b'\r', b'\n', &bytes[start..]);
+        let Some(relative_end) = relative_end else {
+            self.offset = self.source.len();
+            return Some((&self.source[start..], false));
+        };
+        let end = start + relative_end;
+        self.offset = end + 1;
+        if bytes[end] == b'\r' && bytes.get(self.offset) == Some(&b'\n') {
+            self.offset += 1;
+        }
+        Some((&self.source[start..end], true))
+    }
 }
 
 fn find_section_end(line: &str) -> Option<usize> {
@@ -475,9 +510,21 @@ fn parse_entry_key(
     }
 }
 
-fn parse_value(raw: &str, mode: i64, line: usize) -> Result<Value, ParseError> {
-    let value = strip_comment(raw).trim();
+fn parse_value(
+    raw: &str,
+    mode: i64,
+    line: usize,
+    line_terminated: bool,
+) -> Result<Value, ParseError> {
+    let without_comment = strip_comment(raw);
+    let had_comment = without_comment.len() != raw.len();
+    let value = without_comment.trim_start();
     let quoted = value.starts_with('"');
+    let value = if quoted || had_comment || line_terminated || mode == INI_SCANNER_RAW {
+        value.trim_end()
+    } else {
+        value
+    };
     let value = if quoted {
         if value.len() < 2 || !value.ends_with('"') {
             return Err(ParseError {
@@ -777,7 +824,9 @@ fn return_value_with(pointer: *mut Value, value: Value) -> Result<(), VmError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{INI_SCANNER_RAW, INI_SCANNER_TYPED, parse_ini, parse_quantity};
+    use super::{
+        INI_SCANNER_NORMAL, INI_SCANNER_RAW, INI_SCANNER_TYPED, parse_ini, parse_quantity,
+    };
 
     #[test]
     fn quantity_parser_supports_signs_bases_multipliers_and_signed_boundaries() {
@@ -901,5 +950,38 @@ mod tests {
         assert_eq!(normal.get_str("a").unwrap().as_str(), Some("3"));
         assert_eq!(normal.get_str("b").unwrap().as_str(), Some("30711"));
         assert_eq!(normal.get_str("c").unwrap().as_str(), Some("30719"));
+    }
+
+    #[test]
+    fn ini_parser_distinguishes_unterminated_values_from_line_padding() {
+        let normal = parse_ini(
+            "a=alpha \nb=bravo\t\rc=charlie \r\nd=delta\t",
+            false,
+            INI_SCANNER_NORMAL,
+        )
+        .unwrap();
+        assert_eq!(normal.get_str("a").unwrap().as_str(), Some("alpha"));
+        assert_eq!(normal.get_str("b").unwrap().as_str(), Some("bravo"));
+        assert_eq!(normal.get_str("c").unwrap().as_str(), Some("charlie"));
+        assert_eq!(normal.get_str("d").unwrap().as_str(), Some("delta\t"));
+
+        let raw = parse_ini("a=alpha ", false, INI_SCANNER_RAW).unwrap();
+        assert_eq!(raw.get_str("a").unwrap().as_str(), Some("alpha"));
+        let typed = parse_ini("a=alpha ", false, INI_SCANNER_TYPED).unwrap();
+        assert_eq!(typed.get_str("a").unwrap().as_str(), Some("alpha "));
+    }
+
+    #[test]
+    fn ini_parser_treats_nul_as_end_of_input_and_retains_error_line_numbers() {
+        let empty = parse_ini("\0a=ignored", false, INI_SCANNER_NORMAL).unwrap();
+        assert!(empty.is_empty());
+
+        let parsed = parse_ini("a=value \0b=ignored", false, INI_SCANNER_NORMAL).unwrap();
+        assert_eq!(parsed.get_str("a").unwrap().as_str(), Some("value "));
+        assert!(parsed.get_str("b").is_none());
+
+        let error = parse_ini("a=1\rmalformed", false, INI_SCANNER_NORMAL).unwrap_err();
+        assert_eq!(error.line, 2);
+        assert_eq!(error.message, "syntax error, unexpected end of line");
     }
 }
