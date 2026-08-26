@@ -1596,8 +1596,17 @@ impl Parser {
         self.expect(&Token::LBrace(0))?;
 
         let mut arms = Vec::new();
+        let mut has_default = false;
         while self.peek() != Token::RBrace && !self.at_eof() {
-            if matches!(self.peek(), Token::Default(_)) {
+            if let Token::Default(default_line) = self.peek() {
+                if has_default {
+                    let _ = self.compile_error(
+                        "Match expressions may only contain one default arm",
+                        default_line,
+                    );
+                } else {
+                    has_default = true;
+                }
                 self.advance();
                 if matches!(self.peek(), Token::Comma(_))
                     && self.peek_at(1) == Token::DoubleArrow

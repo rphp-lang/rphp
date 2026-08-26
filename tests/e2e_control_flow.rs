@@ -346,21 +346,20 @@ fn test_e2e_while_countdown() {
 // === CR9 regression: multiple default branches ===
 
 #[test]
-fn test_e2e_switch_double_default_parse_error() {
-    // PHP rejects switch with multiple default branches
+fn test_e2e_switch_double_default_is_deferred_compile_error() {
     use rphp::lexer::Lexer;
-    use rphp::parser::Parser;
+    use rphp::parser::{Expr, Parser, Stmt};
 
     let tokens =
         Lexer::new("<?php switch ($x) { default: echo 'a'; break; default: echo 'b'; break; }")
             .tokenize()
             .unwrap();
-    let result = Parser::new(tokens).parse();
-    assert!(
-        result.is_err(),
-        "multiple default branches should be a parse error"
-    );
-    assert!(result.err().unwrap().contains("default"));
+    let statements = Parser::new(tokens).parse().unwrap();
+    assert!(matches!(
+        statements.last(),
+        Some(Stmt::ExprStmt(Expr::CompileError { message, line: 1 }))
+            if message == "Switch statements may only contain one default clause"
+    ));
 }
 
 #[test]

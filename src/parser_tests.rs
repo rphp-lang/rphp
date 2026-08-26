@@ -804,6 +804,34 @@ fn literal_this_global_and_lexical_bindings_are_deferred_compile_errors() {
 }
 
 #[test]
+fn duplicate_switch_and_match_defaults_are_deferred_compile_errors() {
+    for (source, expected_message, expected_line) in [
+        (
+            "<?php\nswitch (1) {\n    default: break;\n    default: break;\n}",
+            "Switch statements may only contain one default clause",
+            4,
+        ),
+        (
+            "<?php\n$value = match (1) {\n    default => 'first',\n    default => 'second',\n};",
+            "Match expressions may only contain one default arm",
+            4,
+        ),
+    ] {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+
+        assert!(
+            matches!(
+                statements.last(),
+                Some(Stmt::ExprStmt(Expr::CompileError { message, line }))
+                    if message == expected_message && *line == expected_line
+            ),
+            "unexpected AST for {source}: {statements:#?}"
+        );
+    }
+}
+
+#[test]
 fn misplaced_strict_types_declarations_are_deferred_compile_errors() {
     for (source, expected_line) in [
         ("<?php\nfunction earlier() {}\ndeclare(strict_types=1);", 3),

@@ -892,13 +892,15 @@ impl Parser {
                                 body,
                             });
                         }
-                        Token::Default(_) => {
+                        Token::Default(line) => {
                             if has_default {
-                                return Err(
-                                    "Switch statements may only contain one default clause".into(),
+                                let _ = self.compile_error(
+                                    "Switch statements may only contain one default clause",
+                                    line,
                                 );
+                            } else {
+                                has_default = true;
                             }
-                            has_default = true;
                             self.advance();
                             self.consume_switch_label_separator()?;
                             let mut body = Vec::new();
