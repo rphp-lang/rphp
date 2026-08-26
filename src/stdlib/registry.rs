@@ -1683,52 +1683,138 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("preg_quote", fn_preg_quote, 2, 1, "string", "delimiter");
 
     // --- String encoding ---
-    reg!(
+    reg_typed!(
         "htmlspecialchars",
         fn_htmlspecialchars,
         4,
         1,
-        "string",
-        "flags",
-        "encoding",
-        "double_encode"
+        ["string", "flags", "encoding", "double_encode"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+            ParamTypeHint::Bool,
+        ],
+        ParamTypeHint::String
     );
-    reg!(
+    reg_typed!(
         "htmlspecialchars_decode",
         fn_htmlspecialchars_decode,
         2,
         1,
-        "string",
-        "flags"
+        ["string", "flags"],
+        [ParamTypeHint::String, ParamTypeHint::Int],
+        ParamTypeHint::String
     );
-    reg!(
+    reg_typed!(
         "htmlentities",
         fn_htmlentities,
         4,
         1,
-        "string",
-        "flags",
-        "encoding",
-        "double_encode"
+        ["string", "flags", "encoding", "double_encode"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+            ParamTypeHint::Bool,
+        ],
+        ParamTypeHint::String
     );
-    reg!(
+    reg_typed!(
         "html_entity_decode",
         fn_html_entity_decode,
         3,
         1,
-        "string",
-        "flags",
-        "encoding"
+        ["string", "flags", "encoding"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+        ],
+        ParamTypeHint::String
     );
-    reg!(
+    reg_typed!(
         "get_html_translation_table",
         fn_get_html_translation_table,
         3,
         0,
-        "table",
-        "flags",
-        "encoding"
+        ["table", "flags", "encoding"],
+        [
+            ParamTypeHint::Int,
+            ParamTypeHint::Int,
+            ParamTypeHint::String
+        ],
+        ParamTypeHint::Array
     );
+    const HTML_ENCODER_DEFAULT_DIAGNOSTICS: &[Option<&str>] = &[
+        None,
+        Some("ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401"),
+        Some("null"),
+        Some("true"),
+    ];
+    const HTML_DECODE_DEFAULT_DIAGNOSTICS: &[Option<&str>] =
+        &[None, Some("ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401")];
+    const HTML_ENTITY_DECODE_DEFAULT_DIAGNOSTICS: &[Option<&str>] = &[
+        None,
+        Some("ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401"),
+        Some("null"),
+    ];
+    const HTML_TABLE_DEFAULT_DIAGNOSTICS: &[Option<&str>] = &[
+        Some("HTML_SPECIALCHARS"),
+        Some("ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401"),
+        Some("\"UTF-8\""),
+    ];
+    for (function_name, defaults, diagnostics) in [
+        (
+            "htmlspecialchars",
+            vec![
+                None,
+                Some(Value::long(11)),
+                Some(Value::null()),
+                Some(Value::bool(true)),
+            ],
+            HTML_ENCODER_DEFAULT_DIAGNOSTICS,
+        ),
+        (
+            "htmlentities",
+            vec![
+                None,
+                Some(Value::long(11)),
+                Some(Value::null()),
+                Some(Value::bool(true)),
+            ],
+            HTML_ENCODER_DEFAULT_DIAGNOSTICS,
+        ),
+        (
+            "htmlspecialchars_decode",
+            vec![None, Some(Value::long(11))],
+            HTML_DECODE_DEFAULT_DIAGNOSTICS,
+        ),
+        (
+            "html_entity_decode",
+            vec![None, Some(Value::long(11)), Some(Value::null())],
+            HTML_ENTITY_DECODE_DEFAULT_DIAGNOSTICS,
+        ),
+        (
+            "get_html_translation_table",
+            vec![
+                Some(Value::long(0)),
+                Some(Value::long(11)),
+                Some(Value::string("UTF-8")),
+            ],
+            HTML_TABLE_DEFAULT_DIAGNOSTICS,
+        ),
+    ] {
+        let function = eg
+            .find_function(function_name)
+            .expect("HTML string function was just registered");
+        eg.register_internal_function_reflection_metadata_with_diagnostics(
+            function,
+            defaults,
+            diagnostics,
+            "standard",
+        );
+    }
     reg_typed!(
         "strip_tags",
         fn_strip_tags,
@@ -1796,13 +1882,13 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         eg.register_internal_function_reflection_metadata(
             function,
             vec![None, Some(default_value)],
-            "standard".to_string(),
+            "standard",
         );
     }
     let strip_whitespace = eg
         .find_function("php_strip_whitespace")
         .expect("php_strip_whitespace was just registered");
-    eg.register_internal_function_extension(strip_whitespace, "standard".to_string());
+    eg.register_internal_function_extension(strip_whitespace, "standard");
     reg!("urlencode", fn_urlencode, 1, 1, "string");
     reg!("urldecode", fn_urldecode, 1, 1, "string");
     reg!("rawurlencode", fn_rawurlencode, 1, 1, "string");

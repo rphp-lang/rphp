@@ -3374,12 +3374,17 @@ fn parameter_to_string(
     let default = if has_default {
         function
             .and_then(|function| {
-                eg.internal_function_parameter_default(function, position as usize)
+                eg.internal_function_parameter_default_diagnostic(function, position as usize)
             })
-            .map_or_else(
-                || " = <default>".to_string(),
-                |value| format!(" = {}", reflection_default_text(value)),
-            )
+            .map(|diagnostic| format!(" = {diagnostic}"))
+            .or_else(|| {
+                function
+                    .and_then(|function| {
+                        eg.internal_function_parameter_default(function, position as usize)
+                    })
+                    .map(|value| format!(" = {}", reflection_default_text(value)))
+            })
+            .unwrap_or_else(|| " = <default>".to_string())
     } else {
         String::new()
     };
@@ -4160,11 +4165,19 @@ fn render_reflection_signature_parameter(
     };
     let variadic_prefix = if variadic { "..." } else { "" };
     let default = if !variadic && index >= function.sig.required_num_args {
-        eg.internal_function_parameter_default(function as *const FunctionCommon, index as usize)
-            .map_or_else(
-                || " = <default>".to_string(),
-                |value| format!(" = {}", reflection_default_text(value)),
+        eg.internal_function_parameter_default_diagnostic(
+            function as *const FunctionCommon,
+            index as usize,
+        )
+        .map(|diagnostic| format!(" = {diagnostic}"))
+        .or_else(|| {
+            eg.internal_function_parameter_default(
+                function as *const FunctionCommon,
+                index as usize,
             )
+            .map(|value| format!(" = {}", reflection_default_text(value)))
+        })
+        .unwrap_or_else(|| " = <default>".to_string())
     } else {
         String::new()
     };

@@ -552,8 +552,18 @@ pub struct ExecutorGlobals {
     /// Exact defaults for the sparse subset of internal functions whose
     /// optional values are admitted through Reflection. Keeping this metadata
     /// out of FunctionCommon preserves the hot descriptor layout.
-    internal_function_reflection_metadata:
-        Option<Box<HashMap<*const FunctionCommon, (Vec<Option<Value>>, Option<String>)>>>,
+    internal_function_reflection_metadata: Option<
+        Box<
+            HashMap<
+                *const FunctionCommon,
+                (
+                    Vec<Option<Value>>,
+                    &'static [Option<&'static str>],
+                    Option<&'static str>,
+                ),
+            >,
+        >,
+    >,
     /// Internal static methods share the hidden class-call slot used by the
     /// method ABI, so staticness cannot be inferred from `this_offset` alone.
     internal_static_methods: Option<Box<std::collections::HashSet<*const FunctionCommon>>>,
@@ -1653,13 +1663,13 @@ impl ExecutorGlobals {
     pub(crate) fn register_internal_function_extension(
         &mut self,
         function: *const FunctionCommon,
-        extension: String,
+        extension: &'static str,
     ) {
         self.internal_function_reflection_metadata
             .get_or_insert_with(|| Box::new(HashMap::new()))
             .entry(function)
-            .or_insert_with(|| (Vec::new(), None))
-            .1 = Some(extension);
+            .or_insert_with(|| (Vec::new(), &[], None))
+            .2 = Some(extension);
     }
 
     #[cold]
@@ -1667,15 +1677,33 @@ impl ExecutorGlobals {
         &mut self,
         function: *const FunctionCommon,
         defaults: Vec<Option<Value>>,
-        extension: String,
+        extension: &'static str,
     ) {
         let metadata = self
             .internal_function_reflection_metadata
             .get_or_insert_with(|| Box::new(HashMap::new()))
             .entry(function)
-            .or_insert_with(|| (Vec::new(), None));
+            .or_insert_with(|| (Vec::new(), &[], None));
         metadata.0 = defaults;
-        metadata.1 = Some(extension);
+        metadata.2 = Some(extension);
+    }
+
+    #[cold]
+    pub(crate) fn register_internal_function_reflection_metadata_with_diagnostics(
+        &mut self,
+        function: *const FunctionCommon,
+        defaults: Vec<Option<Value>>,
+        default_diagnostics: &'static [Option<&'static str>],
+        extension: &'static str,
+    ) {
+        let metadata = self
+            .internal_function_reflection_metadata
+            .get_or_insert_with(|| Box::new(HashMap::new()))
+            .entry(function)
+            .or_insert_with(|| (Vec::new(), &[], None));
+        metadata.0 = defaults;
+        metadata.1 = default_diagnostics;
+        metadata.2 = Some(extension);
     }
 
     pub(crate) fn internal_function_parameter_default(
@@ -1686,8 +1714,21 @@ impl ExecutorGlobals {
         self.internal_function_reflection_metadata
             .as_deref()
             .and_then(|metadata| metadata.get(&function))
-            .and_then(|(defaults, _)| defaults.get(index))
+            .and_then(|(defaults, _, _)| defaults.get(index))
             .and_then(Option::as_ref)
+    }
+
+    pub(crate) fn internal_function_parameter_default_diagnostic(
+        &self,
+        function: *const FunctionCommon,
+        index: usize,
+    ) -> Option<&str> {
+        self.internal_function_reflection_metadata
+            .as_deref()
+            .and_then(|metadata| metadata.get(&function))
+            .and_then(|(_, diagnostics, _)| diagnostics.get(index))
+            .copied()
+            .flatten()
     }
 
     pub(crate) fn internal_function_extension(
@@ -1697,7 +1738,7 @@ impl ExecutorGlobals {
         self.internal_function_reflection_metadata
             .as_deref()
             .and_then(|metadata| metadata.get(&function))
-            .and_then(|(_, extension)| extension.as_deref())
+            .and_then(|(_, _, extension)| *extension)
     }
 
     #[cold]

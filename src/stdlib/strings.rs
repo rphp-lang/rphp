@@ -102,13 +102,47 @@ impl HtmlTranslationEncoding {
     }
 }
 
+fn resolve_html_translation_encoding(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    name: &str,
+) -> Result<Option<HtmlTranslationEncoding>, VmError> {
+    // PHP's charset lookup consumes a C-style name. An explicit empty name,
+    // or bytes after the first NUL, therefore select the request default. The
+    // admitted default remains UTF-8; configurable default_charset handling is
+    // a separate INI contract.
+    let name = name.split('\0').next().unwrap_or_default();
+    if name.is_empty() {
+        return Ok(Some(HtmlTranslationEncoding::Utf8));
+    }
+    if let Some(encoding) = HtmlTranslationEncoding::parse(name) {
+        return Ok(Some(encoding));
+    }
+    report_internal_diagnostic(
+        eg,
+        ed,
+        2,
+        "Warning",
+        &format!("{function}(): Charset \"{name}\" is not supported, assuming UTF-8"),
+    )?;
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    Ok(Some(HtmlTranslationEncoding::Utf8))
+}
+
 fn valid_html_entity(src: &[u8], flags: i64) -> Option<usize> {
     let bytes = src;
     if bytes.first() != Some(&b'&') {
         return None;
     }
-    // HTML entity names and numeric codepoints are short. Bound the probe so
-    // repeated bare ampersands remain linear instead of rescanning the tail.
+    if bytes.get(1) == Some(&b'#') {
+        let (codepoint, consumed) = parse_numeric_html_reference(&bytes[1..])?;
+        return html_numeric_reference_valid_for_encoding(codepoint, flags).then_some(consumed + 1);
+    }
+    // Named HTML entities are short. Bound that probe so repeated bare
+    // ampersands remain linear instead of rescanning the tail.
     let probe_length = bytes.len().min(34);
     let semicolon = bytes[..probe_length]
         .iter()
@@ -117,12 +151,9 @@ fn valid_html_entity(src: &[u8], flags: i64) -> Option<usize> {
         return None;
     }
     let document = flags & ENT_DOCUMENT_MASK;
-    let numeric = parse_numeric_html_reference(&bytes[1..]).is_some_and(|(codepoint, consumed)| {
-        consumed == semicolon && html_numeric_reference_valid_for_encoding(codepoint, flags)
-    });
     let named = named_html_reference(&bytes[1..], document)
         .is_some_and(|(_, consumed)| consumed == semicolon);
-    (numeric || named).then_some(semicolon + 1)
+    named.then_some(semicolon + 1)
 }
 
 fn encode_html_special_chars(src: &str, flags: i64, double_encode: bool) -> String {
@@ -354,10 +385,6 @@ fn html_translation_encoding_argument(
     if arg_opt!(ed, 2).is_none() {
         return Ok(Some("UTF-8".to_string()));
     }
-    let argument = owned_argument(ed, 2);
-    if matches!(argument.dereferenced().value_type(), ValueType::Null) {
-        return Ok(Some("UTF-8".to_string()));
-    }
     typed_internal_string_argument_expected(
         ed,
         eg,
@@ -389,13 +416,20 @@ pub(super) fn fn_htmlspecialchars(
         return Ok(());
     };
     let binary_input = arg!(ed, 0).is_binary_string();
-    match HtmlTranslationEncoding::parse(&encoding_name) {
-        Some(HtmlTranslationEncoding::Utf8) => {
-            let source = if binary_input {
-                let source = arg!(ed, 0)
-                    .php_string_bytes()
-                    .map(Cow::into_owned)
-                    .unwrap_or_else(|| string.as_bytes().to_vec());
+    let binary_source = binary_input.then(|| {
+        arg!(ed, 0)
+            .php_string_bytes()
+            .map(Cow::into_owned)
+            .unwrap_or_else(|| string.as_bytes().to_vec())
+    });
+    let Some(encoding) =
+        resolve_html_translation_encoding(ed, eg, "htmlspecialchars", &encoding_name)?
+    else {
+        return Ok(());
+    };
+    match encoding {
+        HtmlTranslationEncoding::Utf8 => {
+            let source = if let Some(source) = binary_source.as_deref() {
                 let Some(source) = sanitize_html_utf8(&source, flags).map(Cow::into_owned) else {
                     ret!(rv, Value::string(""));
                 };
@@ -413,30 +447,27 @@ pub(super) fn fn_htmlspecialchars(
             }
             ret!(rv, Value::string(encoded));
         }
-        Some(HtmlTranslationEncoding::Legacy(encoding)) => {
-            let source = arg!(ed, 0)
-                .php_string_bytes()
+        HtmlTranslationEncoding::Legacy(encoding) => {
+            let source = binary_source
+                .as_deref()
+                .map(Cow::Borrowed)
                 .unwrap_or_else(|| Cow::Borrowed(string.as_bytes()));
             let encoded =
                 encode_html_entities_legacy(&source, flags, double_encode, encoding, false)
                     .unwrap_or_default();
             ret!(rv, Value::binary_string_from_storage(encoded));
         }
-        Some(HtmlTranslationEncoding::BasicOnly(encoding)) => {
-            let source = arg!(ed, 0)
-                .php_string_bytes()
+        HtmlTranslationEncoding::BasicOnly(encoding) => {
+            let source = binary_source
+                .as_deref()
+                .map(Cow::Borrowed)
                 .unwrap_or_else(|| Cow::Borrowed(string.as_bytes()));
             let encoded =
                 encode_html_entities_basic_multibyte(&source, flags, double_encode, encoding)
                     .unwrap_or_default();
             ret!(rv, Value::binary_string_from_storage(encoded));
         }
-        None => {}
     }
-    ret!(
-        rv,
-        Value::string(encode_html_special_chars(&string, flags, double_encode))
-    );
 }
 
 /// htmlspecialchars_decode($string, $flags = ENT_QUOTES | ENT_SUBSTITUTE): string
@@ -602,7 +633,13 @@ fn parse_numeric_html_reference(source: &[u8]) -> Option<(u32, usize)> {
         let Some(digit) = digit else {
             break;
         };
-        codepoint = codepoint.checked_mul(radix)?.checked_add(digit)?;
+        // Keep scanning after overflow so an arbitrarily long leading-zero
+        // reference can retain its small value. Values above the Unicode
+        // ceiling collapse to one invalid sentinel.
+        codepoint = codepoint
+            .saturating_mul(radix)
+            .saturating_add(digit)
+            .min(0x11_0000);
         position += 1;
     }
     if position == digits_start || source.get(position) != Some(&b';') {
@@ -1290,22 +1327,10 @@ pub(super) fn fn_get_html_translation_table(
     let Some(encoding_name) = html_translation_encoding_argument(ed, eg)? else {
         return Ok(());
     };
-    let encoding = if let Some(encoding) = HtmlTranslationEncoding::parse(&encoding_name) {
-        encoding
-    } else {
-        report_internal_diagnostic(
-            eg,
-            ed,
-            2,
-            "Warning",
-            &format!(
-                "get_html_translation_table(): Charset \"{encoding_name}\" is not supported, assuming UTF-8"
-            ),
-        )?;
-        if eg.exception.is_some() {
-            return Ok(());
-        }
-        HtmlTranslationEncoding::Utf8
+    let Some(encoding) =
+        resolve_html_translation_encoding(ed, eg, "get_html_translation_table", &encoding_name)?
+    else {
+        return Ok(());
     };
 
     let document = flags & ENT_DOCUMENT_MASK;
@@ -1473,19 +1498,25 @@ pub(super) fn fn_htmlentities(
     {
         ret!(rv, Value::string(encode_html_special_chars_default(string)));
     }
-    let binary_input = arg!(ed, 0).is_binary_string();
     let Some((string, flags, encoding, double_encode)) =
         html_encode_arguments(ed, eg, "htmlentities")?
     else {
         return Ok(());
     };
-    match HtmlTranslationEncoding::parse(&encoding) {
-        Some(HtmlTranslationEncoding::Utf8) => {
-            let source = if binary_input {
-                let source = arg!(ed, 0)
-                    .php_string_bytes()
-                    .map(Cow::into_owned)
-                    .unwrap_or_else(|| string.as_bytes().to_vec());
+    let binary_input = arg!(ed, 0).is_binary_string();
+    let binary_source = binary_input.then(|| {
+        arg!(ed, 0)
+            .php_string_bytes()
+            .map(Cow::into_owned)
+            .unwrap_or_else(|| string.as_bytes().to_vec())
+    });
+    let Some(encoding) = resolve_html_translation_encoding(ed, eg, "htmlentities", &encoding)?
+    else {
+        return Ok(());
+    };
+    match encoding {
+        HtmlTranslationEncoding::Utf8 => {
+            let source = if let Some(source) = binary_source.as_deref() {
                 let Some(source) = sanitize_html_utf8(&source, flags).map(Cow::into_owned) else {
                     ret!(rv, Value::string(""));
                 };
@@ -1499,15 +1530,16 @@ pub(super) fn fn_htmlentities(
             }
             ret!(rv, Value::string(encoded));
         }
-        Some(HtmlTranslationEncoding::Legacy(legacy)) => {
-            let source = arg!(ed, 0)
-                .php_string_bytes()
+        HtmlTranslationEncoding::Legacy(legacy) => {
+            let source = binary_source
+                .as_deref()
+                .map(Cow::Borrowed)
                 .unwrap_or_else(|| Cow::Borrowed(string.as_bytes()));
             let encoded = encode_html_entities_legacy(&source, flags, double_encode, legacy, true)
                 .unwrap_or_default();
             ret!(rv, Value::binary_string_from_storage(encoded));
         }
-        Some(HtmlTranslationEncoding::BasicOnly(encoding)) => {
+        HtmlTranslationEncoding::BasicOnly(encoding) => {
             report_internal_diagnostic(
                 eg,
                 ed,
@@ -1518,20 +1550,16 @@ pub(super) fn fn_htmlentities(
             if eg.exception.is_some() {
                 return Ok(());
             }
-            let source = arg!(ed, 0)
-                .php_string_bytes()
+            let source = binary_source
+                .as_deref()
+                .map(Cow::Borrowed)
                 .unwrap_or_else(|| Cow::Borrowed(string.as_bytes()));
             let encoded =
                 encode_html_entities_basic_multibyte(&source, flags, double_encode, encoding)
                     .unwrap_or_default();
             ret!(rv, Value::binary_string_from_storage(encoded));
         }
-        _ => {}
     }
-    ret!(
-        rv,
-        Value::string(encode_html_special_chars(&string, flags, double_encode))
-    );
 }
 
 /// urlencode($string): string
@@ -2206,7 +2234,7 @@ mod tests {
         BasicMultibyteEncoding, ENT_HTML5, ENT_IGNORE, ENT_QUOTES_MASK, ENT_SUBSTITUTE,
         PHP_DEFAULT_MEMORY_LIMIT, basic_multibyte_unit, chunk_split_php_bytes,
         chunk_split_result_length, decode_html_special_references, percent_encode_url_bytes,
-        sanitize_html_utf8,
+        sanitize_html_utf8, valid_html_entity,
     };
     use crate::value::Value;
 
@@ -2226,6 +2254,36 @@ mod tests {
         assert_eq!(
             decode_html_special_references(source, ENT_QUOTES_MASK | ENT_HTML5),
             "&lt;|\"|\"|'|'|<|<|&#65;"
+        );
+    }
+
+    #[test]
+    fn entity_preservation_accepts_long_leading_zero_numbers_without_unbounded_names() {
+        for zero_count in [0, 31, 64, 4_096] {
+            for prefix in ["&#", "&#x"] {
+                let entity = format!("{prefix}{}5;", "0".repeat(zero_count));
+                assert_eq!(
+                    valid_html_entity(entity.as_bytes(), ENT_QUOTES_MASK),
+                    Some(entity.len())
+                );
+            }
+        }
+
+        assert_eq!(
+            valid_html_entity(b"&#999999999999999999999999;", ENT_QUOTES_MASK),
+            None
+        );
+        assert_eq!(
+            valid_html_entity(b"&#xFFFFFFFFFFFFFFFF;", ENT_QUOTES_MASK),
+            None
+        );
+        assert_eq!(valid_html_entity(b"&amp;", ENT_QUOTES_MASK), Some(5));
+        assert_eq!(
+            valid_html_entity(
+                format!("&{};", "a".repeat(4_096)).as_bytes(),
+                ENT_QUOTES_MASK
+            ),
+            None
         );
     }
 
