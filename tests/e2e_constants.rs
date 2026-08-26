@@ -2,6 +2,37 @@ mod common;
 use common::*;
 
 #[test]
+fn ini_access_constants_cover_namespace_runtime_and_default_expression_paths() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+namespace Contract\Ini;
+
+const INI_ALL = 99;
+
+function defaults(
+    $user = INI_USER,
+    $perdir = INI_PERDIR,
+    $system = INI_SYSTEM,
+    $all = \INI_ALL,
+): void {
+    echo "$user:$perdir:$system:$all|";
+}
+
+echo INI_ALL, ':', \INI_ALL, ':', INI_USER, ':', INI_PERDIR, ':', INI_SYSTEM, '|';
+defaults();
+$reader = constant(...);
+echo $reader('INI_ALL'), ':', (new \ReflectionConstant('INI_SYSTEM'))->getValue(), '|';
+var_dump(defined('INI_ALL'), defined('ini_all'));
+$constants = get_defined_constants();
+echo $constants['INI_USER'], ':', $constants['INI_PERDIR'], ':', $constants['INI_SYSTEM'], ':', $constants['INI_ALL'];
+"#,
+        ),
+        "99:7:1:2:4|1:2:4:7|7:4|bool(true)\nbool(false)\n1:2:4:7"
+    );
+}
+
+#[test]
 fn runtime_constant_functions_validate_names_and_report_collisions() {
     assert_eq!(
         run_php_with_source_context(
