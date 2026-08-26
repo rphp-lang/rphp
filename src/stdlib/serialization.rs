@@ -325,12 +325,14 @@ fn serialize_value(
 struct Parser<'a> {
     input: &'a [u8],
     position: usize,
+    last_value_start: usize,
     next_reference: usize,
     references: HashMap<usize, Value>,
-    enum_diagnostic: Option<EnumDiagnostic>,
+    uppercase_reference_targets: Vec<usize>,
+    diagnostic: Option<UnserializeDiagnostic>,
 }
 
-struct EnumDiagnostic {
+struct UnserializeDiagnostic {
     message: Option<String>,
     offset: usize,
 }
@@ -385,13 +387,25 @@ fn incomplete_object(class_name: &str, properties: &PhpArray) -> Value {
             ArrayKey::Int(key) => key.to_string(),
             ArrayKey::String(key) => key.clone(),
         };
-        values.insert(name, value.clone());
+        values.insert(name, clone_unserialized_storage_value(value));
     }
     Value::object(PhpObject::dynamic(
         "__PHP_Incomplete_Class".to_string(),
         0,
         values,
     ))
+}
+
+/// Preserve a serialized `R:` cell when moving parsed members into their
+/// durable array/object storage. Ordinary `Value::clone()` deliberately reads
+/// through references for PHP by-value assignment, which is not the operation
+/// performed while materializing one serialized graph.
+fn clone_unserialized_storage_value(value: &Value) -> Value {
+    if value.is_owned_reference() {
+        value.clone_owned_reference_alias()
+    } else {
+        value.clone()
+    }
 }
 
 fn populate_object_properties(
@@ -413,11 +427,68 @@ fn populate_object_properties(
             .unwrap_or(key.as_str());
         let storage_key =
             crate::runtime::resolve_property_key(eg, class_name, plain_name, Some(class_name));
-        object.set_property(&storage_key, value.clone());
+        object.set_property(&storage_key, clone_unserialized_storage_value(value));
     }
 }
 
 impl<'a> Parser<'a> {
+    #[inline]
+    fn reserve_reference(&mut self, reference: usize) {
+        if !self.uppercase_reference_targets.contains(&reference) {
+            return;
+        }
+        let mut value = Value::owned_reference(Value::null());
+        value.mark_internal_reference_alias();
+        self.references.insert(reference, value);
+    }
+
+    #[inline]
+    fn publish_reference(&mut self, reference: usize, value: Value) -> Result<Value, ()> {
+        if let Some(target) = self.references.get_mut(&reference) {
+            if target.is_owned_reference() {
+                target.assign_dereferenced(value);
+                return Ok(target.clone_owned_reference_alias());
+            }
+            *target = value.clone();
+            return Ok(value);
+        }
+        self.references.insert(reference, value.clone());
+        Ok(value)
+    }
+
+    fn publish_partial_reference(&mut self, reference: usize, value: &Value) -> Result<(), ()> {
+        if let Some(target) = self.references.get_mut(&reference) {
+            if target.is_owned_reference() {
+                target.assign_dereferenced(value.clone());
+            } else {
+                *target = value.clone();
+            }
+        } else {
+            self.references.insert(reference, value.clone());
+        }
+        Ok(())
+    }
+
+    fn reject<T>(&mut self, message: Option<String>, offset: usize) -> Result<T, ()> {
+        if self.diagnostic.is_none() {
+            self.diagnostic = Some(UnserializeDiagnostic { message, offset });
+        }
+        Err(())
+    }
+
+    #[inline]
+    fn counted_key(&mut self) -> Result<ArrayKey, ()> {
+        let position = self.position;
+        match self.key() {
+            Ok(key) => Ok(key),
+            Err(()) if self.input.get(position) == Some(&b'}') => self.reject(
+                Some("Unexpected end of serialized data".to_string()),
+                position,
+            ),
+            Err(()) => Err(()),
+        }
+    }
+
     fn byte(&mut self) -> Result<u8, ()> {
         let byte = *self.input.get(self.position).ok_or(())?;
         self.position += 1;
@@ -470,8 +541,7 @@ impl<'a> Parser<'a> {
     }
 
     fn reject_enum<T>(&mut self, message: Option<String>, offset: usize) -> Result<T, ()> {
-        self.enum_diagnostic = Some(EnumDiagnostic { message, offset });
-        Err(())
+        self.reject(message, offset)
     }
 
     fn enum_value(&mut self, eg: &mut ExecutorGlobals) -> Result<Value, ()> {
@@ -553,9 +623,108 @@ impl<'a> Parser<'a> {
         eg: &mut ExecutorGlobals,
         allowed_classes: &AllowedClasses,
     ) -> Result<Value, ()> {
+        if self.uppercase_reference_targets.is_empty() {
+            self.value_mode::<false>(eg, allowed_classes)
+        } else {
+            self.value_mode::<true>(eg, allowed_classes)
+        }
+    }
+
+    fn value_mode<const UPPERCASE_REFERENCES: bool>(
+        &mut self,
+        eg: &mut ExecutorGlobals,
+        allowed_classes: &AllowedClasses,
+    ) -> Result<Value, ()> {
+        if UPPERCASE_REFERENCES {
+            self.value_with_uppercase_references(eg, allowed_classes)
+        } else {
+            self.value_without_uppercase_references(eg, allowed_classes)
+        }
+    }
+
+    fn value_without_uppercase_references(
+        &mut self,
+        eg: &mut ExecutorGlobals,
+        allowed_classes: &AllowedClasses,
+    ) -> Result<Value, ()> {
+        self.last_value_start = self.position;
         let reference = self.next_reference;
         self.next_reference += 1;
-        let value = match self.byte()? {
+        let tag = self.byte()?;
+        let mut aliases_existing_reference = false;
+        let value = self.parse_value_tag::<false>(
+            tag,
+            reference,
+            eg,
+            allowed_classes,
+            &mut aliases_existing_reference,
+        )?;
+        debug_assert!(!aliases_existing_reference);
+        self.references
+            .entry(reference)
+            .or_insert_with(|| value.clone());
+        Ok(value)
+    }
+
+    fn value_with_uppercase_references(
+        &mut self,
+        eg: &mut ExecutorGlobals,
+        allowed_classes: &AllowedClasses,
+    ) -> Result<Value, ()> {
+        let start = self.position;
+        let reference = self.next_reference;
+        self.next_reference += 1;
+        self.reserve_reference(reference);
+        let tag = match self.byte() {
+            Ok(tag) => tag,
+            Err(()) => {
+                self.references.remove(&reference);
+                if !self.input.is_empty() {
+                    self.reject(None, self.position)?;
+                }
+                return Err(());
+            }
+        };
+        let mut aliases_existing_reference = false;
+        let value = self.parse_value_tag::<true>(
+            tag,
+            reference,
+            eg,
+            allowed_classes,
+            &mut aliases_existing_reference,
+        );
+        match value {
+            Ok(value) if aliases_existing_reference => {
+                self.references.remove(&reference);
+                Ok(value)
+            }
+            Ok(value) => self.publish_reference(reference, value),
+            Err(()) => {
+                self.references.remove(&reference);
+                if self.diagnostic.is_none() && eg.exception.is_none() {
+                    let offset = if self.position == start + 1 && self.position == self.input.len()
+                    {
+                        start
+                    } else {
+                        self.position
+                    };
+                    self.reject(None, offset)?;
+                }
+                Err(())
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn parse_value_tag<const UPPERCASE_REFERENCES: bool>(
+        &mut self,
+        tag: u8,
+        reference: usize,
+        eg: &mut ExecutorGlobals,
+        allowed_classes: &AllowedClasses,
+        aliases_existing_reference: &mut bool,
+    ) -> Result<Value, ()> {
+        match tag {
             b'N' => {
                 self.expect(b';')?;
                 Ok(Value::null())
@@ -604,8 +773,8 @@ impl<'a> Parser<'a> {
                 self.expect(b'{')?;
                 let mut array = PhpArray::with_hash_capacity(length);
                 for _ in 0..length {
-                    let key = self.key()?;
-                    let member = self.value(eg, allowed_classes)?;
+                    let key = self.counted_key()?;
+                    let member = self.value_mode::<UPPERCASE_REFERENCES>(eg, allowed_classes)?;
                     match key {
                         ArrayKey::Int(key) => array.set_int(key, member),
                         ArrayKey::String(key) => array.set_str(&key, member),
@@ -648,11 +817,11 @@ impl<'a> Parser<'a> {
                 };
                 // Publish the object before parsing properties so `r:N;` can
                 // close self-references and longer object cycles.
-                self.references.insert(reference, object.clone());
+                self.publish_partial_reference(reference, &object)?;
                 let mut properties = PhpArray::with_hash_capacity(property_count);
                 for _ in 0..property_count {
-                    let key = self.key()?;
-                    let member = self.value(eg, allowed_classes)?;
+                    let key = self.counted_key()?;
+                    let member = self.value_mode::<UPPERCASE_REFERENCES>(eg, allowed_classes)?;
                     match key {
                         ArrayKey::Int(key) => properties.set_int(key, member),
                         ArrayKey::String(key) => properties.set_str(&key, member),
@@ -660,24 +829,22 @@ impl<'a> Parser<'a> {
                 }
                 self.expect(b'}')?;
                 if !allowed {
-                    let object = incomplete_object(class_name, &properties);
-                    self.references.insert(reference, object.clone());
-                    return Ok(object);
+                    Ok(incomplete_object(class_name, &properties))
+                } else {
+                    let serialized = Value::array(properties.clone());
+                    match crate::stdlib::call_object_public_method(
+                        eg,
+                        &object,
+                        "__unserialize",
+                        std::slice::from_ref(&serialized),
+                    )
+                    .map_err(|_| ())?
+                    {
+                        Some(_) => {}
+                        None => populate_object_properties(eg, &object, class_name, &properties),
+                    }
+                    Ok(object)
                 }
-
-                let serialized = Value::array(properties.clone());
-                match crate::stdlib::call_object_public_method(
-                    eg,
-                    &object,
-                    "__unserialize",
-                    std::slice::from_ref(&serialized),
-                )
-                .map_err(|_| ())?
-                {
-                    Some(_) => {}
-                    None => populate_object_properties(eg, &object, class_name, &properties),
-                }
-                Ok(object)
             }
             b'C' => {
                 self.expect(b':')?;
@@ -688,7 +855,16 @@ impl<'a> Parser<'a> {
                 self.position = class_end;
                 self.expect(b'"')?;
                 let class_name = std::str::from_utf8(class_bytes).map_err(|_| ())?;
-                if allowed_classes.allows(class_name)
+                self.expect(b':')?;
+                let payload_length = usize::try_from(self.integer(b':')?).map_err(|_| ())?;
+                self.expect(b'{')?;
+                let payload_end = self.position.checked_add(payload_length).ok_or(())?;
+                let payload = self.input.get(self.position..payload_end).ok_or(())?;
+                self.position = payload_end;
+                self.expect(b'}')?;
+
+                let allowed = allowed_classes.allows(class_name);
+                if allowed
                     && matches!(
                         class_name.to_ascii_lowercase().as_str(),
                         "generator" | "weakreference" | "weakmap" | "internaliterator"
@@ -698,21 +874,61 @@ impl<'a> Parser<'a> {
                         "Exception",
                         &format!("Unserialization of '{class_name}' is not allowed"),
                     ));
+                    return Err(());
                 }
-                Err(())
+                let object = if allowed {
+                    allocate_object(eg, class_name)?
+                } else {
+                    incomplete_object(class_name, &PhpArray::new())
+                };
+                self.publish_partial_reference(reference, &object)?;
+                if allowed {
+                    let payload = std::str::from_utf8(payload).map_err(|_| ())?;
+                    let serialized = Value::string(payload);
+                    crate::stdlib::call_object_public_method(
+                        eg,
+                        &object,
+                        "unserialize",
+                        std::slice::from_ref(&serialized),
+                    )
+                    .map_err(|_| ())?;
+                }
+                if eg.exception.is_some() {
+                    Err(())
+                } else {
+                    Ok(object)
+                }
             }
             b'E' => self.enum_value(eg),
-            b'r' | b'R' => {
+            b'r' => {
                 self.expect(b':')?;
                 let target = usize::try_from(self.integer(b';')?).map_err(|_| ())?;
-                self.references.get(&target).cloned().ok_or(())
+                self.references
+                    .get(&target)
+                    .map(Value::dereferenced)
+                    .filter(|value| value.value_type() == ValueType::Object)
+                    .cloned()
+                    .ok_or(())
+            }
+            b'R' => {
+                self.expect(b':')?;
+                let target = usize::try_from(self.integer(b';')?).map_err(|_| ())?;
+                if !UPPERCASE_REFERENCES || target >= reference {
+                    return Err(());
+                }
+                let alias = self
+                    .references
+                    .get(&target)
+                    .filter(|value| value.is_owned_reference())
+                    .map(Value::clone_owned_reference_alias)
+                    .ok_or(())?;
+                // An uppercase reference occurrence aliases its target but is
+                // not itself a later addressable reference-table entry.
+                *aliases_existing_reference = true;
+                Ok(alias)
             }
             _ => Err(()),
-        }?;
-        self.references
-            .entry(reference)
-            .or_insert_with(|| value.clone());
-        Ok(value)
+        }
     }
 }
 
@@ -728,6 +944,63 @@ pub(super) fn serialize(
         return return_value(rv, Value::null());
     }
     return_value(rv, Value::string(output))
+}
+
+/// Discover the reference-table slots that may need stable PHP cells before
+/// parsing reaches a later `R:n;`. Incidental `R:` text inside a serialized
+/// string can only reserve an otherwise invisible cell; it cannot change the
+/// decoded value or make an invalid reference valid.
+#[inline]
+fn find_uppercase_reference_marker(input: &[u8], mut position: usize) -> Option<usize> {
+    const REPEATED_R: u64 = u64::from_ne_bytes([b'R'; 8]);
+    const LOW_BITS: u64 = 0x0101_0101_0101_0101;
+    const HIGH_BITS: u64 = 0x8080_8080_8080_8080;
+
+    while input.len() - position >= 8 {
+        let word = u64::from_ne_bytes(input[position..position + 8].try_into().unwrap());
+        let difference = word ^ REPEATED_R;
+        if difference.wrapping_sub(LOW_BITS) & !difference & HIGH_BITS != 0 {
+            return input[position..position + 8]
+                .iter()
+                .position(|byte| *byte == b'R')
+                .map(|relative| position + relative);
+        }
+        position += 8;
+    }
+    input[position..]
+        .iter()
+        .position(|byte| *byte == b'R')
+        .map(|relative| position + relative)
+}
+
+fn uppercase_reference_targets(input: &[u8]) -> Vec<usize> {
+    let mut targets = Vec::new();
+    let mut cursor = 0;
+    while let Some(marker) = find_uppercase_reference_marker(input, cursor) {
+        cursor = marker + 1;
+        if input.get(marker + 1) != Some(&b':') {
+            continue;
+        }
+        let mut position = marker + 2;
+        let mut target = 0usize;
+        let mut has_digit = false;
+        while let Some(digit @ b'0'..=b'9') = input.get(position).copied() {
+            let Some(next) = target
+                .checked_mul(10)
+                .and_then(|target| target.checked_add(usize::from(digit - b'0')))
+            else {
+                has_digit = false;
+                break;
+            };
+            target = next;
+            has_digit = true;
+            position += 1;
+        }
+        if has_digit && input.get(position) == Some(&b';') && !targets.contains(&target) {
+            targets.push(target);
+        }
+    }
+    targets
 }
 
 pub(super) fn unserialize(
@@ -759,14 +1032,41 @@ pub(super) fn unserialize(
     let mut parser = Parser {
         input: input.as_bytes(),
         position: 0,
+        last_value_start: 0,
         next_reference: 1,
         references: HashMap::new(),
-        enum_diagnostic: None,
+        uppercase_reference_targets: uppercase_reference_targets(input.as_bytes()),
+        diagnostic: None,
     };
     match parser.value(eg, &allowed_classes) {
-        Ok(value) if parser.position == parser.input.len() => return_value(rv, value),
+        Ok(value) if parser.position == parser.input.len() => {
+            // The parser's root reference cell is bookkeeping, not a PHP
+            // reference returned by unserialize(). Nested `R:` aliases retain
+            // their cells inside the materialized graph.
+            let value = if value.is_reference() {
+                value.dereferenced().clone()
+            } else {
+                value
+            };
+            return_value(rv, value)
+        }
         _ => {
-            if let Some(diagnostic) = parser.enum_diagnostic {
+            let diagnostic = parser.diagnostic.or_else(|| {
+                (!parser.input.is_empty()).then(|| {
+                    let offset = if parser.position == parser.last_value_start + 1
+                        && parser.position == parser.input.len()
+                    {
+                        parser.last_value_start
+                    } else {
+                        parser.position
+                    };
+                    UnserializeDiagnostic {
+                        message: None,
+                        offset,
+                    }
+                })
+            });
+            if let Some(diagnostic) = diagnostic {
                 if let Some(message) = diagnostic.message {
                     super::report_internal_diagnostic(
                         eg,

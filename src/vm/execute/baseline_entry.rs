@@ -139,16 +139,24 @@ fn format_throwable_chain(eg: &ExecutorGlobals, thrown: &Value, uncaught: bool) 
         let class_name = object.class_name.to_string();
         let message = object
             .get_property("message")
+            .map(Value::dereferenced)
             .map(Value::echo_to_string)
             .unwrap_or_default();
         let location = object
             .get_property("file")
+            .map(Value::dereferenced)
             .and_then(Value::as_str)
             .filter(|file| !file.is_empty())
-            .zip(object.get_property("line").and_then(Value::as_long))
+            .zip(
+                object
+                    .get_property("line")
+                    .map(Value::dereferenced)
+                    .and_then(Value::as_long),
+            )
             .zip(
                 object
                     .get_property("trace")
+                    .map(Value::dereferenced)
                     .and_then(Value::as_array)
                     .cloned(),
             )
@@ -174,6 +182,7 @@ fn format_throwable_chain(eg: &ExecutorGlobals, thrown: &Value, uncaught: bool) 
             .get_property(&key)
             .filter(|previous| {
                 previous
+                    .dereferenced()
                     .as_object()
                     .is_some_and(|object| eg.class_is_a(&object.class_name, "Throwable"))
             })
