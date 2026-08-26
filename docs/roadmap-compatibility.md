@@ -3387,11 +3387,31 @@ retained `strlen()`, five million parenthesized Elvis/full ternary iterations
 and 20,000 repeated parenthesized lex/parse/eval programs below +5%, with
 matching outputs.
 
-The monitored supported debt is now 1,061 failures: 18 strings, zero array and
-1,043 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
+The `19d25812` `readonly-declaration-modifier-diagnostics` checkpoint then
+moves Zend/lang from 4,260 to 4,265 pass, exactly `+5/-0`; strings stay 631/733
+and array stays 828/842 with no other status or category movement. Duplicate
+named readonly class modifiers and readonly class constants now preserve
+located compile fatals after complete parsing. Readonly enum, interface and
+trait prefixes publish PHP's exact class-modifier parse expectation. Valid
+readonly/final/abstract orders, promoted properties and neighboring class-like
+declarations remain executable without token, AST, compiler, VM or runtime
+layout changes.
+
+Two exact-final-binary Zend/lang audits have byte-identical compact manifests
+and summaries; repeated serial strings/array outcome projections also match
+and have zero parent delta. All five Cargo configurations,
+all-feature/all-target, formatting, HTML data, PHPT runner, unsafe, Composer S0,
+four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Two exact-final-binary
+CPU-pinned 32-pair runs keep startup, retained `strlen()`, 250 named readonly
+declarations and one million readonly object constructions below +5%, with
+matching outputs.
+
+The monitored supported debt is now 1,056 failures: 18 strings, zero array and
+1,038 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
 the portability contract and remains deferred. Read-only manifest triage next
-selects five readonly declaration-modifier diagnostics: duplicate readonly
-classes, readonly enums/interfaces/traits and readonly class constants.
+selects four readonly member declaration diagnostics: direct and trait-alias
+readonly methods plus explicit and class-implied readonly promoted properties
+without a type.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
 suppression-wrapped destructuring, exhaustive object/array/resource

@@ -8,6 +8,73 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`readonly-declaration-modifier-diagnostics`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. Named class parsing now records a
+second `readonly` modifier as PHP's located compile fatal. A `readonly` prefix
+before an enum, interface or trait produces PHP's class-modifier parse error,
+including the complete expected-token list. Readonly class constants are fully
+parsed but preserve PHP's first compile-time
+`Cannot use the readonly modifier on a class constant` fatal instead of an
+internal parser message.
+
+Original parser regressions cover the three class-like parse messages plus
+multiline source locations for duplicate class modifiers and class constants.
+Original CLI tests fix message, source, line, stdout/stderr and status 255 for
+all five boundaries. Positive CLI and end-to-end tests preserve valid named
+readonly classes, both final and abstract modifier orders, promoted readonly
+properties and neighboring enum, interface and trait declarations. All five
+supplying php-src cases now pass:
+`readonly_class_duplicated_modifier.phpt`, `readonly_enum.phpt`,
+`readonly_interface.phpt`, `readonly_trait.phpt` and `readonly_const.phpt`.
+
+The complete combined audit covers 7,174 cases: 5,724 pass, 1,056 fail, 182
+skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
+fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
+and one unsupported. Zend/lang moves from 4,260 to 4,265 pass, exactly
+`+5/-0`, with 1,038 failures, 115 skips and 181 unsupported cases. Only the
+five named cases move from `fail/parse` to pass; no remaining outcome changes
+status or category. Two exact-final-binary Zend/lang runs have byte-identical
+manifests and summaries, whose SHA-256 values are respectively
+`472451feb8574e3350e6d74178aa6da4a5a68980b1217e0a5b6ebc5d7d6ec4d3`
+and `d52c7f33571fdf994c38ebc327b1d4b99b5d73d2a0caad35fa2fbd28852a3946`.
+Repeated serial strings and array outcome projections are byte-identical and
+have SHA-256 values
+`06c231b7032faaece97ae32cac251aa7740e317ea4e169ca1f21223f6aea5d38`
+and `84e2007e9e6b16edab2bf9786966aedf44791151a15f2188960711d4f8f4347b`;
+each has zero outcome delta from the exact parent binary.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass. The
+matrix cleanup hook recovered a full filesystem between configurations and the
+affected configuration then passed from a clean target. Production remains at
+1,622 unsafe blocks, 289 unsafe functions, 366 SAFETY annotations and seven
+`# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates and PHP
+8.5.9 warmed-kernel S2 and cold-build S3 pass. The change adds no dependency
+and changes no token, AST, compiler, VM or runtime layout.
+
+Two exact-final-binary CPU-2-pinned, performance-governor, order-balanced
+32-pair release runs with four warmups compare parent SHA-256
+`b2c83fd0224897d2bacaee63780104ad8786cdf2cdcb19ab25c4e4f502f673f5`
+with candidate
+`92b2d96170d693b6b7202b82346570ff71db1048ecc2846ed56ba9c78d2c8c68`.
+Paired medians are -4.840%/-3.406% for 100 startups,
+-1.570%/-1.028% for 250 named readonly class declarations,
+-1.559%/-0.491% for one million readonly class instantiations and
++0.036%/-0.565% for five million retained `strlen()` calls. Comparable outputs
+match and every paired median remains below +5%. The raw TSVs hash to
+`f03048cfcf50cf07b8c472b2ec34f265582e569292652253ab42bf2e5148a088`
+and `e16d59616fe08bee634f270ee02df661ba815553ec7a4f2653fffa2bb843474e`.
+
+This checkpoint does not claim readonly method, promotion, inheritance or trait
+composition diagnostics. The monitored supported debt is now 1,056 failures:
+18 strings, zero array and 1,038 Zend/lang. Read-only manifest triage selects
+four readonly member declaration diagnostics next: direct and trait-alias
+readonly methods plus explicit and class-implied readonly promoted properties
+without a type.
+
+The implementation checkpoint is commit `19d25812`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `unparenthesized-elvis-full-ternary-diagnostic`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. The parser now consumes the complete
 forbidden `a ?: b ? c : d` shape and records PHP's compile-time
