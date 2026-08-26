@@ -3424,13 +3424,30 @@ and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep
 startup, retained `strlen()`, 250 readonly member declaration groups and one
 million typed readonly promotion instances below +5%, with matching outputs.
 
-The monitored supported debt is now 1,052 failures: 18 strings, zero array and
-1,034 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
+The `1708191a` `constructor-promotion-declaration-diagnostics` checkpoint then
+moves Zend/lang from 4,269 to 4,275 pass, exactly `+6/-0`; strings stay 631/733
+and array stays 828/842 with no other status or category movement. One cold
+compiler validation covers promotion outside constructors, abstract/interface
+constructors, variadic promoted parameters and explicit/promoted property
+collisions. Valid typed/defaulted promotion, explicit properties, ordinary
+variadics and accepted by-reference/trait promotion remain executable without
+token, AST, bytecode, VM or runtime-layout changes.
+
+Two exact-final-binary Zend/lang audits have byte-identical compact manifests
+and summaries; repeated serial strings/array outcome projections also match
+the exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep
+startup, retained `strlen()`, 250 promotion declaration scans and one million
+promoted-property instances below +5%, with matching outputs.
+
+The monitored supported debt is now 1,046 failures: 18 strings, zero array and
+1,028 Zend/lang. The attempted 14-case `crypt()` platform approach did not meet
 the portability contract and remains deferred. Read-only manifest triage next
-selects six constructor-promotion declaration validations with one shared
-front-end boundary: promotion outside constructors, promotion in abstract and
-interface constructors, variadic promotion and explicit/promoted property
-redeclaration.
+selects five class-inheritance diagnostics that already have the exact message
+and status but lack declaration source and line: final `Generator`,
+`WeakReference` and readonly classes plus both readonly/non-readonly
+inheritance mismatches.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
 suppression-wrapped destructuring, exhaustive object/array/resource

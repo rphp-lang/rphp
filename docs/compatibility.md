@@ -8,6 +8,74 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`constructor-promotion-declaration-diagnostics`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. A shared cold compiler validation
+now rejects promoted parameters in named functions and non-constructor
+methods, in abstract or interface constructors, and on variadic parameters.
+The same pass detects a promoted property that collides with an explicit or
+earlier promoted property and reports the declaring class and property.
+
+Original CLI regressions fix exact message, class/property name, source, line,
+stderr and status 255 for all six boundaries. A positive CLI regression keeps
+typed and defaulted promotion, explicit properties, ordinary variadic methods,
+by-reference promotion and trait promotion executable. All six supplying
+php-src cases now pass: `ctor_promotion_abstract.phpt`,
+`ctor_promotion_interface.phpt`, `ctor_promotion_free_function.phpt`,
+`ctor_promotion_not_a_ctor.phpt`, `ctor_promotion_variadic.phpt` and
+`ctor_promotion_repeated_prop.phpt`. The complete 18-case neighboring
+constructor-promotion directory changes only those six outcomes.
+
+The complete combined audit covers 7,174 cases: 5,734 pass, 1,046 fail, 182
+skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
+fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
+and one unsupported. Zend/lang moves from 4,269 to 4,275 pass, exactly
+`+6/-0`, with 1,028 failures, 115 skips and 181 unsupported cases. Only the
+six named cases move from `fail/output` to pass; no remaining outcome changes
+status or category. Two exact-final-binary Zend/lang runs have byte-identical
+manifests and summaries, whose SHA-256 values are respectively
+`fb3e077c68a14044a3bd4f02982004ec19e7cea40a2453854d7f9310ee02ada6`
+and `bebc178489924baa809284318eed11c0093f634ac83bc7602fbfaabb071cc1aa`.
+Repeated serial strings and array outcome projections are byte-identical and
+have SHA-256 values
+`06c231b7032faaece97ae32cac251aa7740e317ea4e169ca1f21223f6aea5d38`
+and `84e2007e9e6b16edab2bf9786966aedf44791151a15f2188960711d4f8f4347b`;
+each has zero outcome delta from the exact parent binary.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass. The
+matrix cleanup hook recovered filesystem capacity between configurations.
+Production remains at 1,622 unsafe blocks, 289 unsafe functions, 366 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony
+S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The change adds
+one compiler-only declaration scan and no dependency, token, AST, bytecode, VM
+or runtime-layout change.
+
+Two exact-final-binary CPU-2-pinned, performance-governor, order-balanced
+32-pair release runs with four warmups compare parent SHA-256
+`4509f7785b691a1db248f6bb604f96d5e6fce55e67512c5271850855cd48bfcd`
+with candidate
+`878a4c51db486871fa77dafea4cd263f468c0d6adb1d1f92bc39e9fcf4c9400d`.
+Paired medians are -3.759%/-4.655% for 100 startups,
+-0.392%/-0.094% for 250 promotion declaration scans,
+-0.618%/-0.567% for one million promoted-property instances and
+-0.950%/-0.315% for five million retained `strlen()` calls. Comparable
+outputs match and every paired median remains below +5%. The raw TSVs hash to
+`442afacb1604569bd020a603c6cfba19c83a2143e43095f7909c9fc0dfdc1d20`
+and `8d260df7228898bed26335eae7bd9181f33507d979685080eb3fb6c3069b46c5`.
+
+This checkpoint does not claim by-reference promoted-property aliasing, trait
+promoted-property materialization, complete `ReflectionClass` method
+formatting, or promoted-parameter diagnostics for closures and arrow
+functions. The monitored supported debt is now 1,046 failures: 18 strings,
+zero array and 1,028 Zend/lang. Read-only manifest and raw-output triage select
+five class-inheritance diagnostics next: final `Generator`, `WeakReference`
+and readonly classes plus both readonly/non-readonly inheritance mismatches.
+All five already have the correct message and status; their shared missing
+contract is declaration source and line.
+
+The implementation checkpoint is commit `1708191a`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `readonly-member-declaration-diagnostics`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. Direct readonly method modifiers and
 readonly modifiers in trait alias adaptations now preserve PHP's located
