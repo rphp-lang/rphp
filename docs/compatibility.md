@@ -8,6 +8,97 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`parse-str-nested-contract`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. `parse_str()` now exposes the exact internal
+`(string $string, &$result): void` boundary, including `standard` extension
+provenance. The result parameter is intentionally untyped and reference-only:
+an existing null, scalar, array or object variable is replaced atomically,
+while a non-variable expression is rejected by call binding. Weak scalar and
+Stringable conversion, strict rejection, named/dynamic/first-class and
+`call_user_func_array()` calls, throwing conversions, references and COW share
+that boundary.
+
+The query parser now operates on PHP bytes. It performs lossless percent and
+plus decoding, truncates keys but not values at NUL, skips empty bases, removes
+leading ASCII spaces and normalizes top-level dots/spaces to underscores.
+Canonical decimal keys become integer array keys without converting leading
+zero, plus-prefixed, negative-zero or out-of-range forms. Complete adjacent
+brackets form nested paths; an unmatched first bracket becomes a top-level
+underscore, an unmatched later bracket stops at the last complete segment and
+suffix bytes after a complete segment are ignored. Explicit and appended keys
+share PHP's next-integer progression, and left-to-right scalar/array collisions
+replace or rebuild the prior shape before the result is published.
+
+Four original E2Es cover positive, negative, generated and byte boundaries.
+Their generated sweeps include 66 numeric/malformed records and every
+percent-decoded high byte from `0x80` through `0xff`; the three checksums are
+`79906de792d4a4f40820ede2eb301961`,
+`e14ae5bcc11b6f23ded0011f887af4c6` and
+`d72e340c9c24d189ee91ce83af7faca7`. Independent grammar,
+call/Reflection and strict oracle transcripts match PHP 8.5.9 at SHA-256
+`b65529914f401b1726c51fd433ff470c26735ca68c7556c7a2bc439c3a3157f3`,
+`789f2862bd782990aad5b606dd4508b3473aa5f071bb6fc623d203e84823db6e`
+and `efc43ce7fbbd7072d61dc9fbede8e1535d7d2284fa0d520455e4987f351adb0a`.
+
+The exact focused gate passes `parse_str_basic4.phpt` and `bug77439.phpt`;
+its compact manifest/summary pair hashes to
+`0c0f3b3b60dfce47863047f533786e20bf25203072b306590fee4cb8ae9c5141`
+and `282b8e7d667da78643ca4d1785526fb8f274e905b988a4d6cc4e4e9b3c81bb83`.
+All six strings PHPTs that directly call `parse_str()` now have four passes and
+two explicit runtime-CLI-INI unsupported outcomes, with no ordinary failure,
+timeout or crash.
+
+The complete 733-case strings audit moves from 611 to 613 passes, exactly
++2/-0, with 36 failures, 54 skips, 30 unsupported cases and no timeout or
+crash. Two exact-final-binary runs have byte-identical manifests and summaries
+at SHA-256
+`f6d47a2f90b7e555849b01e277f9ff7a7135db15dfe2a2b16b043280612b7fe0`
+and `9e56f4a48971b38da5dce876de79f12f09b095923a2a7f5108f8ad90bcdf4cee`.
+The parent/candidate canonical maps hash to
+`a4034a69bb17c4dd444712fba7b390a6ff111c9d7fd9879849fc169b35757f2f`
+and `5afe579454420fc35ebf0c0c7faf5c7b332f27a79c836af91cad3e2c61dd0e3e`;
+their pass sets hash to
+`287d69f1bf8a7356a948161ff1ff45b63a410441704b8f4853d3a8cea13502da`
+and `2fba349d47597954518f6a36c544864a4e09d182759852777adc212928439f45`.
+
+The complete array audit remains byte-identical at 828 pass, 13 skip and one
+unsupported case, and Zend/lang remains byte-identical at 4,210 pass, 1,093
+fail, 115 skip and 181 unsupported cases. Neither has an XFAIL, timeout or
+crash. Their exact final manifests remain
+`d1d07b2537a5257a59d3d13c0839674fb7a35ba1f2470ff5d2218fb2eab0d746`
+and `8d3afc26468335d657f15fc7251437f9d1561fae1c36f934672fa4e5f7fc024b`.
+No previous pass or unrelated outcome moved.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks, Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production
+remains at 1,622 unsafe blocks and 289 unsafe functions, with 365 SAFETY
+annotations and seven `# Safety` sections. Two exact-final-binary CPU-2-pinned,
+order-balanced 32-pair release runs use the performance governor, four warmups,
+no excluded sample and disabled JIT/quick loops. They compare parent SHA-256
+`bd69f8de7cfb5b3d1fc08baf23cc648784baa3ec7dedd60c93910df5f3ab36bc`
+with candidate
+`b85696074b13883a8acc3578b15dc8d83019fce4749eafa62778f8dda524ae00`.
+Paired medians are -4.407%/-2.899% for 100 startups, +0.529%/+0.328% for five
+million retained `strlen()` calls, -1.960%/-3.772% for 200,000 ordinary query
+parses and -2.958%/-2.447% for 50,000 nested/suffix query parses. Independent
+and order-balanced medians, outputs and checksums also remain below +5%. The raw
+TSVs hash to
+`026eb8c89d53dcef9f6da6fd0bb40767e2aa0aab2c0b95e8edaaa2d27296b074`
+and `dd53f6dd925ec9dee3ff38d9ad16ac1e2d0b333d0e539c89f034097469ab9dde`.
+
+This checkpoint does not admit configurable `arg_separator.input`,
+`max_input_vars`, request-input or wider web-server parsing, nesting-limit or
+allocation-limit/OOM equivalence, 32-bit behavior, platform `crypt()`/locale
+behavior, or closure of the remaining 36 strings and wider Zend failures. The
+13 platform-dependent crypt cases remain grouped for a dedicated portability
+checkpoint. Exact output triage shows that `substr.phpt` now differs only at
+the explicit-null optional-length boundary, so the single-case
+`substr-null-length-contract` is selected as the next fastest low-risk pass.
+
+The implementation checkpoint is commit `c275bc83`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `html-string-boundary-contract`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. `htmlspecialchars()`, `htmlentities()`,
 `htmlspecialchars_decode()`, `html_entity_decode()` and
