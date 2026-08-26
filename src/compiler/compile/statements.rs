@@ -134,6 +134,84 @@ fn class_constant_temporary_write_line(expression: &Expr) -> Option<usize> {
 }
 
 impl Compiler {
+    fn validate_promoted_callable_parameters(
+        &self,
+        params: &[Param],
+        method: Option<(&str, bool)>,
+    ) -> Result<(), String> {
+        let Some(first_promoted) = params
+            .iter()
+            .find(|parameter| parameter.promoted_property.is_some())
+        else {
+            return Ok(());
+        };
+
+        let Some((method_name, is_abstract)) = method else {
+            return Err(self.goto_error(
+                "Cannot declare promoted property outside a constructor",
+                first_promoted.line,
+            ));
+        };
+        if !method_name.eq_ignore_ascii_case("__construct") {
+            return Err(self.goto_error(
+                "Cannot declare promoted property outside a constructor",
+                first_promoted.line,
+            ));
+        }
+        if is_abstract {
+            return Err(self.goto_error(
+                "Cannot declare promoted property in an abstract constructor",
+                first_promoted.line,
+            ));
+        }
+        if let Some(variadic) = params.iter().find(|parameter| {
+            parameter.promoted_property.is_some() && parameter.is_variadic
+        }) {
+            return Err(self.goto_error(
+                "Cannot declare variadic promoted property",
+                variadic.line,
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn validate_promoted_method_declarations(
+        &self,
+        class_name: &str,
+        properties: &[ClassProperty],
+        methods: &[crate::parser::ClassMethod],
+    ) -> Result<(), String> {
+        for method in methods {
+            self.validate_promoted_callable_parameters(
+                &method.params,
+                Some((&method.name, method.is_abstract)),
+            )?;
+        }
+
+        let mut declared_properties = properties
+            .iter()
+            .map(|property| property.name.as_str())
+            .collect::<HashSet<_>>();
+        for method in methods
+            .iter()
+            .filter(|method| method.name.eq_ignore_ascii_case("__construct"))
+        {
+            for parameter in &method.params {
+                if parameter.promoted_property.is_some()
+                    && !declared_properties.insert(parameter.name.as_str())
+                {
+                    return Err(self.goto_error(
+                        &format!("Cannot redeclare {class_name}::${}", parameter.name),
+                        parameter.line,
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub(super) fn compile_list_assignment_source(
         &mut self,
         source: &Expr,
@@ -2360,6 +2438,7 @@ impl Compiler {
                     Some(params),
                     return_type.as_ref(),
                 );
+                self.validate_promoted_callable_parameters(params, None)?;
                 func_compiler.current_function_name = resolved_name.clone();
                 func_compiler.returns_reference_context = *returns_by_ref;
                 func_compiler.contains_yield = body.iter().any(Stmt::contains_yield);
@@ -4000,6 +4079,11 @@ impl Compiler {
                         &property.name,
                     )?;
                 }
+                self.validate_promoted_method_declarations(
+                    &resolved_class,
+                    properties,
+                    methods,
+                )?;
                 // Make same-class constants available while compiling method
                 // bodies and their nested closures. Attribute arguments use
                 // lexical class scope even though the ClassDef is linked only
@@ -4914,6 +4998,11 @@ impl Compiler {
                     crate::generics::GenericInheritanceKind::Extends,
                     extends,
                 );
+                self.validate_promoted_method_declarations(
+                    &resolved_iface,
+                    properties,
+                    methods,
+                )?;
                 // Interface methods have no body — we still create stub UserFunctions
                 // so they appear in the class_def for type checking, but they should
                 // never be called directly (implementing class provides the body).
@@ -5238,6 +5327,11 @@ impl Compiler {
                         methods,
                     );
                 }
+                self.validate_promoted_method_declarations(
+                    &resolved_trait,
+                    properties,
+                    methods,
+                )?;
                 // Compile trait — very similar to class, but flagged as is_trait=true.
                 // Trait methods get compiled exactly like class methods.
                 let mut compiled_methods = Vec::new();
