@@ -549,12 +549,21 @@ pub struct ExecutorGlobals {
     /// Sparse canonical spellings for built-ins whose public name is not the
     /// lowercase lookup key. Most internal functions need no entry.
     internal_function_display_names: Option<Box<HashMap<*const FunctionCommon, String>>>,
+    /// Exact defaults for the sparse subset of internal functions whose
+    /// optional values are admitted through Reflection. Keeping this metadata
+    /// out of FunctionCommon preserves the hot descriptor layout.
+    internal_function_reflection_metadata:
+        Option<Box<HashMap<*const FunctionCommon, (Vec<Option<Value>>, Option<String>)>>>,
     /// Internal static methods share the hidden class-call slot used by the
     /// method ABI, so staticness cannot be inferred from `this_offset` alone.
     internal_static_methods: Option<Box<std::collections::HashSet<*const FunctionCommon>>>,
     /// Output buffer — collected output for testing, or stdout
     output: std::cell::RefCell<Box<dyn Write>>,
     output_buffers: std::cell::RefCell<Vec<OutputBuffer>>,
+    /// Active user output-handler calls. PHP's source presentation helpers
+    /// use an internal output buffer and must reject re-entry from one of
+    /// these callbacks, while ordinary output remains writable there.
+    output_handler_depth: Cell<usize>,
     /// Temporary buffer for named variadic arguments.
     /// Key = call frame pointer as usize, value = vec of (name, value) pairs.
     /// Populated by SendNamed when target function is variadic and name isn't a declared param.
@@ -1289,10 +1298,12 @@ impl ExecutorGlobals {
             weak_objects: None,
             method_declaring_class: HashMap::new(),
             internal_function_display_names: None,
+            internal_function_reflection_metadata: None,
             internal_static_methods: None,
 
             output: std::cell::RefCell::new(Box::new(std::io::stdout())),
             output_buffers: std::cell::RefCell::new(Vec::new()),
+            output_handler_depth: Cell::new(0),
             pending_named_variadic: HashMap::new(),
             pending_closure_captures: HashMap::new(),
             function_arguments: HashMap::new(),
@@ -1405,10 +1416,12 @@ impl ExecutorGlobals {
             weak_objects: None,
             method_declaring_class: HashMap::new(),
             internal_function_display_names: None,
+            internal_function_reflection_metadata: None,
             internal_static_methods: None,
 
             output: std::cell::RefCell::new(output),
             output_buffers: std::cell::RefCell::new(Vec::new()),
+            output_handler_depth: Cell::new(0),
             pending_named_variadic: HashMap::new(),
             pending_closure_captures: HashMap::new(),
             function_arguments: HashMap::new(),
@@ -1634,6 +1647,56 @@ impl ExecutorGlobals {
             .as_deref()
             .and_then(|names| names.get(&function))
             .map(String::as_str)
+    }
+
+    #[cold]
+    pub(crate) fn register_internal_function_parameter_defaults(
+        &mut self,
+        function: *const FunctionCommon,
+        defaults: Vec<Option<Value>>,
+    ) {
+        if defaults.iter().any(Option::is_some) {
+            self.internal_function_reflection_metadata
+                .get_or_insert_with(|| Box::new(HashMap::new()))
+                .entry(function)
+                .or_insert_with(|| (Vec::new(), None))
+                .0 = defaults;
+        }
+    }
+
+    #[cold]
+    pub(crate) fn register_internal_function_extension(
+        &mut self,
+        function: *const FunctionCommon,
+        extension: String,
+    ) {
+        self.internal_function_reflection_metadata
+            .get_or_insert_with(|| Box::new(HashMap::new()))
+            .entry(function)
+            .or_insert_with(|| (Vec::new(), None))
+            .1 = Some(extension);
+    }
+
+    pub(crate) fn internal_function_parameter_default(
+        &self,
+        function: *const FunctionCommon,
+        index: usize,
+    ) -> Option<&Value> {
+        self.internal_function_reflection_metadata
+            .as_deref()
+            .and_then(|metadata| metadata.get(&function))
+            .and_then(|(defaults, _)| defaults.get(index))
+            .and_then(Option::as_ref)
+    }
+
+    pub(crate) fn internal_function_extension(
+        &self,
+        function: *const FunctionCommon,
+    ) -> Option<&str> {
+        self.internal_function_reflection_metadata
+            .as_deref()
+            .and_then(|metadata| metadata.get(&function))
+            .and_then(|(_, extension)| extension.as_deref())
     }
 
     #[cold]
@@ -7224,6 +7287,21 @@ impl ExecutorGlobals {
             .borrow()
             .last()
             .map(|buffer| buffer.data.clone())
+    }
+
+    pub(crate) fn enter_output_handler(&self) -> usize {
+        let previous = self.output_handler_depth.get();
+        self.output_handler_depth.set(previous.saturating_add(1));
+        previous
+    }
+
+    pub(crate) fn leave_output_handler(&self, previous: usize) {
+        debug_assert_eq!(self.output_handler_depth.get(), previous + 1);
+        self.output_handler_depth.set(previous);
+    }
+
+    pub(crate) fn is_output_handler_active(&self) -> bool {
+        self.output_handler_depth.get() != 0
     }
 }
 

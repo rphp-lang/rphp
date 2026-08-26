@@ -3331,7 +3331,7 @@ fn parameter_get_class(
 fn parameter_to_string(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let position = reflected_property(ed, "__reflection_position")
         .and_then(|value| value.as_long())
@@ -3368,9 +3368,21 @@ fn parameter_to_string(
         ""
     };
     let variadic_prefix = if variadic { "..." } else { "" };
-    // Default expressions currently live in bytecode. Zend uses the same
-    // `<default>` placeholder for values unavailable through reflection.
-    let default = if has_default { " = <default>" } else { "" };
+    let function = reflected_property(ed, "__reflection_function_pointer")
+        .and_then(|value| value.as_long())
+        .map(|pointer| pointer as usize as *const FunctionCommon);
+    let default = if has_default {
+        function
+            .and_then(|function| {
+                eg.internal_function_parameter_default(function, position as usize)
+            })
+            .map_or_else(
+                || " = <default>".to_string(),
+                |value| format!(" = {}", reflection_default_text(value)),
+            )
+    } else {
+        String::new()
+    };
     return_value(
         rv,
         Value::string(format!(
@@ -3482,13 +3494,35 @@ fn parameter_is_default_available(
 }
 
 fn parameter_get_default_value(
-    _ed: *mut ExecuteData,
+    ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    // Default expressions currently live in function bytecode rather than
-    // signature metadata; null is the conservative reflected placeholder.
-    return_value(rv, Value::null())
+    let function = reflected_property(ed, "__reflection_function_pointer")
+        .and_then(|value| value.as_long())
+        .map(|pointer| pointer as usize as *const FunctionCommon);
+    let position = reflected_property(ed, "__reflection_position")
+        .and_then(|value| value.as_long())
+        .and_then(|position| usize::try_from(position).ok());
+    let default = function
+        .zip(position)
+        .and_then(|(function, position)| eg.internal_function_parameter_default(function, position))
+        .cloned()
+        .unwrap_or_else(Value::null);
+    return_value(rv, default)
+}
+
+fn reflection_default_text(value: &Value) -> String {
+    let value = value.dereferenced();
+    match value.value_type() {
+        ValueType::Null => "null".to_string(),
+        ValueType::True => "true".to_string(),
+        ValueType::False => "false".to_string(),
+        ValueType::Long => value.as_long().unwrap_or_default().to_string(),
+        ValueType::Double => value.echo_to_string(),
+        ValueType::String => format!("\"{}\"", value.as_str().unwrap_or_default()),
+        _ => "<default>".to_string(),
+    }
 }
 
 fn parameter_allows_null(
@@ -4096,6 +4130,7 @@ fn render_reflection_signature_parameter(
     function: &FunctionCommon,
     index: u32,
     variadic: bool,
+    eg: &ExecutorGlobals,
 ) -> String {
     let name = function
         .sig
@@ -4125,9 +4160,13 @@ fn render_reflection_signature_parameter(
     };
     let variadic_prefix = if variadic { "..." } else { "" };
     let default = if !variadic && index >= function.sig.required_num_args {
-        " = <default>"
+        eg.internal_function_parameter_default(function as *const FunctionCommon, index as usize)
+            .map_or_else(
+                || " = <default>".to_string(),
+                |value| format!(" = {}", reflection_default_text(value)),
+            )
     } else {
-        ""
+        String::new()
     };
     format!(
         "Parameter #{index} [ <{requirement}> {type_prefix}{reference}{variadic_prefix}${name}{default} ]"
@@ -4154,7 +4193,7 @@ fn reflection_user_source_span(user: &UserFunction) -> Option<(usize, usize)> {
 fn function_to_string(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let Some(function) = reflected_function(ed) else {
         return return_value(rv, Value::string(""));
@@ -4166,9 +4205,13 @@ fn function_to_string(
         .is_some_and(|value| value.value_type() == ValueType::Closure);
     let kind = if is_closure { "Closure" } else { "Function" };
     let provenance = if function.fn_type == FunctionType::User {
-        "user"
+        "user".to_string()
     } else {
-        "internal:Core"
+        format!(
+            "internal:{}",
+            eg.internal_function_extension(function as *const FunctionCommon)
+                .unwrap_or("Core")
+        )
     };
     let reference = if function.sig.returns_reference {
         "&"
@@ -4197,7 +4240,7 @@ fn function_to_string(
             let variadic = function.sig.is_variadic && index == fixed;
             rendered.push_str("    ");
             rendered.push_str(&render_reflection_signature_parameter(
-                function, index, variadic,
+                function, index, variadic, eg,
             ));
             rendered.push('\n');
         }
@@ -4216,7 +4259,7 @@ fn function_to_string(
 fn method_to_string(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let Some(function) = reflected_function(ed) else {
         return return_value(rv, Value::string(""));
@@ -4280,7 +4323,7 @@ fn method_to_string(
             let variadic = function.sig.is_variadic && index == fixed;
             rendered.push_str("    ");
             rendered.push_str(&render_reflection_signature_parameter(
-                function, index, variadic,
+                function, index, variadic, eg,
             ));
             rendered.push('\n');
         }

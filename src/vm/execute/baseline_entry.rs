@@ -10,7 +10,6 @@ fn finish_request_shutdown(
     eg.current_execute_data
         .set(unsafe { (*frame).prev_execute_data });
     if let Err(error) = run_frame_destructors(eg, frame) {
-        crate::value::end_object_handle_request();
         return Err(error);
     }
     unsafe { cleanup_frame_slots(frame) };
@@ -19,7 +18,6 @@ fn finish_request_shutdown(
         return Err(error);
     }
     pop_vm_call_frame(eg, frame);
-    crate::value::end_object_handle_request();
     shutdown_error.map_or(Ok(()), Err)
 }
 
@@ -73,9 +71,14 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
         crate::value::end_object_handle_request();
         return Err(error);
     }
-    finish_request_shutdown(eg, frame, shutdown_error)?;
+    if let Err(error) = finish_request_shutdown(eg, frame, shutdown_error) {
+        crate::value::end_object_handle_request();
+        return Err(error);
+    }
 
-    crate::stdlib::flush_all_output_buffers(eg)?;
+    let output_result = crate::stdlib::flush_all_output_buffers(eg);
+    crate::value::end_object_handle_request();
+    output_result?;
 
     // Check for uncaught exception that propagated through execute_ex.
     if let Some(exc) = eg.exception.take() {

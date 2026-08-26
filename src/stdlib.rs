@@ -14175,7 +14175,7 @@ fn fn_ob_get_contents(
     let Some(contents) = eg.output_buffer_contents() else {
         ret!(rv, Value::bool(false));
     };
-    ret!(rv, Value::string(bytes_to_php_string(&contents)));
+    ret!(rv, php_byte_result(contents, false));
 }
 
 fn fn_ob_get_length(
@@ -14213,7 +14213,10 @@ fn transform_output_buffer(
         return Ok(raw);
     };
     let arguments = [Value::string(bytes_to_php_string(&raw)), Value::long(mode)];
-    let transformed = call_resolved_with_values(eg, &resolved, &arguments)?;
+    let previous_handler_depth = eg.enter_output_handler();
+    let transformed = call_resolved_with_values(eg, &resolved, &arguments);
+    eg.leave_output_handler(previous_handler_depth);
+    let transformed = transformed?;
     if transformed.value_type() == ValueType::False {
         Ok(raw)
     } else {
@@ -14289,7 +14292,7 @@ fn fn_ob_get_clean(
         ret!(rv, Value::bool(false));
     };
     let _ = clean_output_buffer(eg, ed, true)?;
-    ret!(rv, Value::string(bytes_to_php_string(&raw)));
+    ret!(rv, php_byte_result(raw, false));
 }
 
 fn fn_ob_get_flush(
@@ -14301,7 +14304,7 @@ fn fn_ob_get_flush(
         ret!(rv, Value::bool(false));
     };
     let _ = flush_output_buffer(eg, ed, true)?;
-    ret!(rv, Value::string(bytes_to_php_string(&raw)));
+    ret!(rv, php_byte_result(raw, false));
 }
 
 fn fn_ob_clean(
@@ -14350,8 +14353,35 @@ fn fn_ob_end_flush(
 
 pub(crate) fn flush_all_output_buffers(eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     while let Some(mut buffer) = eg.pop_output_buffer() {
-        let output = transform_output_buffer(eg, &mut buffer, OUTPUT_HANDLER_FINAL, None)?;
+        // PHP keeps the output subsystem locked until the final handler and
+        // the handler value's captured roots have both been released. A
+        // destructor reached from those captures must therefore observe the
+        // display-handler re-entry guard.
+        let previous_handler_depth = eg.enter_output_handler();
+        let transformed = transform_output_buffer(eg, &mut buffer, OUTPUT_HANDLER_FINAL, None);
+        let handler = buffer.handler.take();
+        let destructor_result = handler.as_ref().map_or(Ok(()), |handler| {
+            crate::vm::execute::run_value_destructors(
+                eg,
+                std::slice::from_ref(handler),
+                eg.current_execute_data.get(),
+            )
+        });
+        drop(handler);
+        drop(buffer);
+        eg.leave_output_handler(previous_handler_depth);
+        let output = match transformed {
+            Ok(output) => output,
+            Err(error) => {
+                eg.flush_output();
+                return Err(error);
+            }
+        };
         eg.write_output(&output);
+        if let Err(error) = destructor_result {
+            eg.flush_output();
+            return Err(error);
+        }
     }
     Ok(())
 }

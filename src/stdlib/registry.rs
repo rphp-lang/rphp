@@ -1730,30 +1730,59 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "encoding"
     );
     reg!("strip_tags", fn_strip_tags, 2, 1, "string", "allowed_tags");
-    reg!(
+    reg_typed!(
         "highlight_string",
         fn_highlight_string,
         2,
         1,
-        "string",
-        "return"
+        ["string", "return"],
+        [ParamTypeHint::String, ParamTypeHint::Bool],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("true".to_string()),
+        ])
     );
-    reg!(
+    reg_typed!(
         "highlight_file",
         fn_highlight_file,
         2,
         1,
-        "filename",
-        "return"
+        ["filename", "return"],
+        [ParamTypeHint::String, ParamTypeHint::Bool],
+        ParamTypeHint::Union(vec![ParamTypeHint::String, ParamTypeHint::Bool])
     );
-    reg!("show_source", fn_show_source, 2, 1, "filename", "return");
-    reg!(
+    reg_typed!(
+        "show_source",
+        fn_show_source,
+        2,
+        1,
+        ["filename", "return"],
+        [ParamTypeHint::String, ParamTypeHint::Bool],
+        ParamTypeHint::Union(vec![ParamTypeHint::String, ParamTypeHint::Bool])
+    );
+    reg_typed!(
         "php_strip_whitespace",
         fn_php_strip_whitespace,
         1,
         1,
-        "filename"
+        ["filename"],
+        [ParamTypeHint::String],
+        ParamTypeHint::String
     );
+    for function_name in ["highlight_string", "highlight_file", "show_source"] {
+        let function = eg
+            .find_function(function_name)
+            .expect("source-highlighting function was just registered");
+        eg.register_internal_function_parameter_defaults(
+            function,
+            vec![None, Some(Value::bool(false))],
+        );
+        eg.register_internal_function_extension(function, "standard".to_string());
+    }
+    let strip_whitespace = eg
+        .find_function("php_strip_whitespace")
+        .expect("php_strip_whitespace was just registered");
+    eg.register_internal_function_extension(strip_whitespace, "standard".to_string());
     reg!("urlencode", fn_urlencode, 1, 1, "string");
     reg!("urldecode", fn_urldecode, 1, 1, "string");
     reg!("rawurlencode", fn_rawurlencode, 1, 1, "string");

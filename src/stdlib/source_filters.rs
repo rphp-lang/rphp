@@ -116,14 +116,27 @@ fn quoted_end(bytes: &[u8], start: usize, quote: u8) -> usize {
     let mut index = start + 1;
     while index < bytes.len() {
         if bytes[index] == b'\\' {
-            index = (index + 2).min(bytes.len());
+            index += 1;
+            if index < bytes.len() {
+                index += utf8_char_width(bytes[index]);
+            }
         } else if bytes[index] == quote {
             return index + 1;
         } else {
-            index += 1;
+            index += utf8_char_width(bytes[index]);
         }
     }
     bytes.len()
+}
+
+#[inline]
+fn utf8_char_width(first: u8) -> usize {
+    match first {
+        0x00..=0x7f => 1,
+        0xc0..=0xdf => 2,
+        0xe0..=0xef => 3,
+        _ => 4,
+    }
 }
 
 fn line_end(bytes: &[u8], start: usize) -> usize {
@@ -218,13 +231,11 @@ fn is_keyword(identifier: &str) -> bool {
             | "eval"
             | "exit"
             | "extends"
-            | "false"
             | "final"
             | "finally"
             | "fn"
             | "for"
             | "foreach"
-            | "from"
             | "function"
             | "global"
             | "goto"
@@ -240,7 +251,6 @@ fn is_keyword(identifier: &str) -> bool {
             | "match"
             | "namespace"
             | "new"
-            | "null"
             | "or"
             | "print"
             | "private"
@@ -254,7 +264,6 @@ fn is_keyword(identifier: &str) -> bool {
             | "switch"
             | "throw"
             | "trait"
-            | "true"
             | "try"
             | "unset"
             | "use"
@@ -263,6 +272,224 @@ fn is_keyword(identifier: &str) -> bool {
             | "xor"
             | "yield"
     )
+}
+
+fn cast_end(bytes: &[u8], start: usize) -> Option<usize> {
+    if bytes.get(start) != Some(&b'(') {
+        return None;
+    }
+    let mut index = consume_whitespace(bytes, start + 1);
+    let type_start = index;
+    while bytes
+        .get(index)
+        .is_some_and(|byte| byte.is_ascii_alphabetic())
+    {
+        index += 1;
+    }
+    if type_start == index {
+        return None;
+    }
+    let cast = &bytes[type_start..index];
+    const CASTS: [&[u8]; 12] = [
+        b"array", b"binary", b"bool", b"boolean", b"double", b"float", b"int", b"integer",
+        b"object", b"real", b"string", b"unset",
+    ];
+    if !CASTS
+        .iter()
+        .any(|expected| cast.eq_ignore_ascii_case(expected))
+    {
+        return None;
+    }
+    index = consume_whitespace(bytes, index);
+    (bytes.get(index) == Some(&b')')).then_some(index + 1)
+}
+
+#[inline]
+fn identifier_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_'
+}
+
+fn identifier_end(bytes: &[u8], start: usize) -> usize {
+    let mut end = start;
+    while bytes
+        .get(end)
+        .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+    {
+        end += 1;
+    }
+    end
+}
+
+fn push_interpolated_variable_suffix(
+    segments: &mut Vec<HighlightSegment>,
+    source: &str,
+    mut index: usize,
+    end: usize,
+) -> usize {
+    let bytes = source.as_bytes();
+    if bytes
+        .get(index..index.saturating_add(2))
+        .is_some_and(|operator| operator == b"->")
+        && bytes
+            .get(index + 2)
+            .is_some_and(|byte| identifier_start(*byte))
+    {
+        push_segment(segments, HighlightKind::Keyword, &source[index..index + 2]);
+        let name_end = identifier_end(bytes, index + 2);
+        push_segment(
+            segments,
+            HighlightKind::Default,
+            &source[index + 2..name_end],
+        );
+        return name_end;
+    }
+    if bytes.get(index) != Some(&b'[') {
+        return index;
+    }
+    push_segment(segments, HighlightKind::Keyword, &source[index..index + 1]);
+    index += 1;
+    while index < end && bytes[index] != b']' {
+        let token_end = if identifier_start(bytes[index]) || bytes[index].is_ascii_digit() {
+            let mut token_end = index + 1;
+            while bytes
+                .get(token_end)
+                .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'.'))
+            {
+                token_end += 1;
+            }
+            token_end
+        } else if matches!(bytes[index], b'\'' | b'"') {
+            quoted_end(bytes, index, bytes[index])
+        } else {
+            index + utf8_char_width(bytes[index])
+        };
+        let kind = if matches!(bytes[index], b'\'' | b'"') {
+            HighlightKind::String
+        } else if identifier_start(bytes[index]) || bytes[index].is_ascii_digit() {
+            HighlightKind::Default
+        } else {
+            HighlightKind::Keyword
+        };
+        push_segment(segments, kind, &source[index..token_end.min(end)]);
+        index = token_end.min(end);
+    }
+    if index < end && bytes[index] == b']' {
+        push_segment(segments, HighlightKind::Keyword, &source[index..index + 1]);
+        index += 1;
+    }
+    index
+}
+
+fn push_interpolated_content(
+    segments: &mut Vec<HighlightSegment>,
+    source: &str,
+    start: usize,
+    end: usize,
+) {
+    let bytes = source.as_bytes();
+    let mut chunk_start = start;
+    let mut index = start;
+    while index < end {
+        if bytes[index] == b'\\' {
+            index += 1;
+            if index < end {
+                index += utf8_char_width(bytes[index]);
+            }
+            continue;
+        }
+        if bytes[index..].starts_with(b"{$")
+            && bytes
+                .get(index + 2)
+                .is_some_and(|byte| identifier_start(*byte))
+        {
+            push_segment(segments, HighlightKind::String, &source[chunk_start..index]);
+            push_segment(segments, HighlightKind::Keyword, &source[index..index + 1]);
+            let variable_end = identifier_end(bytes, index + 2);
+            push_segment(
+                segments,
+                HighlightKind::Default,
+                &source[index + 1..variable_end],
+            );
+            index = push_interpolated_variable_suffix(segments, source, variable_end, end);
+            if index < end && bytes[index] == b'}' {
+                push_segment(segments, HighlightKind::Keyword, &source[index..index + 1]);
+                index += 1;
+            }
+            chunk_start = index;
+            continue;
+        }
+        if bytes[index..].starts_with(b"${")
+            && bytes
+                .get(index + 2)
+                .is_some_and(|byte| identifier_start(*byte))
+        {
+            push_segment(segments, HighlightKind::String, &source[chunk_start..index]);
+            push_segment(segments, HighlightKind::Keyword, &source[index..index + 2]);
+            let name_end = identifier_end(bytes, index + 2);
+            push_segment(
+                segments,
+                HighlightKind::Default,
+                &source[index + 2..name_end],
+            );
+            index = name_end;
+            if index < end && bytes[index] == b'}' {
+                push_segment(segments, HighlightKind::Keyword, &source[index..index + 1]);
+                index += 1;
+            }
+            chunk_start = index;
+            continue;
+        }
+        if bytes[index] == b'$'
+            && bytes
+                .get(index + 1)
+                .is_some_and(|byte| identifier_start(*byte))
+        {
+            push_segment(segments, HighlightKind::String, &source[chunk_start..index]);
+            let variable_end = identifier_end(bytes, index + 2);
+            push_segment(
+                segments,
+                HighlightKind::Default,
+                &source[index..variable_end],
+            );
+            index = push_interpolated_variable_suffix(segments, source, variable_end, end);
+            chunk_start = index;
+            continue;
+        }
+        index += utf8_char_width(bytes[index]);
+    }
+    push_segment(segments, HighlightKind::String, &source[chunk_start..end]);
+}
+
+fn push_interpolated_string_segments(
+    segments: &mut Vec<HighlightSegment>,
+    source: &str,
+    start: usize,
+    token_end: usize,
+    quote: u8,
+) {
+    let bytes = source.as_bytes();
+    let quoted_end = quoted_end(bytes, start, quote);
+    let closed = quoted_end > start + 1 && bytes.get(quoted_end - 1) == Some(&quote);
+    let content_end = quoted_end.saturating_sub(usize::from(closed));
+    if quote == b'`' {
+        push_segment(segments, HighlightKind::Keyword, &source[start..start + 1]);
+        push_interpolated_content(segments, source, start + 1, content_end);
+        if closed {
+            push_segment(
+                segments,
+                HighlightKind::Keyword,
+                &source[quoted_end - 1..token_end],
+            );
+        }
+    } else {
+        push_segment(segments, HighlightKind::String, &source[start..start + 1]);
+        push_interpolated_content(segments, source, start + 1, content_end);
+        push_segment(
+            segments,
+            HighlightKind::String,
+            &source[content_end..token_end],
+        );
+    }
 }
 
 fn highlight_segments(source: &str) -> Vec<HighlightSegment> {
@@ -293,16 +520,20 @@ fn highlight_segments(source: &str) -> Vec<HighlightSegment> {
         }
 
         if bytes[index..].starts_with(b"?>") {
-            push_segment(
-                &mut segments,
-                HighlightKind::Default,
-                &source[index..index + 2],
-            );
-            index += 2;
+            let mut end = index + 2;
+            if bytes.get(end) == Some(&b'\r') && bytes.get(end + 1) == Some(&b'\n') {
+                end += 2;
+            } else if matches!(bytes.get(end), Some(b'\n' | b'\r')) {
+                end += 1;
+            }
+            push_segment(&mut segments, HighlightKind::Default, &source[index..end]);
+            index = end;
             in_php = false;
             continue;
         }
-        if bytes[index..].starts_with(b"//") || bytes[index] == b'#' {
+        if bytes[index..].starts_with(b"//")
+            || (bytes[index] == b'#' && bytes.get(index + 1) != Some(&b'['))
+        {
             let mut end = index;
             while end < bytes.len() && bytes[end] != b'\n' && !bytes[end..].starts_with(b"?>") {
                 end += 1;
@@ -332,11 +563,21 @@ fn highlight_segments(source: &str) -> Vec<HighlightSegment> {
                 HighlightKind::Keyword,
                 &source[index..header_end],
             );
-            push_segment(
-                &mut segments,
-                HighlightKind::String,
-                &source[header_end..content_end],
-            );
+            let header = &bytes[index + 3..header_end];
+            let nowdoc = header
+                .iter()
+                .copied()
+                .find(|byte| !matches!(byte, b' ' | b'\t'))
+                == Some(b'\'');
+            if nowdoc {
+                push_segment(
+                    &mut segments,
+                    HighlightKind::String,
+                    &source[header_end..content_end],
+                );
+            } else {
+                push_interpolated_content(&mut segments, source, header_end, content_end);
+            }
             push_segment(
                 &mut segments,
                 HighlightKind::Keyword,
@@ -345,9 +586,23 @@ fn highlight_segments(source: &str) -> Vec<HighlightSegment> {
             index = terminator_end;
             continue;
         }
-        if matches!(bytes[index], b'\'' | b'"' | b'`') {
+        if bytes[index] == b'\'' {
             let end = consume_whitespace(bytes, quoted_end(bytes, index, bytes[index]));
             push_segment(&mut segments, HighlightKind::String, &source[index..end]);
+            index = end;
+            continue;
+        }
+        if matches!(bytes[index], b'"' | b'`') {
+            let end = consume_whitespace(bytes, quoted_end(bytes, index, bytes[index]));
+            push_interpolated_string_segments(&mut segments, source, index, end, bytes[index]);
+            index = end;
+            continue;
+        }
+        if bytes[index] == b'('
+            && let Some(cast_end) = cast_end(bytes, index)
+        {
+            let end = consume_whitespace(bytes, cast_end);
+            push_segment(&mut segments, HighlightKind::Keyword, &source[index..end]);
             index = end;
             continue;
         }
@@ -369,13 +624,31 @@ fn highlight_segments(source: &str) -> Vec<HighlightSegment> {
             index = end;
             continue;
         }
-        if bytes[index] == b'$' || bytes[index].is_ascii_digit() {
+        if bytes[index] == b'$'
+            && bytes
+                .get(index + 1)
+                .is_some_and(|byte| identifier_start(*byte))
+        {
             let mut end = index + 1;
-            while bytes.get(end).is_some_and(|byte| {
-                byte.is_ascii_alphanumeric()
-                    || matches!(*byte, b'_' | b'$')
-                    || (bytes[index].is_ascii_digit() && *byte == b'.')
-            }) {
+            while bytes
+                .get(end)
+                .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                end += 1;
+            }
+            end = consume_whitespace(bytes, end);
+            push_segment(&mut segments, HighlightKind::Default, &source[index..end]);
+            index = end;
+            continue;
+        }
+        if bytes[index].is_ascii_digit()
+            || (bytes[index] == b'.' && bytes.get(index + 1).is_some_and(u8::is_ascii_digit))
+        {
+            let mut end = index + 1;
+            while bytes
+                .get(end)
+                .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'.'))
+            {
                 end += 1;
             }
             end = consume_whitespace(bytes, end);
@@ -622,7 +895,9 @@ fn strip_source_whitespace(source: &str) -> String {
             last_was_collapsed_whitespace = false;
             continue;
         }
-        if bytes[index..].starts_with(b"//") || bytes[index] == b'#' {
+        if bytes[index..].starts_with(b"//")
+            || (bytes[index] == b'#' && bytes.get(index + 1) != Some(&b'['))
+        {
             while index < bytes.len() && bytes[index] != b'\n' && !bytes[index..].starts_with(b"?>")
             {
                 index += 1;
@@ -637,11 +912,20 @@ fn strip_source_whitespace(source: &str) -> String {
             continue;
         }
         if bytes[index..].starts_with(b"<<<")
-            && let Some((_, _, end)) = heredoc_bounds(bytes, index)
+            && let Some((_, content_end, end)) = heredoc_bounds(bytes, index)
         {
-            output.push_str(&source[index..end]);
+            let terminator_line_end = line_end(bytes, content_end);
+            if terminator_line_end >= content_end + 2
+                && bytes.get(terminator_line_end - 2..terminator_line_end) == Some(&b"\r\n"[..])
+            {
+                output.push_str(&source[index..terminator_line_end - 2]);
+                output.push('\n');
+                output.push_str(&source[terminator_line_end..end]);
+            } else {
+                output.push_str(&source[index..end]);
+            }
             index = end;
-            last_was_collapsed_whitespace = false;
+            last_was_collapsed_whitespace = true;
             continue;
         }
         if matches!(bytes[index], b'\'' | b'"' | b'`') {
@@ -668,7 +952,7 @@ fn strip_source_whitespace(source: &str) -> String {
 }
 
 enum SourceFile {
-    Contents(String),
+    Contents { source: String, legacy_bytes: bool },
     Unreadable { filename: String, reason: String },
 }
 
@@ -690,7 +974,10 @@ fn read_source_file(_eg: &ExecutorGlobals, filename: String) -> SourceFile {
     #[cfg(feature = "include-path")]
     let filename = super::include_path::resolve_for_open(_eg, &filename, true);
     match std::fs::read(filename) {
-        Ok(bytes) => SourceFile::Contents(super::bytes_to_php_string(&bytes)),
+        Ok(bytes) => SourceFile::Contents {
+            legacy_bytes: !bytes.is_ascii(),
+            source: super::bytes_to_php_string(&bytes),
+        },
         Err(error) => SourceFile::Unreadable {
             filename: requested,
             reason: file_error_reason(&error),
@@ -738,8 +1025,14 @@ pub(super) fn fn_highlight_string(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(source) =
-        super::typed_internal_string_argument(ed, eg, "highlight_string", 0, "string")?
+    let Some(source) = super::typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "highlight_string",
+        0,
+        "string",
+        "string",
+    )?
     else {
         return Ok(());
     };
@@ -754,11 +1047,25 @@ pub(super) fn fn_highlight_string(
         }
         None => false,
     };
+    reject_output_handler_reentry(ed, eg, "highlight_string")?;
+    let legacy_bytes =
+        source.is_binary_string() && source.as_str().is_some_and(|source| !source.is_ascii());
+    let source = source.as_str().unwrap_or_default();
     let highlighted = highlight_source(&source, &HighlightColors::from_executor(eg));
     if return_output {
+        if legacy_bytes {
+            ret!(
+                rv,
+                super::php_byte_result(super::php_string_to_bytes(&highlighted), false)
+            );
+        }
         ret!(rv, Value::string(highlighted));
     }
-    eg.write_output(highlighted.as_bytes());
+    if legacy_bytes {
+        eg.write_output(&super::php_string_to_bytes(&highlighted));
+    } else {
+        eg.write_output(highlighted.as_bytes());
+    }
     ret!(rv, Value::bool(true));
 }
 
@@ -782,8 +1089,12 @@ fn highlight_file(
         }
         None => false,
     };
-    let source = match read_source_file(eg, filename) {
-        SourceFile::Contents(source) => source,
+    reject_output_handler_reentry(ed, eg, function)?;
+    let (source, legacy_bytes) = match read_source_file(eg, filename) {
+        SourceFile::Contents {
+            source,
+            legacy_bytes,
+        } => (source, legacy_bytes),
         SourceFile::Unreadable { filename, reason } => {
             super::report_internal_diagnostic(
                 eg,
@@ -804,9 +1115,19 @@ fn highlight_file(
     };
     let highlighted = highlight_source(&source, &HighlightColors::from_executor(eg));
     if return_output {
+        if legacy_bytes {
+            ret!(
+                rv,
+                super::php_byte_result(super::php_string_to_bytes(&highlighted), false)
+            );
+        }
         ret!(rv, Value::string(highlighted));
     }
-    eg.write_output(highlighted.as_bytes());
+    if legacy_bytes {
+        eg.write_output(&super::php_string_to_bytes(&highlighted));
+    } else {
+        eg.write_output(highlighted.as_bytes());
+    }
     ret!(rv, Value::bool(true));
 }
 
@@ -836,8 +1157,12 @@ pub(super) fn fn_php_strip_whitespace(
     else {
         return Ok(());
     };
-    let stripped = match read_source_file(eg, filename) {
-        SourceFile::Contents(source) => strip_source_whitespace(&source),
+    reject_output_handler_reentry(ed, eg, "php_strip_whitespace")?;
+    let (stripped, legacy_bytes) = match read_source_file(eg, filename) {
+        SourceFile::Contents {
+            source,
+            legacy_bytes,
+        } => (strip_source_whitespace(&source), legacy_bytes),
         SourceFile::Unreadable { filename, reason } => {
             super::report_internal_diagnostic(
                 eg,
@@ -846,10 +1171,30 @@ pub(super) fn fn_php_strip_whitespace(
                 "Warning",
                 &format!("php_strip_whitespace({filename}): Failed to open stream: {reason}"),
             )?;
-            String::new()
+            (String::new(), false)
         }
     };
+    if legacy_bytes {
+        ret!(
+            rv,
+            super::php_byte_result(super::php_string_to_bytes(&stripped), false)
+        );
+    }
     ret!(rv, Value::string(stripped));
+}
+
+fn reject_output_handler_reentry(
+    ed: *mut ExecuteData,
+    eg: &ExecutorGlobals,
+    function: &str,
+) -> Result<(), VmError> {
+    if !eg.is_output_handler_active() {
+        return Ok(());
+    }
+    let (file, line) = super::internal_call_source(ed);
+    Err(VmError::Fatal(format!(
+        "{function}(): Cannot use output buffering in output buffering display handlers in {file} on line {line}"
+    )))
 }
 
 #[cfg(test)]
@@ -871,6 +1216,36 @@ mod tests {
         assert_eq!(
             highlight_source("<?php \n 09 09 09;", &default_colors()),
             "<pre><code style=\"color: #000000\"><span style=\"color: #0000BB\">&lt;?php \n 09 09 09</span><span style=\"color: #007700\">;</span></code></pre>"
+        );
+    }
+
+    #[test]
+    fn highlighter_keeps_attribute_cast_and_interpolation_token_boundaries() {
+        assert_eq!(
+            highlight_source(
+                "<?php #[Attr] (int) $x; \"a{$x}b\"; `c$x`; ?>\r\nz",
+                &default_colors(),
+            ),
+            concat!(
+                "<pre><code style=\"color: #000000\">",
+                "<span style=\"color: #0000BB\">&lt;?php </span>",
+                "<span style=\"color: #007700\">#[</span>",
+                "<span style=\"color: #0000BB\">Attr</span>",
+                "<span style=\"color: #007700\">] (int) </span>",
+                "<span style=\"color: #0000BB\">$x</span>",
+                "<span style=\"color: #007700\">; </span>",
+                "<span style=\"color: #DD0000\">\"a</span>",
+                "<span style=\"color: #007700\">{</span>",
+                "<span style=\"color: #0000BB\">$x</span>",
+                "<span style=\"color: #007700\">}</span>",
+                "<span style=\"color: #DD0000\">b\"</span>",
+                "<span style=\"color: #007700\">; `</span>",
+                "<span style=\"color: #DD0000\">c</span>",
+                "<span style=\"color: #0000BB\">$x</span>",
+                "<span style=\"color: #007700\">`; </span>",
+                "<span style=\"color: #0000BB\">?&gt;\r\n</span>",
+                "z</code></pre>",
+            )
         );
     }
 
@@ -897,6 +1272,16 @@ mod tests {
         assert_eq!(
             strip_source_whitespace("<?php /* comment */ ?>"),
             "<?php  ?>"
+        );
+    }
+
+    #[test]
+    fn whitespace_filter_preserves_attributes_and_normalizes_heredoc_terminator_crlf() {
+        assert_eq!(
+            strip_source_whitespace(
+                "<?php\r\n#[Attr]\r\n$x=<<<TXT\r\nA\r\nTXT;\r\n/* c */\r\necho $x;\r\n?>\r\ntail",
+            ),
+            "<?php\r\n#[Attr] $x=<<<TXT\r\nA\r\nTXT;\necho $x; ?>\r\ntail"
         );
     }
 }
