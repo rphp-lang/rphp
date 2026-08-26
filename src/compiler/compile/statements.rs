@@ -2442,7 +2442,7 @@ impl Compiler {
                 func_compiler.current_function_name = resolved_name.clone();
                 func_compiler.returns_reference_context = *returns_by_ref;
                 func_compiler.contains_yield = body.iter().any(Stmt::contains_yield);
-                let mut cp = self.compile_params(&mut func_compiler, params, name)?;
+                let mut cp = self.compile_params(&mut func_compiler, params)?;
                 func_compiler.validate_declared_type_hint(return_type, *line)?;
                 cp.return_type_hint = self.convert_type_hint(return_type);
                 self.validate_attribute_target(attributes, "function")?;
@@ -4313,9 +4313,7 @@ impl Compiler {
                             )?;
                         }
                     }
-                    let context = format!("method {}::{}", name, method.name);
-                    let mut cp =
-                        self.compile_params(&mut func_compiler, &method.params, &context)?;
+                    let mut cp = self.compile_params(&mut func_compiler, &method.params)?;
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     if explicit_set_hooks.contains(&method.name.to_ascii_lowercase()) {
@@ -5046,9 +5044,7 @@ impl Compiler {
                     func_compiler.known_param_names = self.build_known_param_names();
                     let this_cv = func_compiler.resolve_cv("this");
                     func_compiler.definitely_defined_cvs.insert(this_cv);
-                    let context = format!("interface method {}::{}", name, method.name);
-                    let mut cp =
-                        self.compile_params(&mut func_compiler, &method.params, &context)?;
+                    let mut cp = self.compile_params(&mut func_compiler, &method.params)?;
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     if method.name.starts_with('$') && method.name.ends_with("::set") {
@@ -5373,9 +5369,7 @@ impl Compiler {
                     func_compiler.known_param_names = self.build_known_param_names();
                     let this_cv = func_compiler.resolve_cv("this");
                     func_compiler.definitely_defined_cvs.insert(this_cv);
-                    let context = format!("trait method {}::{}", name, method.name);
-                    let mut cp =
-                        self.compile_params(&mut func_compiler, &method.params, &context)?;
+                    let mut cp = self.compile_params(&mut func_compiler, &method.params)?;
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     if method.name.starts_with('$') && method.name.ends_with("::set") {
@@ -6289,9 +6283,7 @@ impl Compiler {
                     func_compiler.known_param_names = self.build_known_param_names();
                     let this_cv = func_compiler.resolve_cv("this");
                     func_compiler.definitely_defined_cvs.insert(this_cv);
-                    let context = format!("enum method {}::{}", name, method.name);
-                    let mut cp =
-                        self.compile_params(&mut func_compiler, &method.params, &context)?;
+                    let mut cp = self.compile_params(&mut func_compiler, &method.params)?;
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     self.validate_attribute_target(&method.attributes, "method")?;

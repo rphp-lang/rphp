@@ -6461,7 +6461,6 @@ impl Compiler {
         &self,
         func_compiler: &mut Compiler,
         params: &[Param],
-        context: &str,
     ) -> Result<CompiledParams, String> {
         // PHP treats every parameter through the last parameter without a
         // default as required. Defaults before that boundary remain in the
@@ -6554,11 +6553,13 @@ impl Compiler {
             param_names.push(param.name.clone());
 
             if param.is_variadic {
+                if param.default.is_some() {
+                    return Err(func_compiler
+                        .goto_error("Variadic parameter cannot have a default value", param.line));
+                }
                 if i != params.len() - 1 {
-                    return Err(format!(
-                        "Variadic parameter ${} must be last in {}",
-                        param.name, context
-                    ));
+                    return Err(func_compiler
+                        .goto_error("Only the last parameter can be variadic", param.line));
                 }
                 is_variadic = true;
                 variadic_cv_index = func_compiler.resolve_cv(&param.name) as u32;
@@ -10023,7 +10024,7 @@ impl Compiler {
                 func_compiler.returns_reference_context = *returns_by_ref;
                 func_compiler.contains_yield = body.iter().any(Stmt::contains_yield);
                 // params come first as CVs (args), then use_vars
-                let compile_result = self.compile_params(&mut func_compiler, params, "closure");
+                let compile_result = self.compile_params(&mut func_compiler, params);
                 let mut cp = match compile_result {
                     Ok(r) => r,
                     Err(e) => {

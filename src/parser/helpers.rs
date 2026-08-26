@@ -1259,12 +1259,6 @@ impl Parser {
             other => return Err(format!("Expected parameter variable, got {:?}", other)),
         };
         let default = if self.peek() == Token::Assign {
-            if is_variadic {
-                return Err(format!(
-                    "Variadic parameter ${} cannot have a default value",
-                    name
-                ));
-            }
             self.advance(); // consume '='
             Some(self.parse_expr()?)
         } else {
