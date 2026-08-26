@@ -8,6 +8,89 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`setlocale-scalar-boundary-contract`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.9. `setlocale()` now owns PHP's handler-level
+signature boundary: `category` is an `int`, the required `locales` value and
+every variadic remainder accept `array|string|null`, and Reflection exposes the
+same intentionally untyped locale parameters and `string|false` return. Strict
+callers reject weak-only scalars with the correct argument number and parameter
+name; weak callers convert scalar and Stringable values and propagate a
+throwing `__toString()`.
+
+Top-level locale arguments are validated and converted left-to-right before any
+locale is attempted, while elements within a locale array are converted lazily
+until one succeeds. This preserves PHP's exception and side-effect order.
+`"0"` queries the admitted request locale, `null` requests the platform default
+without a deprecation, invalid candidates fall through in array or variadic
+order, and the portable `C`/`POSIX` subset canonicalizes to `"C"`. Locale names
+of 255 bytes or more emit the PHP warning, honor suppression/user/throwing
+handlers and continue to a later candidate only when the handler returns.
+References and COW inputs remain unchanged. An exact-string, empty-rest fast
+path keeps ordinary `C`, `POSIX`, `"0"` and null calls allocation-free.
+
+Three original E2Es cover weak/strict types, eager top-level and lazy array
+order, Stringable and throwing objects, null/query/fallback behavior, 254/255
+byte names, handlers, direct/dynamic/first-class/callback/named/spread calls,
+Reflection, references and COW. Two clean-room portable transcripts are
+byte-identical to PHP 8.5.9 at SHA-256
+`bcd712cb31a00fab895745127a4657b22146b05cc7a1255ea938b6994f17b770`
+and `54678f9e63f0ca7ebfc42ca5db07a952ede58ce5113f83f1a75b7459cc5ad8be`;
+platform-dependent null/default spelling is compared by successful string type,
+not by assuming a host locale name. The four unmodified supplying PHPTs pass;
+their focused manifest/summary hash to
+`81ad52235a93edb2e0cb7e6a15d5d7572532c2d08770c91e015b486d897acb3b`
+and `bc727caa2f68d296f5bc345fd77da11f4f69fdf4e96bcbd46e775ae3cff09797`.
+
+The complete 733-case strings audit moves from 620 to 624 passes, exactly
+`+4/-0`, with 25 failures, 54 skips, 30 unsupported cases and no timeout or
+crash. Only `gh18823_strict.phpt`, `gh18823_weak.phpt`, `gh19070.phpt` and
+`setlocale_error.phpt` move from output failure to pass. Two final serial
+exact-binary runs have identical manifest and summary SHA-256 values
+`126f5301fbc2cbf1a3c11b4ea696dd7bc5363697929f520478e6cb8e15617663`
+and `840d9409995d6940932f89d68e12fc2afb578d3fb342c3d4cc384451d5f4cc24`.
+The array selection remains byte-identical at 828 pass, zero fail, 13 skip and
+one unsupported, with manifest/summary SHA-256
+`d1d07b2537a5257a59d3d13c0839674fb7a35ba1f2470ff5d2218fb2eab0d746`
+and `dc574a270314978ea0cd84fa6e6cdb25eca8f31eadb82e3e079be9879744f09d`.
+Zend/lang remains byte-identical at 4,211 pass, 1,092 fail, 115 skip and 181
+unsupported, with manifest/summary SHA-256
+`585e3c1f76c87ebad0b6fe19c801fe55a7791d1a5ccf248f018c8f8a7a5ea53e`
+and `c0b6b5f889de4da2d2f996125443411ea2a00b570fd678c068d88befb15abef2`.
+No previous pass or unrelated outcome moves.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains within policy at 1,623 unsafe blocks and 289 unsafe
+functions, with 366 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+Two exact-final-binary CPU-2-pinned, order-balanced 32-pair release runs use the
+performance governor, four warmups and no excluded sample. They compare parent
+SHA-256 `d3186f087bcbe49ff42945183af74483f0dbdd259d6a9d875ab885d291273ff0`
+with candidate
+`6746cd9112692608d17cea8531b2bd1951cd14456472ed8659bde5e9995e1b07`.
+Paired medians are +1.782%/+0.858% for 100 startups, +0.118%/+1.752% for five
+million retained `strlen()` calls, -2.578%/-4.545% for one million direct
+`setlocale()` calls and -3.482%/-3.104% for 500,000 dynamic calls. Comparable
+outputs match and all independent and order-specific medians remain below +5%.
+The raw TSVs hash to
+`bea0f2b237ced3fe0aee8690f79198efeb5bacc4656aca959ea0836fee4ac300`
+and `b3ad1cfb42bb1c18682a7a043ae85f83aa3f628a64f7eed53ea466a5cf5342b4`.
+An initial always-normalizing candidate regressed direct/dynamic `setlocale()`
+by +132%/+93% in the smoke gate and was rejected before the exact fast path.
+
+This checkpoint does not claim host locale discovery or switching beyond
+`C`/`POSIX`, environment-specific empty/null locale spelling, `system()`,
+`nl_langinfo()`, `strcoll()`, all numeric host category extensions, 32-bit
+behavior, or closure of the remaining 25 strings and 1,092 Zend/lang failures.
+The next risk-adjusted cluster is the 14-case `crypt()` family, contingent on a
+clean platform/portability contract without weakening public hygiene or unsafe
+policy.
+
+The implementation checkpoint is commit `d0b6d3bc`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `string-scalar-byte-boundary-contract`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. The original `${var}` triage premise was
 rejected: PHP 8.5.9 still emits that deprecation, and RPHP continues to do so.
@@ -82,7 +165,7 @@ separate platform checkpoint.
 
 The implementation checkpoint is commit `3f85605b`.
 
-The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
+The checkpoint before that is
 `printf-position-limit-contract`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. `sprintf()`, `vsprintf()`, `printf()` and
 `vprintf()` now share one positional-field boundary: a missing or zero index,
@@ -160,7 +243,7 @@ diagnostic cluster; platform `crypt()` and locale families remain deferred.
 
 The implementation checkpoint is commit `22acb607`.
 
-The checkpoint before that is
+An earlier checkpoint is
 `sscanf-percent-n-contract`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. The shared scanf engine now returns every `%n`
 field as the integer count of PHP input bytes consumed so far without consuming
