@@ -8,80 +8,66 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
-`noncompound-use-compile-warnings`, pinned to php-src 8.5 commit `fcc29c8`
-and validated against PHP 8.5.9. `use` declarations now retain the first
-imported-name line and whether each alias was written explicitly. In the
-global namespace, an unaliased class, function or constant import whose
-leading slash has been removed and whose name has no namespace separator emits
-PHP's located compile warning `The use statement with non-compound name
-'<name>' has no effect`. Explicit same-spelling aliases, compound names and
-imports inside a named namespace retain their existing resolution without the
-warning; comma-separated imports use PHP's first-name source line.
+`non-enum-constant-property-fetch`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.9. Property reads compiled inside constant
+expressions now carry a bytecode flag. The cached read path accepts only a
+proved enum case; the slow path converts a dynamic property name first and
+then rejects every non-enum object with PHP's catchable `Error`: `Fetching
+properties on non-enums in constant expressions is not allowed`. Nullsafe
+`null`, enum `name`/`value`, enum missing-property diagnostics and ordinary
+runtime property reads retain their existing behavior.
 
-Compile diagnostics produced by runtime `eval()` or include compilation now
-enter the active PHP error handler. A handler may consume or decline the
-diagnostic; a declined warning follows the ordinary reporting and
-`error_get_last()` path, while a handler exception aborts the source unit and
-propagates through the caller's catch table before declarations or statements
-execute. Startup compilation remains on the handler-free request-entry path.
-Original parser and CLI regressions cover class/function/constant and leading-
-slash imports, multiline and comma-separated locations, explicit aliases,
-compound and named-namespace controls, swallowed eval warnings, continued
-execution and catchable handler exceptions.
+Original regressions cover unit and backed enum properties in global constants
+and default arguments, nullsafe short-circuiting, ordinary runtime reads,
+explicit-argument default bypass, owner/name/`__toString()` evaluation order,
+repeated omitted-default failures and exact source/line/trace attribution. The
+five selected `prop_const_expr/non_enums*.phpt` cases move from fail to pass;
+no other outcome changes status or category.
 
-The complete combined audit covers 7,174 cases: 5,763 pass, 1,017 fail, 182
+The complete combined audit covers 7,174 cases: 5,768 pass, 1,012 fail, 182
 skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
 fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
-and one unsupported. Zend/lang moves from 4,297 to 4,304 pass, exactly
-`+7/-0`, with 999 failures, 115 skips and 181 unsupported cases. The five
-selected `bug69388.phpt`, `bug69388_2.phpt`, `namespaces/ns_033.phpt` and
-`use_function/ns_end_resets_seen_symbols_1.phpt`/`_2.phpt` cases move from
-`fail/output` to pass. The same general runtime compile-diagnostic routing also
-moves `autoload/bug65322.phpt` and `bug67436/bug67436.phpt` from `fail/output`
-to pass; no other outcome changes status or category. Two exact-final-binary
-Zend/lang runs have byte-identical manifests and summaries, whose SHA-256
-values are respectively
-`aabdb1113bcade94dc94e3c2d4818391d8c895e3e8be2fcbf02bd614d3d53c71`
-and `e6c89ebf4a43d4a5bc1a38d7522be2abba1068657ab4cd7e7ec01b390afb3206`.
-Repeated serial strings and array outcome projections are byte-identical and
-retain SHA-256 values
-`06c231b7032faaece97ae32cac251aa7740e317ea4e169ca1f21223f6aea5d38`
-and `84e2007e9e6b16edab2bf9786966aedf44791151a15f2188960711d4f8f4347b`;
-each has zero outcome delta from the exact parent binary.
+and one unsupported. Zend/lang moves from 4,304 to 4,309 pass, exactly
+`+5/-0`, with 994 failures, 115 skips and 181 unsupported cases. Two serial
+exact-final-binary Zend/lang runs have byte-identical manifests and summaries,
+whose SHA-256 values are respectively
+`efebc86a85141f9c96472f3c81fee5c6ce748125623c6f9e5fb3013aaa85bcc6`
+and `d32ca37b51d569de696b2b1ef6f1e618a4f2fae578c2ea6c85efc3b5b01589a9`.
+Repeated serial strings and array outcome projections are byte-identical to
+the exact parent and hash to
+`770ea3a9ba03d5ed091fc15bb614b1f3f5e0e0c9e80cca0e633936a55e1e1e73`
+and `7d4b397d553dbdf5875d928f8bcbe886db93d84ec8c172a08760faf969226a46`.
 
 All five Cargo feature configurations, locked all-feature/all-target,
-formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass. Matrix
-cleanup recovered 12.1–14.9 GiB between retained configurations. Production
-remains at 1,621 unsafe blocks, 289 unsafe functions, 366 SAFETY annotations
-and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates
-and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The change adds no
-dependency, opcode, frame, Value/object layout or production unsafe block; it
-extends only cold `UseDecl` AST metadata and the existing compile-diagnostic
-transport.
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production is at 1,622 unsafe blocks against a 1,623 ceiling, 289 unsafe
+functions, 367 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass. The change adds no dependency, opcode, frame or
+Value/object layout; its one added unsafe read uses the existing object-class
+ID accessor after a proved object tag and before any re-entrant operation.
 
 Two exact-final-binary CPU-2-pinned, performance-governor, order-balanced
 32-pair release runs with four warmups compare retained parent SHA-256
 `6737ba8155d42dbddf394d288f5e5a09dd25b9d61d74b654930d9ecd6e9f13fa`
 with candidate
-`2b33959a8ca5e5cc2e72c4fd91894b0819d6751f848e133957701f08b28405ba`.
-Paired medians are -2.388%/-2.407% for 100 startups,
--0.764%/-0.374% for 500 valid global aliased imports,
--1.325%/-1.191% for 500 valid simple imports inside a named namespace and
-+0.250%/-0.686% for five million retained `strlen()` calls. Comparable
-outputs match and every paired median remains below +5%. The raw TSVs hash to
-`b7fa813c0136f20120ae637b91e0d0a7b4597abab60e4f0d74d31ad91d9c8c73`
-and `6742349cde502b6a298673ce13e94f0e32e4b8f3981f54ccd438a59e95ef6d05`.
+`ad17a7a21fdfe1123e2810e49bda020309a98450650561bf30c1274d71b2da79`.
+Paired medians are -6.257%/-6.169% for 100 startups,
+-0.375%/-0.394% for 500 enum-default compilations,
+-1.377%/-1.167% for five million ordinary property reads and
+-2.837%/-1.327% for one million enum-default fetches. Comparable outputs
+match and every paired median remains below +5%. The raw TSVs hash to
+`5312265f399a31574ab1a827d14d0d6d25f47c3d4e5429e06727bb2234ca035a`
+and `89b28bc2e1a3224218c87aab99d00b7bd53b30c06b2f90a28d68328c07e99184`.
 
-This checkpoint does not claim every namespace/import diagnostic or broader
-compile-warning handler completeness. The monitored supported debt is now
-1,017 failures: 18 strings, zero array and 999 Zend/lang. Read-only distinct-
-test expected-message clustering selects the five-case
-`prop_const_expr/non_enums*` boundary next: ordinary, nullsafe and constant-
-owned non-enum property fetches currently execute or return silently instead
-of throwing PHP's catchable constant-expression `Error`; the default-argument
-path must repeat that catchable error on every omitted call.
+This checkpoint does not claim every constant-expression materialization
+site. The monitored supported debt is now 1,012 failures: 18 strings, zero
+array and 994 Zend/lang. Read-only failure clustering selects the four
+remaining supported `prop_const_expr` compile failures next: enum property
+fetches must materialize correctly in class constants, enum backing values and
+instance/static property initializers.
 
-The implementation checkpoint is commit `115eee38`.
+The implementation checkpoint is commit `0547a386`.
 
 The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `duplicate-default-compile-diagnostics`, pinned to php-src 8.5 commit

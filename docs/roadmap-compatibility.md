@@ -3580,14 +3580,30 @@ and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep
 startup, retained `strlen()`, 500 valid global aliased imports and 500 valid
 simple imports inside a named namespace below +5%, with matching outputs.
 
-The monitored supported debt is now 1,017 failures: 18 strings, zero array and
-999 Zend/lang. Read-only distinct-test expected-message clustering next joins
-the five failing `prop_const_expr/non_enums*` cases at PHP's catchable
-`Fetching properties on non-enums in constant expressions is not allowed`
-error. Ordinary, nullsafe and constant-owned property fetches currently
-execute or return silently; the default-argument path must reproduce the
-catchable error on every omitted call. The attempted 14-case `crypt()` platform
-approach did not meet the portability contract and remains deferred.
+The `0547a386` `non-enum-constant-property-fetch` checkpoint then moves
+Zend/lang from 4,304 to 4,309 pass, exactly `+5/-0`; strings stay 631/733 and
+array stays 828/842 with no other status or category movement. Constant-
+expression property reads carry a bytecode flag: the cached path admits only a
+proved enum case, while the slow path preserves dynamic-name conversion before
+throwing PHP 8.5's catchable non-enum `Error`. Enum `name`/`value`, nullsafe
+`null`, missing-property diagnostics, explicit default bypass, repeated
+omitted defaults and ordinary runtime reads retain their required behavior.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical manifests
+and summaries; repeated serial strings/array outcome projections also match
+the exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep
+startup, 500 enum-default compilations, five million ordinary property reads
+and one million enum-default fetches below +5%, with matching outputs.
+
+The monitored supported debt is now 1,012 failures: 18 strings, zero array and
+994 Zend/lang. Read-only failure clustering selects the four remaining
+supported `prop_const_expr` compile failures next. Enum property fetches must
+materialize in class constants, enum backing values and instance/static
+property initializers without weakening the already accepted non-enum guard.
+The attempted 14-case `crypt()` platform approach did not meet the portability
+contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
 suppression-wrapped destructuring, exhaustive object/array/resource
