@@ -8,6 +8,81 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`trait-metadata-preservation`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. A trait constant's doc comment is now visible
+through `ReflectionClassConstant::getDocComment()` both on the trait and after
+composition into a consuming class. `class_alias()` aliases of traits now also
+appear in `get_declared_traits()` under their canonical lowercase name and
+after declared traits, while remaining absent from `get_declared_classes()`.
+
+Doc comments are recognized only for PHP doc-comment spelling and attach to
+the closest class-constant declaration; in a grouped declaration only the
+first constant owns that comment. The parser retains them outside the ordinary
+token stream. Constant metadata stores the optional comment in the existing
+cold source-file allocation behind an impossible NUL path delimiter, avoiding
+growth of every constant definition; trait composition then preserves it with
+the definition. Alias enumeration reuses the deterministic class-like
+inventory and adds no persistent runtime field. Original lexer and Reflection
+regressions cover compact non-doc comments, modifier adjacency, grouped
+constants, direct and composed lookup, alias casing, kind and inventory
+separation.
+
+Both supplying cases now pass:
+`Zend/tests/traits/constant_021.phpt` and
+`Zend/tests/traits/get_declared_traits_004.phpt`. Zend/lang gains exactly
+`+2/-0`, from 4,414 to 4,416 pass. Its two exact-final-binary 5,599-case runs
+each record 4,416 pass, 887 fail, 115 skip and 181 unsupported, with no timeout
+or crash. Their manifests are byte-identical at SHA-256
+`ba8c0293390630a3dca20e6522c1294ed923fe61b337b8f2dbba25e5a16ae505`;
+their summaries hash to
+`f40005fe895085366c1a630d76ad1fd0012e9713ee9db544c1af0c1cbb978ad9`.
+The complete 216-case trait neighborhood is now 212 pass, two fail, one skip
+and one unsupported. The only status changes from the exact parent are the two
+selected failures becoming passes.
+
+The serial array/string audit remains 1,459 pass, 18 fail, 67 skip and 31
+unsupported across 1,575 cases. Its repeated status/category projection and
+the exact parent's projection all hash to
+`5b4995bb334b9096bb5020bb499ef9651e18bb56cfc126ff640dd522714e2e54`.
+The combined audit therefore covers 7,174 cases: 5,875 pass, 905 fail, 182
+skip and 212 unsupported, with no timeout or crash. The supported debt is 18
+strings failures, zero array failures and 887 Zend/lang failures.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at the 1,623 unsafe-block ceiling, with 289 unsafe
+functions, 370 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass. The change adds no dependency, unsafe block, opcode or
+persistent hot-layout field. An initial per-comment source-line lookup was
+rejected because it made lexing quadratic and measurably slowed documented
+trait composition; the accepted lexer retains only the comment text and scans
+linearly.
+
+Two exact-final-binary CPU-2-pinned, performance-governor, order-balanced
+32-pair release runs with four warmups compare retained parent SHA-256
+`a1b9b52b4a2743d1f622df724c47a5e4adf9b250f46b83bc15684a28b7224e3c`
+with candidate
+`c5cf80f1baa08f48449f7d0fa90df558731861ac20a70ce2c7eab336e100dbe3`.
+Paired medians are -3.573%/-3.655% for 100 startups,
++0.917%/+0.508% for 500 plain-constant declarations,
++0.677%/+0.735% for 300 documented trait compositions and
++0.638%/+0.646% for 500 trait-alias publications. Comparable outputs match
+and every paired median remains below +3%. The benchmark harness hashes to
+`da010667f327aac314ff4e7902d19fecd0a794b0259f26ed40f5d844009df30e`;
+the complete observation streams hash to
+`b6ea3647ce9d9feb1c8c6d645f2cbe1f52c8e79082cce66a55eafe53512995cb`
+and `4f3199400cf28e2e4e5270ca613bfecd54effdd163c60a4113171ccb2b43b5df`.
+
+This checkpoint does not claim trait use inside an interface, reserved
+`static` adaptation-owner parsing, doc comments for other Reflection member
+kinds or alias insertion order beyond the existing deterministic inventory
+policy. Read-only clustering selects the two remaining trait failures next:
+`interface_003.phpt` and `static_in_trait_insteadof_reference.phpt`.
+
+The implementation checkpoint is commit `83cbce2f`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `direct-static-trait-member-deprecations`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. Direct property reads, writes and
 references through a trait name, declared and magic static calls, and static
@@ -89,7 +164,7 @@ comments through composition and enumeration of a trait alias created with
 
 The implementation checkpoint is commit `c2440a13`.
 
-The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
+The checkpoint before that is
 `trait-method-prototype-semantics`. Renamed abstract trait methods remain
 consumer-owned link requirements, concrete trait methods participate in parent
 signature validation with their original source location, and protected

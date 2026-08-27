@@ -3759,10 +3759,37 @@ exact-final-binary CPU-2-pinned 32-pair runs keep startup, class/trait links,
 ordinary object construction and Reflection construction below +3%, with
 matching outputs.
 
-The monitored supported debt is now 912 failures: 18 strings, zero array and
-894 Zend/lang. Read-only clustering selects five direct static trait-member
-deprecation failures next across property, method, magic-call,
-first-class-callable and typed-property boundaries.
+The `c2440a13` `direct-static-trait-member-deprecations` checkpoint then moves
+Zend/lang from 4,409 to 4,414 pass, exactly `+5/-0`. Direct trait-name property
+access, declared and magic static calls, and static first-class callables emit
+PHP 8.5's per-access deprecation before typing, dispatch or callable
+materialization, while consumer-class access stays unchanged. Five original
+CLI regressions cover cache hits, relative scope, throwing handlers and failed
+typed-write lifetime. All correctness, framework, unsafe and paired +3%
+performance gates pass.
+
+The `83cbce2f` `trait-metadata-preservation` checkpoint then moves Zend/lang
+from 4,414 to 4,416 pass, exactly `+2/-0`; strings stay 631/733 and array stays
+828/842 with no other status or category movement. Trait-constant doc comments
+survive composition into Reflection metadata, and `class_alias()` trait
+aliases enter the deterministic trait inventory with canonical lowercase
+names. Original lexer and Reflection regressions cover comment classification,
+modifier adjacency, grouped constants, direct/composed lookup, alias casing,
+kind and inventory separation.
+
+Two exact-final-binary Zend/lang audits have byte-identical manifests and
+summaries; repeated serial strings/array outcome projections also match the
+exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-2-pinned 32-pair runs keep
+startup, plain-constant declarations, documented trait composition and trait
+alias publication below +1%, with matching outputs. The accepted linear lexer
+and cold metadata representation add no persistent hot-layout field.
+
+The monitored supported debt is now 905 failures: 18 strings, zero array and
+887 Zend/lang. Read-only clustering selects the two remaining trait failures
+next: interface trait use and the reserved `static` adaptation-owner parse
+boundary.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
