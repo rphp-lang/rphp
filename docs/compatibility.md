@@ -8,6 +8,87 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`trait-adaptation-modifier-semantics`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.9. Trait aliases now retain `final` as a modifier
+rather than manufacturing a method named `final`; `static` and `abstract`
+alias modifiers stop at PHP's compile boundary. Effective visibility,
+staticness and finality propagate through nested trait composition and named
+aliases into runtime lookup and Reflection. Modifier-only and renamed aliases
+therefore report the composed flags, a final method introduced on either side
+of trait composition cannot be overridden, private-final methods produce
+PHP's warning, and repeated exclusion of one trait method is rejected in
+source order.
+
+Inaccessible method dispatch now throws PHP's catchable `Error` with
+`global scope` wording, an attached source/stack origin and prior stdout
+flushed before an unhandled fatal. That shared boundary accounts for six
+additional non-trait passes. Reflection's empty user-method rendering no
+longer inserts an extra blank line between its source span and closing brace.
+
+Six original CLI regressions cover invalid modifiers, duplicate precedence
+exclusions, catchability and wording, nested public plus named-final aliases,
+both directions of final override and private-final warning/Reflection
+metadata. Eleven trait cases now pass: `bug76700.phpt`, `gh13177.phpt`,
+`error_010.phpt`, `error_012.phpt` through `error_014.phpt`, `gh12854.phpt`,
+`language008a.phpt`, `language008b.phpt`, `language018.phpt` and
+`language019.phpt`. The shared catchable-error correction also passes
+`access_modifiers_010.phpt`, `bug76869.phpt`, `closure_033.phpt`,
+`lsb/bug47699.phpt`, `magic_methods/bug61025.phpt` and
+`try_finally_003.phpt`. Zend/lang therefore moves exactly `+17/-0`. The
+complete 216-case trait neighborhood moves from 175 to 186 pass, with 17
+output, four parse and seven runtime failures, one extension skip and one
+unsupported case; no other status or category moves.
+
+The complete combined audit covers 7,174 cases: 5,837 pass, 943 fail, 182
+skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
+fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
+and one unsupported. Zend/lang moves from 4,361 to 4,378 pass, with 925
+failures, 115 skips and 181 unsupported cases. Two exact-final-binary Zend/lang
+runs have byte-identical manifests and summaries, whose SHA-256 values are
+respectively
+`96bf702c08feeebe3a5e6b67b17d15418e67a3b7d824b6dd46fd3c924c66dfba`
+and `44b3cd67d548460bcffd8da7f7f11ce5becd97414a57badca1adfa29233bbc40`.
+Repeated serial strings-and-array status/category projections are
+byte-identical to the exact parent and hash to
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at 1,622 unsafe blocks against a 1,623 ceiling, 289 unsafe
+functions, 367 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass. The change adds no dependency, unsafe block or opcode. It
+adds one cold alias-finality flag and outlined composed-method metadata; the
+successful method-call cache path and persistent VM layouts are unchanged.
+
+Two exact-final-binary CPU-2-pinned, performance-governor, order-balanced
+32-pair release runs with four warmups compare retained parent SHA-256
+`54792a53dcc90a37d4f28bffac370c2395ee56dd92879783028d3ad07ecee16d`
+with candidate
+`591c03fa73a5de32355ee63578c1f859fa746e2cc4d094c3bd58a3491b20aaa3`.
+Paired medians are -0.073%/-0.753% for 100 startups,
++0.183%/+0.719% for 500 simple-trait consumer links,
+-0.049%/+0.097% for 500 precedence-and-alias consumer links and
++0.551%/+0.462% for one million ordinary trait-method calls. Comparable
+outputs match and every paired median remains below +3%. The unchanged
+benchmark harness hashes to
+`ce0d13bce3b84aab552d7f16299a5a481356295c7d7701fd16a2f37bd4e19943`;
+the complete observation streams hash to
+`fc22781702b86270ac526491ae47a994149f7a1f824ee49af46f5acf9275a735`
+and `b302f6e08feda74a14ab8867f600610a337567617acb109d615db7dd4684bcfa`.
+
+This checkpoint does not claim trait-property compatibility and storage,
+aliasing an abstract requirement inherited only through a nested trait,
+direct static trait-member deprecations or the remaining trait identity
+operations. The monitored supported debt is now 943 failures: 18 strings,
+zero array and 925 Zend/lang. Read-only actual/expected clustering selects ten
+trait-property composition cases next: compatible and conflicting defaults,
+visibility, private storage separation, static-property ownership and
+inheritance redeclaration.
+
+The implementation checkpoint is commit `90cf941e`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `trait-adaptation-resolution-validation`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. Trait composition now resolves and
 validates every `insteadof` rule before any `as` rule, matching Zend's
