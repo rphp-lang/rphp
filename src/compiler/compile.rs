@@ -7,6 +7,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Global closure counter — ensures unique names across nested compilers.
 static CLOSURE_COUNTER: AtomicU32 = AtomicU32::new(0);
+/// Constant-expression factories use private registration keys while their
+/// public trace frame retains PHP's synthetic `[constant expression]` name.
+static CONSTANT_EXPRESSION_COUNTER: AtomicU32 = AtomicU32::new(0);
 /// Global anonymous-class counter — nested compilers must not reuse names.
 static ANONYMOUS_CLASS_COUNTER: AtomicU32 = AtomicU32::new(0);
 /// Runtime declaration markers must remain unique across separately compiled
@@ -2429,6 +2432,111 @@ fn local_class_constant_reference_line(
     }
 }
 
+fn constant_expression_contains_runtime_callable(expression: &Expr) -> bool {
+    match expression {
+        Expr::Closure { .. }
+        | Expr::FirstClassFunctionCallable { .. }
+        | Expr::FirstClassCallable { .. } => true,
+        Expr::BinaryOp { left, right, .. }
+        | Expr::NullCoalesce { left, right }
+        | Expr::Elvis { left, right } => {
+            constant_expression_contains_runtime_callable(left)
+                || constant_expression_contains_runtime_callable(right)
+        }
+        Expr::Not(inner)
+        | Expr::UnaryPlus(inner)
+        | Expr::UnaryMinus(inner)
+        | Expr::BitwiseNot(inner)
+        | Expr::ErrorSuppress(inner)
+        | Expr::Cast { expr: inner, .. } => constant_expression_contains_runtime_callable(inner),
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            constant_expression_contains_runtime_callable(condition)
+                || constant_expression_contains_runtime_callable(then_expr)
+                || constant_expression_contains_runtime_callable(else_expr)
+        }
+        Expr::ArrayLiteral(elements) => elements.iter().any(|element| {
+            element
+                .key
+                .as_ref()
+                .is_some_and(constant_expression_contains_runtime_callable)
+                || constant_expression_contains_runtime_callable(&element.value)
+        }),
+        Expr::ArrayAccess { array, index, .. } => {
+            constant_expression_contains_runtime_callable(array)
+                || constant_expression_contains_runtime_callable(index)
+        }
+        Expr::PropertyAccess { object, .. } => {
+            constant_expression_contains_runtime_callable(object)
+        }
+        Expr::DynamicPropertyAccess {
+            object, property, ..
+        } => {
+            constant_expression_contains_runtime_callable(object)
+                || constant_expression_contains_runtime_callable(property)
+        }
+        _ => false,
+    }
+}
+
+fn invalid_runtime_callable_constant_expression(
+    expression: &Expr,
+) -> Option<(&'static str, usize)> {
+    let recurse = invalid_runtime_callable_constant_expression;
+    match expression {
+        Expr::Closure {
+            line,
+            is_static,
+            use_vars,
+            body,
+            ..
+        } => {
+            if matches!(body.as_slice(), [Stmt::Return { line: 0, .. }]) {
+                Some(("Constant expression contains invalid operations", *line))
+            } else if !*is_static {
+                Some(("Closures in constant expressions must be static", *line))
+            } else if !use_vars.is_empty() {
+                Some(("Cannot use(...) variables in constant expression", *line))
+            } else {
+                None
+            }
+        }
+        Expr::FirstClassCallable { callable, .. } => recurse(callable),
+        Expr::BinaryOp { left, right, .. }
+        | Expr::NullCoalesce { left, right }
+        | Expr::Elvis { left, right } => recurse(left).or_else(|| recurse(right)),
+        Expr::Not(inner)
+        | Expr::UnaryPlus(inner)
+        | Expr::UnaryMinus(inner)
+        | Expr::BitwiseNot(inner)
+        | Expr::ErrorSuppress(inner)
+        | Expr::Cast { expr: inner, .. } => recurse(inner),
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => recurse(condition)
+            .or_else(|| recurse(then_expr))
+            .or_else(|| recurse(else_expr)),
+        Expr::ArrayLiteral(elements) => elements.iter().find_map(|element| {
+            element
+                .key
+                .as_ref()
+                .and_then(recurse)
+                .or_else(|| recurse(&element.value))
+        }),
+        Expr::ArrayAccess { array, index, .. } => recurse(array).or_else(|| recurse(index)),
+        Expr::PropertyAccess { object, .. } => recurse(object),
+        Expr::DynamicPropertyAccess {
+            object, property, ..
+        } => recurse(object).or_else(|| recurse(property)),
+        _ => None,
+    }
+}
+
 /// Runtime materialization is reserved for PHP constant-expression forms that
 /// this evaluator can reproduce after a define() or external class becomes
 /// available. An unavailable symbol must not postpone an otherwise invalid
@@ -2443,7 +2551,10 @@ fn deferred_constant_expression_is_supported(expression: &Expr) -> bool {
         | Expr::Null
         | Expr::Constant(_)
         | Expr::CompilerHaltOffsetConstant { .. }
-        | Expr::ClassConstant { .. } => true,
+        | Expr::ClassConstant { .. }
+        | Expr::Closure { .. }
+        | Expr::FirstClassFunctionCallable { .. }
+        | Expr::FirstClassCallable { .. } => true,
         Expr::MagicConstant { name, .. } => [
             "__LINE__",
             "__FILE__",
@@ -2634,11 +2745,39 @@ fn constant_expression_dependency_is_unavailable(reason: &str) -> bool {
 }
 
 #[derive(Debug, Clone)]
+pub struct RuntimeCallableConstantFactory {
+    pub name: String,
+    pub lexical_functions: Vec<String>,
+    resolved: RefCell<Option<Value>>,
+}
+
+impl RuntimeCallableConstantFactory {
+    fn new(name: String, lexical_functions: Vec<String>) -> Self {
+        Self {
+            name,
+            lexical_functions,
+            resolved: RefCell::new(None),
+        }
+    }
+
+    pub(crate) fn resolved(&self) -> Option<Value> {
+        self.resolved.borrow().clone()
+    }
+
+    pub(crate) fn cache(&self, value: Value) {
+        *self.resolved.borrow_mut() = Some(value);
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct DeferredPropertyDefault {
     pub property_name: String,
     pub declaring_class: String,
     pub property_index: usize,
     pub expression: Box<Expr>,
+    /// Private zero-argument function that materializes runtime-only constant
+    /// values such as Closures and first-class callables in lexical scope.
+    pub callable_factory: Option<Rc<RuntimeCallableConstantFactory>>,
     pub evaluation_scope: Rc<AttributeEvaluationScope>,
     pub source_file: String,
     pub source_line: usize,
@@ -2656,14 +2795,19 @@ pub struct ReboundTraitPropertyDefault {
 #[derive(Debug)]
 pub struct DeferredInstancePropertyDefaults {
     entries: Rc<Vec<DeferredPropertyDefault>>,
+    static_entries: Rc<Vec<DeferredPropertyDefault>>,
     rebound_trait_entries: Rc<Vec<ReboundTraitPropertyDefault>>,
     resolved: RefCell<Option<Rc<[Value]>>>,
 }
 
 impl DeferredInstancePropertyDefaults {
-    pub(crate) fn new(entries: Vec<DeferredPropertyDefault>) -> Self {
+    pub(crate) fn with_static_entries(
+        entries: Vec<DeferredPropertyDefault>,
+        static_entries: Vec<DeferredPropertyDefault>,
+    ) -> Self {
         Self {
             entries: Rc::new(entries),
+            static_entries: Rc::new(static_entries),
             rebound_trait_entries: Rc::new(Vec::new()),
             resolved: RefCell::new(None),
         }
@@ -2675,6 +2819,20 @@ impl DeferredInstancePropertyDefaults {
     ) -> Self {
         Self {
             entries: Rc::new(entries),
+            static_entries: Rc::new(Vec::new()),
+            rebound_trait_entries: Rc::new(rebound_trait_entries),
+            resolved: RefCell::new(None),
+        }
+    }
+
+    pub(crate) fn with_all_entries(
+        entries: Vec<DeferredPropertyDefault>,
+        static_entries: Vec<DeferredPropertyDefault>,
+        rebound_trait_entries: Vec<ReboundTraitPropertyDefault>,
+    ) -> Self {
+        Self {
+            entries: Rc::new(entries),
+            static_entries: Rc::new(static_entries),
             rebound_trait_entries: Rc::new(rebound_trait_entries),
             resolved: RefCell::new(None),
         }
@@ -2683,6 +2841,11 @@ impl DeferredInstancePropertyDefaults {
     #[inline]
     pub(crate) fn entries(&self) -> Rc<Vec<DeferredPropertyDefault>> {
         Rc::clone(&self.entries)
+    }
+
+    #[inline]
+    pub(crate) fn static_entries(&self) -> Rc<Vec<DeferredPropertyDefault>> {
+        Rc::clone(&self.static_entries)
     }
 
     #[inline]
@@ -2716,6 +2879,8 @@ pub struct ClassConstantDefinition {
     /// Source expression retained only when dependency diagnostics or a
     /// runtime-defined constant prevent complete eager materialization.
     pub source_expression: Option<Box<Expr>>,
+    /// Private zero-argument function for runtime-only constant values.
+    pub callable_factory: Option<Rc<RuntimeCallableConstantFactory>>,
     pub evaluation_scope: Option<Rc<AttributeEvaluationScope>>,
     pub value_is_deferred: bool,
     /// PHP resolves class-constant dependency graphs lazily. A declaration
@@ -3605,6 +3770,94 @@ impl Compiler {
         let result = self.compile_expr(expr);
         self.compiling_constant_expression = previous;
         result
+    }
+
+    fn compile_runtime_callable_constant_factory(
+        &mut self,
+        expression: &Expr,
+        lexical_class: &str,
+        lexical_parent: Option<&str>,
+    ) -> Result<(String, Vec<String>), String> {
+        if let Some((message, line)) = invalid_runtime_callable_constant_expression(expression) {
+            return Err(self.goto_error(message, line));
+        }
+
+        let factory_id = CONSTANT_EXPRESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let registry_name = format!("\0constant_expression#{factory_id}");
+        let declaration_line = expression_source_line(expression);
+        let mut factory = self.child_compiler();
+        factory.lexical_static_class = Some(lexical_class.to_string());
+        factory.lexical_static_parent = lexical_parent.map(str::to_string);
+        factory.dynamic_static_scope = false;
+        factory.bindable_closure_scope = false;
+        // Nested Closure names derive their public trace from the source unit,
+        // not from the synthetic factory frame used only for materialization.
+        factory.current_function_name = self.source_file.clone();
+        let (value, value_type) = factory.compile_constant_expression(expression);
+        if let Some(error) = factory.deferred_error.take() {
+            return Err(error);
+        }
+        let mut return_value = Instruction::new(OpCode::Return);
+        return_value.op1 = value;
+        return_value.op1_type = value_type;
+        factory.push_instruction_at_line(return_value, declaration_line);
+
+        let all_cvs = factory.all_cvs();
+        let cache = (0..factory.instructions.len())
+            .map(|_| InlineCache::empty())
+            .collect();
+        let may_access_globals = !factory.global_vars.is_empty()
+            || instructions_may_access_globals(&factory.instructions);
+        let nested_generic_declarations = std::mem::take(&mut factory.generic_declarations);
+        let op_array = OpArray {
+            num_cvs: factory.next_cv,
+            num_temps: factory.next_tmp,
+            trait_class_scope_tmp: factory.trait_class_scope_tmp,
+            source_lines: factory.materialize_source_lines_with_declaration(declaration_line),
+            instructions: factory.instructions,
+            literals: factory.literals,
+            try_entries: factory.try_entries,
+            strict_types: self.strict_types,
+            is_generator: false,
+            global_vars: factory.global_vars,
+            static_vars: factory.static_vars,
+            name: "[constant expression]".to_string(),
+            source_file: std::rc::Rc::new(factory.source_file.clone()),
+            main_scope_vars: vec![],
+            all_cvs,
+            cache,
+            may_access_globals,
+            block_info: Vec::new(),
+            block_counters: Vec::new(),
+            block_plans: Vec::new(),
+            ip_to_block: Vec::new(),
+        };
+        let user_function = make_user_function_typed(
+            op_array,
+            0,
+            0,
+            false,
+            0,
+            0,
+            vec![],
+            vec![],
+            ParamTypeHint::None,
+            false,
+        );
+        let lexical_functions = factory
+            .functions
+            .iter()
+            .filter(|(name, _)| name.starts_with("__closure_"))
+            .map(|(name, _)| name.clone())
+            .collect();
+        self.functions.extend(factory.functions);
+        self.class_declaration_keys
+            .extend(factory.class_declaration_keys);
+        self.class_defs.extend(factory.class_defs);
+        self.generic_declarations
+            .extend(nested_generic_declarations);
+        self.functions.push((registry_name.clone(), user_function));
+        Ok((registry_name, lexical_functions))
     }
 
     fn magic_constant_value(&self, name: &str, line: usize) -> Value {

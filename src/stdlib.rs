@@ -15264,6 +15264,27 @@ pub(crate) unsafe fn collect_debug_backtrace(
             }
         }
         if (name == "{closure}" || name.starts_with("{closure:"))
+            && let Some(class) = eg.declaring_class_of((*frame).func)
+        {
+            let receiver = user.and_then(|function| {
+                function
+                    .op_array
+                    .all_cvs
+                    .iter()
+                    .find(|(_, candidate)| candidate == "this")
+                    .map(|(this_cv, _)| (*frame).cv(*this_cv).dereferenced())
+                    .filter(|value| value.as_object().is_some())
+            });
+            entry.set_str("function", Value::string(name));
+            entry.set_str("class", Value::string(class.to_string()));
+            if include_object && let Some(receiver) = receiver {
+                entry.set_str("object", receiver.clone());
+            }
+            entry.set_str(
+                "type",
+                Value::string(if receiver.is_some() { "->" } else { "::" }),
+            );
+        } else if (name == "{closure}" || name.starts_with("{closure:"))
             && function.fn_type() == FunctionType::User
             && let Some((this_cv, _)) = function
                 .as_user()

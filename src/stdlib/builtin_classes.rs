@@ -2225,6 +2225,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         source_file: String::new(),
         evaluation_error: None,
         source_expression: None,
+        callable_factory: None,
         evaluation_scope: None,
         value_is_deferred: false,
         visibility: Visibility::Public,

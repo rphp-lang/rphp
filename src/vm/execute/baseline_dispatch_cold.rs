@@ -2715,7 +2715,7 @@ fn op_call_user_func_array<'a>(
 fn op_fetch_static_prop<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
     op_fetch_static_prop_impl::<false>(eg, frame, op_array, opline)
@@ -2725,7 +2725,7 @@ fn op_fetch_static_prop<'a>(
 fn op_fetch_late_static_prop<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
     op_fetch_static_prop_impl::<true>(eg, frame, op_array, opline)
@@ -2803,7 +2803,7 @@ fn static_property_throw<'a>(
 fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
     // SAFETY: dispatch supplies an instruction from this op-array and a live
@@ -2837,6 +2837,7 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
         return resolve_static_property_reference_fetch(
             eg,
             frame,
+            op_array,
             opline,
             result_ptr,
             cache,
@@ -2865,6 +2866,8 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
     resolve_static_property_read_cache_miss(
         eg,
         frame,
+        op_array,
+        opline,
         result_ptr,
         cache,
         class_id,
@@ -3414,7 +3417,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
 fn op_assign_static_prop<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
     op_assign_static_prop_impl::<false>(eg, frame, op_array, opline)
@@ -3424,7 +3427,7 @@ fn op_assign_static_prop<'a>(
 fn op_assign_late_static_prop<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
     op_assign_static_prop_impl::<true>(eg, frame, op_array, opline)
@@ -3576,7 +3579,7 @@ fn commit_cached_static_property_value<'a>(
 fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
     if opline._pad & STATIC_PROP_REFERENCE_BIND != 0 {
@@ -3749,6 +3752,7 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
         eg,
         frame,
         op_array,
+        opline,
         cache,
         class_id,
         raw_class,
@@ -3763,7 +3767,7 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
 fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
     // SAFETY: dispatch supplies a live frame and its current op-array/opline;
@@ -3816,6 +3820,11 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
         }
         Err(error) => return Err(error),
     };
+    if let Some(result) = materialize_deferred_static_property(
+        eg, frame, op_array, opline, class_id, &resolved,
+    )? {
+        return Ok(result);
+    }
     let definition = &*resolved.definition;
     let called_class = eg
         .class_by_id(class_id)
@@ -3979,7 +3988,8 @@ fn validate_cached_typed_static_property<'a>(
 fn assign_static_property_cache_miss<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
     cache: &mut crate::vm::instruction::InlineCache,
     class_id: u32,
     raw_class: &str,
@@ -4003,6 +4013,11 @@ fn assign_static_property_cache_miss<'a>(
         }
         Err(error) => return Err(error),
     };
+    if let Some(result) = materialize_deferred_static_property(
+        eg, frame, op_array, opline, class_id, &resolved,
+    )? {
+        return Ok(result);
+    }
     let definition = unsafe { &*resolved.definition };
     if definition.is_typed() {
         let called_class = eg
@@ -4099,6 +4114,8 @@ fn assign_static_property_cache_miss<'a>(
 fn resolve_static_property_read_cache_miss<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
     result_ptr: *mut Value,
     cache: &mut crate::vm::instruction::InlineCache,
     class_id: u32,
@@ -4135,6 +4152,11 @@ fn resolve_static_property_read_cache_miss<'a>(
         }
         Err(error) => return Err(error),
     };
+    if let Some(result) = materialize_deferred_static_property(
+        eg, frame, op_array, opline, class_id, &resolved,
+    )? {
+        return Ok(result);
+    }
     let definition = unsafe { &*resolved.definition };
     let stored = eg
         .static_property_value(resolved.storage_slot)
@@ -4174,6 +4196,7 @@ fn resolve_static_property_read_cache_miss<'a>(
 fn resolve_static_property_reference_fetch<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
     result_ptr: *mut Value,
     cache: &mut crate::vm::instruction::InlineCache,
@@ -4199,6 +4222,11 @@ fn resolve_static_property_reference_fetch<'a>(
         }
         Err(error) => return Err(error),
     };
+    if let Some(result) = materialize_deferred_static_property(
+        eg, frame, op_array, opline, class_id, &resolved,
+    )? {
+        return Ok(result);
+    }
     let definition = &*resolved.definition;
     let initialize_null = eg
         .static_property_value(resolved.storage_slot)
@@ -4268,6 +4296,112 @@ fn resolve_static_property_reference_fetch<'a>(
 struct ResolvedStaticProperty {
     storage_slot: usize,
     definition: *const crate::compiler::compile::PropertyDefinition,
+}
+
+#[cold]
+fn materialize_deferred_static_property<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    class_id: u32,
+    resolved: &ResolvedStaticProperty,
+) -> Result<Option<ColdResult<'a>>, VmError> {
+    let Some((deferred, class_name, definition)) =
+        eg.class_by_id(class_id).and_then(|class| {
+            let property_index = class.static_properties.iter().position(|property| {
+                std::ptr::eq(
+                    property as *const crate::compiler::compile::PropertyDefinition,
+                    resolved.definition,
+                )
+            })?;
+            class
+            .deferred_instance_defaults
+            .as_ref()
+            .and_then(|defaults| {
+                defaults
+                    .static_entries()
+                    .iter()
+                    .find(|entry| entry.property_index == property_index)
+                    .cloned()
+            })
+                .map(|deferred| {
+                    (
+                        deferred,
+                        class.name.clone(),
+                        class.static_properties[property_index].clone(),
+                    )
+                })
+        })
+    else {
+        return Ok(None);
+    };
+    if eg
+        .static_property_value(resolved.storage_slot)
+        .is_some_and(|value| !value.is_undef())
+    {
+        return Ok(None);
+    }
+
+    let Some(value) = crate::stdlib::reflection::evaluate_deferred_property_default_value(
+        &deferred,
+        eg,
+    )? else {
+        let exception = eg
+            .exception
+            .take()
+            .expect("deferred static property failure sets an exception");
+        let ip = op_array
+            .instructions
+            .iter()
+            .position(|candidate| std::ptr::eq(candidate, opline))
+            .expect("static-property opcode belongs to its active op-array");
+        attach_constant_expression_origin(
+            &exception,
+            &deferred,
+            eg,
+            frame,
+            op_array,
+            ip,
+        );
+        return Ok(Some(match throw_in_frame(eg, frame, exception)? {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+        }));
+    };
+    let value = match prepare_property_assignment(value, &definition, eg, true, &class_name) {
+        Ok(value) => value,
+        Err(message) => {
+            let exception = make_error_value("TypeError", &message);
+            let ip = op_array
+                .instructions
+                .iter()
+                .position(|candidate| std::ptr::eq(candidate, opline))
+                .expect("static-property opcode belongs to its active op-array");
+            attach_constant_expression_origin(
+                &exception,
+                &deferred,
+                eg,
+                frame,
+                op_array,
+                ip,
+            );
+            return Ok(Some(match throw_in_frame(eg, frame, exception)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            }));
+        }
+    };
+    if !eg.set_static_property_value(resolved.storage_slot, value) {
+        return Err(VmError::Fatal(
+            "Invalid deferred static property storage slot".into(),
+        ));
+    }
+    Ok(None)
 }
 
 #[cold]

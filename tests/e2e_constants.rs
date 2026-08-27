@@ -558,6 +558,169 @@ for ($attempt = 0; $attempt < 2; $attempt++) {
 }
 
 #[test]
+fn callable_class_and_property_defaults_materialize_once_with_php_identity() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class CallableDefaults {
+    public const DIRECT = static function (string $label): string {
+        static $calls = 0;
+        return $label . ++$calls;
+    };
+    public const FCC = self::named(...);
+
+    public Closure $direct = static function (): int {
+        static $calls = 0;
+        return ++$calls;
+    };
+    public Closure $fromConstant = self::DIRECT;
+    public Closure $fcc = self::named(...);
+    public array $nested = ['callback' => self::named(...)];
+    public static Closure $shared = static function (): int {
+        static $calls = 0;
+        return ++$calls;
+    };
+    public static Closure $staticFcc = self::named(...);
+
+    private static function named(string $value): string {
+        return "named:$value";
+    }
+}
+
+$first = new CallableDefaults();
+$second = new CallableDefaults();
+echo (int) (CallableDefaults::DIRECT === CallableDefaults::DIRECT), ':';
+echo (int) ($first->direct === $second->direct), ':';
+echo (int) ($first->fromConstant === CallableDefaults::DIRECT), ':';
+echo (int) ($first->fcc === $second->fcc), ':';
+echo (int) ($first->nested['callback'] === $second->nested['callback']), ':';
+echo (int) (CallableDefaults::$shared === CallableDefaults::$shared), ':';
+echo (int) (CallableDefaults::$staticFcc === CallableDefaults::FCC), '|';
+echo (CallableDefaults::DIRECT)('c'), (CallableDefaults::DIRECT)('c'), '|';
+echo ($first->direct)(), ($second->direct)(), '|';
+echo (CallableDefaults::$shared)(), (CallableDefaults::$shared)(), '|';
+echo ($first->fcc)('i'), '|', ($first->nested['callback'])('n'), '|';
+echo (CallableDefaults::$staticFcc)('s'), '|', (CallableDefaults::FCC)('k');
+$privateFactories = array_filter(
+    get_defined_functions()['user'],
+    static fn (string $name): bool => str_contains($name, "\0constant_expression#"),
+);
+echo '|', count($privateFactories), ':';
+echo (int) function_exists("\0constant_expression#0");
+"#,
+        ),
+        "1:1:1:1:1:1:0|c1c2|12|12|named:i|named:n|named:s|named:k|0:0"
+    );
+}
+
+#[test]
+fn callable_defaults_preserve_lexical_scope_and_inherited_static_storage() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class CallableParent {
+    private const SECRET = 'parent';
+    public Closure $reader = static function (CallableParent $value): string {
+        return $value->secret();
+    };
+    public static Closure $scope = static function (): string {
+        return self::class;
+    };
+    public static Closure $trace = static function (): array {
+        return debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 1)[0];
+    };
+
+    private function secret(): string {
+        return self::SECRET;
+    }
+}
+class CallableChild extends CallableParent {}
+
+$parent = new CallableParent();
+$child = new CallableChild();
+echo ($parent->reader)($child), ':';
+echo ($child->reader)($parent), ':';
+echo (CallableParent::$scope)(), ':', (CallableChild::$scope)(), ':';
+echo (int) (CallableParent::$scope === CallableChild::$scope), ':';
+$frame = (CallableChild::$trace)();
+echo $frame['class'], $frame['type'];
+echo $frame['function'] === '{closure}' || str_starts_with($frame['function'], '{closure:')
+    ? 'closure'
+    : 'wrong';
+"#,
+        ),
+        "parent:parent:CallableParent:CallableParent:1:CallableParent::closure"
+    );
+}
+
+#[test]
+fn invalid_callable_defaults_fail_at_the_php_activation_boundaries() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class MissingConstantCallable {
+    public const CALLBACK = MissingCallableOwner::run(...);
+}
+class MissingInstanceCallable {
+    public Closure $callback = MissingCallableOwner::run(...);
+}
+class MissingStaticCallable {
+    public static Closure $callback = MissingCallableOwner::run(...);
+}
+
+echo 'linked|';
+foreach ([
+    'constant' => static fn () => MissingConstantCallable::CALLBACK,
+    'new' => static fn () => new MissingInstanceCallable(),
+    'static-read' => static fn () => MissingStaticCallable::$callback,
+    'static-write' => static function () {
+        MissingStaticCallable::$callback = strlen(...);
+    },
+] as $label => $operation) {
+    try {
+        $operation();
+    } catch (Throwable $error) {
+        echo $label, ':', $error->getMessage(), '|';
+    }
+}
+"#,
+        ),
+        concat!(
+            "linked|",
+            "constant:Class \"MissingCallableOwner\" not found|",
+            "new:Class \"MissingCallableOwner\" not found|",
+            "static-read:Class \"MissingCallableOwner\" not found|",
+            "static-write:Class \"MissingCallableOwner\" not found|",
+        )
+    );
+}
+
+#[test]
+fn callable_constant_expression_compile_diagnostics_reject_php_invalid_closures() {
+    for (source, expected) in [
+        (
+            "<?php\nclass InvalidArrow {\n    public Closure $callback = static fn () => null;\n}",
+            "Constant expression contains invalid operations in /virtual/callable-defaults.php on line 3",
+        ),
+        (
+            "<?php\nclass InvalidNonStatic {\n    public Closure $callback = function () {};\n}",
+            "Closures in constant expressions must be static in /virtual/callable-defaults.php on line 3",
+        ),
+        (
+            "<?php\n$value = 1;\nclass InvalidCapture {\n    public Closure $callback = static function () use ($value) {};\n}",
+            "Cannot use(...) variables in constant expression in /virtual/callable-defaults.php on line 4",
+        ),
+    ] {
+        let error = run_php_expect_error_with_source_context(
+            source,
+            "/virtual/callable-defaults.php",
+            "/virtual",
+        );
+        assert_eq!(format!("{error:?}"), format!("Fatal(\"{expected}\")"));
+    }
+}
+
+#[test]
 fn deferred_trait_defaults_bind_to_the_consumer_and_shadowed_defaults_do_not_run() {
     assert_eq!(
         run_php(

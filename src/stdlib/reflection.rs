@@ -525,6 +525,9 @@ enum DeferredAttributeError {
         line: usize,
     },
     TypedClassConstant(String),
+    /// A nested synthetic constant-expression factory already published the
+    /// exact throwable, origin and trace into ExecutorGlobals.
+    PendingException,
     Vm(VmError),
 }
 
@@ -541,6 +544,42 @@ impl DeferredAttributeError {
             },
             located => located,
         }
+    }
+}
+
+fn evaluate_runtime_callable_constant_factory(
+    factory: &crate::compiler::compile::RuntimeCallableConstantFactory,
+    scope: &AttributeEvaluationScope,
+    eg: &mut ExecutorGlobals,
+) -> Result<Value, DeferredAttributeError> {
+    if let Some(value) = factory.resolved() {
+        return Ok(value);
+    }
+    let function = eg.find_private_function(&factory.name).ok_or_else(|| {
+        DeferredAttributeError::Message(
+            "Constant-expression callable factory is unavailable".to_string(),
+        )
+    })?;
+    let called_scope_class_id = scope
+        .lexical_class
+        .as_deref()
+        .map_or(0, |class| eg.class_id_of(class));
+    let value = crate::vm::execute::call_function_iter_with_context(
+        eg,
+        function,
+        0,
+        std::iter::empty::<&Value>(),
+        called_scope_class_id,
+        None,
+        0,
+        None,
+    )
+    .map_err(DeferredAttributeError::Vm)?;
+    if eg.exception.is_some() {
+        Err(DeferredAttributeError::PendingException)
+    } else {
+        factory.cache(value.clone());
+        Ok(value)
     }
 }
 
@@ -1347,6 +1386,7 @@ pub(crate) fn evaluate_deferred_class_constant_value(
             eg.exception = Some(make_error_value("TypeError", &error));
             Ok(None)
         }
+        Err(DeferredAttributeError::PendingException) => Ok(None),
         Err(DeferredAttributeError::Vm(error)) => Err(error),
     }
 }
@@ -1437,8 +1477,11 @@ fn evaluate_deferred_class_constant_definition(
     else {
         return Ok(definition.value.clone());
     };
-    let value =
-        evaluate_deferred_attribute_expression(expression, scope, &definition.source_file, eg)?;
+    let value = if let Some(factory) = &definition.callable_factory {
+        evaluate_runtime_callable_constant_factory(factory, scope, eg)?
+    } else {
+        evaluate_deferred_attribute_expression(expression, scope, &definition.source_file, eg)?
+    };
     normalize_deferred_class_constant_value(
         value,
         &definition.type_hint,
@@ -1460,12 +1503,17 @@ pub(crate) fn evaluate_deferred_property_default_value(
     definition: &crate::compiler::compile::DeferredPropertyDefault,
     eg: &mut ExecutorGlobals,
 ) -> Result<Option<Value>, VmError> {
-    match evaluate_deferred_attribute_expression(
-        &definition.expression,
-        &definition.evaluation_scope,
-        &definition.source_file,
-        eg,
-    ) {
+    let evaluated = if let Some(factory) = &definition.callable_factory {
+        evaluate_runtime_callable_constant_factory(factory, &definition.evaluation_scope, eg)
+    } else {
+        evaluate_deferred_attribute_expression(
+            &definition.expression,
+            &definition.evaluation_scope,
+            &definition.source_file,
+            eg,
+        )
+    };
+    match evaluated {
         Ok(value) => Ok(Some(value)),
         Err(DeferredAttributeError::Message(error)) => {
             // Autoload may already have raised a user exception. Preserve that
@@ -1488,6 +1536,7 @@ pub(crate) fn evaluate_deferred_property_default_value(
             }
             Ok(None)
         }
+        Err(DeferredAttributeError::PendingException) => Ok(None),
         Err(DeferredAttributeError::Vm(error)) => Err(error),
     }
 }
@@ -1753,6 +1802,7 @@ fn evaluate_attribute_arguments(
                         eg.exception = Some(make_error_value("TypeError", &error));
                         return Ok(None);
                     }
+                    Err(DeferredAttributeError::PendingException) => return Ok(None),
                     Err(DeferredAttributeError::Vm(error)) => return Err(error),
                 }
             }

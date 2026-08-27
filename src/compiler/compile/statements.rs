@@ -4529,7 +4529,7 @@ impl Compiler {
                     Value::string(resolved_class.clone()),
                 );
                 for constant in &compiled_constants {
-                    if constant.evaluation_error.is_none() {
+                    if constant.evaluation_error.is_none() && !constant.value_is_deferred {
                         property_constants.insert(
                             format!("self::{}", constant.name),
                             constant.value.clone(),
@@ -4552,6 +4552,7 @@ impl Compiler {
                 let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
                 let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
                 let mut deferred_instance_defaults = Vec::new();
+                let mut deferred_static_defaults = Vec::new();
                 let mut readonly_props: Vec<String> = Vec::new();
                 for prop in properties {
                     self.validate_attribute_target(&prop.attributes, "property")?;
@@ -4661,6 +4662,47 @@ impl Compiler {
                     );
                     let mut default_is_deferred = false;
                     let default = match &prop.default {
+                        Some(expr) if constant_expression_contains_runtime_callable(expr) => {
+                            let (callable_factory, lexical_functions) = self
+                                .compile_runtime_callable_constant_factory(
+                                    expr,
+                                    &resolved_class,
+                                    resolved_parent.as_deref(),
+                                )?;
+                            default_is_deferred = true;
+                            let definition = DeferredPropertyDefault {
+                                property_name: prop.name.clone(),
+                                declaring_class: resolved_class.clone(),
+                                property_index: 0,
+                                expression: Box::new(expr.clone()),
+                                callable_factory: Some(std::rc::Rc::new(
+                                    RuntimeCallableConstantFactory::new(
+                                        callable_factory,
+                                        lexical_functions,
+                                    ),
+                                )),
+                                evaluation_scope: std::rc::Rc::new(
+                                    AttributeEvaluationScope {
+                                        namespace: self.current_namespace.clone(),
+                                        class_imports: self.use_map.clone(),
+                                        function_imports: self.function_use_map.clone(),
+                                        constant_imports: self.constant_use_map.clone(),
+                                        lexical_class: Some(resolved_class.clone()),
+                                        lexical_parent: resolved_parent.clone(),
+                                        lexical_property: Some(prop.name.clone()),
+                                        source_directory: self.source_directory.clone(),
+                                    },
+                                ),
+                                source_file: self.source_file.clone(),
+                                source_line: prop.line,
+                            };
+                            if prop.is_static {
+                                deferred_static_defaults.push(definition);
+                            } else {
+                                deferred_instance_defaults.push(definition);
+                            }
+                            None
+                        }
                         Some(expr) => match self.eval_const_expr_in_source_with_property(
                             expr,
                             &property_constants,
@@ -4678,6 +4720,7 @@ impl Compiler {
                                     declaring_class: resolved_class.clone(),
                                     property_index: 0,
                                     expression: Box::new(expr.clone()),
+                                    callable_factory: None,
                                     evaluation_scope: std::rc::Rc::new(
                                         AttributeEvaluationScope {
                                             namespace: self.current_namespace.clone(),
@@ -4941,13 +4984,14 @@ impl Compiler {
                         .map(|method| method.name.clone())
                         .collect(),
                     enum_backing_error: None,
-                    deferred_instance_defaults: (!deferred_instance_defaults.is_empty()).then(
-                        || {
-                            Box::new(DeferredInstancePropertyDefaults::new(
+                    deferred_instance_defaults: (!deferred_instance_defaults.is_empty()
+                        || !deferred_static_defaults.is_empty())
+                        .then(|| {
+                            Box::new(DeferredInstancePropertyDefaults::with_static_entries(
                                 deferred_instance_defaults,
+                                deferred_static_defaults,
                             ))
-                        },
-                    ),
+                        }),
                     class_id: 0,
                 });
                 if resolved_class.starts_with("class@anonymous#") {
@@ -5619,6 +5663,7 @@ impl Compiler {
                                     declaring_class: resolved_trait.clone(),
                                     property_index: 0,
                                     expression: Box::new(expr.clone()),
+                                    callable_factory: None,
                                     evaluation_scope: std::rc::Rc::new(
                                         AttributeEvaluationScope {
                                             namespace: self.current_namespace.clone(),
@@ -5726,6 +5771,7 @@ impl Compiler {
                                 declaring_class: resolved_trait.clone(),
                                 property_index: 0,
                                 expression: Box::new(expression.clone()),
+                                callable_factory: None,
                                 evaluation_scope: std::rc::Rc::new(
                                     AttributeEvaluationScope {
                                         namespace: self.current_namespace.clone(),
@@ -6629,6 +6675,29 @@ impl Compiler {
             }
         }
 
+        let callable_factories = constants
+            .iter()
+            .map(|constant| {
+                constant_expression_contains_runtime_callable(&constant.value).then(|| {
+                    self.compile_runtime_callable_constant_factory(
+                        &constant.value,
+                        owner,
+                        parent,
+                    )
+                })
+            })
+            .map(|factory| {
+                factory.transpose().map(|factory| {
+                    factory.map(|(name, lexical_functions)| {
+                        std::rc::Rc::new(RuntimeCallableConstantFactory::new(
+                            name,
+                            lexical_functions,
+                        ))
+                    })
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
         let mut known = self.known_constants.clone();
         known.insert("self::class".into(), Value::string(owner.to_string()));
         let owner_prefix = format!("{owner}::");
@@ -6649,12 +6718,15 @@ impl Compiler {
 
         let mut values = vec![None; constants.len()];
         let mut evaluation_errors = vec![None; constants.len()];
-        let mut deferred_values = vec![false; constants.len()];
-        let mut remaining = constants.len();
+        let mut deferred_values = callable_factories
+            .iter()
+            .map(Option::is_some)
+            .collect::<Vec<_>>();
+        let mut remaining = deferred_values.iter().filter(|deferred| !**deferred).count();
         while remaining != 0 {
             let mut progressed = false;
             for (index, constant) in constants.iter().enumerate() {
-                if values[index].is_some() {
+                if values[index].is_some() || deferred_values[index] {
                     continue;
                 }
                 let Ok(value) = self.eval_const_expr_in_source(&constant.value, &known)
@@ -6838,6 +6910,7 @@ impl Compiler {
                     source_file: self.source_file.clone(),
                     source_expression: retain_expression
                         .then(|| Box::new(constant.value.clone())),
+                    callable_factory: callable_factories[index].clone(),
                     evaluation_scope,
                     value_is_deferred: deferred_values[index],
                     evaluation_error,

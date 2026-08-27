@@ -440,6 +440,9 @@ pub struct ExecutorGlobals {
     >,
     /// Function table — name → pointer to FunctionCommon
     pub function_table: HashMap<String, *const FunctionCommon>,
+    /// Compiler-owned helpers that must never participate in user function
+    /// lookup, callable checks, Reflection or get_defined_functions().
+    private_function_table: HashMap<String, *const FunctionCommon>,
     /// Class table — name/alias → shared ClassDef. `Rc` keeps metadata and
     /// inline-cache pointers stable while aliases reuse the exact identity.
     pub class_table: HashMap<String, std::rc::Rc<ClassDef>>,
@@ -1286,6 +1289,7 @@ impl ExecutorGlobals {
                 [ResolvedVirtualAggregateCacheEntry::EMPTY; RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS],
             ),
             function_table: HashMap::new(),
+            private_function_table: HashMap::new(),
             class_table: HashMap::new(),
             pending_anonymous_classes: HashMap::new(),
             pending_runtime_classes: HashMap::new(),
@@ -1404,6 +1408,7 @@ impl ExecutorGlobals {
                 [ResolvedVirtualAggregateCacheEntry::EMPTY; RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS],
             ),
             function_table: HashMap::new(),
+            private_function_table: HashMap::new(),
             class_table: HashMap::new(),
             pending_anonymous_classes: HashMap::new(),
             pending_runtime_classes: HashMap::new(),
@@ -4313,12 +4318,17 @@ impl ExecutorGlobals {
         let class_name = class_def.name.clone();
         let declaration_file = class_def.source_file.clone();
         let declaration_line = class_def.declaration_line;
-        let (own_deferred_instance_defaults, own_rebound_trait_defaults) = class_def
+        let (
+            own_deferred_instance_defaults,
+            own_deferred_static_defaults,
+            own_rebound_trait_defaults,
+        ) = class_def
             .deferred_instance_defaults
             .take()
             .map(|defaults| {
                 (
                     defaults.entries().as_ref().clone(),
+                    defaults.static_entries().as_ref().clone(),
                     defaults.rebound_trait_entries().as_ref().clone(),
                 )
             })
@@ -4328,6 +4338,7 @@ impl ExecutorGlobals {
         // storage-slot order, which deliberately places child declarations
         // first for property lookup.
         let mut deferred_instance_defaults = Vec::new();
+        let mut deferred_static_defaults = Vec::new();
         let mut rebound_trait_defaults = own_rebound_trait_defaults;
         let mut inherited_rebound_trait_defaults = Vec::new();
         // PHP does not permit class redeclaration. Besides matching that rule,
@@ -4468,6 +4479,7 @@ impl ExecutorGlobals {
             if let Some(parent) = self.class_table.get(parent_name.as_str()) {
                 if let Some(defaults) = &parent.deferred_instance_defaults {
                     deferred_instance_defaults.extend(defaults.entries().iter().cloned());
+                    deferred_static_defaults.extend(defaults.static_entries().iter().cloned());
                     inherited_rebound_trait_defaults.extend(
                         defaults
                             .rebound_trait_entries()
@@ -4561,6 +4573,7 @@ impl ExecutorGlobals {
             }
         }
         deferred_instance_defaults.extend(own_deferred_instance_defaults);
+        deferred_static_defaults.extend(own_deferred_static_defaults);
 
         // An inherited trait-composed static property keeps its parent's
         // storage slot and therefore its actual value. PHP nevertheless
@@ -4987,11 +5000,29 @@ impl ExecutorGlobals {
             }
         }
 
+        deferred_static_defaults.retain_mut(|deferred| {
+            let Some((property_index, _)) =
+                class_def
+                    .static_properties
+                    .iter()
+                    .enumerate()
+                    .find(|(_, property)| {
+                        property.name == deferred.property_name
+                            && property.declaring_class == deferred.declaring_class
+                    })
+            else {
+                return false;
+            };
+            deferred.property_index = property_index;
+            true
+        });
+
         let mut resolved_static_slots = Vec::with_capacity(static_property_slots.len());
-        for (definition, inherited_slot) in class_def
+        for (property_index, (definition, inherited_slot)) in class_def
             .static_properties
             .iter()
             .zip(static_property_slots)
+            .enumerate()
         {
             let slot = if let Some(slot) = inherited_slot {
                 slot
@@ -5000,6 +5031,12 @@ impl ExecutorGlobals {
                     .map_err(|_| "Too many static property storage slots".to_string())?;
                 self.static_property_values
                     .push(definition.default.clone().unwrap_or_else(|| {
+                        if deferred_static_defaults
+                            .iter()
+                            .any(|deferred| deferred.property_index == property_index)
+                        {
+                            return Value::undef();
+                        }
                         if definition.is_typed() {
                             Value::undef()
                         } else {
@@ -5069,11 +5106,13 @@ impl ExecutorGlobals {
             })
         });
         class_def.deferred_instance_defaults = (!deferred_instance_defaults.is_empty()
+            || !deferred_static_defaults.is_empty()
             || !rebound_trait_defaults.is_empty())
         .then(|| {
             Box::new(
-                crate::compiler::compile::DeferredInstancePropertyDefaults::with_rebound_trait_entries(
+                crate::compiler::compile::DeferredInstancePropertyDefaults::with_all_entries(
                     deferred_instance_defaults,
+                    deferred_static_defaults,
                     rebound_trait_defaults,
                 ),
             )
@@ -5124,6 +5163,47 @@ impl ExecutorGlobals {
         for (_full_name, func_ptr) in method_entries {
             self.method_declaring_class
                 .insert(func_ptr, class_name.clone());
+        }
+        let constant_expression_lexical_functions = self
+            .class_table
+            .get(&class_name)
+            .map(|class| {
+                let constant_functions = class.constants.iter().flat_map(|constant| {
+                    constant
+                        .callable_factory
+                        .iter()
+                        .flat_map(|factory| factory.lexical_functions.iter())
+                        .map(|function| (function.clone(), constant.declaring_class.clone()))
+                });
+                let property_functions =
+                    class
+                        .deferred_instance_defaults
+                        .iter()
+                        .flat_map(|defaults| {
+                            defaults
+                                .entries()
+                                .iter()
+                                .chain(defaults.static_entries().iter())
+                                .filter_map(|definition| {
+                                    definition.callable_factory.as_ref().map(|factory| {
+                                        factory.lexical_functions.iter().map(|function| {
+                                            (function.clone(), definition.declaring_class.clone())
+                                        })
+                                    })
+                                })
+                                .flatten()
+                                .collect::<Vec<_>>()
+                        });
+                constant_functions
+                    .chain(property_functions)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for (function, declaring_class) in constant_expression_lexical_functions {
+            if let Some(function) = self.find_function(&function) {
+                self.method_declaring_class
+                    .insert(function, declaring_class);
+            }
         }
 
         self.validate_interface_property_contracts(&class_name)?;
@@ -6442,6 +6522,16 @@ impl ExecutorGlobals {
         name: &str,
         func: *const FunctionCommon,
     ) -> Result<(), String> {
+        if name.starts_with('\0') {
+            if self
+                .private_function_table
+                .insert(name.to_string(), func)
+                .is_some()
+            {
+                return Err("Cannot redeclare private compiler function".to_string());
+            }
+            return Ok(());
+        }
         let key = name.to_lowercase();
         if let Some(alias) = crate::builtin_metadata::internal_function_alias(&key)
             && let Some(&previous) = self.function_table.get(alias.target)
@@ -6453,6 +6543,12 @@ impl ExecutorGlobals {
         }
         self.function_table.insert(key, func);
         Ok(())
+    }
+
+    pub(crate) fn find_private_function(&self, name: &str) -> Option<*const FunctionCommon> {
+        name.starts_with('\0')
+            .then(|| self.private_function_table.get(name).copied())
+            .flatten()
     }
 
     #[cold]
