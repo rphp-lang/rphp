@@ -3862,14 +3862,32 @@ gate records -2.314% for ordinary append, -0.555% for dynamic array literals
 and -1.506% for declared property writes, with matching checksums and every
 path below +5%.
 
-The monitored supported debt is now 894 failures: 18 strings, zero array and
-876 Zend/lang. The complete 216-case trait neighborhood has zero ordinary
-failure. Read-only clustering selects the five-case scalar list-destructuring
-diagnostic boundary next: `list/destruct_bool.phpt`, `destruct_float.phpt`,
-`destruct_int.phpt`, `destruct_string.phpt` and `list/bug39304.phpt`, including
-ordinary, null and error-suppressed controls. `ArrayAccess`, `SplFixedArray`
-and general SPL remain separate contracts rather than being folded into that
-goal.
+The `ee688efc` `scalar-list-destructuring-diagnostics` checkpoint then moves
+Zend/lang from 4,427 to 4,434 pass, exactly `+7/-0`: all five selected list
+cases pass and the shared fetch-dimension boundary also converts adjacent
+`foreach_list_002.phpt` and `engine_assignExecutionOrder_002.phpt`. Scalar
+sources now warn once per materialized element with PHP's type spelling,
+evaluation order, null result, suppression-mask behavior and throwing-handler
+commit boundary. Null, valid array, reference and copy-on-write controls retain
+their previous state.
+
+Two exact-final-binary Zend/lang manifests are byte-identical; repeated serial
+strings/array outcome projections also match the exact parent. All five Cargo
+configurations, all-feature/all-target, formatting, HTML data, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production
+remains below the unsafe ceiling at 1,618 blocks and 289 functions. One
+exact-final-binary CPU-2-pinned 32-pair release gate records -3.121% for valid
+nested destructuring, -0.546% for ordinary string offsets and -0.830% for the
+existing resource-warning path, with matching checksums and every path below
++5%.
+
+The monitored supported debt is now 887 failures: 18 strings, zero array and
+869 Zend/lang. Read-only clustering selects the runtime-constant keyed-
+destructuring boundary next, starting with
+`Zend/tests/list/list_keyed_non_literals.phpt`, whose unresolved constant key
+currently degrades to index zero. `ArrayAccess`-backed destructuring,
+`ArrayObject`, `SplFixedArray` and general SPL remain separate contracts rather
+than being folded into that goal.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
@@ -3990,10 +4008,10 @@ particular, a by-reference `foreach` target is rebound for each listener, so
 Symfony EventDispatcher preserves every lazy listener and RouterListener
 publishes a valid compiled route cache.
 The cold build also preserves a `$this` property passed to a runtime-resolved
-by-reference method parameter, and destructuring a null or other non-array
-scalar source yields null elements without scalar-offset diagnostics. These
-contracts keep `PhpDumper`'s recursive call map live and permit its synthetic
-`kernel` and `service_container` entries to remain null without warnings.
+by-reference method parameter. Destructuring a null source yields null elements
+silently, while a non-null scalar emits PHP's canonical per-element warning;
+the synthetic `kernel` and `service_container` entries used by `PhpDumper`
+remain null without warnings and its recursive call map stays live.
 
 ### C5 — Request/response and repeated runtime (S4)
 

@@ -8,6 +8,89 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`scalar-list-destructuring-diagnostics`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. Long and short destructuring from
+`bool`, `float`, `int` and `string` now emit PHP's canonical warning for each
+materialized element before assigning `null`; resources retain the same
+diagnostic contract without a new allocation. A null source remains silent.
+The source is evaluated once, keyed elements preserve key evaluation order,
+skipped elements do not fetch, and nested scalar or string sources warn only
+for the dimensions that are actually materialized.
+
+PHP error-handler behavior is preserved rather than bypassed: `@` and
+`error_reporting(0)` suppress built-in display while installed handlers still
+observe the warning with PHP's active mask. If a handler throws, the current
+element and every later target retain their previous state. Original
+regressions cover long and short syntax, all scalar types, skips, dynamic keys,
+nested patterns, one-shot source evaluation, null and valid-array controls,
+throwing handlers, display suppression, prior-warning order, references and
+copy-on-write. The clean-room oracle source hashes to
+`1dd6b076848122a8bb4e8cff4fbd845d2f0208707931401ea45e8c4e218972bc`;
+PHP 8.5.9 and the exact release candidate match byte-for-byte with stdout
+SHA-256
+`92781c6553c66696aa5d6648391c11bebeb3d40b234fa1c7967155000d852da8`,
+empty stderr and zero exit status.
+
+All five selected cases now pass:
+`Zend/tests/list/destruct_bool.phpt`, `destruct_float.phpt`,
+`destruct_int.phpt`, `destruct_string.phpt` and `bug39304.phpt`. Their focused
+manifest hashes to
+`6a6678e6a807faca6ad13463a9056cf960254183109d71b877f0791d8c9d1ede`.
+The general fetch-dimension boundary also converts adjacent
+`Zend/tests/foreach/foreach_list_002.phpt` and
+`tests/lang/engine_assignExecutionOrder_002.phpt`, so the exact Zend/lang
+delta is `+7/-0`, from 4,427 to 4,434 pass, with no other status or category
+movement and every prior pass preserved.
+
+Two exact-final-binary 5,599-case Zend/lang runs each record 4,434 pass, 869
+fail, 115 skip and 181 unsupported, with no timeout or crash. Their manifests
+are byte-identical at SHA-256
+`487cf3e940fb16ba5d7d67950188f2432acf95a761a416434f9539c8cde45c93`;
+the commit-labelled summary hashes to
+`d9589b6bc00859d94f6b8a4ec3a7ebdafe4e6c554c04ceac29fdd9cefddbd8cc`.
+Repeated serial strings/array runs remain 1,459 pass, 18 fail, 67 skip and 31
+unsupported across 1,575 cases; both runs and the exact parent share the same
+sorted status/category projection at SHA-256
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`.
+The combined audit therefore covers 7,174 cases: 5,893 pass, 887 fail, 182
+skip and 212 unsupported. Supported debt is 18 strings failures, zero array
+failures and 869 Zend/lang failures.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains below its ceiling at 1,618 unsafe blocks and 289 unsafe
+functions, with 369 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass. The change adds no dependency, unsafe block, opcode or
+persistent runtime layout field.
+
+One exact-final-binary CPU-2-pinned, performance-governor, order-balanced
+32-pair release gate with four warmups compares retained parent SHA-256
+`81e7fd1d9dff4b7d10b31ceec800d5f1a4d6e9e651e6405ad6564c811ea5b18d`
+with candidate
+`95930454edd6312722a2e87bd94814f96e926bf0d866971b95afe3094f2a6f8b`.
+Balanced median changes are -3.121% for two million valid nested
+destructurings, -0.546% for four million ordinary string-offset reads and
+-0.830% for 200,000 existing resource-destructuring warning pairs. Comparable
+checksums match and every path remains below the +5% gate. The harness and
+three workloads hash to
+`1f61b6161dba2df78b0f7804247e9a148fea7684fc72a2bb74db3cdc6d980b63`,
+`1ffe5bbebe2bb4172ac44bfe4bc7b193c83c4d19226dd85c31226fbaee585b76`,
+`c1e1fbb2db6e891cb613053de67b3969d1a5e7d00d46dc2a53ebdc296ac9bd0f`
+and
+`f9a7cc9b398a34eef84ae761738288d35b86edcddf406313ca9d9dbb60946a52`.
+
+This checkpoint does not claim `ArrayAccess`, `ArrayObject`, `SplFixedArray`
+or general SPL implementation, exhaustive string-offset conversions, 32-bit
+behavior or allocation-limit/OOM equivalence. Read-only clustering of the
+exact remaining manifest selects the runtime-constant keyed-destructuring
+boundary next, starting with
+`Zend/tests/list/list_keyed_non_literals.phpt`; ArrayAccess-backed
+destructuring remains a separate root.
+
+The implementation checkpoint is commit `ee688efc`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `append-error-result-boundaries`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. When an array's next integer key is already
 `PHP_INT_MAX`, array literals, runtime default-value materialization and
