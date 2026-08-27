@@ -809,36 +809,21 @@ fn set_foreach_iteration_state(
     }
 }
 
-/// Keep the next-position counter of every active by-reference foreach stable
-/// across an array splice. RPHP represents a live Zend HashTable iterator as
-/// an owned reference to the source plus a frame-local numeric position. A
-/// structural mutation keeps the reference live but must translate that
-/// position so entries inserted before the current element are not revisited
-/// and entries removed before it are not skipped.
-pub(crate) fn adjust_live_foreach_reference_positions_for_splice(
-    internal_frame: *mut ExecuteData,
-    argument_index: u32,
+/// Translate every active by-reference foreach position that observes the
+/// mutated reference cell. `frame` is the first user frame whose loops may be
+/// live; callers reached through an internal array mutator start at its parent.
+fn adjust_live_foreach_reference_positions(
+    mut frame: *mut ExecuteData,
+    target_reference: usize,
     start: usize,
     removed: usize,
     inserted: usize,
 ) {
-    if internal_frame.is_null() {
-        return;
-    }
-    // SAFETY: an internal handler and every saved caller frame remain live for
-    // its synchronous invocation. User frame metadata owns the instruction and
-    // slot ranges inspected below; only Long foreach-position TMPs are updated.
+    // SAFETY: the active frame chain remains live throughout synchronous array
+    // mutation. User frame metadata owns every instruction and slot inspected
+    // below; only Long foreach-position TMPs are updated.
     unsafe {
-        let argument = (*internal_frame).cv(argument_index);
-        if argument.owned_reference_handle_count() < 3 {
-            return;
-        }
-        let target_reference = argument.reference_identity();
-        let Some(target_reference) = target_reference else {
-            return;
-        };
         let removed_end = start.saturating_add(removed);
-        let mut frame = (*internal_frame).prev_execute_data;
         while !frame.is_null() {
             let function = (*frame).func;
             if !function.is_null() && (*function).fn_type == FunctionType::User {
@@ -905,6 +890,59 @@ pub(crate) fn adjust_live_foreach_reference_positions_for_splice(
             }
             frame = (*frame).prev_execute_data;
         }
+    }
+}
+
+/// Keep the next-position counter of every active by-reference foreach stable
+/// across an array splice performed by an internal function.
+pub(crate) fn adjust_live_foreach_reference_positions_for_splice(
+    internal_frame: *mut ExecuteData,
+    argument_index: u32,
+    start: usize,
+    removed: usize,
+    inserted: usize,
+) {
+    if internal_frame.is_null() {
+        return;
+    }
+    // SAFETY: the internal activation and its argument remain live for the
+    // complete synchronous call.
+    unsafe {
+        let argument = (*internal_frame).cv(argument_index);
+        if argument.owned_reference_handle_count() < 3 {
+            return;
+        }
+        let Some(target_reference) = argument.reference_identity() else {
+            return;
+        };
+        adjust_live_foreach_reference_positions(
+            (*internal_frame).prev_execute_data,
+            target_reference,
+            start,
+            removed,
+            inserted,
+        );
+    }
+}
+
+/// Apply the same iterator translation to a structural mutation executed in a
+/// user frame, including every independently nested loop over the same cell.
+#[inline]
+fn adjust_live_foreach_reference_positions_for_direct_splice(
+    frame: *mut ExecuteData,
+    target_reference: Option<usize>,
+    start: usize,
+    removed: usize,
+    inserted: usize,
+) {
+    if let Some(target_reference) = target_reference {
+        adjust_live_foreach_reference_positions(
+            frame,
+            target_reference,
+            start,
+            removed,
+            inserted,
+        );
     }
 }
 

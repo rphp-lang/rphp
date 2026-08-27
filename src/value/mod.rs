@@ -4074,8 +4074,8 @@ impl PhpArray {
         }
     }
 
-    /// Remove element by key
-    pub fn remove(&mut self, key: &ArrayKey) -> bool {
+    /// Remove an element by key and return its former ordered position.
+    pub(crate) fn remove_with_position(&mut self, key: &ArrayKey) -> Option<usize> {
         // Remove breaks packed invariant
         if matches!(&self.storage, ArrayStorage::Packed(_)) {
             self.transition_to_hash();
@@ -4089,10 +4089,10 @@ impl PhpArray {
                 let removed = small.remove_at(position).is_some();
                 if removed {
                     self.adjust_cursor_after_remove(position);
+                    return Some(position);
                 }
-                return removed;
             }
-            return false;
+            return None;
         }
         if let ArrayStorage::LinearHash(linear) = &mut self.storage {
             let position = match key {
@@ -4103,9 +4103,9 @@ impl PhpArray {
                 linear.entries.remove(position);
                 linear.invalidate_index();
                 self.adjust_cursor_after_remove(position);
-                return true;
+                return Some(position);
             }
-            return false;
+            return None;
         }
         if let ArrayStorage::Hash {
             entries,
@@ -4128,10 +4128,15 @@ impl PhpArray {
                 *verified_int_prefix = rebuild_int_index(entries, int_index, 0);
                 Self::reindex_string_entries(entries, str_index, idx);
                 self.adjust_cursor_after_remove(idx);
-                return true;
+                return Some(idx);
             }
         }
-        false
+        None
+    }
+
+    /// Remove element by key.
+    pub fn remove(&mut self, key: &ArrayKey) -> bool {
+        self.remove_with_position(key).is_some()
     }
 
     /// Remove and return last element.

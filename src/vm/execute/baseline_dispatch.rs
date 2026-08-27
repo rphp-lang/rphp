@@ -7363,6 +7363,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::UnsetDim => {
                 // Remove key op2 from array op1
                 let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                // SAFETY: `frame` is the active activation for `opline`; the
+                // compiler allocated op1 as a live operand slot for UnsetDim.
+                let array_reference = unsafe {
+                    match opline.op1_type {
+                        OpType::Cv => (*frame).cv(opline.op1 as u32).reference_identity(),
+                        OpType::Tmp | OpType::Var => {
+                            (&*(*frame).get_op_mut(opline.op1 as u32, opline.op1_type))
+                                .reference_identity()
+                        }
+                        OpType::Const | OpType::Unused => None,
+                    }
+                };
                 let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 let arr = unsafe { &mut *arr_ptr };
                 if matches!(arr.value_type(), ValueType::Object | ValueType::Closure) {
@@ -7426,7 +7438,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     ValueType::Array => {
                         let array = arr.as_array_mut().unwrap();
                         key = array.normalize_utf8_text_key(key, idx_val);
-                        array.remove(&key);
+                        if let Some(position) = array.remove_with_position(&key) {
+                            adjust_live_foreach_reference_positions_for_direct_splice(
+                                frame,
+                                array_reference,
+                                position,
+                                1,
+                                0,
+                            );
+                        }
                     }
                     ValueType::Undef | ValueType::Null => {
                         // PHP silently ignores unset on undef/null
