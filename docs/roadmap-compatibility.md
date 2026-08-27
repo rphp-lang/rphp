@@ -3805,11 +3805,27 @@ and legacy custom-payload unserialization below +1% in the first run and below
 zero in the second, with matching outputs. An O(1) class-ID relationship guard
 keeps recursive interface resolution off ordinary serialization.
 
-The monitored supported debt is now 902 failures: 18 strings, zero array and
-884 Zend/lang. The complete 216-case trait neighborhood has zero ordinary
-failure. Read-only clustering selects two cold serialization rejection cases
-next: anonymous-class serialization and malformed declared property-count
-offset reporting.
+The `1ced9068` `serialization-rejection-offset-boundaries` checkpoint then
+moves Zend/lang from 4,419 to 4,421 pass, exactly `+2/-0`; strings stay 631/733
+and array stays 828/842 with no other status or category movement. Anonymous
+objects now raise PHP's stable serialization exception before magic hooks,
+while a digit-only unterminated object property count reports the consumed
+full-input offset. Original regressions preserve named and dynamic-object wire
+formats, valid object decoding and the earlier malformed/reference diagnostic
+boundaries.
+
+Two exact-final-binary Zend/lang audits have byte-identical manifests and
+summaries; repeated serial strings/array outcome projections also match the
+exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-2-pinned 32-pair runs keep
+startup, ordinary object serialization, ordinary object unserialization and
+the changed malformed path below +1% in both runs, with matching outputs.
+
+The monitored supported debt is now 900 failures: 18 strings, zero array and
+882 Zend/lang. The complete 216-case trait neighborhood has zero ordinary
+failure. Read-only clustering selects the remaining cold serial typed-property
+validation case next: `serialize/bug70121.phpt`.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
