@@ -8,6 +8,85 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`callable-constant-initializer-materialization`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. Static Closures and first-class
+function or static-method callables now materialize in class constants and in
+instance or static property initializers. A compiler-owned zero-argument
+factory preserves the declaration's namespace, class, parent, private scope,
+source identity and deferred exception boundary. Its result is cached once so
+repeated reads and object construction retain PHP's Closure identity and
+function-static state.
+
+Factories live in a request-local private function table and therefore cannot
+leak through ordinary lookup, callable checks, Reflection or
+`get_defined_functions()`. Class constants materialize on their normal first
+read or object-activation boundary; instance defaults materialize on object
+construction; static defaults materialize before their first read, reference
+fetch or write. Failed creation remains retryable. Non-static or capturing
+Closures and arrow functions retain PHP's compile-time diagnostics, while
+class-scoped Closure backtraces publish the declaring class and `::`/`->`
+call type without changing the Closure's public name.
+
+Four original E2E regressions cover Closure/FCC identity, shared function
+statics, nested arrays, a property default sourced from a callable class
+constant, private scope, inheritance, static storage, trace metadata, deferred
+missing owners, read/write activation, invalid Closure forms and private
+factory invisibility. The 13 selected Closure/FCC compile failures all pass.
+The full audit additionally discovers `Zend/tests/constants/bug74657.phpt` as
+a same-root pass: property defaults no longer fold an unresolved class
+constant to a placeholder null. The exact delta is therefore `+14/-0`, with
+no other status or category movement. The complete 59-case Closure/FCC
+neighborhood is 37 pass, ten output failures, four runtime failures and eight
+extension skips.
+
+The complete combined audit covers 7,174 cases: 5,786 pass, 994 fail, 182
+skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
+fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
+and one unsupported. Zend/lang moves from 4,313 to 4,327 pass, with 976
+failures, 115 skips and 181 unsupported cases. Two serial exact-final-binary
+Zend/lang runs have byte-identical manifests and summaries, whose SHA-256
+values are respectively
+`84fe2dc8173315ffbf8771b0a3d07cc02088203ff53c8d9c492b4447b40d6b58`
+and `786994941280c4fb468a889386a4a07bdf8bbeefe00e7fb7801015578a4ea7a7`.
+Repeated strings and array outcome projections are byte-identical and hash to
+`3e3ae0063c61f4f6799fdfba99c0c5654b2dbcda6abd5b501442bc3d993e14d4`
+and `c8d79f587b6487d167e3250ee32d9f05d238a891bf595a3efdff4b5327555ae6`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at 1,622 unsafe blocks against a 1,623 ceiling, 289 unsafe
+functions, 367 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass. The change adds no dependency, unsafe block, opcode,
+frame, FunctionCommon, Value or object layout. It adds cold callable-factory
+metadata and one allocation-lazy private HashMap to `ExecutorGlobals`.
+
+Two exact-final-binary CPU-2-pinned, performance-governor, order-balanced
+32-pair release runs with four warmups compare retained parent SHA-256
+`1173c22d00f4aa154f99fe67548b19ca6b7b411129964be818ed627aaf934203`
+with candidate
+`6a61409e4858bfad656bfcdcddd0af6b055456324ba41e7314d72fc5b2a1a7d4`.
+Paired medians are -1.342%/-1.720% for 100 startups,
++1.255%/+1.346% for 500 scalar-initializer class compilations,
+-4.083%/-3.432% for one million cached static-property reads and
+-0.767%/-0.074% for one million ordinary Closure calls. Comparable outputs
+match and every paired median remains below +5%. The benchmark harness hashes
+to `5fb7ebb6d793157ba6501eb9bbfa8ab8717ea376865e7ac540245b1131e4b5a1`;
+the complete observation streams hash to
+`09dbf997f260ca2a1a86f4f3a247dc27f04278da6dda0c9697d96d4360c531bb`
+and `7a798577c1f96451ca87a25601ae2b42c7a57d20d7b0f086be26a2499b67c3f0`.
+
+This checkpoint does not claim callable expressions in attributes, global
+dynamic-callable validation, callable autoload completion, abstract or magic
+method creation, trait-static deprecation handling or the remaining namespace
+fallback case. The monitored supported debt is now 994 failures: 18 strings,
+zero array and 976 Zend/lang. Read-only clustering selects six global callable
+constant-expression validation failures next: the capturing-Closure case,
+four dynamic/illegal FCC-name cases and the instance-call expression case.
+
+The implementation checkpoint is commit `01554589`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `constant-property-initializer-materialization`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. Enum case `name` and `value` reads
 now materialize in class constants, enum backing expressions and instance or

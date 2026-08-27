@@ -3614,12 +3614,29 @@ and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-2-pinned 32-pair runs keep
 startup, 500 enum declaration compilations, 500 scalar-initializer compilations
 and one million enum-default fetches below +5%, with matching outputs.
 
-The monitored supported debt is now 1,008 failures: 18 strings, zero array and
-990 Zend/lang. Read-only failure clustering selects the 13 adjacent closure
-and first-class-callable constant-expression compile failures next. Their
-already-supported static forms must materialize in class constants and
-instance/static property initializers while preserving scope and invalid-form
-diagnostics.
+The `01554589` `callable-constant-initializer-materialization` checkpoint then
+moves Zend/lang from 4,313 to 4,327 pass, exactly `+14/-0`; strings stay 631/733
+and array stays 828/842 with no other status or category movement. Thirteen
+selected static Closure/FCC class-constant and property-initializer compile
+failures pass, and the same deferred-constant correction also discovers
+`constants/bug74657.phpt`. Compiler-owned private factories retain namespace,
+class scope, source diagnostics, cached Closure identity and function statics.
+Class constants, instance defaults and static defaults materialize at PHP's
+read/construction/read-reference-write activation boundaries without exposing
+the factories through user function lookup, callable checks or introspection.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical manifests
+and summaries; repeated strings/array outcome projections also match the exact
+parent. All five Cargo configurations, all-feature/all-target, formatting,
+HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9
+S2/S3 pass. Two exact-final-binary CPU-2-pinned 32-pair runs keep startup, 500
+scalar-initializer class compilations, one million cached static-property reads
+and one million ordinary Closure calls below +5%, with matching outputs.
+
+The monitored supported debt is now 994 failures: 18 strings, zero array and
+976 Zend/lang. Read-only failure clustering selects six global callable
+constant-expression validation failures next: the capturing-Closure case,
+four dynamic or illegal FCC-name cases and the instance-call expression case.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
