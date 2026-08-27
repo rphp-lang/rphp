@@ -28,9 +28,21 @@ use super::{
 pub(super) fn fn_file_get_contents(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
+    if let Some(data) = decode_data_uri(path.as_ref()) {
+        match data {
+            Ok(bytes) => ret!(rv, Value::string(bytes_to_php_string(&bytes))),
+            Err(error) => {
+                report_data_uri_error(ed, eg, path.as_ref(), error)?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+                ret!(rv, Value::bool(false));
+            }
+        }
+    }
     match std::fs::read(path.as_ref()) {
         Ok(bytes) => ret!(rv, Value::string(bytes_to_php_string(&bytes))),
         Err(_) => ret!(rv, Value::bool(false)),
@@ -47,6 +59,146 @@ pub(super) fn bytes_to_php_string(bytes: &[u8]) -> String {
 /// Convert a PHP-style string back to raw bytes (inverse of bytes_to_php_string).
 pub(super) fn php_string_to_bytes(s: &str) -> Vec<u8> {
     s.chars().map(|c| c as u8).collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DataUriError {
+    IllegalParameter,
+    UnableToDecode,
+    MissingComma,
+}
+
+impl DataUriError {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::IllegalParameter => "rfc2397: illegal parameter",
+            Self::UnableToDecode => "rfc2397: unable to decode",
+            Self::MissingComma => "rfc2397: no comma in URL",
+        }
+    }
+}
+
+/// Decode the RFC 2397 subset exposed by PHP's lowercase `data:` wrapper.
+/// The wrapper percent-decodes ordinary payloads but passes base64 payloads
+/// directly to the strict decoder. Invalid percent escapes remain literal.
+pub(super) fn decode_data_uri(uri: &str) -> Option<Result<Vec<u8>, DataUriError>> {
+    let encoded = uri.strip_prefix("data:")?;
+    let encoded = encoded.strip_prefix("//").unwrap_or(encoded);
+    let Some((metadata, payload)) = encoded.split_once(',') else {
+        return Some(Err(DataUriError::MissingComma));
+    };
+
+    let mut fields = metadata.split(';');
+    let _media_type = fields.next();
+    let parameters: Vec<_> = fields.collect();
+    let mut base64 = false;
+    for (index, parameter) in parameters.iter().enumerate() {
+        if *parameter == "base64" && index + 1 == parameters.len() {
+            base64 = true;
+        } else if !parameter.contains('=') {
+            return Some(Err(DataUriError::IllegalParameter));
+        }
+    }
+
+    let bytes = php_string_to_bytes(payload);
+    if base64 {
+        return Some(crate::base64::decode(&bytes, true).ok_or(DataUriError::UnableToDecode));
+    }
+
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && let (Some(high), Some(low)) = (
+                bytes.get(index + 1).and_then(|byte| hex_value(*byte)),
+                bytes.get(index + 2).and_then(|byte| hex_value(*byte)),
+            )
+        {
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else if bytes[index] == b'+' {
+            decoded.push(b' ');
+            index += 1;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    Some(Ok(decoded))
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+pub(super) fn report_data_uri_error(
+    execute_data: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    uri: &str,
+    error: DataUriError,
+) -> Result<(), VmError> {
+    super::report_internal_diagnostic(
+        eg,
+        execute_data,
+        2,
+        "Warning",
+        &format!(
+            "file_get_contents({uri}): Failed to open stream: {}",
+            error.reason()
+        ),
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod data_uri_tests {
+    use super::{DataUriError, decode_data_uri};
+
+    #[test]
+    fn decodes_plain_percent_and_base64_payloads() {
+        assert_eq!(
+            decode_data_uri("data://text/plain,hello%20world%00%2B+"),
+            Some(Ok(b"hello world\0+ ".to_vec()))
+        );
+        assert_eq!(
+            decode_data_uri("data:,plain%2Ctext"),
+            Some(Ok(b"plain,text".to_vec()))
+        );
+        assert_eq!(
+            decode_data_uri("data:text/plain;base64,AAECYWJj"),
+            Some(Ok(b"\0\x01\x02abc".to_vec()))
+        );
+        assert_eq!(
+            decode_data_uri("data:text/plain,a%GGb%2"),
+            Some(Ok(b"a%GGb%2".to_vec()))
+        );
+    }
+
+    #[test]
+    fn rejects_php_rfc2397_parameter_and_base64_boundaries() {
+        assert_eq!(
+            decode_data_uri("data:text/plain;BASE64,YQ=="),
+            Some(Err(DataUriError::IllegalParameter))
+        );
+        assert_eq!(
+            decode_data_uri("data:text/plain;foo,bar"),
+            Some(Err(DataUriError::IllegalParameter))
+        );
+        assert_eq!(
+            decode_data_uri("data:text/plain;base64,YQ==="),
+            Some(Err(DataUriError::UnableToDecode))
+        );
+        assert_eq!(
+            decode_data_uri("data:text/plain"),
+            Some(Err(DataUriError::MissingComma))
+        );
+        assert_eq!(decode_data_uri("DATA:text/plain,upper"), None);
+    }
 }
 
 /// Default-build file_put_contents($filename, $data, $flags = 0): int|false.

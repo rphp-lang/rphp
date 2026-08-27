@@ -161,6 +161,50 @@ pub(super) fn fn_file_get_contents(
         return Ok(());
     }
 
+    if let Some(data) = super::filesystem::decode_data_uri(&filename) {
+        let bytes = match data {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                super::filesystem::report_data_uri_error(execute_data, eg, &filename, error)?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+                return return_value(return_pointer, Value::bool(false));
+            }
+        };
+        let start = if offset < 0 {
+            let distance = usize::try_from(offset.unsigned_abs()).unwrap_or(usize::MAX);
+            let Some(start) = bytes.len().checked_sub(distance) else {
+                super::report_internal_diagnostic(
+                    eg,
+                    execute_data,
+                    2,
+                    "Warning",
+                    &format!(
+                        "file_get_contents(): Failed to seek to position {offset} in the stream"
+                    ),
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+                return return_value(return_pointer, Value::bool(false));
+            };
+            start
+        } else {
+            usize::try_from(offset)
+                .unwrap_or(usize::MAX)
+                .min(bytes.len())
+        };
+        let end = length
+            .and_then(|length| start.checked_add(length))
+            .unwrap_or(bytes.len())
+            .min(bytes.len());
+        return return_value(
+            return_pointer,
+            Value::string(super::bytes_to_php_string(&bytes[start..end])),
+        );
+    }
+
     #[cfg(feature = "include-path")]
     let filename = super::include_path::resolve_for_open(eg, &filename, use_include_path);
     let mut stream = match PhpStream::open(&filename, "r") {
