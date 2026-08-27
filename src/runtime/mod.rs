@@ -98,6 +98,21 @@ struct MethodDeclaration<'a> {
     parameter_default_diagnostics: Option<&'a [Option<Box<str>>]>,
 }
 
+#[derive(Clone)]
+struct EffectiveTraitMethod {
+    target: String,
+    origin_owner: String,
+    origin_method: String,
+}
+
+struct TraitCompositionMethod {
+    target: String,
+    provider: String,
+    source_method: String,
+    origin_owner: String,
+    origin_method: String,
+}
+
 /// Stable sidecar for one reified static-property declaration. The weak
 /// receiver guard makes pointer reuse safe without retaining assigned objects;
 /// a different or already-dropped object always falls back to the full
@@ -4276,6 +4291,306 @@ impl ExecutorGlobals {
         self.register_class_mode(class_def, false)
     }
 
+    fn same_effective_trait_method(
+        left_owner: &str,
+        left_method: &str,
+        right_owner: &str,
+        right_method: &str,
+    ) -> bool {
+        left_owner.eq_ignore_ascii_case(right_owner)
+            && left_method.eq_ignore_ascii_case(right_method)
+    }
+
+    /// Recover the effective concrete methods of an already-linked trait in
+    /// source-composition order. The original declaration identity survives
+    /// nested composition so a diamond which reaches the same implementation
+    /// twice remains legal, including when independent static storage forced
+    /// the runtime to clone its function pointer.
+    #[cold]
+    fn effective_trait_methods(
+        &self,
+        trait_def: &ClassDef,
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> Vec<EffectiveTraitMethod> {
+        let visit_key = trait_def.name.to_ascii_lowercase();
+        if !visiting.insert(visit_key.clone()) {
+            return Vec::new();
+        }
+
+        let own_concrete = trait_def
+            .methods
+            .iter()
+            .filter(|method| !trait_def.method_is_abstract(&method.0))
+            .map(|method| method.0.to_ascii_lowercase())
+            .collect::<std::collections::HashSet<_>>();
+        let mut effective = trait_def
+            .methods
+            .iter()
+            .filter(|method| !trait_def.method_is_abstract(&method.0))
+            .filter(|method| {
+                self.function_table
+                    .contains_key(&format!("{}::{}", trait_def.name, method.0).to_ascii_lowercase())
+            })
+            .map(|method| EffectiveTraitMethod {
+                target: method.0.clone(),
+                origin_owner: trait_def.name.clone(),
+                origin_method: method.0.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        let nested = trait_def
+            .uses
+            .iter()
+            .filter_map(|used| {
+                self.find_class(used).map(|definition| {
+                    (
+                        definition.name.clone(),
+                        self.effective_trait_methods(definition, visiting),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        for (provider, methods) in &nested {
+            for method in methods {
+                let target_key = method.target.to_ascii_lowercase();
+                if own_concrete.contains(&target_key)
+                    || trait_def.trait_precedences.iter().any(|precedence| {
+                        precedence.method.eq_ignore_ascii_case(&method.target)
+                            && precedence
+                                .instead_of
+                                .iter()
+                                .any(|excluded| excluded.eq_ignore_ascii_case(provider))
+                    })
+                {
+                    continue;
+                }
+                if let Some(previous) = effective
+                    .iter()
+                    .find(|candidate| candidate.target.eq_ignore_ascii_case(&method.target))
+                {
+                    if Self::same_effective_trait_method(
+                        &previous.origin_owner,
+                        &previous.origin_method,
+                        &method.origin_owner,
+                        &method.origin_method,
+                    ) {
+                        continue;
+                    }
+                    // An already-linked trait cannot retain an unresolved
+                    // collision. Keep its first effective entry defensively;
+                    // validation of the owning trait reports the ambiguity.
+                    continue;
+                }
+                effective.push(method.clone());
+            }
+        }
+
+        for adaptation in &trait_def.trait_aliases {
+            let Some(alias) = adaptation.alias.as_ref() else {
+                continue;
+            };
+            // The current compact adaptation AST represents PHP 8.3's
+            // `method as final;` modifier in the alias slot. It does not add a
+            // method named `final`, so it cannot participate in a collision.
+            if alias.eq_ignore_ascii_case("final") {
+                continue;
+            }
+            if own_concrete.contains(&alias.to_ascii_lowercase()) {
+                continue;
+            }
+            let source = adaptation
+                .trait_name
+                .as_ref()
+                .and_then(|owner| {
+                    nested
+                        .iter()
+                        .find(|(provider, _)| provider.eq_ignore_ascii_case(owner))
+                })
+                .and_then(|(_, methods)| {
+                    methods
+                        .iter()
+                        .find(|method| method.target.eq_ignore_ascii_case(&adaptation.method))
+                })
+                .or_else(|| {
+                    nested.iter().find_map(|(_, methods)| {
+                        methods
+                            .iter()
+                            .find(|method| method.target.eq_ignore_ascii_case(&adaptation.method))
+                    })
+                });
+            let Some(source) = source else {
+                continue;
+            };
+            if let Some(previous) = effective
+                .iter()
+                .find(|candidate| candidate.target.eq_ignore_ascii_case(alias))
+            {
+                if Self::same_effective_trait_method(
+                    &previous.origin_owner,
+                    &previous.origin_method,
+                    &source.origin_owner,
+                    &source.origin_method,
+                ) {
+                    continue;
+                }
+                continue;
+            }
+            effective.push(EffectiveTraitMethod {
+                target: alias.clone(),
+                origin_owner: source.origin_owner.clone(),
+                origin_method: source.origin_method.clone(),
+            });
+        }
+
+        visiting.remove(&visit_key);
+        effective
+    }
+
+    /// PHP rejects a class-like declaration when two distinct concrete trait
+    /// implementations still occupy the same composed method name after
+    /// precedence and alias rules. This is a cold link invariant: declarations
+    /// owned by the consumer win, abstract requirements do not collide, and a
+    /// repeated path to the same original method is harmless.
+    #[cold]
+    fn unresolved_trait_method_collision(&self, class_def: &ClassDef) -> Option<String> {
+        let own_concrete = class_def
+            .methods
+            .iter()
+            .filter(|method| !class_def.method_is_abstract(&method.0))
+            .map(|method| method.0.to_ascii_lowercase())
+            .collect::<std::collections::HashSet<_>>();
+        let providers = class_def
+            .uses
+            .iter()
+            .filter_map(|used| {
+                self.find_class(used).map(|definition| {
+                    (
+                        definition.name.clone(),
+                        self.effective_trait_methods(
+                            definition,
+                            &mut std::collections::HashSet::new(),
+                        ),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut grouped = (0..providers.len())
+            .map(|_| Vec::<TraitCompositionMethod>::new())
+            .collect::<Vec<_>>();
+
+        for (index, (provider, methods)) in providers.iter().enumerate() {
+            for method in methods {
+                if own_concrete.contains(&method.target.to_ascii_lowercase())
+                    || class_def.trait_precedences.iter().any(|precedence| {
+                        precedence.method.eq_ignore_ascii_case(&method.target)
+                            && precedence
+                                .instead_of
+                                .iter()
+                                .any(|excluded| excluded.eq_ignore_ascii_case(provider))
+                    })
+                {
+                    continue;
+                }
+                grouped[index].push(TraitCompositionMethod {
+                    target: method.target.clone(),
+                    provider: provider.clone(),
+                    source_method: method.target.clone(),
+                    origin_owner: method.origin_owner.clone(),
+                    origin_method: method.origin_method.clone(),
+                });
+            }
+        }
+
+        for adaptation in &class_def.trait_aliases {
+            let Some(alias) = adaptation.alias.as_ref() else {
+                continue;
+            };
+            if alias.eq_ignore_ascii_case("final") {
+                continue;
+            }
+            if own_concrete.contains(&alias.to_ascii_lowercase()) {
+                continue;
+            }
+            let source = adaptation
+                .trait_name
+                .as_ref()
+                .and_then(|owner| {
+                    providers
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (provider, _))| provider.eq_ignore_ascii_case(owner))
+                })
+                .and_then(|(index, (_, methods))| {
+                    methods
+                        .iter()
+                        .find(|method| method.target.eq_ignore_ascii_case(&adaptation.method))
+                        .map(|method| (index, method))
+                })
+                .or_else(|| {
+                    providers
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, (_, methods))| {
+                            methods
+                                .iter()
+                                .find(|method| {
+                                    method.target.eq_ignore_ascii_case(&adaptation.method)
+                                })
+                                .map(|method| (index, method))
+                        })
+                });
+            let Some((index, source)) = source else {
+                continue;
+            };
+            grouped[index].push(TraitCompositionMethod {
+                target: alias.clone(),
+                provider: providers[index].0.clone(),
+                source_method: source.target.clone(),
+                origin_owner: source.origin_owner.clone(),
+                origin_method: source.origin_method.clone(),
+            });
+        }
+
+        let mut occupied = std::collections::HashMap::<String, TraitCompositionMethod>::new();
+        for candidate in grouped.into_iter().flatten() {
+            let target_key = candidate.target.to_ascii_lowercase();
+            let Some(previous) = occupied.get(&target_key) else {
+                occupied.insert(target_key, candidate);
+                continue;
+            };
+            if Self::same_effective_trait_method(
+                &previous.origin_owner,
+                &previous.origin_method,
+                &candidate.origin_owner,
+                &candidate.origin_method,
+            ) {
+                continue;
+            }
+            let source_method = if candidate.provider.eq_ignore_ascii_case(&previous.provider) {
+                &candidate.target
+            } else {
+                &candidate.source_method
+            };
+            let location = class_def
+                .source_file
+                .as_ref()
+                .map_or_else(String::new, |file| {
+                    format!(" in {file} on line {}", class_def.declaration_line)
+                });
+            return Some(format!(
+                "Trait method {}::{} has not been applied as {}::{}, because of collision with {}::{}{}",
+                candidate.provider,
+                source_method,
+                class_def.name,
+                candidate.target,
+                previous.provider,
+                previous.target,
+                location
+            ));
+        }
+        None
+    }
+
     /// A resolved `use` edge must name a trait. Runtime declarations surface
     /// this relation as a catchable Error at the declaration opcode, so keep
     /// the message separate from registration's fallback fatal formatting.
@@ -4403,6 +4718,9 @@ impl ExecutorGlobals {
                 "Class {owner} is not a trait, Only traits may be used in 'as' and 'insteadof' statements{}",
                 relation_location()
             ));
+        }
+        if let Some(error) = self.unresolved_trait_method_collision(&class_def) {
+            return Err(error);
         }
         let class_table = &self.class_table;
         self.generic_metadata
