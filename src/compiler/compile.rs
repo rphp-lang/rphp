@@ -42,9 +42,9 @@ use crate::vm::instruction::{
     FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_FUNC_ARG,
     FETCH_DIM_FUNC_ARG_NAMED, FETCH_DIM_FUNC_ARG_ROOT_CV, FETCH_DIM_ISSET, FETCH_DIM_MUTABLE,
     FETCH_DIM_SILENT, FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME,
-    FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC,
-    FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT,
-    INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
+    FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND, FETCH_OBJ_CONSTANT_EXPRESSION,
+    FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE,
+    FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
     NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
     OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OpType, PROPERTY_INCDEC_DECREMENT,
     PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE,
@@ -10615,6 +10615,9 @@ impl Compiler {
                 fetch.op2_type = OpType::Const;
                 fetch.result = tmp;
                 fetch.result_type = OpType::Tmp;
+                if self.compiling_constant_expression {
+                    fetch._pad |= FETCH_OBJ_CONSTANT_EXPRESSION;
+                }
                 if matches!(object.as_ref(), Expr::Variable { name, .. } if name == "this")
                     && self.current_hook_matches(property)
                 {
@@ -10660,6 +10663,9 @@ impl Compiler {
                 fetch.op2_type = property_type;
                 fetch.result = tmp;
                 fetch.result_type = OpType::Tmp;
+                if self.compiling_constant_expression {
+                    fetch._pad |= FETCH_OBJ_CONSTANT_EXPRESSION;
+                }
                 self.push_instruction_at_line(fetch, *line);
                 if let Some(index) = nullsafe_patch {
                     receiver_patches.push(index);

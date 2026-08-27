@@ -210,6 +210,11 @@ pub const OBJ_PROP_HOOK_BYPASS: u16 = 1 << 5;
 /// cell that will be written back after the operation.
 pub const FETCH_OBJ_REFERENCE_SOURCE: u16 = 1 << 6;
 
+/// Property read emitted while materializing a constant expression. PHP only
+/// permits enum-case receivers in this context; ordinary object receivers are
+/// rejected after the dynamic property name has been evaluated and converted.
+pub const FETCH_OBJ_CONSTANT_EXPRESSION: u16 = 1 << 7;
+
 /// `AssignObjProp` is materializing a reference binding, which uses PHP's
 /// modification diagnostic for a null or scalar receiver.
 pub const ASSIGN_OBJ_MODIFY: u16 = 1;

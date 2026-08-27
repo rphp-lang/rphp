@@ -261,6 +261,105 @@ try { staticPalette(); } catch (Error $error) { echo 'static:', $error->getMessa
 }
 
 #[test]
+fn constant_expression_property_fetches_keep_enum_nullsafe_and_runtime_paths() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+enum UnitSignal { case Ready; }
+enum BackedSignal: string { case Ready = 'ready'; }
+
+const UNIT_NAME = UnitSignal::Ready?->name;
+const BACKED_VALUE = BackedSignal::Ready->value;
+const NULLSAFE_VALUE = null?->missing;
+
+function enumDefaults(
+    $name = UnitSignal::Ready->name,
+    $value = BackedSignal::Ready?->value,
+    $empty = null?->missing,
+): void {
+    var_dump($name, $value, $empty);
+}
+
+enumDefaults();
+class RuntimeProperty { public $value = 'runtime'; }
+$object = new RuntimeProperty();
+echo UNIT_NAME, ':', BACKED_VALUE, ':', $object->value, ':', $object?->value;
+"#,
+        ),
+        concat!(
+            "string(5) \"Ready\"\n",
+            "string(5) \"ready\"\n",
+            "NULL\n",
+            "Ready:ready:runtime:runtime",
+        )
+    );
+}
+
+#[test]
+fn non_enum_constant_property_errors_follow_name_order_and_repeat_for_defaults() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ConstantOwner {
+    public $chosen = 42;
+    public function __construct() { echo 'owner|'; }
+}
+class DynamicPropertyName {
+    public function __construct() { echo 'name|'; }
+    public function __toString() { echo 'string|'; return 'chosen'; }
+}
+function materialize($value = (new ConstantOwner)->{new DynamicPropertyName}) {
+    echo "body:$value|";
+}
+
+materialize('given');
+for ($attempt = 0; $attempt < 2; $attempt++) {
+    try {
+        materialize();
+    } catch (Error $error) {
+        echo get_class($error), ':', $error->getMessage(), '|';
+    }
+}
+"#,
+        ),
+        concat!(
+            "body:given|",
+            "owner|name|string|Error:Fetching properties on non-enums in constant expressions is not allowed|",
+            "owner|name|string|Error:Fetching properties on non-enums in constant expressions is not allowed|",
+        )
+    );
+}
+
+#[test]
+fn non_enum_nullsafe_property_of_another_constant_stops_at_the_fetch_origin() {
+    let error = run_php_expect_error_with_source_context(
+        r#"<?php
+class DeferredObject { public $value = 7; }
+const OWNER = new DeferredObject();
+const INVALID =
+    OWNER?->value;
+echo 'unreachable';
+"#,
+        "/virtual/non-enum-constant-property.php",
+        "/virtual",
+    );
+
+    let rphp::vm::execute::VmError::Fatal(message) = error else {
+        panic!("expected a fatal error");
+    };
+    assert_eq!(
+        message,
+        concat!(
+            "Uncaught Error: Fetching properties on non-enums in constant expressions is not allowed ",
+            "in /virtual/non-enum-constant-property.php:5\n",
+            "Stack trace:\n",
+            "#0 {main}\n",
+            "  thrown in /virtual/non-enum-constant-property.php on line 5",
+        )
+    );
+}
+
+#[test]
 fn goto_keyword_spelling_is_preserved_for_class_constant_names() {
     assert_eq!(
         run_php(

@@ -7371,7 +7371,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::FetchObjR => {
-                match try_cached_fetch_obj_r(frame, op_array, opline) {
+                match try_cached_fetch_obj_r(eg, frame, op_array, opline) {
                     CachedFetchObjResult::Miss => {
                         match op_fetch_obj_r_slow(eg, frame, op_array, opline)? {
                             ColdResult::NewFrame(nf, no) => {

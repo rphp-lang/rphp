@@ -1030,6 +1030,7 @@ fn finish_cached_fetch_obj_r(
 
 #[inline(always)]
 fn try_cached_fetch_obj_r(
+    eg: &ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
@@ -1040,6 +1041,15 @@ fn try_cached_fetch_obj_r(
     .dereferenced();
     if obj_val.value_type() != ValueType::Object {
         return CachedFetchObjResult::Miss;
+    }
+
+    if opline._pad & FETCH_OBJ_CONSTANT_EXPRESSION != 0 {
+        // SAFETY: the tag check above proves an Object value, and no
+        // re-entrant operation or object mutation occurs before this read.
+        let class_id = unsafe { obj_val.object_class_id_unchecked() };
+        if class_id == 0 || !eg.class_by_id(class_id).is_some_and(|class| class.is_enum) {
+            return CachedFetchObjResult::Miss;
+        }
     }
 
     let ip = unsafe {
@@ -1207,6 +1217,24 @@ fn op_fetch_obj_r_slow_inner<'a>(
         ConvertedPropertyName::Control(result) => return Ok(result),
     };
     let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
+
+    if opline._pad & FETCH_OBJ_CONSTANT_EXPRESSION != 0 {
+        let is_enum = obj_val
+            .as_object()
+            .and_then(|object| eg.find_class(&object.class_name))
+            .is_some_and(|class| class.is_enum);
+        if !is_enum {
+            return Ok(object_property_throw_at(
+                eg,
+                frame,
+                op_array,
+                ip,
+                "Error",
+                "Fetching properties on non-enums in constant expressions is not allowed"
+                    .to_string(),
+            )?);
+        }
+    }
 
     if let Some(obj) = obj_val.as_object() {
 
