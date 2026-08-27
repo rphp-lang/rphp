@@ -3936,12 +3936,34 @@ release gate records +0.587% startup, +0.061% reference-foreach parse/compile,
 foreach, -1.697% by-value call foreach and -0.349% by-value generator foreach,
 with matching checksums and every path below +5%.
 
-The monitored supported debt is now 883 failures: 18 strings, zero array and
-865 Zend/lang. Read-only clustering selects
-`Zend/tests/foreach/foreach_018.phpt` next: stdClass iteration currently exposes
-raw NUL-mangled array-cast property keys rather than their PHP-visible terminal
-names. `ArrayAccess`-backed destructuring, `ArrayObject`,
-`SplObjectStorage`, `SplFixedArray` and general SPL remain separate contracts.
+The `68b5498e` `stdclass-mangled-foreach-keys` checkpoint then moves Zend/lang
+from 4,438 to 4,441 pass, exactly `+3/-0`. Canonical dynamic `stdClass`
+iteration keeps raw NUL-mangled property names as storage/writeback identities
+while publishing the terminal PHP-visible key, and malformed names report
+their notice before loop-variable assignment. The live ordered path preserves
+insertion/deletion, nested iteration and by-reference aliases. Array/object
+storage casts retain only genuinely aliased reference cells; singleton wrappers
+separate by value, preserving the existing `bugGH-8655` pass. User-class
+by-value iteration remains on its visibility-filtered materialization path.
+
+Two exact-final-binary Zend/lang runs have the same status/category projection;
+two strings/array projections also match the exact parent. All five Cargo
+configurations, all-feature/all-target, formatting, HTML data, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production
+remains below the unsafe ceiling at 1,619 blocks and 289 functions. One
+CPU-2-pinned 32-pair release gate records -9.174% mangled `stdClass` foreach,
+-1.457% user-class foreach, -33.946% by-reference `stdClass`, -4.503% property
+writes and -4.578% ordinary casts, with matching outputs. A reference-bearing
+cast records +4.341% candidate contract cost; the semantically incomplete
+parent is not presented as a like-for-like baseline. A generalized direct
+user-class path was rejected after a roughly 0.21-to-0.88-second slowdown.
+
+The monitored supported debt is now 880 failures: 18 strings, zero array and
+862 Zend/lang. Read-only clustering selects
+`Zend/tests/foreach/foreach_008.phpt` next: nested by-reference mutation skips
+the surviving bucket after two unsets. `ArrayAccess`-backed destructuring,
+`ArrayObject`, `SplObjectStorage`, `SplFixedArray` and general SPL remain
+separate contracts.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
