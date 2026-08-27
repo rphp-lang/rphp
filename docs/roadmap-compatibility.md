@@ -3670,11 +3670,32 @@ S2/S3 pass. Two exact-final-binary CPU-2-pinned 32-pair runs keep startup, 500
 simple-trait consumer links, 500 adapted-trait consumer links and one million
 ordinary trait-method calls below +3%, with matching outputs.
 
-The monitored supported debt is now 982 failures: 18 strings, zero array and
-964 Zend/lang. Read-only expected-message clustering selects nine trait-method
-composition collisions next. They share one missing link invariant: RPHP
-currently accepts and sometimes executes an ambiguous method, whereas PHP 8.5
-rejects the composed class before user code runs.
+The `746eff01` `trait-method-composition-collision-validation` checkpoint then
+moves Zend/lang from 4,339 to 4,348 pass, exactly `+9/-0`; strings stay 631/733
+and array stays 828/842 with no other status or category movement. Cold
+class-like linking now rejects distinct concrete trait implementations that
+remain under one composed method name. It preserves source trait/method order,
+case-insensitive names and alias-source diagnostics while tracking original
+identity through nested composition. Consumer methods, abstract requirements,
+resolved precedence, excluded-method aliases, duplicate use and same-origin
+diamonds remain valid; private and magic methods collide normally. Five
+original CLI regressions cover the rejection and preservation boundaries.
+
+Two exact-final-binary Zend/lang audits have byte-identical manifests and
+summaries; repeated serial strings/array outcome projections also match the
+exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-2-pinned 32-pair runs keep
+startup, 500 simple-trait consumer links, 500 precedence-and-alias consumer
+links and one million ordinary trait-method calls below +3%, with matching
+outputs.
+
+The monitored supported debt is now 973 failures: 18 strings, zero array and
+955 Zend/lang. Read-only actual/expected clustering selects 12 trait-adaptation
+resolution failures next: missing or ambiguous alias/precedence methods,
+unused adaptation owners, an unknown precedence owner and self-excluding
+`insteadof`. They share the absent pre-composition adaptation resolver and can
+be validated without changing runtime dispatch.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument

@@ -8,6 +8,85 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`trait-method-composition-collision-validation`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. Class-like linking now rejects two
+distinct concrete trait implementations that remain under the same composed
+method name after `insteadof` and alias rules. Candidate order follows source
+trait order and method declaration order, method names remain case-insensitive,
+and diagnostics retain canonical trait/class spelling, alias source and the
+consumer declaration line.
+
+The cold validator tracks original method identity through nested composition,
+so a diamond reaching the same implementation twice remains valid even when
+function-static storage requires separate runtime pointers. Consumer-owned
+methods, abstract requirements, explicit precedence, aliases of excluded
+methods and duplicate use of one trait remain valid. Private and magic methods
+participate in collisions like ordinary concrete methods.
+
+Five original CLI regressions cover direct public/private/magic and
+case-insensitive collisions, source-ordered alias collisions, aliases that do
+not resolve the original name, eager trait composition, consumer overrides,
+abstract/concrete pairing, resolved precedence, excluded-method aliases,
+duplicate use, nested same-origin composition and the existing `as final`
+parser sentinel. All nine selected upstream cases now pass, exactly `+9/-0`:
+`bugs/case-sensitive.phpt`, `conflict001.phpt`, `conflict003.phpt`,
+`error_011.phpt`, `error_015.phpt`, `language010.phpt`, `language011.phpt`,
+`language014.phpt` and `methods_002.phpt`. The complete 216-case trait
+neighborhood moves from 153 to 162 pass, with 29 output, four parse and 19
+runtime failures, one extension skip and one unsupported case; no other status
+or category moves.
+
+The complete combined audit covers 7,174 cases: 5,807 pass, 973 fail, 182
+skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
+fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
+and one unsupported. Zend/lang moves from 4,339 to 4,348 pass, with 955
+failures, 115 skips and 181 unsupported cases. Two exact-final-binary Zend/lang
+runs have byte-identical manifests and summaries, whose SHA-256 values are
+respectively
+`a2fa8b312bdf57d9ecacf413340cccaf8cbdd67cf2184a23f9797ce33d5f4a07`
+and `565ad7902eefc0dcf75d67316b41996b113cebaa7d0264c235d89860b7cffaa1`.
+Repeated serial strings and array outcome projections are byte-identical to
+the exact parent and hash to
+`3e3ae0063c61f4f6799fdfba99c0c5654b2dbcda6abd5b501442bc3d993e14d4`
+and `c8d79f587b6487d167e3250ee32d9f05d238a891bf595a3efdff4b5327555ae6`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at 1,622 unsafe blocks against a 1,623 ceiling, 289 unsafe
+functions, 367 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass. The change adds no dependency, unsafe block, opcode or
+persistent layout field. It adds only cold link-time origin reconstruction and
+focused regressions; ordinary method lookup and dispatch are unchanged.
+
+Two exact-final-binary CPU-2-pinned, performance-governor, order-balanced
+32-pair release runs with four warmups compare retained parent SHA-256
+`5f26bc73e9915c00e3041efc8925ef0eedc2ff0687f6102ebe84f06cc3dccdc4`
+with candidate
+`d0857db19e9b44f24d7de9982f97b7f5b7da658baeeca1677a7a55363d67f9f3`.
+Paired medians are -2.923%/-3.140% for 100 startups,
++0.451%/+0.573% for 500 simple-trait consumer links,
++0.700%/+0.401% for 500 precedence-and-alias consumer links and
+-1.664%/-1.667% for one million ordinary trait-method calls. Comparable
+outputs match and every paired median remains below +3%. The benchmark harness
+hashes to
+`ce0d13bce3b84aab552d7f16299a5a481356295c7d7701fd16a2f37bd4e19943`;
+the complete observation streams hash to
+`e4c11fbfe7bc962699669e417d614d57260331ac60062b7096b12b55eaf57850`
+and `ec512082d3df6456c8dcb9c3f65dededa6bb0be5d68adbf7cbe67ac846d6759f`.
+
+This checkpoint does not claim missing or ambiguous adaptation methods,
+adaptation-owner membership, inconsistent precedence exclusions, duplicate
+exclusions, property conflicts, final-alias Reflection metadata or other trait
+signature diagnostics. The monitored supported debt is now 973 failures: 18
+strings, zero array and 955 Zend/lang. Read-only actual/expected clustering
+selects 12 trait-adaptation resolution failures next: missing or ambiguous
+alias/precedence methods, unused adaptation owners, an unknown precedence
+owner and self-excluding `insteadof`.
+
+The implementation checkpoint is commit `746eff01`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `trait-kind-link-validation`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. Class linking now rejects a resolved class or
 interface used directly as a trait with PHP's catchable `Error`, including the
@@ -74,7 +153,7 @@ despite PHP 8.5 rejecting the ambiguous linked class.
 
 The implementation checkpoint is commit `34a3c768`.
 
-The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
+An earlier measured AMD64 PHP 8.5 contract checkpoint is
 `global-callable-constant-expression-validation`, pinned to php-src 8.5
 commit `fcc29c8` and validated against PHP 8.5.9. Global `const`
 declarations now run the shared callable constant-expression validator before
