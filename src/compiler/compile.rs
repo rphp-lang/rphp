@@ -45,17 +45,17 @@ use crate::vm::instruction::{
     CLASS_CONST_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES, EVAL_FLAG_ERROR_SUPPRESS,
     FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_FUNC_ARG,
     FETCH_DIM_FUNC_ARG_NAMED, FETCH_DIM_FUNC_ARG_ROOT_CV, FETCH_DIM_ISSET, FETCH_DIM_MUTABLE,
-    FETCH_DIM_SILENT, FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME,
-    FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND, FETCH_OBJ_CONSTANT_EXPRESSION,
-    FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE,
-    FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
-    NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
-    OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OpType, PROPERTY_INCDEC_DECREMENT,
-    PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE,
-    SEND_FLAG_GLOBALS, SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE,
-    SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
-    STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH,
-    STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    FETCH_DIM_REFERENCE_SOURCE, FETCH_DIM_SILENT, FETCH_DYNAMIC_ERROR_SUPPRESS,
+    FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND,
+    FETCH_OBJ_CONSTANT_EXPRESSION, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY,
+    FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache,
+    Instruction, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
+    NEW_FLAG_UNPACKED_ARGUMENTS, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OpType,
+    PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
+    REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS, SEND_FLAG_INDIRECT_TEMPORARY,
+    SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME,
+    STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND,
+    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -9090,15 +9090,16 @@ impl Compiler {
                             }
                             let defer_temporary_array_fetches =
                                 Self::is_array_write_call_result(root);
-                            let (left, left_type, writeback) =
-                                match self.compile_foreach_reference_source(target, false, true) {
-                                    Ok(source) => source,
-                                    Err(error) => {
-                                        self.deferred_error = Some(error);
-                                        let null = self.add_literal(Value::null());
-                                        return (null, OpType::Const);
-                                    }
-                                };
+                            let (left, left_type, writeback) = match self
+                                .compile_foreach_reference_source(target, false, true, false)
+                            {
+                                Ok(source) => source,
+                                Err(error) => {
+                                    self.deferred_error = Some(error);
+                                    let null = self.add_literal(Value::null());
+                                    return (null, OpType::Const);
+                                }
+                            };
                             if matches!(&writeback, ForeachArrayWriteback::Array(_)) {
                                 self.mark_trailing_mutable_dimension_fetches();
                             }
@@ -9199,7 +9200,7 @@ impl Compiler {
             Expr::PostIncTarget(target) | Expr::PostDecTarget(target) => {
                 let source_line = incdec_target_source_line(target);
                 let (current, current_type, writeback) =
-                    match self.compile_foreach_reference_source(target, false, true) {
+                    match self.compile_foreach_reference_source(target, false, true, false) {
                         Ok(source) => source,
                         Err(error) => {
                             self.deferred_error = Some(error);
@@ -9290,7 +9291,7 @@ impl Compiler {
             Expr::PreIncTarget(target) | Expr::PreDecTarget(target) => {
                 let source_line = incdec_target_source_line(target);
                 let (left, left_type, writeback) =
-                    match self.compile_foreach_reference_source(target, false, true) {
+                    match self.compile_foreach_reference_source(target, false, true, false) {
                         Ok(source) => source,
                         Err(error) => {
                             self.deferred_error = Some(error);
@@ -9850,6 +9851,7 @@ impl Compiler {
                                     match self.compile_foreach_reference_source(
                                         expr,
                                         silent_array_fetch,
+                                        false,
                                         false,
                                     ) {
                                         Ok((op, op_type, writeback)) => {
@@ -13584,7 +13586,7 @@ impl Compiler {
             self.definitely_defined_cvs.insert(cv);
         } else {
             let (target, target_type, writeback) =
-                self.compile_foreach_reference_source(target, true, false)?;
+                self.compile_foreach_reference_source(target, true, false, false)?;
             let mut append = Instruction::new(OpCode::ArrayPushOp);
             append.op1 = target;
             append.op1_type = target_type;

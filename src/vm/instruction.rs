@@ -288,6 +288,11 @@ pub const FETCH_DIM_FUNC_ARG_NAMED: u16 = 1 << 7;
 /// parameter instead autovivifies the root silently.
 pub const FETCH_DIM_FUNC_ARG_ROOT_CV: u16 = 1 << 8;
 
+/// `FetchDimR` supplies a direct array-dimension expression to a by-reference
+/// `foreach`. A string container must normalize the key diagnostics and then
+/// reject reference creation before materializing an offset value.
+pub const FETCH_DIM_REFERENCE_SOURCE: u16 = 1 << 9;
+
 /// `FetchDynamicVar` reads the symbol-table entry without reporting an
 /// undefined-variable diagnostic. Unlike `FETCH_DIM_ISSET`, the fetched value
 /// is preserved; this is required by `??=` and by mutations rooted at a

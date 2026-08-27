@@ -6251,6 +6251,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                             StringOffsetKey::Invalid => None,
                         };
+                        if idx.is_some() && opline._pad & FETCH_DIM_REFERENCE_SOURCE != 0 {
+                            throw_operator!(
+                                "Error",
+                                "Cannot create references to/from string offsets"
+                            );
+                        }
                         if let Some(idx) = idx {
                             let pos = if idx >= 0 {
                                 idx as usize

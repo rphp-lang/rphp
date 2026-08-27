@@ -235,7 +235,7 @@ impl Compiler {
         );
         if contains_reference && mutable {
             let (source, source_type, writeback) =
-                self.compile_foreach_reference_source(source, true, false)?;
+                self.compile_foreach_reference_source(source, true, false, false)?;
             if source_type == OpType::Cv {
                 let internal = self.resolve_cv(&format!("\0list_source_{}", self.next_cv));
                 let mut bind = Instruction::new(OpCode::BindCvRef);
@@ -535,6 +535,7 @@ impl Compiler {
                 source,
                 silent_fetch,
                 warn_undefined_root,
+                false,
             ),
         }
     }
@@ -544,6 +545,7 @@ impl Compiler {
         source: &Expr,
         silent_fetch: bool,
         warn_undefined_root: bool,
+        dimension_reference_source: bool,
     ) -> Result<(u16, OpType, ForeachArrayWriteback), String> {
         // A nullsafe chain is readable but never referenceable. PHP still
         // permits it as a by-reference foreach source by iterating a detached
@@ -771,10 +773,17 @@ impl Compiler {
                 fetch.op2_type = key_type;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
+                if dimension_reference_source {
+                    fetch._pad |= FETCH_DIM_REFERENCE_SOURCE;
+                }
                 if silent_fetch {
                     fetch._pad |= FETCH_DIM_SILENT;
                 }
-                self.instructions.push(fetch);
+                if dimension_reference_source {
+                    self.push_instruction_at_line(fetch, expression_source_line(source));
+                } else {
+                    self.instructions.push(fetch);
+                }
                 Ok((
                     current,
                     OpType::Tmp,
@@ -2268,7 +2277,7 @@ impl Compiler {
                     )
                 } else {
                     let (left, left_type, writeback) =
-                        self.compile_foreach_reference_source(target, false, true)?;
+                        self.compile_foreach_reference_source(target, false, true, false)?;
                     let (right, right_type) = self.compile_expr(expr);
                     (left, left_type, writeback, right, right_type)
                 };
@@ -3108,7 +3117,24 @@ impl Compiler {
                 let reference_iteration = *by_ref || destructure_by_ref;
                 // Compile array expression
                 let (arr_op, arr_type, reference_writeback) = if reference_iteration {
-                    let (op, op_type, writeback) = if matches!(
+                    let (op, op_type, writeback) = if matches!(array, Expr::ErrorSuppress(_)) {
+                        let (op, op_type) = self.compile_expr(array);
+                        if op_type == OpType::Cv {
+                            let detached = self.alloc_tmp();
+                            let mut snapshot = Instruction::new(OpCode::AssignCv);
+                            snapshot.op1 = detached;
+                            snapshot.op1_type = OpType::Tmp;
+                            snapshot.op2 = op;
+                            snapshot.op2_type = op_type;
+                            self.push_instruction_at_line(
+                                snapshot,
+                                expression_source_line(array),
+                            );
+                            (detached, OpType::Tmp, ForeachArrayWriteback::Discard)
+                        } else {
+                            (op, op_type, ForeachArrayWriteback::Discard)
+                        }
+                    } else if matches!(
                         array,
                         Expr::ArrayLiteral(_)
                             | Expr::FunctionCall { .. }
@@ -3120,7 +3146,7 @@ impl Compiler {
                         let (op, op_type) = self.compile_expr(array);
                         (op, op_type, ForeachArrayWriteback::Discard)
                     } else {
-                        self.compile_foreach_reference_source(array, false, false)?
+                        self.compile_foreach_reference_source(array, false, false, true)?
                     };
                     (op, op_type, Some(writeback))
                 } else {

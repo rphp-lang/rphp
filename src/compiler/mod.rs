@@ -28,8 +28,8 @@ use crate::vm::function::{
     CapturedTypedLongFunctionPlan, IndirectScalarLongCallable, IndirectScalarLongFunctionPlan,
 };
 use crate::vm::instruction::{
-    FETCH_DIM_FUNC_ARG, InlineCache, Instruction, KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE,
-    OpType, SEND_FLAG_YIELD_SNAPSHOT,
+    FETCH_DIM_FUNC_ARG, FETCH_DIM_REFERENCE_SOURCE, InlineCache, Instruction, KnownScalarType,
+    LATE_STATIC_PROP_EMBEDDED_SCOPE, OpType, SEND_FLAG_YIELD_SNAPSHOT,
 };
 use crate::vm::opcode::OpCode;
 use crate::vm::planner::{BlockInfo, BlockPlan};
@@ -691,6 +691,7 @@ impl OpArray {
             let entry = self.instructions[entry_ip];
             if closed_region_ip[entry_ip]
                 || entry.opcode != OpCode::FetchDimR
+                || entry._pad & FETCH_DIM_REFERENCE_SOURCE != 0
                 || entry.extended_value != 0
             {
                 continue;
