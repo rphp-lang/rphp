@@ -2890,8 +2890,9 @@ impl DeferredInstancePropertyDefaults {
 pub struct ClassConstantDefinition {
     pub name: String,
     pub value: Value,
-    /// Source unit retained only for deferred magic-constant evaluation and
-    /// use-site dependency diagnostics.
+    /// Source unit retained for diagnostics. A NUL-delimited suffix carries
+    /// the optional class-constant doc comment in the same already-owned cold
+    /// allocation; PHP source paths cannot contain NUL bytes.
     pub source_file: String,
     /// Source expression retained only when dependency diagnostics or a
     /// runtime-defined constant prevent complete eager materialization.
@@ -2912,6 +2913,20 @@ pub struct ClassConstantDefinition {
 }
 
 impl ClassConstantDefinition {
+    #[inline]
+    pub(crate) fn source_file(&self) -> &str {
+        self.source_file
+            .split_once('\0')
+            .map_or(self.source_file.as_str(), |(source_file, _)| source_file)
+    }
+
+    #[inline]
+    pub(crate) fn doc_comment(&self) -> Option<&str> {
+        self.source_file
+            .split_once('\0')
+            .map(|(_, doc_comment)| doc_comment)
+    }
+
     /// Ordinary class-constant reads stay on the established cache fast path.
     /// Only declarations with a direct Deprecated marker, a dependency
     /// expression, or a deferred value need the cold use-site reporter.

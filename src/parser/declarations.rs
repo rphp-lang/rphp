@@ -526,6 +526,7 @@ impl Parser {
         self.class_scope_active = true;
 
         while self.peek() != Token::RBrace && !self.at_eof() {
+            let member_start = self.pos;
             let attributes = self.parse_attribute_groups()?;
             if matches!(self.peek(), Token::Use(_)) {
                 let use_line = match self.advance() {
@@ -602,6 +603,7 @@ impl Parser {
                     &modifiers,
                     false,
                     &attributes,
+                    self.class_member_doc_comment(member_start, self.pos),
                 )?);
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 let (declared, hooks) =
@@ -785,6 +787,7 @@ impl Parser {
         self.in_class_body = true;
 
         while self.peek() != Token::RBrace && !self.at_eof() {
+            let member_start = self.pos;
             let attributes = self.parse_attribute_groups()?;
             // Trait `use` statements: use Foo, Bar;
             if matches!(self.peek(), Token::Use(_)) {
@@ -883,6 +886,7 @@ impl Parser {
                     &modifiers,
                     false,
                     &attributes,
+                    self.class_member_doc_comment(member_start, self.pos),
                 )?);
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 // Property — possibly with type hint: `private int $x = 0;`
@@ -959,6 +963,7 @@ impl Parser {
         let mut trait_precedences = Vec::new();
 
         while self.peek() != Token::RBrace && !self.at_eof() {
+            let member_start = self.pos;
             let attributes = self.parse_attribute_groups()?;
             if matches!(self.peek(), Token::Use(_)) {
                 let use_line = match self.advance() {
@@ -1054,6 +1059,7 @@ impl Parser {
                     &modifiers,
                     false,
                     &attributes,
+                    self.class_member_doc_comment(member_start, self.pos),
                 )?);
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 // Property — possibly with type hint
@@ -1113,6 +1119,7 @@ impl Parser {
         let mut constants = Vec::new();
         let mut methods = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
+            let member_start = self.pos;
             let attributes = self.parse_attribute_groups()?;
             if matches!(self.peek(), Token::Use(_)) {
                 let use_line = match self.advance() {
@@ -1171,6 +1178,7 @@ impl Parser {
                     &modifiers,
                     true,
                     &attributes,
+                    self.class_member_doc_comment(member_start, self.pos),
                 )?);
             } else if matches!(self.peek(), Token::Function(_)) {
                 let line = match self.advance() {
@@ -1294,6 +1302,7 @@ impl Parser {
         self.in_class_body = true;
 
         while self.peek() != Token::RBrace && !self.at_eof() {
+            let member_start = self.pos;
             let attributes = self.parse_attribute_groups()?;
             if matches!(self.peek(), Token::Use(_)) {
                 let use_line = match self.advance() {
@@ -1341,6 +1350,7 @@ impl Parser {
                         &modifiers,
                         false,
                         &attributes,
+                        self.class_member_doc_comment(member_start, self.pos),
                     )?);
                 } else if matches!(self.peek(), Token::Function(_)) {
                     let line = match self.advance() {
@@ -1545,6 +1555,7 @@ impl Parser {
         modifiers: &MemberModifiers,
         in_interface: bool,
         attributes: &[Attribute],
+        doc_comment: Option<std::sync::Arc<str>>,
     ) -> Result<Vec<ClassConstant>, String> {
         if modifiers.is_static {
             return Err("Class constants cannot be declared static".into());
@@ -1571,6 +1582,7 @@ impl Parser {
         self.expect(&Token::Const)?;
         let type_hint = self.try_parse_class_constant_type()?;
         let mut constants = Vec::new();
+        let mut doc_comment = doc_comment;
         loop {
             let (name, line) = match self.advance() {
                 Token::Identifier(name, line)
@@ -1583,6 +1595,7 @@ impl Parser {
             let value = self.parse_expr()?;
             constants.push(ClassConstant {
                 attributes: attributes.to_vec(),
+                doc_comment: doc_comment.take(),
                 line,
                 visibility: modifiers.visibility,
                 name,

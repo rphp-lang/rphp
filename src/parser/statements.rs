@@ -26,9 +26,20 @@ impl Parser {
     }
 
     pub fn new(tokens: Vec<Token>) -> Self {
+        let mut syntax_tokens = Vec::with_capacity(tokens.len());
+        let mut doc_comments = Vec::new();
+        for token in tokens {
+            match token {
+                Token::DocComment(comment) => {
+                    doc_comments.push((syntax_tokens.len(), comment));
+                }
+                token => syntax_tokens.push(token),
+            }
+        }
         Self {
-            tokens,
+            tokens: syntax_tokens,
             pos: 0,
+            doc_comments,
             source_name: None,
             in_class_body: false,
             class_scope_active: false,

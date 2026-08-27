@@ -73,6 +73,9 @@ pub enum Token {
     Print,           // print
     Global,          // global
     Clone(usize),    // clone, source line
+    /// A PHP doc comment retained for declaration metadata. Ordinary comments
+    /// remain lexer trivia and never enter the parser token stream.
+    DocComment(std::sync::Arc<str>),
     /// Start of a PHP attribute group (`#[`) together with its source line.
     AttributeStart(usize),
     Include,     // include
@@ -257,6 +260,13 @@ pub fn decode_php_source(bytes: &[u8]) -> String {
     output
 }
 
+fn decode_shared_php_source(bytes: &[u8]) -> std::sync::Arc<str> {
+    match std::str::from_utf8(bytes) {
+        Ok(source) => std::sync::Arc::from(source),
+        Err(_) => std::sync::Arc::from(decode_php_source(bytes)),
+    }
+}
+
 fn decode_numeric_literal(bytes: &[u8]) -> String {
     bytes
         .iter()
@@ -330,7 +340,7 @@ impl<'a> Lexer<'a> {
     pub fn tokenize(&mut self) -> Result<Vec<Token>, String> {
         let mut tokens = Vec::new();
 
-        self.skip_whitespace()?;
+        let _ = self.skip_whitespace()?;
 
         // Expect <?php opening tag
         if self.starts_with(b"<?php") {
@@ -341,7 +351,9 @@ impl<'a> Lexer<'a> {
         }
 
         loop {
-            self.skip_whitespace()?;
+            if let Some(comment) = self.skip_whitespace()? {
+                tokens.push(Token::DocComment(comment));
+            }
 
             if self.pos >= self.src.len() {
                 tokens.extend(
@@ -917,7 +929,8 @@ impl<'a> Lexer<'a> {
         Ok(tokens)
     }
 
-    fn skip_whitespace(&mut self) -> Result<(), String> {
+    fn skip_whitespace(&mut self) -> Result<Option<std::sync::Arc<str>>, String> {
+        let mut doc_comment = None;
         loop {
             // Skip whitespace
             while self.pos < self.src.len() && self.src[self.pos].is_ascii_whitespace() {
@@ -941,6 +954,11 @@ impl<'a> Lexer<'a> {
             // Skip /* */ block comments
             if self.starts_with(b"/*") {
                 let start = self.pos;
+                // Zend classifies a block as T_DOC_COMMENT only when `/**`
+                // is followed by whitespace. Star runs such as `/***/` and
+                // compact comments such as `/**text*/` remain T_COMMENT.
+                let is_doc_comment = self.starts_with(b"/**")
+                    && self.src.get(start + 3).is_some_and(u8::is_ascii_whitespace);
                 self.pos += 2;
                 loop {
                     if self.pos + 1 >= self.src.len() {
@@ -955,11 +973,14 @@ impl<'a> Lexer<'a> {
                     }
                     self.pos += 1;
                 }
+                if is_doc_comment {
+                    doc_comment = Some(decode_shared_php_source(&self.src[start..self.pos]));
+                }
                 continue;
             }
             break;
         }
-        Ok(())
+        Ok(doc_comment)
     }
 
     fn starts_with(&self, prefix: &[u8]) -> bool {
@@ -1360,6 +1381,22 @@ mod tests {
                 Token::Eof,
             ]
         );
+    }
+
+    #[test]
+    fn only_php_doc_comments_enter_the_metadata_token_stream() {
+        let tokens =
+            Lexer::new("<?php /**compact*/ /***/ /*****/ /** retained */ class Documented {}")
+                .tokenize()
+                .unwrap();
+        let comments = tokens
+            .iter()
+            .filter_map(|token| match token {
+                Token::DocComment(comment) => Some(comment.as_ref()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(comments, vec!["/** retained */"]);
     }
 
     #[test]

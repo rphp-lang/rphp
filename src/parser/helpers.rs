@@ -1,4 +1,19 @@
 impl Parser {
+    /// Return the closest doc comment within one class-member declaration.
+    /// PHP associates a docblock with only the first constant in a grouped
+    /// declaration, so the caller deliberately consumes this value once.
+    fn class_member_doc_comment(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> Option<std::sync::Arc<str>> {
+        let boundary = self
+            .doc_comments
+            .partition_point(|(position, _)| *position <= end);
+        let (position, comment) = self.doc_comments[..boundary].last()?;
+        (*position >= start).then(|| comment.clone())
+    }
+
     fn closest_token_source_line(&self) -> usize {
         self.tokens[..self.pos]
             .iter()

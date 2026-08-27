@@ -7,6 +7,9 @@ include!("parser/ast.rs");
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    /// Doc comments keyed by the position of the following syntax token.
+    /// Keeping trivia out of `tokens` preserves every existing grammar path.
+    doc_comments: Vec<(usize, std::sync::Arc<str>)>,
     /// Human-readable source identity used by parser diagnostics. Embedders
     /// that do not have one keep the historical context-free errors.
     source_name: Option<String>,

@@ -6820,7 +6820,7 @@ impl ExecutorGlobals {
     }
 
     pub(crate) fn declared_trait_names(&self) -> Vec<String> {
-        self.declared_class_like_names(|class| class.is_trait, false)
+        self.declared_class_like_names(|class| class.is_trait, true)
     }
 
     /// Find a class-like symbol without allocating a normalized name. Exact

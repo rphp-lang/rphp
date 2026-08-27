@@ -1306,7 +1306,7 @@ pub(crate) fn report_deprecated_class_constant_use(
             report_deprecated_expression_references(
                 expression,
                 scope,
-                &definition.source_file,
+                definition.source_file(),
                 use_site,
                 eg,
             )?;
@@ -1397,10 +1397,10 @@ pub(crate) fn class_constant_evaluation_error_value(
     let message = definition.evaluation_error.as_deref()?;
     let error = make_error_value("Error", message);
     if let Some(line) = definition.evaluation_error_line()
-        && !definition.source_file.is_empty()
+        && !definition.source_file().is_empty()
         && let Some(mut object) = error.as_object_mut()
     {
-        object.set_property("file", Value::string(definition.source_file.clone()));
+        object.set_property("file", Value::string(definition.source_file()));
         object.set_property("line", Value::long(line as i64));
     }
     Some(error)
@@ -1480,7 +1480,7 @@ fn evaluate_deferred_class_constant_definition(
     let value = if let Some(factory) = &definition.callable_factory {
         evaluate_runtime_callable_constant_factory(factory, scope, eg)?
     } else {
-        evaluate_deferred_attribute_expression(expression, scope, &definition.source_file, eg)?
+        evaluate_deferred_attribute_expression(expression, scope, definition.source_file(), eg)?
     };
     normalize_deferred_class_constant_value(
         value,
@@ -4798,13 +4798,35 @@ fn class_get_attributes(
 }
 
 fn reflection_get_doc_comment(
-    _ed: *mut ExecuteData,
+    ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    // The frontend deliberately discards comments today. Returning false is
-    // PHP's truthful "no retained doc comment" result; an empty string would
-    // incorrectly claim that a doc comment exists.
+    if matches!(
+        receiver_class_name(ed).as_deref(),
+        Some("ReflectionClassConstant")
+    ) {
+        let owner =
+            reflected_property(ed, "class").and_then(|value| value.as_str().map(str::to_owned));
+        let name =
+            reflected_property(ed, "name").and_then(|value| value.as_str().map(str::to_owned));
+        let comment = owner
+            .as_deref()
+            .zip(name.as_deref())
+            .and_then(|(owner, name)| {
+                eg.find_class(owner)?
+                    .constants
+                    .iter()
+                    .find(|constant| constant.name == name)?
+                    .doc_comment()
+                    .map(str::to_owned)
+            });
+        if let Some(comment) = comment {
+            return return_value(rv, Value::string(comment));
+        }
+    }
+    // Other declaration kinds still deliberately discard comments. Returning
+    // false is PHP's truthful "no retained doc comment" result.
     return_value(rv, Value::bool(false))
 }
 

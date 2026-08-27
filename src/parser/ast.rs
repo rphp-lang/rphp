@@ -1218,6 +1218,7 @@ pub struct ClassProperty {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassConstant {
     pub attributes: Vec<Attribute>,
+    pub doc_comment: Option<std::sync::Arc<str>>,
     pub line: usize,
     pub visibility: Visibility,
     pub name: String,

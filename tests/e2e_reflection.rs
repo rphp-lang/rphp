@@ -93,6 +93,33 @@ fn reflection_doc_comments_truthfully_report_unretained_metadata() {
 }
 
 #[test]
+fn reflection_class_constant_doc_comments_survive_trait_composition() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait ReflectedConstantDocsTrait {
+    /** trait constant docs */
+    public const VALUE = 42;
+}
+class ReflectedConstantDocsConsumer { use ReflectedConstantDocsTrait; }
+class ReflectedGroupedConstantDocs {
+    /** earlier docs */ public /** closest docs */ const FIRST = 1, SECOND = 2;
+}
+foreach ([
+    new ReflectionClassConstant(ReflectedConstantDocsTrait::class, 'VALUE'),
+    new ReflectionClassConstant(ReflectedConstantDocsConsumer::class, 'VALUE'),
+    new ReflectionClassConstant(ReflectedGroupedConstantDocs::class, 'FIRST'),
+] as $constant) {
+    var_dump($constant->getDocComment());
+}
+var_dump((new ReflectionClassConstant(ReflectedGroupedConstantDocs::class, 'SECOND'))->getDocComment());
+"#,
+        ),
+        "string(26) \"/** trait constant docs */\"\nstring(26) \"/** trait constant docs */\"\nstring(19) \"/** closest docs */\"\nbool(false)\n"
+    );
+}
+
+#[test]
 fn reflection_class_is_subclass_of_accepts_names_and_reflections() {
     assert_eq!(
         run_php(
@@ -1757,6 +1784,24 @@ echo in_array(DeclaredInventoryTrait::class, get_declared_traits(), true) ? 't' 
 "#,
     );
     assert_eq!(out, "ceait");
+}
+
+#[test]
+fn declared_trait_inventory_appends_a_canonical_alias() {
+    let out = run_php(
+        r#"<?php
+trait DeclaredInventoryTrait {}
+class_alias(DeclaredInventoryTrait::class, 'InventoryTraitAlias');
+$matches = array_values(array_filter(
+    get_declared_traits(),
+    fn($name) => str_contains(strtolower($name), 'inventorytrait'),
+));
+echo implode(',', $matches), '|';
+echo (int) trait_exists('InventoryTraitAlias', false), ':';
+echo (int) in_array('inventorytraitalias', get_declared_classes(), true);
+"#,
+    );
+    assert_eq!(out, "DeclaredInventoryTrait,inventorytraitalias|1:0");
 }
 
 #[test]

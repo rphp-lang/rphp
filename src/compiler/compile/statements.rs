@@ -6913,6 +6913,11 @@ impl Compiler {
                         source_directory: self.source_directory.clone(),
                     })
                 });
+                let mut source_file = self.source_file.clone();
+                if let Some(doc_comment) = &constant.doc_comment {
+                    source_file.push('\0');
+                    source_file.push_str(doc_comment);
+                }
                 Ok(ClassConstantDefinition {
                     attributes: self.compile_attributes_in_scope(
                         &constant.attributes,
@@ -6922,7 +6927,7 @@ impl Compiler {
                     ),
                     name: constant.name.clone(),
                     value,
-                    source_file: self.source_file.clone(),
+                    source_file,
                     source_expression: retain_expression
                         .then(|| Box::new(constant.value.clone())),
                     callable_factory: callable_factories[index].clone(),
