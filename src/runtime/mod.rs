@@ -4446,19 +4446,12 @@ impl ExecutorGlobals {
         effective
     }
 
-    /// PHP rejects a class-like declaration when two distinct concrete trait
-    /// implementations still occupy the same composed method name after
-    /// precedence and alias rules. This is a cold link invariant: declarations
-    /// owned by the consumer win, abstract requirements do not collide, and a
-    /// repeated path to the same original method is harmless.
+    /// Resolve adaptations before rejecting distinct concrete trait methods
+    /// which still occupy the same composed name. Keeping the two cold phases
+    /// behind the existing composition call leaves declarations with no trait
+    /// work on their established registration path.
     #[cold]
-    fn unresolved_trait_method_collision(&self, class_def: &ClassDef) -> Option<String> {
-        let own_concrete = class_def
-            .methods
-            .iter()
-            .filter(|method| !class_def.method_is_abstract(&method.0))
-            .map(|method| method.0.to_ascii_lowercase())
-            .collect::<std::collections::HashSet<_>>();
+    fn trait_composition_error(&self, class_def: &ClassDef) -> Option<String> {
         let providers = class_def
             .uses
             .iter()
@@ -4474,6 +4467,24 @@ impl ExecutorGlobals {
                 })
             })
             .collect::<Vec<_>>();
+        if (!class_def.trait_precedences.is_empty() || !class_def.trait_aliases.is_empty())
+            && let Some(error) = self.trait_adaptation_resolution_error(class_def, &providers)
+        {
+            let location = class_def
+                .source_file
+                .as_ref()
+                .map_or_else(String::new, |file| {
+                    format!(" in {file} on line {}", class_def.declaration_line)
+                });
+            return Some(format!("{error}{location}"));
+        }
+
+        let own_concrete = class_def
+            .methods
+            .iter()
+            .filter(|method| !class_def.method_is_abstract(&method.0))
+            .map(|method| method.0.to_ascii_lowercase())
+            .collect::<std::collections::HashSet<_>>();
         let mut grouped = (0..providers.len())
             .map(|_| Vec::<TraitCompositionMethod>::new())
             .collect::<Vec<_>>();
@@ -4608,23 +4619,169 @@ impl ExecutorGlobals {
         })
     }
 
-    /// Trait adaptation owners are validated independently from direct uses.
-    /// PHP reports this declaration-link failure as a non-catchable fatal and
-    /// names the resolved class-like symbol rather than the source spelling.
+    #[inline]
+    fn same_trait_identity(left: &ClassDef, right: &ClassDef) -> bool {
+        std::ptr::eq(left, right)
+    }
+
     #[cold]
-    fn non_trait_adaptation_owner(&self, class_def: &ClassDef) -> Option<String> {
-        let aliases = class_def
-            .trait_aliases
-            .iter()
-            .filter_map(|adaptation| adaptation.trait_name.as_ref());
-        let precedences = class_def.trait_precedences.iter().flat_map(|precedence| {
-            std::iter::once(&precedence.trait_name).chain(precedence.instead_of.iter())
-        });
-        aliases.chain(precedences).find_map(|owner| {
-            self.find_class(owner)
-                .filter(|definition| !definition.is_trait)
-                .map(|definition| definition.name.clone())
+    fn used_trait_matches(&self, class_def: &ClassDef, trait_def: &ClassDef) -> bool {
+        class_def.uses.iter().any(|used| {
+            self.find_class(used)
+                .is_some_and(|candidate| Self::same_trait_identity(candidate, trait_def))
         })
+    }
+
+    /// Resolve one absolute adaptation owner with PHP's class-alias identity
+    /// semantics. Diagnostics name the canonical linked symbol, while an
+    /// unknown reference retains the resolved source spelling.
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn resolve_trait_adaptation_owner<'a>(
+        &'a self,
+        class_def: &ClassDef,
+        owner: &str,
+    ) -> Result<&'a ClassDef, String> {
+        let trait_def = self
+            .find_class(owner)
+            .ok_or_else(|| format!("Could not find trait {owner}"))?;
+        if !trait_def.is_trait {
+            return Err(format!(
+                "Class {} is not a trait, Only traits may be used in 'as' and 'insteadof' statements",
+                trait_def.name
+            ));
+        }
+        if !self.used_trait_matches(class_def, trait_def) {
+            return Err(format!(
+                "Required Trait {} wasn't added to {}",
+                trait_def.name, class_def.name
+            ));
+        }
+        Ok(trait_def)
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn trait_provider_exposes_method(
+        trait_def: &ClassDef,
+        methods: &[EffectiveTraitMethod],
+        method: &str,
+    ) -> bool {
+        methods
+            .iter()
+            .any(|candidate| candidate.target.eq_ignore_ascii_case(method))
+            || trait_def
+                .methods
+                .iter()
+                .any(|candidate| candidate.0.eq_ignore_ascii_case(method))
+    }
+
+    /// Resolve and validate `insteadof` followed by `as`, matching Zend's
+    /// deterministic pre-composition phase. This must run before collision
+    /// detection: invalid rules never get to suppress or manufacture methods.
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn trait_adaptation_resolution_error(
+        &self,
+        class_def: &ClassDef,
+        providers: &[(String, Vec<EffectiveTraitMethod>)],
+    ) -> Option<String> {
+        for precedence in &class_def.trait_precedences {
+            let source =
+                match self.resolve_trait_adaptation_owner(class_def, &precedence.trait_name) {
+                    Ok(source) => source,
+                    Err(error) => return Some(error),
+                };
+            let source_methods = providers
+                .iter()
+                .find(|(provider, _)| provider.eq_ignore_ascii_case(&source.name))
+                .map_or(&[][..], |(_, methods)| methods.as_slice());
+            if !Self::trait_provider_exposes_method(source, source_methods, &precedence.method) {
+                return Some(format!(
+                    "A precedence rule was defined for {}::{} but this method does not exist",
+                    source.name, precedence.method
+                ));
+            }
+
+            for owner in &precedence.instead_of {
+                let excluded_trait = match self.resolve_trait_adaptation_owner(class_def, owner) {
+                    Ok(excluded_trait) => excluded_trait,
+                    Err(error) => return Some(error),
+                };
+                if Self::same_trait_identity(source, excluded_trait) {
+                    return Some(format!(
+                        "Inconsistent insteadof definition. The method {} is to be used from {}, but {} is also on the exclude list",
+                        precedence.method, source.name, source.name
+                    ));
+                }
+            }
+        }
+
+        for adaptation in &class_def.trait_aliases {
+            if let Some(owner) = adaptation.trait_name.as_deref() {
+                let source = match self.resolve_trait_adaptation_owner(class_def, owner) {
+                    Ok(source) => source,
+                    Err(error) => return Some(error),
+                };
+                let source_methods = providers
+                    .iter()
+                    .find(|(provider, _)| provider.eq_ignore_ascii_case(&source.name))
+                    .map_or(&[][..], |(_, methods)| methods.as_slice());
+                if !Self::trait_provider_exposes_method(source, source_methods, &adaptation.method)
+                {
+                    return Some(format!(
+                        "An alias was defined for {}::{} but this method does not exist",
+                        source.name, adaptation.method
+                    ));
+                }
+                continue;
+            }
+
+            let mut source: Option<&ClassDef> = None;
+            for (provider, methods) in providers {
+                let Some(candidate) = self.find_class(provider) else {
+                    continue;
+                };
+                if !Self::trait_provider_exposes_method(candidate, methods, &adaptation.method) {
+                    continue;
+                }
+                if let Some(previous) = source {
+                    return Some(format!(
+                        "An alias was defined for method {}(), which exists in both {} and {}. Use {}::{} or {}::{} to resolve the ambiguity",
+                        adaptation.method,
+                        previous.name,
+                        candidate.name,
+                        previous.name,
+                        adaptation.method,
+                        candidate.name,
+                        adaptation.method
+                    ));
+                }
+                source = Some(candidate);
+            }
+
+            if source.is_none() {
+                match adaptation.alias.as_deref() {
+                    Some(alias) if !alias.eq_ignore_ascii_case("final") => {
+                        return Some(format!(
+                            "An alias ({alias}) was defined for method {}(), but this method does not exist",
+                            adaptation.method
+                        ));
+                    }
+                    _ => {
+                        return Some(format!(
+                            "The modifiers of the trait method {}() are changed, but this method does not exist. Error",
+                            adaptation.method
+                        ));
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     /// Compose and internally publish a runtime class before its outstanding
@@ -4710,17 +4867,13 @@ impl ExecutorGlobals {
                     format!(" in {file} on line {}", class_def.declaration_line)
                 })
         };
-        if let Some(error) = self.direct_non_trait_use_error(&class_def) {
-            return Err(format!("{error}{}", relation_location()));
-        }
-        if let Some(owner) = self.non_trait_adaptation_owner(&class_def) {
-            return Err(format!(
-                "Class {owner} is not a trait, Only traits may be used in 'as' and 'insteadof' statements{}",
-                relation_location()
-            ));
-        }
-        if let Some(error) = self.unresolved_trait_method_collision(&class_def) {
-            return Err(error);
+        if !class_def.uses.is_empty() {
+            if let Some(error) = self.direct_non_trait_use_error(&class_def) {
+                return Err(format!("{error}{}", relation_location()));
+            }
+            if let Some(error) = self.trait_composition_error(&class_def) {
+                return Err(error);
+            }
         }
         let class_table = &self.class_table;
         self.generic_metadata
