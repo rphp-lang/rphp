@@ -3633,10 +3633,29 @@ S2/S3 pass. Two exact-final-binary CPU-2-pinned 32-pair runs keep startup, 500
 scalar-initializer class compilations, one million cached static-property reads
 and one million ordinary Closure calls below +5%, with matching outputs.
 
-The monitored supported debt is now 994 failures: 18 strings, zero array and
-976 Zend/lang. Read-only failure clustering selects six global callable
-constant-expression validation failures next: the capturing-Closure case,
-four dynamic or illegal FCC-name cases and the instance-call expression case.
+The `b7620003` `global-callable-constant-expression-validation` checkpoint then
+moves Zend/lang from 4,327 to 4,333 pass, exactly `+6/-0`; strings stay 631/733
+and array stays 828/842 with no other status or category movement. Global
+`const` declarations now invoke the shared callable constant-expression
+validator before runtime lowering. Capturing Closures, variable/Closure/
+constant-derived dynamic function names, integer function names and
+instance-method callable creation on a `new` receiver retain PHP 8.5's exact
+compile-stage messages and source lines, while valid named, statically named
+and literal-string callables remain accepted.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical manifests
+and summaries; repeated strings/array outcome projections also match the exact
+parent. All five Cargo configurations, all-feature/all-target, formatting,
+HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9
+S2/S3 pass. Two exact-final-binary CPU-2-pinned 32-pair runs keep startup, 500
+scalar global-constant compilations, 500 valid callable global-constant
+compilations and one million ordinary Closure calls below +5%, with matching
+outputs.
+
+The monitored supported debt is now 988 failures: 18 strings, zero array and
+970 Zend/lang. Read-only expected-message and directory clustering selects six
+trait-kind link-validation failures next: four direct class/interface-as-trait
+uses and two non-trait adaptation owners in `as`/`insteadof` statements.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument

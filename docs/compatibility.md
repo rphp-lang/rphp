@@ -8,6 +8,74 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`global-callable-constant-expression-validation`, pinned to php-src 8.5
+commit `fcc29c8` and validated against PHP 8.5.9. Global `const`
+declarations now run the shared callable constant-expression validator before
+emitting runtime bytecode. Capturing Closures, variables, Closure expressions
+used as dynamic callable targets, constant-derived callable names, integer
+callable names and instance-method callable creation on `new` receivers stop
+at PHP's compile boundary with their distinct diagnostics and source lines.
+The already-correct `static::` rejection retains precedence.
+
+Two original E2E regressions cover all six rejection categories and preserve
+valid named functions, statically named methods and literal-string callables.
+The six selected upstream cases all move to pass, exactly `+6/-0`: one
+capturing-Closure case and five first-class-callable validation cases. No other
+Zend/lang status or category moves. The complete 59-case Closure/FCC
+neighborhood is now 43 pass, six output failures, two runtime failures and
+eight extension skips.
+
+The complete combined audit covers 7,174 cases: 5,792 pass, 988 fail, 182
+skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
+fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
+and one unsupported. Zend/lang moves from 4,327 to 4,333 pass, with 970
+failures, 115 skips and 181 unsupported cases. Two serial exact-final-binary
+Zend/lang runs have byte-identical manifests and summaries, whose SHA-256
+values are respectively
+`f214c10392a5e68322a3ed345dd28e678a74f9c3abee2e016edb302867d029df`
+and `ff6ebb05b3b56832190c49b87191bdde83ab233db8bdecd9981456a3e948fe24`.
+Repeated strings and array outcome projections are byte-identical to the exact
+parent and hash to
+`3e3ae0063c61f4f6799fdfba99c0c5654b2dbcda6abd5b501442bc3d993e14d4`
+and `c8d79f587b6487d167e3250ee32d9f05d238a891bf595a3efdff4b5327555ae6`.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at 1,622 unsafe blocks against a 1,623 ceiling, 289 unsafe
+functions, 367 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass. The change adds no dependency, unsafe block, opcode,
+runtime field, frame, FunctionCommon, Value or object layout; it adds only
+cold compiler matching and the focused regressions.
+
+Two exact-final-binary CPU-2-pinned, performance-governor, order-balanced
+32-pair release runs with four warmups compare retained parent SHA-256
+`6a61409e4858bfad656bfcdcddd0af6b055456324ba41e7314d72fc5b2a1a7d4`
+with candidate
+`23dca28ea35772745e1da2dcf25c3e0c5cca8d49ad5944ff62497fba944ab702`.
+Paired medians are -4.374%/-3.982% for 100 startups,
++0.016%/-0.147% for 500 scalar global-constant compilations,
+-0.141%/-0.207% for 500 valid callable global-constant compilations and
+-0.793%/-0.827% for one million ordinary Closure calls. Comparable outputs
+match and every paired median remains below +5%. The benchmark harness hashes
+to `4f77ca10a2677465964b35c465b847e44bec5dac89f5b7fbbbe065bfe1e6f13c`;
+the complete observation streams hash to
+`f214a0adf8c8cd263fd86dffe3817df1a5fdf00e9f599ad4dc2a26f77a75a839`
+and `fed681b55ca43ec26d84f8a5d320411fcaabc215475e5b5295bf3d95db8a38a1`.
+
+This checkpoint does not claim callable expressions in attributes, dynamic
+class or method names, the unselected scalar callable-name boundaries,
+callable autoload/link completion, abstract or magic method creation,
+trait-static deprecation handling or the remaining namespace fallback case.
+The monitored supported debt is now 988 failures: 18 strings, zero array and
+970 Zend/lang. Read-only expected-message and directory clustering selects six
+trait-kind link validations next: four direct attempts to use a class or
+interface as a trait, plus two non-trait owners in `as`/`insteadof`
+adaptations.
+
+The implementation checkpoint is commit `b7620003`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `callable-constant-initializer-materialization`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. Static Closures and first-class
 function or static-method callables now materialize in class constants and in
