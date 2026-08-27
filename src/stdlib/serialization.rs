@@ -235,7 +235,9 @@ fn serialize_value(
             let class_name = object.class_name.to_string();
             let class_id = object.class_id;
             drop(object);
-            if matches!(
+            let forbidden_class_name = if class_name.starts_with("class@anonymous#") {
+                Some("class@anonymous")
+            } else if matches!(
                 class_name.to_ascii_lowercase().as_str(),
                 "generator"
                     | "weakreference"
@@ -243,9 +245,14 @@ fn serialize_value(
                     | "internaliterator"
                     | "sensitiveparametervalue"
             ) {
+                Some(class_name.as_str())
+            } else {
+                None
+            };
+            if let Some(forbidden_class_name) = forbidden_class_name {
                 eg.exception = Some(crate::value::make_error_value(
                     "Exception",
-                    &format!("Serialization of '{class_name}' is not allowed"),
+                    &format!("Serialization of '{forbidden_class_name}' is not allowed"),
                 ));
                 return Ok(());
             }
@@ -839,6 +846,12 @@ impl<'a> Parser<'a> {
                 self.position = class_end;
                 self.expect(b'"')?;
                 self.expect(b':')?;
+                // Zend consumes a digit-only unterminated object property
+                // count before reporting the malformed boundary. Preserve
+                // the full-input offset without changing scalar token errors.
+                if self.input[self.position..].iter().all(u8::is_ascii_digit) {
+                    self.reject(None, self.input.len())?;
+                }
                 let property_count = self.integer(b':')?;
                 let property_count = usize::try_from(property_count).map_err(|_| ())?;
                 self.expect(b'{')?;

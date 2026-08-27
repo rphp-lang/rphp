@@ -3,6 +3,40 @@ mod common;
 use common::run_php;
 
 #[test]
+fn unterminated_object_property_counts_report_the_consumed_input_boundary() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo "warning:$message\n";
+    return true;
+});
+
+foreach ([
+    'O:9:"000000000":10000000',
+    'a:2:{i:0;O:9:"000000000":10000000',
+] as $wire) {
+    echo 'case:', strlen($wire), "\n";
+    var_dump(unserialize($wire));
+}
+
+$valid = unserialize('O:8:"stdClass":0:{}');
+echo get_class($valid), "\n";
+"#,
+        ),
+        concat!(
+            "case:24\n",
+            "warning:unserialize(): Error at offset 24 of 24 bytes\n",
+            "bool(false)\n",
+            "case:33\n",
+            "warning:unserialize(): Error at offset 33 of 33 bytes\n",
+            "bool(false)\n",
+            "stdClass\n",
+        )
+    );
+}
+
+#[test]
 fn malformed_unserialize_reports_the_first_general_parser_boundary() {
     assert_eq!(
         run_php(

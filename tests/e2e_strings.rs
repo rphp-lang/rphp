@@ -815,6 +815,39 @@ echo json_encode(unserialize($serialized, ['allowed_classes' => false]));
 }
 
 #[test]
+fn anonymous_object_serialization_is_rejected_before_magic_hooks() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$anonymous = new class {
+    public function __serialize(): array {
+        echo "anonymous-hook\n";
+        return [];
+    }
+};
+try {
+    serialize($anonymous);
+} catch (Exception $error) {
+    echo get_class($error), ':', $error->getMessage(), "\n";
+}
+
+class NamedValue {
+    public function __serialize(): array { return ['v' => 7]; }
+}
+echo serialize(new NamedValue()), "\n";
+$dynamic = unserialize('O:11:"GhostPacket":0:{}');
+echo serialize($dynamic), "\n";
+"#,
+        ),
+        concat!(
+            "Exception:Serialization of 'class@anonymous' is not allowed\n",
+            "O:10:\"NamedValue\":1:{s:1:\"v\";i:7;}\n",
+            "O:11:\"GhostPacket\":0:{}\n",
+        )
+    );
+}
+
+#[test]
 fn legacy_serializable_uses_trait_methods_and_yields_to_modern_hooks() {
     assert_eq!(
         run_php(
