@@ -925,6 +925,76 @@ fn evaluate_deferred_attribute_expression(
                 Ok(left)
             }
         }
+        Expr::PropertyAccess {
+            object,
+            property,
+            nullsafe,
+            line,
+        } => {
+            let receiver = evaluate_deferred_attribute_expression(object, scope, source_file, eg)?;
+            if *nullsafe && receiver.value_type() == ValueType::Null {
+                return Ok(Value::null());
+            }
+            let object = receiver.as_object().ok_or_else(|| {
+                DeferredAttributeError::Message(format!(
+                    "Attempt to read property \"{property}\" on {}",
+                    receiver.type_name()
+                ))
+            })?;
+            if !eg
+                .find_class(&object.class_name)
+                .is_some_and(|class| class.is_enum)
+            {
+                return Err(DeferredAttributeError::Message(
+                    "Fetching properties on non-enums in constant expressions is not allowed"
+                        .to_string(),
+                )
+                .with_location_if_missing(source_file, *line));
+            }
+            Ok(object
+                .get_property(property)
+                .cloned()
+                .unwrap_or_else(Value::null))
+        }
+        Expr::DynamicPropertyAccess {
+            object,
+            property,
+            nullsafe,
+            line,
+        } => {
+            let receiver = evaluate_deferred_attribute_expression(object, scope, source_file, eg)?;
+            if *nullsafe && receiver.value_type() == ValueType::Null {
+                return Ok(Value::null());
+            }
+            let property =
+                evaluate_deferred_attribute_expression(property, scope, source_file, eg)?;
+            let Some(property) = property.as_str() else {
+                return Err(DeferredAttributeError::Message(format!(
+                    "Cannot use value of type {} as a property name",
+                    property.type_name()
+                )));
+            };
+            let object = receiver.as_object().ok_or_else(|| {
+                DeferredAttributeError::Message(format!(
+                    "Attempt to read property \"{property}\" on {}",
+                    receiver.type_name()
+                ))
+            })?;
+            if !eg
+                .find_class(&object.class_name)
+                .is_some_and(|class| class.is_enum)
+            {
+                return Err(DeferredAttributeError::Message(
+                    "Fetching properties on non-enums in constant expressions is not allowed"
+                        .to_string(),
+                )
+                .with_location_if_missing(source_file, *line));
+            }
+            Ok(object
+                .get_property(property)
+                .cloned()
+                .unwrap_or_else(Value::null))
+        }
         Expr::New {
             class_name,
             args,
@@ -1612,6 +1682,30 @@ fn report_deprecated_expression_references(
             report_deprecated_expression_references(array, scope, source_file, use_site, eg)?;
             if eg.exception.is_none() {
                 report_deprecated_expression_references(index, scope, source_file, use_site, eg)?;
+            }
+        }
+        Expr::PropertyAccess { object, .. } => {
+            report_deprecated_expression_references(object, scope, source_file, use_site, eg)?;
+        }
+        Expr::DynamicPropertyAccess {
+            object,
+            property,
+            nullsafe,
+            ..
+        } => {
+            report_deprecated_expression_references(object, scope, source_file, use_site, eg)?;
+            if eg.exception.is_none()
+                && (!*nullsafe
+                    || evaluate_deferred_attribute_expression(object, scope, source_file, eg)
+                        .is_ok_and(|value| value.value_type() != ValueType::Null))
+            {
+                report_deprecated_expression_references(
+                    property,
+                    scope,
+                    source_file,
+                    use_site,
+                    eg,
+                )?;
             }
         }
         _ => {}

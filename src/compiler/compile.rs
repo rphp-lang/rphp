@@ -2349,6 +2349,13 @@ fn constant_expression_references_symbol(expression: &Expr) -> bool {
             constant_expression_references_symbol(array)
                 || constant_expression_references_symbol(index)
         }
+        Expr::PropertyAccess { object, .. } => constant_expression_references_symbol(object),
+        Expr::DynamicPropertyAccess {
+            object, property, ..
+        } => {
+            constant_expression_references_symbol(object)
+                || constant_expression_references_symbol(property)
+        }
         _ => false,
     }
 }
@@ -2410,6 +2417,10 @@ fn local_class_constant_reference_line(
                 .or_else(|| recurse(&element.value))
         }),
         Expr::ArrayAccess { array, index, .. } => recurse(array).or_else(|| recurse(index)),
+        Expr::PropertyAccess { object, .. } => recurse(object),
+        Expr::DynamicPropertyAccess {
+            object, property, ..
+        } => recurse(object).or_else(|| recurse(property)),
         Expr::DynamicNamedClassConstant { constant, .. } => recurse(constant),
         Expr::DynamicClassConstant {
             class, constant, ..
@@ -2480,6 +2491,13 @@ fn deferred_constant_expression_is_supported(expression: &Expr) -> bool {
         Expr::ArrayAccess { array, index, .. } => {
             deferred_constant_expression_is_supported(array)
                 && deferred_constant_expression_is_supported(index)
+        }
+        Expr::PropertyAccess { object, .. } => deferred_constant_expression_is_supported(object),
+        Expr::DynamicPropertyAccess {
+            object, property, ..
+        } => {
+            deferred_constant_expression_is_supported(object)
+                && deferred_constant_expression_is_supported(property)
         }
         _ => false,
     }
@@ -2585,6 +2603,13 @@ fn trait_property_default_rebinds_class(expression: &Expr) -> bool {
         Expr::ArrayAccess { array, index, .. } => {
             trait_property_default_rebinds_class(array)
                 || trait_property_default_rebinds_class(index)
+        }
+        Expr::PropertyAccess { object, .. } => trait_property_default_rebinds_class(object),
+        Expr::DynamicPropertyAccess {
+            object, property, ..
+        } => {
+            trait_property_default_rebinds_class(object)
+                || trait_property_default_rebinds_class(property)
         }
         _ => false,
     }
@@ -3065,6 +3090,9 @@ pub struct Compiler {
     /// Constants known at compile time (from `const FOO = 42;` in the same file).
     /// Used by eval_const_expr to resolve Expr::Constant in property defaults.
     known_constants: HashMap<String, Value>,
+    /// Canonical declaration names of enums whose case objects are available
+    /// to the declaration-time constant folder in this compilation scope.
+    known_enum_classes: Rc<HashSet<String>>,
     compiler_halt_offset: Option<i64>,
     /// Runtime materialization still belongs to a PHP constant-expression
     /// context. Nested compilers use this only while lowering a default or
@@ -3375,6 +3403,7 @@ impl Compiler {
             source_directory: String::new(),
             implicit_return_value: Value::null(),
             known_constants: HashMap::new(),
+            known_enum_classes: Rc::new(HashSet::new()),
             compiler_halt_offset: None,
             compiling_constant_expression: false,
             nullsafe_receiver_patches: HashMap::new(),
@@ -3565,6 +3594,7 @@ impl Compiler {
         child.source_file = self.source_file.clone();
         child.source_directory = self.source_directory.clone();
         child.known_constants = self.known_constants.clone();
+        child.known_enum_classes = Rc::clone(&self.known_enum_classes);
         child.compiler_halt_offset = self.compiler_halt_offset;
         child
     }
@@ -5502,11 +5532,12 @@ impl Compiler {
             Value::string(lexical_property.unwrap_or_default()),
         );
         self.collect_class_name_literals(expr, &mut imported);
-        Self::eval_const_expr_with_context(
+        Self::eval_const_expr_with_context_and_enum_classes(
             expr,
             &imported,
             Some((self.source_file.as_str(), self.source_directory.as_str())),
             self.precision,
+            &self.known_enum_classes,
         )
     }
 
@@ -5987,6 +6018,15 @@ impl Compiler {
                 self.collect_class_name_literals(array, known);
                 self.collect_class_name_literals(index, known);
             }
+            Expr::PropertyAccess { object, .. } => {
+                self.collect_class_name_literals(object, known);
+            }
+            Expr::DynamicPropertyAccess {
+                object, property, ..
+            } => {
+                self.collect_class_name_literals(object, known);
+                self.collect_class_name_literals(property, known);
+            }
             _ => {}
         }
     }
@@ -5999,6 +6039,22 @@ impl Compiler {
         known: &HashMap<String, Value>,
         file_context: Option<(&str, &str)>,
         precision: i32,
+    ) -> Result<Value, String> {
+        Self::eval_const_expr_with_context_and_enum_classes(
+            expr,
+            known,
+            file_context,
+            precision,
+            &HashSet::new(),
+        )
+    }
+
+    fn eval_const_expr_with_context_and_enum_classes(
+        expr: &Expr,
+        known: &HashMap<String, Value>,
+        file_context: Option<(&str, &str)>,
+        precision: i32,
+        known_enum_classes: &HashSet<String>,
     ) -> Result<Value, String> {
         match expr {
             Expr::Integer(n) => Ok(Value::long(*n)),
@@ -6084,8 +6140,13 @@ impl Compiler {
                 class_name,
                 constant,
             } => {
-                let constant =
-                    Self::eval_const_expr_with_context(constant, known, file_context, precision)?;
+                let constant = Self::eval_const_expr_with_context_and_enum_classes(
+                    constant,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
                 let constant = constant.as_str().ok_or_else(|| {
                     format!(
                         "value of type {} cannot be used as a class constant name",
@@ -6105,16 +6166,26 @@ impl Compiler {
             Expr::DynamicClassConstant {
                 class, constant, ..
             } => {
-                let class =
-                    Self::eval_const_expr_with_context(class, known, file_context, precision)?;
+                let class = Self::eval_const_expr_with_context_and_enum_classes(
+                    class,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
                 let class = class.as_str().ok_or_else(|| {
                     format!(
                         "value of type {} cannot be used as a class name",
                         class.type_name()
                     )
                 })?;
-                let constant =
-                    Self::eval_const_expr_with_context(constant, known, file_context, precision)?;
+                let constant = Self::eval_const_expr_with_context_and_enum_classes(
+                    constant,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
                 let constant = constant.as_str().ok_or_else(|| {
                     format!(
                         "value of type {} cannot be used as a class constant name",
@@ -6132,8 +6203,13 @@ impl Compiler {
                     })
             }
             Expr::BinaryOp { op, left, right } => {
-                let left =
-                    Self::eval_const_expr_with_context(left, known, file_context, precision)?;
+                let left = Self::eval_const_expr_with_context_and_enum_classes(
+                    left,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
                 // Preserve PHP's short-circuit rules even though constant
                 // evaluation itself has no observable side effects.
                 match op {
@@ -6141,17 +6217,33 @@ impl Compiler {
                     BinOp::Or if left.is_truthy() => return Ok(Value::bool(true)),
                     _ => {}
                 }
-                let right =
-                    Self::eval_const_expr_with_context(right, known, file_context, precision)?;
+                let right = Self::eval_const_expr_with_context_and_enum_classes(
+                    right,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
                 Self::eval_const_binary_with_precision(*op, &left, &right, precision)
             }
             Expr::Not(inner) => Ok(Value::bool(
-                !Self::eval_const_expr_with_context(inner, known, file_context, precision)?
-                    .is_truthy(),
+                !Self::eval_const_expr_with_context_and_enum_classes(
+                    inner,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?
+                .is_truthy(),
             )),
             Expr::UnaryPlus(inner) => {
-                let value =
-                    Self::eval_const_expr_with_context(inner, known, file_context, precision)?;
+                let value = Self::eval_const_expr_with_context_and_enum_classes(
+                    inner,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
                 if let Some(number) = value.as_long() {
                     Ok(Value::long(number))
                 } else if let Some(number) = value.as_double() {
@@ -6161,8 +6253,13 @@ impl Compiler {
                 }
             }
             Expr::UnaryMinus(inner) => {
-                let value =
-                    Self::eval_const_expr_with_context(inner, known, file_context, precision)?;
+                let value = Self::eval_const_expr_with_context_and_enum_classes(
+                    inner,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
                 if let Some(number) = value.as_long() {
                     Ok(number
                         .checked_neg()
@@ -6179,31 +6276,148 @@ impl Compiler {
                 then_expr,
                 else_expr,
             } => {
-                if Self::eval_const_expr_with_context(condition, known, file_context, precision)?
-                    .is_truthy()
+                if Self::eval_const_expr_with_context_and_enum_classes(
+                    condition,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?
+                .is_truthy()
                 {
-                    Self::eval_const_expr_with_context(then_expr, known, file_context, precision)
+                    Self::eval_const_expr_with_context_and_enum_classes(
+                        then_expr,
+                        known,
+                        file_context,
+                        precision,
+                        known_enum_classes,
+                    )
                 } else {
-                    Self::eval_const_expr_with_context(else_expr, known, file_context, precision)
+                    Self::eval_const_expr_with_context_and_enum_classes(
+                        else_expr,
+                        known,
+                        file_context,
+                        precision,
+                        known_enum_classes,
+                    )
                 }
             }
             Expr::Elvis { left, right } => {
-                let left =
-                    Self::eval_const_expr_with_context(left, known, file_context, precision)?;
+                let left = Self::eval_const_expr_with_context_and_enum_classes(
+                    left,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
                 if left.is_truthy() {
                     Ok(left)
                 } else {
-                    Self::eval_const_expr_with_context(right, known, file_context, precision)
+                    Self::eval_const_expr_with_context_and_enum_classes(
+                        right,
+                        known,
+                        file_context,
+                        precision,
+                        known_enum_classes,
+                    )
                 }
             }
             Expr::NullCoalesce { left, right } => {
-                let left =
-                    Self::eval_const_expr_with_context(left, known, file_context, precision)?;
+                let left = Self::eval_const_expr_with_context_and_enum_classes(
+                    left,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
                 if left.value_type() == ValueType::Null {
-                    Self::eval_const_expr_with_context(right, known, file_context, precision)
+                    Self::eval_const_expr_with_context_and_enum_classes(
+                        right,
+                        known,
+                        file_context,
+                        precision,
+                        known_enum_classes,
+                    )
                 } else {
                     Ok(left)
                 }
+            }
+            Expr::PropertyAccess {
+                object,
+                property,
+                nullsafe,
+                ..
+            } => {
+                let receiver = Self::eval_const_expr_with_context_and_enum_classes(
+                    object,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
+                if *nullsafe && receiver.value_type() == ValueType::Null {
+                    return Ok(Value::null());
+                }
+                let object = receiver.as_object().ok_or_else(|| {
+                    format!(
+                        "constant expression cannot fetch a property on {}",
+                        receiver.type_name()
+                    )
+                })?;
+                if !known_enum_classes.contains(object.class_name.as_ref()) {
+                    return Err(
+                        "Fetching properties on non-enums in constant expressions is not allowed"
+                            .to_string(),
+                    );
+                }
+                object.get_property(property).cloned().ok_or_else(|| {
+                    format!("undefined property: {}::${property}", object.class_name)
+                })
+            }
+            Expr::DynamicPropertyAccess {
+                object,
+                property,
+                nullsafe,
+                ..
+            } => {
+                let receiver = Self::eval_const_expr_with_context_and_enum_classes(
+                    object,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
+                if *nullsafe && receiver.value_type() == ValueType::Null {
+                    return Ok(Value::null());
+                }
+                let property = Self::eval_const_expr_with_context_and_enum_classes(
+                    property,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
+                let property = property.as_str().map(str::to_owned).ok_or_else(|| {
+                    format!(
+                        "value of type {} cannot be folded as a property name",
+                        property.type_name()
+                    )
+                })?;
+                let object = receiver.as_object().ok_or_else(|| {
+                    format!(
+                        "constant expression cannot fetch a property on {}",
+                        receiver.type_name()
+                    )
+                })?;
+                if !known_enum_classes.contains(object.class_name.as_ref()) {
+                    return Err(
+                        "Fetching properties on non-enums in constant expressions is not allowed"
+                            .to_string(),
+                    );
+                }
+                object.get_property(&property).cloned().ok_or_else(|| {
+                    format!("undefined property: {}::${property}", object.class_name)
+                })
             }
             Expr::New {
                 class_name,
@@ -6223,11 +6437,12 @@ impl Compiler {
             Expr::ArrayLiteral(elements) => {
                 let mut arr = crate::value::PhpArray::new();
                 for elem in elements {
-                    let val = Self::eval_const_expr_with_context(
+                    let val = Self::eval_const_expr_with_context_and_enum_classes(
                         &elem.value,
                         known,
                         file_context,
                         precision,
+                        known_enum_classes,
                     )?;
                     if elem.unpack {
                         let source = val.as_array().ok_or_else(|| {
@@ -6251,11 +6466,12 @@ impl Compiler {
                         continue;
                     }
                     if let Some(key_expr) = &elem.key {
-                        let key = Self::eval_const_expr_with_context(
+                        let key = Self::eval_const_expr_with_context_and_enum_classes(
                             key_expr,
                             known,
                             file_context,
                             precision,
+                            known_enum_classes,
                         )?;
                         if let Some(n) = key.as_long() {
                             arr.set_int(n, val);
@@ -6273,10 +6489,20 @@ impl Compiler {
                 Ok(Value::array(arr))
             }
             Expr::ArrayAccess { array, index, .. } => {
-                let array =
-                    Self::eval_const_expr_with_context(array, known, file_context, precision)?;
-                let index =
-                    Self::eval_const_expr_with_context(index, known, file_context, precision)?;
+                let array = Self::eval_const_expr_with_context_and_enum_classes(
+                    array,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
+                let index = Self::eval_const_expr_with_context_and_enum_classes(
+                    index,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
                 let array = array
                     .as_array()
                     .ok_or_else(|| "constant expression cannot index a non-array".to_string())?;

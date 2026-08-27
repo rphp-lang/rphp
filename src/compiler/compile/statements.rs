@@ -6031,6 +6031,7 @@ impl Compiler {
                 if is_backed {
                     resolved_implements.push("BackedEnum".to_string());
                 }
+                std::rc::Rc::make_mut(&mut self.known_enum_classes).insert(resolved_enum.clone());
 
                 // Backing expressions are constants, but PHP defers their
                 // table-wide type/uniqueness contract until an ordinary

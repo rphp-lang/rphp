@@ -360,6 +360,119 @@ echo 'unreachable';
 }
 
 #[test]
+fn enum_property_values_materialize_across_declaration_initializers() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+enum SourcePulse: int { case Live = 73; }
+enum CopiedName: string { case Live = SourcePulse::Live->name; }
+enum CopiedValue: int { case Live = SourcePulse::Live?->value; }
+
+class InitializerSnapshot {
+    public const NAME = SourcePulse::Live?->name;
+    public const VALUE = SourcePulse::Live->value;
+    public string $name = SourcePulse::Live->name;
+    public int $value = SourcePulse::Live?->value;
+    public static string $staticName = SourcePulse::Live?->name;
+    public static int $staticValue = SourcePulse::Live->value;
+}
+
+echo CopiedName::Live->value, ':', CopiedValue::Live->value, '|';
+for ($attempt = 0; $attempt < 2; $attempt++) {
+    $snapshot = new InitializerSnapshot();
+    echo InitializerSnapshot::NAME, ':', InitializerSnapshot::VALUE, ':';
+    echo $snapshot->name, ':', $snapshot->value, '|';
+}
+echo InitializerSnapshot::$staticName, ':', InitializerSnapshot::$staticValue;
+"#,
+        ),
+        "Live:73|Live:73:Live:73|Live:73:Live:73|Live:73"
+    );
+}
+
+#[test]
+fn enum_property_initializer_folding_keeps_alias_nested_and_dynamic_forms() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+namespace SourceDomain {
+    enum Status: string { case Ready = 'ready'; }
+}
+namespace ProjectionDomain {
+    use SourceDomain\Status as ImportedStatus;
+
+    class Projection {
+        public const VALUES = [
+            'name' => ImportedStatus::Ready->name,
+            'value' => ImportedStatus::Ready?->value,
+            'dynamic' => ImportedStatus::Ready->{'name'},
+        ];
+        public array $values = [
+            ImportedStatus::Ready?->name,
+            ImportedStatus::Ready->value,
+        ];
+        public static array $staticValues = [
+            ImportedStatus::Ready->{'name'},
+            ImportedStatus::Ready?->value,
+        ];
+    }
+
+    $projection = new Projection();
+    echo implode('|', Projection::VALUES), "\n";
+    echo implode('|', $projection->values), "\n";
+    echo implode('|', Projection::$staticValues);
+}
+"#,
+        ),
+        "Ready|ready|Ready\nReady|ready\nReady|ready"
+    );
+}
+
+#[test]
+fn enum_property_instance_initializer_can_wait_for_a_later_enum_declaration() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class DeferredSnapshot {
+    public const NAME = FuturePulse::Ready?->name;
+    public string $name = FuturePulse::Ready?->name;
+    public string $value = FuturePulse::Ready->value;
+}
+
+enum FuturePulse: string { case Ready = 'future'; }
+
+for ($attempt = 0; $attempt < 2; $attempt++) {
+    $snapshot = new DeferredSnapshot();
+    echo DeferredSnapshot::NAME, ':', $snapshot->name, ':', $snapshot->value, '|';
+}
+"#,
+        ),
+        "Ready:Ready:future|Ready:Ready:future|"
+    );
+}
+
+#[test]
+fn deferred_declaration_property_fetch_keeps_the_non_enum_error() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+define('LATE_NON_ENUM', new stdClass());
+class DeferredNonEnum {
+    public const BAD = LATE_NON_ENUM->missing;
+}
+
+try {
+    var_dump(DeferredNonEnum::BAD);
+} catch (Error $error) {
+    echo get_class($error), ':', $error->getMessage();
+}
+"#,
+        ),
+        "Error:Fetching properties on non-enums in constant expressions is not allowed"
+    );
+}
+
+#[test]
 fn goto_keyword_spelling_is_preserved_for_class_constant_names() {
     assert_eq!(
         run_php(
