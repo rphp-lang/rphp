@@ -963,6 +963,63 @@ fn take_foreach_protocol_exception<'a>(
 }
 
 #[inline]
+fn release_temporary_foreach_source<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    init: &Instruction,
+) -> Result<Option<ColdResult<'a>>, VmError> {
+    debug_assert!(init.opcode == OpCode::ForeachInit);
+    debug_assert!(matches!(init.op1_type, OpType::Tmp | OpType::Var));
+    release_statement_temps(eg, frame, init.op1 as usize, init.op1 as usize + 1)?;
+    take_foreach_protocol_exception(eg, frame)
+}
+
+/// Release a temporary IteratorAggregate receiver after its returned Iterator
+/// has successfully completed the first validity check. Zend no longer needs
+/// the aggregate at that boundary, but still retains direct Iterator operands
+/// and named/aliased aggregate variables for their ordinary PHP lifetime.
+#[inline]
+fn release_temporary_foreach_aggregate<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    foreach_next: &Instruction,
+) -> Result<Option<ColdResult<'a>>, VmError> {
+    // SAFETY: the active instruction is borrowed from this op array for the
+    // duration of the dispatch call.
+    let next_ip = unsafe {
+        (foreach_next as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    };
+    let Some(init) = next_ip
+        .checked_sub(1)
+        .and_then(|init_ip| op_array.instructions.get(init_ip))
+        .filter(|init| init.opcode == OpCode::ForeachInit)
+    else {
+        return Ok(None);
+    };
+    if !matches!(init.op1_type, OpType::Tmp | OpType::Var) {
+        return Ok(None);
+    }
+
+    // SAFETY: ForeachInit's compiler-owned source TMP remains live until this
+    // first ForeachNext. release_statement_temps clears exactly that one slot
+    // and keeps the frame ownership bitmap synchronized.
+    let is_aggregate = unsafe {
+        let source = &*(*frame).get_op_ptr(init.op1 as u32, init.op1_type, op_array);
+        source
+            .dereferenced()
+            .as_object()
+            .map(|object| object.class_name.to_string())
+            .is_some_and(|class_name| eg.class_is_a(&class_name, "IteratorAggregate"))
+    };
+    if !is_aggregate {
+        return Ok(None);
+    }
+
+    release_temporary_foreach_source(eg, frame, init)
+}
+
+#[inline]
 fn uses_user_iterator_protocol(value: &Value, eg: &ExecutorGlobals) -> bool {
     let Some(object) = value.as_object() else {
         return false;
@@ -1297,6 +1354,12 @@ fn op_foreach_init<'a>(
             }
         };
         if is_empty {
+            if resolved_iterable.is_some()
+                && matches!(opline.op1_type, OpType::Tmp | OpType::Var)
+                && let Some(control) = release_temporary_foreach_source(eg, frame, opline)?
+            {
+                return Ok(control);
+            }
             let target = opline.op2 as usize;
             let base_ptr = op_array.instructions.as_ptr();
             unsafe { (*frame).opline = base_ptr.add(target) };
@@ -1312,6 +1375,12 @@ fn op_foreach_init<'a>(
             iterable.clone()
         };
         set_foreach_iteration_state(frame, opline, cloned, 0);
+        if resolved_iterable.is_some()
+            && matches!(opline.op1_type, OpType::Tmp | OpType::Var)
+            && let Some(control) = release_temporary_foreach_source(eg, frame, opline)?
+        {
+            return Ok(control);
+        }
     }
     Ok(ColdResult::Done)
 }
@@ -1372,7 +1441,6 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
             arr_val.as_object_rc().and_then(|rc| rc.borrow().generator.clone())
         } else { None }
     } else { None };
-
     let has_more = if cursor < 0 {
         if cursor < -1 {
             let _ = crate::stdlib::call_object_protocol_method(
@@ -1395,6 +1463,12 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
         )?
         .unwrap_or_else(|| Value::bool(false));
         if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
+            return Ok(control);
+        }
+        if cursor == -1
+            && let Some(control) =
+                release_temporary_foreach_aggregate(eg, frame, op_array, opline)?
+        {
             return Ok(control);
         }
         if !valid.is_truthy() {
