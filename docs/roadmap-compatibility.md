@@ -3720,12 +3720,28 @@ startup, composition links, private-property hierarchies, ordinary trait
 property access and lexical-static trait property reads below +3%, with
 matching outputs.
 
-The monitored supported debt is now 927 failures: 18 strings, zero array and
-909 Zend/lang. Read-only actual/expected clustering selects six trait-kind
-declaration and instantiation failures next: invalid trait
-inheritance/implementation, trait use inside an interface, direct and
-Reflection instantiation, and extending a trait. They share parser/link/runtime
-enforcement of one class-like kind contract while keeping diagnostics staged.
+The `53e955c0` `trait-kind-declaration-instantiation-validation` checkpoint then
+moves Zend/lang from 4,394 to 4,404 pass, exactly `+10/-0`; strings stay
+631/733 and array stays 828/842 with no other status or category movement.
+Trait relationship clauses and interface trait use now stop at their distinct
+parser/compile boundaries, trait parenting stops before child publication, and
+direct plus Reflection construction share catchable kind-specific errors and
+canonical names. Five original CLI regressions cover the stage, diagnostic,
+case-insensitive identity and construction boundaries.
+
+Two exact-final-binary Zend/lang audits have byte-identical manifests and
+summaries; repeated serial strings/array outcome projections also match the
+exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-2-pinned 32-pair runs keep
+startup, class/trait links, ordinary object construction and Reflection
+construction below +3%, with matching outputs.
+
+The monitored supported debt is now 917 failures: 18 strings, zero array and
+899 Zend/lang. Read-only actual/expected clustering selects four trait
+method-prototype failures next: renamed abstract requirements, inherited
+protected access and trait-sourced override diagnostics. They share effective
+prototype ownership across trait composition and inheritance.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
