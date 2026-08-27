@@ -8,6 +8,96 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`append-error-result-boundaries`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. When an array's next integer key is already
+`PHP_INT_MAX`, array literals, runtime default-value materialization and
+ordinary or reference append now raise PHP's catchable `Error` at the common
+commit boundary. Compound and concatenating append assignments plus pre/post
+increment and decrement share that boundary. Explicit literal keys are
+evaluated before their values, an append RHS is evaluated exactly once, and
+overflow takes priority over the later non-variable-reference notice without
+changing the array, source reference, copy-on-write peer or temporary result.
+Valid append, alias and removed-maximum-key behavior remains intact.
+
+The parser accepts an empty append dimension as an increment/decrement write
+target only far enough to reach the same runtime error path. Missing classes
+decoded by `unserialize()` now use PHP's canonical
+`__PHP_Incomplete_Class` shape and retain their original class name for
+round-trip serialization. Direct, compound and incrementing property writes
+to that placeholder raise PHP's class-specific catchable `Error` without
+mutation. The same write-path audit also makes scalar dimension assignment
+catchable and preserves PHP's `true`/`false` spelling in scalar property-write
+errors.
+
+Original regressions cover positive and negative append, explicit-key and RHS
+evaluation order, literal/default construction, valid and rejected reference
+sources, throwing notice handlers, copy-on-write, self-aliasing, removed
+maximum keys, compound/concat/pre/post targets and receiver state after every
+failure. They also cover incomplete-object direct/compound/increment writes
+and scalar array/property controls. The clean-room oracle source hashes to
+`69d36bee89d53c65c58eea70ce8c43bf3b5ade2f8d9511b2598bbc87a0423d84`;
+debug and release RPHP match PHP 8.5.9 byte-for-byte with stdout SHA-256
+`01944807da02ad3c9a2afb4febcebb36a6c99b0e5bee965070f91471e3a42466`,
+empty stderr and zero exit status.
+
+All four supplied cases now pass:
+`Zend/tests/array_literal_next_element_error.phpt`,
+`Zend/tests/assign_dim_obj_null_return.phpt`,
+`Zend/tests/assign_ref_error_var_handling.phpt` and
+`Zend/tests/serialize/bug71841.phpt`. The general scalar-dimension boundary
+also converts adjacent `tests/lang/bug29893.phpt`, so the exact Zend/lang
+delta is `+5/-0`, from 4,422 to 4,427 pass, with every prior pass preserved.
+The final focused four-case manifest hashes to
+`fae80dff8001caa06cb54f62973bf65ed8a561d553784030c22885854b01c00f`.
+
+Two exact-final-binary 5,599-case Zend/lang runs each record 4,427 pass, 876
+fail, 115 skip and 181 unsupported, with no timeout or crash. Their manifests
+and summaries are byte-identical at SHA-256
+`77ca16e07aa57776c6b15ef3937f075408e0f479bac7d84403e93dc4f7b6f021`
+and
+`4f5defac84b52a13ab414279a121d37954ae77c810ce6e94605dd1b48a8f599b`.
+The repeated serial strings/array audit remains 1,459 pass, 18 fail, 67 skip
+and 31 unsupported across 1,575 cases; candidate runs and the exact parent
+share the same sorted status/category projection at SHA-256
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`.
+The combined audit therefore covers 7,174 cases: 5,886 pass, 894 fail, 182
+skip and 212 unsupported. Supported debt is 18 strings failures, zero array
+failures and 876 Zend/lang failures.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production is below its ceiling at 1,618 unsafe blocks and 289 unsafe
+functions, with 369 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass. The change adds no dependency, opcode or persistent
+runtime layout field.
+
+One exact-final-binary CPU-2-pinned, performance-governor, order-balanced
+32-pair release gate with four warmups compares retained parent SHA-256
+`b6b5a185fdc69cab95f60a28fbb4013f0eb369652a646b5afc5c3f6f42319b86`
+with candidate
+`81e7fd1d9dff4b7d10b31ceec800d5f1a4d6e9e651e6405ad6564c811ea5b18d`.
+Balanced median changes are -2.314% for two million ordinary appends, -0.555%
+for 800,000 dynamic array literals and -1.506% for five million declared
+instance-property writes. Comparable checksums match and all paths remain
+below the +5% gate. The harness, append workload, literal workload and
+property control hash to
+`1f61b6161dba2df78b0f7804247e9a148fea7684fc72a2bb74db3cdc6d980b63`,
+`d400c492a941b3c5b5b51ec544e74a4b4a210c73c86377cb6587f8c6d27df2b8`,
+`372940c692d747c06a3a80b0380308519e0cee779a5aaf5a58a10a0d1b031511`
+and
+`015601c1e3720e34158f79f45ebf5dfc824605669818b7339bd07ac066477ab9`.
+
+This checkpoint does not claim `SplFixedArray`, general SPL implementation,
+32-bit behavior or allocation-limit/OOM equivalence. Read-only clustering of
+the exact remaining manifest selects the five-case scalar list-destructuring
+diagnostic boundary next: `list/destruct_bool.phpt`, `destruct_float.phpt`,
+`destruct_int.phpt`, `destruct_string.phpt` and `list/bug39304.phpt`, including
+error-suppression controls.
+
+The implementation checkpoint is commit `d1344ea5`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `typed-property-unserialize-validation`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. Materializing an ordinary `O:`
 payload now resolves serialized public, protected and private property names

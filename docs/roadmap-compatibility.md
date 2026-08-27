@@ -3842,20 +3842,40 @@ malformed decoding are -6.434%, +2.043%, +1.623% and -1.236%; one unchanged
 serialization control is explicitly retained as a noisy +4.251% observation.
 Two ordinary one-million property controls are -0.686% and +0.109%.
 
-The monitored supported debt is now 899 failures: 18 strings, zero array and
-881 Zend/lang. The complete 216-case trait neighborhood has zero ordinary
-failure. Read-only clustering selects the four-case append/error-result
-boundary next: `array_literal_next_element_error.phpt`,
-`assign_dim_obj_null_return.phpt`, `assign_ref_error_var_handling.phpt` and
-`serialize/bug71841.phpt`. `SplFixedArray` remains a separate extension-sized
-contract rather than being folded into that goal.
+The `d1344ea5` `append-error-result-boundaries` checkpoint then moves Zend/lang
+from 4,422 to 4,427 pass, exactly `+5/-0`: the four selected cases become exact
+and the general catchable scalar-dimension boundary also converts adjacent
+`tests/lang/bug29893.phpt`. Array literals/defaults, ordinary/reference append
+and compound/concat/pre/post targets now share PHP's occupied-next-index
+`Error`, evaluation order and state-preservation contract. The parser accepts
+append increment/decrement targets only through that runtime boundary, and
+property writes to canonical `__PHP_Incomplete_Class` placeholders raise the
+original-class-specific catchable `Error` without mutation.
+
+Two exact-final-binary Zend/lang audits have byte-identical manifests and
+summaries; repeated serial strings/array outcome projections also match the
+exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Production remains below the unsafe ceiling at 1,618
+blocks and 289 functions. One exact-final-binary CPU-2-pinned 32-pair release
+gate records -2.314% for ordinary append, -0.555% for dynamic array literals
+and -1.506% for declared property writes, with matching checksums and every
+path below +5%.
+
+The monitored supported debt is now 894 failures: 18 strings, zero array and
+876 Zend/lang. The complete 216-case trait neighborhood has zero ordinary
+failure. Read-only clustering selects the five-case scalar list-destructuring
+diagnostic boundary next: `list/destruct_bool.phpt`, `destruct_float.phpt`,
+`destruct_int.phpt`, `destruct_string.phpt` and `list/bug39304.phpt`, including
+ordinary, null and error-suppressed controls. `ArrayAccess`, `SplFixedArray`
+and general SPL remain separate contracts rather than being folded into that
+goal.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
-suppression-wrapped destructuring, exhaustive object/array/resource
-string-offset conversions, 32-bit behavior and allocation-limit/OOM equivalence
-remain explicit contracts.
+exhaustive object/array/resource string-offset conversions, 32-bit behavior
+and allocation-limit/OOM equivalence remain explicit contracts.
 
 Every accepted goal updates its focused regression corpus and the failure
 manifest. A broader PHPT rerun is required when the expected fanout is large,
