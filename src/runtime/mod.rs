@@ -4276,6 +4276,42 @@ impl ExecutorGlobals {
         self.register_class_mode(class_def, false)
     }
 
+    /// A resolved `use` edge must name a trait. Runtime declarations surface
+    /// this relation as a catchable Error at the declaration opcode, so keep
+    /// the message separate from registration's fallback fatal formatting.
+    #[cold]
+    pub(crate) fn direct_non_trait_use_error(&self, class_def: &ClassDef) -> Option<String> {
+        class_def.uses.iter().find_map(|trait_name| {
+            self.find_class(trait_name)
+                .filter(|definition| !definition.is_trait)
+                .map(|definition| {
+                    format!(
+                        "{} cannot use {} - it is not a trait",
+                        class_def.name, definition.name
+                    )
+                })
+        })
+    }
+
+    /// Trait adaptation owners are validated independently from direct uses.
+    /// PHP reports this declaration-link failure as a non-catchable fatal and
+    /// names the resolved class-like symbol rather than the source spelling.
+    #[cold]
+    fn non_trait_adaptation_owner(&self, class_def: &ClassDef) -> Option<String> {
+        let aliases = class_def
+            .trait_aliases
+            .iter()
+            .filter_map(|adaptation| adaptation.trait_name.as_ref());
+        let precedences = class_def.trait_precedences.iter().flat_map(|precedence| {
+            std::iter::once(&precedence.trait_name).chain(precedence.instead_of.iter())
+        });
+        aliases.chain(precedences).find_map(|owner| {
+            self.find_class(owner)
+                .filter(|definition| !definition.is_trait)
+                .map(|definition| definition.name.clone())
+        })
+    }
+
     /// Compose and internally publish a runtime class before its outstanding
     /// method-variance dependencies have finished autoloading. The active-link
     /// guard keeps the class hidden from userland symbol probes while a new
@@ -4350,6 +4386,23 @@ impl ExecutorGlobals {
             .map(|(_, class)| class.as_ref())
         {
             return Err(Self::class_like_redeclaration_error(previous, &class_def));
+        }
+        let relation_location = || {
+            class_def
+                .source_file
+                .as_ref()
+                .map_or_else(String::new, |file| {
+                    format!(" in {file} on line {}", class_def.declaration_line)
+                })
+        };
+        if let Some(error) = self.direct_non_trait_use_error(&class_def) {
+            return Err(format!("{error}{}", relation_location()));
+        }
+        if let Some(owner) = self.non_trait_adaptation_owner(&class_def) {
+            return Err(format!(
+                "Class {owner} is not a trait, Only traits may be used in 'as' and 'insteadof' statements{}",
+                relation_location()
+            ));
         }
         let class_table = &self.class_table;
         self.generic_metadata

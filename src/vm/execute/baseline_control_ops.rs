@@ -147,6 +147,22 @@ fn op_declare_class<'a>(
             );
         }
     }
+    if let Some(message) = eg.direct_non_trait_use_error(&class_def) {
+        let error = make_error_value("Error", &message);
+        let instruction_index = op_array
+            .instructions
+            .iter()
+            .position(|instruction| std::ptr::eq(instruction, opline))
+            .expect("DeclareClass instruction belongs to its op array");
+        attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+        eg.restore_runtime_class_declaration(declaration_key, class_def);
+        return Ok(match throw_in_frame(eg, frame, error)? {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+        });
+    }
     let class_name = class_def.name.clone();
     if let Some((active_parent, outstanding_dependencies)) =
         eg.active_parent_link_dependencies(&class_def)
