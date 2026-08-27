@@ -8,6 +8,92 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`data-uri-runtime-list-key`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. Triage disproved the initial compiler hypothesis:
+a direct runtime `define()` value already passed through the ordinary constant
+fetch and numeric-string array-key normalization correctly. The selected test
+instead defined its key from `file_get_contents('data:text/plain,2')`, which
+previously returned `false` and therefore selected integer key zero.
+
+Both the minimal and extended `file_get_contents()` implementations now share
+a dependency-free decoder for PHP's lowercase RFC 2397 `data:` boundary. It
+accepts opaque and `data://` forms, percent-decodes ordinary payloads with
+PHP's plus-to-space rule, preserves invalid percent escapes literally, decodes
+strict base64 payloads, validates parameters and reports the canonical missing
+comma, illegal-parameter and decode warnings. The extended form also preserves
+positive, negative, zero-length and past-end offset/length behavior, including
+the failed negative-seek warning. Diagnostics retain ordinary handler,
+suppression-mask and throwing-handler commit behavior.
+
+Original regressions connect that decoded runtime constant to long, short and
+nested keyed destructuring while preserving source/key evaluation order,
+numeric-string keys, references and copy-on-write. Negative controls cover an
+undefined constant, a missing array key, target state after a throwing handler,
+binary percent/base64 payloads, invalid metadata and seek boundaries in both
+minimal and extended feature builds. The clean-room oracle source hashes to
+`7a11f8332f08b9f45e38a5f52a7ca201a83022eaab492f7397f9bffac3df2557`;
+PHP 8.5.9 and the exact release candidate match byte-for-byte with stdout
+SHA-256
+`f79bef6fb386558e48c388062f382421916b84418a3705e0dd1461a3fe867b2a`,
+empty stderr and zero exit status.
+
+`Zend/tests/list/list_keyed_non_literals.phpt` changes from output failure to
+pass. Its parent and candidate focused manifests hash to
+`7f93bbc58e21107de2d0d820dfa2c354f553fdb2d87910e92b853e74b6e9343f`
+and
+`bd77737dc015f4e0176fb03eef6c92e16a78865e48c964d036638f15c20c0c0c`.
+The exact Zend/lang delta is `+1/-0`, from 4,434 to 4,435 pass, with no other
+status or category movement and every prior pass preserved. Two adjacent
+scalar-type cases that also mention `data:` retain byte-identical failing
+output, proving that their independent callable-diagnostic gap was not hidden.
+
+Two exact-final-binary 5,599-case Zend/lang runs each record 4,435 pass, 868
+fail, 115 skip and 181 unsupported, with no timeout or crash. Their manifests
+are byte-identical at SHA-256
+`ddaf63d984b3c9783b2c44380d6fd03e7fcd2313698e897f1292fe69cf3ddb8d`;
+the implementation-commit-labelled summary hashes to
+`7c6f3c71f4b84a71ae7d5d56cf84420f57cef6c64c37a6a226158590b21e9c44`.
+Repeated serial strings/array runs remain 1,459 pass, 18 fail, 67 skip and 31
+unsupported across 1,575 cases; both runs and the exact parent share the same
+sorted status/category projection at SHA-256
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`.
+The combined audit therefore covers 7,174 cases: 5,894 pass, 886 fail, 182
+skip and 212 unsupported. Supported debt is 18 strings failures, zero array
+failures and 868 Zend/lang failures.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains below its ceiling at 1,618 unsafe blocks and 289 unsafe
+functions, with 369 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass. The change adds no dependency, unsafe block, opcode or
+persistent runtime layout field.
+
+One exact-final-binary CPU-2-pinned, performance-governor, order-balanced
+32-pair release gate with four warmups compares retained parent SHA-256
+`95930454edd6312722a2e87bd94814f96e926bf0d866971b95afe3094f2a6f8b`
+with candidate
+`da316019ac1e326871a19cd8c647c5879799e16af0e28d4beea32c39632d7a96`.
+Balanced median changes are +0.153% for 100,000 ordinary regular-file content
+reads and -2.364% for two million runtime-constant keyed destructurings.
+Comparable checksums match and both paths remain below the +5% gate. The
+harness and two workloads hash to
+`1f61b6161dba2df78b0f7804247e9a148fea7684fc72a2bb74db3cdc6d980b63`,
+`2772c7ca6f5b6df96577f4fae06a74cd50f4d8e48fc1a4a2fa0e36aeca446f06`
+and
+`99ac08d5489b81f00fa36d1a370431cdd0b41d93bfd62af74721ce182995caf2`.
+
+This checkpoint does not claim `fopen()` or general stream-registry/metadata
+support for `data:`, other remote wrappers, `ArrayAccess`, `ArrayObject`,
+`SplObjectStorage`, `SplFixedArray` or general SPL implementation, 32-bit
+behavior or allocation-limit/OOM equivalence. Read-only clustering of the
+exact remaining manifest selects `Zend/tests/foreach/foreach_list_003.phpt`
+next: its forbidden list-key case needs PHP's compile-fatal stage, filename and
+line. ArrayAccess-backed destructuring remains a separate runtime root.
+
+The implementation checkpoint is commit `4d28d046`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `scalar-list-destructuring-diagnostics`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. Long and short destructuring from
 `bool`, `float`, `int` and `string` now emit PHP's canonical warning for each

@@ -3881,13 +3881,30 @@ nested destructuring, -0.546% for ordinary string offsets and -0.830% for the
 existing resource-warning path, with matching checksums and every path below
 +5%.
 
-The monitored supported debt is now 887 failures: 18 strings, zero array and
-869 Zend/lang. Read-only clustering selects the runtime-constant keyed-
-destructuring boundary next, starting with
-`Zend/tests/list/list_keyed_non_literals.phpt`, whose unresolved constant key
-currently degrades to index zero. `ArrayAccess`-backed destructuring,
-`ArrayObject`, `SplFixedArray` and general SPL remain separate contracts rather
-than being folded into that goal.
+The `4d28d046` `data-uri-runtime-list-key` checkpoint then moves Zend/lang from
+4,434 to 4,435 pass, exactly `+1/-0`. The initially suspected runtime-constant
+list lowering was already correct; the supplying `define()` received `false`
+because `file_get_contents('data:text/plain,2')` lacked its RFC 2397 boundary.
+Minimal and extended builds now share plain/percent/base64 data decoding,
+parameter and decode warnings, offset/length handling and PHP error-handler
+semantics. The resulting numeric-string constant reaches long, short, nested
+and reference keyed destructuring without changing source/key order or COW.
+
+Two exact-final-binary Zend/lang manifests are byte-identical; repeated serial
+strings/array outcome projections also match the exact parent. All five Cargo
+configurations, all-feature/all-target, formatting, HTML data, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production
+remains below the unsafe ceiling at 1,618 blocks and 289 functions. One
+exact-final-binary CPU-2-pinned 32-pair release gate records +0.153% for
+ordinary regular-file contents and -2.364% for runtime-constant keyed
+destructuring, with matching checksums and both paths below +5%.
+
+The monitored supported debt is now 886 failures: 18 strings, zero array and
+868 Zend/lang. Read-only clustering selects
+`Zend/tests/foreach/foreach_list_003.phpt` next: the forbidden list-key form
+currently reports a bare parse error instead of PHP's compile fatal with file
+and line. `ArrayAccess`-backed destructuring, `ArrayObject`,
+`SplObjectStorage`, `SplFixedArray` and general SPL remain separate contracts.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
