@@ -3597,11 +3597,29 @@ and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep
 startup, 500 enum-default compilations, five million ordinary property reads
 and one million enum-default fetches below +5%, with matching outputs.
 
-The monitored supported debt is now 1,012 failures: 18 strings, zero array and
-994 Zend/lang. Read-only failure clustering selects the four remaining
-supported `prop_const_expr` compile failures next. Enum property fetches must
-materialize in class constants, enum backing values and instance/static
-property initializers without weakening the already accepted non-enum guard.
+The `0829bcd7` `constant-property-initializer-materialization` checkpoint then
+moves Zend/lang from 4,309 to 4,313 pass, exactly `+4/-0`; strings stay 631/733
+and array stays 828/842 with no other status or category movement. The
+declaration-time folder materializes static, dynamic-name and nullsafe enum
+case property reads in class constants, enum backing values and instance or
+static property initializers. Copy-on-write known-enum metadata keeps nested
+compiler creation constant-time, and the deferred evaluator covers forward
+declaration initializers without weakening the enum-only guard.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical manifests
+and summaries; repeated serial strings/array outcome projections also match
+the exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-2-pinned 32-pair runs keep
+startup, 500 enum declaration compilations, 500 scalar-initializer compilations
+and one million enum-default fetches below +5%, with matching outputs.
+
+The monitored supported debt is now 1,008 failures: 18 strings, zero array and
+990 Zend/lang. Read-only failure clustering selects the 13 adjacent closure
+and first-class-callable constant-expression compile failures next. Their
+already-supported static forms must materialize in class constants and
+instance/static property initializers while preserving scope and invalid-form
+diagnostics.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument

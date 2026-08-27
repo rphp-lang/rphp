@@ -8,31 +8,30 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
-`non-enum-constant-property-fetch`, pinned to php-src 8.5 commit `fcc29c8`
-and validated against PHP 8.5.9. Property reads compiled inside constant
-expressions now carry a bytecode flag. The cached read path accepts only a
-proved enum case; the slow path converts a dynamic property name first and
-then rejects every non-enum object with PHP's catchable `Error`: `Fetching
-properties on non-enums in constant expressions is not allowed`. Nullsafe
-`null`, enum `name`/`value`, enum missing-property diagnostics and ordinary
-runtime property reads retain their existing behavior.
+`constant-property-initializer-materialization`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. Enum case `name` and `value` reads
+now materialize in class constants, enum backing expressions and instance or
+static property initializers. Static, dynamic-name and nullsafe forms share
+the same enum-only rule. Copy-on-write enum metadata avoids copying the known
+enum set into every nested compiler, while forward declaration initializers
+use the established deferred evaluator after class registration.
 
-Original regressions cover unit and backed enum properties in global constants
-and default arguments, nullsafe short-circuiting, ordinary runtime reads,
-explicit-argument default bypass, owner/name/`__toString()` evaluation order,
-repeated omitted-default failures and exact source/line/trace attribution. The
-five selected `prop_const_expr/non_enums*.phpt` cases move from fail to pass;
-no other outcome changes status or category.
+Original regressions cover backed enum values, class constants, typed instance
+and static defaults, aliases, nested arrays, dynamic names, nullsafe reads,
+repeated object construction and a later enum declaration. A deferred
+non-enum object retains PHP's catchable `Error`. The four selected
+`prop_const_expr` cases move from `fail/compile` to pass; all 20 cases in that
+directory are now 19 pass and one extension skip, with no ordinary failure.
 
-The complete combined audit covers 7,174 cases: 5,768 pass, 1,012 fail, 182
+The complete combined audit covers 7,174 cases: 5,772 pass, 1,008 fail, 182
 skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
 fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
-and one unsupported. Zend/lang moves from 4,304 to 4,309 pass, exactly
-`+5/-0`, with 994 failures, 115 skips and 181 unsupported cases. Two serial
+and one unsupported. Zend/lang moves from 4,309 to 4,313 pass, exactly
+`+4/-0`, with 990 failures, 115 skips and 181 unsupported cases. Two serial
 exact-final-binary Zend/lang runs have byte-identical manifests and summaries,
 whose SHA-256 values are respectively
-`efebc86a85141f9c96472f3c81fee5c6ce748125623c6f9e5fb3013aaa85bcc6`
-and `d32ca37b51d569de696b2b1ef6f1e618a4f2fae578c2ea6c85efc3b5b01589a9`.
+`70859f5c049587f716042732a18b98a09a0ee5ed1f904ff15e52c0589cc90d2f`
+and `b4d7299ef2d28a75ad5b22bcb1c11f1cfa1678ba86e4ca1b2507cf59eea621ce`.
 Repeated serial strings and array outcome projections are byte-identical to
 the exact parent and hash to
 `770ea3a9ba03d5ed091fc15bb614b1f3f5e0e0c9e80cca0e633936a55e1e1e73`
@@ -40,34 +39,35 @@ and `7d4b397d553dbdf5875d928f8bcbe886db93d84ec8c172a08760faf969226a46`.
 
 All five Cargo feature configurations, locked all-feature/all-target,
 formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
-Production is at 1,622 unsafe blocks against a 1,623 ceiling, 289 unsafe
+Production remains at 1,622 unsafe blocks against a 1,623 ceiling, 289 unsafe
 functions, 367 SAFETY annotations and seven `# Safety` sections. Composer
 2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
-cold-build S3 pass. The change adds no dependency, opcode, frame or
-Value/object layout; its one added unsafe read uses the existing object-class
-ID accessor after a proved object tag and before any re-entrant operation.
+cold-build S3 pass. The change adds no dependency, unsafe block, opcode, frame
+or Value/object layout.
 
 Two exact-final-binary CPU-2-pinned, performance-governor, order-balanced
 32-pair release runs with four warmups compare retained parent SHA-256
-`6737ba8155d42dbddf394d288f5e5a09dd25b9d61d74b654930d9ecd6e9f13fa`
+`ad17a7a21fdfe1123e2810e49bda020309a98450650561bf30c1274d71b2da79`
 with candidate
-`ad17a7a21fdfe1123e2810e49bda020309a98450650561bf30c1274d71b2da79`.
-Paired medians are -6.257%/-6.169% for 100 startups,
--0.375%/-0.394% for 500 enum-default compilations,
--1.377%/-1.167% for five million ordinary property reads and
--2.837%/-1.327% for one million enum-default fetches. Comparable outputs
-match and every paired median remains below +5%. The raw TSVs hash to
-`5312265f399a31574ab1a827d14d0d6d25f47c3d4e5429e06727bb2234ca035a`
-and `89b28bc2e1a3224218c87aab99d00b7bd53b30c06b2f90a28d68328c07e99184`.
+`1173c22d00f4aa154f99fe67548b19ca6b7b411129964be818ed627aaf934203`.
+Paired medians are -0.039%/+0.347% for 100 startups,
++0.197%/+1.157% for 500 enum declaration compilations,
+-0.290%/+0.157% for 500 scalar-initializer compilations and
++2.441%/+1.572% for one million retained enum-default fetches. Comparable
+outputs match and every paired median remains below +5%. The raw TSVs hash to
+`24077e8234d307c8a9b298e2799ebee2a6adc798b6f35912fc373737a6797bd2`
+and `725f6ec79939fc798af73b54d18e66f84a2b0fd48624267f3cb151a218f3ade6`.
 
-This checkpoint does not claim every constant-expression materialization
-site. The monitored supported debt is now 1,012 failures: 18 strings, zero
-array and 994 Zend/lang. Read-only failure clustering selects the four
-remaining supported `prop_const_expr` compile failures next: enum property
-fetches must materialize correctly in class constants, enum backing values and
-instance/static property initializers.
+This checkpoint does not claim every missing-property diagnostic, attribute
+materialization, same-enum self-cycle or arbitrary forward static-property
+case. The monitored supported debt is now 1,008 failures: 18 strings, zero
+array and 990 Zend/lang. Read-only manifest clustering selects the 13 adjacent
+compile failures in closure and first-class-callable constant expressions
+next: their already-supported static forms must materialize in class constants
+and instance/static property initializers while scope and invalid-form
+diagnostics remain PHP-compatible.
 
-The implementation checkpoint is commit `0547a386`.
+The implementation checkpoint is commit `0829bcd7`.
 
 The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `duplicate-default-compile-diagnostics`, pinned to php-src 8.5 commit
