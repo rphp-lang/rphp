@@ -73,13 +73,37 @@ impl Parser {
         method: String,
     ) -> Result<TraitAlias, String> {
         self.expect(&Token::As)?;
+        let mut is_final = false;
         let visibility = match self.peek() {
             Token::Public => Some(Visibility::Public),
             Token::Protected => Some(Visibility::Protected),
             Token::Private => Some(Visibility::Private),
+            Token::Final => {
+                is_final = true;
+                None
+            }
+            Token::Static(_) => {
+                let line = self.closest_token_source_line();
+                let _ = self.compile_error(
+                    "Cannot use \"static\" as method modifier in trait alias",
+                    line,
+                );
+                None
+            }
+            Token::Abstract => {
+                let line = self.closest_token_source_line();
+                let _ = self.compile_error(
+                    "Cannot use \"abstract\" as method modifier in trait alias",
+                    line,
+                );
+                None
+            }
             _ => None,
         };
-        if visibility.is_some() {
+        if visibility.is_some()
+            || is_final
+            || matches!(self.peek(), Token::Static(_) | Token::Abstract)
+        {
             self.advance();
         }
         if let Token::Identifier(ref modifier, line) = self.peek()
@@ -103,6 +127,7 @@ impl Parser {
             method,
             alias,
             visibility,
+            is_final,
         })
     }
 

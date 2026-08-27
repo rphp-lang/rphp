@@ -3713,11 +3713,23 @@ fn op_init_method_call<'a>(
                             Visibility::Private => "private",
                             _ => "public",
                         };
-                        return Err(VmError::Fatal(format!(
-                            "Call to {} method {}::{}() from scope {}",
-                            vis_str, defining_class, method,
-                            caller_class.as_deref().unwrap_or("global")
-                        )));
+                        let scope = caller_class.as_deref().map_or_else(
+                            || "global scope".to_string(),
+                            |scope| format!("scope {scope}"),
+                        );
+                        let error = make_error_value(
+                            "Error",
+                            &format!(
+                                "Call to {vis_str} method {defining_class}::{method}() from {scope}"
+                            ),
+                        );
+                        attach_throwable_origin(&error, eg, frame, op_array, ip);
+                        return Ok(match throw_in_frame(eg, frame, error)? {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                ColdResult::NewFrame(new_frame, new_op_array)
+                            }
+                            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                        });
                     }
                 }
             }

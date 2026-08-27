@@ -4523,6 +4523,9 @@ fn method_to_string(
         // though the execution signature does not need a return-type guard.
         rendered.push_str("  - Return [ void ]\n");
     }
+    if parameter_count == 0 && !has_return && rendered.ends_with("\n\n") {
+        rendered.pop();
+    }
     rendered.push_str("}\n");
     return_value(rv, Value::string(rendered))
 }
@@ -5574,6 +5577,9 @@ fn method_modifiers(visibility: Visibility, is_static: bool, is_final: bool) -> 
     visibility | if is_static { 16 } else { 0 } | if is_final { 32 } else { 0 }
 }
 
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
 fn collect_reflected_methods(
     eg: &ExecutorGlobals,
     owner: &str,
@@ -5603,23 +5609,21 @@ fn collect_reflected_methods(
             class.name.clone(),
         ));
     }
-    for trait_name in &class.uses {
-        let Some(trait_class) = eg.find_class(trait_name) else {
+    for method in eg.effective_composed_trait_methods(class) {
+        if !seen.insert(method.target.to_ascii_lowercase()) {
+            continue;
+        }
+        let Some(function) = eg.find_function(&format!("{}::{}", class.name, method.target)) else {
             continue;
         };
-        for (name, visibility, is_static, is_final, function) in &trait_class.methods {
-            if trait_class.method_is_abstract(name) || !seen.insert(name.to_ascii_lowercase()) {
-                continue;
-            }
-            methods.push((
-                name.clone(),
-                *visibility,
-                *is_static,
-                *is_final,
-                &function.common,
-                class.name.clone(),
-            ));
-        }
+        methods.push((
+            method.target,
+            method.visibility,
+            method.is_static,
+            method.is_final,
+            function,
+            class.name.clone(),
+        ));
     }
     if let Some(parent) = class.parent.clone() {
         collect_reflected_methods(eg, &parent, methods, seen);

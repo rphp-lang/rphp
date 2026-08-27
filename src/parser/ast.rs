@@ -779,6 +779,9 @@ pub struct TraitAlias {
     pub method: String,
     pub alias: Option<String>,
     pub visibility: Option<Visibility>,
+    /// PHP 8.3+ permits `final` as the sole non-visibility modifier in a
+    /// trait alias. Keep it distinct from an alias literally named `final`.
+    pub is_final: bool,
 }
 
 /// One `TraitA::method insteadof TraitB, TraitC` precedence rule.

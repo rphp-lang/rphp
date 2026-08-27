@@ -4946,6 +4946,7 @@ impl Compiler {
                         method: adaptation.method.clone(),
                         alias: adaptation.alias.clone(),
                         visibility: adaptation.visibility,
+                        is_final: adaptation.is_final,
                     })
                     .collect();
                 let resolved_trait_precedences = trait_precedences
@@ -5825,6 +5826,7 @@ impl Compiler {
                         method: adaptation.method.clone(),
                         alias: adaptation.alias.clone(),
                         visibility: adaptation.visibility,
+                        is_final: adaptation.is_final,
                     })
                     .collect();
                 let resolved_trait_precedences = trait_precedences
@@ -6565,6 +6567,7 @@ impl Compiler {
                         method: adaptation.method.clone(),
                         alias: adaptation.alias.clone(),
                         visibility: adaptation.visibility,
+                        is_final: adaptation.is_final,
                     })
                     .collect();
                 self.class_defs.push(ClassDef {

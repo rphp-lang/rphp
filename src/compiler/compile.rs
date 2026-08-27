@@ -2949,6 +2949,7 @@ pub struct TraitMethodAlias {
     pub method: String,
     pub alias: Option<String>,
     pub visibility: Option<Visibility>,
+    pub is_final: bool,
 }
 
 #[derive(Debug, Clone)]

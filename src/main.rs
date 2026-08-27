@@ -344,6 +344,7 @@ fn main() {
             exit_after_pending_shutdown(&mut eg, code);
         }
         Err(execute::VmError::Parse(message)) => {
+            eg.flush_output();
             eprintln!("\nParse error: {message}");
             exit_after_pending_shutdown(&mut eg, 255);
         }
@@ -352,6 +353,7 @@ fn main() {
             // The leading boundary is trimmed by PHPT when no program output
             // precedes it and remains observable as the required blank line
             // after output that was already emitted.
+            eg.flush_output();
             eprintln!("\nFatal error: {e}");
             exit_after_pending_shutdown(&mut eg, 255);
         }

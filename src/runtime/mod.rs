@@ -99,10 +99,13 @@ struct MethodDeclaration<'a> {
 }
 
 #[derive(Clone)]
-struct EffectiveTraitMethod {
-    target: String,
+pub(crate) struct EffectiveTraitMethod {
+    pub(crate) target: String,
     origin_owner: String,
     origin_method: String,
+    pub(crate) visibility: Visibility,
+    pub(crate) is_static: bool,
+    pub(crate) is_final: bool,
 }
 
 struct TraitCompositionMethod {
@@ -4307,6 +4310,8 @@ impl ExecutorGlobals {
     /// twice remains legal, including when independent static storage forced
     /// the runtime to clone its function pointer.
     #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
     fn effective_trait_methods(
         &self,
         trait_def: &ClassDef,
@@ -4335,6 +4340,9 @@ impl ExecutorGlobals {
                 target: method.0.clone(),
                 origin_owner: trait_def.name.clone(),
                 origin_method: method.0.clone(),
+                visibility: method.1,
+                is_static: method.2,
+                is_final: method.3,
             })
             .collect::<Vec<_>>();
 
@@ -4386,18 +4394,6 @@ impl ExecutorGlobals {
         }
 
         for adaptation in &trait_def.trait_aliases {
-            let Some(alias) = adaptation.alias.as_ref() else {
-                continue;
-            };
-            // The current compact adaptation AST represents PHP 8.3's
-            // `method as final;` modifier in the alias slot. It does not add a
-            // method named `final`, so it cannot participate in a collision.
-            if alias.eq_ignore_ascii_case("final") {
-                continue;
-            }
-            if own_concrete.contains(&alias.to_ascii_lowercase()) {
-                continue;
-            }
             let source = adaptation
                 .trait_name
                 .as_ref()
@@ -4421,6 +4417,26 @@ impl ExecutorGlobals {
             let Some(source) = source else {
                 continue;
             };
+            let Some(alias) = adaptation.alias.as_ref() else {
+                if let Some(method) = effective.iter_mut().find(|candidate| {
+                    candidate.target.eq_ignore_ascii_case(&adaptation.method)
+                        && Self::same_effective_trait_method(
+                            &candidate.origin_owner,
+                            &candidate.origin_method,
+                            &source.origin_owner,
+                            &source.origin_method,
+                        )
+                }) {
+                    if let Some(visibility) = adaptation.visibility {
+                        method.visibility = visibility;
+                    }
+                    method.is_final |= adaptation.is_final;
+                }
+                continue;
+            };
+            if own_concrete.contains(&alias.to_ascii_lowercase()) {
+                continue;
+            }
             if let Some(previous) = effective
                 .iter()
                 .find(|candidate| candidate.target.eq_ignore_ascii_case(alias))
@@ -4435,15 +4451,322 @@ impl ExecutorGlobals {
                 }
                 continue;
             }
+            let mut alias_method = source.clone();
+            alias_method.target = alias.clone();
+            if let Some(visibility) = adaptation.visibility {
+                alias_method.visibility = visibility;
+            }
+            alias_method.is_final |= adaptation.is_final;
             effective.push(EffectiveTraitMethod {
                 target: alias.clone(),
                 origin_owner: source.origin_owner.clone(),
                 origin_method: source.origin_method.clone(),
+                visibility: alias_method.visibility,
+                is_static: alias_method.is_static,
+                is_final: alias_method.is_final,
             });
         }
 
         visiting.remove(&visit_key);
         effective
+    }
+
+    /// Reconstruct the concrete trait methods published by one consumer,
+    /// including modifier-only adaptations and renamed aliases. This cold
+    /// metadata view is shared by link validation and Reflection; callable
+    /// dispatch continues to use the already-composed function table.
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    pub(crate) fn effective_composed_trait_methods(
+        &self,
+        class_def: &ClassDef,
+    ) -> Vec<EffectiveTraitMethod> {
+        let providers = class_def
+            .uses
+            .iter()
+            .filter_map(|used| {
+                self.find_class(used).map(|definition| {
+                    (
+                        definition.name.clone(),
+                        self.effective_trait_methods(
+                            definition,
+                            &mut std::collections::HashSet::new(),
+                        ),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let own = class_def
+            .methods
+            .iter()
+            .filter(|method| !class_def.method_is_abstract(&method.0))
+            .map(|method| method.0.to_ascii_lowercase())
+            .collect::<std::collections::HashSet<_>>();
+        let mut composed = Vec::<(String, EffectiveTraitMethod)>::new();
+
+        for (provider, methods) in &providers {
+            for method in methods {
+                if own.contains(&method.target.to_ascii_lowercase())
+                    || class_def.trait_precedences.iter().any(|precedence| {
+                        precedence.method.eq_ignore_ascii_case(&method.target)
+                            && precedence.instead_of.iter().any(|excluded| {
+                                excluded.eq_ignore_ascii_case(provider)
+                                    || self
+                                        .find_class(excluded)
+                                        .zip(self.find_class(provider))
+                                        .is_some_and(|(left, right)| {
+                                            Self::same_trait_identity(left, right)
+                                        })
+                            })
+                    })
+                    || composed
+                        .iter()
+                        .any(|(_, candidate)| candidate.target.eq_ignore_ascii_case(&method.target))
+                {
+                    continue;
+                }
+                composed.push((provider.clone(), method.clone()));
+            }
+        }
+
+        for adaptation in &class_def.trait_aliases {
+            let source = adaptation
+                .trait_name
+                .as_deref()
+                .and_then(|owner| {
+                    providers.iter().find(|(provider, _)| {
+                        provider.eq_ignore_ascii_case(owner)
+                            || self
+                                .find_class(provider)
+                                .zip(self.find_class(owner))
+                                .is_some_and(|(left, right)| Self::same_trait_identity(left, right))
+                    })
+                })
+                .and_then(|(provider, methods)| {
+                    methods
+                        .iter()
+                        .find(|method| method.target.eq_ignore_ascii_case(&adaptation.method))
+                        .map(|method| (provider.as_str(), method))
+                })
+                .or_else(|| {
+                    providers.iter().find_map(|(provider, methods)| {
+                        methods
+                            .iter()
+                            .find(|method| method.target.eq_ignore_ascii_case(&adaptation.method))
+                            .map(|method| (provider.as_str(), method))
+                    })
+                });
+            let Some((provider, source)) = source else {
+                continue;
+            };
+
+            if let Some(alias) = adaptation.alias.as_deref() {
+                if own.contains(&alias.to_ascii_lowercase())
+                    || composed
+                        .iter()
+                        .any(|(_, candidate)| candidate.target.eq_ignore_ascii_case(alias))
+                {
+                    continue;
+                }
+                let mut method = source.clone();
+                method.target = alias.to_string();
+                if let Some(visibility) = adaptation.visibility {
+                    method.visibility = visibility;
+                }
+                method.is_final |= adaptation.is_final;
+                composed.push((provider.to_string(), method));
+                continue;
+            }
+
+            if let Some((_, method)) = composed.iter_mut().find(|(candidate_provider, method)| {
+                candidate_provider.eq_ignore_ascii_case(provider)
+                    && method.target.eq_ignore_ascii_case(&adaptation.method)
+            }) {
+                if let Some(visibility) = adaptation.visibility {
+                    method.visibility = visibility;
+                }
+                method.is_final |= adaptation.is_final;
+            }
+        }
+
+        composed.into_iter().map(|(_, method)| method).collect()
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn private_final_method_warnings(&mut self, class_def: &ClassDef) {
+        let providers = class_def
+            .uses
+            .iter()
+            .filter_map(|used| {
+                self.find_class(used).map(|definition| {
+                    (
+                        definition.name.clone(),
+                        self.effective_trait_methods(
+                            definition,
+                            &mut std::collections::HashSet::new(),
+                        ),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut diagnostics = class_def
+            .methods
+            .iter()
+            .filter(|method| {
+                method.1 == Visibility::Private
+                    && method.3
+                    && !method.0.eq_ignore_ascii_case("__construct")
+            })
+            .map(|method| crate::compiler::compile::CompileDeprecation {
+                message:
+                    "Private methods cannot be final as they are never overridden by other classes"
+                        .to_string(),
+                file: class_def.source_file.clone().unwrap_or_default(),
+                line: method
+                    .4
+                    .op_array
+                    .source_lines
+                    .first()
+                    .map_or(class_def.declaration_line, |(_, line)| *line as usize),
+                warning: true,
+            })
+            .collect::<Vec<_>>();
+        let alias_warning_count = class_def
+            .trait_aliases
+            .iter()
+            .filter(|adaptation| adaptation.is_final)
+            .filter(|adaptation| {
+                let source = adaptation
+                    .trait_name
+                    .as_deref()
+                    .and_then(|owner| {
+                        providers.iter().find(|(provider, _)| {
+                            provider.eq_ignore_ascii_case(owner)
+                                || self
+                                    .find_class(provider)
+                                    .zip(self.find_class(owner))
+                                    .is_some_and(|(left, right)| {
+                                        Self::same_trait_identity(left, right)
+                                    })
+                        })
+                    })
+                    .and_then(|(_, methods)| {
+                        methods
+                            .iter()
+                            .find(|method| method.target.eq_ignore_ascii_case(&adaptation.method))
+                    })
+                    .or_else(|| {
+                        providers.iter().find_map(|(_, methods)| {
+                            methods.iter().find(|method| {
+                                method.target.eq_ignore_ascii_case(&adaptation.method)
+                            })
+                        })
+                    });
+                source.is_some_and(|source| {
+                    !source.is_final
+                        && adaptation.visibility.unwrap_or(source.visibility) == Visibility::Private
+                        && !adaptation
+                            .alias
+                            .as_deref()
+                            .unwrap_or(&adaptation.method)
+                            .eq_ignore_ascii_case("__construct")
+                })
+            })
+            .count();
+        diagnostics.extend((0..alias_warning_count).map(|_| {
+            crate::compiler::compile::CompileDeprecation {
+                message:
+                    "Private methods cannot be final as they are never overridden by other classes"
+                        .to_string(),
+                file: class_def.source_file.clone().unwrap_or_default(),
+                line: class_def.declaration_line,
+                warning: true,
+            }
+        }));
+        if diagnostics.is_empty() {
+            return;
+        }
+        self.emit_compile_deprecations(&diagnostics);
+    }
+
+    /// Existing direct-method validation handles the ordinary class case.
+    /// This companion catches either side of an override that entered through
+    /// trait composition without publishing duplicate method declarations.
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn trait_final_override_error(&self, class_def: &ClassDef) -> Option<String> {
+        let parent_name = class_def.parent.as_deref()?;
+        let child_trait_methods = self.effective_composed_trait_methods(class_def);
+        let mut child_names = class_def
+            .methods
+            .iter()
+            .map(|method| method.0.as_str())
+            .chain(
+                child_trait_methods
+                    .iter()
+                    .map(|method| method.target.as_str()),
+            )
+            .collect::<Vec<_>>();
+        child_names.sort_unstable_by_key(|name| name.to_ascii_lowercase());
+        child_names.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+
+        let mut ancestor_name = Some(parent_name);
+        while let Some(name) = ancestor_name {
+            let ancestor = self.find_class(name)?;
+            for method in &child_trait_methods {
+                if let Some((canonical, _, _, is_final, _)) = ancestor
+                    .methods
+                    .iter()
+                    .find(|candidate| candidate.0.eq_ignore_ascii_case(&method.target))
+                    && *is_final
+                {
+                    return Some(format!(
+                        "Cannot override final method {}::{}()",
+                        ancestor.name, canonical
+                    ));
+                }
+            }
+
+            for method in self
+                .effective_composed_trait_methods(ancestor)
+                .into_iter()
+                .filter(|method| method.is_final)
+            {
+                if child_names
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(&method.target))
+                {
+                    return Some(format!(
+                        "Cannot override final method {}::{}()",
+                        ancestor.name, method.target
+                    ));
+                }
+            }
+            ancestor_name = ancestor.parent.as_deref();
+        }
+        None
+    }
+
+    #[inline]
+    fn trait_final_override_may_apply(&self, class_def: &ClassDef) -> bool {
+        if !class_def.uses.is_empty() {
+            return class_def.parent.is_some();
+        }
+        let mut ancestor_name = class_def.parent.as_deref();
+        while let Some(name) = ancestor_name {
+            let Some(ancestor) = self.find_class(name) else {
+                return false;
+            };
+            if !ancestor.uses.is_empty() {
+                return true;
+            }
+            ancestor_name = ancestor.parent.as_deref();
+        }
+        false
     }
 
     /// Resolve adaptations before rejecting distinct concrete trait methods
@@ -4689,6 +5012,7 @@ impl ExecutorGlobals {
         class_def: &ClassDef,
         providers: &[(String, Vec<EffectiveTraitMethod>)],
     ) -> Option<String> {
+        let mut exclusions = std::collections::HashSet::<(usize, String)>::new();
         for precedence in &class_def.trait_precedences {
             let source =
                 match self.resolve_trait_adaptation_owner(class_def, &precedence.trait_name) {
@@ -4711,6 +5035,16 @@ impl ExecutorGlobals {
                     Ok(excluded_trait) => excluded_trait,
                     Err(error) => return Some(error),
                 };
+                let exclusion = (
+                    excluded_trait as *const ClassDef as usize,
+                    precedence.method.to_ascii_lowercase(),
+                );
+                if !exclusions.insert(exclusion) {
+                    return Some(format!(
+                        "Failed to evaluate a trait precedence ({}). Method of trait {} was defined to be excluded multiple times",
+                        precedence.method, excluded_trait.name
+                    ));
+                }
                 if Self::same_trait_identity(source, excluded_trait) {
                     return Some(format!(
                         "Inconsistent insteadof definition. The method {} is to be used from {}, but {} is also on the exclude list",
@@ -4874,6 +5208,22 @@ impl ExecutorGlobals {
             if let Some(error) = self.trait_composition_error(&class_def) {
                 return Err(error);
             }
+        }
+        if class_def.source_file.is_some()
+            && (class_def.trait_aliases.iter().any(|alias| alias.is_final)
+                || class_def.methods.iter().any(|method| {
+                    method.1 == Visibility::Private
+                        && method.3
+                        && !method.0.eq_ignore_ascii_case("__construct")
+                }))
+        {
+            self.private_final_method_warnings(&class_def);
+        }
+        if class_def.source_file.is_some()
+            && self.trait_final_override_may_apply(&class_def)
+            && let Some(error) = self.trait_final_override_error(&class_def)
+        {
+            return Err(format!("{error}{}", relation_location()));
         }
         let class_table = &self.class_table;
         self.generic_metadata
@@ -6893,6 +7243,16 @@ impl ExecutorGlobals {
                     }
                 }
             }
+            // A directly used trait may itself publish an adapted method from
+            // one of its traits. Resolve that already-linked metadata before
+            // falling through to the consumer's parent hierarchy.
+            for trait_name in &class_def.uses {
+                if let Some((visibility, is_static, _)) =
+                    self.find_method_info(trait_name, method_name)
+                {
+                    return Some((visibility, is_static, class_name.to_string()));
+                }
+            }
             // Check parent
             if let Some(parent) = &class_def.parent {
                 return self.find_method_info(parent, method_name);
@@ -7984,7 +8344,7 @@ impl ExecutorGlobals {
     /// Flush the active request output sink. PHP's `flush()` does not bypass
     /// user-level output buffers; it only asks the underlying SAPI/output
     /// transport to publish bytes already handed to it.
-    pub(crate) fn flush_output(&self) {
+    pub fn flush_output(&self) {
         let _ = self.output.borrow_mut().flush();
     }
 
