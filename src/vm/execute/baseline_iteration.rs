@@ -970,7 +970,14 @@ fn release_temporary_foreach_source<'a>(
 ) -> Result<Option<ColdResult<'a>>, VmError> {
     debug_assert!(init.opcode == OpCode::ForeachInit);
     debug_assert!(matches!(init.op1_type, OpType::Tmp | OpType::Var));
-    release_statement_temps(eg, frame, init.op1 as usize, init.op1 as usize + 1)?;
+    release_statement_temps(
+        eg,
+        frame,
+        init.op1 as usize,
+        init.op1 as usize + 1,
+        false,
+        false,
+    )?;
     take_foreach_protocol_exception(eg, frame)
 }
 

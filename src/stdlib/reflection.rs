@@ -803,7 +803,7 @@ fn evaluate_deferred_attribute_expression(
         Expr::BinaryStringLiteral(value) => Ok(Value::binary_string_from_storage(value.clone())),
         Expr::Bool(value) => Ok(Value::bool(*value)),
         Expr::Null => Ok(Value::null()),
-        Expr::Constant(name) => {
+        Expr::Constant { name, .. } => {
             let (primary, fallback) = resolve_attribute_constant_name(name, scope);
             eg.find_constant(&primary)
                 .or_else(|| fallback.as_deref().and_then(|name| eg.find_constant(name)))
@@ -1549,7 +1549,7 @@ fn report_deprecated_expression_references(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     match expression {
-        Expr::Constant(name) => {
+        Expr::Constant { name, .. } => {
             let (primary, fallback) = resolve_attribute_constant_name(name, scope);
             let resolved = if eg.find_constant(&primary).is_some() {
                 Some(primary)

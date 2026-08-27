@@ -2650,6 +2650,23 @@ impl Compiler {
                     let idx = self.add_literal(Value::null());
                     (idx, OpType::Const, false)
                 };
+                if !self.contains_yield {
+                    let cleanup_temps = self
+                        .loop_stack
+                        .iter()
+                        .rev()
+                        .filter_map(|context| context.return_cleanup_temp)
+                        .collect::<Vec<_>>();
+                    for temp in cleanup_temps {
+                        let mut release = Instruction::new(OpCode::ReleaseTemps);
+                        release.op1 = temp;
+                        release.op1_type = OpType::Tmp;
+                        release.op2 = temp + 1;
+                        release.op2_type = OpType::Tmp;
+                        release._pad |= RELEASE_TEMPS_ON_RETURN;
+                        self.push_instruction_at_line(release, *line);
+                    }
+                }
                 let mut ret = Instruction::new(OpCode::Return);
                 ret.op1 = op;
                 ret.op1_type = op_type;
@@ -2692,6 +2709,7 @@ impl Compiler {
                     break_patches: Vec::new(),
                     continue_patches: Vec::new(),
                     is_switch: false,
+                    return_cleanup_temp: None,
                 });
                 self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
 
@@ -2726,6 +2744,7 @@ impl Compiler {
                     break_patches: Vec::new(),
                     continue_patches: Vec::new(),
                     is_switch: false,
+                    return_cleanup_temp: None,
                 });
                 self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
 
@@ -2798,6 +2817,7 @@ impl Compiler {
                     break_patches: Vec::new(),
                     continue_patches: Vec::new(),
                     is_switch: false,
+                    return_cleanup_temp: None,
                 });
                 self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
 
@@ -2904,6 +2924,7 @@ impl Compiler {
                     break_patches: Vec::new(),
                     continue_patches: Vec::new(),
                     is_switch: true,
+                    return_cleanup_temp: None,
                 });
                 self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
 
@@ -3260,6 +3281,10 @@ impl Compiler {
                     break_patches: Vec::new(),
                     continue_patches: Vec::new(),
                     is_switch: false,
+                    return_cleanup_temp: (!reference_iteration
+                        && !matches!(array, Expr::ArrayLiteral(_))
+                        && matches!(arr_type, OpType::Tmp | OpType::Var))
+                    .then_some(arr_op),
                 });
                 self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
 

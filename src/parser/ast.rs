@@ -458,7 +458,10 @@ pub enum Expr {
         expr: Box<Expr>,
         class: Box<Expr>,
     },
-    Constant(String), // FOO, PHP_INT_MAX — named constant reference
+    Constant {
+        name: String,
+        line: usize,
+    }, // FOO, PHP_INT_MAX — named constant reference
     CompilerHaltOffsetConstant {
         name: String,
         line: usize,
@@ -634,7 +637,7 @@ impl Expr {
             | Expr::StaticProperty { .. }
             | Expr::ClassConstant { .. }
             | Expr::FirstClassFunctionCallable { .. }
-            | Expr::Constant(_)
+            | Expr::Constant { .. }
             | Expr::CompilerHaltOffsetConstant { .. }
             | Expr::MagicConstant { .. } => false,
             Expr::DynamicClassConstant {

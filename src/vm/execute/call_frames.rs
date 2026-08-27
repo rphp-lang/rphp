@@ -434,6 +434,7 @@ fn run_final_object_destructor_tree(
     detach_lazy_state: bool,
     logical_caller: *mut ExecuteData,
     internal_trace_origin: bool,
+    logical_caller_at_current_site: bool,
 ) -> Result<bool, VmError> {
     if owner.weak_object_strong_count() != Some(expected_references) {
         return Ok(false);
@@ -484,6 +485,7 @@ fn run_final_object_destructor_tree(
                 detach_lazy_state,
                 logical_caller,
                 internal_trace_origin,
+                logical_caller_at_current_site,
             )?;
             if eg.exception.is_some() {
                 if detach_lazy_state {
@@ -503,6 +505,7 @@ fn run_final_object_destructor_tree(
                     eg,
                     logical_caller,
                     internal_trace_origin,
+                    logical_caller_at_current_site,
                     &owner,
                     "__destruct",
                     &[],
@@ -543,6 +546,7 @@ fn run_final_object_destructor_tree(
                 detach_lazy_state,
                 logical_caller,
                 internal_trace_origin,
+                logical_caller_at_current_site,
             )?;
             if eg.exception.is_some() {
                 return Ok(true);
@@ -610,6 +614,7 @@ fn run_final_object_destructor_tree(
             detach_lazy_state,
             logical_caller,
             internal_trace_origin,
+            logical_caller_at_current_site,
         )?;
         if eg.exception.is_some() {
             break;
@@ -698,6 +703,7 @@ fn run_value_destructors_inner(
                 false,
                 logical_caller,
                 true,
+                false,
             )?;
             if eg.exception.is_some() {
                 return Ok(true);
@@ -889,6 +895,7 @@ fn run_frame_destructors(
                     false,
                     logical_caller,
                     false,
+                    false,
                 )?;
                 if eg.exception.is_some() {
                     return Ok(());
@@ -997,6 +1004,7 @@ pub(crate) fn run_prepared_value_destructor(
         true,
         logical_caller,
         false,
+        false,
     )?;
     Ok(())
 }
@@ -1007,6 +1015,8 @@ fn release_statement_temps(
     frame: *mut ExecuteData,
     first: usize,
     end: usize,
+    ordinary_foreach_object_only: bool,
+    logical_caller_at_current_site: bool,
 ) -> Result<(), VmError> {
     // SAFETY: the compiler emits a bounded statement-temporary range inside
     // this live frame; ownership bits identify which slots may be dropped.
@@ -1022,6 +1032,50 @@ fn release_statement_temps(
                 |bitmap| bitmap & (1u64 << index) != 0,
             )
         };
+
+        if ordinary_foreach_object_only {
+            debug_assert_eq!(end, first + 1);
+            if !is_owned(first) {
+                return Ok(());
+            }
+            let source = (&*base.add(first)).dereferenced();
+            let Some(object) = source.as_object() else {
+                return Ok(());
+            };
+            if eg.class_is_a(&object.class_name, "Traversable") {
+                return Ok(());
+            }
+            drop(object);
+
+            // A marked return source is a single compiler-owned root. Its
+            // generic release map can therefore contain only that root; when
+            // it is actually final, none of its children can alias it. Avoid
+            // allocating the one-entry map and identity vector on this return
+            // hot path while retaining the same strong-count proof.
+            if value_requires_vm_release(eg, &*base.add(first)) {
+                let receiver = (&*base.add(first)).clone();
+                let _ = run_final_object_destructor_tree(
+                    eg,
+                    receiver,
+                    2,
+                    None,
+                    false,
+                    frame,
+                    false,
+                    logical_caller_at_current_site,
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+                let value = base.add(first);
+                std::ptr::drop_in_place(value);
+                std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
+                if compact {
+                    (*frame).heap_bitmap &= !(1u64 << first);
+                }
+                return Ok(());
+            }
+        }
 
         // Most exceptional statements either own no heap temporary or only a
         // failed-construction shell whose destructor is already retired. Keep
@@ -1091,6 +1145,7 @@ fn release_statement_temps(
                     false,
                     frame,
                     false,
+                    logical_caller_at_current_site,
                 )?;
                 if eg.exception.is_some() {
                     return Ok(());
@@ -1112,6 +1167,81 @@ fn release_statement_temps(
             if compact {
                 (*frame).heap_bitmap &= !(1u64 << index);
             }
+        }
+    }
+    Ok(())
+}
+
+fn replace_throwable_first_trace_site(
+    throwable: &Value,
+    file: std::rc::Rc<String>,
+    line: usize,
+) {
+    let Some(mut trace_value) = throwable
+        .as_object()
+        .and_then(|object| object.get_property("trace").cloned())
+    else {
+        return;
+    };
+    let Some(trace) = trace_value.as_array_mut() else {
+        return;
+    };
+    let Some(mut first) = trace.get_value_at(0).cloned() else {
+        return;
+    };
+    let Some(entry) = first.as_array_mut() else {
+        return;
+    };
+    entry.set_str("file", Value::shared_string(file));
+    entry.set_str("line", Value::long(line as i64));
+    trace.set_int(0, first);
+    if let Some(mut object) = throwable.as_object_mut() {
+        object.set_property("trace", trace_value);
+    }
+}
+
+/// Consume compiler-marked by-value foreach source temporaries at the actual
+/// return commit boundary. Markers may belong to mutually exclusive branches;
+/// the frame ownership bitmap makes unexecuted or already-released slots a
+/// no-op. Scanning immutable bytecode also covers a return delayed through
+/// finally without adding state to the hot call-frame layout.
+#[cold]
+fn release_return_foreach_sources(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+) -> Result<(), VmError> {
+    for release in op_array
+        .instructions
+        .iter()
+        .filter(|instruction| {
+            instruction.opcode == OpCode::ReleaseTemps
+                && instruction._pad & RELEASE_TEMPS_ON_RETURN != 0
+        })
+    {
+        release_statement_temps(
+            eg,
+            frame,
+            release.op1 as usize,
+            release.op2 as usize,
+            true,
+            false,
+        )?;
+        if let Some(exception) = eg.exception.as_ref()
+            && let Some(release_index) = op_array
+                .instructions
+                .iter()
+                .position(|instruction| std::ptr::eq(instruction, release))
+            && let Some(line) = op_array.source_line(release_index)
+        {
+            replace_throwable_first_trace_site(
+                exception,
+                op_array.source_file.clone(),
+                line,
+            );
+        }
+        if eg.exception.is_some() {
+            break;
         }
     }
     Ok(())
@@ -1559,6 +1689,7 @@ fn call_magic_method_from_logical_caller(
     eg: &mut ExecutorGlobals,
     logical_caller: *mut ExecuteData,
     internal_trace_origin: bool,
+    logical_caller_at_current_site: bool,
     obj_val: &Value,
     method_name: &str,
     args: &[Value],
@@ -1580,6 +1711,7 @@ fn call_magic_method_from_logical_caller(
         eg,
         logical_caller,
         internal_trace_origin,
+        logical_caller_at_current_site,
         func_ptr,
         call_args.len(),
         call_args.iter(),
@@ -2155,6 +2287,8 @@ fn throw_in_frame<'a>(
                     search_frame,
                     release.op1 as usize,
                     release.op2 as usize,
+                    false,
+                    false,
                 )?;
                 if let Some(replacement) = eg.exception.take() {
                     append_replaced_exception(&replacement, &thrown, eg);

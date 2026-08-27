@@ -5663,7 +5663,7 @@ impl ExecutorGlobals {
                 for deferred in trait_deferred_defaults.iter() {
                     if !matches!(
                         deferred.expression.as_ref(),
-                        crate::parser::Expr::Constant(_)
+                        crate::parser::Expr::Constant { .. }
                     ) {
                         continue;
                     }

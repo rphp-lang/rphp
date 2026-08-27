@@ -757,7 +757,7 @@ impl Parser {
                 );
             }
             let callable = match self.parse_concat()? {
-                Expr::Constant(name) => Expr::FirstClassFunctionCallable { name, line },
+                Expr::Constant { name, .. } => Expr::FirstClassFunctionCallable { name, line },
                 callable => callable,
             };
             input = Expr::Pipe {
@@ -1383,7 +1383,10 @@ impl Parser {
                             line: named_line.unwrap_or(1),
                         })
                     } else {
-                        Ok(Expr::Constant(name))
+                        Ok(Expr::Constant {
+                            name,
+                            line: named_line.unwrap_or(1),
+                        })
                     }
                 }
             }
@@ -1421,7 +1424,10 @@ impl Parser {
                             line: named_line.unwrap_or(1),
                         })
                     } else {
-                        Ok(Expr::Constant(name))
+                        Ok(Expr::Constant {
+                            name,
+                            line: named_line.unwrap_or(1),
+                        })
                     }
                 }
             }
@@ -1550,7 +1556,10 @@ impl Parser {
                             line: named_line.unwrap_or(1),
                         })
                     } else {
-                        Ok(Expr::Constant(name))
+                        Ok(Expr::Constant {
+                            name,
+                            line: named_line.unwrap_or(1),
+                        })
                     }
                 }
             }

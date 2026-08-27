@@ -518,6 +518,7 @@ fn call_function_iter_from_logical_caller<'a, I>(
     eg: &mut ExecutorGlobals,
     logical_caller: *mut ExecuteData,
     internal_trace_origin: bool,
+    logical_caller_at_current_site: bool,
     func_ptr: *const FunctionCommon,
     num_args: usize,
     args: I,
@@ -537,7 +538,7 @@ where
         None,
         logical_caller,
         true,
-        false,
+        logical_caller_at_current_site,
         internal_trace_origin.then(|| ("Unknown".to_string(), 0, None, false)),
     )?;
     Ok(return_value)

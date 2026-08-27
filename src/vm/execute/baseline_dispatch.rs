@@ -1818,7 +1818,31 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             });
             if at_finally_end {
                 if frame_pending {
-                    unsafe { (*frame).pending_return_after_finally = false; }
+                    // SAFETY: `frame` is the live activation whose finally-end
+                    // instruction is currently dispatched. Its caller-provided
+                    // return slot stays writable until this branch either
+                    // resumes exception dispatch or retires the frame.
+                    unsafe {
+                        (*frame).pending_return_after_finally = false;
+                        release_return_foreach_sources(eg, frame, op_array)?;
+                        if let Some(exception) = eg.exception.take() {
+                            let return_target = (*frame).return_value;
+                            if !return_target.is_null() {
+                                frame_return_set(frame, return_target, Value::null());
+                            }
+                            match throw_in_frame(eg, frame, exception)? {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
                     // Deferred return — pop frame now (return value already written)
                     let prev = unsafe { (*frame).prev_execute_data };
                     if prev.is_null() {
@@ -9393,6 +9417,23 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
                 eg.finally_exceptions.remove(&(frame as usize));
 
+                if !op_array.try_entries.is_empty() {
+                    release_return_foreach_sources(eg, frame, op_array)?;
+                    if let Some(exception) = eg.exception.take() {
+                        match throw_in_frame(eg, frame, exception)? {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue 'vm;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+
                 if func_common_ret.plan.needs_late_static_scope() {
                     eg.discard_late_static_scope(frame as usize);
                 }
@@ -9668,13 +9709,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::ReleaseTemps => {
-                release_statement_temps(
-                    eg,
-                    frame,
-                    opline.op1 as usize,
-                    opline.op2 as usize,
-                )?;
-                resume_pending_exception!();
+                let return_cleanup = opline._pad & RELEASE_TEMPS_ON_RETURN != 0;
+                if !return_cleanup || op_array.try_entries.is_empty() {
+                    release_statement_temps(
+                        eg,
+                        frame,
+                        opline.op1 as usize,
+                        opline.op2 as usize,
+                        return_cleanup,
+                        return_cleanup,
+                    )?;
+                    resume_pending_exception!();
+                }
             }
 
             // All opcodes handled — new opcodes must be added above

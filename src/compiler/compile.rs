@@ -52,10 +52,11 @@ use crate::vm::instruction::{
     Instruction, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
     NEW_FLAG_UNPACKED_ARGUMENTS, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OpType,
     PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
-    REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS, SEND_FLAG_INDIRECT_TEMPORARY,
-    SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME,
-    STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND,
-    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, RELEASE_TEMPS_ON_RETURN, SEND_FLAG_GLOBALS,
+    SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_YIELD_SNAPSHOT,
+    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY,
+    STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT,
+    THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -114,6 +115,7 @@ fn expression_source_line(expression: &Expr) -> usize {
         | Expr::ListAssign { line, .. }
         | Expr::DynamicCall { line, .. }
         | Expr::DynamicStaticCall { line, .. }
+        | Expr::Constant { line, .. }
         | Expr::MagicConstant { line, .. }
         | Expr::YieldFrom { line, .. }
         | Expr::Clone { line, .. } => *line,
@@ -436,12 +438,12 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
             Expr::Bool(value) => (value.to_string(), 100),
             Expr::Null => ("null".to_string(), 100),
             Expr::Variable { name, .. } => (format!("${name}"), 100),
-            Expr::Constant(name)
+            Expr::Constant { name, .. }
                 if name.eq_ignore_ascii_case("exit") || name.eq_ignore_ascii_case("die") =>
             {
                 ("\\exit()".to_string(), 100)
             }
-            Expr::Constant(name) => (name.clone(), 100),
+            Expr::Constant { name, .. } => (name.clone(), 100),
             Expr::CompilerHaltOffsetConstant { name, .. } => (name.clone(), 100),
             Expr::Not(value) => (format!("!{}", render(value, 80, false)?), 80),
             Expr::Cast {
@@ -2316,7 +2318,7 @@ fn invalid_typed_declaration_default_message(
 
 fn constant_expression_references_symbol(expression: &Expr) -> bool {
     match expression {
-        Expr::Constant(_)
+        Expr::Constant { .. }
         | Expr::CompilerHaltOffsetConstant { .. }
         | Expr::ClassConstant { .. }
         | Expr::DynamicClassConstant { .. }
@@ -2508,7 +2510,7 @@ fn invalid_runtime_callable_constant_expression(
         Expr::FirstClassCallable { callable, line } => match callable.as_ref() {
             Expr::Variable { .. }
             | Expr::DynamicVariable { .. }
-            | Expr::Constant(_)
+            | Expr::Constant { .. }
             | Expr::Closure { .. } => Some((
                 "Cannot use dynamic function name in constant expression",
                 *line,
@@ -2567,7 +2569,7 @@ fn deferred_constant_expression_is_supported(expression: &Expr) -> bool {
         | Expr::BinaryStringLiteral(_)
         | Expr::Bool(_)
         | Expr::Null
-        | Expr::Constant(_)
+        | Expr::Constant { .. }
         | Expr::CompilerHaltOffsetConstant { .. }
         | Expr::ClassConstant { .. }
         | Expr::Closure { .. }
@@ -3107,6 +3109,8 @@ struct LoopContext {
     continue_patches: Vec<usize>,
     /// True if this is a switch context (continue acts as break)
     is_switch: bool,
+    /// Compiler-owned by-value foreach source retained until a return commits.
+    return_cleanup_temp: Option<u16>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3437,7 +3441,7 @@ impl Compiler {
             | Expr::FirstClassCallable { .. }
             | Expr::Instanceof { .. }
             | Expr::DynamicInstanceof { .. }
-            | Expr::Constant(_)
+            | Expr::Constant { .. }
             | Expr::CompilerHaltOffsetConstant { .. }
             | Expr::MagicConstant { .. }
             | Expr::Print(_)
@@ -4967,7 +4971,7 @@ impl Compiler {
             Expr::StringLiteral(value) | Expr::BinaryStringLiteral(value) => {
                 !value.is_empty() && value != "0"
             }
-            Expr::Constant(name) => crate::builtin_constant(name.trim_start_matches('\\'))
+            Expr::Constant { name, .. } => crate::builtin_constant(name.trim_start_matches('\\'))
                 .is_some_and(|value| value.is_truthy()),
             _ => false,
         }
@@ -5537,10 +5541,12 @@ impl Compiler {
             Expr::Bool(value) => value.to_string(),
             Expr::ArrayLiteral(elements) if elements.is_empty() => "[]".to_string(),
             Expr::ArrayLiteral(_) => "[...]".to_string(),
-            Expr::Constant(name) if name.eq_ignore_ascii_case("null") => "null".to_string(),
-            Expr::Constant(name) if name.eq_ignore_ascii_case("true") => "true".to_string(),
-            Expr::Constant(name) if name.eq_ignore_ascii_case("false") => "false".to_string(),
-            Expr::Constant(name) => self.resolve_constant_name(name).0,
+            Expr::Constant { name, .. } if name.eq_ignore_ascii_case("null") => "null".to_string(),
+            Expr::Constant { name, .. } if name.eq_ignore_ascii_case("true") => "true".to_string(),
+            Expr::Constant { name, .. } if name.eq_ignore_ascii_case("false") => {
+                "false".to_string()
+            }
+            Expr::Constant { name, .. } => self.resolve_constant_name(name).0,
             Expr::CompilerHaltOffsetConstant { name, .. } => self.resolve_constant_name(name).0,
             Expr::ClassConstant {
                 class_name,
@@ -6350,7 +6356,7 @@ impl Compiler {
             Expr::BinaryStringLiteral(s) => Ok(Value::binary_string_from_storage(s.clone())),
             Expr::Bool(b) => Ok(Value::bool(*b)),
             Expr::Null => Ok(Value::null()),
-            Expr::Constant(name) | Expr::CompilerHaltOffsetConstant { name, .. } => {
+            Expr::Constant { name, .. } | Expr::CompilerHaltOffsetConstant { name, .. } => {
                 let name = name.strip_prefix('\\').unwrap_or(name);
                 // Check user-defined constants from the same compilation unit
                 if let Some(val) = known.get(name) {
@@ -12126,7 +12132,7 @@ impl Compiler {
                 self.push_instruction_at_line(create, *line);
                 (result, OpType::Tmp)
             }
-            Expr::Constant(name) => {
+            Expr::Constant { name, line } => {
                 if name == "\\__COMPILER_HALT_OFFSET__"
                     && let Some(offset) = self.compiler_halt_offset
                 {
@@ -12153,7 +12159,7 @@ impl Compiler {
                 }
                 instr.result = tmp;
                 instr.result_type = OpType::Tmp;
-                self.instructions.push(instr);
+                self.push_instruction_at_line(instr, *line);
                 (tmp, OpType::Tmp)
             }
             Expr::CompilerHaltOffsetConstant { name, line } => {

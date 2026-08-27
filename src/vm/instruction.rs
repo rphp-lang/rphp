@@ -347,6 +347,12 @@ pub const ASSIGN_CV_REBIND: u16 = 1;
 /// compiler scratch storage does not extend PHP-visible value lifetime.
 pub const ASSIGN_CV_MOVE_SOURCE: u16 = 1 << 1;
 
+/// ReleaseTemps marks an active by-value foreach source that must be retired
+/// after return-expression evaluation. Ordinary-object sources execute this
+/// marker directly unless a try region requires Return dispatch to defer it
+/// through finally; arrays and Traversable sources retain their old lifetime.
+pub const RELEASE_TEMPS_ON_RETURN: u16 = 1;
+
 /// AssignDim stores the source l-value's PHP reference cell in the selected
 /// element. Ordinary assignments intentionally dereference their source;
 /// reference assignments must retain the cell so self-referential arrays and
