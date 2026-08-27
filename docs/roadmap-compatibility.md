@@ -3652,10 +3652,29 @@ scalar global-constant compilations, 500 valid callable global-constant
 compilations and one million ordinary Closure calls below +5%, with matching
 outputs.
 
-The monitored supported debt is now 988 failures: 18 strings, zero array and
-970 Zend/lang. Read-only expected-message and directory clustering selects six
-trait-kind link-validation failures next: four direct class/interface-as-trait
-uses and two non-trait adaptation owners in `as`/`insteadof` statements.
+The `34a3c768` `trait-kind-link-validation` checkpoint then moves Zend/lang
+from 4,333 to 4,339 pass, exactly `+6/-0`; strings stay 631/733 and array stays
+828/842 with no other status or category movement. Direct use of a resolved
+class or interface as a trait now throws PHP's catchable `Error` before the
+consumer is published. Explicit non-trait owners in alias and precedence
+adaptations retain the distinct non-catchable link-fatal boundary, canonical
+names and declaration locations. Four original CLI regressions cover the four
+non-trait kinds, catchability and failed publication, both adaptation forms
+and valid composition.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical manifests
+and summaries; repeated strings/array outcome projections also match the exact
+parent. All five Cargo configurations, all-feature/all-target, formatting,
+HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9
+S2/S3 pass. Two exact-final-binary CPU-2-pinned 32-pair runs keep startup, 500
+simple-trait consumer links, 500 adapted-trait consumer links and one million
+ordinary trait-method calls below +3%, with matching outputs.
+
+The monitored supported debt is now 982 failures: 18 strings, zero array and
+964 Zend/lang. Read-only expected-message clustering selects nine trait-method
+composition collisions next. They share one missing link invariant: RPHP
+currently accepts and sometimes executes an ambiguous method, whereas PHP 8.5
+rejects the composed class before user code runs.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
