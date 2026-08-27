@@ -3716,7 +3716,13 @@ fn op_init_method_call<'a>(
             // Visibility check
             if let Some((vis, defining_class)) = eg.find_method_visibility(&dispatch_class, method) {
                 if vis != Visibility::Public {
-                    if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
+                    if !eg.check_instance_method_visibility(
+                        caller_class.as_deref(),
+                        &target_class_name,
+                        method,
+                        &defining_class,
+                        vis,
+                    ) {
                         let vis_str = match vis {
                             Visibility::Protected => "protected",
                             Visibility::Private => "private",

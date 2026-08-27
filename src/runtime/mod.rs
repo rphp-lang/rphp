@@ -95,6 +95,7 @@ struct MethodDeclaration<'a> {
     enforces_visibility: bool,
     is_static: bool,
     is_abstract: bool,
+    source_file: Option<&'a str>,
     source_line: usize,
     function: &'a FunctionCommon,
     parameter_default_diagnostics: Option<&'a [Option<Box<str>>]>,
@@ -2257,6 +2258,11 @@ impl ExecutorGlobals {
                 .method_is_abstract(&method.0)
                 .then(|| Self::method_declaration(class_def, method))
         }));
+        requirements.extend(class_def.trait_aliases.iter().filter_map(|adaptation| {
+            let alias = adaptation.alias.as_deref()?;
+            let declaration = self.trait_alias_declaration(class_def, adaptation)?;
+            (declaration.is_abstract && !alias.eq_ignore_ascii_case("final")).then_some(declaration)
+        }));
         for trait_name in &class_def.uses {
             if let Some(trait_def) = self.class_table.get(trait_name.as_str()) {
                 self.collect_abstract_method_requirements(trait_def, requirements, visited);
@@ -2288,6 +2294,9 @@ impl ExecutorGlobals {
             enforces_visibility: !class_def.is_trait,
             is_static: method.2,
             is_abstract: class_def.method_is_abstract(&method.0),
+            source_file: (!method.4.op_array.source_file.is_empty())
+                .then_some(method.4.op_array.source_file.as_str())
+                .or(class_def.source_file.as_deref()),
             source_line: method
                 .4
                 .op_array
@@ -2298,6 +2307,41 @@ impl ExecutorGlobals {
             function: &method.4.common,
             parameter_default_diagnostics: method.4.parameter_default_diagnostics.as_deref(),
         }
+    }
+
+    /// Resolve one trait adaptation as the declaration it contributes to its
+    /// consumer. Abstract aliases are contracts rather than callables, but
+    /// still acquire the consumer-relative name and owner used by PHP's link
+    /// diagnostics.
+    fn trait_alias_declaration<'a>(
+        &'a self,
+        class_def: &'a ClassDef,
+        adaptation: &'a crate::compiler::compile::TraitMethodAlias,
+    ) -> Option<MethodDeclaration<'a>> {
+        let source_trait = adaptation
+            .trait_name
+            .as_deref()
+            .and_then(|owner| {
+                class_def
+                    .uses
+                    .iter()
+                    .find(|used| used.eq_ignore_ascii_case(owner))
+            })
+            .and_then(|name| self.find_class(name))
+            .or_else(|| {
+                class_def.uses.iter().find_map(|used| {
+                    let trait_def = self.find_class(used)?;
+                    self.find_effective_method(trait_def, &adaptation.method)
+                        .map(|_| trait_def)
+                })
+            })?;
+        let mut declaration = self.find_effective_method(source_trait, &adaptation.method)?;
+        declaration.owner = &class_def.name;
+        declaration.name = adaptation.alias.as_deref().unwrap_or(&adaptation.method);
+        if let Some(visibility) = adaptation.visibility {
+            declaration.visibility = visibility;
+        }
+        Some(declaration)
     }
 
     fn find_effective_method<'a>(
@@ -2311,6 +2355,14 @@ impl ExecutorGlobals {
             .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case(method_name))
         {
             return Some(Self::method_declaration(class_def, method));
+        }
+        for adaptation in &class_def.trait_aliases {
+            let target = adaptation.alias.as_deref().unwrap_or(&adaptation.method);
+            if target.eq_ignore_ascii_case(method_name)
+                && let Some(declaration) = self.trait_alias_declaration(class_def, adaptation)
+            {
+                return Some(declaration);
+            }
         }
         let mut abstract_trait_method = None;
         for trait_name in &class_def.uses {
@@ -2586,12 +2638,9 @@ impl ExecutorGlobals {
             return None;
         }
 
-        let location = linking_class
-            .source_file
-            .as_ref()
-            .map_or_else(String::new, |file| {
-                format!(" in {file} on line {}", implementation.source_line)
-            });
+        let location = implementation.source_file.map_or_else(String::new, |file| {
+            format!(" in {file} on line {}", implementation.source_line)
+        });
         if implementation.is_static != required.is_static {
             let required_kind = if required.is_static {
                 "static"
@@ -3585,37 +3634,57 @@ impl ExecutorGlobals {
         };
 
         for method in &class_def.methods {
-            let implementation = Self::method_declaration(class_def, method);
-            let Some(required) = self.find_effective_method(parent, implementation.name) else {
+            self.validate_parent_method_declaration(
+                class_def,
+                parent,
+                Self::method_declaration(class_def, method),
+            )?;
+        }
+        for method in self.effective_composed_trait_methods(class_def) {
+            let Some(implementation) = self.composed_trait_method_declaration(class_def, &method)
+            else {
                 continue;
             };
-            let required_is_implicit_property_accessor = required
-                .name
-                .strip_prefix('$')
-                .and_then(|name| name.split_once("::"))
-                .and_then(|(property_name, hook)| {
-                    parent
-                        .properties
-                        .iter()
-                        .find(|property| property.name.eq_ignore_ascii_case(property_name))
-                        .map(|property| match hook.to_ascii_lowercase().as_str() {
-                            "get" => !property.has_get_hook,
-                            "set" => !property.has_set_hook,
-                            _ => false,
-                        })
-                })
-                .unwrap_or(false);
-            if required.visibility == Visibility::Private
-                || required_is_implicit_property_accessor
-                || (required.name.eq_ignore_ascii_case("__construct") && !required.is_abstract)
-            {
-                continue;
-            }
-            if let Some(error) =
-                self.incompatible_method_contract_diagnostic(required, implementation, class_def)
-            {
-                return Err(error);
-            }
+            self.validate_parent_method_declaration(class_def, parent, implementation)?;
+        }
+        Ok(())
+    }
+
+    fn validate_parent_method_declaration(
+        &self,
+        class_def: &ClassDef,
+        parent: &ClassDef,
+        implementation: MethodDeclaration<'_>,
+    ) -> Result<(), String> {
+        let Some(required) = self.find_effective_method(parent, implementation.name) else {
+            return Ok(());
+        };
+        let required_is_implicit_property_accessor = required
+            .name
+            .strip_prefix('$')
+            .and_then(|name| name.split_once("::"))
+            .and_then(|(property_name, hook)| {
+                parent
+                    .properties
+                    .iter()
+                    .find(|property| property.name.eq_ignore_ascii_case(property_name))
+                    .map(|property| match hook.to_ascii_lowercase().as_str() {
+                        "get" => !property.has_get_hook,
+                        "set" => !property.has_set_hook,
+                        _ => false,
+                    })
+            })
+            .unwrap_or(false);
+        if required.visibility == Visibility::Private
+            || required_is_implicit_property_accessor
+            || (required.name.eq_ignore_ascii_case("__construct") && !required.is_abstract)
+        {
+            return Ok(());
+        }
+        if let Some(error) =
+            self.incompatible_method_contract_diagnostic(required, implementation, class_def)
+        {
+            return Err(error);
         }
         Ok(())
     }
@@ -4613,6 +4682,25 @@ impl ExecutorGlobals {
         }
 
         composed.into_iter().map(|(_, method)| method).collect()
+    }
+
+    fn composed_trait_method_declaration<'a>(
+        &'a self,
+        class_def: &'a ClassDef,
+        effective: &'a EffectiveTraitMethod,
+    ) -> Option<MethodDeclaration<'a>> {
+        let origin = self.find_class(&effective.origin_owner)?;
+        let method = origin
+            .methods
+            .iter()
+            .find(|method| method.0.eq_ignore_ascii_case(&effective.origin_method))?;
+        let mut declaration = Self::method_declaration(origin, method);
+        declaration.owner = &class_def.name;
+        declaration.name = &effective.target;
+        declaration.visibility = effective.visibility;
+        declaration.is_static = effective.is_static;
+        declaration.is_abstract = false;
+        Some(declaration)
     }
 
     #[cold]
@@ -7419,6 +7507,62 @@ impl ExecutorGlobals {
             });
             if let Some(property) = declared_here {
                 if property.visibility == Visibility::Private {
+                    break;
+                }
+                prototype = Some(class_def.name.as_str());
+            }
+            current = class_def.parent.as_deref();
+        }
+
+        prototype.is_some_and(|prototype| {
+            self.check_visibility(caller_class, prototype, Visibility::Protected)
+        })
+    }
+
+    /// Check protected instance-method access against the oldest non-private
+    /// declaration in the receiver's override family. Trait implementations
+    /// participate as declarations of their consumer, while an abstract trait
+    /// requirement satisfied by a parent leaves that inherited prototype
+    /// intact.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn check_instance_method_visibility(
+        &self,
+        caller_class: Option<&str>,
+        receiver_class: &str,
+        method_name: &str,
+        defining_class: &str,
+        visibility: Visibility,
+    ) -> bool {
+        if self.check_visibility(caller_class, defining_class, visibility) {
+            return true;
+        }
+        if visibility != Visibility::Protected {
+            return false;
+        }
+
+        let mut current = Some(receiver_class);
+        let mut prototype = None;
+        while let Some(class_name) = current {
+            let Some(class_def) = self.find_class(class_name) else {
+                break;
+            };
+            let declared_here = class_def
+                .methods
+                .iter()
+                .find(|method| {
+                    method.0.eq_ignore_ascii_case(method_name)
+                        && !class_def.method_is_abstract(&method.0)
+                })
+                .map(|method| method.1)
+                .or_else(|| {
+                    self.effective_composed_trait_methods(class_def)
+                        .into_iter()
+                        .find(|method| method.target.eq_ignore_ascii_case(method_name))
+                        .map(|method| method.visibility)
+                });
+            if let Some(declaration_visibility) = declared_here {
+                if declaration_visibility == Visibility::Private {
                     break;
                 }
                 prototype = Some(class_def.name.as_str());
