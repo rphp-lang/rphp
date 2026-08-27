@@ -579,6 +579,7 @@ impl InlineCache {
     const CALLBACK_CACHE_DISABLED: *const FunctionCommon = 1usize as *const FunctionCommon;
     const DEPRECATED_ENUM_CASE: *const FunctionCommon = 1usize as *const FunctionCommon;
     const GENERIC_CLASS_SCOPE: u32 = 1 << 31;
+    const DIRECT_STATIC_TRAIT_ACCESS: u32 = 2;
     const CONSTRUCTOR_HAS_DESTRUCTOR: u32 = 1;
 
     pub fn empty() -> Self {
@@ -651,6 +652,27 @@ impl InlineCache {
         self.func = std::ptr::null();
         self.class_id = class_id;
         self.prop_info = ((slot as u32) << 2) | flags;
+    }
+
+    /// Static-property opcodes reserve cache state 2 for a resolved owner that
+    /// is itself a trait. Read sites normally use state 1, untyped writes use
+    /// state 3, and typed writes use state 1, so the marker keeps ordinary
+    /// cache-hit guards byte-for-byte independent from the deprecated path.
+    #[inline(always)]
+    pub fn static_property_class_id(&self) -> u32 {
+        self.class_id
+    }
+
+    #[inline(always)]
+    pub fn requires_direct_static_trait_deprecation(&self) -> bool {
+        self.property_flags() == Self::DIRECT_STATIC_TRAIT_ACCESS
+    }
+
+    #[inline(always)]
+    pub fn mark_direct_static_trait_access(&mut self) {
+        debug_assert_ne!(self.property_flags(), 0);
+        self.prop_info =
+            (self.prop_info & !Self::PROP_FLAG_MASK) | Self::DIRECT_STATIC_TRAIT_ACCESS;
     }
 
     /// Enum-case fetches use property flag 2. Their otherwise-idle function
@@ -757,7 +779,7 @@ impl InlineCache {
 
     #[inline(always)]
     pub fn typed_static_property_definition(&self) -> Option<&PropertyDefinition> {
-        if self.property_flags() != 1 {
+        if !matches!(self.property_flags(), 1 | Self::DIRECT_STATIC_TRAIT_ACCESS) {
             return None;
         }
         let definition =
@@ -773,7 +795,10 @@ impl InlineCache {
 
     #[inline(always)]
     pub fn typed_static_property_tag(&self) -> usize {
-        debug_assert_eq!(self.property_flags(), 1);
+        debug_assert!(matches!(
+            self.property_flags(),
+            1 | Self::DIRECT_STATIC_TRAIT_ACCESS
+        ));
         self.func as usize & Self::TYPED_PROPERTY_TAG_MASK
     }
 
@@ -1041,6 +1066,20 @@ mod inline_cache_tests {
 
         cache.set_property(7, 3, 1);
         assert_eq!(cache.generic_property_declaration(), None);
+    }
+
+    #[test]
+    fn static_trait_marker_preserves_the_resolved_class_and_property_slot() {
+        let mut cache = InlineCache::empty();
+        cache.set_property(7, 3, 3);
+        assert_eq!(cache.static_property_class_id(), 7);
+        assert!(!cache.requires_direct_static_trait_deprecation());
+
+        cache.mark_direct_static_trait_access();
+        assert_eq!(cache.static_property_class_id(), 7);
+        assert_eq!(cache.property_slot(), 3);
+        assert_eq!(cache.property_flags(), 2);
+        assert!(cache.requires_direct_static_trait_deprecation());
     }
 
     #[test]

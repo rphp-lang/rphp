@@ -418,6 +418,67 @@ fn report_php_deprecation(
     )
 }
 
+/// PHP 8.5 still permits static access through a trait's own name, but every
+/// access is deprecated. Keep the test outside property/function resolution
+/// so a throwing user error handler wins over a typed-property failure or
+/// magic dispatch. Warm property accesses use a cache marker before entering
+/// this cold path, while first resolution and non-property members still use
+/// the class lookup here.
+#[cold]
+#[inline(never)]
+fn report_direct_static_trait_member_access<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    class_id: u32,
+    member: &str,
+    method: bool,
+) -> Result<Option<ColdResult<'a>>, VmError> {
+    let Some(class) = eg.class_by_id(class_id) else {
+        return Ok(None);
+    };
+    if !class.is_trait {
+        return Ok(None);
+    }
+    let class = class.name.clone();
+    report_direct_static_trait_member_access_cold(
+        eg, frame, op_array, opline, &class, member, method,
+    )
+}
+
+#[cold]
+#[inline(never)]
+fn report_direct_static_trait_member_access_cold<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    class: &str,
+    member: &str,
+    method: bool,
+) -> Result<Option<ColdResult<'a>>, VmError> {
+    let message = if method {
+        format!(
+            "Calling static trait method {class}::{member} is deprecated, it should only be called on a class using the trait"
+        )
+    } else {
+        format!(
+            "Accessing static trait property {class}::${member} is deprecated, it should only be accessed on a class using the trait"
+        )
+    };
+    report_php_deprecation(eg, frame, op_array, opline, &message)?;
+    let Some(exception) = eg.exception.take() else {
+        return Ok(None);
+    };
+    Ok(Some(match throw_in_frame(eg, frame, exception)? {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+    }))
+}
+
 enum FalseArrayLocation {
     Operand {
         operand: u16,
@@ -2754,6 +2815,48 @@ fn clone_heap_static_property_value(value: &Value) -> Value {
     value.clone()
 }
 
+/// Publish one value from an already-guarded append-only static-property
+/// cache. Callers must prove that `storage_slot` belongs to their cache entry
+/// and `result_ptr` is the prepared result slot of the live frame.
+#[inline(always)]
+fn publish_cached_static_property_read(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    result_ptr: *mut Value,
+    storage_slot: usize,
+) {
+    // SAFETY: the private callers establish the cache-slot and frame-result
+    // invariants above; static storage is append-only for the executor life.
+    unsafe {
+        let value = clone_static_property_value(
+            eg.static_property_value_unchecked(storage_slot),
+        );
+        frame_tmp_set(frame, result_ptr, value);
+    }
+}
+
+#[cold]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn fetch_cached_direct_static_trait_property<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    result_ptr: *mut Value,
+    cache: &crate::vm::instruction::InlineCache,
+    class_id: u32,
+    property: &str,
+) -> Result<ColdResult<'a>, VmError> {
+    if let Some(result) = report_direct_static_trait_member_access(
+        eg, frame, op_array, opline, class_id, property, false,
+    )? {
+        return Ok(result);
+    }
+    publish_cached_static_property_read(eg, frame, result_ptr, cache.property_slot());
+    Ok(ColdResult::Done)
+}
+
 fn dynamic_static_property_owner(
     eg: &ExecutorGlobals,
     raw_value: &Value,
@@ -2799,6 +2902,27 @@ fn static_property_throw<'a>(
     })
 }
 
+/// A failed typed write creates its TypeError while the rejected RHS is still
+/// live, then releases that RHS before binding the exception into a catch CV.
+/// The ordering matches Zend's observable object-handle recycling contract.
+#[cold]
+#[inline(never)]
+fn static_property_type_error_with_keepalive<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    message: String,
+    rejected_value: Value,
+) -> Result<ColdResult<'a>, VmError> {
+    let error = make_error_value("TypeError", &message);
+    drop(rejected_value);
+    Ok(match throw_in_frame(eg, frame, error)? {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+    })
+}
+
 #[inline(always)]
 fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
     eg: &mut ExecutorGlobals,
@@ -2820,6 +2944,23 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
         )
     };
 
+    // A non-late constant owner is monomorphic per instruction. Once its
+    // ordinary read cache is published, the class/name operands no longer
+    // need decoding. Direct trait caches use state 2 and deliberately miss
+    // this path so every deprecated access reaches the diagnostic handler.
+    if !LATE_STATIC
+        && opline._pad
+            & (STATIC_PROP_DYNAMIC_OWNER
+                | STATIC_PROP_DYNAMIC_NAME
+                | STATIC_PROP_REFERENCE_FETCH)
+            == 0
+        && cache.class_id != 0
+        && cache.property_flags() == 1
+    {
+        publish_cached_static_property_read(eg, frame, result_ptr, cache.property_slot());
+        return Ok(ColdResult::Done);
+    }
+
     let dynamic_owner = opline._pad & STATIC_PROP_DYNAMIC_OWNER != 0;
     let dynamic_owner_value = dynamic_owner
         .then(|| dynamic_static_property_owner(eg, class_name_val))
@@ -2832,8 +2973,18 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
         || static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class),
         |(_, class_id)| *class_id,
     );
-
     if opline._pad & STATIC_PROP_REFERENCE_FETCH != 0 {
+        if let Some(result) = report_direct_static_trait_member_access(
+            eg,
+            frame,
+            op_array,
+            opline,
+            class_id,
+            prop,
+            false,
+        )? {
+            return Ok(result);
+        }
         return resolve_static_property_reference_fetch(
             eg,
             frame,
@@ -2852,18 +3003,11 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
         && cache.class_id == class_id
         && cache.property_flags() == 1
     {
-        // SAFETY: the class/cache guards prove the storage slot is valid; the
-        // compiler-emitted result pointer was validated above.
-        unsafe {
-            let value = clone_static_property_value(
-                eg.static_property_value_unchecked(cache.property_slot()),
-            );
-            frame_tmp_set(frame, result_ptr, value);
-        }
+        publish_cached_static_property_read(eg, frame, result_ptr, cache.property_slot());
         return Ok(ColdResult::Done);
     }
 
-    resolve_static_property_read_cache_miss(
+    resolve_static_property_read_or_trait_cache(
         eg,
         frame,
         op_array,
@@ -2875,6 +3019,53 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
         prop,
         opline._pad,
     )
+}
+
+#[cold]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn resolve_static_property_read_or_trait_cache<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    result_ptr: *mut Value,
+    cache: &mut crate::vm::instruction::InlineCache,
+    class_id: u32,
+    raw_class: &str,
+    property: &str,
+    flags: u16,
+) -> Result<ColdResult<'a>, VmError> {
+    if flags & STATIC_PROP_DYNAMIC_NAME == 0
+        && class_id != 0
+        && cache.requires_direct_static_trait_deprecation()
+        && cache.static_property_class_id() == class_id
+    {
+        return fetch_cached_direct_static_trait_property(
+            eg, frame, op_array, opline, result_ptr, cache, class_id, property,
+        );
+    }
+    let direct_trait_access = eg
+        .class_by_id(class_id)
+        .is_some_and(|definition| definition.is_trait);
+    if direct_trait_access
+        && let Some(result) = report_direct_static_trait_member_access(
+            eg, frame, op_array, opline, class_id, property, false,
+        )?
+    {
+        return Ok(result);
+    }
+    let result = resolve_static_property_read_cache_miss(
+        eg, frame, op_array, opline, result_ptr, cache, class_id, raw_class, property, flags,
+    )?;
+    if direct_trait_access
+        && matches!(result, ColdResult::Done)
+        && cache.static_property_class_id() == class_id
+        && cache.property_flags() != 0
+    {
+        cache.mark_direct_static_trait_access();
+    }
+    Ok(result)
 }
 
 #[inline(always)]
@@ -3607,6 +3798,10 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
     } else {
         clone_static_property_value(source)
     };
+    // SAFETY: dispatch supplies a live frame and the compiler-validated
+    // property-name operand for this static-property assignment instruction.
+    let property_name =
+        unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
     // Compact late-static frames already carry the called class ID. Check the
     // monomorphic untyped cache before decoding the two constant string
     // operands; a cache miss still takes the canonical resolver below.
@@ -3637,8 +3832,6 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
 
     let class_name =
         unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-    let property_name =
-        unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
     let dynamic_owner = opline._pad & STATIC_PROP_DYNAMIC_OWNER != 0;
     let dynamic_owner_value = dynamic_owner
         .then(|| dynamic_static_property_owner(eg, class_name))
@@ -3748,7 +3941,45 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
         }
     }
 
-    assign_static_property_cache_miss(
+    if opline._pad & STATIC_PROP_DYNAMIC_NAME == 0
+        && class_id != 0
+        && cache.requires_direct_static_trait_deprecation()
+        && cache.static_property_class_id() == class_id
+    {
+        return assign_cached_direct_static_trait_property(
+            eg,
+            frame,
+            op_array,
+            opline,
+            cache,
+            class_id,
+            raw_class,
+            property,
+            value,
+        );
+    }
+
+    // Read-modify-write lowering already diagnosed the corresponding Fetch;
+    // a direct reference bind has no Fetch and is handled by its dedicated
+    // path above.
+    let direct_trait_access = opline._pad & STATIC_PROP_INDIRECT_MODIFY == 0
+        && eg
+            .class_by_id(class_id)
+            .is_some_and(|definition| definition.is_trait);
+    if direct_trait_access
+        && let Some(result) = report_direct_static_trait_member_access(
+            eg,
+            frame,
+            op_array,
+            opline,
+            class_id,
+            property,
+            false,
+        )?
+    {
+        return Ok(result);
+    }
+    let result = assign_static_property_cache_miss(
         eg,
         frame,
         op_array,
@@ -3759,6 +3990,57 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
         property,
         value,
         opline._pad,
+    )?;
+    if direct_trait_access
+        && matches!(result, ColdResult::Done)
+        && cache.static_property_class_id() == class_id
+        && cache.property_flags() != 0
+    {
+        cache.mark_direct_static_trait_access();
+    }
+    Ok(result)
+}
+
+#[cold]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn assign_cached_direct_static_trait_property<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    cache: &mut crate::vm::instruction::InlineCache,
+    class_id: u32,
+    raw_class: &str,
+    property: &str,
+    value: Value,
+) -> Result<ColdResult<'a>, VmError> {
+    // Read-modify-write lowering already diagnosed the corresponding Fetch.
+    if opline._pad & STATIC_PROP_INDIRECT_MODIFY == 0
+        && let Some(result) = report_direct_static_trait_member_access(
+            eg, frame, op_array, opline, class_id, property, false,
+        )?
+    {
+        return Ok(result);
+    }
+    if cache.func.is_null() {
+        return commit_cached_static_property_value(
+            eg,
+            frame,
+            cache.property_slot(),
+            value,
+            op_array.strict_types,
+        );
+    }
+    validate_cached_typed_static_property(
+        eg,
+        frame,
+        op_array,
+        cache,
+        class_id,
+        raw_class,
+        opline._pad,
+        value,
     )
 }
 
@@ -3806,6 +4088,11 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
         || static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class),
         |(_, class_id)| *class_id,
     );
+    if let Some(result) = report_direct_static_trait_member_access(
+        eg, frame, op_array, opline, class_id, property, false,
+    )? {
+        return Ok(result);
+    }
     let resolved = match resolve_static_property(
         eg,
         frame,
@@ -3937,6 +4224,10 @@ fn validate_cached_typed_static_property<'a>(
     {
         return Ok(static_property_throw(eg, frame, "TypeError", message)?);
     }
+    // Retain the rejected value until after the Throwable acquires its object
+    // handle. PHP allocates the TypeError before releasing the failed RHS;
+    // this is observable through the request-local handle reuse order.
+    let rejected_value_keepalive = value.clone();
     value = match prepare_property_assignment(
         value,
         definition,
@@ -3946,14 +4237,15 @@ fn validate_cached_typed_static_property<'a>(
     ) {
         Ok(value) => value,
         Err(message) => {
-            return Ok(static_property_throw(
+            return Ok(static_property_type_error_with_keepalive(
                 eg,
                 frame,
-                "TypeError",
                 message,
+                rejected_value_keepalive,
             )?);
         }
     };
+    drop(rejected_value_keepalive);
     #[cfg(feature = "php-generics-reified")]
     if definition.requires_reified_check
         && let Err(message) = eg.check_reified_static_property_value(
@@ -4031,6 +4323,9 @@ fn assign_static_property_cache_miss<'a>(
         {
             return Ok(static_property_throw(eg, frame, "TypeError", message)?);
         }
+        // Match PHP's failed-write object lifetime: construct the TypeError
+        // while the rejected RHS still owns its handle, then release it.
+        let rejected_value_keepalive = value.clone();
         value = match prepare_property_assignment(
             value,
             definition,
@@ -4040,14 +4335,15 @@ fn assign_static_property_cache_miss<'a>(
         ) {
             Ok(value) => value,
             Err(message) => {
-                return Ok(static_property_throw(
+                return Ok(static_property_type_error_with_keepalive(
                     eg,
                     frame,
-                    "TypeError",
                     message,
+                    rejected_value_keepalive,
                 )?);
             }
         };
+        drop(rejected_value_keepalive);
         #[cfg(feature = "php-generics-reified")]
         if definition.requires_reified_check
             && let Err(message) = eg.check_reified_static_property_value(
@@ -5283,6 +5579,20 @@ fn op_create_first_class_callable<'a>(
             ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
         });
     };
+
+    if let Some((class, method)) = callable.as_array().and_then(|callable| {
+        Some((
+            callable.get_value_at(0)?.as_str()?,
+            callable.get_value_at(1)?.as_str()?,
+        ))
+    }) {
+        let class_id = eg.class_id_of(class);
+        if let Some(result) = report_direct_static_trait_member_access(
+            eg, frame, op_array, opline, class_id, method, true,
+        )? {
+            return Ok(result);
+        }
+    }
 
     let closure = crate::stdlib::resolved_callback_into_closure(resolved, eg);
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };

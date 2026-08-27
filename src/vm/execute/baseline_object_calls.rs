@@ -3903,9 +3903,14 @@ fn class_callback_requires_instance(
         .is_some_and(|(_, is_static, _)| !is_static)
 }
 
-// InitStaticCall uses the low bit of a cached FunctionCommon pointer to retain
-// the resolved method's staticness without growing the per-instruction cache.
-const _: () = assert!(std::mem::align_of::<FunctionCommon>() >= 2);
+// InitStaticCall uses the two low bits of a cached FunctionCommon pointer to
+// retain the resolved method's staticness and the PHP 8.5 direct-trait
+// deprecation without growing the per-instruction cache. Ordinary static
+// method pointers keep both bits clear and retain their one-load hot path.
+const STATIC_CALL_NON_STATIC: usize = 1;
+const STATIC_CALL_DIRECT_TRAIT: usize = 2;
+const STATIC_CALL_TAG_MASK: usize = STATIC_CALL_NON_STATIC | STATIC_CALL_DIRECT_TRAIT;
+const _: () = assert!(std::mem::align_of::<FunctionCommon>() >= 4);
 
 fn throw_non_static_callback_error<'a>(
     eg: &mut ExecutorGlobals,
@@ -3962,16 +3967,24 @@ fn op_init_static_call<'a>(
     let class = resolved_class.unwrap_or_else(|| raw_class.clone());
     let num_args = opline.extended_value;
     let cached = op_array.cache[ip].func;
+    if !cached.is_null() && cached as usize & STATIC_CALL_DIRECT_TRAIT != 0 {
+        let class_id = eg.class_id_of(&class);
+        if let Some(result) = report_direct_static_trait_member_access(
+            eg, frame, op_array, opline, class_id, &method, true,
+        )? {
+            return Ok(result);
+        }
+    }
     let (func_ptr, method_is_non_static, magic_method, trait_scope_class_id) = if !cached.is_null() {
         let tagged = cached as usize;
-        if tagged & 1 == 0 {
+        if tagged & STATIC_CALL_TAG_MASK == 0 {
             // Keep the overwhelmingly common static-method cache hit as the
             // original pointer without an unconditional mask operation.
             (cached, false, None, op_array.cache[ip].class_id)
         } else {
             (
-                (tagged & !1usize) as *const FunctionCommon,
-                true,
+                (tagged & !STATIC_CALL_TAG_MASK) as *const FunctionCommon,
+                tagged & STATIC_CALL_NON_STATIC != 0,
                 None,
                 op_array.cache[ip].class_id,
             )
@@ -4003,6 +4016,18 @@ fn op_init_static_call<'a>(
                     }
                     ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                 });
+            }
+        }
+
+        let direct_trait_call = eg
+            .find_class(&class)
+            .is_some_and(|definition| definition.is_trait);
+        if direct_trait_call {
+            let class_id = eg.class_id_of(&class);
+            if let Some(result) = report_direct_static_trait_member_access(
+                eg, frame, op_array, opline, class_id, &method, true,
+            )? {
+                return Ok(result);
             }
         }
 
@@ -4190,7 +4215,9 @@ fn op_init_static_call<'a>(
                 // FunctionCommon is pointer-aligned, so InitStaticCall owns
                 // the otherwise-zero low bit as its non-static marker. This
                 // keeps the warmed scalar-call path at one cache load.
-                cache.func = ((resolved as usize) | usize::from(method_is_non_static))
+                cache.func = ((resolved as usize)
+                    | usize::from(method_is_non_static) * STATIC_CALL_NON_STATIC
+                    | usize::from(direct_trait_call) * STATIC_CALL_DIRECT_TRAIT)
                     as *const FunctionCommon;
                 cache.class_id = trait_scope_class_id;
             }
@@ -4333,6 +4360,21 @@ fn op_init_late_static_call<'a>(
     };
     #[cfg(not(target_arch = "x86_64"))]
     let class_id = late_static_call_class_id(eg, frame);
+    // SAFETY: dispatch supplies a live frame and the compiler-validated method
+    // operand for this InitLateStaticCall instruction.
+    let method_name =
+        unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+    if eg
+        .class_by_id(class_id)
+        .is_some_and(|definition| definition.is_trait)
+    {
+        let method = method_name.as_str().unwrap_or("");
+        if let Some(result) = report_direct_static_trait_member_access(
+            eg, frame, op_array, opline, class_id, method, true,
+        )? {
+            return Ok(result);
+        }
+    }
     let cache = &op_array.cache[ip];
     let (func_ptr, trait_scope_class_id) = if cache.class_id == class_id && !cache.func.is_null() {
         (cache.func, cache.method_trait_scope_class_id())
@@ -4349,9 +4391,6 @@ fn op_init_late_static_call<'a>(
                 }
                 ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
             });
-        };
-        let method_name = unsafe {
-            &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
         };
         let class = class_definition.name.clone();
         let method = method_name.as_str().unwrap_or("");
