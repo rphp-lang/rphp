@@ -8,6 +8,80 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`foreach-call-reference-cow`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. By-reference foreach now accepts direct, method,
+static, dynamic and dynamic-static call results. An ordinary value return is
+iterated through a detached temporary, so element writes do not escape through
+the returned array's outer copy-on-write identity. A reference return keeps its
+owned or borrowed TMP reference cell through `ForeachInit`, so element writes
+and the surviving final loop alias update the original array.
+
+The source call runs exactly once. Original regressions cover ordinary and
+reference returns, caller/argument COW copies, interior references, all call
+forms, key/value iteration, nested loops, early break, exception unwind,
+post-loop assignment and `unset()`. Scalar call results reach PHP's ordinary
+runtime foreach warning and error-handler boundary. Iterator call results keep
+their catchable `Error`; a non-reference generator is now rejected before its
+first yield with PHP's catchable `Exception` instead of reaching an internal
+array-writeback fatal.
+
+`Zend/tests/foreach/bug67633.phpt` and the adjacent
+`Zend/tests/generators/errors/non_ref_generator_iterated_by_ref_error.phpt`
+change from runtime failure to pass. Two exact-final-binary 5,599-case
+Zend/lang runs each record 4,438 pass, 865 fail, 115 skip and 181 unsupported,
+with no timeout or crash. Their stable full projections are identical at
+SHA-256
+`a875f8f6e3014221e5a29691dd3b1461d47efaac715d00bb1a7d953f501f2d49`;
+the exact parent/candidate status and category delta is `+2/-0`, with no other
+movement or lost pass. Serial strings/array outcomes remain 1,459 pass, 18
+fail, 67 skip and 31 unsupported across 1,575 cases, with the same stable
+projection at SHA-256
+`186bb8ce61e52902a472ee088689d2d1a35912cbed49c3ec126d93e94a21ac54`.
+The combined audit therefore covers 7,174 cases: 5,897 pass, 883 fail, 182
+skip and 212 unsupported. Supported debt is 18 strings failures, zero array
+failures and 865 Zend/lang failures.
+
+The clean-room oracle corpus hashes to
+`82741e80bae2bbd2c636a23345b64602159ae895c9ce37b721af05fa281992b6`;
+PHP 8.5.9 and the exact release candidate match byte-for-byte with combined
+stdout SHA-256
+`f1cba8d9c055b572c3ca3c154d4511fd20ece123778428a092dfb7437533df8a`,
+empty stderr and zero exit status. All five Cargo feature configurations,
+locked all-feature/all-target, formatting, HTML-entity-data, PHPT-runner and
+unsafe-policy checks pass. One documented metadata accessor raises production
+to 1,619 unsafe blocks while retaining 289 unsafe functions, 370 SAFETY
+annotations and seven `# Safety` sections, below the 1,623-block ceiling.
+Composer 2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2
+and cold-build S3 pass. The change adds no dependency, opcode or persistent
+runtime layout field.
+
+One exact-final-binary CPU-2-pinned, order-balanced 32-pair release gate with
+four warmups compares retained parent SHA-256
+`272cb98ab17eb6b3cc5827289cb88a5516fe68c23ad0fd0ac3eaa7cba9ce7d0f`
+with candidate
+`edc622616090660150b1c291264c0488bbc711786a4313d3599f6c28c72aaae5`.
+Paired median changes are +0.587% for startup, +0.061% for reference-foreach
+parse/compile, +1.113% for CV by-reference foreach, +1.476% for literal
+temporary by-reference foreach, -1.697% for by-value call-result foreach and
+-0.349% for by-value generator foreach. Comparable checksums match and every
+path remains below the +5% gate. The harness and result TSV hash to
+`b9616b4e760495781066c942ae1bd9bfda71dd643db9cb907f3b6e9261b2d30f`
+and
+`6dac41174b57a9af502f9b662379583865b97caa119bcf143f1d28a8088d62e2`.
+The new by-reference call-result and error paths perform different work in the
+parent and are deliberately not presented as comparative workloads.
+
+This checkpoint does not claim general Iterator/IteratorAggregate or
+generator by-reference semantics, `ArrayAccess`, `ArrayObject`,
+`SplObjectStorage`, `SplFixedArray` or general SPL implementation, 32-bit
+behavior or allocation-limit/OOM equivalence. Read-only clustering of the
+exact remaining manifest selects `Zend/tests/foreach/foreach_018.phpt` next:
+stdClass iteration currently exposes raw NUL-mangled property keys instead of
+the visible terminal property names.
+
+The implementation checkpoint is commit `9455f0e2`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `forbidden-foreach-list-key-diagnostic`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. Long-form `list()` and short-form
 `[]` destructuring used before `=>` in `foreach` now reach PHP's compile-fatal

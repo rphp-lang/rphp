@@ -3917,12 +3917,30 @@ functions. One exact-final-binary CPU-2-pinned 32-pair release gate records
 value-destructuring parse/compile and +2.058% for value-destructuring runtime,
 with matching checksums and every path below +5%.
 
-The monitored supported debt is now 885 failures: 18 strings, zero array and
-867 Zend/lang. Read-only clustering selects
-`Zend/tests/foreach/bug67633.phpt` next: by-reference foreach currently rejects
-a function-returned array at compile time, while PHP distinguishes a copied
-ordinary return from a reference return and mutates only the latter's source.
-`ArrayAccess`-backed destructuring, `ArrayObject`,
+The `9455f0e2` `foreach-call-reference-cow` checkpoint then moves Zend/lang
+from 4,436 to 4,438 pass, exactly `+2/-0`. By-reference foreach accepts every
+call-result form, detaches value-returned arrays while retaining reference-
+returned array aliases, and preserves one-shot evaluation, interior references,
+COW, nested/break/exception state and the final loop alias. The same init
+boundary rejects a non-reference generator before its first yield with PHP's
+catchable `Exception`, converting the adjacent generator diagnostic case.
+
+Two exact-final-binary Zend/lang runs have the same stable full projection;
+serial strings/array outcomes also match the exact parent. All five Cargo
+configurations, all-feature/all-target, formatting, HTML data, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. One
+documented metadata accessor leaves production below the unsafe ceiling at
+1,619 blocks and 289 functions. One exact-final-binary CPU-2-pinned 32-pair
+release gate records +0.587% startup, +0.061% reference-foreach parse/compile,
++1.113% CV by-reference foreach, +1.476% literal temporary by-reference
+foreach, -1.697% by-value call foreach and -0.349% by-value generator foreach,
+with matching checksums and every path below +5%.
+
+The monitored supported debt is now 883 failures: 18 strings, zero array and
+865 Zend/lang. Read-only clustering selects
+`Zend/tests/foreach/foreach_018.phpt` next: stdClass iteration currently exposes
+raw NUL-mangled array-cast property keys rather than their PHP-visible terminal
+names. `ArrayAccess`-backed destructuring, `ArrayObject`,
 `SplObjectStorage`, `SplFixedArray` and general SPL remain separate contracts.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
