@@ -987,9 +987,12 @@ pub enum Stmt {
     },
     UseDecl {
         // Each entry carries its own kind so mixed group-use declarations can
-        // import classes, functions and constants in one statement.
+        // import classes, functions and constants in one statement. Preserve
+        // explicit-alias syntax because a same-spelling alias suppresses PHP's
+        // otherwise mandatory global non-compound-name warning.
         line: usize,
-        imports: Vec<(UseKind, String, String)>, // (kind, fully_qualified, alias)
+        name_line: usize,
+        imports: Vec<(UseKind, String, String, bool)>, // (kind, fqn, alias, explicit alias)
     },
     Const {
         line: usize,

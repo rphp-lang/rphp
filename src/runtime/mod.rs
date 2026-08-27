@@ -1140,26 +1140,62 @@ impl ExecutorGlobals {
         diagnostics: &[crate::compiler::compile::CompileDeprecation],
     ) {
         for diagnostic in diagnostics {
-            let (level, label) = if diagnostic.warning {
-                (2, "Warning")
-            } else {
-                (8192, "Deprecated")
-            };
-            self.record_last_error(
+            self.emit_unhandled_compile_diagnostic(diagnostic);
+        }
+    }
+
+    /// Runtime-compiled include/eval diagnostics enter the active PHP error
+    /// handler before the ordinary output path. Startup compilation has no
+    /// executable frame or installed handler and continues to use
+    /// `emit_compile_deprecations` directly.
+    pub(crate) fn emit_runtime_compile_deprecations(
+        &mut self,
+        caller: *mut ExecuteData,
+        diagnostics: &[crate::compiler::compile::CompileDeprecation],
+    ) -> Result<(), crate::vm::execute::VmError> {
+        for diagnostic in diagnostics {
+            let level = if diagnostic.warning { 2 } else { 8192 };
+            let handled = crate::stdlib::dispatch_php_error(
+                self,
+                caller,
                 level,
                 &diagnostic.message,
                 &diagnostic.file,
                 diagnostic.line,
-            );
-            if self.error_reporting & level != 0 {
-                self.write_output(
-                    format!(
-                        "\n{label}: {} in {} on line {}\n",
-                        diagnostic.message, diagnostic.file, diagnostic.line,
-                    )
-                    .as_bytes(),
-                );
+            )?;
+            if self.exception.is_some() {
+                break;
             }
+            if !handled {
+                self.emit_unhandled_compile_diagnostic(diagnostic);
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_unhandled_compile_diagnostic(
+        &mut self,
+        diagnostic: &crate::compiler::compile::CompileDeprecation,
+    ) {
+        let (level, label) = if diagnostic.warning {
+            (2, "Warning")
+        } else {
+            (8192, "Deprecated")
+        };
+        self.record_last_error(
+            level,
+            &diagnostic.message,
+            &diagnostic.file,
+            diagnostic.line,
+        );
+        if self.error_reporting & level != 0 {
+            self.write_output(
+                format!(
+                    "\n{label}: {} in {} on line {}\n",
+                    diagnostic.message, diagnostic.file, diagnostic.line,
+                )
+                .as_bytes(),
+            );
         }
     }
 

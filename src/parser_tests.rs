@@ -832,6 +832,26 @@ fn duplicate_switch_and_match_defaults_are_deferred_compile_errors() {
 }
 
 #[test]
+fn use_declarations_preserve_first_name_line_and_explicit_alias_provenance() {
+    let tokens = Lexer::new("<?php\nuse\n    Plain,\n    Same as Same;")
+        .tokenize()
+        .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+
+    assert!(matches!(
+        &statements[0],
+        Stmt::UseDecl {
+            line: 2,
+            name_line: 3,
+            imports,
+        } if imports == &vec![
+            (UseKind::Class, "Plain".to_string(), "Plain".to_string(), false),
+            (UseKind::Class, "Same".to_string(), "Same".to_string(), true),
+        ]
+    ));
+}
+
+#[test]
 fn misplaced_strict_types_declarations_are_deferred_compile_errors() {
     for (source, expected_line) in [
         ("<?php\nfunction earlier() {}\ndeclare(strict_types=1);", 3),

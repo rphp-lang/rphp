@@ -3747,9 +3747,28 @@ impl Compiler {
                 self.constant_declaration_scope_start = prev_constant_declaration_scope_start;
                 self.elided_declaration_scope_start = prev_elided_declaration_scope_start;
             }
-            Stmt::UseDecl { line, imports } => {
-                for (kind, fqn, alias) in imports {
+            Stmt::UseDecl {
+                line,
+                name_line,
+                imports,
+            } => {
+                for (kind, fqn, alias, explicit_alias) in imports {
                     let fqn = fqn.strip_prefix('\\').unwrap_or(fqn).to_string();
+                    if self.current_namespace.is_none()
+                        && !explicit_alias
+                        && !fqn.contains('\\')
+                    {
+                        self.compile_deprecations
+                            .borrow_mut()
+                            .push(CompileDeprecation {
+                                message: format!(
+                                    "The use statement with non-compound name '{fqn}' has no effect"
+                                ),
+                                file: self.source_file.clone(),
+                                line: *name_line,
+                                warning: true,
+                            });
+                    }
                     match kind {
                         UseKind::Class => {
                             if crate::class_names::is_semantically_reserved(alias) {

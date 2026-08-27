@@ -354,7 +354,7 @@ impl Parser {
                 } else {
                     UseKind::Class
                 };
-                let (first_name, grouped) = self.parse_use_name()?;
+                let (first_name, grouped, name_line) = self.parse_use_name()?;
                 let mut imports = Vec::new();
                 if grouped {
                     if self.peek() == Token::RBrace {
@@ -401,11 +401,12 @@ impl Parser {
                                     .to_string(),
                             );
                         }
-                        let (relative_name, nested_group) = self.parse_use_name()?;
+                        let (relative_name, nested_group, _) = self.parse_use_name()?;
                         if nested_group {
                             return Err("Nested group use declaration is not allowed".to_string());
                         }
-                        let alias = if self.consume_as_keyword() {
+                        let explicit_alias = self.consume_as_keyword();
+                        let alias = if explicit_alias {
                             match self.advance() {
                                 Token::Identifier(name, _) => name,
                                 other => {
@@ -422,7 +423,12 @@ impl Parser {
                                 .unwrap_or(&relative_name)
                                 .to_string()
                         };
-                        imports.push((item_kind, format!("{first_name}\\{relative_name}"), alias));
+                        imports.push((
+                            item_kind,
+                            format!("{first_name}\\{relative_name}"),
+                            alias,
+                            explicit_alias,
+                        ));
                         if !matches!(self.peek(), Token::Comma(_)) {
                             break;
                         }
@@ -441,7 +447,8 @@ impl Parser {
                 } else {
                     let mut fqn = first_name;
                     loop {
-                        let alias = if self.consume_as_keyword() {
+                        let explicit_alias = self.consume_as_keyword();
+                        let alias = if explicit_alias {
                             match self.advance() {
                                 Token::Identifier(name, _) => name,
                                 other => {
@@ -454,12 +461,12 @@ impl Parser {
                         } else {
                             fqn.rsplit('\\').next().unwrap_or(&fqn).to_string()
                         };
-                        imports.push((kind, fqn, alias));
+                        imports.push((kind, fqn, alias, explicit_alias));
                         if !matches!(self.peek(), Token::Comma(_)) {
                             break;
                         }
                         self.advance();
-                        let (next_name, nested_group) = self.parse_use_name()?;
+                        let (next_name, nested_group, _) = self.parse_use_name()?;
                         if nested_group {
                             return Err("Group use prefix must start a use declaration".to_string());
                         }
@@ -469,6 +476,7 @@ impl Parser {
                 self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::UseDecl {
                     line: use_line,
+                    name_line,
                     imports,
                 })
             }

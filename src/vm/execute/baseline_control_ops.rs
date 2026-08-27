@@ -321,9 +321,9 @@ fn imported_class_name(statements: &[crate::parser::Stmt], alias: &str) -> Optio
     for statement in statements {
         match statement {
             crate::parser::Stmt::UseDecl { imports, .. } => {
-                if let Some((_, name, _)) = imports
+                if let Some((_, name, _, _)) = imports
                     .iter()
-                    .find(|(kind, _, imported_alias)| {
+                    .find(|(kind, _, imported_alias, _)| {
                         *kind == crate::parser::UseKind::Class
                             && imported_alias.eq_ignore_ascii_case(alias)
                     })
@@ -371,6 +371,20 @@ fn compilation_constants(eg: &ExecutorGlobals) -> HashMap<String, Value> {
         }
     }
     known
+}
+
+fn emit_source_unit_compile_deprecations(
+    eg: &mut ExecutorGlobals,
+    caller: Option<(*mut ExecuteData, &crate::compiler::OpArray)>,
+    diagnostics: &[crate::compiler::compile::CompileDeprecation],
+) -> Result<Option<IncludeFileOutcome>, VmError> {
+    if let Some((frame, _)) = caller {
+        eg.emit_runtime_compile_deprecations(frame, diagnostics)?;
+        Ok(eg.exception.take().map(IncludeFileOutcome::Thrown))
+    } else {
+        eg.emit_compile_deprecations(diagnostics);
+        Ok(None)
+    }
 }
 
 /// Clone one variable binding across the synchronous include/eval scope
@@ -472,7 +486,11 @@ fn execute_source_unit(
             Ok(result) => break result,
             Err(error) if compile_attempts < 16 => {
                 let Some(owner) = unavailable_class_constant_owner(&error.message) else {
-                    eg.emit_compile_deprecations(&error.deprecations);
+                    if let Some(outcome) =
+                        emit_source_unit_compile_deprecations(eg, caller, &error.deprecations)?
+                    {
+                        return Ok(outcome);
+                    }
                     return Err(VmError::Fatal(error.message));
                 };
                 let class_name = imported_class_name(&stmts, owner)
@@ -480,13 +498,21 @@ fn execute_source_unit(
                 let loaded = eg.find_class(&class_name).is_some()
                     || crate::stdlib::autoload::ensure_symbol_loaded(eg, &class_name)?;
                 if !loaded {
-                    eg.emit_compile_deprecations(&error.deprecations);
+                    if let Some(outcome) =
+                        emit_source_unit_compile_deprecations(eg, caller, &error.deprecations)?
+                    {
+                        return Ok(outcome);
+                    }
                     return Err(VmError::Fatal(error.message));
                 }
                 compile_attempts += 1;
             }
             Err(error) => {
-                eg.emit_compile_deprecations(&error.deprecations);
+                if let Some(outcome) =
+                    emit_source_unit_compile_deprecations(eg, caller, &error.deprecations)?
+                {
+                    return Ok(outcome);
+                }
                 return Err(VmError::Fatal(error.message));
             }
         }
@@ -494,7 +520,11 @@ fn execute_source_unit(
     if record_included {
         eg.record_included_file(canonical.clone());
     }
-    eg.emit_compile_deprecations(&compile_result.deprecations);
+    if let Some(outcome) =
+        emit_source_unit_compile_deprecations(eg, caller, &compile_result.deprecations)?
+    {
+        return Ok(outcome);
+    }
     for (name, attributes) in std::mem::take(&mut compile_result.constant_attributes) {
         eg.constant_attributes.entry(name).or_insert(attributes);
     }

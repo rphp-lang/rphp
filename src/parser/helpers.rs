@@ -698,15 +698,15 @@ impl Parser {
     /// Parse the leading name of a use declaration, retaining the `\{`
     /// boundary that distinguishes a group import from an ordinary qualified
     /// name. Whitespace is already absent from the token stream.
-    fn parse_use_name(&mut self) -> Result<(String, bool), String> {
+    fn parse_use_name(&mut self) -> Result<(String, bool, usize), String> {
         let leading_backslash = if self.peek() == Token::Backslash {
             self.advance();
             true
         } else {
             false
         };
-        let mut parts = match self.advance() {
-            Token::Identifier(name, _) => vec![name],
+        let (mut parts, name_line) = match self.advance() {
+            Token::Identifier(name, line) => (vec![name], line),
             Token::Exit { line, .. } => {
                 return Err(self.source_error(
                     "syntax error, unexpected token \"exit\", expecting identifier or fully qualified name or namespaced name",
@@ -728,7 +728,7 @@ impl Parser {
                 if leading_backslash {
                     prefix.insert(0, '\\');
                 }
-                return Ok((prefix, true));
+                return Ok((prefix, true, name_line));
             }
             match self.advance() {
                 Token::Identifier(name, _) => parts.push(name),
@@ -744,7 +744,7 @@ impl Parser {
         if leading_backslash {
             name.insert(0, '\\');
         }
-        Ok((name, false))
+        Ok((name, false, name_line))
     }
 
     fn consume_as_keyword(&mut self) -> bool {
