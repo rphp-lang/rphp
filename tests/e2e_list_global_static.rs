@@ -216,7 +216,7 @@ var_dump($third, $fourth);
 }
 
 #[test]
-fn destructuring_non_array_scalars_yields_null_without_offset_warnings() {
+fn destructuring_non_array_scalars_warns_per_element_and_yields_null() {
     assert_eq!(
         run_php(
             r#"<?php
@@ -226,7 +226,20 @@ foreach ([1, true, 1.5, 'text'] as $source) {
 }
 "#
         ),
-        "NULL\nNULL\nNULL\nNULL\nNULL\nNULL\nNULL\nNULL\n"
+        concat!(
+            "\nWarning: Cannot use int as array in <main> on line 3\n",
+            "\nWarning: Cannot use int as array in <main> on line 3\n",
+            "NULL\nNULL\n",
+            "\nWarning: Cannot use bool as array in <main> on line 3\n",
+            "\nWarning: Cannot use bool as array in <main> on line 3\n",
+            "NULL\nNULL\n",
+            "\nWarning: Cannot use float as array in <main> on line 3\n",
+            "\nWarning: Cannot use float as array in <main> on line 3\n",
+            "NULL\nNULL\n",
+            "\nWarning: Cannot use string as array in <main> on line 3\n",
+            "\nWarning: Cannot use string as array in <main> on line 3\n",
+            "NULL\nNULL\n",
+        )
     );
 }
 

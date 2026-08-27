@@ -6126,8 +6126,68 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                     }
+                } else if opline._pad & FETCH_DIM_DESTRUCTURE != 0
+                    && matches!(
+                        arr_val.value_type(),
+                        ValueType::False
+                            | ValueType::True
+                            | ValueType::Long
+                            | ValueType::Double
+                            | ValueType::Resource
+                    )
+                {
+                    let message = match arr_val.value_type() {
+                        ValueType::False | ValueType::True => "Cannot use bool as array",
+                        ValueType::Long => "Cannot use int as array",
+                        ValueType::Double => "Cannot use float as array",
+                        ValueType::Resource => "Cannot use resource as array",
+                        _ => unreachable!("guarded scalar destructuring type"),
+                    };
+                    report_php_warning(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        message,
+                        opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
+                    )?;
+                    if let Some(exception) = eg.exception.take() {
+                        match throw_in_frame(eg, frame, exception)? {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue 'vm;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
+                    write_fetch_dim_result(frame, result_ptr, Value::null());
                 } else if let Some(s) = arr_val.as_str() {
                     if opline._pad & FETCH_DIM_DESTRUCTURE != 0 {
+                        report_php_warning(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            "Cannot use string as array",
+                            opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
+                        )?;
+                        if let Some(exception) = eg.exception.take() {
+                            match throw_in_frame(eg, frame, exception)? {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
                         write_fetch_dim_result(frame, result_ptr, Value::null());
                     } else {
                         // String offset access: $s[0] — PHP strings are byte-oriented
@@ -6391,31 +6451,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     write_fetch_dim_result(frame, result_ptr, value.dereferenced().clone());
                 } else {
-                    if arr_val.value_type() == ValueType::Resource
-                        && opline._pad & FETCH_DIM_DESTRUCTURE != 0
-                    {
-                        report_php_warning(
-                            eg,
-                            frame,
-                            op_array,
-                            opline,
-                            "Cannot use resource as array",
-                            opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
-                        )?;
-                        if let Some(exception) = eg.exception.take() {
-                            match throw_in_frame(eg, frame, exception)? {
-                                ThrowResult::Handled(new_frame, new_op_array) => {
-                                    frame = new_frame;
-                                    op_array = new_op_array;
-                                    continue 'vm;
-                                }
-                                ThrowResult::Unhandled(exception) => {
-                                    eg.exception = Some(exception);
-                                    return Ok(());
-                                }
-                            }
-                        }
-                    } else if matches!(arr_val.value_type(), ValueType::Null | ValueType::Undef)
+                    if matches!(arr_val.value_type(), ValueType::Null | ValueType::Undef)
                         && opline._pad & FETCH_DIM_MUTABLE != 0
                         && opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_SILENT) == 0
                     {
