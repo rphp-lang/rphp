@@ -3899,11 +3899,30 @@ exact-final-binary CPU-2-pinned 32-pair release gate records +0.153% for
 ordinary regular-file contents and -2.364% for runtime-constant keyed
 destructuring, with matching checksums and both paths below +5%.
 
-The monitored supported debt is now 886 failures: 18 strings, zero array and
-868 Zend/lang. Read-only clustering selects
-`Zend/tests/foreach/foreach_list_003.phpt` next: the forbidden list-key form
-currently reports a bare parse error instead of PHP's compile fatal with file
-and line. `ArrayAccess`-backed destructuring, `ArrayObject`,
+The `d447672e` `forbidden-foreach-list-key-diagnostic` checkpoint then moves
+Zend/lang from 4,435 to 4,436 pass, exactly `+1/-0`. Long/short/nested, empty
+and mixed destructuring key forms now defer PHP's `Cannot use list as key
+element` compile fatal until the complete source unit has parsed, retaining
+the `as`-boundary line, source filename, no-side-effect behavior and earlier
+deferred-diagnostic/later-syntax priority. Ordinary key targets, value-side
+destructuring and reference foreach remain unchanged.
+
+Two exact-final-binary Zend/lang runs have the same stable full projection;
+repeated serial strings/array outcome projections also match the exact parent.
+All five Cargo configurations, all-feature/all-target, formatting, HTML data,
+PHPT runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3
+pass. Production remains below the unsafe ceiling at 1,618 blocks and 289
+functions. One exact-final-binary CPU-2-pinned 32-pair release gate records
+-0.098% for startup, -0.067% for ordinary foreach parse/compile, +0.168% for
+value-destructuring parse/compile and +2.058% for value-destructuring runtime,
+with matching checksums and every path below +5%.
+
+The monitored supported debt is now 885 failures: 18 strings, zero array and
+867 Zend/lang. Read-only clustering selects
+`Zend/tests/foreach/bug67633.phpt` next: by-reference foreach currently rejects
+a function-returned array at compile time, while PHP distinguishes a copied
+ordinary return from a reference return and mutates only the latter's source.
+`ArrayAccess`-backed destructuring, `ArrayObject`,
 `SplObjectStorage`, `SplFixedArray` and general SPL remain separate contracts.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.

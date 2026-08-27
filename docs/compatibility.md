@@ -8,6 +8,69 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`forbidden-foreach-list-key-diagnostic`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. Long-form `list()` and short-form
+`[]` destructuring used before `=>` in `foreach` now reach PHP's compile-fatal
+boundary instead of escaping as a bare parser error. The parser retains the
+recognized target long enough to finish the enclosing source unit, records the
+source/`as` boundary line, and then reports `Cannot use list as key element`
+with the correct filename, stream and exit status. Iterable and body effects
+never execute; an earlier deferred parser/declaration diagnostic keeps
+priority, while a later syntax error still wins.
+
+Original CLI regressions cover long, short, nested, empty and mixed forms,
+scalar and expression iterables, namespace, include and eval source origins,
+source-line boundaries and side-effect suppression. Positive controls preserve
+ordinary key targets, long/short/nested value destructuring and by-reference
+iteration. The lexer now retains the line on `as`; ordinary foreach lowering,
+opcodes and runtime layout are unchanged.
+
+`Zend/tests/foreach/foreach_list_003.phpt` changes from parse failure to pass.
+Two exact-final-binary 5,599-case Zend/lang runs each record 4,436 pass, 867
+fail, 115 skip and 181 unsupported, with no timeout or crash. Their stable full
+projections are identical at SHA-256
+`9b8ea92dfd16428f08c8dcd9dc6b2f8f58b7ce489d1e5ea8387a706a0a87ecf9`;
+the exact parent/candidate status and category delta is `+1/-0`, with no other
+movement or lost pass. Repeated serial strings/array runs remain 1,459 pass,
+18 fail, 67 skip and 31 unsupported across 1,575 cases, with the same stable
+projection at SHA-256
+`5dd1cec8b2a4b1cf6c18b74d7ad08f73352cd127455b74d9b051e8e8fc7d8f0d`.
+The combined audit therefore covers 7,174 cases: 5,895 pass, 885 fail, 182
+skip and 212 unsupported. Supported debt is 18 strings failures, zero array
+failures and 867 Zend/lang failures.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains below its ceiling at 1,618 unsafe blocks and 289 unsafe
+functions, with 369 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass. The change adds no dependency, unsafe block, opcode or
+persistent runtime layout field.
+
+One exact-final-binary CPU-2-pinned, order-balanced 32-pair release gate with
+four warmups compares retained parent SHA-256
+`da316019ac1e326871a19cd8c647c5879799e16af0e28d4beea32c39632d7a96`
+with candidate
+`272cb98ab17eb6b3cc5827289cb88a5516fe68c23ad0fd0ac3eaa7cba9ce7d0f`.
+Balanced median changes are -0.098% for startup, -0.067% for ordinary foreach
+parse/compile, +0.168% for value-destructuring parse/compile and +2.058% for
+value-destructuring runtime. Comparable checksums match and every path remains
+below the +5% gate. The harness and result TSV hash to
+`db6661ae728e11d511fc534f90530f8b9b9db31932ab1180506d91c74c0e8c7a`
+and
+`371dedc3a54f3e51f680c5a52f46e269dbce2b15b812d5984f6067fd6bf1a3bf`.
+
+This checkpoint does not claim a general compile-diagnostic framework rewrite,
+`ArrayAccess`-backed destructuring, `ArrayObject`, `SplObjectStorage`,
+`SplFixedArray` or general SPL implementation, 32-bit behavior or
+allocation-limit/OOM equivalence. Read-only clustering of the exact remaining
+manifest selects `Zend/tests/foreach/bug67633.phpt` next: by-reference foreach
+must separate a copied array return from a reference-returned array while
+preserving copy-on-write and alias state.
+
+The implementation checkpoint is commit `d447672e`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `data-uri-runtime-list-key`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. Triage disproved the initial compiler hypothesis:
 a direct runtime `define()` value already passed through the ordinary constant
