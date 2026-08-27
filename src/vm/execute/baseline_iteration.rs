@@ -958,7 +958,9 @@ fn op_foreach_init<'a>(
 ) -> Result<ColdResult<'a>, VmError> {
     // SAFETY: ForeachInit's source operand and promoted array/object alias use a
     // compiler-validated frame slot borrowed only until this opcode finishes.
-    // A CV array is promoted to an owned cell before either side mutates it.
+    // A CV array is promoted to an owned cell before either side mutates it; a
+    // reference-returning call already supplies the owned or borrowed cell in
+    // its TMP result and must keep that alias instead of detaching its value.
     let (init_ip, by_reference, live_source_alias) = unsafe {
         let init_ip =
             (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
@@ -968,12 +970,19 @@ fn op_foreach_init<'a>(
             .is_some_and(|next| next.opcode == OpCode::ForeachNextRef);
         let source = (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
         let live_source_alias = (by_reference
-            && opline.op1_type == OpType::Cv
+            && (opline.op1_type == OpType::Cv || (&*source).is_reference())
             && matches!(
                 (&*source).dereferenced().value_type(),
                 ValueType::Array | ValueType::Object
             ))
-        .then(|| materialize_reference_alias(frame, (*frame).cv_mut(opline.op1 as u32)));
+        .then(|| {
+            let source = if opline.op1_type == OpType::Cv {
+                (*frame).cv_mut(opline.op1 as u32)
+            } else {
+                (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
+            };
+            materialize_reference_alias(frame, source)
+        });
         (init_ip, by_reference, live_source_alias)
     };
     let raw_source = live_source_alias.as_ref().unwrap_or_else(|| unsafe {
@@ -1071,6 +1080,19 @@ fn op_foreach_init<'a>(
     if is_generator {
         // Start the generator (rewind)
         let gen_ref = arr_val.as_object_rc().unwrap().borrow().generator.clone().unwrap();
+        if by_reference && !gen_ref.borrow().yields_by_reference() {
+            let error = make_error_value(
+                "Exception",
+                "You can only iterate a generator by-reference if it declared that it yields by-reference",
+            );
+            attach_throwable_origin(&error, eg, frame, op_array, init_ip);
+            return Ok(match throw_in_frame(eg, frame, error)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+            });
+        }
         {
             let state = gen_ref.borrow().state;
             if state == crate::vm::generator::GeneratorState::Created {

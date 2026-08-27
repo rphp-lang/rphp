@@ -148,6 +148,14 @@ impl Generator {
         &*(self.func as *const UserFunction)
     }
 
+    /// Whether this generator's declaration permits by-reference iteration.
+    #[inline]
+    pub(crate) fn yields_by_reference(&self) -> bool {
+        // SAFETY: generator construction stores a stable FunctionCommon pointer
+        // owned by the request function table for the generator's lifetime.
+        unsafe { (*self.func).sig.returns_reference }
+    }
+
     /// Visit every PHP value owned by a detached generator activation.
     ///
     /// The request-local cycle collector cannot infer these edges from the

@@ -3108,7 +3108,15 @@ impl Compiler {
                 let reference_iteration = *by_ref || destructure_by_ref;
                 // Compile array expression
                 let (arr_op, arr_type, reference_writeback) = if reference_iteration {
-                    let (op, op_type, writeback) = if matches!(array, Expr::ArrayLiteral(_)) {
+                    let (op, op_type, writeback) = if matches!(
+                        array,
+                        Expr::ArrayLiteral(_)
+                            | Expr::FunctionCall { .. }
+                            | Expr::MethodCall { .. }
+                            | Expr::StaticCall { .. }
+                            | Expr::DynamicCall { .. }
+                            | Expr::DynamicStaticCall { .. }
+                    ) {
                         let (op, op_type) = self.compile_expr(array);
                         (op, op_type, ForeachArrayWriteback::Discard)
                     } else {
