@@ -3690,12 +3690,42 @@ startup, 500 simple-trait consumer links, 500 precedence-and-alias consumer
 links and one million ordinary trait-method calls below +3%, with matching
 outputs.
 
-The monitored supported debt is now 973 failures: 18 strings, zero array and
-955 Zend/lang. Read-only actual/expected clustering selects 12 trait-adaptation
-resolution failures next: missing or ambiguous alias/precedence methods,
-unused adaptation owners, an unknown precedence owner and self-excluding
-`insteadof`. They share the absent pre-composition adaptation resolver and can
-be validated without changing runtime dispatch.
+The `14006b28` `trait-adaptation-resolution-validation` checkpoint then moves
+Zend/lang from 4,348 to 4,361 pass, exactly `+13/-0`. Composition now validates
+all `insteadof` rules before `as` rules, requires adaptation owners to be
+participating traits, and rejects missing, ambiguous, unused, unknown and
+self-excluded sources at the declaration boundary.
+
+The `90cf941e` `trait-adaptation-modifier-semantics` checkpoint then moves
+Zend/lang from 4,361 to 4,378 pass, exactly `+17/-0`. Alias visibility and
+finality propagate through nested composition into dispatch and Reflection;
+invalid `static`/`abstract` modifiers, final overrides, duplicate exclusions
+and inaccessible-method errors now retain PHP's stage and diagnostics.
+
+The `90621fa4` `trait-property-composition-semantics` checkpoint then moves
+Zend/lang from 4,378 to 4,394 pass, exactly `+16/-0`; strings stay 631/733 and
+array stays 828/842 with no other status or category movement. Property
+composition now checks exact declaration compatibility across class, trait,
+static and instance sources, preserves inherited-private storage separation,
+and binds lexical trait static-property access to the concrete composer without
+changing late-static dispatch. Four original CLI regressions cover the exact
+conflict, storage and inheritance boundaries.
+
+Two exact-final-binary Zend/lang audits have byte-identical manifests and
+summaries; repeated serial strings/array outcome projections also match the
+exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-2-pinned 32-pair runs keep
+startup, composition links, private-property hierarchies, ordinary trait
+property access and lexical-static trait property reads below +3%, with
+matching outputs.
+
+The monitored supported debt is now 927 failures: 18 strings, zero array and
+909 Zend/lang. Read-only actual/expected clustering selects six trait-kind
+declaration and instantiation failures next: invalid trait
+inheritance/implementation, trait use inside an interface, direct and
+Reflection instantiation, and extending a trait. They share parser/link/runtime
+enforcement of one class-like kind contract while keeping diagnostics staged.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
