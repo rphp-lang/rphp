@@ -8,6 +8,81 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`string-offset-ref-foreach`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. A direct array-dimension expression used as a
+by-reference `foreach` source now retains its referenceability provenance
+through the terminal `FetchDimR`. String containers normalize the key first,
+including PHP's cast or illegal-offset warning, and then throw the catchable
+`Error: Cannot create references to/from string offsets` before materializing
+the byte, entering the loop or publishing a later side effect. Invalid array
+or object keys retain their earlier concrete `TypeError`, while exact,
+negative and out-of-range numeric offsets all reach the reference error.
+
+The marker is emitted only for an actual by-reference foreach dimension, not
+for append, compound or inc/dec users of the shared mutable-source compiler
+helper. Its exact source line is retained for direct, include and eval code.
+The straight-region planner rejects a marked fetch before publishing a quick
+entry, so ordinary `FetchDimR`, by-value iteration and valid array-dimension
+reference loops keep their baseline and optimized paths free of a new runtime
+guard. An error-suppressed source remains a value expression: `@$array`
+iterates a detached COW snapshot, while an error-suppressed call that returns
+by reference retains its alias.
+
+Six original regressions cover exact, cast, illegal and invalid keys; warning
+suppression and a throwing error handler; receiver/property/key evaluation
+order; catch and operand-state preservation; valid array COW and reference
+identity; and direct/include/eval parity. The clean-room oracle sources have
+aggregate SHA-256
+`661daf1ea6323eb692589e814ce5ab474deb0989c4ca1a320f5c52ddd5bf5890`;
+the committed regression source hashes to
+`8d4687ac90bb8b7f329b4d446a08d288a4302982764668b82cb1142aedf6aa31`.
+
+`Zend/tests/foreach/bug73792.phpt` changes from output failure to pass. Two
+exact-final-binary 5,599-case Zend/lang runs each record 4,451 pass, 852 fail,
+115 skip and 181 unsupported, with no timeout or crash. Their status/category
+projections are identical at SHA-256
+`6494f7aecee8fb1f96880913181863b300c1d0a07941ddbb63aed495902cb456`;
+the exact parent/candidate delta is `+1/-0`, with no other movement or lost
+pass. Two 1,575-case strings/array projections remain identical to the exact
+parent at SHA-256
+`186bb8ce61e52902a472ee088689d2d1a35912cbed49c3ec126d93e94a21ac54`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,910 pass, 870 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 852 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`2117792bbf546965f05c422492af7a9d2ed4519c9669db98cc180fbf4a019277`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains below its ceiling at 1,621 unsafe blocks and 289 unsafe
+functions, with 372 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+One exact-final-binary CPU-2-pinned gate used four warmups and 32 balanced
+order pairs without outlier removal. Paired median changes are +0.306% for
+startup, +1.255% for ordinary string-offset reads, +0.886% for by-value
+array-dimension iteration, -0.126% for direct by-reference iteration, +0.199%
+for valid array-dimension by-reference iteration and -0.023% for the equivalent
+property-dimension path. All outputs match and every control is below the
+five-percent regression ceiling. The harness and result hash to
+`43105e7faec0cbbe8192f0e964b921d90c75c1d1ab5fc27d61fa1bb9897c9f4d`
+and
+`c7893a02b38c9d6aa934fe12f1676cc7baee252010a7bc2c2ead5689bfdb5059`.
+
+This checkpoint does not claim general string-offset write/reference
+implementation outside the foreach source boundary, Iterator or
+IteratorAggregate lifecycle, generators, object iteration, ArrayAccess,
+ArrayObject, SPL, 32-bit behavior or allocation-limit/OOM equivalence.
+Read-only clustering selects
+`Zend/tests/foreach/foreach_empty_loop_leak.phpt` next: an empty
+IteratorAggregate loop currently releases its temporary after the surrounding
+catch boundary, so its throwing destructor becomes an uncaught fatal instead
+of the expected caught exception.
+
+The implementation checkpoint is commit `a46182d2`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `nested-ref-foreach-mutation`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. A direct `unset()` now retains the removed
 array bucket's former ordered position and translates every active
