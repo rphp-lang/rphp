@@ -8,6 +8,86 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`typed-property-unserialize-validation`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. Materializing an ordinary `O:`
+payload now resolves serialized public, protected and private property names
+to the effective declaration and uses the canonical strict typed-property
+assignment boundary. Inherited private slots remain distinct. A reference
+attached through `R:` also receives the declaration's type constraint, so a
+later write through any alias cannot bypass it. The internal `Exception` and
+`Error` metadata now expose `$previous` as `?Throwable`, matching their valid
+serialized state.
+
+Original regressions cover valid public/protected/private payloads, duplicate
+inherited private names, strict rejection before later output, integer-to-float
+assignment, reference constraint intersection and later alias mutation,
+cycles, `__unserialize()` hook ownership and internal Throwable chains. The
+clean-room regression is byte-identical to PHP 8.5.9. The supplying
+`Zend/tests/serialize/bug70121.phpt` changes from output failure to an exact
+diagnostic pass with exit status 255; its parent, oracle and candidate manifest
+SHA-256 values are
+`f3e87e716267f3132e97a82d9c846b71bad0ed3d419632cdd24369bfd5cacae5`,
+`dc55821af908e9958bc30d94382b3c70709377aac355a2c4097113eab4a2e8f5`
+and
+`5741e9c44ca8f48bbe93589e104eb505a7eaf9ea47725aee4673080ffea75fbc`.
+
+Zend/lang gains exactly `+1/-0`, from 4,421 to 4,422 pass. Its two
+exact-final-binary 5,599-case runs each record 4,422 pass, 881 fail, 115 skip
+and 181 unsupported, with no timeout or crash. Their manifests and summaries
+are byte-identical at SHA-256
+`1800defa5bc8e16ad9d10a3f9bccf271ff1eb5fa05e537f16c604d90e8dcbeb3`
+and
+`2e3b6cc9af0cc850a2857b09dfb4222a1eb8640ce7cec5802f5e2fac98cd770f`.
+The 825-case serialization and interaction neighborhood moves from 715 to 716
+pass and from 91 to 90 fail; `bug70121.phpt` is its only status/category
+change. The serial strings/array audit remains 1,459 pass, 18 fail, 67 skip
+and 31 unsupported across 1,575 cases. Its two candidate runs and exact parent
+have the same status/category projection at SHA-256
+`392587b16fee83fa2233b41d0bc8a1dd95d5d4b34a1b5365f25985f5c8515dbe`.
+The combined audit therefore covers 7,174 cases: 5,881 pass, 899 fail, 182
+skip and 212 unsupported. Supported debt is 18 strings failures, zero array
+failures and 881 Zend/lang failures.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at 1,623 unsafe blocks and 289 unsafe functions, with 370
+SAFETY annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass. The
+change adds no dependency, unsafe block, opcode or persistent runtime layout
+field.
+
+Three exact-final-binary CPU-2-pinned, performance-governor, order-balanced
+32-pair release runs with four warmups compare retained parent SHA-256
+`ccae9279d5795a7cfc18e467db23a1ebf618a05f50e3f552bb0ce8ea98632902`
+with candidate
+`b6b5a185fdc69cab95f60a28fbb4013f0eb369652a646b5afc5c3f6f42319b86`.
+The median of run medians is -6.434% for 100 startups, +2.043% for 100,000
+ordinary object serializations, +1.623% for 50,000 valid typed-object
+unserializations and -1.236% for 50,000 malformed object-count decodes. The
+changed valid-unserialize path remains below +3% in every run. One unchanged
+serialization control is noisy at +4.251% with a -7.089%/+17.132% paired
+decile range; the other two runs are +0.120% and +2.043%, and the aggregate
+remains inside the gate. Two additional one-million ordinary trait-property
+controls are -0.686% and +0.109%. Comparable outputs match. The harness hashes
+to
+`3b9308d21fb4b78fb8a50b1454054b5eaa18a11672fa06bf2077c56565611a1d`;
+the raw observation streams hash to
+`c1a79a3ea872aa6a0de6bf2d94b5fbce8660b870968ca572357546d1418c21be`,
+`57f20f0e3ec2624466ea988b732b6dc23c42b8314f7339e8d58532ad461d2572`
+and
+`e2d5f9da93c76ae2d747c374dcf750e6fb0d67774458767b57e09ab87f54951a`.
+
+This checkpoint does not claim serializer-side encoding of property
+references, general incomplete-object mutation, array-next-index overflow,
+`SplFixedArray`, or broad internal-class serialized metadata. Read-only
+clustering selects the four-case append/error-result boundary next:
+`Zend/tests/array_literal_next_element_error.phpt`,
+`assign_dim_obj_null_return.phpt`, `assign_ref_error_var_handling.phpt` and
+`serialize/bug71841.phpt`.
+
+The implementation checkpoint is commit `8ef395e6`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `serialization-rejection-offset-boundaries`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. `serialize()` now rejects an
 anonymous-class object with PHP's `Exception` and stable public

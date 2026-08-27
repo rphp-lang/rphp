@@ -3822,10 +3822,33 @@ and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-2-pinned 32-pair runs keep
 startup, ordinary object serialization, ordinary object unserialization and
 the changed malformed path below +1% in both runs, with matching outputs.
 
-The monitored supported debt is now 900 failures: 18 strings, zero array and
-882 Zend/lang. The complete 216-case trait neighborhood has zero ordinary
-failure. Read-only clustering selects the remaining cold serial typed-property
-validation case next: `serialize/bug70121.phpt`.
+The `8ef395e6` `typed-property-unserialize-validation` checkpoint then moves
+Zend/lang from 4,421 to 4,422 pass, exactly `+1/-0`; strings stay 631/733 and
+array stays 828/842 with no other status or category movement. Ordinary `O:`
+payload materialization resolves effective visibility and uses the canonical
+strict typed-property assignment boundary. `R:` attachments carry declaration
+constraints, inherited private slots remain distinct and internal Throwable
+`$previous` metadata accepts only `?Throwable`. Original regressions cover
+valid, rejected, visibility, reference, cycle, hook and internal-class paths.
+
+Two exact-final-binary Zend/lang audits have byte-identical manifests and
+summaries; repeated serial strings/array outcome projections also match the
+exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Three CPU-2-pinned 32-pair runs keep the changed
+typed-object unserialize path below +3% in every run. Median-of-run medians for
+startup, ordinary object serialization, valid typed-object unserialization and
+malformed decoding are -6.434%, +2.043%, +1.623% and -1.236%; one unchanged
+serialization control is explicitly retained as a noisy +4.251% observation.
+Two ordinary one-million property controls are -0.686% and +0.109%.
+
+The monitored supported debt is now 899 failures: 18 strings, zero array and
+881 Zend/lang. The complete 216-case trait neighborhood has zero ordinary
+failure. Read-only clustering selects the four-case append/error-result
+boundary next: `array_literal_next_element_error.phpt`,
+`assign_dim_obj_null_return.phpt`, `assign_ref_error_var_handling.phpt` and
+`serialize/bug71841.phpt`. `SplFixedArray` remains a separate extension-sized
+contract rather than being folded into that goal.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
