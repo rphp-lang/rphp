@@ -149,6 +149,10 @@ fn trait_static_diagnostics_cover_composition_and_precedence() {
             "<?php\ntrait Source { public function work() {} }\nclass Consumer {\n    use Source {\n        Source::work insteadof\n            static;\n    }\n}\n",
             4,
         ),
+        (
+            "<?php\ntrait Preferred { public function choose() {} }\nclass Consumer {\n    use Preferred {\n        static::choose insteadof Preferred;\n    }\n}\n",
+            4,
+        ),
     ] {
         assert_compile_fatal(
             source,

@@ -233,6 +233,7 @@ fn serialize_value(
                 .as_object()
                 .expect("object value lost its payload");
             let class_name = object.class_name.to_string();
+            let class_id = object.class_id;
             drop(object);
             if matches!(
                 class_name.to_ascii_lowercase().as_str(),
@@ -248,6 +249,51 @@ fn serialize_value(
                 ));
                 return Ok(());
             }
+
+            // PHP's deprecated Serializable protocol remains observable when
+            // no modern __serialize() hook takes precedence. Keep this on the
+            // already-cold object serialization path and resolve the method
+            // after lazy initialization so trait-composed implementations use
+            // the same effective dispatch as ordinary instance calls.
+            let has_protocol_ancestor = eg
+                .class_by_id(class_id)
+                .is_some_and(|class| class.parent.is_some() || !class.implements.is_empty());
+            if serialize_hook.is_none()
+                && has_protocol_ancestor
+                && eg.class_is_a(&class_name, "Serializable")
+                && let Some(legacy_hook) =
+                    crate::stdlib::resolve_object_public_method(eg, hook_receiver, "serialize")
+            {
+                let payload = crate::stdlib::call_resolved_with_values(eg, &legacy_hook, &[])?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+                if payload.value_type() == ValueType::Null {
+                    // A null payload serializes as a scalar N; and does not
+                    // establish object identity for a later occurrence.
+                    state.objects.remove(&identity);
+                    output.push_str("N;");
+                    return Ok(());
+                }
+                let Some(payload) = payload.as_str() else {
+                    eg.exception = Some(crate::value::make_error_value(
+                        "Exception",
+                        &format!("{class_name}::serialize() must return a string or NULL"),
+                    ));
+                    return Ok(());
+                };
+                output.push_str("C:");
+                output.push_str(&class_name.len().to_string());
+                output.push_str(":\"");
+                output.push_str(&class_name);
+                output.push_str("\":");
+                output.push_str(&payload.len().to_string());
+                output.push_str(":{");
+                output.push_str(payload);
+                output.push('}');
+                return Ok(());
+            }
+
             let properties = if let Some(serialize_hook) = serialize_hook {
                 let serialized =
                     crate::stdlib::call_resolved_with_values(eg, &serialize_hook, &[])?;

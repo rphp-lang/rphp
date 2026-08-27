@@ -686,12 +686,21 @@ impl Parser {
     /// Parse the left-hand reference of a trait adaptation. The unqualified
     /// form is a method name and therefore admits PHP's semi-reserved words;
     /// qualified and namespace-relative forms identify a trait before `::`.
-    fn parse_trait_method_reference(&mut self) -> Result<(Option<String>, String), String> {
+    fn parse_trait_method_reference(
+        &mut self,
+        adaptation_line: usize,
+    ) -> Result<(Option<String>, String), String> {
         let first = match self.peek() {
             Token::Namespace if self.peek_at(1) == Token::Backslash => {
                 self.parse_qualified_or_namespace_relative_name()?
             }
             Token::Backslash | Token::Identifier(_, _) => self.parse_qualified_name()?,
+            Token::Static(line) if self.peek_at(1) == Token::DoubleColon => {
+                self.advance();
+                self.last_primary_line = Some(line);
+                self.compile_error(ReservedStaticRole::Trait.diagnostic(), adaptation_line);
+                "static".to_string()
+            }
             _ => {
                 let token = self.advance();
                 let method = Self::token_as_named_arg_label(&token)

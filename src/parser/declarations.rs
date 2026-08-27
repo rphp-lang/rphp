@@ -533,12 +533,14 @@ impl Parser {
                     Token::Use(line) => line,
                     _ => unreachable!("trait use parser starts at use"),
                 };
-                let (trait_uses, _) = self.parse_trait_ancestor_list(use_line)?;
+                let (trait_uses, adaptation_line) =
+                    self.parse_trait_ancestor_list(use_line)?;
                 uses.extend(trait_uses);
                 if matches!(self.peek(), Token::LBrace(_)) {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
-                        let (trait_name, method) = self.parse_trait_method_reference()?;
+                        let (trait_name, method) =
+                            self.parse_trait_method_reference(adaptation_line)?;
                         trait_aliases
                             .push(self.parse_trait_alias_adaptation(trait_name, method)?);
                     }
@@ -801,7 +803,8 @@ impl Parser {
                 if matches!(self.peek(), Token::LBrace(_)) {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
-                        let (trait_name, method) = self.parse_trait_method_reference()?;
+                        let (trait_name, method) =
+                            self.parse_trait_method_reference(adaptation_line)?;
                         if self.peek() == Token::Insteadof {
                             self.advance();
                             let Some(trait_name) = trait_name else {
@@ -976,7 +979,8 @@ impl Parser {
                 if matches!(self.peek(), Token::LBrace(_)) {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
-                        let (trait_name, method) = self.parse_trait_method_reference()?;
+                        let (trait_name, method) =
+                            self.parse_trait_method_reference(adaptation_line)?;
                         if self.peek() == Token::Insteadof {
                             self.advance();
                             let Some(trait_name) = trait_name else {
@@ -1136,7 +1140,8 @@ impl Parser {
                 if matches!(self.peek(), Token::LBrace(_)) {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
-                        let (trait_name, method) = self.parse_trait_method_reference()?;
+                        let (trait_name, method) =
+                            self.parse_trait_method_reference(adaptation_line)?;
                         if self.peek() == Token::Insteadof {
                             self.advance();
                             let Some(_) = trait_name else {
@@ -1309,12 +1314,14 @@ impl Parser {
                     Token::Use(line) => line,
                     _ => unreachable!("trait use parser starts at use"),
                 };
-                let (trait_uses, _) = self.parse_trait_ancestor_list(use_line)?;
+                let (trait_uses, adaptation_line) =
+                    self.parse_trait_ancestor_list(use_line)?;
                 uses.extend(trait_uses);
                 if matches!(self.peek(), Token::LBrace(_)) {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
-                        let (trait_name, method) = self.parse_trait_method_reference()?;
+                        let (trait_name, method) =
+                            self.parse_trait_method_reference(adaptation_line)?;
                         trait_aliases
                             .push(self.parse_trait_alias_adaptation(trait_name, method)?);
                     }

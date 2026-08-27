@@ -815,6 +815,63 @@ echo json_encode(unserialize($serialized, ['allowed_classes' => false]));
 }
 
 #[test]
+fn legacy_serializable_uses_trait_methods_and_yields_to_modern_hooks() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait LegacyWire {
+    public function serialize() { echo 'legacy>'; return 'payload'; }
+    public function unserialize($payload) { echo 'restore:', $payload, '>'; }
+}
+class TraitPacket implements Serializable { use LegacyWire; }
+class InheritedPacket extends TraitPacket {}
+interface LegacyContract extends Serializable {}
+class IndirectPacket implements LegacyContract { use LegacyWire; }
+class ModernPacket implements Serializable {
+    use LegacyWire;
+    public function __serialize(): array { echo 'modern>'; return ['v' => 3]; }
+    public function __unserialize(array $data): void { echo 'hydrate:', $data['v'], '>'; }
+}
+trait NullWire {
+    public function serialize() { return null; }
+    public function unserialize($payload) {}
+}
+class NullPacket implements Serializable { use NullWire; }
+trait InvalidWire {
+    public function serialize() { return 3; }
+    public function unserialize($payload) {}
+}
+class InvalidPacket implements Serializable { use InvalidWire; }
+
+$legacy = serialize(new TraitPacket());
+echo $legacy, '>';
+unserialize($legacy);
+foreach ([new InheritedPacket(), new IndirectPacket()] as $packet) {
+    $wire = serialize($packet);
+    echo $wire, '>';
+    unserialize($wire);
+}
+$modern = serialize(new ModernPacket());
+echo $modern, '>';
+unserialize($modern);
+$null = new NullPacket();
+echo serialize([$null, $null]), '>';
+try { serialize(new InvalidPacket()); }
+catch (Exception $error) { echo get_class($error), ':', $error->getMessage(); }
+"#,
+        ),
+        concat!(
+            "legacy>C:11:\"TraitPacket\":7:{payload}>restore:payload>",
+            "legacy>C:15:\"InheritedPacket\":7:{payload}>restore:payload>",
+            "legacy>C:14:\"IndirectPacket\":7:{payload}>restore:payload>",
+            "modern>O:12:\"ModernPacket\":1:{s:1:\"v\";i:3;}>",
+            "hydrate:3>a:2:{i:0;N;i:1;N;}>",
+            "Exception:InvalidPacket::serialize() must return a string or NULL"
+        )
+    );
+}
+
+#[test]
 fn object_serialization_preserves_cycles_and_shared_identity() {
     assert_eq!(
         run_php(
