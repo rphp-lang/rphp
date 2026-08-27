@@ -3561,14 +3561,33 @@ and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep
 startup, retained `strlen()`, 500 switch declarations and 500 match
 declarations below +5%, with matching outputs.
 
-The monitored supported debt is now 1,024 failures: 18 strings, zero array and
-1,006 Zend/lang. Read-only expected-message clustering next joins five
-cross-directory failures at the omitted compile warning for non-compound `use`
-names: `bug69388.phpt`, `bug69388_2.phpt`, `namespaces/ns_033.phpt` and both
-`use_function/ns_end_resets_seen_symbols` cases. Their current programs and
-namespace/import resolution otherwise match the oracle. The attempted 14-case
-`crypt()` platform approach did not meet the portability contract and remains
-deferred.
+The `115eee38` `noncompound-use-compile-warnings` checkpoint then moves
+Zend/lang from 4,297 to 4,304 pass, exactly `+7/-0`; strings stay 631/733 and
+array stays 828/842 with no other status or category movement. `UseDecl`
+metadata now retains the first imported-name line and explicit-alias syntax.
+The compiler publishes PHP 8.5's located ineffective non-compound import
+warning only for unaliased class, function and constant names in the global
+namespace; compound names, explicit aliases and named namespaces retain their
+existing resolution. Runtime eval/include compile diagnostics enter the active
+PHP error handler, including decline, ordinary fallback and catchable handler-
+exception paths.
+
+Two serial exact-final-binary Zend/lang audits have byte-identical manifests
+and summaries; repeated serial strings/array outcome projections also match
+the exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-pinned 32-pair runs keep
+startup, retained `strlen()`, 500 valid global aliased imports and 500 valid
+simple imports inside a named namespace below +5%, with matching outputs.
+
+The monitored supported debt is now 1,017 failures: 18 strings, zero array and
+999 Zend/lang. Read-only distinct-test expected-message clustering next joins
+the five failing `prop_const_expr/non_enums*` cases at PHP's catchable
+`Fetching properties on non-enums in constant expressions is not allowed`
+error. Ordinary, nullsafe and constant-owned property fetches currently
+execute or return silently; the default-argument path must reproduce the
+catchable error on every omitted call. The attempted 14-case `crypt()` platform
+approach did not meet the portability contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
 visibility, isolated/mixed standalone CR, broader binary-string propagation,
 suppression-wrapped destructuring, exhaustive object/array/resource
