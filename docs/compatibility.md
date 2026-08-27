@@ -8,6 +8,74 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`empty-foreach-temporary-lifetime`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. A compiler-owned temporary
+`IteratorAggregate` receiver is now released while the source `foreach`
+try/catch region is still active. An aggregate returning an internal iterator
+is released in `ForeachInit` after the emptiness decision and before target or
+body publication. An aggregate returning a user `Iterator` is released after
+`rewind()` and its first successful `valid()`, but before `current()`, `key()`
+or the body. An exception from the aggregate destructor therefore follows the
+ordinary catch/finally path and preempts later iterator calls without changing
+the previous key or value targets.
+
+The release consumes exactly the compiler-owned source temporary and keeps the
+existing foreach state as the iterator owner. Direct `Iterator` sources and
+named or aliased aggregate receivers retain their ordinary last-reference
+lifetime. Empty and nonempty internal iterators, break, continue and body
+exceptions preserve PHP ordering, and the generator branches remain unchanged.
+Five original regressions cover the empty throwing destructor, the complete
+user-iterator call order, destructor exception priority and operand state,
+named/aliased lifetime, and direct/include/eval parity. The clean-room oracle
+source set has aggregate SHA-256
+`7d75f13bdaf2851f054fc0161c36d89c7af7faa0577680210cbbca9dfb470091`;
+the committed regression source hashes to
+`22bb068a89d934d8fca4368b39bc370369511d98207daf7bb05ef180fcf034ed`.
+
+`Zend/tests/foreach/foreach_empty_loop_leak.phpt` changes from runtime failure
+to pass. Two exact-final-binary 5,599-case Zend/lang runs each record 4,452
+pass, 851 fail, 115 skip and 181 unsupported, with no timeout or crash. Their
+status/category projections are identical at SHA-256
+`babe0ea1a59f385db79dd21116a8a8cec15cfde2b0a258d2a8a3c826397c0eba`;
+the exact parent/candidate delta is `+1/-0`, with no other movement or lost
+pass. Two 1,575-case strings/array projections remain identical to the exact
+parent at SHA-256
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,911 pass, 869 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 851 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`4cff80f90a064f2aa4084896c3a89d268d54467c83d1cb8a37dc96f5bf4017a0`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 374 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+One exact-final-binary CPU-2-pinned gate used four warmups and 32 balanced
+order pairs without outlier removal. Paired median changes are -4.362% for
+startup, -0.740% for array foreach, -0.094% for direct `Iterator`, +0.080% for
+named aggregate, +2.524% for temporary internal aggregate and +0.555% for
+temporary user aggregate. All outputs match and every control is below the
+five-percent regression ceiling. The harness and result hash to
+`4890303d25a93099741c7f9a554a28ff638d25b41a3d117dc14bcf2abe139829`
+and
+`1042dd148d2124e5afee95074ba5accec936061ef5821b53631e588c16f84f4d`.
+
+This checkpoint does not claim general Iterator or IteratorAggregate protocol
+implementation, generator or Fiber lifecycle, general object iteration,
+ArrayAccess, ArrayObject, SplObjectStorage, SplFixedArray, other SPL behavior,
+shutdown-only fatal policy, 32-bit behavior or allocation-limit/OOM
+equivalence. Read-only clustering selects
+`Zend/tests/temporary_cleaning/temporary_cleaning_017.phpt` next: a return from
+an object foreach reaches its temporary receiver destructor, but the resulting
+error propagation and stack boundary do not yet match PHP 8.5.
+
+The implementation checkpoint is commit `c4831d2a`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `string-offset-ref-foreach`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. A direct array-dimension expression used as a
 by-reference `foreach` source now retains its referenceability provenance

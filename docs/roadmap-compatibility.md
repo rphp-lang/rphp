@@ -3994,12 +3994,29 @@ CPU-2-pinned 32-pair release gate places the paired medians for startup,
 ordinary string reads, by-value iteration and three valid by-reference foreach
 paths between -0.126% and +1.255%, with matching outputs.
 
-The monitored supported debt is now 870 failures: 18 strings, zero array and
-852 Zend/lang. Read-only clustering selects
-`Zend/tests/foreach/foreach_empty_loop_leak.phpt` next: an empty
-IteratorAggregate temporary is destroyed outside the source catch boundary,
-making its destructor exception uncaught. General Iterator/IteratorAggregate
-and generator lifecycle, object iteration, `ArrayAccess`, `ArrayObject`,
+The `c4831d2a` `empty-foreach-temporary-lifetime` checkpoint then moves
+Zend/lang from 4,451 to 4,452 pass, exactly `+1/-0`. A compiler-owned temporary
+IteratorAggregate source is released inside `ForeachInit` for internal
+iterators or immediately after the first successful user-Iterator `valid()`.
+Its destructor exception therefore remains in the source catch/finally region
+and preempts target or body publication. Direct Iterator, named/aliased
+aggregate and generator lifetimes remain unchanged.
+
+Two exact-final-binary Zend/lang runs have the same status/category projection;
+two strings/array projections also match the exact parent. All five Cargo
+configurations, all-feature/all-target, formatting, HTML data, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production
+remains at the unsafe ceiling of 1,623 blocks and 289 functions. One
+CPU-2-pinned 32-pair release gate places the paired medians for startup, array
+foreach, direct Iterator, named aggregate and temporary internal/user aggregate
+paths between -4.362% and +2.524%, with matching outputs.
+
+The monitored supported debt is now 869 failures: 18 strings, zero array and
+851 Zend/lang. Read-only clustering selects
+`Zend/tests/temporary_cleaning/temporary_cleaning_017.phpt` next: return from an
+object foreach reaches the temporary receiver destructor, but its propagated
+error and stack boundary still differ. General Iterator/IteratorAggregate and
+generator lifecycle, object iteration expansion, `ArrayAccess`, `ArrayObject`,
 `SplObjectStorage`, `SplFixedArray` and broader SPL remain separate contracts.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
