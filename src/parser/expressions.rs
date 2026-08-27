@@ -1174,7 +1174,19 @@ impl Parser {
             }
             Token::PlusPlus => {
                 self.advance();
-                let target = self.parse_power()?;
+                let previous = self.preserve_empty_dimension_suffix;
+                self.preserve_empty_dimension_suffix = true;
+                let target = self.parse_power();
+                self.preserve_empty_dimension_suffix = previous;
+                let mut target = target?;
+                if self.is_empty_array_dimension_suffix() {
+                    let line = self.expect_lbracket()?;
+                    self.expect(&Token::RBracket)?;
+                    target = Expr::ArrayAppendArgument {
+                        target: Box::new(target),
+                        line,
+                    };
+                }
                 if let Some(line) = Self::nullsafe_chain_line(&target) {
                     return Ok(self.nullsafe_write_error(line));
                 }
@@ -1196,7 +1208,10 @@ impl Parser {
                     | Expr::StaticProperty { .. }
                     | Expr::DynamicNamedStaticProperty { .. }
                     | Expr::DynamicStaticProperty { .. }
-                    | Expr::ArrayAccess { .. } => Ok(Expr::PreIncTarget(Box::new(target))),
+                    | Expr::ArrayAccess { .. }
+                    | Expr::ArrayAppendArgument { .. } => {
+                        Ok(Expr::PreIncTarget(Box::new(target)))
+                    }
                     other => self
                         .call_write_error(&other)
                         .map_or_else(|| Err(format!("Invalid increment target: {other:?}")), Ok),
@@ -1204,7 +1219,19 @@ impl Parser {
             }
             Token::MinusMinus => {
                 self.advance();
-                let target = self.parse_power()?;
+                let previous = self.preserve_empty_dimension_suffix;
+                self.preserve_empty_dimension_suffix = true;
+                let target = self.parse_power();
+                self.preserve_empty_dimension_suffix = previous;
+                let mut target = target?;
+                if self.is_empty_array_dimension_suffix() {
+                    let line = self.expect_lbracket()?;
+                    self.expect(&Token::RBracket)?;
+                    target = Expr::ArrayAppendArgument {
+                        target: Box::new(target),
+                        line,
+                    };
+                }
                 if let Some(line) = Self::nullsafe_chain_line(&target) {
                     return Ok(self.nullsafe_write_error(line));
                 }
@@ -1226,7 +1253,10 @@ impl Parser {
                     | Expr::StaticProperty { .. }
                     | Expr::DynamicNamedStaticProperty { .. }
                     | Expr::DynamicStaticProperty { .. }
-                    | Expr::ArrayAccess { .. } => Ok(Expr::PreDecTarget(Box::new(target))),
+                    | Expr::ArrayAccess { .. }
+                    | Expr::ArrayAppendArgument { .. } => {
+                        Ok(Expr::PreDecTarget(Box::new(target)))
+                    }
                     other => self
                         .call_write_error(&other)
                         .map_or_else(|| Err(format!("Invalid decrement target: {other:?}")), Ok),

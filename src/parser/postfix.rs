@@ -445,7 +445,11 @@ impl Parser {
                     if self.peek_at(1) == Token::RBracket {
                         if matches!(
                             self.peek_at(2),
-                            Token::LBracket(_) | Token::Arrow | Token::NullSafe
+                            Token::LBracket(_)
+                                | Token::Arrow
+                                | Token::NullSafe
+                                | Token::PlusPlus
+                                | Token::MinusMinus
                         ) {
                             self.advance();
                             self.advance();
@@ -817,7 +821,8 @@ impl Parser {
                         | Expr::StaticProperty { .. }
                         | Expr::DynamicNamedStaticProperty { .. }
                         | Expr::DynamicStaticProperty { .. }
-                        | Expr::ArrayAccess { .. } => {
+                        | Expr::ArrayAccess { .. }
+                        | Expr::ArrayAppendArgument { .. } => {
                             if increment {
                                 Expr::PostIncTarget(Box::new(expr))
                             } else {

@@ -5715,7 +5715,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                     } else {
-                        php_arr.push(cloned_val);
+                        if !php_arr.try_push(cloned_val) {
+                            throw_operator!(
+                                "Error",
+                                "Cannot add element to the array as the next element is already occupied"
+                            );
+                        }
                     }
                     if opline._pad & ARRAY_ELEMENT_FINAL_IMMUTABLE_LITERAL != 0 {
                         arr.mark_immutable_array_literal();
@@ -6449,6 +6454,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     } else if arr_val.value_type() != ValueType::Undef
                         && opline._pad & FETCH_DIM_DESTRUCTURE == 0
+                        && opline._pad & FETCH_DIM_MUTABLE == 0
                         && opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_SILENT) == 0
                     {
                         report_php_warning(
@@ -6913,29 +6919,24 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         php_arr.set(key, cloned_val);
                     }
                 } else {
-                    return Err(VmError::Fatal("Cannot use a scalar value as an array".into()));
+                    throw_operator!("Error", "Cannot use a scalar value as an array");
                 }
             }
 
             OpCode::ArrayPushOp => 'array_push: {
                 // op1[] = op2
-                let cloned_val = if opline._pad & crate::vm::instruction::ARRAY_ELEMENT_REFERENCE != 0 {
-                    if opline.op2_type != OpType::Cv {
-                        return Err(VmError::Fatal(
-                            "Reference array append source must be a variable".into(),
-                        ));
-                    }
-                    // SAFETY: the reference flag is emitted only for a source
-                    // CV in this live frame. Materialization retains any heap
-                    // payload and updates the frame cleanup bitmap atomically.
-                    unsafe {
-                        let source = (*frame).cv_mut(opline.op2 as u32) as *mut Value;
-                        materialize_reference_alias(frame, source)
-                    }
-                } else {
-                    let val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                    val.clone()
-                };
+                let reference_append = opline._pad & ARRAY_ELEMENT_REFERENCE != 0;
+                let deferred_reference_notice = opline._pad
+                    & ARRAY_ELEMENT_DEFER_NONREFERENCEABLE_NOTICE
+                    != 0;
+                if reference_append
+                    && !deferred_reference_notice
+                    && opline.op2_type != OpType::Cv
+                {
+                    return Err(VmError::Fatal(
+                        "Reference array append source must be a variable".into(),
+                    ));
+                }
                 // SAFETY: ArrayPushOp op1 names a compiler-owned mutable slot in this
                 // live frame. A PHP reference owns its target; if false-array
                 // reporting runs, the pointer is reacquired before mutation.
@@ -6994,71 +6995,204 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     };
                 }
-                // SAFETY: arr_ptr was resolved from the active frame after
-                // any reentrant callback and remains owned by its operand.
-                let arr = unsafe { &mut *arr_ptr };
-                if matches!(arr.value_type(), ValueType::Object | ValueType::Closure) {
-                    let receiver = arr.clone();
-                    let args = [Value::null(), cloned_val];
-                    let handled = crate::stdlib::call_object_protocol_method(
-                        eg,
-                        &receiver,
-                        "ArrayAccess",
-                        "offsetSetAppend",
-                        &args,
-                    )?;
-                    if handled.is_none() {
-                        let instruction_index = (opline_ptr as usize
-                            - op_array.instructions.as_ptr() as usize)
-                            / std::mem::size_of::<Instruction>();
-                        match throw_object_as_array(
+                // SAFETY: after any false-conversion callback, ArrayPushOp's
+                // compiler-owned operands remain live for this opcode. Raw
+                // pointers are reacquired after re-entrant diagnostics, and
+                // no borrowed reference escapes this dispatch arm.
+                unsafe {
+                    // Preserve the ordinary initialized-array append as a
+                    // single predictable hot path. Reference appends need the
+                    // staged overflow/notice handling below; null, false and
+                    // objects likewise remain on their cold conversions.
+                    if !reference_append {
+                        let arr = &mut *arr_ptr;
+                        if let Some(array) = arr.as_array_mut() {
+                            let value = &*(*frame).get_op_ptr(
+                                opline.op2 as u32,
+                                opline.op2_type,
+                                op_array,
+                            );
+                            if !array.try_push(value.clone()) {
+                                throw_operator!(
+                                    "Error",
+                                    "Cannot add element to the array as the next element is already occupied"
+                                );
+                            }
+                            break 'array_push;
+                        }
+                    }
+                    let arr = &mut *arr_ptr;
+                    if matches!(arr.value_type(), ValueType::Object | ValueType::Closure) {
+                        let cloned_val = if reference_append {
+                            // A deferred call result follows the pre-existing
+                            // object-protocol ordering: diagnose it before
+                            // materializing the value as an alias.
+                            let source =
+                                (*frame).get_op_mut(opline.op2 as u32, opline.op2_type);
+                            if deferred_reference_notice && !(&*source).is_reference() {
+                                report_php_notice(
+                                    eg,
+                                    frame,
+                                    op_array,
+                                    opline,
+                                    "Only variables should be assigned by reference",
+                                )?;
+                                if let Some(exception) = eg.exception.take() {
+                                    match throw_in_frame(eg, frame, exception)? {
+                                        ThrowResult::Handled(new_frame, new_op_array) => {
+                                            frame = new_frame;
+                                            op_array = new_op_array;
+                                            continue 'vm;
+                                        }
+                                        ThrowResult::Unhandled(exception) => {
+                                            eg.exception = Some(exception);
+                                            return Ok(());
+                                        }
+                                    }
+                                }
+                            }
+                            materialize_reference_alias(frame, source)
+                        } else {
+                            let val = &*(*frame).get_op_ptr(
+                                opline.op2 as u32,
+                                opline.op2_type,
+                                op_array,
+                            );
+                            val.clone()
+                        };
+                        let receiver = arr.clone();
+                        let args = [Value::null(), cloned_val];
+                        let handled = crate::stdlib::call_object_protocol_method(
                             eg,
-                            frame,
-                            op_array,
-                            instruction_index,
                             &receiver,
-                        )? {
-                            ThrowResult::Handled(new_frame, new_op_array) => {
-                                frame = new_frame;
-                                op_array = new_op_array;
-                                continue 'vm;
-                            }
-                            ThrowResult::Unhandled(exception) => {
-                                eg.exception = Some(exception);
-                                return Ok(());
+                            "ArrayAccess",
+                            "offsetSetAppend",
+                            &args,
+                        )?;
+                        if handled.is_none() {
+                            let instruction_index = (opline_ptr as usize
+                                - op_array.instructions.as_ptr() as usize)
+                                / std::mem::size_of::<Instruction>();
+                            match throw_object_as_array(
+                                eg,
+                                frame,
+                                op_array,
+                                instruction_index,
+                                &receiver,
+                            )? {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
                             }
                         }
-                    }
-                    if let Some(exception) = eg.exception.take() {
-                        match throw_in_frame(eg, frame, exception)? {
-                            ThrowResult::Handled(new_frame, new_op_array) => {
-                                frame = new_frame;
-                                op_array = new_op_array;
-                                continue 'vm;
-                            }
-                            ThrowResult::Unhandled(exception) => {
-                                eg.exception = Some(exception);
-                                return Ok(());
+                        if let Some(exception) = eg.exception.take() {
+                            match throw_in_frame(eg, frame, exception)? {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
                             }
                         }
+                        (*frame).opline = opline_ptr.add(1);
+                        continue 'vm;
                     }
-                    unsafe { (*frame).opline = opline_ptr.add(1) };
-                    continue 'vm;
-                }
-                // Auto-create array if variable is null/undef
-                if arr.value_type() == ValueType::Null || arr.value_type() == ValueType::Undef {
-                    unsafe { slot_set(arr_ptr, Value::array(PhpArray::new())) };
-                    let arr = unsafe { &mut *arr_ptr };
-                    arr.as_array_mut().unwrap().push(cloned_val);
-                } else if let Some(php_arr) = arr.as_array_mut() {
-                    if !php_arr.try_push(cloned_val) {
+                    // Auto-create array if variable is null/undef
+                    if arr.value_type() == ValueType::Null || arr.value_type() == ValueType::Undef {
+                        slot_set(arr_ptr, Value::array(PhpArray::new()));
+                    }
+                    let array_can_push = (&*arr_ptr)
+                        .as_array()
+                        .is_some_and(PhpArray::can_push);
+                    if !array_can_push && (&*arr_ptr).as_array().is_some() {
                         throw_operator!(
                             "Error",
                             "Cannot add element to the array as the next element is already occupied"
                         );
                     }
-                } else {
-                    return Err(VmError::Fatal("[] operator not supported for non-array".into()));
+                    if (&*arr_ptr).as_array().is_some() {
+                        if reference_append && deferred_reference_notice {
+                            let source =
+                                (*frame).get_op_mut(opline.op2 as u32, opline.op2_type);
+                            if (&*source).is_reference() {
+                                let alias = materialize_reference_alias(frame, source);
+                                let pushed = (&mut *arr_ptr)
+                                    .as_array_mut()
+                                    .expect("prechecked array append target")
+                                    .try_push(alias);
+                                debug_assert!(pushed);
+                            } else {
+                                let current = reference_initial_value((&*source).clone());
+                                let binding = Value::owned_reference(Value::null());
+                                let pushed = (&mut *arr_ptr)
+                                    .as_array_mut()
+                                    .expect("prechecked array append target")
+                                    .try_push(binding.clone_owned_reference_alias());
+                                debug_assert!(pushed);
+                                report_php_notice(
+                                    eg,
+                                    frame,
+                                    op_array,
+                                    opline,
+                                    "Only variables should be assigned by reference",
+                                )?;
+                                if let Some(exception) = eg.exception.take() {
+                                    match throw_in_frame(eg, frame, exception)? {
+                                        ThrowResult::Handled(new_frame, new_op_array) => {
+                                            frame = new_frame;
+                                            op_array = new_op_array;
+                                            continue 'vm;
+                                        }
+                                        ThrowResult::Unhandled(exception) => {
+                                            eg.exception = Some(exception);
+                                            return Ok(());
+                                        }
+                                    }
+                                }
+                                slot_set(binding.as_ref_ptr(), current);
+                                frame_tmp_set(frame, source, binding);
+                            }
+                        } else {
+                            let cloned_val = if reference_append {
+                                let source = (*frame).cv_mut(opline.op2 as u32) as *mut Value;
+                                materialize_reference_alias(frame, source)
+                            } else {
+                                let val = &*(*frame).get_op_ptr(
+                                    opline.op2 as u32,
+                                    opline.op2_type,
+                                    op_array,
+                                );
+                                val.clone()
+                            };
+                            // `$array[] =& $array` promotes the destination CV
+                            // itself while materializing the source alias.
+                            // Follow that cell only after the overflow check.
+                            let append_ptr = if (&*arr_ptr).is_reference() {
+                                (&mut *arr_ptr).as_ref_ptr()
+                            } else {
+                                arr_ptr
+                            };
+                            let pushed = (&mut *append_ptr)
+                                .as_array_mut()
+                                .expect("prechecked array append target")
+                                .try_push(cloned_val);
+                            debug_assert!(pushed);
+                        }
+                    } else {
+                        return Err(VmError::Fatal(
+                            "[] operator not supported for non-array".into(),
+                        ));
+                    }
                 }
             }
 
@@ -7107,6 +7241,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         array_ptr = (&mut *array_ptr).as_ref_ptr();
                     }
                     let array_value = &mut *array_ptr;
+                    if array_value
+                        .as_array()
+                        .is_some_and(|array| !array.can_push())
+                    {
+                        throw_operator!(
+                            "Error",
+                            "Cannot add element to the array as the next element is already occupied"
+                        );
+                    }
                     debug_assert_eq!(opline.result_type, OpType::Cv);
                     // Reference assignment rebinds the CV itself. Following an
                     // existing reference here would replace the caller's value
@@ -7168,7 +7311,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let array = (&mut *array_ptr).as_array_mut().ok_or_else(|| {
                             VmError::Fatal("Cannot append a reference to a non-array".into())
                         })?;
-                        array.push((*target).clone_owned_reference_alias());
+                        if !array.try_push((*target).clone_owned_reference_alias()) {
+                            throw_operator!(
+                                "Error",
+                                "Cannot add element to the array as the next element is already occupied"
+                            );
+                        }
                     }
                 }
             }
@@ -7864,7 +8012,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         "Error",
                         &format!(
                             "Attempt to modify property \"{prop_name}\" on {}",
-                            obj.dereferenced().type_name()
+                            property_write_receiver_type(obj.dereferenced())
                         ),
                     );
                     match throw_in_frame(eg, frame, error)? {

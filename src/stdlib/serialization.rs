@@ -232,7 +232,10 @@ fn serialize_value(
             let object = hook_receiver
                 .as_object()
                 .expect("object value lost its payload");
-            let class_name = object.class_name.to_string();
+            let incomplete_class_name = object.incomplete_class_name();
+            let class_name = incomplete_class_name
+                .clone()
+                .unwrap_or_else(|| object.class_name.to_string());
             let class_id = object.class_id;
             drop(object);
             let forbidden_class_name = if class_name.starts_with("class@anonymous#") {
@@ -301,7 +304,7 @@ fn serialize_value(
                 return Ok(());
             }
 
-            let properties = if let Some(serialize_hook) = serialize_hook {
+            let mut properties = if let Some(serialize_hook) = serialize_hook {
                 let serialized =
                     crate::stdlib::call_resolved_with_values(eg, &serialize_hook, &[])?;
                 if eg.exception.is_some() {
@@ -336,6 +339,9 @@ fn serialize_value(
             } else {
                 ordinary_object_properties(hook_receiver, eg)
             };
+            if incomplete_class_name.is_some() {
+                properties.remove(&ArrayKey::String("__PHP_Incomplete_Class_Name".to_string()));
+            }
             if eg.exception.is_some() {
                 return Ok(());
             }
@@ -413,20 +419,20 @@ fn allocate_object(eg: &mut ExecutorGlobals, class_name: &str) -> Result<Value, 
         crate::stdlib::autoload::ensure_symbol_loaded(eg, class_name).map_err(|_| ())?;
     }
     let object = eg.find_class(class_name).map_or_else(
-        || PhpObject::dynamic(class_name.to_string(), 0, HashMap::new()),
+        || incomplete_object(class_name, &PhpArray::new()),
         |class| {
             if class.class_id == 0 {
-                PhpObject::dynamic(class.name.clone(), 0, HashMap::new())
+                Value::object(PhpObject::dynamic(class.name.clone(), 0, HashMap::new()))
             } else {
-                PhpObject::with_layout(
+                Value::object(PhpObject::with_layout(
                     class.class_id,
                     class.property_layout.clone(),
                     class.property_defaults.as_ref().to_vec(),
-                )
+                ))
             }
         },
     );
-    Ok(Value::object(object))
+    Ok(object)
 }
 
 fn incomplete_object(class_name: &str, properties: &PhpArray) -> Value {

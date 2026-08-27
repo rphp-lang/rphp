@@ -405,6 +405,11 @@ pub const ARRAY_ELEMENT_FINAL_IMMUTABLE_LITERAL: u16 = 1 << 2;
 /// Element stored in an immutable outer literal. A nested immutable array keeps
 /// immutable contents but the outer storage becomes its sole source owner.
 pub const ARRAY_ELEMENT_IMMUTABLE_CONTAINER: u16 = 1 << 3;
+/// ArrayPushOp flag: a by-reference append source is a call result whose
+/// referenceability must be diagnosed only after the destination can accept
+/// the append. This preserves PHP's overflow-error priority over the later
+/// non-variable reference notice.
+pub const ARRAY_ELEMENT_DEFER_NONREFERENCEABLE_NOTICE: u16 = 1 << 4;
 
 /// Arithmetic/bitwise opcode flag: the operation is the read phase of a
 /// compound assignment. PHP validates commutative binary operands as an

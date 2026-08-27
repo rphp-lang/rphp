@@ -1130,6 +1130,15 @@ fn scalar_property_write_fetch_throw<'a>(
     )
 }
 
+#[inline(always)]
+fn property_write_receiver_type(value: &Value) -> &'static str {
+    match value.value_type() {
+        ValueType::False => "false",
+        ValueType::True => "true",
+        _ => value.type_name(),
+    }
+}
+
 #[inline(never)]
 fn op_fetch_obj_r_slow<'a>(
     eg: &mut ExecutorGlobals,
@@ -1187,7 +1196,7 @@ fn op_fetch_obj_r_slow_inner<'a>(
                 eg,
                 frame,
                 &name,
-                obj_val.type_name(),
+                property_write_receiver_type(obj_val),
                 write_flags,
             )?);
         }
@@ -1226,6 +1235,24 @@ fn op_fetch_obj_r_slow_inner<'a>(
         ConvertedPropertyName::Control(result) => return Ok(result),
     };
     let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
+
+    let write_flags = opline._pad & (FETCH_OBJ_MODIFY | FETCH_OBJ_INCDEC | FETCH_OBJ_COMPOUND);
+    if write_flags != 0
+        && let Some(missing_class) = obj_val
+            .as_object()
+            .and_then(|object| object.incomplete_class_name())
+    {
+        return Ok(object_property_throw_at(
+            eg,
+            frame,
+            op_array,
+            ip,
+            "Error",
+            format!(
+                "The script tried to modify a property on an incomplete object. Please ensure that the class definition \"{missing_class}\" of the object you are trying to operate on was loaded _before_ unserialize() gets called or provide an autoloader to load the class definition"
+            ),
+        )?);
+    }
 
     if opline._pad & FETCH_OBJ_CONSTANT_EXPRESSION != 0 {
         let is_enum = obj_val
@@ -2150,7 +2177,7 @@ fn op_bind_obj_prop_ref<'a>(
                 "Error",
                 format!(
                     "Attempt to modify property \"{name}\" on {}",
-                    receiver.dereferenced().type_name()
+                    property_write_receiver_type(receiver.dereferenced())
                 ),
             )?);
         };
@@ -3023,6 +3050,25 @@ fn op_assign_obj_prop_inner<'a>(
     let lazy_receiver_owner = eg.lazy_object_state(obj).map(|_| obj.clone());
     let obj = lazy_receiver_owner.as_ref().unwrap_or(obj);
 
+    if let Some(missing_class) = obj
+        .as_object()
+        .and_then(|object| object.incomplete_class_name())
+    {
+        let instruction_index = (opline as *const Instruction as usize
+            - op_array.instructions.as_ptr() as usize)
+            / std::mem::size_of::<Instruction>();
+        return Ok(object_property_throw_at(
+            eg,
+            frame,
+            op_array,
+            instruction_index,
+            "Error",
+            format!(
+                "The script tried to modify a property on an incomplete object. Please ensure that the class definition \"{missing_class}\" of the object you are trying to operate on was loaded _before_ unserialize() gets called or provide an autoloader to load the class definition"
+            ),
+        )?);
+    }
+
     if let Some(php_obj) = obj.as_object_mut() {
         let caller_class = get_caller_class(frame, eg);
         let object_display_class_name = if php_obj.class_name.starts_with("class@anonymous#") {
@@ -3569,7 +3615,7 @@ fn op_assign_obj_prop_inner<'a>(
             "Error",
             format!(
                 "Attempt to {action} property \"{name}\" on {}",
-                obj.type_name()
+                property_write_receiver_type(obj)
             ),
         )?);
     }

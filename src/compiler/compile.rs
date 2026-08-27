@@ -31,14 +31,15 @@ use crate::value::{
     canonical_decimal_array_key as canonical_string_literal_array_key,
 };
 use crate::vm::instruction::{
-    ARITHMETIC_COMPOUND_ASSIGN, ARRAY_ELEMENT_FINAL_IMMUTABLE_LITERAL,
-    ARRAY_ELEMENT_IMMUTABLE_CONTAINER, ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_DYNAMIC_CALL_CLASS,
-    ARRAY_INIT_HASH_HINT, ARRAY_INIT_IMMUTABLE_LITERAL, ARRAY_UNPACK_CONSTANT_EXPRESSION,
-    ASSIGN_CV_MOVE_SOURCE, ASSIGN_CV_REBIND, ASSIGN_DIM_ERROR_SUPPRESS,
-    ASSIGN_DIM_KEY_ALREADY_NORMALIZED, ASSIGN_DIM_REFERENCE, ASSIGN_DIM_RESULT_VALUE,
-    ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_CLONE_WITH, ASSIGN_OBJ_ERROR_SUPPRESS, ASSIGN_OBJ_MODIFY,
-    ASSIGN_PROP_MOVE_SOURCE, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE,
-    CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_RETURN_EXPLICITLY_IGNORED,
+    ARITHMETIC_COMPOUND_ASSIGN, ARRAY_ELEMENT_DEFER_NONREFERENCEABLE_NOTICE,
+    ARRAY_ELEMENT_FINAL_IMMUTABLE_LITERAL, ARRAY_ELEMENT_IMMUTABLE_CONTAINER,
+    ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_DYNAMIC_CALL_CLASS, ARRAY_INIT_HASH_HINT,
+    ARRAY_INIT_IMMUTABLE_LITERAL, ARRAY_UNPACK_CONSTANT_EXPRESSION, ASSIGN_CV_MOVE_SOURCE,
+    ASSIGN_CV_REBIND, ASSIGN_DIM_ERROR_SUPPRESS, ASSIGN_DIM_KEY_ALREADY_NORMALIZED,
+    ASSIGN_DIM_REFERENCE, ASSIGN_DIM_RESULT_VALUE, ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_CLONE_WITH,
+    ASSIGN_OBJ_ERROR_SUPPRESS, ASSIGN_OBJ_MODIFY, ASSIGN_PROP_MOVE_SOURCE,
+    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS,
+    CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_RETURN_EXPLICITLY_IGNORED,
     CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME,
     CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_CALL_OWNER, CLASS_CONST_DYNAMIC_NAME,
     CLASS_CONST_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES, EVAL_FLAG_ERROR_SUPPRESS,
@@ -9057,8 +9058,8 @@ impl Compiler {
                             )
                         }
                         Expr::ArrayAppendArgument { target, .. } => {
-                            let (left, left_type) =
-                                match self.compile_array_append_argument_reference(target, &[]) {
+                            let (array, array_type, append_writeback) =
+                                match self.compile_array_append_source(target, true, false) {
                                     Ok(source) => source,
                                     Err(error) => {
                                         self.deferred_error = Some(error);
@@ -9067,6 +9068,13 @@ impl Compiler {
                                     }
                                 };
                             let (right, right_type) = self.compile_expr(expr);
+                            let (left, left_type) = self
+                                .emit_prepared_array_append_argument_reference(
+                                    array,
+                                    array_type,
+                                    append_writeback,
+                                    Vec::new(),
+                                );
                             (
                                 left,
                                 left_type,
@@ -10042,6 +10050,10 @@ impl Compiler {
 
                 // Add elements
                 for (element_index, elem) in elements.iter().enumerate() {
+                    // PHP resolves an explicit key before evaluating the
+                    // corresponding value. Keep both operands live until the
+                    // single AddArrayElement commit point.
+                    let compiled_key = elem.key.as_ref().map(|key| self.compile_expr(key));
                     let (val_op, val_type) = if elem.by_reference {
                         match self.compile_array_element_reference_source(&elem.value) {
                             Ok(source) => (source, OpType::Cv),
@@ -10075,8 +10087,7 @@ impl Compiler {
                     add.op1 = arr_tmp;
                     add.op2_type = val_type;
                     add.op2 = val_op;
-                    if let Some(key) = &elem.key {
-                        let (key_op, key_type) = self.compile_expr(key);
+                    if let Some((key_op, key_type)) = compiled_key {
                         add.result_type = key_type;
                         add.result = key_op;
                     }
@@ -11973,7 +11984,9 @@ impl Compiler {
                 } else {
                     None
                 };
-                let reference_source = if *by_ref {
+                let deferred_reference_notice =
+                    *by_ref && direct_cv.is_some() && Self::is_call_result_reference_source(expr);
+                let reference_source = if *by_ref && !deferred_reference_notice {
                     let source = if Self::is_call_result_reference_source(expr)
                         && !matches!(target.as_ref(), Expr::Variable { .. })
                     {
@@ -12022,6 +12035,9 @@ impl Compiler {
                 append.op2_type = assigned_type;
                 if *by_ref {
                     append._pad |= ARRAY_ELEMENT_REFERENCE;
+                }
+                if deferred_reference_notice {
+                    append._pad |= ARRAY_ELEMENT_DEFER_NONREFERENCEABLE_NOTICE;
                 }
                 self.instructions.push(append);
                 if let Some((_, _, writeback)) = mutable_source {

@@ -1469,6 +1469,19 @@ impl PhpObject {
             && self.property_values.is_empty()
     }
 
+    /// Return the missing class name carried by unserialize()'s canonical
+    /// incomplete-object placeholder. User-declared classes always have a
+    /// non-zero class ID and cannot collide with this internal shape.
+    #[inline]
+    pub(crate) fn incomplete_class_name(&self) -> Option<String> {
+        if self.class_id != 0 || self.class_name.as_ref() != "__PHP_Incomplete_Class" {
+            return None;
+        }
+        self.get_property("__PHP_Incomplete_Class_Name")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    }
+
     #[inline(always)]
     pub(crate) fn property_layout_ptr(&self) -> *const ObjectLayout {
         Rc::as_ptr(&self.property_layout)
@@ -2904,11 +2917,16 @@ impl PhpArray {
     /// occupied, PHP cannot represent another key and the append must fail
     /// rather than wrapping into the negative range.
     #[inline]
+    pub(crate) fn can_push(&self) -> bool {
+        self.next_int_key != i64::MAX || self.get_int(i64::MAX).is_none()
+    }
+
+    #[inline]
     pub(crate) fn try_push(&mut self, val: Value) -> bool {
-        let key = self.next_int_key;
-        if key == i64::MAX && self.get_int(key).is_some() {
+        if !self.can_push() {
             return false;
         }
+        let key = self.next_int_key;
         if key == 0 && self.cursor.get() & ARRAY_INT_KEY_INITIALIZED == 0 {
             self.cursor
                 .set(self.cursor.get() | ARRAY_INT_KEY_INITIALIZED);

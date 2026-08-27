@@ -416,7 +416,7 @@ $object->stored = assignment_value();
 var_dump($object->stored);
 "#
         ),
-        "rhs\nAttempt to assign property \"7\" on null\nNULL\nrhs\nAttempt to assign property \"7\" on bool\nbool(false)\nrhs\nAttempt to assign property \"7\" on int\nint(12)\nrhs\nAttempt to assign property \"7\" on string\nstring(1) \"s\"\nrhs\nint(9)\n"
+        "rhs\nAttempt to assign property \"7\" on null\nNULL\nrhs\nAttempt to assign property \"7\" on false\nbool(false)\nrhs\nAttempt to assign property \"7\" on int\nint(12)\nrhs\nAttempt to assign property \"7\" on string\nstring(1) \"s\"\nrhs\nint(9)\n"
     );
 }
 
@@ -436,7 +436,7 @@ foreach ([null, true, 12, 's'] as $value) {
 }
 "#
         ),
-        "Attempt to modify property \"7\" on null\nAttempt to modify property \"7\" on null\nrhs\nAttempt to modify property \"7\" on null\nrhs\nAttempt to modify property \"7\" on null\nNULL\nAttempt to modify property \"7\" on bool\nAttempt to modify property \"7\" on bool\nrhs\nAttempt to modify property \"7\" on bool\nrhs\nAttempt to modify property \"7\" on bool\nbool(true)\nAttempt to modify property \"7\" on int\nAttempt to modify property \"7\" on int\nrhs\nAttempt to modify property \"7\" on int\nrhs\nAttempt to modify property \"7\" on int\nint(12)\nAttempt to modify property \"7\" on string\nAttempt to modify property \"7\" on string\nrhs\nAttempt to modify property \"7\" on string\nrhs\nAttempt to modify property \"7\" on string\nstring(1) \"s\"\n"
+        "Attempt to modify property \"7\" on null\nAttempt to modify property \"7\" on null\nrhs\nAttempt to modify property \"7\" on null\nrhs\nAttempt to modify property \"7\" on null\nNULL\nAttempt to modify property \"7\" on true\nAttempt to modify property \"7\" on true\nrhs\nAttempt to modify property \"7\" on true\nrhs\nAttempt to modify property \"7\" on true\nbool(true)\nAttempt to modify property \"7\" on int\nAttempt to modify property \"7\" on int\nrhs\nAttempt to modify property \"7\" on int\nrhs\nAttempt to modify property \"7\" on int\nint(12)\nAttempt to modify property \"7\" on string\nAttempt to modify property \"7\" on string\nrhs\nAttempt to modify property \"7\" on string\nrhs\nAttempt to modify property \"7\" on string\nstring(1) \"s\"\n"
     );
 }
 
@@ -456,7 +456,7 @@ $object = (object) ['stored' => 1];
 var_dump(++$object->stored, $object->stored++, $object->stored);
 "#
         ),
-        "Attempt to increment/decrement property \"7\" on null\nAttempt to increment/decrement property \"7\" on null\nAttempt to increment/decrement property \"7\" on null\nAttempt to increment/decrement property \"7\" on null\nNULL\nAttempt to increment/decrement property \"7\" on bool\nAttempt to increment/decrement property \"7\" on bool\nAttempt to increment/decrement property \"7\" on bool\nAttempt to increment/decrement property \"7\" on bool\nbool(true)\nAttempt to increment/decrement property \"7\" on int\nAttempt to increment/decrement property \"7\" on int\nAttempt to increment/decrement property \"7\" on int\nAttempt to increment/decrement property \"7\" on int\nint(12)\nAttempt to increment/decrement property \"7\" on string\nAttempt to increment/decrement property \"7\" on string\nAttempt to increment/decrement property \"7\" on string\nAttempt to increment/decrement property \"7\" on string\nstring(1) \"s\"\nint(2)\nint(2)\nint(3)\n"
+        "Attempt to increment/decrement property \"7\" on null\nAttempt to increment/decrement property \"7\" on null\nAttempt to increment/decrement property \"7\" on null\nAttempt to increment/decrement property \"7\" on null\nNULL\nAttempt to increment/decrement property \"7\" on true\nAttempt to increment/decrement property \"7\" on true\nAttempt to increment/decrement property \"7\" on true\nAttempt to increment/decrement property \"7\" on true\nbool(true)\nAttempt to increment/decrement property \"7\" on int\nAttempt to increment/decrement property \"7\" on int\nAttempt to increment/decrement property \"7\" on int\nAttempt to increment/decrement property \"7\" on int\nint(12)\nAttempt to increment/decrement property \"7\" on string\nAttempt to increment/decrement property \"7\" on string\nAttempt to increment/decrement property \"7\" on string\nAttempt to increment/decrement property \"7\" on string\nstring(1) \"s\"\nint(2)\nint(2)\nint(3)\n"
     );
 }
 
@@ -482,7 +482,7 @@ $valid = (object) ['number' => 2];
 var_dump($valid->number += compound_value(3));
 "#
         ),
-        "rhs\nAttempt to assign property \"7\" on null\nNULL\nrhs\nAttempt to assign property \"7\" on bool\nbool(true)\nrhs\nAttempt to assign property \"7\" on int\nint(12)\nrhs\nAttempt to assign property \"7\" on string\nstring(1) \"s\"\nrhs\nError:Attempt to assign property \"bad\" on null\nrhs\nwarning:Undefined property: stdClass::$missing\nint(3)\nbase\nname\nrhs\nAttempt to modify property \"inner\" on null\nrhs\nint(5)\n"
+        "rhs\nAttempt to assign property \"7\" on null\nNULL\nrhs\nAttempt to assign property \"7\" on true\nbool(true)\nrhs\nAttempt to assign property \"7\" on int\nint(12)\nrhs\nAttempt to assign property \"7\" on string\nstring(1) \"s\"\nrhs\nError:Attempt to assign property \"bad\" on null\nrhs\nwarning:Undefined property: stdClass::$missing\nint(3)\nbase\nname\nrhs\nAttempt to modify property \"inner\" on null\nrhs\nint(5)\n"
     );
 }
 

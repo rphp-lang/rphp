@@ -351,6 +351,21 @@ impl Compiler {
             .iter()
             .map(|index| self.compile_expr(index))
             .collect();
+        Ok(self.emit_prepared_array_append_argument_reference(
+            array,
+            array_type,
+            writeback,
+            keys,
+        ))
+    }
+
+    pub(super) fn emit_prepared_array_append_argument_reference(
+        &mut self,
+        array: u16,
+        array_type: OpType,
+        writeback: ForeachArrayWriteback,
+        keys: Vec<(u16, OpType)>,
+    ) -> (u16, OpType) {
         let appended = self.resolve_cv(&format!("\0array_append_argument_{}", self.next_cv));
         let mut bind_append = Instruction::new(OpCode::BindArrayAppendRef);
         bind_append.op1 = array;
@@ -379,7 +394,7 @@ impl Compiler {
             self.instructions.push(bind_dimension);
             current = child;
         }
-        Ok((current, OpType::Cv))
+        (current, OpType::Cv)
     }
 
     pub(super) fn compile_array_element_reference_source(
@@ -695,6 +710,15 @@ impl Compiler {
                         dynamic_owner,
                         line,
                     },
+                ))
+            }
+            Expr::ArrayAppendArgument { target, .. } => {
+                let (current, current_type) =
+                    self.compile_array_append_argument_reference(target, &[])?;
+                Ok((
+                    current,
+                    current_type,
+                    ForeachArrayWriteback::Variable(current),
                 ))
             }
             Expr::ArrayAccess { .. } => {
