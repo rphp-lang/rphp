@@ -1012,7 +1012,7 @@ impl Parser {
                 self.expect_lparen()?;
                 let array = self.parse_expr()?;
                 if !self.consume_as_keyword() {
-                    self.expect(&Token::As)?;
+                    self.expect(&Token::As(0))?;
                 }
                 // foreach ($arr as $key => $val), foreach ($arr as $val),
                 // and the corresponding destructuring value forms.
@@ -1027,29 +1027,30 @@ impl Parser {
                     None
                 };
                 let first_by_ref = first_reference_line.is_some();
-                if let Some(targets) = self.parse_foreach_destructure()? {
+                let first_target_position = self.pos;
+                let deferred_before_first_target = self.deferred_compile_error.clone();
+                let first = if let Some(targets) = self.parse_foreach_destructure()? {
                     if first_by_ref {
                         return Err("Foreach destructuring target cannot be a reference".into());
                     }
-                    if self.peek() == Token::DoubleArrow {
-                        return Err("Cannot use list as key element".to_string());
-                    }
-                    self.expect(&Token::RParen)?;
-                    let body = self.parse_control_body(Token::EndForeach)?;
-                   return Ok(Stmt::Foreach {
-                       line,
-                       array,
-                       value: ForeachTarget::Destructure(targets),
-                        key: None,
-                       by_ref: false,
-                       body,
-                   });
-               }
-                let first_expr = self.parse_foreach_target_expression()?;
-                let first = self.into_foreach_target(first_expr)?;
+                    ForeachTarget::Destructure(targets)
+                } else {
+                    let first_expr = self.parse_foreach_target_expression()?;
+                    self.into_foreach_target(first_expr)?
+                };
                 let (key, value, by_ref) = if self.peek() == Token::DoubleArrow {
-                   if let Some(line) = first_reference_line {
-                       let _ = self.compile_error("Key element cannot be a reference", line);
+                    let first = if matches!(&first, ForeachTarget::Destructure(_)) {
+                        self.deferred_compile_error = deferred_before_first_target;
+                        let first_target_line =
+                            self.closest_token_source_line_before(first_target_position);
+                        ForeachTarget::Target(
+                            self.compile_error("Cannot use list as key element", first_target_line),
+                        )
+                    } else {
+                        first
+                    };
+                    if let Some(line) = first_reference_line {
+                        let _ = self.compile_error("Key element cannot be a reference", line);
                     }
                     self.advance(); // consume '=>'
                     let by_ref = if self.peek() == Token::Ampersand {
@@ -1064,21 +1065,21 @@ impl Parser {
                                 "Foreach destructuring target cannot be a reference".into()
                             );
                         }
-                       ForeachTarget::Destructure(targets)
-                   } else {
+                        ForeachTarget::Destructure(targets)
+                    } else {
                         let value_expr = self.parse_foreach_target_expression()?;
                         self.into_foreach_target(value_expr)?
-                   };
+                    };
                     (Some(first), value, by_ref)
-               } else {
+                } else {
                     (None, first, first_by_ref)
-               };
+                };
                 self.expect(&Token::RParen)?;
                 let body = self.parse_control_body(Token::EndForeach)?;
                 Ok(Stmt::Foreach {
-                   line,
-                   array,
-                   value,
+                    line,
+                    array,
+                    value,
                     key,
                     by_ref,
                     body,

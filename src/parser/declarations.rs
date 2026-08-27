@@ -72,7 +72,7 @@ impl Parser {
         trait_name: Option<String>,
         method: String,
     ) -> Result<TraitAlias, String> {
-        self.expect(&Token::As)?;
+        self.expect(&Token::As(0))?;
         let mut is_final = false;
         let visibility = match self.peek() {
             Token::Public => Some(Visibility::Public),

@@ -15,7 +15,11 @@ impl Parser {
     }
 
     fn closest_token_source_line(&self) -> usize {
-        self.tokens[..self.pos]
+        self.closest_token_source_line_before(self.pos)
+    }
+
+    fn closest_token_source_line_before(&self, position: usize) -> usize {
+        self.tokens[..position]
             .iter()
             .rev()
             .find_map(|token| match token {
@@ -49,6 +53,7 @@ impl Parser {
                 | Token::Echo { line }
                 | Token::Return { line }
                 | Token::Foreach { line } => Some(*line),
+                Token::As(line) => Some(*line),
                 Token::New(line) | Token::Throw(line) => Some(*line as usize),
                 _ => None,
             })
@@ -228,7 +233,7 @@ impl Parser {
             Token::Do => Some("do".to_string()),
             Token::For => Some("for".to_string()),
             Token::Foreach { .. } => Some("foreach".to_string()),
-            Token::As => Some("as".to_string()),
+            Token::As(_) => Some("as".to_string()),
             Token::Switch => Some("switch".to_string()),
             Token::Case(_) => Some("case".to_string()),
             Token::Default(_) => Some("default".to_string()),
@@ -772,7 +777,7 @@ impl Parser {
     }
 
     fn consume_as_keyword(&mut self) -> bool {
-        let is_alias = self.peek() == Token::As
+        let is_alias = matches!(self.peek(), Token::As(_))
             || matches!(self.peek(), Token::Identifier(name, _) if name.eq_ignore_ascii_case("as"));
         if is_alias {
             self.advance();

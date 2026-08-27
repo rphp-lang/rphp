@@ -39,7 +39,7 @@ pub enum Token {
     Foreach {
         line: usize,
     }, // foreach
-    As,              // as
+    As(usize),       // as with source line
     Insteadof,       // insteadof (trait precedence adaptation)
     Isset,           // isset
     Empty,           // empty
@@ -852,7 +852,7 @@ impl<'a> Lexer<'a> {
                         "array" => tokens.push(Token::ArrayKw),
                         "foreach" => tokens.push(Token::Foreach { line }),
                         "endforeach" => tokens.push(Token::EndForeach),
-                        "as" => tokens.push(Token::As),
+                        "as" => tokens.push(Token::As(line)),
                         "insteadof" => tokens.push(Token::Insteadof),
                         "isset" => tokens.push(Token::Isset),
                         "empty" => tokens.push(Token::Empty),
