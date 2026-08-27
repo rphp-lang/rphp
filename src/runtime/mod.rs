@@ -18,6 +18,8 @@ use crate::parser::Visibility;
 use crate::value::{ClosureStaticVars, ObjectLayout, PhpArray, Value};
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::{Function, FunctionCommon};
+use crate::vm::instruction::OpType;
+use crate::vm::opcode::OpCode;
 use crate::vm::stack::VmStack;
 use crate::vm::stats;
 use crate::vm::virtual_aggregate_cache::{
@@ -3808,28 +3810,48 @@ impl ExecutorGlobals {
         class_name: &str,
         method_name: &str,
         is_static: bool,
-    ) -> *const FunctionCommon {
+        bind_lexical_static_properties: bool,
+    ) -> (*const FunctionCommon, bool) {
         // SAFETY: function-table pointers remain live for the ExecutorGlobals
         // lifetime and FunctionCommon is the first field of UserFunction. The
         // discriminant is checked before the enclosing cast is dereferenced.
         let source = unsafe {
             if (*source).fn_type != crate::vm::function::FunctionType::User {
-                return source;
+                return (source, false);
             }
             &*(source as *const crate::vm::function::UserFunction)
         };
-        if source.op_array.static_vars.is_empty() && !source.common.plan.has_no_discard_attribute()
+        let bind_lexical_static_properties = bind_lexical_static_properties
+            && source.op_array.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction.opcode,
+                    OpCode::FetchLateStaticProp | OpCode::AssignLateStaticProp
+                ) && instruction.op1_type == OpType::Const
+                    && source
+                        .op_array
+                        .literals
+                        .get(instruction.op1 as usize)
+                        .and_then(Value::as_str)
+                        .is_some_and(|owner| owner.eq_ignore_ascii_case("self"))
+            });
+        if source.op_array.static_vars.is_empty()
+            && !source.common.plan.has_no_discard_attribute()
+            && !bind_lexical_static_properties
         {
-            return &source.common;
+            return (&source.common, false);
         }
         let function = crate::compiler::clone_trait_method_with_static_storage(
             source,
             class_name,
             method_name,
             is_static,
+            bind_lexical_static_properties,
         );
         self.trait_static_functions.push(Box::new(function));
-        &self.trait_static_functions.last().unwrap().common
+        (
+            &self.trait_static_functions.last().unwrap().common,
+            bind_lexical_static_properties,
+        )
     }
 
     /// Register an ordinary compiled class immediately, or retain an
@@ -5477,7 +5499,6 @@ impl ExecutorGlobals {
         let trait_names = class_def.uses.clone();
         let mut composed_trait_constant_origins = std::collections::HashMap::new();
         let mut composed_trait_property_names = std::collections::HashMap::new();
-        let mut composed_static_trait_names = std::collections::HashSet::new();
         for trait_name in &trait_names {
             let trait_definition =
                 self.class_table
@@ -5527,15 +5548,12 @@ impl ExecutorGlobals {
                 let accepted_rebound_defaults = trait_rebound_defaults
                     .iter()
                     .filter(|rebound| {
-                        if rebound.is_static {
+                        (if rebound.is_static {
                             !own_static_names.contains(&rebound.definition.property_name)
-                                && !composed_static_trait_names
-                                    .contains(&rebound.definition.property_name)
                         } else {
                             !own_property_names.contains(&rebound.definition.property_name)
-                                && !composed_trait_property_names
-                                    .contains_key(&rebound.definition.property_name)
-                        }
+                        }) && !composed_trait_property_names
+                            .contains_key(&rebound.definition.property_name)
                     })
                     .cloned()
                     .collect::<Vec<_>>();
@@ -5611,6 +5629,7 @@ impl ExecutorGlobals {
                     &class_name,
                     trait_name,
                     &own_property_names,
+                    &own_static_names,
                     &mut composed_trait_property_names,
                     class_def.source_file.as_deref(),
                     class_def.declaration_line,
@@ -5619,7 +5638,10 @@ impl ExecutorGlobals {
                     if own_property_names.contains(&deferred.property_name)
                         || composed_trait_property_names
                             .get(&deferred.property_name)
-                            .is_none_or(|first_trait| !first_trait.eq_ignore_ascii_case(trait_name))
+                            .is_none_or(|origin| {
+                                origin.is_static
+                                    || !origin.trait_name.eq_ignore_ascii_case(trait_name)
+                            })
                     {
                         continue;
                     }
@@ -5638,7 +5660,10 @@ impl ExecutorGlobals {
                     &class_name,
                     trait_name,
                     &own_static_names,
-                    &mut composed_static_trait_names,
+                    &own_property_names,
+                    &mut composed_trait_property_names,
+                    class_def.source_file.as_deref(),
+                    class_def.declaration_line,
                 )?;
                 for mut rebound in accepted_rebound_defaults {
                     if !class_def.is_trait && !rebound.is_static {
@@ -5684,23 +5709,29 @@ impl ExecutorGlobals {
                     .collect();
                 for (method_name, func_ptr, is_static) in trait_methods {
                     if !child_method_names.contains(&method_name) {
-                        let func_ptr = self.compose_trait_method_pointer(
-                            func_ptr,
-                            &class_name,
-                            &method_name,
-                            is_static,
-                        );
+                        let (func_ptr, bound_lexical_static_properties) = self
+                            .compose_trait_method_pointer(
+                                func_ptr,
+                                &class_name,
+                                &method_name,
+                                is_static,
+                                !class_def.is_trait,
+                            );
                         let child_full = format!("{}::{}", class_name, method_name).to_lowercase();
                         self.function_table.insert(child_full, func_ptr);
-                        // Keep the concrete body owner stable. A single trait
-                        // function pointer can be composed into many classes;
-                        // overwriting this reverse map with the last consumer
-                        // makes lexical private scope registration-order
-                        // dependent. Call frames recover the actual consuming
-                        // class from `$this` when the owner is a trait.
+                        // A specialized trait function is unique to this
+                        // concrete composer, so publish that lexical owner
+                        // directly. Shared pointers retain their trait owner
+                        // and recover the active composer from the call frame.
+                        let declaring_class =
+                            if !class_def.is_trait && bound_lexical_static_properties {
+                                &class_name
+                            } else {
+                                trait_name
+                            };
                         self.method_declaring_class
                             .entry(func_ptr)
-                            .or_insert_with(|| trait_name.clone());
+                            .or_insert_with(|| declaring_class.clone());
                     }
                 }
             } else {
@@ -5756,12 +5787,23 @@ impl ExecutorGlobals {
                         })
                 })
                 .unwrap_or(false);
-            let pointer = self.compose_trait_method_pointer(pointer, &class_name, alias, is_static);
+            let (pointer, bound_lexical_static_properties) = self.compose_trait_method_pointer(
+                pointer,
+                &class_name,
+                alias,
+                is_static,
+                !class_def.is_trait,
+            );
             self.function_table
                 .insert(format!("{}::{}", class_name, alias).to_lowercase(), pointer);
+            let declaring_class = if !class_def.is_trait && bound_lexical_static_properties {
+                &class_name
+            } else {
+                source_trait
+            };
             self.method_declaring_class
                 .entry(pointer)
-                .or_insert_with(|| source_trait.clone());
+                .or_insert_with(|| declaring_class.clone());
         }
 
         // Interface constants are inherited without being copied into source
@@ -6970,7 +7012,12 @@ impl ExecutorGlobals {
     /// Get the class_id for a given class name. Returns 0 if not found.
     #[inline]
     pub fn class_id_of(&self, class_name: &str) -> u32 {
-        self.class_table.get(class_name).map_or(0, |cd| cd.class_id)
+        let class_name = class_name.strip_prefix('\\').unwrap_or(class_name);
+        self.class_table
+            .get(class_name)
+            .map(|class| class.class_id)
+            .or_else(|| self.find_class(class_name).map(|class| class.class_id))
+            .unwrap_or(0)
     }
 
     /// Resolve one immutable constant in the flattened class-like table.
@@ -7012,7 +7059,10 @@ impl ExecutorGlobals {
         receiver_class: &str,
         trait_name: &str,
     ) -> Option<&'a str> {
-        let definition = self.class_table.get(receiver_class)?;
+        // Dispatch preserves the source spelling used at the call site, while
+        // PHP class identity is case-insensitive. Resolve that spelling before
+        // walking the canonical inheritance/composition chain.
+        let definition = self.find_class(receiver_class)?;
         self.trait_composition_scope_from_definition(definition, trait_name)
     }
 

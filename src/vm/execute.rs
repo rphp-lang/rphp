@@ -207,10 +207,88 @@ unsafe fn proven_scalar_op_ptr(
     }
 }
 
-/// Get the current caller's **lexical** (declaring) class name from the frame.
+/// Get the current caller's **lexical** (declaring) class ID from the frame.
 /// Uses the `method_declaring_class` map on EG rather than runtime $this,
 /// so that `private` checks use the class that defines the code, not the
-/// dynamic receiver.  Returns None if in top-level code or a plain function.
+/// dynamic receiver. Returns zero in top-level code or a plain function.
+#[inline]
+fn caller_class_id(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> u32 {
+    if frame.is_null() {
+        return 0;
+    }
+    // SAFETY: callers pass the live executing frame. Its function pointer and
+    // compiler-sized CV range remain valid for this non-reentrant scope probe.
+    unsafe {
+        let func = (*frame).func;
+        if func.is_null() {
+            return 0;
+        }
+        if let Some(class) = eg.declaring_class_of(func) {
+            let is_trait = eg
+                .class_table
+                .get(class)
+                .is_some_and(|definition| definition.is_trait);
+            if !is_trait {
+                return eg.class_id_of(class);
+            }
+
+            // Calls that selected an ancestor's trait composition publish the
+            // exact dispatch class in the compiler-reserved activation TMP.
+            // Prefer it over the dynamic receiver, which may remain a child
+            // object and would otherwise make `parent` recurse into the same
+            // composition.
+            if (*func).fn_type == FunctionType::User {
+                let function = &*(func as *const UserFunction);
+                if let Some(scope_tmp) = function.op_array.trait_class_scope_tmp {
+                    let scope = &*(*frame).slot_ptr(scope_tmp as u32);
+                    if let Some(scope) = scope.as_str() {
+                        return eg.class_id_of(scope);
+                    }
+                }
+            }
+
+            // Trait op arrays are shared by every consuming class. Their lexical
+            // visibility scope is the nearest class that composed the trait, not
+            // whichever consumer happened to register last.
+            let receiver_class = if (*frame).num_cvs == 0 {
+                None
+            } else {
+                let receiver = (*frame).cv(0);
+                (receiver.value_type() == ValueType::Object)
+                    .then(|| receiver.object_class_name_unchecked().to_string())
+            };
+            if let Some(receiver_class) = receiver_class
+                && let Some(scope) = eg.trait_composition_scope(&receiver_class, class)
+            {
+                return eg.class_id_of(scope);
+            }
+            let embedded = frame_embedded_late_static_class_id(frame);
+            let called_class_id = if embedded != 0 {
+                embedded
+            } else {
+                eg.late_static_scope_class_id(frame as usize)
+            };
+            if let Some(called_class) = eg.class_by_id(called_class_id)
+                && let Some(scope) = eg.trait_composition_scope(&called_class.name, class)
+            {
+                return eg.class_id_of(scope);
+            }
+        }
+    }
+
+    // Closure::bind() may assign a lexical visibility scope to a closure that
+    // was declared outside any class. Dynamic-closure initialization publishes
+    // that explicit scope on the closure frame; do not recover a class from an
+    // ordinary caller here, because plain functions never inherit visibility.
+    let embedded = frame_embedded_late_static_class_id(frame);
+    let class_id = if embedded != 0 {
+        embedded
+    } else {
+        eg.late_static_scope_class_id(frame as usize)
+    };
+    class_id
+}
+
 #[inline]
 fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<String> {
     if frame.is_null() {
@@ -232,11 +310,6 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
                 return Some(class.to_string());
             }
 
-            // Calls that selected an ancestor's trait composition publish the
-            // exact dispatch class in the compiler-reserved activation TMP.
-            // Prefer it over the dynamic receiver, which may remain a child
-            // object and would otherwise make `parent` recurse into the same
-            // composition.
             if (*func).fn_type == FunctionType::User {
                 let function = &*(func as *const UserFunction);
                 if let Some(scope_tmp) = function.op_array.trait_class_scope_tmp {
@@ -247,9 +320,6 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
                 }
             }
 
-            // Trait op arrays are shared by every consuming class. Their lexical
-            // visibility scope is the nearest class that composed the trait, not
-            // whichever consumer happened to register last.
             let receiver_class = if (*frame).num_cvs == 0 {
                 None
             } else {
@@ -265,10 +335,6 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
         }
     }
 
-    // Closure::bind() may assign a lexical visibility scope to a closure that
-    // was declared outside any class. Dynamic-closure initialization publishes
-    // that explicit scope on the closure frame; do not recover a class from an
-    // ordinary caller here, because plain functions never inherit visibility.
     let embedded = frame_embedded_late_static_class_id(frame);
     let class_id = if embedded != 0 {
         embedded

@@ -803,10 +803,10 @@ class C {
 }
 
 #[test]
-fn trait_property_class_overrides_trait() {
-    // Class's own property always takes precedence over trait's
-    let out = run_php(
-        r#"<?php
+fn incompatible_class_and_trait_properties_are_rejected() {
+    let result = std::panic::catch_unwind(|| {
+        run_php(
+            r#"<?php
 trait T1 { public $x = 10; }
 class C {
     use T1;
@@ -815,8 +815,12 @@ class C {
 $c = new C();
 echo $c->x;
 "#,
+        )
+    });
+    assert!(
+        result.is_err(),
+        "Expected panic from incompatible class and trait properties"
     );
-    assert_eq!(out, "99");
 }
 
 #[test]

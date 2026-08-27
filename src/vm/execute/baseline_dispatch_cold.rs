@@ -2889,12 +2889,12 @@ fn static_property_class_id<const LATE_STATIC: bool>(
         if opline._pad & LATE_STATIC_PROP_EMBEDDED_SCOPE != 0 {
             unsafe { ((*frame).heap_bitmap >> 32) as u32 }
         } else if raw_class.eq_ignore_ascii_case("parent") {
-            eg.class_by_id(late_static_call_class_id(eg, frame))
+            eg.class_by_id(caller_class_id(frame, eg))
                 .and_then(|class| class.parent.as_deref())
                 .map_or(0, |parent| eg.class_id_of(parent))
-        } else if raw_class.eq_ignore_ascii_case("static")
-            || raw_class.eq_ignore_ascii_case("self")
-        {
+        } else if raw_class.eq_ignore_ascii_case("self") {
+            caller_class_id(frame, eg)
+        } else if raw_class.eq_ignore_ascii_case("static") {
             late_static_call_class_id(eg, frame)
         } else {
             eg.class_id_of(raw_class)

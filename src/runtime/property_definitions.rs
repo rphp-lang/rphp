@@ -559,6 +559,31 @@ fn property_definitions_are_compatible(
         }
 }
 
+#[derive(Clone)]
+struct ComposedTraitPropertyOrigin {
+    trait_name: String,
+    is_static: bool,
+}
+
+#[cold]
+#[inline(never)]
+fn incompatible_trait_property_error(
+    first_owner: &str,
+    second_owner: &str,
+    property: &str,
+    class_name: &str,
+    source_file: Option<&str>,
+    declaration_line: usize,
+) -> String {
+    let location = source_file.map_or_else(String::new, |file| {
+        format!(" in {file} on line {declaration_line}")
+    });
+    format!(
+        "{first_owner} and {second_owner} define the same property (${property}) in the composition of {class_name}. \
+         However, the definition differs and is considered incompatible. Class was composed{location}"
+    )
+}
+
 fn validate_inherited_property_definition(
     eg: &ExecutorGlobals,
     child: &PropertyDefinition,
@@ -751,21 +776,61 @@ fn merge_trait_static_property_definitions(
     class_name: &str,
     trait_name: &str,
     own_names: &std::collections::HashSet<String>,
-    composed_names: &mut std::collections::HashSet<String>,
+    own_instance_names: &std::collections::HashSet<String>,
+    composed_names: &mut std::collections::HashMap<String, ComposedTraitPropertyOrigin>,
+    source_file: Option<&str>,
+    declaration_line: usize,
 ) -> Result<(), String> {
     debug_assert_eq!(target.len(), target_slots.len());
     for property in source {
         let existing = target
             .iter()
             .position(|candidate| candidate.name == property.name);
-        if own_names.contains(&property.name) || composed_names.contains(&property.name) {
+        if own_instance_names.contains(&property.name) {
+            return Err(incompatible_trait_property_error(
+                class_name,
+                trait_name,
+                &property.name,
+                class_name,
+                source_file,
+                declaration_line,
+            ));
+        }
+        if own_names.contains(&property.name) {
             let index = existing.expect("own/composed static property definition");
             let existing_property = &target[index];
             if !property_definitions_are_compatible(existing_property, property) {
-                return Err(format!(
-                    "{} and {} define the same property (${}) in the composition of {}. \
-                     However, the definition differs and is considered incompatible",
-                    existing_property.declaring_class, trait_name, property.name, class_name
+                return Err(incompatible_trait_property_error(
+                    class_name,
+                    trait_name,
+                    &property.name,
+                    class_name,
+                    source_file,
+                    declaration_line,
+                ));
+            }
+            continue;
+        }
+        if let Some(first) = composed_names.get(&property.name) {
+            if !first.is_static {
+                return Err(incompatible_trait_property_error(
+                    &first.trait_name,
+                    trait_name,
+                    &property.name,
+                    class_name,
+                    source_file,
+                    declaration_line,
+                ));
+            }
+            let index = existing.expect("composed static property definition");
+            if !property_definitions_are_compatible(&target[index], property) {
+                return Err(incompatible_trait_property_error(
+                    &first.trait_name,
+                    trait_name,
+                    &property.name,
+                    class_name,
+                    source_file,
+                    declaration_line,
                 ));
             }
             continue;
@@ -780,14 +845,27 @@ fn merge_trait_static_property_definitions(
         definition.type_scope = class_name.to_string();
         if let Some(index) = existing {
             // A first trait declaration in this class overrides inherited
-            // metadata and receives a fresh storage slot.
-            target[index] = definition;
-            target_slots[index] = None;
+            // metadata and receives a fresh storage slot. An inherited private
+            // declaration is a distinct slot, so retain it behind the new
+            // child-scoped declaration just like an explicit child property.
+            if target[index].visibility == Visibility::Private {
+                target.insert(index, definition);
+                target_slots.insert(index, None);
+            } else {
+                target[index] = definition;
+                target_slots[index] = None;
+            }
         } else {
             target.push(definition);
             target_slots.push(None);
         }
-        composed_names.insert(property.name.clone());
+        composed_names.insert(
+            property.name.clone(),
+            ComposedTraitPropertyOrigin {
+                trait_name: trait_name.to_string(),
+                is_static: true,
+            },
+        );
     }
     Ok(())
 }
@@ -800,7 +878,8 @@ fn merge_trait_property_definitions(
     class_name: &str,
     trait_name: &str,
     own_names: &std::collections::HashSet<String>,
-    composed_names: &mut std::collections::HashMap<String, String>,
+    own_static_names: &std::collections::HashSet<String>,
+    composed_names: &mut std::collections::HashMap<String, ComposedTraitPropertyOrigin>,
     source_file: Option<&str>,
     declaration_line: usize,
 ) -> Result<(), String> {
@@ -808,6 +887,16 @@ fn merge_trait_property_definitions(
         let existing = target
             .iter()
             .position(|candidate| candidate.name == property.name);
+        if own_static_names.contains(&property.name) {
+            return Err(incompatible_trait_property_error(
+                class_name,
+                trait_name,
+                &property.name,
+                class_name,
+                source_file,
+                declaration_line,
+            ));
+        }
         if own_names.contains(&property.name) {
             let existing_property = &target[existing.expect("own property definition")];
             if existing_property.has_get_hook
@@ -824,12 +913,31 @@ fn merge_trait_property_definitions(
                     property.name
                 ));
             }
-            // Preserve the existing class-over-trait behavior. Compatibility
-            // of an explicit class declaration is handled by the declaration
-            // validation path.
+            if !property_definitions_are_compatible(existing_property, property) {
+                return Err(incompatible_trait_property_error(
+                    class_name,
+                    trait_name,
+                    &property.name,
+                    class_name,
+                    source_file,
+                    declaration_line,
+                ));
+            }
+            // Compatible class declarations retain their source metadata and
+            // storage while satisfying the trait declaration.
             continue;
         }
-        if let Some(first_trait) = composed_names.get(&property.name) {
+        if let Some(first) = composed_names.get(&property.name) {
+            if first.is_static {
+                return Err(incompatible_trait_property_error(
+                    &first.trait_name,
+                    trait_name,
+                    &property.name,
+                    class_name,
+                    source_file,
+                    declaration_line,
+                ));
+            }
             let existing_property = &target[existing.expect("composed trait property")];
             if existing_property.has_get_hook
                 || existing_property.has_set_hook
@@ -840,17 +948,21 @@ fn merge_trait_property_definitions(
                     format!(" in {file} on line {declaration_line}")
                 });
                 return Err(format!(
-                    "{first_trait} and {trait_name} define the same hooked property (${}) in the composition of {class_name}. \
+                    "{} and {trait_name} define the same hooked property (${}) in the composition of {class_name}. \
                      Conflict resolution between hooked properties is currently not supported. Class was composed{location}",
+                    first.trait_name,
                     property.name
                 ));
             }
             let compatible = property_definitions_are_compatible(existing_property, property);
             if !compatible {
-                return Err(format!(
-                    "{} and {} define the same property (${}) in the composition of {}. \
-                     However, the definition differs and is considered incompatible",
-                    first_trait, trait_name, property.name, class_name
+                return Err(incompatible_trait_property_error(
+                    &first.trait_name,
+                    trait_name,
+                    &property.name,
+                    class_name,
+                    source_file,
+                    declaration_line,
                 ));
             }
             continue;
@@ -861,12 +973,23 @@ fn merge_trait_property_definitions(
         addition.type_scope = class_name.to_string();
         if let Some(index) = existing {
             // The first trait declaration in this class replaces inherited
-            // metadata, just as the static-property composition path does.
-            target[index] = addition;
+            // metadata. Inherited private storage remains an independent
+            // parent slot and stays behind the new child-scoped declaration.
+            if target[index].visibility == Visibility::Private {
+                target.insert(index, addition);
+            } else {
+                target[index] = addition;
+            }
         } else {
             target.push(addition);
         }
-        composed_names.insert(property.name.clone(), trait_name.to_string());
+        composed_names.insert(
+            property.name.clone(),
+            ComposedTraitPropertyOrigin {
+                trait_name: trait_name.to_string(),
+                is_static: false,
+            },
+        );
     }
     Ok(())
 }

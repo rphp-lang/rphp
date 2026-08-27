@@ -6063,6 +6063,7 @@ pub fn clone_trait_method_with_static_storage(
     class_name: &str,
     method_name: &str,
     is_static: bool,
+    bind_lexical_static_properties: bool,
 ) -> UserFunction {
     let source_op = &source.op_array;
     let method_name = source_op
@@ -6097,10 +6098,38 @@ pub fn clone_trait_method_with_static_storage(
         ip_to_block: Vec::new(),
     };
     let storage_name = op_array.name.clone();
-    for instruction in &op_array.instructions {
+    let mut bound_class_literal = None;
+    for instruction in &mut op_array.instructions {
         if matches!(instruction.opcode, OpCode::CheckStatic | OpCode::BindStatic) {
             op_array.literals[instruction.extended_value as usize] =
                 Value::string(storage_name.clone());
+        }
+        if bind_lexical_static_properties
+            && matches!(
+                instruction.opcode,
+                OpCode::FetchLateStaticProp | OpCode::AssignLateStaticProp
+            )
+            && instruction.op1_type == OpType::Const
+            && source_op
+                .literals
+                .get(instruction.op1 as usize)
+                .and_then(Value::as_str)
+                .is_some_and(|owner| owner.eq_ignore_ascii_case("self"))
+        {
+            let literal = *bound_class_literal.get_or_insert_with(|| {
+                let literal = op_array.literals.len() as u16;
+                op_array
+                    .literals
+                    .push(Value::string(class_name.to_string()));
+                literal
+            });
+            instruction.op1 = literal;
+            instruction.opcode = match instruction.opcode {
+                OpCode::FetchLateStaticProp => OpCode::FetchStaticProp,
+                OpCode::AssignLateStaticProp => OpCode::AssignStaticProp,
+                _ => unreachable!(),
+            };
+            instruction._pad &= !LATE_STATIC_PROP_EMBEDDED_SCOPE;
         }
     }
     op_array.compute_blocks();
