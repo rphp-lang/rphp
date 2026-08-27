@@ -8,49 +8,46 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
-`trait-kind-declaration-instantiation-validation`, pinned to php-src 8.5 commit
-`fcc29c8` and validated against PHP 8.5.9. Trait declarations now reject
-`extends` and `implements` at PHP's parser boundary with exact token wording
-and location. A trait `use` inside an interface reaches the distinct compile
-fatal boundary, naming the first trait, interface and use line. Class linking
-resolves parent identity case-insensitively and rejects a trait parent before
-publishing the child.
+`trait-method-prototype-semantics`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. Effective trait declarations now participate in
+class linking without entering the callable table: a renamed abstract method
+remains an independent consumer-owned requirement, while a concrete trait
+override is checked against the parent signature and reports the trait's real
+source file and line.
 
-Direct construction and all three ReflectionClass construction APIs now throw
-the same catchable, origin-bearing `Error` for traits, interfaces, abstract
-classes and enums, with the declaration's canonical name. ReflectionClass's
-`newInstance`, `newInstanceArgs` and `newInstanceWithoutConstructor` display
-their PHP casing in traces while their lookup remains case-insensitive. The
-ordinary cached object-construction path is unchanged; kind validation remains
-on cold resolution and Reflection construction boundaries.
+Protected instance calls now recover the oldest non-private declaration in
+their override family on the cold cache-miss path. Class and trait overrides
+therefore remain accessible between sibling branches that share a prototype;
+an abstract trait requirement preserves an inherited prototype and a private
+ancestor still terminates the family. The warmed method-call cache and public
+dispatch path are unchanged.
 
-Five original CLI regressions cover both invalid trait relationship clauses,
-interface trait use, case-insensitive trait parenting, direct catchable
-construction, and both Reflection construction forms. All six selected trait
-cases now pass: `bug55524.phpt`, `bugs/interfaces.phpt`, `bug60145.phpt`,
-`error_007.phpt`, `bug60173.phpt` and `error_009.phpt`. Four adjacent cases
-also move to pass through the shared Reflection boundary:
-`arginfo_zpp_mismatch.phpt`, `arginfo_zpp_mismatch_strict.phpt`,
-`enum/no-new-through-reflection.phpt` and `weakrefs/notify.phpt`. Zend/lang
-therefore moves exactly `+10/-0`. The complete 216-case trait neighborhood
-moves from 198 to 204 pass, with six output, one parse and three runtime
-failures, one extension skip and one unsupported case; no other status or
-category moves. The focused and neighborhood manifests hash to
-`927bc602fb433e5136c36655f6224b57186109296839285a9099db4c1a60b1f7`
-and `2d3e19566c0d365295c4cc8508a4379de16295a5dba181b69363aaeb29b40db6`.
+Five original CLI regressions cover renamed abstract requirements, included
+trait source diagnostics, class and trait sibling overrides, inherited
+requirements and the private boundary. All four selected trait cases pass:
+`bug69084.phpt`, `bug81192.phpt`, `gh14009_001.phpt` and `gh14009_004.phpt`.
+The same mechanism also moves `inheritance/grandparent_prototype.phpt` to pass,
+so Zend/lang gains `+5/-0`. The complete 216-case trait neighborhood moves
+from 204 to 208 pass, leaving five output failures, one parse failure, one skip
+and one unsupported case. The focused and neighborhood manifests hash to
+`2ec8cd53d1fa96d40142ecf05febe1d521f360d4a3e3ddc56a5b9b7048f1edd6`
+and `6b813ae2d69864dfb8d5eb389f638f8e6cbd93b5d4cfa3ec69587ffd43649cf4`.
 
-The complete combined audit covers 7,174 cases: 5,863 pass, 917 fail, 182
-skip, 212 unsupported and no timeout or crash. Strings remain 631 pass, 18
-fail, 54 skip and 30 unsupported; array remains 828 pass, zero fail, 13 skip
-and one unsupported. Zend/lang moves from 4,394 to 4,404 pass, with 899
-failures, 115 skips and 181 unsupported cases. Two exact-final-binary Zend/lang
-runs have byte-identical manifests and summaries, whose SHA-256 values are
-respectively
-`e000765b908f191b73e942b8b861335564107b8d7d357f9997a290bb6060edd3`
-and `62ff441a2fec911399d3af2ff130a3eb67cf1c11049449a496ed4aed68972527`.
-Repeated serial strings-and-array status/category projections are
-byte-identical to the exact parent and hash to
-`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`.
+Two remaining inheritance failures advance without becoming passes:
+`bug37632.phpt` now reaches its later protected-constructor output difference,
+and `bug70957.phpt` reaches the correct trait-override link fatal but still
+renders an unresolved `self::class` default. No prior pass is lost. The
+complete combined audit covers 7,174 cases: 5,868 pass, 912 fail, 182 skip,
+212 unsupported and no timeout or crash. Strings remain 631 pass and 18 fail;
+array remains 828 pass and zero fail; Zend/lang moves from 4,404 to 4,409 pass,
+with 894 failures, 115 skips and 181 unsupported cases. Two exact-final-binary
+Zend/lang runs have byte-identical manifests and summaries, whose SHA-256
+values are respectively
+`9381dcb18dc6ea50ff06f1631a9e5c85df148d3bea5099e894103c152520813d`
+and `ef1417938b21a9ca7afeb280f5e0f36d1abd74a08de7cd43a8d59605fd36a2fc`.
+Repeated serial strings-and-array status/category projections match the exact
+parent and hash to
+`5b4995bb334b9096bb5020bb499ef9651e18bb56cfc126ff640dd522714e2e54`.
 
 All five Cargo feature configurations, locked all-feature/all-target,
 formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
@@ -58,36 +55,51 @@ Production remains at the 1,623 unsafe-block ceiling, with 289 unsafe
 functions, 368 SAFETY annotations and seven `# Safety` sections. Composer
 2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
 cold-build S3 pass. The change adds no dependency, unsafe block, opcode or
-persistent layout field.
+persistent runtime layout field.
 
 Two exact-final-binary CPU-2-pinned, performance-governor, order-balanced
 32-pair release runs with four warmups compare retained parent SHA-256
-`5c19f9a8666ec14fe0a16405a1c73e594a126dafe4826c0310141b85c205d1dd`
+`4ca1789ddf10b6297f3116e88ff4f8c9dfeb8aa4970c59a142518193ff35b4d1`
 with candidate
-`4ca1789ddf10b6297f3116e88ff4f8c9dfeb8aa4970c59a142518193ff35b4d1`.
-Paired medians are -0.836%/-0.772% for 100 startups,
--0.142%/-0.132% for 500 class-hierarchy links,
--0.187%/-0.037% for 500 trait-consumer links,
-+0.337%/-0.373% for one million ordinary object constructions and
-+1.010%/+1.153% for 200,000 Reflection constructions without a constructor.
+`230932bc84a5d025cd3013c99a0e0511dcdd4a3887a454bcc8a63881f34ed4dd`.
+Paired medians are +0.132%/+0.048% for 100 startups,
+-0.085%/-0.185% for 500 class-hierarchy links,
+-0.274%/-0.360% for 500 trait-consumer links,
++0.567%/+0.457% for one million ordinary object constructions and
++0.003%/+0.634% for 200,000 Reflection constructions without a constructor.
 Comparable outputs match and every paired median remains below +3%. The
 benchmark harness hashes to
 `11bc1680b8d73d3eb938fdf342ea9ab0db80c3a8a52f3c4c6fd2707e79fc8b26`;
 the complete observation streams hash to
-`eb4d955a152c196c77bc3ae9f0aac386c11bbc154018f300ea5691e5ff08c916`
-and `e87966809c5912bcf7dce4561d52c88e3dce36e5f2a1ccb0a3a0d6dae34c4aac`.
+`89e7c0bcd326692807af789b7ff456cdc08103366916f3eb7485d208818535d6`
+and `8f02a4bb058b01ece2a70e260c2a55ae403bc6b128229cd638c681b03e1a9445`.
 
-This checkpoint does not claim abstract trait requirement aliases, inherited
-method-prototype visibility, trait method source-location contracts, direct
-static trait-member deprecations, trait-constant doc comments or the remaining
-trait identity operations. The monitored supported debt is now 917 failures:
-18 strings, zero array and 899 Zend/lang. Read-only actual/expected clustering
-selects four trait method-prototype cases next: renamed abstract requirements,
-inherited protected access and trait-sourced override diagnostics.
+This checkpoint does not claim direct static trait-member deprecations,
+trait-constant doc comments, aliased trait enumeration, reserved `static`
+adaptation owners, legacy Serializable output or the remaining Reflection
+metadata. The monitored supported debt is now 912 failures: 18 strings, zero
+array and 894 Zend/lang. Read-only clustering selects five direct static
+trait-member deprecation cases next across property, method, magic-call,
+first-class-callable and typed-property boundaries.
 
-The implementation checkpoint is commit `53e955c0`.
+The implementation checkpoint is commit `69db49f1`.
 
 The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
+`trait-kind-declaration-instantiation-validation`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. Trait declarations reject `extends`
+and `implements` at PHP's parser boundary, interface trait use reaches its
+distinct compile fatal, and case-insensitive class linking rejects trait
+parents before publication. Direct construction and all ReflectionClass
+construction forms share catchable, kind-specific errors with canonical names.
+
+Five original CLI regressions cover relationship clauses, interface trait use,
+case-insensitive trait parenting and direct plus Reflection construction. Six
+selected and four adjacent cases move Zend/lang from 4,394 to 4,404 pass,
+exactly `+10/-0`. The complete combined audit at that checkpoint records 5,863
+passes and 917 supported failures. All required Cargo, static, framework and
+performance gates pass. The implementation checkpoint is commit `53e955c0`.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is
 `trait-property-composition-semantics`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. Class and trait properties now compose only
 when their visibility, static/instance kind, type, readonly/final flags, hooks

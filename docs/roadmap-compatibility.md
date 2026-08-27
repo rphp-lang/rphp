@@ -3737,11 +3737,32 @@ and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-2-pinned 32-pair runs keep
 startup, class/trait links, ordinary object construction and Reflection
 construction below +3%, with matching outputs.
 
-The monitored supported debt is now 917 failures: 18 strings, zero array and
-899 Zend/lang. Read-only actual/expected clustering selects four trait
-method-prototype failures next: renamed abstract requirements, inherited
-protected access and trait-sourced override diagnostics. They share effective
-prototype ownership across trait composition and inheritance.
+The `69db49f1` `trait-method-prototype-semantics` checkpoint then moves
+Zend/lang from 4,404 to 4,409 pass, `+5/-0`; the fifth pass is the adjacent
+`inheritance/grandparent_prototype.phpt`. Renamed abstract trait methods remain
+consumer-owned link requirements, concrete trait methods participate in parent
+signature validation with their original source location, and protected
+sibling access follows the oldest non-private method prototype. Private
+ancestors terminate the family and abstract trait requirements preserve an
+inherited implementation. Five original CLI regressions cover these positive
+and negative boundaries.
+
+No prior pass is lost. Two known failures advance stage: `bug37632.phpt`
+reaches its later protected-constructor output difference, while
+`bug70957.phpt` reaches trait-override link validation and remains blocked by
+default-value rendering of `self::class`. Two exact-final-binary Zend/lang
+audits have byte-identical manifests and summaries; repeated serial
+strings/array outcome projections also match the exact parent. All five Cargo
+configurations, all-feature/all-target, formatting, HTML data, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Two
+exact-final-binary CPU-2-pinned 32-pair runs keep startup, class/trait links,
+ordinary object construction and Reflection construction below +3%, with
+matching outputs.
+
+The monitored supported debt is now 912 failures: 18 strings, zero array and
+894 Zend/lang. Read-only clustering selects five direct static trait-member
+deprecation failures next across property, method, magic-call,
+first-class-callable and typed-property boundaries.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
