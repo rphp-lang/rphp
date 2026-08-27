@@ -8,6 +8,92 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`final-trait-serializable-boundaries`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.9. The deprecated `Serializable` protocol now
+uses an effective trait-composed `serialize()` method to emit PHP's `C:` custom
+payload and calls `unserialize()` on round-trip. The behavior also follows
+inherited classes and subinterfaces. A modern `__serialize()`/`__unserialize()`
+pair retains precedence, a null legacy payload emits `N;` without publishing a
+later object reference, invalid return values raise `Exception`, and thrown
+hook exceptions propagate unchanged. The existing PHP 8.5 declaration
+deprecation remains at the concrete class boundary.
+
+The left owner in a trait precedence rule now diagnoses reserved
+`static::method` as a trait name at PHP's deferred compile-fatal boundary and
+uses the containing `use` declaration's source line. Unqualified semi-reserved
+method names and valid qualified, namespace-relative and right-hand
+`insteadof` forms retain their existing grammar.
+
+Original regressions cover direct, inherited and subinterface legacy methods,
+modern-hook precedence, round-trip dispatch, repeated null identity, invalid
+return values and both sides of a trait precedence rule. The two supplying
+trait cases and one adjacent serialization case now pass:
+`Zend/tests/traits/interface_003.phpt`,
+`Zend/tests/traits/static_in_trait_insteadof_reference.phpt` and
+`Zend/tests/serialize/bug64354.phpt`. Zend/lang gains exactly `+3/-0`, from
+4,416 to 4,419 pass. Its two exact-final-binary 5,599-case runs each record
+4,419 pass, 884 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Their manifests are byte-identical at SHA-256
+`24c0f4912cda79700cf5781cbd2b20fed9666e261554219ecf2447524a16731a`;
+their summaries hash to
+`3f912880f92feb0def4134e9fd5de82cd0da3e2978dc17ef48ab804bc9640ef5`.
+The focused three-case manifest hashes to
+`41912cba9ccbb4e01f4b10f8126eb61bb7238b64f3691000c0a934760f131334`.
+
+The complete 216-case trait neighborhood is now 214 pass, one skip and one
+unsupported, with zero ordinary failure. A broader 1,033-case trait,
+serialization, magic-method, enum, lazy-object, readonly and property-hook
+neighborhood has 921 pass, 91 fail, 11 skip and ten unsupported; the same three
+selected paths are its only status/category changes from the exact parent.
+
+The serial array/string audit remains 1,459 pass, 18 fail, 67 skip and 31
+unsupported across 1,575 cases. Its repeated status/category projection and
+the exact parent's projection all remain byte-identical at SHA-256
+`5b4995bb334b9096bb5020bb499ef9651e18bb56cfc126ff640dd522714e2e54`.
+The combined audit therefore covers 7,174 cases: 5,878 pass, 902 fail, 182
+skip and 212 unsupported, with no timeout or crash. The supported debt is 18
+strings failures, zero array failures and 884 Zend/lang failures.
+
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at the 1,623 unsafe-block ceiling, with 289 unsafe
+functions, 370 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass. The change adds no dependency, unsafe block, opcode or
+persistent runtime layout field.
+
+Two exact-final-binary CPU-2-pinned, performance-governor, order-balanced
+32-pair release runs with four warmups compare retained parent SHA-256
+`c5cf80f1baa08f48449f7d0fa90df558731861ac20a70ce2c7eab336e100dbe3`
+with candidate
+`e78067c893bd41abbfa1baf489fcad39a76f3e547af110173a44bb623ad52a8a`.
+Paired medians are -6.064%/-6.359% for 100 startups,
+-0.357%/-0.200% for 300 valid trait-adaptation links,
++0.331%/-2.186% for 100,000 ordinary object serializations,
+-0.757%/-1.142% for 50,000 modern-hook serializations and
+-0.755%/-1.140% for 50,000 legacy custom-payload unserializations. Comparable
+outputs match and every paired median remains below +3%. The benchmark harness
+hashes to
+`4c38ae0c946f8b8caeaa0275ba7ca96bbfb87a648af98cc8b0d801b5ebdc9841`;
+the complete observation streams hash to
+`903be10517463009bb7c5755d89c86882850d01c5381562b7469375a11c65219`
+and `102ba75b1ecbeaf85a65f65bfdd915dd0520fc225eb33def5abc34b951939351`.
+An initial recursive interface check on every ordinary serialization was
+rejected after a pilot exposed a double-digit regression. The accepted path
+uses the object's existing class ID for an O(1) no-relationship guard and
+enters recursive `Serializable` resolution only for classes with a parent or
+interface edge.
+
+This checkpoint does not claim binary legacy payloads, malformed custom-object
+payload equivalence, anonymous-class serialization rejection, typed-property
+validation during unserialize, incomplete-object mutation, array-next-index
+overflow or `SplFixedArray`. Read-only clustering selects the two-case cold
+serialization rejection boundary next:
+`Zend/tests/serialize/bug69761.phpt` and `bug70253.phpt`.
+
+The implementation checkpoint is commit `d3d6a0fe`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `trait-metadata-preservation`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. A trait constant's doc comment is now visible
 through `ReflectionClassConstant::getDocComment()` both on the trait and after
@@ -82,7 +168,7 @@ policy. Read-only clustering selects the two remaining trait failures next:
 
 The implementation checkpoint is commit `83cbce2f`.
 
-The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
+The checkpoint before that is
 `direct-static-trait-member-deprecations`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. Direct property reads, writes and
 references through a trait name, declared and magic static calls, and static

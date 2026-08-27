@@ -3786,10 +3786,30 @@ startup, plain-constant declarations, documented trait composition and trait
 alias publication below +1%, with matching outputs. The accepted linear lexer
 and cold metadata representation add no persistent hot-layout field.
 
-The monitored supported debt is now 905 failures: 18 strings, zero array and
-887 Zend/lang. Read-only clustering selects the two remaining trait failures
-next: interface trait use and the reserved `static` adaptation-owner parse
-boundary.
+The `d3d6a0fe` `final-trait-serializable-boundaries` checkpoint then moves
+Zend/lang from 4,416 to 4,419 pass, exactly `+3/-0`; the adjacent third pass is
+`serialize/bug64354.phpt`. Trait-composed, inherited and indirect legacy
+`Serializable` methods now emit and consume the custom `C:` payload while
+modern hooks retain precedence, and a reserved left-hand `static::method`
+trait owner stops at PHP's deferred compile-fatal boundary. Original
+regressions cover custom round-trip, null identity, invalid returns, hook
+precedence and both trait-precedence sides.
+
+Two exact-final-binary Zend/lang audits have byte-identical manifests and
+summaries; repeated serial strings/array outcome projections also match the
+exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Two exact-final-binary CPU-2-pinned 32-pair runs keep
+startup, valid trait-adaptation links, ordinary and modern object serialization
+and legacy custom-payload unserialization below +1% in the first run and below
+zero in the second, with matching outputs. An O(1) class-ID relationship guard
+keeps recursive interface resolution off ordinary serialization.
+
+The monitored supported debt is now 902 failures: 18 strings, zero array and
+884 Zend/lang. The complete 216-case trait neighborhood has zero ordinary
+failure. Read-only clustering selects two cold serialization rejection cases
+next: anonymous-class serialization and malformed declared property-count
+offset reporting.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
