@@ -721,6 +721,61 @@ fn callable_constant_expression_compile_diagnostics_reject_php_invalid_closures(
 }
 
 #[test]
+fn global_callable_constant_expressions_validate_before_runtime_lowering() {
+    for (source, expected) in [
+        (
+            "<?php\n$value = 1;\nconst CALLBACK = static function () use ($value) {};",
+            "Cannot use(...) variables in constant expression in /virtual/global-callable-constants.php on line 3",
+        ),
+        (
+            "<?php\n$callback = 'strlen';\nconst CALLBACK = $callback(...);",
+            "Cannot use dynamic function name in constant expression in /virtual/global-callable-constants.php on line 3",
+        ),
+        (
+            "<?php\nconst CALLBACK = (static function () {})(...);",
+            "Cannot use dynamic function name in constant expression in /virtual/global-callable-constants.php on line 2",
+        ),
+        (
+            "<?php\nconst NAME = 'strlen';\nconst CALLBACK = (NAME)(...);",
+            "Cannot use dynamic function name in constant expression in /virtual/global-callable-constants.php on line 3",
+        ),
+        (
+            "<?php\nconst CALLBACK = (0)(...);",
+            "Illegal function name in /virtual/global-callable-constants.php on line 2",
+        ),
+        (
+            "<?php\nclass Target { public function run() {} }\nconst CALLBACK = (new Target())->run(...);",
+            "Constant expression contains invalid operations in /virtual/global-callable-constants.php on line 3",
+        ),
+    ] {
+        let error = run_php_expect_error_with_source_context(
+            source,
+            "/virtual/global-callable-constants.php",
+            "/virtual",
+        );
+        assert_eq!(format!("{error:?}"), format!("Fatal(\"{expected}\")"));
+    }
+}
+
+#[test]
+fn global_callable_constant_expressions_keep_php_valid_callable_forms() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class CallableTarget {
+    public static function suffix(string $value): string { return $value . '!'; }
+}
+const NAMED = strlen(...);
+const STATIC_METHOD = CallableTarget::suffix(...);
+const LITERAL_NAME = ('strtoupper')(...);
+echo (NAMED)('four'), ':', (STATIC_METHOD)('ok'), ':', (LITERAL_NAME)('done');
+"#,
+        ),
+        "4:ok!:DONE"
+    );
+}
+
+#[test]
 fn deferred_trait_defaults_bind_to_the_consumer_and_shadowed_defaults_do_not_run() {
     assert_eq!(
         run_php(

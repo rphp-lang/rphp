@@ -3818,6 +3818,18 @@ impl Compiler {
                         },
                     ));
                 }
+                if let Some((message, expression_line)) =
+                    invalid_runtime_callable_constant_expression(value)
+                {
+                    return Err(self.goto_error(
+                        message,
+                        if expression_line == 0 {
+                            *line
+                        } else {
+                            expression_line
+                        },
+                    ));
+                }
                 // Compile the value expression and emit FetchConst to define it
                 // For const, we evaluate at compile time if possible, otherwise at runtime
                 // Also record known compile-time constants for property default resolution.

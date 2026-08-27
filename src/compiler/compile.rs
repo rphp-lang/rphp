@@ -2504,7 +2504,24 @@ fn invalid_runtime_callable_constant_expression(
                 None
             }
         }
-        Expr::FirstClassCallable { callable, .. } => recurse(callable),
+        Expr::FirstClassCallable { callable, line } => match callable.as_ref() {
+            Expr::Variable { .. }
+            | Expr::DynamicVariable { .. }
+            | Expr::Constant(_)
+            | Expr::Closure { .. } => Some((
+                "Cannot use dynamic function name in constant expression",
+                *line,
+            )),
+            Expr::Integer(_) => Some(("Illegal function name", *line)),
+            Expr::ArrayLiteral(elements)
+                if elements
+                    .first()
+                    .is_some_and(|owner| matches!(owner.value, Expr::New { .. })) =>
+            {
+                Some(("Constant expression contains invalid operations", *line))
+            }
+            _ => recurse(callable),
+        },
         Expr::BinaryOp { left, right, .. }
         | Expr::NullCoalesce { left, right }
         | Expr::Elvis { left, right } => recurse(left).or_else(|| recurse(right)),
