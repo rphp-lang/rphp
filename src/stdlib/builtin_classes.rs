@@ -1424,11 +1424,16 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 Visibility::Protected,
                 "Exception".to_string(),
             ),
-            PropertyDefinition::new(
+            PropertyDefinition::declared(
                 "previous".to_string(),
                 Some(Value::null()),
                 Visibility::Private,
                 "Exception".to_string(),
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+                    "Throwable".to_string(),
+                ))),
+                false,
+                false,
             ),
         ],
         static_properties: vec![],
@@ -1559,11 +1564,16 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 Visibility::Protected,
                 "Error".to_string(),
             ),
-            PropertyDefinition::new(
+            PropertyDefinition::declared(
                 "previous".to_string(),
                 Some(Value::null()),
                 Visibility::Private,
                 "Error".to_string(),
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+                    "Throwable".to_string(),
+                ))),
+                false,
+                false,
             ),
         ],
         static_properties: vec![],

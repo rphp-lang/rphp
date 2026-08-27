@@ -413,7 +413,7 @@ fn prepare_reference_assignment(
 
 #[cold]
 #[inline(never)]
-fn prepare_typed_property_reference_attachment(
+pub(crate) fn prepare_typed_property_reference_attachment(
     value: Value,
     definition: &crate::compiler::compile::PropertyDefinition,
     constraints: &[crate::value::ReferencePropertyConstraint],

@@ -461,27 +461,187 @@ fn clone_unserialized_storage_value(value: &Value) -> Value {
     }
 }
 
-fn populate_object_properties(
+fn unserialized_property_storage_key(
     eg: &ExecutorGlobals,
+    object: &PhpObject,
+    serialized_key: &str,
+) -> String {
+    if let Some((scope, name)) = serialized_key
+        .strip_prefix('\0')
+        .and_then(|key| key.split_once('\0'))
+    {
+        if scope == "*" && object.property_slot(name).is_some() {
+            return name.to_string();
+        }
+        if scope == "*"
+            && eg
+                .find_class(object.class_name.as_ref())
+                .is_some_and(|class| {
+                    class.properties.iter().any(|property| {
+                        property.visibility != crate::parser::Visibility::Private
+                            && property.name == name
+                    })
+                })
+        {
+            return name.to_string();
+        }
+        if scope != "*" {
+            let key = crate::runtime::mangle_private_prop(scope, name);
+            if object.property_slot(&key).is_some() {
+                return key;
+            }
+            if let Some(slot) = eg.class_by_id(object.class_id).and_then(|class| {
+                class.properties.iter().position(|property| {
+                    property.visibility == crate::parser::Visibility::Private
+                        && property.name == name
+                        && property.declaring_class.eq_ignore_ascii_case(scope)
+                })
+            }) && let Some(key) = object.property_name_at_slot(slot)
+            {
+                return key.to_string();
+            }
+            if eg
+                .find_class(object.class_name.as_ref())
+                .is_some_and(|class| {
+                    class.properties.iter().any(|property| {
+                        property.visibility == crate::parser::Visibility::Private
+                            && property.name == name
+                            && property.declaring_class.eq_ignore_ascii_case(scope)
+                    })
+                })
+            {
+                return key;
+            }
+        }
+    }
+
+    let plain_name = serialized_key
+        .strip_prefix('\0')
+        .and_then(|key| key.split_once('\0').map(|(_, name)| name))
+        .unwrap_or(serialized_key);
+    crate::runtime::resolve_property_key(
+        eg,
+        object.class_name.as_ref(),
+        plain_name,
+        Some(object.class_name.as_ref()),
+    )
+}
+
+fn populate_object_properties(
+    eg: &mut ExecutorGlobals,
     object: &Value,
     class_name: &str,
     properties: &PhpArray,
-) {
-    let Some(mut object) = object.as_object_mut() else {
-        return;
-    };
+) -> Result<(), ()> {
+    let class_id = object.as_object().map(|object| object.class_id).ok_or(())?;
     for (key, value) in properties.iter() {
         let ArrayKey::String(key) = key else {
             continue;
         };
-        let plain_name = key
-            .strip_prefix('\0')
-            .and_then(|key| key.split_once('\0').map(|(_, name)| name))
-            .unwrap_or(key.as_str());
-        let storage_key =
-            crate::runtime::resolve_property_key(eg, class_name, plain_name, Some(class_name));
-        object.set_property(&storage_key, clone_unserialized_storage_value(value));
+        let (storage_key, slot) = {
+            let object = object.as_object().ok_or(())?;
+            let storage_key = unserialized_property_storage_key(eg, &object, &key);
+            let slot = object.property_slot(&storage_key);
+            (storage_key, slot)
+        };
+        let mut stored = clone_unserialized_storage_value(value);
+        let definition = slot
+            .and_then(|slot| eg.instance_property_definition(class_id, slot))
+            .or_else(|| {
+                eg.find_class(class_name).and_then(|class| {
+                    class.properties.iter().find(|property| {
+                        let key = if property.visibility == crate::parser::Visibility::Private {
+                            crate::runtime::mangle_private_prop(
+                                &property.declaring_class,
+                                &property.name,
+                            )
+                        } else {
+                            property.name.clone()
+                        };
+                        key == storage_key
+                    })
+                })
+            });
+
+        #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+        if let Some(definition) = definition
+            && let Some(declaration) = definition.generic_declaration
+            && let Err(message) = eg.check_cached_generic_property_value(
+                object,
+                &definition.name,
+                stored.dereferenced(),
+                declaration,
+            )
+        {
+            eg.exception = Some(crate::value::make_error_value("TypeError", &message));
+            return Err(());
+        }
+
+        let constraint =
+            if let Some(definition) = definition.filter(|definition| definition.is_typed()) {
+                let retained_reference = stored.is_owned_reference();
+                let candidate = if retained_reference {
+                    stored.dereferenced().clone()
+                } else {
+                    std::mem::replace(&mut stored, Value::undef())
+                };
+                let prepared = match if retained_reference {
+                    crate::vm::execute::prepare_typed_property_reference_attachment(
+                        candidate,
+                        definition,
+                        &stored.reference_property_constraints(),
+                        eg,
+                        true,
+                        class_name,
+                    )
+                } else {
+                    crate::vm::execute::prepare_property_assignment(
+                        candidate, definition, eg, true, class_name,
+                    )
+                } {
+                    Ok(prepared) => prepared,
+                    Err(message) => {
+                        eg.exception = Some(crate::value::make_error_value("TypeError", &message));
+                        return Err(());
+                    }
+                };
+                if retained_reference {
+                    stored.assign_dereferenced(prepared);
+                } else {
+                    stored = prepared;
+                }
+                let owner = if retained_reference {
+                    slot.map(|slot| {
+                        object
+                            .as_object()
+                            .expect("unserialized object must remain allocated")
+                            .instance_property_reference_owner(slot)
+                    })
+                } else {
+                    None
+                };
+                owner.map(|owner| crate::value::ReferencePropertyConstraint {
+                    owner,
+                    declaring_class: definition.declaring_class.clone(),
+                    property: definition.name.clone(),
+                    type_scope: definition.type_scope.clone(),
+                    called_class: class_name.to_string(),
+                    type_hint: definition.type_hint.clone(),
+                })
+            } else {
+                None
+            };
+        if stored.is_owned_reference()
+            && let Some(constraint) = constraint
+        {
+            stored.add_reference_property_constraint(constraint);
+        }
+        object
+            .as_object_mut()
+            .ok_or(())?
+            .set_property(&storage_key, stored);
     }
+    Ok(())
 }
 
 impl<'a> Parser<'a> {
@@ -900,7 +1060,7 @@ impl<'a> Parser<'a> {
                     .map_err(|_| ())?
                     {
                         Some(_) => {}
-                        None => populate_object_properties(eg, &object, class_name, &properties),
+                        None => populate_object_properties(eg, &object, class_name, &properties)?,
                     }
                     Ok(object)
                 }

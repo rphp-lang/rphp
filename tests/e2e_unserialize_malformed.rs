@@ -158,3 +158,128 @@ echo str_contains((string) $roundTrip, 'roundtrip') ? "roundtrip\n" : "missing\n
         "linked\nroundtrip\n"
     );
 }
+
+#[test]
+fn typed_object_materialization_resolves_visibility_and_uses_strict_assignment() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class AncestorPacket {
+    private int $value;
+    public function ancestorValue(): int { return $this->value; }
+}
+class VisibilityPacket extends AncestorPacket {
+    private int $value;
+    protected float $ratio;
+    public int $public;
+    public function values(): string {
+        return $this->ancestorValue().':'.$this->value.':'.gettype($this->ratio).':'.$this->ratio.':'.$this->public;
+    }
+}
+class IntPacket { public int $value; }
+
+function member(string $name, string $value): string {
+    return 's:'.strlen($name).':"'.$name.'";'.$value;
+}
+
+$wire = 'O:16:"VisibilityPacket":4:{'
+    .member("\0AncestorPacket\0value", 'i:11;')
+    .member("\0VisibilityPacket\0value", 'i:13;')
+    .member("\0*\0ratio", 'i:7;')
+    .member('public', 'i:17;')
+    .'}';
+echo unserialize($wire)->values(), "\n";
+
+try {
+    unserialize('O:9:"IntPacket":1:{s:5:"value";s:3:"bad";}');
+    echo "not-reached\n";
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+        ),
+        concat!(
+            "11:13:double:7:17\n",
+            "Cannot assign string to property IntPacket::$value of type int\n",
+        )
+    );
+}
+
+#[test]
+fn typed_references_hooks_and_cycles_survive_object_materialization() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class RefPacket { public int $value; }
+class PairPacket { public int $int; public float $float; }
+class HookPacket {
+    public int $value;
+    public function __unserialize(array $data): void {
+        echo 'hook:', gettype($data['value']), "\n";
+        $this->value = 7;
+    }
+}
+class CyclePacket { public ?CyclePacket $next; }
+
+try {
+    unserialize('O:10:"PairPacket":2:{s:3:"int";i:7;s:5:"float";R:2;}');
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+
+$graph = unserialize('a:2:{i:0;O:9:"RefPacket":1:{s:5:"value";i:7;}i:1;R:3;}');
+$graph[1] = 9;
+echo $graph[0]->value, ':', $graph[1], "\n";
+try {
+    $graph[1] = 'bad';
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+echo $graph[0]->value, ':', $graph[1], "\n";
+
+$hook = unserialize('O:10:"HookPacket":1:{s:5:"value";s:3:"bad";}');
+echo $hook->value, "\n";
+
+$cycle = new CyclePacket();
+$cycle->next = $cycle;
+$copy = unserialize(serialize($cycle));
+echo $copy === $copy->next ? "cycle\n" : "broken\n";
+"#,
+        ),
+        concat!(
+            "Reference with value of type int held by property PairPacket::$int of type int is not compatible with property PairPacket::$float of type float\n",
+            "9:9\n",
+            "Cannot assign string to reference held by property RefPacket::$value of type int\n",
+            "9:9\n",
+            "hook:string\n",
+            "7\n",
+            "cycle\n",
+        )
+    );
+}
+
+#[test]
+fn internal_throwable_previous_is_validated_before_unserialize_returns() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$key = "\0Exception\0previous";
+$invalid = 'O:9:"Exception":1:{s:'.strlen($key).':"'.$key.'";O:8:"stdClass":0:{}}';
+try {
+    unserialize($invalid);
+    echo "not-reached\n";
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+
+$previous = new Exception('root');
+$copy = unserialize(serialize(new Exception('leaf', 0, $previous)));
+echo $copy->getMessage(), ':', $copy->getPrevious()->getMessage(), "\n";
+"#,
+        ),
+        concat!(
+            "Cannot assign stdClass to property Exception::$previous of type ?Throwable\n",
+            "leaf:root\n",
+        )
+    );
+}
