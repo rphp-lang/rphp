@@ -564,6 +564,15 @@ fn op_new_obj_resolved<'a>(
         )?);
     }
     if let Some(class_def) = class_def {
+        if class_def.is_trait {
+            return Ok(new_object_validation_error(
+                eg,
+                frame,
+                op_array,
+                ip,
+                &format!("Cannot instantiate trait {}", class_def.name),
+            )?);
+        }
         if class_def.is_interface {
             return Ok(new_object_validation_error(
                 eg,

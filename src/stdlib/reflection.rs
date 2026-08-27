@@ -7194,10 +7194,20 @@ fn reflected_class_instance(
     let class = eg
         .find_class(&owner)
         .ok_or_else(|| VmError::Fatal(format!("Class {owner} does not exist")))?;
-    if class.is_interface || class.is_trait || class.is_abstract || class.is_enum {
-        return Err(VmError::Fatal(format!(
-            "Class {owner} cannot be instantiated without invoking its constructor"
-        )));
+    let instantiation_error = if class.is_trait {
+        Some(format!("Cannot instantiate trait {}", class.name))
+    } else if class.is_interface {
+        Some(format!("Cannot instantiate interface {}", class.name))
+    } else if class.is_abstract {
+        Some(format!("Cannot instantiate abstract class {}", class.name))
+    } else if class.is_enum {
+        Some(format!("Cannot instantiate enum {}", class.name))
+    } else {
+        None
+    };
+    if let Some(message) = instantiation_error {
+        eg.exception = Some(make_error_value("Error", &message));
+        return Ok(None);
     }
     let class_id = class.class_id;
     let class_name = class.name.clone();

@@ -936,6 +936,19 @@ impl Parser {
         let (name, line) = self.parse_classlike_declaration_name("trait")?;
         let generic_params = self.parse_generic_parameters()?;
         self.push_generic_scope(&generic_params);
+        let invalid_relation = match self.peek() {
+            Token::Extends => Some("extends"),
+            Token::Implements => Some("implements"),
+            _ => None,
+        };
+        if let Some(relation) = invalid_relation {
+            return Err(self.source_error(
+                &format!(
+                    "syntax error, unexpected token \"{relation}\", expecting \"{{\""
+                ),
+                line,
+            ));
+        }
         self.expect(&Token::LBrace(0))?;
 
         let mut properties = Vec::new();
@@ -1101,6 +1114,57 @@ impl Parser {
         let mut methods = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
             let attributes = self.parse_attribute_groups()?;
+            if matches!(self.peek(), Token::Use(_)) {
+                let use_line = match self.advance() {
+                    Token::Use(line) => line,
+                    _ => unreachable!("trait use parser starts at use"),
+                };
+                let (trait_uses, adaptation_line) =
+                    self.parse_trait_ancestor_list(use_line)?;
+                let used_trait = trait_uses
+                    .first()
+                    .map(|ancestor| ancestor.name.rsplit('\\').next().unwrap_or(&ancestor.name))
+                    .unwrap_or("")
+                    .to_string();
+                if matches!(self.peek(), Token::LBrace(_)) {
+                    self.advance();
+                    while self.peek() != Token::RBrace && !self.at_eof() {
+                        let (trait_name, method) = self.parse_trait_method_reference()?;
+                        if self.peek() == Token::Insteadof {
+                            self.advance();
+                            let Some(_) = trait_name else {
+                                return Err(
+                                    "Trait precedence requires an explicit trait name".into()
+                                );
+                            };
+                            loop {
+                                self.parse_qualified_name_with_reserved_static(
+                                    ReservedStaticRole::Trait,
+                                    Some(adaptation_line),
+                                )?;
+                                if matches!(self.peek(), Token::Comma(_)) {
+                                    self.advance();
+                                } else {
+                                    break;
+                                }
+                            }
+                            self.expect(&Token::Semicolon(0))?;
+                        } else {
+                            self.parse_trait_alias_adaptation(trait_name, method)?;
+                        }
+                    }
+                    self.expect(&Token::RBrace)?;
+                } else {
+                    self.expect(&Token::Semicolon(0))?;
+                }
+                let _ = self.compile_error(
+                    format!(
+                        "Cannot use traits inside of interfaces. {used_trait} is used in {name}"
+                    ),
+                    use_line,
+                );
+                continue;
+            }
             let modifiers = self.parse_member_modifiers();
             if self.peek() == Token::Const {
                 constants.extend(self.parse_class_constant_declaration(

@@ -1871,7 +1871,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     );
     register_method!(
         "ReflectionClass",
-        "newinstancewithoutconstructor",
+        "newInstanceWithoutConstructor",
         class_new_instance_without_constructor,
         1,
         0,
@@ -1879,14 +1879,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     );
     register_variadic_method!(
         "ReflectionClass",
-        "newinstance",
+        "newInstance",
         class_new_instance,
         0,
         ["args"]
     );
     register_method!(
         "ReflectionClass",
-        "newinstanceargs",
+        "newInstanceArgs",
         class_new_instance_args,
         2,
         0,

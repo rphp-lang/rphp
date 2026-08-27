@@ -5310,7 +5310,15 @@ impl ExecutorGlobals {
 
         // Enums and final classes cannot be used as parents.
         if let Some(parent_name) = &class_def.parent {
-            if let Some(parent) = self.class_table.get(parent_name.as_str()) {
+            if let Some(parent) = self.find_class(parent_name) {
+                if parent.is_trait {
+                    return Err(format!(
+                        "Class {} cannot extend trait {}{}",
+                        class_name,
+                        parent.name,
+                        declaration_location()
+                    ));
+                }
                 if parent.is_enum {
                     return Err(format!(
                         "Class {} cannot extend enum {}{}",

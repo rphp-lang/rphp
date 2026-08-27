@@ -1073,7 +1073,7 @@ fn readonly_method_modifiers_are_located_deferred_compile_errors() {
 }
 
 #[test]
-fn source_aware_punctuation_keeps_the_existing_internal_fallback_text() {
+fn source_aware_punctuation_keeps_internal_fallbacks_and_trait_diagnostics() {
     let tokens = Lexer::new("<?php declare(ticks=1) {}").tokenize().unwrap();
     assert_eq!(
         Parser::new(tokens).parse().unwrap_err(),
@@ -1085,7 +1085,7 @@ fn source_aware_punctuation_keeps_the_existing_internal_fallback_text() {
         .unwrap();
     assert_eq!(
         Parser::new(tokens).parse().unwrap_err(),
-        "Expected LBrace, got Extends"
+        "syntax error, unexpected token \"extends\", expecting \"{\" on line 1"
     );
 
     let tokens = Lexer::new("<?php declare(ticks=1) ?").tokenize().unwrap();
