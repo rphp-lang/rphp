@@ -717,6 +717,25 @@ impl DynamicPropertyMap {
         }
     }
 
+    #[inline(always)]
+    pub(crate) fn entry_at(&self, position: usize) -> Option<(&str, &Value)> {
+        match &self.storage {
+            DynamicPropertyStorage::Small(small) => small
+                .entries
+                .get(position)?
+                .as_ref()
+                .map(|(name, value)| (name.as_str(), value)),
+            DynamicPropertyStorage::Linear(linear) => linear
+                .entries
+                .get(position)
+                .map(|(name, value)| (name.as_str(), value)),
+            DynamicPropertyStorage::Indexed(indexed) => indexed
+                .entries
+                .get(position)
+                .map(|(name, value)| (name.as_ref(), value)),
+        }
+    }
+
     /// Resolve two independent property reads while branching on the backing
     /// storage only once. Cached small-map positions are guards, not
     /// assumptions: a receiver with a different insertion order falls back to
@@ -1640,6 +1659,11 @@ impl PhpObject {
         if let Some(dynamic) = &self.dynamic_properties {
             dynamic.for_each(visitor);
         }
+    }
+
+    #[inline(always)]
+    pub(crate) fn dynamic_property_at(&self, position: usize) -> Option<(&str, &Value)> {
+        self.dynamic_properties.as_ref()?.entry_at(position)
     }
 
     pub(crate) fn object_cursor(&self) -> Option<Option<usize>> {
@@ -6440,9 +6464,23 @@ impl Value {
         self.type_info &= !Self::STATIC_INITIALIZER_IN_PROGRESS_FLAG;
     }
 
+    /// Clone an array element while preserving an explicit reference cell
+    /// across copy-on-write separation.
     #[inline]
     fn clone_for_array_cow(&self) -> Self {
         if self.is_owned_reference() {
+            self.clone_owned_reference_alias()
+        } else {
+            self.clone()
+        }
+    }
+
+    /// Move one value between durable PHP storage containers. A reference
+    /// cell remains visible only while another PHP storage location retains
+    /// it; a singleton wrapper has ordinary by-value cast semantics.
+    #[inline]
+    pub(crate) fn clone_for_php_storage(&self) -> Self {
+        if self.is_owned_reference() && self.owned_reference_is_aliased() {
             self.clone_owned_reference_alias()
         } else {
             self.clone()

@@ -3684,7 +3684,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                             ArrayKey::Int(key) => key.to_string(),
                                             ArrayKey::String(key) => key,
                                         };
-                                        object.set_property(&key, value.clone());
+                                        object.set_property(
+                                            &key,
+                                            value.clone_for_php_storage(),
+                                        );
                                     }
                                     Value::object(object)
                                 }

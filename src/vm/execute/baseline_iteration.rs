@@ -740,6 +740,43 @@ fn materialize_foreach_object(
     Ok(Value::array(array))
 }
 
+#[inline]
+fn visible_foreach_object_property_name(name: &str) -> (&str, Option<&'static str>) {
+    let Some(mangled) = name.strip_prefix('\0') else {
+        return (name, None);
+    };
+    let Some((scope, _)) = mangled.split_once('\0') else {
+        return (name, Some("Illegal member variable name"));
+    };
+    if scope.is_empty() {
+        return (name, Some("Illegal member variable name"));
+    }
+    let visible = name
+        .rsplit_once('\0')
+        .map(|(_, visible)| visible)
+        .unwrap_or(name);
+    if visible.is_empty() {
+        (name, Some("Corrupt member variable name"))
+    } else {
+        (visible, None)
+    }
+}
+
+#[inline]
+fn materialize_foreach_object_key(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    storage_name: &str,
+) -> Result<Value, VmError> {
+    let (visible_name, diagnostic) = visible_foreach_object_property_name(storage_name);
+    if let Some(diagnostic) = diagnostic {
+        report_php_notice(eg, frame, op_array, opline, diagnostic)?;
+    }
+    Ok(Value::string(visible_name.to_string()))
+}
+
 fn promote_foreach_property_reference(property: &mut Value) -> Value {
     if property.is_owned_reference() {
         return property.clone_owned_reference_alias();
@@ -1169,7 +1206,10 @@ fn op_foreach_init<'a>(
                 .flatten()
         });
         let object_values = if iterator_values.is_none() && arr_val.as_object().is_some() {
-            let materialized = if by_reference {
+            let direct_std_class = arr_val
+                .as_object()
+                .is_some_and(|object| object.is_dynamic_std_class());
+            let materialized = if by_reference || direct_std_class {
                 arr_val.clone()
             } else {
                 materialize_foreach_object(arr_val, eg, frame)?
@@ -1497,7 +1537,12 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
             } else {
                 false
             }
-        } else if BY_REFERENCE_LOOP && arr_val.value_type() == ValueType::Object {
+        } else if arr_val.value_type() == ValueType::Object
+            && (BY_REFERENCE_LOOP
+                || arr_val
+                    .as_object()
+                    .is_some_and(|object| object.is_dynamic_std_class()))
+        {
             let caller_class = get_caller_class(frame, eg);
             let class_id = arr_val
                 .as_object()
@@ -1517,7 +1562,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                     })
                     .collect::<Vec<_>>()
             };
-            let dynamic_names = {
+            let dynamic_names = (!slots.is_empty()).then(|| {
                 let object = arr_val.as_object().unwrap();
                 let declared_names = slots
                     .iter()
@@ -1531,12 +1576,57 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                     }
                 });
                 names
-            };
-            if pos < slots.len() + dynamic_names.len() {
-                let (name, value) = if pos < slots.len() {
+            });
+            let dynamic_len = dynamic_names.as_ref().map_or_else(
+                || {
+                    arr_val
+                        .as_object()
+                        .and_then(|object| {
+                            object
+                                .dynamic_properties
+                                .as_ref()
+                                .map(|properties| properties.len())
+                        })
+                        .unwrap_or(0)
+                },
+                Vec::len,
+            );
+            if pos < slots.len() + dynamic_len {
+                let name = if pos < slots.len() {
+                    eg.instance_property_definition(class_id, slots[pos])
+                        .expect("visible property slot must retain its definition")
+                        .name
+                        .clone()
+                } else {
+                    let dynamic_position = pos - slots.len();
+                    dynamic_names.as_ref().map_or_else(
+                        || {
+                            arr_val
+                                .as_object()
+                                .and_then(|object| {
+                                    object
+                                        .dynamic_property_at(dynamic_position)
+                                        .map(|(name, _)| name.to_string())
+                                })
+                                .expect("dynamic property position must remain readable")
+                        },
+                        |names| names[dynamic_position].clone(),
+                    )
+                };
+                let key = if key_encoded > 0 {
+                    Some(materialize_foreach_object_key(
+                        eg, frame, op_array, opline, &name,
+                    )?)
+                } else {
+                    None
+                };
+                if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
+                    return Ok(control);
+                }
+
+                let value = if pos < slots.len() {
                     let slot = slots[pos];
                     let (
-                        name,
                         declaring_class,
                         type_scope,
                         type_hint,
@@ -1548,7 +1638,6 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                             .instance_property_definition(class_id, slot)
                             .expect("visible property slot must retain its definition");
                         (
-                            definition.name.clone(),
                             definition.declaring_class.clone(),
                             definition.type_scope.clone(),
                             definition.type_hint.clone(),
@@ -1557,7 +1646,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                             definition.has_get_hook,
                         )
                     };
-                    if is_readonly {
+                    if BY_REFERENCE_LOOP && is_readonly {
                         let error = make_error_value(
                             "Error",
                             &format!(
@@ -1572,7 +1661,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                             ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                         });
                     }
-                    let value = if has_get_hook {
+                    if BY_REFERENCE_LOOP && has_get_hook {
                         let hook_name = format!("${name}::get");
                         let returned = call_guarded_property_magic_method(
                             eg,
@@ -1612,7 +1701,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                                 ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                             });
                         }
-                    } else {
+                    } else if BY_REFERENCE_LOOP {
                         let (owner, called_class) = {
                             let object = arr_val.as_object().unwrap();
                             (
@@ -1640,25 +1729,46 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                             );
                         }
                         binding
-                    };
-                    (name, value)
+                    } else if has_get_hook {
+                        let returned = call_object_property_get_hook(eg, arr_val, &name)?
+                            .map(|value| value.dereferenced().clone())
+                            .unwrap_or_else(Value::null);
+                        if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
+                            return Ok(control);
+                        }
+                        returned
+                    } else {
+                        arr_val
+                            .as_object()
+                            .and_then(|object| object.get_property_slot(slot).cloned())
+                            .expect("visible property slot must remain readable")
+                    }
                 } else {
-                    let name = dynamic_names[pos - slots.len()].clone();
-                    let mut object = arr_val.as_object_mut().unwrap();
-                    let value = promote_foreach_property_reference(
-                        object
-                            .get_dynamic_property_mut(&name)
-                            .expect("dynamic property must remain addressable"),
-                    );
-                    (name, value)
+                    if BY_REFERENCE_LOOP {
+                        let mut object = arr_val.as_object_mut().unwrap();
+                        promote_foreach_property_reference(
+                            object
+                                .get_dynamic_property_mut(&name)
+                                .expect("dynamic property must remain addressable"),
+                        )
+                    } else {
+                        arr_val
+                            .as_object()
+                            .and_then(|object| {
+                                object
+                                    .get_dynamic_property_with_position(&name)
+                                    .map(|(property, _)| property.clone())
+                            })
+                            .expect("dynamic property must remain readable")
+                    }
                 };
-                bind_foreach_value_cv(eg, frame, val_cv, value)?;
-                if key_encoded > 0 {
-                    let key_cv = key_encoded - 1;
-                    let key = canonical_decimal_array_key(&name)
-                        .map(Value::long)
-                        .unwrap_or_else(|| Value::string(name));
-                    assign_foreach_cv(eg, frame, key_cv, key)?;
+                if BY_REFERENCE_LOOP || !ASSIGN_THROUGH_REFERENCE {
+                    bind_foreach_value_cv(eg, frame, val_cv, value)?;
+                } else {
+                    assign_foreach_cv(eg, frame, val_cv, value)?;
+                }
+                if let Some(key) = key {
+                    assign_foreach_cv(eg, frame, key_encoded - 1, key)?;
                 }
                 let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2 as u32, opline.op2_type) };
                 unsafe {

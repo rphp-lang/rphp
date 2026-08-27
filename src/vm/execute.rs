@@ -570,15 +570,15 @@ pub(crate) fn cast_object_to_array(value: &Value, eg: &ExecutorGlobals) -> Value
                     format!("\0{}\0{}", definition.declaring_class, definition.name)
                 }
             };
-            result.set_str(&key, property.clone());
+            result.set_str(&key, property.clone_for_php_storage());
         }
         object.for_each_dynamic_property(|key, property| {
-            result.set_str(key, property.clone());
+            result.set_str(key, property.clone_for_php_storage());
         });
     } else {
         object.for_each_property(|key, property| {
             if property.value_type() != ValueType::Undef {
-                result.set_str(key, property.clone());
+                result.set_str(key, property.clone_for_php_storage());
             }
         });
     }
