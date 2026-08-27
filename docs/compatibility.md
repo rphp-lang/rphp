@@ -8,6 +8,81 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`nested-ref-foreach-mutation`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. A direct `unset()` now retains the removed
+array bucket's former ordered position and translates every active
+by-reference `foreach` cursor observing the same reference cell. Deleting a
+current or earlier bucket therefore no longer skips the next survivor, while
+deleting the next or a later bucket leaves the cursor unchanged. Each nested
+loop keeps its independent position, including when the mutation occurs in a
+called user function.
+
+The common cursor translator remains shared with `array_shift()`,
+`array_unshift()` and `array_splice()`. Direct removal starts at the current
+user frame, while internal mutators start at their caller; both paths match on
+stable PHP reference identity. Original regressions cover current, previous,
+next and future deletions, two nested loops, numeric and string insertion,
+append, COW copies, explicit aliases, final loop bindings, exception cleanup,
+caller-frame mutation and direct/include/eval sources.
+
+`Zend/tests/foreach/foreach_008.phpt`, four `gh11244-*` cases and four
+`gh13178_*` cases change from output failure to pass. Two exact-final-binary
+5,599-case Zend/lang runs each record 4,450 pass, 853 fail, 115 skip and 181
+unsupported, with no timeout or crash. Their full status/category projections
+are identical at SHA-256
+`fdf9a9016086e9532b763d4463a4c91e80760ab8a06cff0768d1148d5e4af3c7`;
+the exact parent/candidate delta is `+9/-0`, with no other movement or lost
+pass. Two strings/array projections remain identical at SHA-256
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported across 1,575 cases. The
+combined audit covers 7,174 cases: 5,909 pass, 871 fail, 182 skip and 212
+unsupported. Supported debt is 18 strings failures, zero array failures and
+853 Zend/lang failures.
+
+The clean-room oracle and include source hash to
+`2fe9d33f42dc48b6241c1cd493d32b15124fe86035b3755f1121140cc2b9dc84`
+and
+`318eaaaad7d5abd884f00e8a8a21101bd82872ac5431e82c84477b13049ee29c`.
+PHP 8.5.9 and exact candidate SHA-256
+`957d30da4e940c40ef56c9f9faae87a3744ec4be1b40a90077c6f886f135847d`
+match byte-for-byte with stdout SHA-256
+`9d54828f8212df1bac3265db93d4684c084d42cf6932d9f14ad96b820c8357e3`,
+empty stderr and zero exit status. All five Cargo feature configurations,
+locked all-feature/all-target, formatting, HTML-entity-data, PHPT-runner and
+unsafe-policy checks pass. Production remains below its ceiling at 1,621
+unsafe blocks and 289 unsafe functions, with 372 SAFETY annotations and seven
+`# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates and PHP
+8.5.9 warmed-kernel S2 and cold-build S3 pass. The change adds no dependency,
+opcode or persistent runtime layout field.
+
+One exact-final-binary CPU-2-pinned, order-balanced 32-pair release gate
+compares retained parent SHA-256
+`68a467fd4a6222a27395fc60d38870d1eb243cddbfa759e3f194cf8c02425135`
+with the candidate above. Paired median changes are -4.299% for startup,
++0.245% for by-reference iteration without mutation, -2.913% for ordinary
+array `unset()` outside iteration, +1.930% for deleting a future bucket,
++0.690% for `array_shift()` and +0.497% for `array_splice()`. All comparable
+output checksums match. Deleting the current bucket records +11.859%, with
+parent-first/candidate-first medians of +11.725%/+12.124%; the candidate
+correctly visits the additional bucket skipped by the parent, so this is a
+contract cost rather than a like-for-like regression. The harness and result
+hash to
+`8968d5190b5768a71dd9ad19048e3b3a42c7c80f96d90c943549d8e1e72cc207`
+and
+`fb7b483ab900b79e6079d2f65603e6560b98b31562bbde7303985819181b8d39`.
+
+This checkpoint does not claim general `Iterator`/`IteratorAggregate` or
+generator cursor semantics, object iteration, `ArrayAccess`, `ArrayObject`,
+`SplObjectStorage`, `SplFixedArray` or general SPL implementation, 32-bit
+behavior or allocation-limit/OOM equivalence. Read-only clustering of the
+exact remaining manifest selects `Zend/tests/foreach/bug73792.phpt` next: a
+by-reference loop over an invalid string offset currently emits a later
+foreach warning instead of PHP's ordered illegal-offset warning and fatal
+reference error.
+
+The implementation checkpoint is commit `97d26be4`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `stdclass-mangled-foreach-keys`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. By-value and by-reference iteration over a
 canonical dynamic `stdClass` now publishes the terminal PHP-visible property
@@ -90,9 +165,9 @@ dynamic `stdClass` uses the new direct boundary. This checkpoint does not
 claim a general property-mangling/serialization rewrite, Reflection visibility
 metadata, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` or
 general SPL implementation, 32-bit behavior or allocation-limit/OOM
-equivalence. Read-only clustering of the exact remaining manifest selects
-`Zend/tests/foreach/foreach_008.phpt` next: nested by-reference array mutation
-currently skips the surviving bucket after two unsets.
+equivalence. At that checkpoint, read-only clustering of the exact remaining
+manifest selected `Zend/tests/foreach/foreach_008.phpt` next: nested
+by-reference array mutation skipped the surviving bucket after two unsets.
 
 The implementation checkpoint is commit `68b5498e`.
 

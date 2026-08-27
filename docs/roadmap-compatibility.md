@@ -3958,12 +3958,30 @@ cast records +4.341% candidate contract cost; the semantically incomplete
 parent is not presented as a like-for-like baseline. A generalized direct
 user-class path was rejected after a roughly 0.21-to-0.88-second slowdown.
 
-The monitored supported debt is now 880 failures: 18 strings, zero array and
-862 Zend/lang. Read-only clustering selects
-`Zend/tests/foreach/foreach_008.phpt` next: nested by-reference mutation skips
-the surviving bucket after two unsets. `ArrayAccess`-backed destructuring,
-`ArrayObject`, `SplObjectStorage`, `SplFixedArray` and general SPL remain
-separate contracts.
+The `97d26be4` `nested-ref-foreach-mutation` checkpoint then moves Zend/lang
+from 4,441 to 4,450 pass, exactly `+9/-0`. Direct array `unset()` reports the
+removed bucket's ordered position to the common live-reference cursor
+translator, which adjusts each matching nested or caller-frame loop
+independently. Current and previous deletion no longer skip a survivor;
+future/next deletion, insertion, append, COW, final aliases and existing
+internal shift/splice behavior remain stable.
+
+Two exact-final-binary Zend/lang runs have the same status/category projection;
+two strings/array projections also match the exact parent. All five Cargo
+configurations, all-feature/all-target, formatting, HTML data, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production
+remains below the unsafe ceiling at 1,621 blocks and 289 functions. One
+CPU-2-pinned 32-pair release gate places all comparable array/foreach paths
+between -2.913% and +1.930%, with matching outputs. Current-bucket deletion
+records +11.859% while correctly processing the extra bucket skipped by the
+parent, and is retained as candidate contract cost.
+
+The monitored supported debt is now 871 failures: 18 strings, zero array and
+853 Zend/lang. Read-only clustering selects
+`Zend/tests/foreach/bug73792.phpt` next: a by-reference loop over an invalid
+string offset reaches the wrong warning/fatal boundary. `ArrayAccess`-backed
+destructuring, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and general
+SPL remain separate contracts.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
