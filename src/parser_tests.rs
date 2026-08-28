@@ -1974,3 +1974,40 @@ fn duplicate_asymmetric_visibility_is_a_deferred_compile_error() {
             if message == "Multiple access type modifiers are not allowed"
     ));
 }
+
+#[test]
+fn contextual_enum_tokens_preserve_spelling_and_declaration_disambiguation() {
+    let tokens = Lexer::new(
+        "<?php\nEnUm Signal { case Ready; }\nclass ENUM {}\nfunction enum() {}\nconst eNuM = 1;\nenum();",
+    )
+    .tokenize()
+    .unwrap();
+    assert!(matches!(
+        &tokens[1],
+        Token::Enum { name, line: 2 } if name == "EnUm"
+    ));
+
+    let statements = Parser::new(tokens).parse().unwrap();
+    assert!(matches!(
+        &statements[0],
+        Stmt::Enum { name, cases, .. }
+            if name == "Signal" && cases.len() == 1 && cases[0].name == "Ready"
+    ));
+    assert!(matches!(
+        &statements[1],
+        Stmt::Class { name, .. } if name == "ENUM"
+    ));
+    assert!(matches!(
+        &statements[2],
+        Stmt::Function { name, .. } if name == "enum"
+    ));
+    assert!(matches!(
+        &statements[3],
+        Stmt::Const { declarations, .. }
+            if declarations.len() == 1 && declarations[0].0 == "eNuM"
+    ));
+    assert!(matches!(
+        &statements[4],
+        Stmt::ExprStmt(Expr::FunctionCall { name, .. }) if name == "enum"
+    ));
+}

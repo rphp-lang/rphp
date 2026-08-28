@@ -65,14 +65,19 @@ pub enum Token {
     Abstract(usize), // abstract with source line
     Declare,         // declare
     Final(usize),    // final with source line
-    Enum,            // enum
-    Namespace,       // namespace
-    Backslash,       // \ (namespace separator)
-    Yield(usize),    // yield, source line
-    From,            // from (used after yield)
-    Print,           // print
-    Global,          // global
-    Clone(usize),    // clone, source line
+    /// `enum` is a contextual keyword. Preserve its source spelling because
+    /// PHP also admits it as a class-like, function, constant and member name.
+    Enum {
+        name: String,
+        line: usize,
+    },
+    Namespace,    // namespace
+    Backslash,    // \ (namespace separator)
+    Yield(usize), // yield, source line
+    From,         // from (used after yield)
+    Print,        // print
+    Global,       // global
+    Clone(usize), // clone, source line
     /// A PHP doc comment retained for declaration metadata. Ordinary comments
     /// remain lexer trivia and never enter the parser token stream.
     DocComment(std::sync::Arc<str>),
@@ -915,7 +920,12 @@ impl<'a> Lexer<'a> {
                         "implements" => tokens.push(Token::Implements),
                         "abstract" => tokens.push(Token::Abstract(line)),
                         "final" => tokens.push(Token::Final(line)),
-                        "enum" => tokens.push(Token::Enum),
+                        ident if ident.eq_ignore_ascii_case("enum") => {
+                            tokens.push(Token::Enum {
+                                name: ident.to_string(),
+                                line,
+                            });
+                        }
                         "declare" => tokens.push(Token::Declare),
                         "namespace" => tokens.push(Token::Namespace),
                         "yield" => tokens.push(Token::Yield(line)),

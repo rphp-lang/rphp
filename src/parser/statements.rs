@@ -130,6 +130,9 @@ impl Parser {
                 | Token::Goto {
                     line: token_line, ..
                 }
+                | Token::Enum {
+                    line: token_line, ..
+                }
                 | Token::Case(token_line)
                 | Token::Default(token_line)
                 | Token::Echo { line: token_line } => *token_line,
@@ -193,7 +196,7 @@ impl Parser {
         if !matches!(self.peek(), Token::Declare | Token::Semicolon(_)) {
             self.strict_types_allowed = false;
         }
-        if let Token::Identifier(name, _) = self.peek() {
+        if let Token::Identifier(name, _) | Token::Enum { name, .. } = self.peek() {
             if self.peek_at(1) == Token::Colon {
                 self.advance();
                 self.advance();
@@ -208,7 +211,7 @@ impl Parser {
         if let Token::Goto { line, .. } = self.peek() {
             self.advance();
             let name = match self.advance() {
-                Token::Identifier(label, _) => label,
+                Token::Identifier(label, _) | Token::Enum { name: label, .. } => label,
                 Token::Exit { .. } => {
                     return Err(self.source_error(
                         "syntax error, unexpected token \"exit\", expecting identifier",
@@ -419,7 +422,7 @@ impl Parser {
                         let explicit_alias = self.consume_as_keyword();
                         let alias = if explicit_alias {
                             match self.advance() {
-                                Token::Identifier(name, _) => name,
+                                Token::Identifier(name, _) | Token::Enum { name, .. } => name,
                                 other => {
                                     return Err(format!(
                                         "Expected alias name after 'as', got {:?}",
@@ -461,7 +464,7 @@ impl Parser {
                         let explicit_alias = self.consume_as_keyword();
                         let alias = if explicit_alias {
                             match self.advance() {
-                                Token::Identifier(name, _) => name,
+                                Token::Identifier(name, _) | Token::Enum { name, .. } => name,
                                 other => {
                                     return Err(format!(
                                         "Expected alias name after 'as', got {:?}",
@@ -498,6 +501,7 @@ impl Parser {
                 loop {
                     let (name, line) = match self.advance() {
                         Token::Identifier(name, line)
+                        | Token::Enum { name, line }
                         | Token::MagicConstant { name, line }
                         | Token::Goto { name, line } => (name, line),
                         Token::Exit { line, .. } => {
@@ -1088,12 +1092,18 @@ impl Parser {
             Token::Function(line)
                 if matches!(
                     self.peek_at(1),
-                    Token::Identifier(_, _) | Token::From | Token::Exit { .. }
+                    Token::Identifier(_, _)
+                        | Token::Enum { .. }
+                        | Token::From
+                        | Token::Exit { .. }
                 )
                     || (self.peek_at(1) == Token::Ampersand
                         && matches!(
                             self.peek_at(2),
-                            Token::Identifier(_, _) | Token::From | Token::Exit { .. }
+                            Token::Identifier(_, _)
+                                | Token::Enum { .. }
+                                | Token::From
+                                | Token::Exit { .. }
                         )) =>
             {
                 self.advance(); // consume 'function'
@@ -1103,7 +1113,7 @@ impl Parser {
                 let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
                 let name = match self.advance() {
-                    Token::Identifier(n, _) => n,
+                    Token::Identifier(n, _) | Token::Enum { name: n, .. } => n,
                     Token::From => "from".to_string(),
                     Token::Exit { .. } => {
                         return Err(self.source_error(
@@ -1205,11 +1215,11 @@ impl Parser {
                 if name.eq_ignore_ascii_case("readonly")
                     && matches!(
                         self.peek_at(1),
-                        Token::Enum | Token::Interface | Token::Trait
+                        Token::Enum { .. } | Token::Interface | Token::Trait
                     ) =>
             {
                 let (unexpected, line) = match (self.peek_at(1), self.peek()) {
-                    (Token::Enum, Token::Identifier(_, line)) => ("enum", line),
+                    (Token::Enum { .. }, Token::Identifier(_, line)) => ("enum", line),
                     (Token::Interface, Token::Identifier(_, line)) => ("interface", line),
                     (Token::Trait, Token::Identifier(_, line)) => ("trait", line),
                     _ => unreachable!("guarded readonly class-like diagnostic"),
@@ -1235,7 +1245,65 @@ impl Parser {
             {
                 self.parse_class()
             }
-            Token::Enum => self.parse_enum(),
+            Token::Enum { .. } if matches!(self.peek_at(1), Token::LBrace(_)) => {
+                let Token::LBrace(line) = self.peek_at(1) else {
+                    unreachable!("guarded contextual enum block diagnostic")
+                };
+                Err(self.source_error("syntax error, unexpected token \"{\"", line))
+            }
+            Token::Enum { .. }
+                if matches!(
+                    self.peek_at(1),
+                    Token::Identifier(_, _) | Token::Enum { .. }
+                ) => self.parse_enum(),
+            Token::Enum { .. }
+                if matches!(
+                    self.peek_at(1),
+                    Token::Backslash
+                        | Token::DoubleColon
+                        | Token::LParen(_)
+                        | Token::LBracket(_)
+                        | Token::Arrow
+                        | Token::NullSafe
+                        | Token::Semicolon(_)
+                        | Token::Assign
+                        | Token::Plus
+                        | Token::Minus
+                        | Token::Star
+                        | Token::Slash
+                        | Token::Percent
+                        | Token::Dot
+                        | Token::PlusPlus
+                        | Token::MinusMinus
+                        | Token::EqualEqual
+                        | Token::IdenticalEqual
+                        | Token::NotEqual
+                        | Token::NotIdentical
+                        | Token::Less
+                        | Token::LessEqual
+                        | Token::Greater
+                        | Token::GreaterEqual
+                        | Token::AmpAmp
+                        | Token::PipePipe
+                        | Token::LogicalAnd
+                        | Token::LogicalOr
+                        | Token::LogicalXor
+                        | Token::PipeGreater(_)
+                        | Token::Question
+                        | Token::QuestionQuestion
+                        | Token::Instanceof
+                        | Token::Pipe
+                        | Token::Ampersand
+                        | Token::Caret
+                        | Token::StarStar
+                        | Token::Spaceship
+                        | Token::ShiftLeft
+                        | Token::ShiftRight
+                ) => {
+                    let expr = self.parse_expr()?;
+                    self.finish_static_property_statement(expr)
+                }
+            Token::Enum { .. } => self.parse_enum(),
             Token::Interface => self.parse_interface(),
             Token::Trait => self.parse_trait(),
             Token::Static(_) if self.peek_at(1) == Token::DoubleColon => {

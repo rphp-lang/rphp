@@ -373,6 +373,7 @@ impl Parser {
         let token = self.advance();
         let member_line = match &token {
             Token::Identifier(_, line)
+            | Token::Enum { line, .. }
             | Token::Goto { line, .. }
             | Token::Echo { line }
             | Token::MagicConstant { line, .. } => Some(*line),
@@ -731,7 +732,7 @@ impl Parser {
                     }
                     let token = self.advance();
                     let member_line = match &token {
-                        Token::Identifier(_, line) => Some(*line),
+                        Token::Identifier(_, line) | Token::Enum { line, .. } => Some(*line),
                         Token::Goto { line, .. }
                         | Token::Echo { line }
                         | Token::MagicConstant { line, .. } => Some(*line),

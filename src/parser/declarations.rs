@@ -1328,7 +1328,7 @@ impl Parser {
             } else if matches!(self.peek(), Token::Case(_)) {
                 self.advance(); // consume 'case'
                 let (case_name, case_line) = match self.advance() {
-                    Token::Identifier(n, line) => (n, line),
+                    Token::Identifier(n, line) | Token::Enum { name: n, line } => (n, line),
                     Token::Exit { name, line } => (name, line),
                     other => return Err(format!("Expected enum case name, got {:?}", other)),
                 };
@@ -1584,6 +1584,7 @@ impl Parser {
         loop {
             let (name, line) = match self.advance() {
                 Token::Identifier(name, line)
+                | Token::Enum { name, line }
                 | Token::MagicConstant { name, line }
                 | Token::Goto { name, line } => (name, line),
                 Token::Exit { name, line } => (name, line),
@@ -1611,7 +1612,10 @@ impl Parser {
     }
 
     fn try_parse_class_constant_type(&mut self) -> Result<Option<TypeHint>, String> {
-        if matches!(self.peek(), Token::Identifier(_, _) | Token::Goto { .. })
+        if matches!(
+            self.peek(),
+            Token::Identifier(_, _) | Token::Enum { .. } | Token::Goto { .. }
+        )
             && self.peek_at(1) == Token::Assign
         {
             return Ok(None);

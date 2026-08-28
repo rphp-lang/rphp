@@ -26,6 +26,66 @@ echo WireState::Open->value;
 }
 
 #[test]
+fn enum_is_a_contextual_identifier_outside_the_declaration_prefix() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+namespace enum { class Item {} function enum() { return __FUNCTION__; } }
+namespace Context {
+    interface Contract {}
+    class enum implements Contract {
+        const enum = 'constant';
+        public enum $value;
+        public static function enum(): string { return 'method'; }
+    }
+    function enum(enum $value): enum { return $value; }
+    const enum = 'global';
+    $value = enum(new enum());
+    $value->value = $value;
+    echo $value::class, '|', enum::enum, '|', enum::enum(), '|', enum, "\n";
+}
+namespace ImportContext {
+    use enum\Item as enum;
+    echo (new enum())::class, "\n";
+}
+namespace InterfaceContext {
+    interface enum {}
+    class User implements enum {}
+    echo (new User()) instanceof enum ? "interface\n" : "bad\n";
+}
+namespace TraitContext {
+    trait enum { public function marker() { return 'trait'; } }
+    class User { use enum; }
+    echo (new User())->marker(), "\n";
+}
+namespace {
+    echo enum\enum(), '|', (new enum\Item())::class, "\n";
+    goto enum;
+    echo "bad\n";
+    enum:
+    echo "label\n";
+}
+"#,
+        ),
+        "Context\\enum|constant|method|global\nenum\\Item\ninterface\ntrait\nenum\\enum|enum\\Item\nlabel\n"
+    );
+}
+
+#[test]
+fn enum_declarations_remain_distinct_and_preserve_contextual_names() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+EnUm Signal { case Ready; public function enum() { return $this->name; } }
+enum enum: string { case Value = 'value'; const enum = 'constant'; }
+echo Signal::Ready->enum(), '|', enum::Value->value, '|', enum::enum;
+"#,
+        ),
+        "Ready|value|constant"
+    );
+}
+
+#[test]
 fn enum_backing_type_is_limited_to_one_int_or_string_type() {
     for (source, expected) in [
         (

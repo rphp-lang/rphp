@@ -675,7 +675,7 @@ impl Parser {
             if self.peek() == Token::Instanceof {
                 self.advance();
                 left = if self.peek() == Token::Backslash
-                    || matches!(self.peek(), Token::Identifier(_, _))
+                    || matches!(self.peek(), Token::Identifier(_, _) | Token::Enum { .. })
                 {
                     Expr::Instanceof {
                         expr: Box::new(left),
@@ -868,7 +868,7 @@ impl Parser {
                 if self.peek() == Token::Instanceof {
                     self.advance();
                     expr = if self.peek() == Token::Backslash
-                        || matches!(self.peek(), Token::Identifier(_, _))
+                        || matches!(self.peek(), Token::Identifier(_, _) | Token::Enum { .. })
                     {
                         Expr::Instanceof {
                             expr: Box::new(expr),
@@ -1459,8 +1459,8 @@ impl Parser {
                     })
                 }
             }
-            Token::Identifier(_, _) | Token::From => {
-                let name = if matches!(self.peek(), Token::Identifier(_, _))
+            Token::Identifier(_, _) | Token::Enum { .. } | Token::From => {
+                let name = if matches!(self.peek(), Token::Identifier(_, _) | Token::Enum { .. })
                     && self.peek_at(1) == Token::Backslash
                 {
                     // Qualified name: App\Models\User
@@ -1470,6 +1470,10 @@ impl Parser {
                         Token::Identifier(n, line) => {
                             self.last_primary_line = Some(line);
                             n
+                        }
+                        Token::Enum { name, line } => {
+                            self.last_primary_line = Some(line);
+                            name
                         }
                         Token::From => "from".to_string(),
                         _ => unreachable!(),
@@ -1798,7 +1802,10 @@ impl Parser {
                     return Ok(expression);
                 }
                 let (class_name, call_line) = match self.peek() {
-                    Token::Backslash | Token::Identifier(_, _) | Token::Namespace => {
+                    Token::Backslash
+                    | Token::Identifier(_, _)
+                    | Token::Enum { .. }
+                    | Token::Namespace => {
                         let class_name = if self.peek() == Token::Namespace {
                             self.parse_namespace_relative_name()?
                         } else {

@@ -35,6 +35,7 @@ impl Parser {
                 | Token::Static(line)
                 | Token::Abstract(line)
                 | Token::Final(line)
+                | Token::Enum { line, .. }
                 | Token::Comma(line)
                 | Token::Case(line)
                 | Token::Default(line)
@@ -267,7 +268,7 @@ impl Parser {
             Token::Declare => Some("declare".to_string()),
             Token::Trait => Some("trait".to_string()),
             Token::Final(_) => Some("final".to_string()),
-            Token::Enum => Some("enum".to_string()),
+            Token::Enum { name, .. } => Some(name.clone()),
             Token::Namespace => Some("namespace".to_string()),
             Token::Yield(_) => Some("yield".to_string()),
             Token::From => Some("from".to_string()),
@@ -594,6 +595,7 @@ impl Parser {
                 | Token::Static(_)
                 | Token::LParen(_)
                 | Token::Identifier(_, _)
+                | Token::Enum { .. }
                 | Token::Public
                 | Token::Protected
                 | Token::Private
@@ -617,7 +619,7 @@ impl Parser {
             false
         };
         match self.advance() {
-            Token::Identifier(n, line) => {
+            Token::Identifier(n, line) | Token::Enum { name: n, line } => {
                 self.last_primary_line = Some(line);
                 parts.push(n);
             }
@@ -634,7 +636,7 @@ impl Parser {
         while self.peek() == Token::Backslash {
             self.advance(); // consume '\'
             match self.advance() {
-                Token::Identifier(n, _) => parts.push(n),
+                Token::Identifier(n, _) | Token::Enum { name: n, .. } => parts.push(n),
                 Token::True => parts.push("true".to_string()),
                 Token::False => parts.push("false".to_string()),
                 Token::Null => parts.push("null".to_string()),
@@ -660,7 +662,7 @@ impl Parser {
         self.expect(&Token::Namespace)?;
         self.expect(&Token::Backslash)?;
         let first = match self.advance() {
-            Token::Identifier(name, line) => {
+            Token::Identifier(name, line) | Token::Enum { name, line } => {
                 self.last_primary_line = Some(line);
                 name
             }
@@ -701,7 +703,9 @@ impl Parser {
             Token::Namespace if self.peek_at(1) == Token::Backslash => {
                 self.parse_qualified_or_namespace_relative_name()?
             }
-            Token::Backslash | Token::Identifier(_, _) => self.parse_qualified_name()?,
+            Token::Backslash | Token::Identifier(_, _) | Token::Enum { .. } => {
+                self.parse_qualified_name()?
+            }
             Token::Static(line) if self.peek_at(1) == Token::DoubleColon => {
                 self.advance();
                 self.last_primary_line = Some(line);
@@ -737,7 +741,7 @@ impl Parser {
             false
         };
         let (mut parts, name_line) = match self.advance() {
-            Token::Identifier(name, line) => (vec![name], line),
+            Token::Identifier(name, line) | Token::Enum { name, line } => (vec![name], line),
             Token::Exit { line, .. } => {
                 return Err(self.source_error(
                     "syntax error, unexpected token \"exit\", expecting identifier or fully qualified name or namespaced name",
@@ -762,7 +766,7 @@ impl Parser {
                 return Ok((prefix, true, name_line));
             }
             match self.advance() {
-                Token::Identifier(name, _) => parts.push(name),
+                Token::Identifier(name, _) | Token::Enum { name, .. } => parts.push(name),
                 other => {
                     return Err(format!(
                         "Expected identifier after '\\' in use declaration, got {:?}",
@@ -841,6 +845,7 @@ impl Parser {
             && matches!(
                 self.tokens.get(self.pos + 1),
                 Some(Token::Identifier(_, _))
+                    | Some(Token::Enum { .. })
                     | Some(Token::Backslash)
                     | Some(Token::Namespace)
                     | Some(Token::ArrayKw)
@@ -865,6 +870,7 @@ impl Parser {
                 matches!(
                     self.tokens.get(self.pos + 1),
                     Some(Token::Identifier(_, _))
+                        | Some(Token::Enum { .. })
                         | Some(Token::Backslash)
                         | Some(Token::Namespace)
                         | Some(Token::ArrayKw)
@@ -881,6 +887,16 @@ impl Parser {
                 matches!(
                     self.tokens.get(self.pos + 1),
                     Some(Token::Variable(_, _)) | Some(Token::Pipe) | Some(Token::Ampersand)
+                )
+            }
+            Token::Enum { .. } => {
+                matches!(
+                    self.tokens.get(self.pos + 1),
+                    Some(Token::Variable(_, _))
+                        | Some(Token::Pipe)
+                        | Some(Token::Ampersand)
+                        | Some(Token::Backslash)
+                        | Some(Token::Less)
                 )
             }
             Token::Backslash | Token::Namespace => true,
@@ -952,6 +968,7 @@ impl Parser {
             let is_type = matches!(
                 next,
                 Some(Token::Identifier(_, _))
+                    | Some(Token::Enum { .. })
                     | Some(Token::Backslash)
                     | Some(Token::Namespace)
                     | Some(Token::ArrayKw)
@@ -970,7 +987,7 @@ impl Parser {
         // Disambiguate: Identifier followed by $var, &, or ... means it's a type hint
         // Identifier NOT followed by those means it's not a type hint (shouldn't happen in param context)
         match self.peek() {
-            Token::Identifier(_, _) => {
+            Token::Identifier(_, _) | Token::Enum { .. } => {
                 let next = self.tokens.get(self.pos + 1);
                 let is_type_context = matches!(
                     next,
@@ -1073,10 +1090,14 @@ impl Parser {
                     Ok(TypeHint::ClassName(name))
                 }
             },
+            Token::Enum { name, .. } => {
+                let name = self.parse_type_name_tail(name, false)?;
+                Ok(TypeHint::ClassName(name))
+            }
             Token::Namespace => {
                 self.expect(&Token::Backslash)?;
                 let first = match self.advance() {
-                    Token::Identifier(name, _) => name,
+                    Token::Identifier(name, _) | Token::Enum { name, .. } => name,
                     other => {
                         return Err(format!(
                             "Expected identifier after 'namespace\\\\' in type hint, got {:?}",
@@ -1089,7 +1110,7 @@ impl Parser {
             }
             Token::Backslash => {
                 let first = match self.advance() {
-                    Token::Identifier(name, _) => name,
+                    Token::Identifier(name, _) | Token::Enum { name, .. } => name,
                     other => {
                         return Err(format!(
                             "Expected identifier after leading '\\' in type hint, got {:?}",
@@ -1160,7 +1181,7 @@ impl Parser {
         while self.peek() == Token::Backslash {
             self.advance();
             match self.advance() {
-                Token::Identifier(name, _) => parts.push(name),
+                Token::Identifier(name, _) | Token::Enum { name, .. } => parts.push(name),
                 other => {
                     return Err(format!(
                         "Expected identifier after '\\' in type hint, got {:?}",

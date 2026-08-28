@@ -25,7 +25,7 @@ impl Parser {
         expected_kind: &str,
     ) -> Result<(String, usize), String> {
         match self.advance() {
-            Token::Identifier(name, line) => Ok((name, line)),
+            Token::Identifier(name, line) | Token::Enum { name, line } => Ok((name, line)),
             Token::Static(line) => Err(self.source_error(
                 "syntax error, unexpected token \"static\", expecting identifier",
                 line,
