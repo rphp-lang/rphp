@@ -4931,6 +4931,7 @@ impl Compiler {
         backing_type: Option<&TypeHint>,
         properties: &[ClassProperty],
         cases: &[EnumCase],
+        constants: &[ClassConstant],
     ) -> Result<bool, String> {
         if let Some(backing_type) = backing_type
             && !matches!(backing_type, TypeHint::Int | TypeHint::String)
@@ -4968,6 +4969,25 @@ impl Compiler {
             };
             if let Some(message) = invalid {
                 return Err(self.goto_error(&message, case.line));
+            }
+        }
+        let mut declarations = cases
+            .iter()
+            .map(|case| (case.line, case.name.as_str()))
+            .chain(
+                constants
+                    .iter()
+                    .map(|constant| (constant.line, constant.name.as_str())),
+            )
+            .collect::<Vec<_>>();
+        declarations.sort_by_key(|(line, _)| *line);
+        let mut names = std::collections::HashSet::new();
+        for (line, name) in declarations {
+            if !names.insert(name) {
+                return Err(self.goto_error(
+                    &format!("Cannot redefine class constant {resolved_enum}::{name}"),
+                    line,
+                ));
             }
         }
         Ok(is_backed)
@@ -5052,6 +5072,7 @@ impl Compiler {
                     backing_type,
                     cases,
                     properties,
+                    constants,
                     methods,
                     ..
                 } => {
@@ -5064,6 +5085,7 @@ impl Compiler {
                         backing_type.as_ref(),
                         properties,
                         cases,
+                        constants,
                     )?;
                     self.validate_enum_abstract_methods(&resolved_enum, methods)?;
                     self.validate_enum_case_constant_operations(cases)?;

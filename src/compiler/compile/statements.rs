@@ -6053,6 +6053,7 @@ impl Compiler {
                     backing_type.as_ref(),
                     properties,
                     cases,
+                    constants,
                 )?;
 
                 self.validate_enum_abstract_methods(&resolved_enum, methods)?;

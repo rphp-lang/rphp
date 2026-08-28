@@ -5035,6 +5035,59 @@ impl ExecutorGlobals {
         None
     }
 
+    /// Enum cases and class constants share one case-sensitive symbol table.
+    /// Trait resolution and method-adaptation errors precede this cold link
+    /// check, while property and forbidden-magic validation follows it.
+    #[cold]
+    fn enum_trait_case_constant_conflict(&self, class_def: &ClassDef) -> Option<String> {
+        if !class_def.is_enum {
+            return None;
+        }
+        let providers = class_def
+            .uses
+            .iter()
+            .map(|used| self.find_class(used))
+            .collect::<Option<Vec<_>>>()?;
+        let (trait_definition, constant) = providers.iter().find_map(|trait_definition| {
+            trait_definition.constants.iter().find_map(|constant| {
+                class_def
+                    .static_properties
+                    .iter()
+                    .any(|case| case.name == constant.name)
+                    .then_some((*trait_definition, constant))
+            })
+        })?;
+        let location = class_def
+            .source_file
+            .as_ref()
+            .map_or_else(String::new, |file| {
+                format!(" in {file} on line {}", class_def.declaration_line)
+            });
+        Some(format!(
+            "Cannot use trait {}, because {}::{} conflicts with enum case {}::{}{}",
+            trait_definition.name,
+            trait_definition.name,
+            constant.name,
+            class_def.name,
+            constant.name,
+            location
+        ))
+    }
+
+    /// Class-declaration execution renders this link error like compilation,
+    /// but only after higher-priority trait adaptation/method collisions have
+    /// been ruled out. Registration repeats the checks as a safety net for
+    /// non-opcode callers.
+    pub(crate) fn enum_trait_case_constant_compile_fatal(
+        &self,
+        class_def: &ClassDef,
+    ) -> Option<String> {
+        if !class_def.is_enum || self.trait_composition_error(class_def).is_some() {
+            return None;
+        }
+        self.enum_trait_case_constant_conflict(class_def)
+    }
+
     /// A resolved `use` edge must name a trait. Runtime declarations surface
     /// this relation as a catchable Error at the declaration opcode, so keep
     /// the message separate from registration's fallback fatal formatting.
@@ -5316,6 +5369,9 @@ impl ExecutorGlobals {
                 return Err(format!("{error}{}", relation_location()));
             }
             if let Some(error) = self.trait_composition_error(&class_def) {
+                return Err(error);
+            }
+            if let Some(error) = self.enum_trait_case_constant_conflict(&class_def) {
                 return Err(error);
             }
         }

@@ -163,6 +163,10 @@ fn op_declare_class<'a>(
             ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
         });
     }
+    if let Some(error) = eg.enum_trait_case_constant_compile_fatal(&class_def) {
+        eg.abort_runtime_class_link(&class_def.name);
+        return Err(VmError::CompileFatal(error));
+    }
     let class_name = class_def.name.clone();
     if let Some((active_parent, outstanding_dependencies)) =
         eg.active_parent_link_dependencies(&class_def)
