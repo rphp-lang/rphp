@@ -1680,6 +1680,22 @@ fn test_parse_abstract_method_contract() {
     assert!(methods[0].is_static);
     assert!(methods[0].is_abstract);
     assert!(methods[0].body.is_empty());
+
+    let tokens = Lexer::new(
+        "<?php enum E { abstract public function contract(); abstract protected function staged() { return; } }",
+    )
+    .tokenize()
+    .unwrap();
+    let statements = Parser::new(tokens)
+        .parse()
+        .expect("forbidden enum abstract methods remain compiler-stage declarations");
+    let Stmt::Enum { methods, .. } = &statements[0] else {
+        panic!("expected enum declaration");
+    };
+    assert_eq!(methods.len(), 2);
+    assert!(methods.iter().all(|method| method.is_abstract));
+    assert!(methods[0].body.is_empty());
+    assert_eq!(methods[1].body.len(), 1);
 }
 
 #[test]

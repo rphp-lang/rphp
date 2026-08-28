@@ -68,6 +68,27 @@ fn enum_case_values_follow_the_backing_shape_at_declaration_time() {
 }
 
 #[test]
+fn enum_abstract_methods_reach_the_qualified_declaration_diagnostic() {
+    for (source, expected) in [
+        (
+            "<?php\nenum Invalid {\n    abstract public function contract();\n}",
+            "Enum method Invalid::contract() must not be abstract in /virtual/enum-abstract.php on line 3",
+        ),
+        (
+            "<?php\nnamespace Domain;\nenum Invalid {\n    abstract protected static function MixedCase() { return; }\n}",
+            "Enum method Domain\\Invalid::MixedCase() must not be abstract in /virtual/enum-abstract.php on line 4",
+        ),
+    ] {
+        let error = run_php_expect_error_with_source_context(
+            source,
+            "/virtual/enum-abstract.php",
+            "/virtual",
+        );
+        assert_eq!(error.to_string(), expected, "unexpected error for {source}");
+    }
+}
+
+#[test]
 fn invalid_backed_enum_tables_are_lazy_repeatable_and_skip_cases() {
     assert_eq!(
         run_php(

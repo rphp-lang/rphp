@@ -6073,6 +6073,8 @@ impl Compiler {
                     }
                 }
 
+                self.validate_enum_abstract_methods(&resolved_enum, methods)?;
+
                 // PHP validates forbidden enum magic methods before interface
                 // compatibility, including when Serializable is also present.
                 if let Some(method) = methods

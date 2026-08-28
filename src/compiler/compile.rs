@@ -4839,6 +4839,26 @@ impl Compiler {
         Ok(())
     }
 
+    fn validate_enum_abstract_methods(
+        &self,
+        resolved_enum: &str,
+        methods: &[ClassMethod],
+    ) -> Result<(), String> {
+        if let Some(method) = methods
+            .iter()
+            .find(|method| method.is_abstract && !method.name.starts_with('$'))
+        {
+            return Err(self.goto_error(
+                &format!(
+                    "Enum method {resolved_enum}::{}() must not be abstract",
+                    method.name
+                ),
+                method.line,
+            ));
+        }
+        Ok(())
+    }
+
     /// Validate declaration-stage constraints that PHP applies even when an
     /// optimizer can prove that the containing source region never executes.
     /// Ordinary class declarations nested in functions and control-flow
@@ -4878,9 +4898,21 @@ impl Compiler {
                 Stmt::Function { body, .. } | Stmt::Block(body) => {
                     self.validate_elided_abstract_methods(body)?;
                 }
-                Stmt::Interface { methods, .. }
-                | Stmt::Trait { methods, .. }
-                | Stmt::Enum { methods, .. } => {
+                Stmt::Enum {
+                    line,
+                    name,
+                    methods,
+                    ..
+                } => {
+                    self.validate_class_like_name(name, "enum", *line)?;
+                    let resolved_enum = self.resolve_declaration_name(name);
+                    self.validate_declaration_import(UseKind::Class, name, &resolved_enum, *line)?;
+                    self.validate_enum_abstract_methods(&resolved_enum, methods)?;
+                    for method in methods {
+                        self.validate_elided_abstract_methods(&method.body)?;
+                    }
+                }
+                Stmt::Interface { methods, .. } | Stmt::Trait { methods, .. } => {
                     for method in methods {
                         self.validate_elided_abstract_methods(&method.body)?;
                     }

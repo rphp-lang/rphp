@@ -576,7 +576,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type(line, false)?;
-                let body = self.parse_method_body(&modifiers, line, false)?;
+                let body = self.parse_method_body(&modifiers, line, false, false)?;
                 if modifiers.is_abstract {
                     self.compile_error(
                         format!("Anonymous class method {method_name}() must not be abstract"),
@@ -874,7 +874,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type(line, false)?;
-                let body = self.parse_method_body(&modifiers, line, false)?;
+                let body = self.parse_method_body(&modifiers, line, false, false)?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
@@ -1036,7 +1036,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type(line, false)?;
-                let body = self.parse_method_body(&modifiers, line, true)?;
+                let body = self.parse_method_body(&modifiers, line, true, false)?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
@@ -1374,12 +1374,7 @@ impl Parser {
                     let params = self.parse_param_list()?;
                     self.expect(&Token::RParen)?;
                     let return_type = self.parse_return_type(line, false)?;
-                    self.expect(&Token::LBrace(0))?;
-                    let mut body = Vec::new();
-                    while self.peek() != Token::RBrace && !self.at_eof() {
-                        body.push(self.parse_stmt_in_scope(false)?);
-                    }
-                    self.expect(&Token::RBrace)?;
+                    let body = self.parse_method_body(&modifiers, line, true, true)?;
                     self.pop_generic_scope();
                     self.class_scope_active = previous_class_scope;
                     methods.push(ClassMethod {
@@ -1391,7 +1386,7 @@ impl Parser {
                         body,
                         is_static: modifiers.is_static,
                         is_final: modifiers.is_final,
-                        is_abstract: false,
+                        is_abstract: modifiers.is_abstract,
                         returns_by_ref,
                         return_type,
                         generic_params,
@@ -1649,6 +1644,7 @@ impl Parser {
         modifiers: &MemberModifiers,
         method_line: usize,
         allow_private_abstract: bool,
+        defer_all_abstract_bodies: bool,
     ) -> Result<Vec<Stmt>, String> {
         if modifiers.duplicate.is_some() {
             if matches!(self.peek(), Token::Semicolon(_)) {
@@ -1670,7 +1666,9 @@ impl Parser {
                     method_line,
                 );
             }
-            if modifiers.visibility == Visibility::Private && !allow_private_abstract {
+            if defer_all_abstract_bodies
+                || modifiers.visibility == Visibility::Private && !allow_private_abstract
+            {
                 if matches!(self.peek(), Token::Semicolon(_)) {
                     self.advance();
                     return Ok(Vec::new());
