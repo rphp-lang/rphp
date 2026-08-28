@@ -8,6 +8,109 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`user-enum-json-encoding`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. `json_encode()` now gives user enums PHP 8.5's
+canonical default boundary: backed cases encode their scalar backing value,
+while unit cases return false with error 11, or the numeric placeholder zero
+under `JSON_PARTIAL_OUTPUT_ON_ERROR`. `JSON_THROW_ON_ERROR`, partial-output
+priority, `JsonException`, `json_last_error()` and `json_last_error_msg()`
+preserve the prior error state and later-error ordering.
+
+An enum that implements `JsonSerializable` takes the protocol path before the
+default enum path. Callback results retain PHP array order, a callback that
+returns its receiver exposes the engine-provided `name`/`value` projection,
+and repeated or nested calls share a request-local recursion guard without
+leaking it after return or exception. Recursive arrays and objects report
+error 6, partial output substitutes null, non-finite numbers report error 7,
+and callback exceptions pass through without mutating the input. Referenced
+array traversal retains the reached COW snapshot across re-entrant callback
+mutation. Ordinary successful requests add only one nullable sidecar word to
+executor state; recursive-container tracking is linked through the active
+encoder stack.
+
+Eight original CLI regressions cover unit/backed defaults, throw/partial and
+error-state ordering, callback precedence and ordering, receiver return,
+callback exception, recursive containers, repeated and nested invocation,
+referenced-input mutation and state preservation. Their source hashes to
+SHA-256
+`e622da74d217ef9a8837aae107be10cc3c227cf73f28c72deb1dde74b71e93d5`.
+The clean-room oracle hashes to
+`92ed6de9bc8b8b69699129156d7eb5cd27bce8820624fa5346f37eb18c8ffb6f`;
+its PHP 8.5.9 and exact-candidate stdout both hash to
+`c83d139ac0439d0fc01924ede42d5fd4d95801fb626a977615ee9884794af990`.
+Two independent owner-mutation and self-return controls hash to
+`4200b0bb1acf1a34b4067d7a3d09295d2f18ec50af416c6b5c7b0e8de48aac3a`
+and
+`6b66051fc916d0f06963dbc9f6051bd23f15e67fc71bc13c13ca40219991e49f`;
+all three controls match the reference byte for byte.
+
+`Zend/tests/enum/json_encode.phpt` changes from an output failure to pass. The
+complete 152-case enum directory moves from 139 pass / 4 fail to 140 pass / 3
+fail, with eight skips and one unsupported case unchanged; that path is the
+only status/category movement, an exact `+1/-0` gain. The candidate
+path/status/category projection hashes to
+`2edaf5f4eba42c865b34a29a58b55ea1453f1803f6898d653d5266a666b92c4e`
+and its exact pass set to
+`6c35b3c98599edd40c68042048f5fc3e5eff6523f3707e7e119f8a79c5538674`.
+The three remaining enum failures are `ast-dumper.phpt`,
+`name-property.phpt` and `spl-object-storage.phpt`.
+
+The adjacent 88-case ext/json directory moves from 15 pass / 67 fail / three
+crashes to 30 pass / 55 fail / zero crashes, retaining two skips and one
+unsupported case. No parent pass is lost. Its final projection and pass-set
+hashes are
+`afe973b8e31173a40e5a2991c1c4680aed90fffb3ce73aa6ddd7b9e07d817823`
+and
+`58117667c8a6548afe4320cbb9a0be9c4770c576f5768ac915b46499e451a590`.
+
+Two serial exact-final-binary 5,599-case Zend/lang runs have identical raw
+manifests at SHA-256
+`54036081f676e7898c68e011e1e5cf41fa09adacbf4e3d63fa23f5a8636976aa`:
+4,509 pass, 794 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Their path/status/category projection hashes to
+`310ffc4ae6f0b5592d00994e1ed0e18d76cef6787ba4a7f9a9580af406ecfdf3`
+and exact pass set to
+`c3a2791ac31e77e164685ffdcd6974841717b90eeec217c10740f7057b970ac5`.
+Two serial 1,575-case strings/array runs have identical raw manifests at
+`9f5edf942abcc866a1c0c833bca1a4dbef97b344295e36fd07314f233e29b0ce`
+and retain the exact parent projection/pass set at
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`
+and
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,968 pass, 812 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 794 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`8b083e9118d8dc85405d44d2091092d0e071b095f2acf78451ed97d686eebb4c`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+Two exact-final-binary CPU-2-pinned gates used four warmups and 32 balanced
+order pairs without outlier removal. Across startup, scalar JSON, array JSON,
+ordinary object JSON and enum-property-read controls, the first run ranges
+from -6.84% to +1.55% and the second from -5.01% to +2.25%, below the +5%
+regression gate with exact control outputs. Backed-enum and
+`JsonSerializable` enum workloads are reported as changed paths because the
+parent does not produce equivalent output; they are not A/B regression
+claims. Result hashes are
+`3ff5aea504187df49f3185500699cd768be45319b030bc3a11ac4cd2f68e8099`
+and
+`3524a61f8cf2692467c66cf89271ab24ea13469f92f3090d50977c38be13f2dc`;
+the task harness hashes to
+`72d8cef42200b464feece4797c7e443249a08c372066689016802070599559fd`.
+
+This checkpoint does not claim the enum AST dumper, detailed enum-property
+Reflection, `SplObjectStorage` or broader SPL, general JSON decode/UTF-8/depth
+completion, 32-bit behavior or allocation-limit/OOM equivalence.
+
+The implementation checkpoint is commit `a9010ccb`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `user-enum-case-object-handles`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. User-enum case singletons now receive their
 request-local object handles when PHP first materializes them, rather than

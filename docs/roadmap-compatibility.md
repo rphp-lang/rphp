@@ -4398,6 +4398,34 @@ The monitored supported debt is now 813 failures: 18 strings, zero array and
 encoding, detailed enum-property Reflection and `SplObjectStorage`; internal
 persistent-enum numbering, 32-bit behavior and allocation-limit/OOM
 equivalence remain separate boundaries.
+
+The `a9010ccb` `user-enum-json-encoding` checkpoint then moves Zend/lang from
+4,508 to 4,509 pass, exactly `+1/-0`. Backed user-enum cases now encode their
+scalar backing value, while unit cases select PHP 8.5's non-backed-enum error
+11 across ordinary, throwing and partial-output calls. `JsonSerializable`
+precedes the default enum path, repeated and nested calls share and release a
+request-local recursion guard, and receiver returns expose the engine `name`
+and `value` projection. Callback exceptions, recursive arrays/objects,
+non-finite values, later-error priority, COW/reference snapshots and input
+state are preserved by original regressions. The only enum PHPT movement is
+`enum/json_encode.phpt`; the other 151 enum outcomes are stable.
+
+Two serial exact-final-binary Zend/lang runs have identical raw manifests,
+path/status/category projections and pass sets; two strings/array projections
+also match the exact parent. The adjacent 88-case ext/json directory gains 15
+passes without a lost parent pass and removes all three parent crashes. All
+five Cargo configurations, all-feature/all-target, formatting, HTML data,
+PHPT runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3
+pass. Production remains at the unsafe ceiling of 1,623 blocks and 289
+functions. Two CPU-2-pinned 32-pair release gates place all startup/scalar/
+array/object/enum-property controls below the +5% ceiling; changed enum JSON
+paths are measured separately because parent and candidate outputs differ.
+
+The monitored supported debt is now 812 failures: 18 strings, zero array and
+794 Zend/lang. The three remaining enum failures are the AST dumper, detailed
+enum-property Reflection and `SplObjectStorage`; broader JSON decode, SPL,
+32-bit behavior and allocation-limit/OOM equivalence remain separate
+boundaries.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
