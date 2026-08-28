@@ -3820,6 +3820,66 @@ impl Compiler {
         }
     }
 
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn invalid_attribute_constant_expression(expression: &Expr) -> Option<&'static str> {
+        let recurse = Self::invalid_attribute_constant_expression;
+        match expression {
+            Expr::FunctionCall { .. }
+            | Expr::MethodCall { .. }
+            | Expr::StaticCall { .. }
+            | Expr::DynamicCall { .. }
+            | Expr::DynamicStaticCall { .. } => {
+                Some("Constant expression contains invalid operations")
+            }
+            Expr::DynamicClassConstant {
+                class, constant, ..
+            } => {
+                if !Self::is_compile_time_class_constant_name(class) {
+                    Some(
+                        "Dynamic class names are not allowed in compile-time class constant references",
+                    )
+                } else {
+                    recurse(class).or_else(|| recurse(constant))
+                }
+            }
+            Expr::DynamicNamedClassConstant { constant, .. } => recurse(constant),
+            Expr::BinaryOp { left, right, .. }
+            | Expr::NullCoalesce { left, right }
+            | Expr::Elvis { left, right } => recurse(left).or_else(|| recurse(right)),
+            Expr::Not(inner)
+            | Expr::UnaryPlus(inner)
+            | Expr::UnaryMinus(inner)
+            | Expr::BitwiseNot(inner)
+            | Expr::ErrorSuppress(inner)
+            | Expr::Cast { expr: inner, .. } => recurse(inner),
+            Expr::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => recurse(condition)
+                .or_else(|| recurse(then_expr))
+                .or_else(|| recurse(else_expr)),
+            Expr::ArrayLiteral(elements) => elements.iter().find_map(|element| {
+                element
+                    .key
+                    .as_ref()
+                    .and_then(recurse)
+                    .or_else(|| recurse(&element.value))
+            }),
+            Expr::ArrayAccess { array, index, .. } => recurse(array).or_else(|| recurse(index)),
+            Expr::PropertyAccess { object, .. } => recurse(object),
+            Expr::DynamicPropertyAccess {
+                object, property, ..
+            } => recurse(object).or_else(|| recurse(property)),
+            Expr::New { args, .. } | Expr::DynamicNew { args, .. } => {
+                args.iter().find_map(|argument| recurse(argument.expr()))
+            }
+            _ => None,
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             instructions: Vec::new(),
@@ -5251,6 +5311,7 @@ impl Compiler {
                 } => {
                     let invalid_case_line = Attribute::non_enum_case_line(attributes);
                     let _non_enum_case_scope = invalid_case_line.map(NonEnumCaseErrorScope::enter);
+                    self.validate_elided_attribute_constant_expressions(attributes, *line)?;
                     self.validate_class_like_name(name, "class", *line)?;
                     let resolved_class = self.resolve_declaration_name(name);
                     if !resolved_class.starts_with("class@anonymous#") {
@@ -5273,11 +5334,21 @@ impl Compiler {
                         return Err(self.goto_error(NON_ENUM_CASE_ERROR, line));
                     }
                 }
-                Stmt::Function { body, .. } | Stmt::Block(body) => {
+                Stmt::Function {
+                    line,
+                    attributes,
+                    body,
+                    ..
+                } => {
+                    self.validate_elided_attribute_constant_expressions(attributes, *line)?;
+                    self.validate_elided_abstract_methods(body)?;
+                }
+                Stmt::Block(body) => {
                     self.validate_elided_abstract_methods(body)?;
                 }
                 Stmt::Enum {
                     line,
+                    attributes,
                     name,
                     backing_type,
                     cases,
@@ -5286,6 +5357,7 @@ impl Compiler {
                     methods,
                     ..
                 } => {
+                    self.validate_elided_attribute_constant_expressions(attributes, *line)?;
                     self.validate_class_like_name(name, "enum", *line)?;
                     let resolved_enum = self.resolve_declaration_name(name);
                     self.validate_declaration_import(UseKind::Class, name, &resolved_enum, *line)?;
@@ -5304,17 +5376,20 @@ impl Compiler {
                     }
                 }
                 Stmt::Interface {
+                    line,
                     attributes,
                     methods,
                     ..
                 }
                 | Stmt::Trait {
+                    line,
                     attributes,
                     methods,
                     ..
                 } => {
                     let invalid_case_line = Attribute::non_enum_case_line(attributes);
                     let _non_enum_case_scope = invalid_case_line.map(NonEnumCaseErrorScope::enter);
+                    self.validate_elided_attribute_constant_expressions(attributes, *line)?;
                     for method in methods {
                         self.validate_elided_abstract_methods(&method.body)?;
                     }
@@ -6480,11 +6555,29 @@ impl Compiler {
         })
     }
 
+    #[inline(never)]
     fn validate_attribute_target(
         &self,
         attributes: &[Attribute],
         target: &str,
+        target_line: usize,
     ) -> Result<(), String> {
+        if attributes.is_empty() {
+            return Ok(());
+        }
+        self.validate_nonempty_attribute_target(attributes, target, target_line)
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn validate_nonempty_attribute_target(
+        &self,
+        attributes: &[Attribute],
+        target: &str,
+        target_line: usize,
+    ) -> Result<(), String> {
+        self.validate_attribute_constant_expressions(attributes, target_line)?;
         let mut lines = attributes.iter().filter_map(|attribute| {
             self.resolve_name(&attribute.name)
                 .eq_ignore_ascii_case("Attribute")
@@ -6501,6 +6594,39 @@ impl Compiler {
         }
         if let Some(line) = lines.next() {
             return Err(self.goto_error("Attribute \"Attribute\" must not be repeated", line));
+        }
+        Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn validate_elided_attribute_constant_expressions(
+        &self,
+        attributes: &[Attribute],
+        target_line: usize,
+    ) -> Result<(), String> {
+        if attributes.is_empty() {
+            return Ok(());
+        }
+        self.validate_attribute_constant_expressions(attributes, target_line)
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn validate_attribute_constant_expressions(
+        &self,
+        attributes: &[Attribute],
+        target_line: usize,
+    ) -> Result<(), String> {
+        for attribute in attributes {
+            for argument in &attribute.args {
+                if let Some(message) = Self::invalid_attribute_constant_expression(argument.expr())
+                {
+                    return Err(self.goto_error(message, target_line));
+                }
+            }
         }
         Ok(())
     }
@@ -7634,7 +7760,7 @@ impl Compiler {
         let mut type_hints = Vec::new();
         let mut param_names = Vec::new();
         for (i, param) in params.iter().enumerate() {
-            self.validate_attribute_target(&param.attributes, "parameter")?;
+            self.validate_attribute_target(&param.attributes, "parameter", param.line)?;
             self.validate_deprecated_target(&param.attributes, "parameter")?;
             self.validate_override_target(
                 &param.attributes,
@@ -11243,7 +11369,7 @@ impl Compiler {
                     self.deferred_error = Some(error);
                 }
                 cp.return_type_hint = self.convert_type_hint(return_type);
-                if let Err(error) = self.validate_attribute_target(attributes, "function") {
+                if let Err(error) = self.validate_attribute_target(attributes, "function", *line) {
                     self.deferred_error = Some(error);
                 }
                 if let Err(error) = self.validate_deprecated_target(attributes, "function") {

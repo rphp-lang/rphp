@@ -2482,7 +2482,7 @@ impl Compiler {
                 let mut cp = self.compile_params(&mut func_compiler, params)?;
                 func_compiler.validate_declared_type_hint(return_type, *line)?;
                 cp.return_type_hint = self.convert_type_hint(return_type);
-                self.validate_attribute_target(attributes, "function")?;
+                self.validate_attribute_target(attributes, "function", *line)?;
                 self.validate_deprecated_target(attributes, "function")?;
                 self.validate_no_discard_callable(
                     attributes,
@@ -3903,7 +3903,7 @@ impl Compiler {
                 attributes,
                 declarations,
             } => {
-                self.validate_attribute_target(attributes, "constant")?;
+                self.validate_attribute_target(attributes, "constant", *line)?;
                 self.validate_deprecated_target(attributes, "constant")?;
                 self.validate_override_target(attributes, "constant", false)?;
                 let reflected_attributes = self.compile_attributes(attributes, 64);
@@ -4153,7 +4153,7 @@ impl Compiler {
                     *is_abstract,
                     methods,
                 )?;
-                self.validate_attribute_target(attributes, "class")?;
+                self.validate_attribute_target(attributes, "class", *class_line)?;
                 if *is_abstract {
                     self.validate_attribute_class_form(
                         attributes,
@@ -4490,7 +4490,7 @@ impl Compiler {
                                 warning: false,
                             });
                     }
-                    self.validate_attribute_target(&method.attributes, "method")?;
+                    self.validate_attribute_target(&method.attributes, "method", method.line)?;
                     self.validate_deprecated_target(&method.attributes, "method")?;
                     self.validate_no_discard_callable(
                         &method.attributes,
@@ -4703,7 +4703,7 @@ impl Compiler {
                 let mut deferred_static_defaults = Vec::new();
                 let mut readonly_props: Vec<String> = Vec::new();
                 for prop in properties {
-                    self.validate_attribute_target(&prop.attributes, "property")?;
+                    self.validate_attribute_target(&prop.attributes, "property", prop.line)?;
                     self.validate_deprecated_target(&prop.attributes, "property")?;
                     self.validate_override_target(&prop.attributes, "property", true)?;
                     if prop.is_abstract && prop.is_final {
@@ -5180,7 +5180,7 @@ impl Compiler {
                     &resolved_iface,
                     *interface_line,
                 )?;
-                self.validate_attribute_target(attributes, "class")?;
+                self.validate_attribute_target(attributes, "class", *interface_line)?;
                 self.validate_attribute_class_form(
                     attributes,
                     &format!("interface {resolved_iface}"),
@@ -5267,7 +5267,7 @@ impl Compiler {
                     if method.name.starts_with('$') && method.name.ends_with("::set") {
                         cp.return_type_hint = crate::vm::function::ParamTypeHint::Void;
                     }
-                    self.validate_attribute_target(&method.attributes, "method")?;
+                    self.validate_attribute_target(&method.attributes, "method", method.line)?;
                     self.validate_deprecated_target(&method.attributes, "method")?;
                     self.validate_no_discard_callable(
                         &method.attributes,
@@ -5389,7 +5389,11 @@ impl Compiler {
                     self.compile_class_constants(&resolved_iface, None, constants)?;
                 let mut compiled_properties = Vec::new();
                 for property in properties {
-                    self.validate_attribute_target(&property.attributes, "property")?;
+                    self.validate_attribute_target(
+                        &property.attributes,
+                        "property",
+                        property.line,
+                    )?;
                     self.validate_deprecated_target(&property.attributes, "property")?;
                     self.validate_override_target(&property.attributes, "property", true)?;
                     if property.is_abstract {
@@ -5524,7 +5528,7 @@ impl Compiler {
                     &resolved_trait,
                     *trait_line,
                 )?;
-                self.validate_attribute_target(attributes, "class")?;
+                self.validate_attribute_target(attributes, "class", *trait_line)?;
                 self.validate_attribute_class_form(
                     attributes,
                     &format!("trait {resolved_trait}"),
@@ -5597,7 +5601,7 @@ impl Compiler {
                     if method.name.starts_with('$') && method.name.ends_with("::set") {
                         cp.return_type_hint = crate::vm::function::ParamTypeHint::Void;
                     }
-                    self.validate_attribute_target(&method.attributes, "method")?;
+                    self.validate_attribute_target(&method.attributes, "method", method.line)?;
                     self.validate_deprecated_target(&method.attributes, "method")?;
                     self.validate_no_discard_callable(
                         &method.attributes,
@@ -5736,7 +5740,7 @@ impl Compiler {
                     Value::string(resolved_trait.clone()),
                 );
                 for prop in properties {
-                    self.validate_attribute_target(&prop.attributes, "property")?;
+                    self.validate_attribute_target(&prop.attributes, "property", prop.line)?;
                     self.validate_deprecated_target(&prop.attributes, "property")?;
                     self.validate_override_target(&prop.attributes, "property", true)?;
                     if prop.is_abstract && prop.is_final {
@@ -6069,7 +6073,7 @@ impl Compiler {
                     &resolved_enum,
                     *enum_line,
                 )?;
-                self.validate_attribute_target(attributes, "class")?;
+                self.validate_attribute_target(attributes, "class", *enum_line)?;
                 self.validate_attribute_class_form(
                     attributes,
                     &format!("enum {resolved_enum}"),
@@ -6487,7 +6491,7 @@ impl Compiler {
                     let mut cp = self.compile_params(&mut func_compiler, &method.params)?;
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
-                    self.validate_attribute_target(&method.attributes, "method")?;
+                    self.validate_attribute_target(&method.attributes, "method", method.line)?;
                     self.validate_deprecated_target(&method.attributes, "method")?;
                     self.validate_no_discard_callable(
                         &method.attributes,
@@ -6609,7 +6613,11 @@ impl Compiler {
                 // Static properties (cases) are stored as class properties with is_enum_case flag.
                 let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
                 for (case, case_value) in cases.iter().zip(compiled_case_values) {
-                    self.validate_attribute_target(&case.attributes, "class constant")?;
+                    self.validate_attribute_target(
+                        &case.attributes,
+                        "class constant",
+                        case.line,
+                    )?;
                     self.validate_deprecated_target(&case.attributes, "class constant")?;
                     self.validate_override_target(&case.attributes, "class constant", false)?;
                     let case_name = &case.name;
@@ -6808,7 +6816,11 @@ impl Compiler {
     ) -> Result<Vec<ClassConstantDefinition>, String> {
         let mut names = std::collections::HashSet::new();
         for constant in constants {
-            self.validate_attribute_target(&constant.attributes, "class constant")?;
+            self.validate_attribute_target(
+                &constant.attributes,
+                "class constant",
+                constant.line,
+            )?;
             self.validate_deprecated_target(&constant.attributes, "class constant")?;
             self.validate_override_target(&constant.attributes, "class constant", false)?;
             if let Some(forbidden) = Self::forbidden_class_constant_type_name(

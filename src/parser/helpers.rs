@@ -393,7 +393,7 @@ impl Parser {
         while let Token::AttributeStart(line) = self.peek() {
             self.advance();
             loop {
-                let name = self.parse_qualified_name()?;
+                let name = self.parse_attribute_name()?;
                 let args = if matches!(self.peek(), Token::LParen(_)) {
                     self.advance();
                     if matches!(self.peek(), Token::DotDotDot(_))
@@ -435,6 +435,9 @@ impl Parser {
         attributes: Vec<Attribute>,
     ) -> Result<Stmt, String> {
         let attribute_line = attributes.first().map_or(1, |attribute| attribute.line);
+        if let Some(error) = self.attributed_multiple_constants_error(&statement) {
+            return Ok(error);
+        }
         let target_line = match &statement {
             Stmt::Function { line, .. }
             | Stmt::Class { line, .. }
@@ -559,6 +562,49 @@ impl Parser {
             }
         }
         Ok(statement)
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn parse_attribute_name(&mut self) -> Result<String, String> {
+        if let Token::Variable(name, line) = self.peek() {
+            return Err(self.variable_attribute_name_error(&name, line));
+        }
+        self.parse_qualified_name()
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn variable_attribute_name_error(&self, name: &str, line: usize) -> String {
+        let prefix = "syntax error, unexpected variable \"$";
+        let mut message = String::with_capacity(prefix.len() + name.len() + 1);
+        message.push_str(prefix);
+        message.push_str(name);
+        message.push('"');
+        self.source_error(&message, line)
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn attributed_multiple_constants_error(&mut self, statement: &Stmt) -> Option<Stmt> {
+        let Stmt::Const {
+            line, declarations, ..
+        } = statement
+        else {
+            return None;
+        };
+        if declarations.len() <= 1 {
+            return None;
+        }
+        let message = "Cannot apply attributes to multiple constants at once".to_string();
+        self.deferred_compile_error = Some((message.clone(), *line));
+        Some(Stmt::ExprStmt(Expr::CompileError {
+            message,
+            line: *line,
+        }))
     }
 
     fn advance(&mut self) -> Token {
