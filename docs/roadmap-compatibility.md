@@ -4225,10 +4225,33 @@ unsafe ceiling of 1,623 blocks and 289 functions. One CPU-2-pinned 32-pair
 parser/compiler gate places enum and non-startup control paired medians between
 -0.266% and +0.165%; 100-request startup is -4.067%, and all 288 outputs match.
 
-The monitored supported debt is now 821 failures: 18 strings, zero array and
-803 Zend/lang. Read-only enum-manifest triage selects the invalid
-constant-expression pair `backed-int-const-invalid-expr.phpt` and
-`offsetGet-in-const-expr.phpt` next. Enum Reflection/JSON/SPL behavior, general
+The `17223097` `enum-constant-expression-operation-boundaries` checkpoint then
+moves Zend/lang from 4,500 to 4,502 pass, exactly `+2/-0`. Runtime variables in
+backed enum case values now select the canonical case-line, uncatchable
+constant-operation compile fatal after declaration-shape validation but before
+later enum link/body errors. A class constant that offsets an enum-case object
+remains lazy and raises the canonical catchable `Error` at each read, before
+its index is evaluated and without invoking `ArrayAccess`. Valid arrays, enum
+properties, short circuits, include/eval origin and state preservation retain
+their previous behavior. The targeted gains are
+`enum/backed-int-const-invalid-expr.phpt` and
+`enum/offsetGet-in-const-expr.phpt`; the remaining 150 enum outcomes do not
+move.
+
+Two serial exact-final-binary Zend/lang runs have identical raw manifests,
+path/status/category projections and pass sets; two strings/array projections
+also match the exact parent. All five Cargo configurations,
+all-feature/all-target, formatting, HTML data, PHPT runner, unsafe, Composer
+S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at the
+unsafe ceiling of 1,623 blocks and 289 functions. One CPU-2-pinned 32-pair
+release gate runs SHA-verified parent/candidate copies from the same tmpfs and
+places all eight paired medians between -0.348% and +0.083%, with all 256
+outputs and statuses matching.
+
+The monitored supported debt is now 819 failures: 18 strings, zero array and
+801 Zend/lang. Read-only enum-manifest triage selects
+`enum/case-in-class.phpt` next because it is the only remaining enum failure
+classified at the parser boundary. Enum Reflection/JSON/SPL behavior, general
 class-link recovery and runtime inheritance expansion remain separate.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and

@@ -8,6 +8,99 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`enum-constant-expression-operation-boundaries`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. A runtime variable nested anywhere
+in a backed enum case value now raises PHP's canonical uncatchable
+`Constant expression contains invalid operations` compile fatal at the case
+declaration line. Backing type, property and case-shape errors retain priority;
+the invalid operation precedes magic-method, direct enum-interface and
+method-body errors, while a later source syntax error still wins globally.
+The same validation applies to constant-elided, post-return, include and eval
+source units without losing earlier output or shutdown state.
+
+An enum-case object used as the receiver of `[]` in a class constant remains a
+lazy constant expression. Declaring or not reading the constant succeeds;
+each read raises a catchable `Error` with PHP's canonical `Cannot use [] on
+objects in constant expression` message and the array-access source location.
+The receiver is evaluated before the index, so an invalid later index cannot
+replace the object error, and implementing `ArrayAccess` does not invoke any of
+its four methods. Valid array offsets, enum `name`/`value` property constants
+and constant-expression short circuiting retain their existing behavior.
+
+Seven original CLI regressions cover direct, nested and multiline variable
+expressions; validation and later-syntax priority; constant-elided and
+post-return declarations; lazy, repeated and short-circuited reads; evaluation
+order; valid controls; include/eval origin and state preservation. Their source
+hashes to SHA-256
+`8aa434db16be8ad52bce3bedd7dd90a1cf4a3e9908eb39b89fa51f591830ae46`.
+The 29-file clean-room oracle/harness aggregate hashes to
+`463aec0f4002cb418e9821646b71f542196be0a309324b3a2e96b9a1ef4318ba`;
+its PHP 8.5.9 result manifest hashes to
+`d12df661f71aee0dd59b504bb1f384fe6224c0e4853ba099e323a7daefc5958f`.
+Twenty-four of 26 scenarios match byte for byte in exit status, stdout and
+stderr. One uncaught runtime scenario differs only by RPHP's pre-existing
+leading stderr newline while retaining the complete message, location, trace,
+status and stdout. One valid string-offset class constant remains an
+independent pre-existing failure and is not claimed by this checkpoint.
+
+`Zend/tests/enum/backed-int-const-invalid-expr.phpt` and
+`Zend/tests/enum/offsetGet-in-const-expr.phpt` change from fail to pass. The
+complete 152-case enum directory moves from 131 pass / 12 fail to 133 pass / 10
+fail, with eight skips and one unsupported case in both runs; those two paths
+are the only status/category movements, an exact `+2/-0` gain. The candidate
+path/status/category projection hashes to
+`b78df9ad47baff119ade3ca57ee9982313c3a47577a5a4b833a51cf5bebc414a`
+and its exact pass set to
+`4cf8289d3d5daf99dcd4e110d07c13753b8ad7994075c9a3ab1209647c9baebd`.
+Two serial exact-final-binary 5,599-case Zend/lang runs each record 4,502 pass,
+801 fail, 115 skip and 181 unsupported, with no timeout or crash. Their raw
+manifests are identical at SHA-256
+`a4f342796942f3e3a373fc2217d520f0596c2133ec9204d8560d05d9561f8eb0`,
+their path/status/category projection hashes to
+`6be5c1642cba22e001a73706fb8d6a1b57ba467f6326ab257b3b53481578d2a9`,
+and their exact pass-set hash is
+`0a2cc5b67fa921646dc05ac74d37ce96e874364d89ed41451b8abe64e7f06f68`.
+Two serial 1,575-case strings/array runs retain the exact parent projection at
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`
+and pass-set hash
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,961 pass, 819 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 801 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`2afff74df116e680579739facf1d14d80c8279bcbd756f1880692ffdd73ccbc4`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+One exact-final-binary CPU-2-pinned parser/compiler gate used four warmups and
+32 balanced order pairs without outlier removal. SHA-verified copies of the
+exact parent and candidate were placed on the same tmpfs to remove an observed
+storage-layout startup bias. Paired median changes are -0.024% for 100-request
+startup, +0.083% for ordinary constants, -0.348% for valid array constant
+offsets, -0.319% for backed enum cases, +0.051% for enum-property constants,
+-0.230% for deferred defined constants, -0.134% for constant-elided backed
+enums and -0.109% for short-circuited constants. All 256 output/exit pairs
+match. The summary and raw paired data hash respectively to
+`1f18a65822e6c09603dbade13dcae96ca077b1bfb53f8e77c75da7c5ad9fb64d`
+and `6567dd119307d18730a571ccfbc86e58c144b437d293a75b6114b177fc8327dd`;
+the complete harness/source aggregate hashes to
+`deb6f8328851b715f24aa9d0a3bf48fd6548ff43b4a2e18c351e42c7a6e71239`.
+
+This checkpoint does not claim general constant-expression validation, valid
+string-offset constant expressions, general runtime `ArrayAccess`, enum
+Reflection/JSON/SPL behavior, general class-link recovery, 32-bit behavior or
+allocation-limit/OOM equivalence. Read-only enum-manifest triage selects
+`Zend/tests/enum/case-in-class.phpt` next as the only remaining enum failure
+classified at the parser boundary.
+
+The implementation checkpoint is commit `17223097`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `enum-synthesized-method-redeclaration-staging`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. A direct user declaration of the
 engine-owned `cases()` method now stops an ordinary unit or backed enum at the
