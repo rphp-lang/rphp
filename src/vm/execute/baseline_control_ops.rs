@@ -509,7 +509,7 @@ fn execute_source_unit(
                     {
                         return Ok(outcome);
                     }
-                    return Err(VmError::Fatal(error.message));
+                    return Err(VmError::CompileFatal(error.message));
                 };
                 let class_name = imported_class_name(&stmts, owner)
                     .unwrap_or_else(|| owner.trim_start_matches('\\').to_string());
@@ -521,7 +521,7 @@ fn execute_source_unit(
                     {
                         return Ok(outcome);
                     }
-                    return Err(VmError::Fatal(error.message));
+                    return Err(VmError::CompileFatal(error.message));
                 }
                 compile_attempts += 1;
             }
@@ -531,7 +531,7 @@ fn execute_source_unit(
                 {
                     return Ok(outcome);
                 }
-                return Err(VmError::Fatal(error.message));
+                return Err(VmError::CompileFatal(error.message));
             }
         }
     };

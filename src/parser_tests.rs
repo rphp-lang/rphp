@@ -1689,11 +1689,18 @@ fn test_abstract_method_modifier_boundaries() {
         Parser::new(tokens).parse()
     };
 
-    assert!(
-        parse("<?php class C { abstract public function run(); }")
-            .unwrap_err()
-            .contains("must therefore be declared abstract")
-    );
+    let statements =
+        parse("<?php class C { abstract public function run(); }").expect("valid class grammar");
+    let Stmt::Class {
+        is_abstract,
+        methods,
+        ..
+    } = &statements[0]
+    else {
+        panic!("expected class declaration");
+    };
+    assert!(!is_abstract);
+    assert!(methods[0].is_abstract);
     let statements =
         parse("<?php abstract class C { final abstract public function run(); }").unwrap();
     assert!(matches!(

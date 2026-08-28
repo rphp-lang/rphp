@@ -147,6 +147,14 @@ fn exit_after_pending_shutdown(eg: &mut ExecutorGlobals, default_code: i32) -> !
     }
 }
 
+fn startup_display_errors_uses_stderr(settings: &[(String, String)]) -> bool {
+    settings
+        .iter()
+        .rev()
+        .find(|(name, _)| name.eq_ignore_ascii_case("display_errors"))
+        .is_some_and(|(_, value)| value.trim().eq_ignore_ascii_case("stderr"))
+}
+
 fn read_source(action: CliAction) -> Result<Vec<u8>, String> {
     match action {
         CliAction::Inline(code) => {
@@ -346,6 +354,15 @@ fn main() {
         Err(execute::VmError::Parse(message)) => {
             eg.flush_output();
             eprintln!("\nParse error: {message}");
+            exit_after_pending_shutdown(&mut eg, 255);
+        }
+        Err(execute::VmError::CompileFatal(message)) => {
+            eg.flush_output();
+            if startup_display_errors_uses_stderr(&ini_settings) {
+                eprintln!("Fatal error: {message}");
+            } else {
+                eprintln!("\nFatal error: {message}");
+            }
             exit_after_pending_shutdown(&mut eg, 255);
         }
         Err(e) => {

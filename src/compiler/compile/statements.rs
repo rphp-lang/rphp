@@ -2341,14 +2341,18 @@ impl Compiler {
                     // statements never pay for this recursive source scan.
                     self.contains_yield |= then_body.iter().any(Stmt::contains_yield)
                         || else_body.iter().any(Stmt::contains_yield);
-                    let (body, elided_body) = if value.is_truthy() {
-                        (then_body, else_body)
+                    if value.is_truthy() {
+                        for statement in then_body {
+                            self.compile_stmt(statement)?;
+                        }
+                        self.validate_elided_abstract_methods(else_body)?;
+                        self.record_elided_declarations(else_body)?;
                     } else {
-                        (else_body, then_body)
-                    };
-                    self.record_elided_declarations(elided_body)?;
-                    for statement in body {
-                        self.compile_stmt(statement)?;
+                        self.validate_elided_abstract_methods(then_body)?;
+                        self.record_elided_declarations(then_body)?;
+                        for statement in else_body {
+                            self.compile_stmt(statement)?;
+                        }
                     }
                 } else {
                     // Compile condition
@@ -4132,6 +4136,19 @@ impl Compiler {
                         &resolved_class,
                         *class_line,
                     )?;
+                }
+                if !*is_abstract
+                    && let Some(method) = methods
+                        .iter()
+                        .find(|method| method.is_abstract && !method.name.starts_with('$'))
+                {
+                    return Err(self.goto_error(
+                        &format!(
+                            "Class {resolved_class} declares abstract method {}() and must therefore be declared abstract",
+                            method.name
+                        ),
+                        method.line,
+                    ));
                 }
                 self.validate_attribute_target(attributes, "class")?;
                 if *is_abstract {

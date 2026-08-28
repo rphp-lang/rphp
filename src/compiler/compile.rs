@@ -4800,6 +4800,101 @@ impl Compiler {
         Ok(())
     }
 
+    /// Validate declaration-stage constraints that PHP applies even when an
+    /// optimizer can prove that the containing source region never executes.
+    /// Ordinary class declarations nested in functions and control-flow
+    /// bodies are still compiled, so a concrete class cannot hide a directly
+    /// declared abstract method behind a constant branch or an earlier
+    /// return. Keep this targeted: runtime inheritance/link checks remain
+    /// attached to the declaration marker.
+    fn validate_elided_abstract_methods(&self, statements: &[Stmt]) -> Result<(), String> {
+        for statement in statements {
+            match statement {
+                Stmt::Class {
+                    line,
+                    name,
+                    is_abstract,
+                    methods,
+                    ..
+                } => {
+                    self.validate_class_like_name(name, "class", *line)?;
+                    let resolved_class = self.resolve_declaration_name(name);
+                    if !resolved_class.starts_with("class@anonymous#") {
+                        self.validate_declaration_import(
+                            UseKind::Class,
+                            name,
+                            &resolved_class,
+                            *line,
+                        )?;
+                    }
+                    if !*is_abstract
+                        && let Some(method) = methods
+                            .iter()
+                            .find(|method| method.is_abstract && !method.name.starts_with('$'))
+                    {
+                        return Err(self.goto_error(
+                            &format!(
+                                "Class {resolved_class} declares abstract method {}() and must therefore be declared abstract",
+                                method.name
+                            ),
+                            method.line,
+                        ));
+                    }
+                    for method in methods {
+                        self.validate_elided_abstract_methods(&method.body)?;
+                    }
+                }
+                Stmt::Function { body, .. } | Stmt::Block(body) => {
+                    self.validate_elided_abstract_methods(body)?;
+                }
+                Stmt::Interface { methods, .. }
+                | Stmt::Trait { methods, .. }
+                | Stmt::Enum { methods, .. } => {
+                    for method in methods {
+                        self.validate_elided_abstract_methods(&method.body)?;
+                    }
+                }
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    self.validate_elided_abstract_methods(then_body)?;
+                    self.validate_elided_abstract_methods(else_body)?;
+                }
+                Stmt::While { body, .. }
+                | Stmt::DoWhile { body, .. }
+                | Stmt::For { body, .. }
+                | Stmt::Foreach { body, .. } => {
+                    self.validate_elided_abstract_methods(body)?;
+                }
+                Stmt::Switch { cases, .. } => {
+                    for case in cases {
+                        self.validate_elided_abstract_methods(&case.body)?;
+                    }
+                }
+                Stmt::TryCatch {
+                    try_body,
+                    catches,
+                    finally_body,
+                } => {
+                    self.validate_elided_abstract_methods(try_body)?;
+                    for catch in catches {
+                        self.validate_elided_abstract_methods(&catch.body)?;
+                    }
+                    if let Some(finally_body) = finally_body {
+                        self.validate_elided_abstract_methods(finally_body)?;
+                    }
+                }
+                Stmt::Namespace { body, .. } => {
+                    self.validate_elided_abstract_methods(body)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     fn resolve_constant_name(&self, name: &str) -> (String, Option<String>) {
         if let Some(relative) = name.strip_prefix("namespace\\") {
             let resolved = self
@@ -5220,6 +5315,8 @@ impl Compiler {
                 // and must not be collected from dead code (Composer's
                 // version polyfills rely on this distinction).
                 self.compile_stmt(stmt)?;
+            } else {
+                self.validate_elided_abstract_methods(std::slice::from_ref(stmt))?;
             }
         }
         self.finalize_gotos()?;

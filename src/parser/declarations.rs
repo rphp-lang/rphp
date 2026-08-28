@@ -905,18 +905,6 @@ impl Parser {
         self.expect(&Token::RBrace)?;
         self.pop_generic_scope();
 
-        if self.deferred_compile_error.is_none()
-            && !is_abstract
-            && let Some(method) = methods
-                .iter()
-                .find(|method| method.is_abstract && !method.name.starts_with('$'))
-        {
-            return Err(format!(
-                "Class {} declares abstract method {}() and must therefore be declared abstract",
-                name, method.name
-            ));
-        }
-
         Ok(Stmt::Class {
             line,
             attributes: Vec::new(),
