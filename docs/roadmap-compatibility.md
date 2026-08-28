@@ -4514,6 +4514,33 @@ skips and unsupported observer case require native `zend_test` capabilities.
 General source pretty-printing, attribute-group retention, skipped/unsupported
 enum capabilities, 32-bit behavior and allocation-limit/OOM equivalence remain
 separate boundaries.
+
+The `e4507d04` `magic-call-named-argument-packing` checkpoint then moves
+Zend/lang from 4,512 to 4,515 pass, exactly `+3/-0`. Direct and runtime
+first-class instance/static dispatch through `__call` and `__callStatic` now
+packs positional, named, named-only and unpacked arguments into the synthetic
+argument array with source order, key, casing, evaluation, object/COW and
+source-reference state preserved. Duplicate-name and thrown-argument priority
+remain unchanged; ordinary resolved calls retain their own signatures and
+unknown-name errors. Magic trampoline Reflection exposes zero required and one
+optional variadic `mixed $arguments` parameter without growing persistent
+runtime layouts.
+
+Three exact-final-binary Zend/lang manifests are byte-identical; the two target
+PHPTs and adjacent `function_arguments/gh20435_2.phpt` are the only movements.
+The strings/array projection remains exact-parent-identical. All five Cargo
+configurations, all-feature/all-target, formatting, PHPT runner, unsafe,
+Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains
+at the unsafe ceiling of 1,623 blocks and 289 functions. Two CPU-2-pinned
+32-pair release gates keep startup, ordinary/direct/dynamic named and dynamic
+array calls below the +5% regression ceiling; candidate-only direct and
+trampoline magic lanes retain exact checksums.
+
+The monitored supported debt is now 806 failures: 18 strings, zero array and
+788 Zend/lang. Constant-expression magic first-class callable rejection,
+missing-method diagnostics outside named packing, general Reflection/Closure
+completion, PHP 8.2, 32-bit behavior and allocation-limit/OOM equivalence
+remain separate boundaries.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.

@@ -8,6 +8,86 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`magic-call-named-argument-packing`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.9. Runtime dispatch through `__call()` and
+`__callStatic()` now treats every supplied named argument as an entry in the
+synthetic magic argument array rather than resolving it against the two
+physical handler parameters. Direct instance/static calls, named-only calls,
+source unpacking and runtime first-class callable trampolines preserve the
+requested method's spelling, positional/named source order, numeric/string
+keys, evaluation order and object identity. Source-unpacked reference cells
+are snapshotted like PHP while ordinary callback-array reference behavior is
+unchanged. Duplicate-name and argument exceptions retain their priority and
+do not dispatch or evaluate later operands.
+
+Magic first-class callables expose PHP's public trampoline signature through
+Reflection: zero required parameters and one optional variadic `mixed
+$arguments` parameter. `ReflectionParameter` construction by position or name
+uses the same projection. Ordinary resolved calls and ordinary closures retain
+their own signatures and `Unknown named parameter` diagnostics. The call frame
+uses a spare packed flag, so no persistent frame, value, closure or object
+layout grows.
+
+Three original E2E regressions cover direct/static/unpacked and first-class
+calls, more than two positional arguments, names colliding with the physical
+handler parameters, method-name casing, evaluation order, object/COW and
+source-reference state, duplicate and exception priority, ordinary-closure
+signature isolation and instance/static Reflection. Their source hashes to
+SHA-256
+`253414b04620deaba94e943d9a7904add4287dcb29e848e31e5a756694f86e3c`.
+The clean-room oracle hashes to
+`6fb19726eb558f16930b4200fb4dd808d47f59673aff601a1d434124f0abd8d6`;
+its PHP 8.5.9 and exact-candidate stdout both hash to
+`610463abadde146c843ed555aa807e6a002779a599b6fab9878c13f15ceecd1a`
+with empty stderr.
+
+`Zend/tests/named_params/__call.phpt` and
+`Zend/tests/magic_methods/trampoline_closure_named_arguments.phpt` change to
+exact pass. The adjacent `Zend/tests/function_arguments/gh20435_2.phpt`
+backtrace case closes through the same argument-packing root cause. These are
+the only status/category movements, an exact `+3/-0` gain; the focused target
+manifest hashes to
+`a035ecd87f41c2ed595e0f7e55909bdac69ec5e4d7d0df8d5788b576daf4d4d3`.
+Three exact-final-binary 5,599-case Zend/lang manifests are byte-identical at
+SHA-256
+`369ec26b52673b34f16632ad3104a780d683b8c26164be0173d2cb3b4f8ad5a8`:
+4,515 pass, 788 fail, 115 skip and 181 unsupported, with no timeout or crash.
+The exact pass set hashes to
+`f398faec7c9475c4ea26e6d277485d63259a3abbb7bfa8a832915f4938cef16a`.
+The final 1,575-case strings/array projection remains byte-identical to both
+parent confirmations at
+`9f5edf942abcc866a1c0c833bca1a4dbef97b344295e36fd07314f233e29b0ce`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,974 pass, 806 fail, 182 skip and 212 unsupported. Supported
+debt is 18 strings failures, zero array failures and 788 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`a78ed3c7cc5681c4a7f2100633d4b5d95ae96cf46ade99c8115e743ec765bc1e`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks pass. Production remains at
+the ceiling of 1,623 unsafe blocks and 289 unsafe functions, with 375 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+
+Two exact-final-binary CPU-2-pinned gates used 32 balanced-order pairs without
+outlier removal and retained exact checksums. Independent/paired median changes
+for direct named calls are +2.019%/+2.368% and +2.221%/+1.966%; startup,
+ordinary calls, dynamic named calls and dynamic array calls remain below
++1.1% in both confirmations. Candidate-only direct-magic medians are
+0.108802/0.110502 seconds per 100,000 calls and trampoline-magic medians are
+0.083707/0.083533 seconds. The raw result hashes are
+`634a930639406cb6a133e8bccfe27895a17a7a68faa51687dfa687e835734038`
+and `4f59f620c5ea384dbf1ae4ba9c7e0ad724442a5da9fb69a7c2cb6b34a87326bf`;
+the harness hashes to
+`4364445e1d30fa984a552354a7958a48b9e417929d4c8972495453bb5337a1ae`.
+Every comparable median remains below the +5% regression ceiling.
+
+This checkpoint does not claim constant-expression magic first-class callable
+acceptance, general missing-method diagnostics outside named packing, complete
+Reflection/Closure behavior, PHP 8.2, 32-bit behavior or allocation-limit/OOM
+equivalence. The implementation checkpoint is commit `e4507d04`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `enum-assert-ast-rendering`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. Direct `assert()` calls with no explicit
 description now synthesize PHP's canonical source text when their expression
