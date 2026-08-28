@@ -8,6 +8,77 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`first-class-callable-directory-closure`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. A first-class-callable placeholder
+inside an attribute now produces PHP's non-catchable `Cannot create Closure as
+attribute argument` compile error at the annotated declaration line. Any
+nullsafe segment in an instance receiver chain is rejected before receiver
+evaluation with `Cannot combine nullsafe operator with Closure creation`.
+Discarded bare CV expression statements no longer perform an unobservable
+rvalue fetch or emit an undefined-variable notice; observed reads and `$this`
+retain their existing diagnostics.
+
+Four original E2E regressions and the expanded parser corpus cover declaration
+line attribution, nested and dead-code nullsafe chains, compile-error priority,
+discarded versus observed variables, error-handler state, ordinary nullsafe
+calls, dynamic FCCs and plain attribute arguments. Their files hash to
+`931329c7af72673f6149d45b086954bc55b5561d33e9350256d462d7a594d9fa`
+and
+`fce9a0a9978d7affa1883bba5c17222d822d97e228778973e0410f8f2e167080`.
+The four clean-room oracle sources have aggregate digest
+`4f570d2389f4f7d225455ff7e40e2be1d64bad1d9ed022514d766266b0a1482f`;
+successful control output, stderr and exit status match PHP 8.5.9 byte for
+byte, while fatal controls match the canonical headline, source line and
+status used by the upstream tests.
+
+`first_class_callable_011.phpt`, `first_class_callable_013.phpt` and
+`first_class_callable_dynamic.phpt` are the only status/category movements,
+an exact `+3/-0` gain. The three-case target manifest hashes to
+`b6b60c227ae783109aff4241981e0e1589e94b17b4b35b61fef4cea69a051178`.
+The complete 65-case `Zend/tests/first_class_callable` directory is closed for
+the supported contract at 61 pass and four extension skips, with manifest hash
+`01e7c846d34c89ed27a586e2dd7a48c3b83d9bf9c8a07f70f0865f5a224fca19`.
+
+Two serial exact-final-binary 5,599-case Zend/lang manifests are byte-identical
+at SHA-256
+`ee5417ebbe7bd550a05ec985cf3c9b31a01ff5e9d5ede0276941fe35620c5047`:
+4,523 pass, 780 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Their path/status/category projection and exact pass set hash to
+`9ef5f0531c35bcf40d4fdf0dd71e248008e90c6220f9a6bb2c1e35bc9f7880e1`
+and
+`a8d12df5359421691e0060be866904e1089d016ff008229d92fda0e4e66d8fca`.
+Two serial 1,575-case strings/array projections remain exact-parent-identical:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,982 pass, 798 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 780 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`2e817bdf7c57e5c476250632810bb06487a3ca77a6552c2334305a6c30d18b18`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and both unsafe-policy checks pass. Production remains
+at the ceiling of 1,623 unsafe blocks and 289 unsafe functions, with 377 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+
+Two exact-final-binary CPU-2-pinned gates used four warmups and 32
+balanced-order pairs without outlier removal. Observed CV-read medians are
++0.492% and -0.584%, ordinary-call controls are -0.355% and -0.469%, and
+startup is -0.556% and -0.526%; all checksums are exact. The intentionally
+discarded undefined-CV lane improves by 99.878% or more because it no longer
+enters the notice handler. Raw result hashes are
+`c6e8dac76822339e0c7eedd58be6aa8c1e049413e1b29a5a836a12b97e7047c0`
+and
+`787f791e5d048b2a36fd02b66349489226764ac767a647976fbb8676e159d9c5`;
+the harness hashes to
+`60ce1961f7597bb8cf839eb650b7dd35615dedda635279ec59582465eb10f756`.
+
+This checkpoint does not claim general attribute validation, property-hook
+attributes, nullsafe write contexts outside FCC creation, undefined-notice
+suppression in other statement kinds, PHP 8.2, 32-bit behavior or
+allocation-limit/OOM equivalence. The implementation checkpoint is commit
+`22016a9c`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `constant-expression-fcc-resolution`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. First-class callables in constants, runtime
 defaults, property initializers and deferred attribute arguments now resolve

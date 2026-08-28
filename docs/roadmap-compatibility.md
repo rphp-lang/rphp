@@ -4566,6 +4566,32 @@ The monitored supported debt is now 801 failures: 18 strings, zero array and
 completion, instance-call constant expressions, remaining FCC diagnostics,
 PHP 8.2, 32-bit behavior and allocation-limit/OOM equivalence remain separate
 boundaries.
+
+The `22016a9c` `first-class-callable-directory-closure` checkpoint then moves
+Zend/lang from 4,520 to 4,523 pass, exactly `+3/-0`, and closes the supported
+`Zend/tests/first_class_callable` directory at 61 pass plus four extension
+skips. Attribute FCC placeholders now fail at compile time on the annotated
+target line, nullsafe segments anywhere in an FCC receiver chain fail before
+receiver evaluation, and a discarded bare CV statement no longer performs an
+unobservable rvalue fetch. Observed reads, `$this`, ordinary nullsafe calls,
+dynamic FCCs and non-FCC attribute arguments retain their prior behavior.
+
+Two serial exact-final-binary Zend/lang manifests are byte-identical, and the
+three named PHPTs are the only status/category movements. The strings/array
+projection remains exact-parent-identical. All five Cargo configurations,
+all-feature/all-target, formatting, PHPT runner, unsafe, Composer S0, four
+Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at the unsafe
+ceiling of 1,623 blocks and 289 functions. Two CPU-2-pinned 32-pair release
+gates keep observed reads, ordinary calls and startup below the +5% regression
+ceiling; the removed discarded-fetch lane improves by more than 99.8% with
+exact checksums.
+
+The monitored supported debt is now 798 failures: 18 strings, zero array and
+780 Zend/lang. General attribute validation, property-hook attributes,
+nullsafe write contexts outside FCC creation, notice suppression in other
+statement kinds, PHP 8.2, 32-bit behavior and allocation-limit/OOM equivalence
+remain separate boundaries.
+
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
