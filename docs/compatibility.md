@@ -8,6 +8,85 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`frameless-call-operand-cleanup`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. A positional two- or three-argument global
+`in_array()` call now retires its compiler-owned operand temporaries at the
+consuming statement boundary. Nested objects are released in Zend order, so a
+destructor Throwable replaces the successful call result or the active
+argument/call error, with the displaced exception retained as `previous`.
+Nothing after the failed statement is published.
+
+The compiler marks only the unambiguous global positional call shapes that
+Zend lowers through its frameless internal ABI. Namespaced fallback, named
+arguments, other internal functions and ordinary calls keep their preceding
+path. The VM first discards abandoned pending argument copies, then applies the
+existing alias-aware destructor planner to the owned operand range. Scalar and
+shallow destructor-free operands retain an allocation-free drop path. Cleanup
+re-entry preserves live slots until every destructor succeeds, preventing a
+double drop while allowing a later destructor exception to replace an earlier
+one. Direct, include and eval execution retain the destructor origin and the
+consuming call site.
+
+Seven original regressions cover successful two- and three-argument calls,
+nested arrays, two-destructor and TypeError replacement chains,
+argument-evaluation priority, named/COW/reference and ordinary-call controls,
+instruction metadata, and direct/include/eval source metadata. The committed
+regression source hashes to
+`b2f88ea20fca6a04014b7db97c9ebf0138a9f8600ff71e1710d3baa5d979ba23`.
+Eight clean-room oracle sources concatenate in lexical order to SHA-256
+`9f7dab922be40fe8b990b05a445cde6b43f7c852fb88e6cb3dcea56aeb23a11a`.
+The four catchable or successful boundary programs are byte-exact with PHP
+8.5.9; direct/include/eval coverage additionally normalizes PHP's synthetic
+internal trace frame while comparing the same destructor origin and call site.
+
+`Zend/tests/frameless_throwing_destructor.phpt` changes from output failure to
+pass. Two exact-final-binary 5,599-case Zend/lang runs each record 4,481 pass,
+822 fail, 115 skip and 181 unsupported, with no timeout or crash. Their full
+path/status/category projections are identical at SHA-256
+`f3756d7841e516b3609a8c463860991e71baffd8a750e11aaec8e3015f3dd107`,
+and their exact pass-set hash is
+`8efb3f210ee0e1c474b1396833979be80f9c95e2d309252ac98a723ad7348b95`.
+The exact parent delta is `+1/-0`, with no other movement. Two 1,575-case
+strings/array runs retain the exact parent path/status/category projection at
+SHA-256
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,940 pass, 840 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 822 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`f5e9859ed132ee3ed62cfd4c7f3c8e7608d7890833582bab53b8a1ffe32fbc24`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+One exact-final-binary CPU-2-pinned gate used four warmups and 32 balanced
+order pairs without outlier removal. Paired median changes are -7.500% for
+startup, -3.120% for named scalar positional calls, +3.540% for scalar
+temporary literals, -3.047% for retained objects, +1.164% for named arguments
+and +0.563% for non-frameless calls. All comparable outputs match and the
+positive controls remain below the five-percent regression ceiling. The
+temporary object with an empty destructor records +57.257%, the required new
+semantic work absent in the parent rather than a like-for-like regression. The
+harness and result hash to
+`91722250c066d00ffb4a4397c266210605c26c28f8c852728984ef1d11ada1cf`
+and
+`8adbfcbbecc6af1db509213007c063c7584a85a113962dfc98a7bbedab0c3a8d`.
+
+This checkpoint does not claim broad operand/result cleaning, general internal
+call ABI changes, ArrayAccess or SPL, shutdown-only fatal formatting,
+generator or Fiber lifecycle, 32-bit behavior or allocation-limit/OOM
+equivalence. Read-only final-manifest triage selects
+`Zend/tests/temporary_cleaning/temporary_cleaning_016.phpt` next: its bounded
+deprecated `${expr}` interpolation parse/live-range failure is separable from
+the 32-case `temporary_cleaning_013` operand-cleaning cluster.
+
+The implementation checkpoint is commit `eed9297b`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `object-foreach-return-cleanup`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. A return expression inside by-value `foreach`
 over a compiler-owned temporary ordinary object is now evaluated before the

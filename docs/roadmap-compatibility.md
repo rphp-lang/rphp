@@ -4031,14 +4031,33 @@ unsafe ceiling of 1,623 blocks and 289 functions. One CPU-2-pinned 32-pair
 release gate places all six paired medians between -2.185% and +2.904%, with
 matching outputs.
 
-The monitored supported debt is now 841 failures: 18 strings, zero array and
-823 Zend/lang. Read-only clustering selects
-`Zend/tests/frameless_throwing_destructor.phpt` next: a frameless internal call
-currently exits successfully without retiring its temporary object operand, so
-the expected destructor exception is absent. General Iterator/IteratorAggregate
-and generator lifecycle, object iteration expansion, `ArrayAccess`,
-`ArrayObject`, `SplObjectStorage`, `SplFixedArray` and broader SPL remain
-separate contracts.
+The `eed9297b` `frameless-call-operand-cleanup` checkpoint then moves Zend/lang
+from 4,480 to 4,481 pass, exactly `+1/-0`. Positional two- and three-argument
+global `in_array()` calls now retire compiler-owned nested operand temporaries
+at their consuming statement boundary. Destructor Throwables replace the call
+result or active argument/call error in Zend order, retain the displaced
+exception as `previous` and preserve the destructor origin plus consuming call
+site. Named, namespaced, COW/reference and non-frameless controls retain their
+prior ownership and lifetime.
+
+Two exact-final-binary Zend/lang runs have the same path/status/category
+projection and pass set; two strings/array projections also match the exact
+parent. All five Cargo configurations, all-feature/all-target, formatting,
+HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9
+S2/S3 pass. Production remains at the unsafe ceiling of 1,623 blocks and 289
+functions. One CPU-2-pinned 32-pair release gate keeps every comparable
+positive control at or below +3.540%, with matching outputs. The temporary
+object path records the required destructor-dispatch contract cost rather than
+a comparable regression.
+
+The monitored supported debt is now 840 failures: 18 strings, zero array and
+822 Zend/lang. Read-only final-manifest triage selects
+`Zend/tests/temporary_cleaning/temporary_cleaning_016.phpt` next: its bounded
+deprecated `${expr}` interpolation parse/live-range failure is separable from
+the broad 32-case `temporary_cleaning_013` operand/result-cleaning cluster.
+General Iterator/IteratorAggregate and generator lifecycle, object iteration
+expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
+broader SPL remain separate contracts.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument
