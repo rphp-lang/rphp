@@ -8,6 +8,100 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`enum-trait-case-constant-conflict`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.9. When execution reaches an enum declaration,
+an imported trait class constant whose case-sensitive name matches an enum
+case now raises PHP's canonical uncatchable `Cannot use trait T, because
+T::C conflicts with enum case E::C` fatal at the enum declaration. Nested
+trait constants identify the outer trait used by the enum. Trait-use order,
+then constant declaration order, selects the reported conflict; differently
+cased names remain valid.
+
+The declaration first resolves every used trait, so a missing trait retains
+priority. Enum shape and direct case/constant collisions are validated during
+compilation, while trait method collisions and invalid adaptations precede the
+new link boundary. The constant/case conflict in turn precedes forbidden enum
+trait properties, magic methods and aliases. Later source syntax and
+method-body compile errors keep their existing global priority. Registration
+is aborted before any trait member or partial enum becomes visible; reached,
+include and eval declarations preserve prior output, shutdown state and source
+locations, while unreachable and post-return declarations remain inert.
+
+Seven original CLI regressions cover unit, backed and namespaced enums, nested
+traits, conflict selection and casing, direct symbols and validation order,
+method/adaptation/property/magic interactions, valid and unreachable controls,
+include/eval origins and state preservation. Their source hashes to SHA-256
+`53e20141b5584934fff6a37fc107056ad0af42293a806e2657f9a75607f74814`.
+The 43-file clean-room oracle/harness aggregate hashes to
+`530b8d1ab396175f1fdc50c140ded0822d0a69694108a35530a31a42338911d6`;
+its PHP 8.5.9 result manifest hashes to
+`3f19f0a39578d02a9b416ae9fa33d878ee44f917b1d5516282e02fbef0dca14f`
+and the exact-candidate result manifest to
+`940068a4e787f4e2e1fa25698ce714ed880d9123475d9ec291888e3064f3d8de`.
+Thirty-seven of 41 scenarios match byte for byte in exit status, stdout and
+stderr. The four explicit non-claims are pre-existing leading-newline
+diagnostic-envelope differences for two missing-trait, one method-collision
+and one invalid-adaptation scenario; their higher-priority selection remains
+correct.
+
+`Zend/tests/enum/gh21760.phpt` changes from fail to pass. The complete 152-case
+enum directory moves from 134 pass / 9 fail to 135 pass / 8 fail, with eight
+skips and one unsupported case in both runs; that path is the only
+status/category movement, an exact `+1/-0` gain. The candidate
+path/status/category projection hashes to
+`0a08588de3db2ce9e4744ffdecce4d95ab9b3074d7f773758a5ed1ed8c99ff80`
+and its exact pass set to
+`7fd986b3ea901df53b4e7440a70aae7417ca83b6a8fc967e477511a3da4bc235`.
+The complete 216-case trait directory retains 214 pass, one skip and one
+unsupported case with no movement; its projection and pass-set hashes are
+`b90f85659f2194ff0fc003566c5504dc7e978c71aa98da62a9a522b777f18579`
+and `b46c468f103a02bd984ee3625077539a1633c0dfda62252175f67b3f5dfdf91c`.
+
+Two serial exact-final-binary 5,599-case Zend/lang runs have identical raw
+manifests at SHA-256
+`234e06d9b0cfd3db13c0ea242be691c0ca0115082840e8c1f7917d664f4fb432`:
+4,504 pass, 799 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Their path/status/category projection hashes to
+`fe875a853d9e402d4f96d371626d8b2bf2f708904c2ea14e1e1f3936a0c34d19`
+and exact pass set to
+`0b1c1ff98a76e48ac10ecca3a2770be54d2bba902299cb29b48c3ec2a9a49b85`.
+Two serial 1,575-case strings/array runs retain the exact parent projection at
+`392587b16fee83fa2233b41d0bc8a1dd95d5d4b34a1b5365f25985f5c8515dbe`
+and pass-set hash
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,963 pass, 817 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 799 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`4f23d309f34bc462fe1397e56f36f4a1b5f51b7468d8fcb2795114acda484099`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+One exact-final-binary CPU-2-pinned declaration/link gate used four warmups and
+32 balanced order pairs without outlier removal. SHA-verified parent and
+candidate copies ran from the same tmpfs. Paired median changes range from
+-0.296% to +1.037% across startup, plain enums, ordinary class traits, enum
+trait constants, case-sensitive near misses, nested traits, direct enum
+symbols, enum trait methods, elided enums and a function control. All 320
+output/status pairs match. The result and raw paired-data hashes are
+`2c21ab78f61ccf6ad305758ea17dcc154199a4b37ad95bf83349239fef80b316`
+and `bea35589893d21e4ee4a6668590ad704858dd3f14ebcde07be43ede9ed8bc6c0`;
+the benchmark harness hashes to
+`7ea3565594abf414c69ea3a0ec3ef1453bba8c58553f3d09794579905289489e`.
+
+This checkpoint does not claim general non-enum trait-constant conflicts,
+trait properties or forbidden enum methods beyond ordering, enum
+Reflection/JSON/SPL behavior, 32-bit behavior or allocation-limit/OOM
+equivalence. The remaining enum failures are reported independently.
+
+The implementation checkpoint is commit `ae30dd03`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `non-enum-case-declaration-diagnostic`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. A class, interface, trait or anonymous-class
 member spelled `case Name;` is now consumed as PHP's enum-case-shaped grammar

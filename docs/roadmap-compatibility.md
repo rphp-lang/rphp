@@ -4269,8 +4269,30 @@ unsafe ceiling of 1,623 blocks and 289 functions. One CPU-2-pinned 32-pair
 release gate places all nine parser/compiler medians between -0.539% and
 +0.325%, with all 288 output/status pairs matching.
 
-The monitored supported debt is now 818 failures: 18 strings, zero array and
-800 Zend/lang. The nine remaining enum failures are output or runtime gaps;
+The `ae30dd03` `enum-trait-case-constant-conflict` checkpoint then moves
+Zend/lang from 4,503 to 4,504 pass, exactly `+1/-0`. At a reached enum
+declaration, an imported trait constant whose case-sensitive name equals an
+enum case now raises the canonical uncatchable conflict fatal before any
+partial enum is published. Nested traits identify the outer used trait, and
+use/constant order selects the error. Missing traits, enum/direct-symbol
+shape, trait method collisions, invalid adaptations, method-body errors and
+later syntax retain priority; the conflict precedes trait properties and
+forbidden magic methods or aliases. Valid case-sensitive near misses,
+unreachable declarations and include/eval output, shutdown and source state
+retain their behavior. The only PHPT movement is
+`enum/gh21760.phpt`; the other 151 enum and all 216 trait outcomes are stable.
+
+Two serial exact-final-binary Zend/lang runs have identical raw manifests,
+path/status/category projections and pass sets; two strings/array projections
+also match the exact parent. All five Cargo configurations,
+all-feature/all-target, formatting, HTML data, PHPT runner, unsafe, Composer
+S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at the
+unsafe ceiling of 1,623 blocks and 289 functions. One CPU-2-pinned 32-pair
+release gate places all ten declaration/link and control medians between
+-0.296% and +1.037%, with all 320 output/status pairs matching.
+
+The monitored supported debt is now 817 failures: 18 strings, zero array and
+799 Zend/lang. The eight remaining enum failures are output or runtime gaps;
 enum Reflection/JSON/SPL behavior, general class-link recovery and runtime
 inheritance expansion remain separate.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
