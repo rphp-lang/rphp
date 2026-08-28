@@ -4337,6 +4337,21 @@ impl ExecutorGlobals {
             ));
         }
 
+        if class_def.is_enum
+            && closure
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("Traversable"))
+            && !closure.iter().any(|name| {
+                name.eq_ignore_ascii_case("Iterator")
+                    || name.eq_ignore_ascii_case("IteratorAggregate")
+            })
+        {
+            return Err(format!(
+                "Enum {} must implement interface Traversable as part of either Iterator or IteratorAggregate in Unknown on line 0",
+                class_def.name
+            ));
+        }
+
         let implements_serializable = closure
             .iter()
             .any(|name| name.eq_ignore_ascii_case("Serializable"));
