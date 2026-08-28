@@ -1983,7 +1983,26 @@ mod tests {
 
         assert!(tokens.iter().any(|token| matches!(
             token,
-            Token::CompileDeprecation(message, 2)
+            Token::CompileDeprecation(message, 3)
+                if message.starts_with("Using ${expr} (variable variables)")
+        )));
+        assert_eq!(tokens.last(), Some(&Token::Eof));
+    }
+
+    #[test]
+    fn outer_double_quote_is_not_taken_from_an_interpolated_expression() {
+        let tokens = Lexer::new("<?php\n$a = 'slot';\necho \"$a${\"y$a$a\"}y\";")
+            .tokenize()
+            .unwrap();
+
+        assert!(
+            tokens
+                .iter()
+                .all(|token| !matches!(token, Token::ParseError(..)))
+        );
+        assert!(tokens.iter().any(|token| matches!(
+            token,
+            Token::CompileDeprecation(message, 3)
                 if message.starts_with("Using ${expr} (variable variables)")
         )));
         assert_eq!(tokens.last(), Some(&Token::Eof));
@@ -2102,7 +2121,7 @@ mod tests {
                 Token::CompileDeprecation(
                     "Using ${expr} (variable variables) in strings is deprecated, use {${expr}} instead"
                         .into(),
-                    3,
+                    4,
                 ),
             ]
         );

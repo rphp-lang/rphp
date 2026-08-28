@@ -85,6 +85,16 @@ impl<'a> Lexer<'a> {
             match self.src[self.pos] {
                 b'"' => break,
                 b'\\' if self.pos + 1 < self.src.len() => self.pos += 2,
+                b'$' if self.src.get(self.pos + 1) == Some(&b'{') => {
+                    self.pos = Self::complex_interpolation_end(self.src, self.pos + 2)
+                        .map_err(|message| StringLexError::new(message, opener_line))?
+                        + 1;
+                }
+                b'{' if self.src.get(self.pos + 1) == Some(&b'$') => {
+                    self.pos = Self::complex_interpolation_end(self.src, self.pos + 2)
+                        .map_err(|message| StringLexError::new(message, opener_line))?
+                        + 1;
+                }
                 _ => self.pos += 1,
             }
         }
@@ -699,7 +709,7 @@ impl<'a> Lexer<'a> {
                     }
                     let expression_line =
                         source_line + Self::count_logical_line_breaks(&content[..variable_offset]);
-                    let deprecation_line = expression_line.saturating_sub(heredoc_line_adjustment);
+                    let deprecation_line = expression_line;
                     let expression_start = pos + 2;
                     let expression_end = Self::complex_interpolation_end(content, expression_start)
                         .map_err(|message| StringLexError::new(message, expression_line))?;
@@ -1035,7 +1045,7 @@ impl<'a> Lexer<'a> {
             _ => true,
         });
         if tokens.is_empty() {
-            return Err("Empty complex string interpolation".into());
+            return Err("syntax error, unexpected token \"}\"".into());
         }
         Ok((tokens, diagnostics))
     }

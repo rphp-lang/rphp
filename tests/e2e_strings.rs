@@ -297,7 +297,7 @@ echo <<<OUT
             "/virtual",
         ),
         concat!(
-            "\nDeprecated: Using ${expr} (variable variables) in strings is deprecated, use {${expr}} instead in /virtual/nested-heredoc.php on line 4\n",
+            "\nDeprecated: Using ${expr} (variable variables) in strings is deprecated, use {${expr}} instead in /virtual/nested-heredoc.php on line 5\n",
             "start\nresolved\nend",
         )
     );
@@ -349,7 +349,7 @@ DOC;
         concat!(
             "\nWarning: Octal escape sequence overflow \\400 is greater than \\377 in /virtual/heredoc-octal.php on line 3\n",
             "\nWarning: Octal escape sequence overflow \\400 is greater than \\377 in /virtual/heredoc-octal.php on line 4\n",
-            "\nDeprecated: Using ${expr} (variable variables) in strings is deprecated, use {${expr}} instead in /virtual/heredoc-octal.php on line 3\n",
+            "\nDeprecated: Using ${expr} (variable variables) in strings is deprecated, use {${expr}} instead in /virtual/heredoc-octal.php on line 4\n",
             "\nWarning: Undefined variable $\0 in /virtual/heredoc-octal.php on line 4\n",
             "outer=\0\ninner=",
         )
