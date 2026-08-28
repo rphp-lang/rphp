@@ -815,6 +815,15 @@ const SPL_PRIORITY_EXTR_DATA: i64 = 1;
 const SPL_PRIORITY_EXTR_PRIORITY: i64 = 2;
 const SPL_PRIORITY_EXTR_BOTH: i64 = 3;
 
+pub(super) fn spl_object_storage_internal_properties() -> &'static [&'static str] {
+    &[
+        SPL_STORAGE_DATA,
+        SPL_STORAGE_OBJECTS,
+        SPL_STORAGE_ITERATOR,
+        SPL_STORAGE_POSITION,
+    ]
+}
+
 #[inline]
 fn spl_storage_array(receiver: &Value, property: &str) -> PhpArray {
     receiver
@@ -856,6 +865,57 @@ fn spl_storage_store(receiver: &Value, identity: i64, object: Value, data: Value
         receiver.set_property(SPL_STORAGE_OBJECTS, Value::array(objects));
         receiver.set_property(SPL_STORAGE_ITERATOR, Value::array(iterator));
     }
+}
+
+pub(super) fn spl_object_storage_wire_entries(receiver: &Value) -> Option<PhpArray> {
+    let values = spl_storage_array(receiver, SPL_STORAGE_DATA);
+    let iterator = spl_storage_array(receiver, SPL_STORAGE_ITERATOR);
+    let mut entries = PhpArray::with_packed_capacity(iterator.len().saturating_mul(2));
+    for object in iterator.values() {
+        let identity = i64::try_from(object.object_identity()?).ok()?;
+        let info = values
+            .get_int(identity)
+            .cloned()
+            .unwrap_or_else(Value::null);
+        entries.push(object.clone());
+        entries.push(info);
+    }
+    Some(entries)
+}
+
+pub(super) fn restore_spl_object_storage(
+    receiver: &Value,
+    entries: &PhpArray,
+) -> Result<(), &'static str> {
+    if entries.len() % 2 != 0 {
+        return Err("Odd number of elements");
+    }
+    let mut decoded = Vec::with_capacity(entries.len() / 2);
+    let mut values = entries.values();
+    while let Some(object) = values.next() {
+        let Some(info) = values.next() else {
+            return Err("Odd number of elements");
+        };
+        let Some(identity) = object.object_identity() else {
+            return Err("Non-object key");
+        };
+        decoded.push((
+            i64::try_from(identity).map_err(|_| "Non-object key")?,
+            object.clone(),
+            info.dereferenced().clone(),
+        ));
+    }
+
+    if let Some(mut object) = receiver.as_object_mut() {
+        object.set_property(SPL_STORAGE_DATA, Value::array(PhpArray::new()));
+        object.set_property(SPL_STORAGE_OBJECTS, Value::array(PhpArray::new()));
+        object.set_property(SPL_STORAGE_ITERATOR, Value::array(PhpArray::new()));
+        object.set_property(SPL_STORAGE_POSITION, Value::long(0));
+    }
+    for (identity, object, info) in decoded {
+        spl_storage_store(receiver, identity, object, info);
+    }
+    Ok(())
 }
 
 fn spl_storage_remove(receiver: &Value, identity: i64) {

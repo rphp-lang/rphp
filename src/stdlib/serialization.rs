@@ -119,7 +119,6 @@ fn serialize_value(
     state: &mut SerializeState,
 ) -> Result<(), VmError> {
     let reference = state.next_reference;
-    state.next_reference += 1;
     if let Some(identity) = value.reference_identity() {
         if let Some(reference) = state.references.get(&identity) {
             output.push_str("R:");
@@ -129,6 +128,10 @@ fn serialize_value(
         }
         state.references.insert(identity, reference);
     }
+    // `R:` aliases an existing value-table slot and does not consume a new
+    // slot. Every newly serialized value and lowercase object `r:` occurrence
+    // does, so advance only after the uppercase-reference fast return.
+    state.next_reference += 1;
     let value = value.dereferenced();
     match value.value_type() {
         ValueType::Undef | ValueType::Null => output.push_str("N;"),
@@ -258,6 +261,23 @@ fn serialize_value(
                     "Exception",
                     &format!("Serialization of '{forbidden_class_name}' is not allowed"),
                 ));
+                return Ok(());
+            }
+
+            if class_name.eq_ignore_ascii_case("SplObjectStorage") {
+                let entries =
+                    super::builtin_classes::spl_object_storage_wire_entries(hook_receiver)
+                        .unwrap_or_else(PhpArray::new);
+                let mut members = ordinary_object_properties(hook_receiver, eg);
+                for internal in super::builtin_classes::spl_object_storage_internal_properties() {
+                    members.remove(&ArrayKey::String((*internal).to_string()));
+                    members.remove(&ArrayKey::String(format!("\0SplObjectStorage\0{internal}")));
+                }
+                output.push_str("O:16:\"SplObjectStorage\":2:{i:0;");
+                serialize_value(&Value::array(entries), output, eg, state)?;
+                output.push_str("i:1;");
+                serialize_value(&Value::array(members), output, eg, state)?;
+                output.push('}');
                 return Ok(());
             }
 
@@ -917,6 +937,10 @@ impl<'a> Parser<'a> {
         match value {
             Ok(value) if aliases_existing_reference => {
                 self.references.remove(&reference);
+                // Uppercase `R:` reuses its target slot and is not itself an
+                // addressable value-table entry. Keep following `r:` indices
+                // aligned with Zend's serialized reference numbering.
+                self.next_reference -= 1;
                 Ok(value)
             }
             Ok(value) => self.publish_reference(reference, value),
@@ -1061,6 +1085,39 @@ impl<'a> Parser<'a> {
                 self.expect(b'}')?;
                 if !allowed {
                     Ok(incomplete_object(class_name, &properties))
+                } else if class_name.eq_ignore_ascii_case("SplObjectStorage") {
+                    let Some(entries) = properties.get_int(0).and_then(Value::as_array) else {
+                        eg.exception = Some(crate::value::make_error_value(
+                            "UnexpectedValueException",
+                            "Invalid serialization data for SplObjectStorage object",
+                        ));
+                        return Err(());
+                    };
+                    let Some(members) = properties.get_int(1).and_then(Value::as_array) else {
+                        eg.exception = Some(crate::value::make_error_value(
+                            "UnexpectedValueException",
+                            "Invalid serialization data for SplObjectStorage object",
+                        ));
+                        return Err(());
+                    };
+                    let mut members = members.clone();
+                    for internal in super::builtin_classes::spl_object_storage_internal_properties()
+                    {
+                        members.remove(&ArrayKey::String((*internal).to_string()));
+                        members
+                            .remove(&ArrayKey::String(format!("\0SplObjectStorage\0{internal}")));
+                    }
+                    if let Err(message) =
+                        super::builtin_classes::restore_spl_object_storage(&object, entries)
+                    {
+                        eg.exception = Some(crate::value::make_error_value(
+                            "UnexpectedValueException",
+                            message,
+                        ));
+                        return Err(());
+                    }
+                    populate_object_properties(eg, &object, class_name, &members)?;
+                    Ok(object)
                 } else {
                     let serialized = Value::array(properties.clone());
                     match crate::stdlib::call_object_public_method(
