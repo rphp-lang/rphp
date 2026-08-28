@@ -9695,6 +9695,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::EnsureFccClassLoaded => {
+                match op_ensure_fcc_class_loaded(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => {
+                        frame = nf;
+                        op_array = no;
+                        continue 'vm;
+                    }
+                    ColdResult::Unhandled(exc) => {
+                        eg.exception = Some(exc);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+
             OpCode::ClosureUseVar => {
                 op_closure_use_var(frame, op_array, opline);
             }

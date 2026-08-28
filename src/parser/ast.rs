@@ -471,6 +471,15 @@ pub enum Expr {
         callable: Box<Expr>,
         line: usize,
     },
+    /// A source member-call FCC whose owner and dynamic member have distinct
+    /// evaluation boundaries. Static syntax may autoload/validate the class
+    /// after the owner but before evaluating the member expression.
+    FirstClassMemberCallable {
+        owner: Box<Expr>,
+        member: Box<Expr>,
+        static_syntax: bool,
+        line: usize,
+    },
     Instanceof {
         // $obj instanceof ClassName
         expr: Box<Expr>,
@@ -639,6 +648,9 @@ impl Expr {
                     || args.iter().any(CallArg::contains_yield)
             }
             Expr::FirstClassCallable { callable, .. } => callable.contains_yield(),
+            Expr::FirstClassMemberCallable { owner, member, .. } => {
+                owner.contains_yield() || member.contains_yield()
+            }
             // A closure has its own suspension context; declaring it does not
             // suspend the surrounding expression.
             Expr::Closure { .. }

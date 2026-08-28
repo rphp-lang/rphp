@@ -5532,8 +5532,116 @@ fn op_create_closure(
         has_heap_captures: false,
         scope_is_dummy: false,
     };
-    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-    unsafe { frame_tmp_set(frame, result_ptr, Value::closure(closure)) };
+    unsafe {
+        let result_ptr = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+        frame_tmp_set(frame, result_ptr, Value::closure(closure));
+    }
+}
+
+#[inline(never)]
+fn op_ensure_fcc_class_loaded<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    let instruction_index = op_array
+        .instructions
+        .iter()
+        .position(|instruction| std::ptr::eq(instruction, opline))
+        .expect("active FCC autoload instruction belongs to its op array");
+    // SAFETY: the compiler validated this operand against the live frame and
+    // op-array pair; cloning it ends the borrow before autoload can re-enter.
+    // This instruction exclusively owns its cache slot. Retained string
+    // identities are paired by OpArray::drop.
+    let (owner, class_already_loaded) = unsafe {
+        let owner =
+            (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)).clone();
+        let cache = &mut *(op_array.cache.as_ptr().add(instruction_index)
+            as *mut crate::vm::instruction::InlineCache);
+        let class_already_loaded = owner.as_str().is_some_and(|class_name| {
+            let Some(class_name_ptr) = owner.string_rc_ptr() else {
+                return false;
+            };
+            let cached_name_ptr = cache.fcc_loaded_class_name();
+            if cached_name_ptr == class_name_ptr {
+                return true;
+            }
+            if eg
+                .find_class(class_name.trim_start_matches('\\'))
+                .is_none()
+            {
+                return false;
+            }
+            Value::retain_cached_string(class_name_ptr);
+            if !cached_name_ptr.is_null() {
+                Value::release_cached_string(cached_name_ptr);
+            }
+            cache.set_fcc_loaded_class_name(class_name_ptr);
+            true
+        });
+        (owner, class_already_loaded)
+    };
+    if owner.as_object().is_some() {
+        return Ok(ColdResult::Done);
+    }
+    let Some(class_name) = owner.as_str().map(str::to_owned) else {
+        return throw_first_class_callable_error(
+            eg,
+            frame,
+            op_array,
+            instruction_index,
+            "Class name must be a valid object or a string",
+        );
+    };
+    let class_name = class_name.trim_start_matches('\\');
+    if class_already_loaded {
+        return Ok(ColdResult::Done);
+    }
+    let has_autoloaders = eg
+        .autoload
+        .as_ref()
+        .is_some_and(|state| !state.entries.is_empty());
+    if !has_autoloaders {
+        return Ok(ColdResult::Done);
+    }
+    let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, class_name)?;
+    if let Some(exception) = eg.exception.take() {
+        return Ok(match throw_in_frame(eg, frame, exception)? {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+        });
+    }
+    if !loaded {
+        return throw_first_class_callable_error(
+            eg,
+            frame,
+            op_array,
+            instruction_index,
+            &format!("Class \"{class_name}\" not found"),
+        );
+    }
+    Ok(ColdResult::Done)
+}
+
+#[inline(never)]
+fn throw_first_class_callable_error<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    instruction_index: usize,
+    message: &str,
+) -> Result<ColdResult<'a>, VmError> {
+    let error = make_error_value("Error", message);
+    attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+    Ok(match throw_in_frame(eg, frame, error)? {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+    })
 }
 
 #[inline(never)]
@@ -5543,13 +5651,17 @@ fn op_create_first_class_callable<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    // SAFETY: opline operands and result identify compiler-allocated slots in
-    // this live frame; the read is cloned before callback resolution mutates VM state.
-    let (callable, instruction_index) = unsafe {
-        (
-            (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)).clone(),
-            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
-        )
+    // SAFETY: the active opline operands and result identify compiler slots in
+    // this live frame; the read is cloned before callback resolution mutates
+    // VM state, and the same instruction index owns its live cache entry.
+    let (callable, instruction_index, cache_slot) = unsafe {
+        let instruction_index =
+            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
+        let cache_slot = op_array.cache.as_ptr().add(instruction_index)
+            as *mut crate::vm::instruction::InlineCache;
+        let callable =
+            (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)).clone();
+        (callable, instruction_index, cache_slot)
     };
     let existing_closure = if callable.value_type() == ValueType::Closure {
         Some(callable.clone())
@@ -5576,24 +5688,57 @@ fn op_create_first_class_callable<'a>(
         }
         return Ok(ColdResult::Done);
     }
-    let caller_class = get_caller_class(frame, eg);
-    let resolved = crate::stdlib::resolve_callback_with_cache(
-        &callable,
-        eg,
-        caller_class.as_deref(),
-        None,
-    )
-    .or_else(|| {
-        if opline.extended_value == 0 {
-            return None;
+
+    if opline._pad & crate::vm::instruction::FIRST_CLASS_CALLABLE_CLASS_PRELOADED == 0
+        && let Some(class_name) = callable.as_array().and_then(|array| {
+        (array.len() == 2
+            && array.get_value_at(1).and_then(Value::as_str).is_some())
+        .then(|| array.get_value_at(0).and_then(Value::as_str))
+        .flatten()
+    })
+    {
+        let class_name = class_name.trim_start_matches('\\');
+        if eg.find_class(class_name).is_none() {
+            let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, class_name)?;
+            if let Some(exception) = eg.exception.take() {
+                return Ok(match throw_in_frame(eg, frame, exception)? {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
         }
-        let fallback = &op_array.literals[opline.extended_value as usize];
+    }
+
+    let caller_class = get_caller_class(frame, eg);
+    let fallback = (opline.extended_value != 0)
+        .then(|| &op_array.literals[opline.extended_value as usize]);
+    let cached = crate::stdlib::resolve_callback_cache_hit(&callable, cache_slot).or_else(|| {
+        fallback.and_then(|fallback| {
+            crate::stdlib::resolve_callback_cache_hit(fallback, cache_slot)
+        })
+    });
+    let prefer_global = opline._pad
+        & crate::vm::instruction::FIRST_CLASS_CALLABLE_PREFER_GLOBAL_FALLBACK
+        != 0;
+    let resolve = |value: &Value, eg: &ExecutorGlobals| {
         crate::stdlib::resolve_callback_with_cache(
-            fallback,
+            value,
             eg,
             caller_class.as_deref(),
-            None,
+            Some(cache_slot),
         )
+    };
+    let resolved = cached.or_else(|| {
+        if prefer_global {
+            fallback
+                .and_then(|fallback| resolve(fallback, eg))
+                .or_else(|| resolve(&callable, eg))
+        } else {
+            resolve(&callable, eg)
+                .or_else(|| fallback.and_then(|fallback| resolve(fallback, eg)))
+        }
     });
     let Some(resolved) = resolved else {
         let message = crate::stdlib::first_class_callable_error(
@@ -5601,15 +5746,26 @@ fn op_create_first_class_callable<'a>(
             eg,
             caller_class.as_deref(),
         );
-        let error = make_error_value("Error", &message);
-        attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-        return Ok(match throw_in_frame(eg, frame, error)? {
-            ThrowResult::Handled(new_frame, new_op_array) => {
-                ColdResult::NewFrame(new_frame, new_op_array)
-            }
-            ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
-        });
+        return throw_first_class_callable_error(
+            eg,
+            frame,
+            op_array,
+            instruction_index,
+            &message,
+        );
     };
+
+    if opline._pad & crate::vm::instruction::FIRST_CLASS_CALLABLE_CONSTANT_EXPRESSION != 0
+        && resolved.is_magic_call
+    {
+        return throw_first_class_callable_error(
+            eg,
+            frame,
+            op_array,
+            instruction_index,
+            "Creating a callable for the magic __callStatic() method is not supported in constant expressions",
+        );
+    }
 
     if let Some((class, method)) = callable.as_array().and_then(|callable| {
         Some((

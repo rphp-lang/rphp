@@ -96,6 +96,19 @@ pub const FETCH_CV_ERROR_SUPPRESS: u16 = 1;
 /// Direct increment/decrement executes inside an `@` suppression scope.
 pub const INCDEC_ERROR_SUPPRESS: u16 = 1;
 
+/// CreateFirstClassCallable flag: the callable is being materialized from a
+/// PHP constant expression. Magic `__callStatic` trampolines remain valid for
+/// ordinary runtime FCCs, but PHP rejects them at this boundary.
+pub const FIRST_CLASS_CALLABLE_CONSTANT_EXPRESSION: u16 = 1;
+/// CreateFirstClassCallable flag: an unqualified function name in a namespace
+/// had no unconditional namespaced declaration at compile time. Prefer its
+/// global fallback on the first resolution and retain that choice in the
+/// opcode-local cache.
+pub const FIRST_CLASS_CALLABLE_PREFER_GLOBAL_FALLBACK: u16 = 1 << 1;
+/// CreateFirstClassCallable flag: a preceding EnsureFccClassLoaded instruction
+/// already performed the static owner's single autoload attempt.
+pub const FIRST_CLASS_CALLABLE_CLASS_PRELOADED: u16 = 1 << 2;
+
 /// FetchConst flag: this exact read resolves PHP's deprecated built-in
 /// `E_STRICT` constant and must emit its PHP 8.5 use-site diagnostic.
 pub const FETCH_CONST_DEPRECATED_E_STRICT: u16 = 1;
@@ -597,6 +610,7 @@ impl InlineCache {
     const METHOD_LINKED_GENERIC_LONG_CONTRACT: u32 = 16;
     const CALLBACK_PIPELINE_METADATA_ARMED: u32 = 1 << 31;
     const CALLBACK_CACHE_DISABLED: *const FunctionCommon = 1usize as *const FunctionCommon;
+    const FCC_CLASS_LOADED: *const FunctionCommon = 2usize as *const FunctionCommon;
     const DEPRECATED_ENUM_CASE: *const FunctionCommon = 1usize as *const FunctionCommon;
     const GENERIC_CLASS_SCOPE: u32 = 1 << 31;
     const DIRECT_STATIC_TRAIT_ACCESS: u32 = 2;
@@ -1041,6 +1055,26 @@ impl InlineCache {
         self.func = Self::CALLBACK_CACHE_DISABLED;
         self.class_id = 0;
         self.prop_info = 0;
+    }
+
+    /// Retained class-name identity whose existence was already proven by an
+    /// EnsureFccClassLoaded site. PHP class publication is monotonic within a
+    /// request, so an exact identity hit does not need another table lookup.
+    #[inline(always)]
+    pub fn fcc_loaded_class_name(&self) -> *const String {
+        if self.func == Self::FCC_CLASS_LOADED {
+            self.callback_string()
+        } else {
+            std::ptr::null()
+        }
+    }
+
+    #[inline(always)]
+    pub fn set_fcc_loaded_class_name(&mut self, key: *const String) {
+        let raw = key as usize as u64;
+        self.func = Self::FCC_CLASS_LOADED;
+        self.class_id = (raw >> 32) as u32;
+        self.prop_info = raw as u32;
     }
 }
 

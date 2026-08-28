@@ -85,7 +85,9 @@ pub(super) fn loop_miss_reason(
             | OpCode::SendUserChecked
             | OpCode::InitDynamicCall
             | OpCode::CreateClosure
-            | OpCode::ClosureUseVar => has_callback_or_indirect_call = true,
+            | OpCode::ClosureUseVar
+            | OpCode::CreateFirstClassCallable
+            | OpCode::EnsureFccClassLoaded => has_callback_or_indirect_call = true,
 
             OpCode::InitArray
             | OpCode::AddArrayElement
@@ -235,6 +237,16 @@ mod tests {
     fn prioritizes_callback_pipelines_over_array_shapes() {
         assert_eq!(
             classify_loop("<?php for ($i = 0; $i < 10; $i++) { $row = array_map('abs', [$i]); }"),
+            JitMissReason::CallbackOrIndirectCall
+        );
+    }
+
+    #[test]
+    fn treats_first_class_callable_autoload_as_an_indirect_call_boundary() {
+        assert_eq!(
+            classify_loop(
+                "<?php $class = 'Target'; $method = 'run'; for ($i = 0; $i < 10; $i++) { $callback = $class::$method(...); }"
+            ),
             JitMissReason::CallbackOrIndirectCall
         );
     }

@@ -18989,6 +18989,40 @@ fn find_method_in_class_hierarchy<'a>(
     None
 }
 
+/// Locate an abstract declaration without treating it as an invokable
+/// function. Abstract user methods deliberately have no function-table entry,
+/// but FCC diagnostics must still distinguish them from a missing method and
+/// must not fall through to `__call`/`__callStatic`.
+fn find_abstract_method_in_class_hierarchy<'a>(
+    eg: &'a ExecutorGlobals,
+    class_name: &str,
+    method_name: &str,
+) -> Option<(&'a str, &'a str)> {
+    let mut current = find_class_case_insensitive(eg, class_name);
+    while let Some(class) = current {
+        if let Some((name, _, _, _, _)) = class.methods.iter().find(|(name, _, _, _, _)| {
+            name.eq_ignore_ascii_case(method_name) && class.method_is_abstract(name)
+        }) {
+            return Some((class.name.as_str(), name.as_str()));
+        }
+        for trait_name in &class.uses {
+            let Some(trait_def) = find_class_case_insensitive(eg, trait_name) else {
+                continue;
+            };
+            if let Some((name, _, _, _, _)) = trait_def.methods.iter().find(|(name, _, _, _, _)| {
+                name.eq_ignore_ascii_case(method_name) && trait_def.method_is_abstract(name)
+            }) {
+                return Some((class.name.as_str(), name.as_str()));
+            }
+        }
+        current = class
+            .parent
+            .as_deref()
+            .and_then(|parent| find_class_case_insensitive(eg, parent));
+    }
+    None
+}
+
 /// Invoke a public instance method selected by a VM protocol operation such as
 /// ArrayAccess. Internal methods live in the function table while user methods
 /// carry their direct pointer in ClassDef, so the protocol boundary resolves
@@ -19864,6 +19898,11 @@ fn resolve_callback(
                 let Some((visibility, is_static, func_ptr, _)) =
                     find_method_in_class_hierarchy(eg, class_name, method_name)
                 else {
+                    if find_abstract_method_in_class_hierarchy(eg, class_name, method_name)
+                        .is_some()
+                    {
+                        return None;
+                    }
                     return resolve_magic_callback(
                         eg,
                         class_name,
@@ -19963,6 +20002,11 @@ fn resolve_callback(
                 let Some((visibility, _, func_ptr, declaring)) =
                     find_method_in_class_hierarchy(eg, &class_name, method_name)
                 else {
+                    if find_abstract_method_in_class_hierarchy(eg, &class_name, method_name)
+                        .is_some()
+                    {
+                        return None;
+                    }
                     return resolve_magic_callback(
                         eg,
                         &class_name,
@@ -20026,6 +20070,10 @@ fn resolve_callback(
                 let Some((visibility, is_static, func_ptr, declaring)) =
                     find_method_in_class_hierarchy(eg, class_str, method_name)
                 else {
+                    if find_abstract_method_in_class_hierarchy(eg, class_str, method_name).is_some()
+                    {
+                        return None;
+                    }
                     return resolve_magic_callback(
                         eg,
                         class_str,
@@ -20142,11 +20190,16 @@ pub(crate) fn first_class_callable_error(
         let Some(class) = find_class_case_insensitive(eg, class_name) else {
             return format!("Class \"{class_name}\" not found");
         };
-        let Some((visibility, is_static, _, defining)) =
-            find_method_in_class_hierarchy(eg, &class.name, method)
-        else {
+        let concrete = find_method_in_class_hierarchy(eg, &class.name, method);
+        if concrete.is_none() {
+            if let Some((defining, declared_method)) =
+                find_abstract_method_in_class_hierarchy(eg, &class.name, method)
+            {
+                return format!("Cannot call abstract method {defining}::{declared_method}()");
+            }
             return format!("Call to undefined method {}::{method}()", class.name);
-        };
+        }
+        let (visibility, is_static, _, defining) = concrete.unwrap();
         if let Some(error) = inaccessible_method(visibility, defining, method) {
             return error;
         }
@@ -20247,7 +20300,17 @@ fn resolve_cached_string_callback(
     cache_slot: *mut InlineCache,
 ) -> Option<ResolvedCallback> {
     let name = val.as_str()?;
-    let cached_name_ptr = unsafe { (*cache_slot).callback_string() };
+    // SAFETY: the caller supplies the live opcode-owned cache entry; the VM
+    // mutates it only on its single execution thread.
+    let (cache_disabled, cached_name_ptr) = unsafe {
+        (
+            (*cache_slot).callback_string_cache_disabled(),
+            (*cache_slot).callback_string(),
+        )
+    };
+    if cache_disabled {
+        return None;
+    }
     if cached_name_ptr.is_null() {
         return None;
     }
@@ -20260,6 +20323,17 @@ fn resolve_cached_string_callback(
         return None;
     }
     Some(ResolvedCallback::plain_function(func_ptr))
+}
+
+/// Probe an opcode-local callback cache without changing its monomorphic
+/// state. FCC namespace fallback sites use this to honor whichever literal
+/// won the first resolution before attempting either name again.
+#[inline]
+pub(crate) fn resolve_callback_cache_hit(
+    val: &Value,
+    cache_slot: *mut InlineCache,
+) -> Option<ResolvedCallback> {
+    resolve_cached_string_callback(val, cache_slot)
 }
 
 #[inline]

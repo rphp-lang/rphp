@@ -2003,6 +2003,10 @@ impl Parser {
             Expr::FirstClassCallable { callable, .. } => {
                 Self::collect_free_vars(callable, bound, out);
             }
+            Expr::FirstClassMemberCallable { owner, member, .. } => {
+                Self::collect_free_vars(owner, bound, out);
+                Self::collect_free_vars(member, bound, out);
+            }
             Expr::Isset(exprs) => {
                 for e in exprs {
                     Self::collect_free_vars(e, bound, out);

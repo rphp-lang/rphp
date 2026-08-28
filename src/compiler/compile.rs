@@ -122,6 +122,7 @@ fn expression_source_line(expression: &Expr) -> usize {
         | Expr::Pipe { line, .. }
         | Expr::FunctionCall { line, .. }
         | Expr::FirstClassFunctionCallable { line, .. }
+        | Expr::FirstClassMemberCallable { line, .. }
         | Expr::Eval { line, .. }
         | Expr::PostInc { line, .. }
         | Expr::PostDec { line, .. }
@@ -653,6 +654,7 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
                 100,
             ),
             Expr::AnonymousNew {
+                attributes,
                 args,
                 is_readonly,
                 allow_dynamic_properties,
@@ -675,6 +677,12 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
                     .iter()
                     .all(|ancestor| ancestor.arguments.is_empty()) =>
             {
+                let attributes = render_attributes(attributes)?;
+                let attributes = if attributes.is_empty() {
+                    String::new()
+                } else {
+                    format!("{attributes} ")
+                };
                 let arguments = render_arguments(args)?;
                 let arguments = (!args.is_empty()).then(|| format!("({arguments})"));
                 let parent = parent
@@ -697,7 +705,7 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
                 let readonly = if *is_readonly { "readonly " } else { "" };
                 (
                     format!(
-                        "new {readonly}class{}{}{} {body}",
+                        "new {attributes}{readonly}class{}{}{} {body}",
                         arguments.as_deref().unwrap_or_default(),
                         parent,
                         implements,
@@ -728,6 +736,7 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
                 (format!("{callable}({})", render_arguments(args)?), 100)
             }
             Expr::Closure {
+                attributes,
                 is_static,
                 returns_by_ref,
                 params,
@@ -737,6 +746,12 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
                 generic_params,
                 ..
             } if generic_params.is_empty() => {
+                let attributes = render_attributes(attributes)?;
+                let attributes = if attributes.is_empty() {
+                    String::new()
+                } else {
+                    format!("{attributes} ")
+                };
                 let params = params
                     .iter()
                     .map(render_parameter)
@@ -756,7 +771,7 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
                     let reference = if *returns_by_ref { "&" } else { "" };
                     (
                         format!(
-                            "{static_prefix}fn{reference}({params}){return_type} => {}",
+                            "{attributes}{static_prefix}fn{reference}({params}){return_type} => {}",
                             render(value, 0, false)?
                         ),
                         100,
@@ -781,7 +796,7 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
                     };
                     (
                         format!(
-                            "{static_prefix}function{reference} ({params}){captures}{return_type} {{\n{}}}",
+                            "{attributes}{static_prefix}function{reference} ({params}){captures}{return_type} {{\n{}}}",
                             render_block(body)?
                         ),
                         100,
@@ -1114,6 +1129,8 @@ fn instructions_may_access_globals(instructions: &[Instruction]) -> bool {
                 | OpCode::InitMethodCall
                 | OpCode::InitStaticCall
                 | OpCode::InitLateStaticCall
+                | OpCode::CreateFirstClassCallable
+                | OpCode::EnsureFccClassLoaded
                 | OpCode::Include
                 | OpCode::FetchGlobals
                 | OpCode::FetchGlobal
@@ -2682,7 +2699,8 @@ fn constant_expression_contains_runtime_callable(expression: &Expr) -> bool {
     match expression {
         Expr::Closure { .. }
         | Expr::FirstClassFunctionCallable { .. }
-        | Expr::FirstClassCallable { .. } => true,
+        | Expr::FirstClassCallable { .. }
+        | Expr::FirstClassMemberCallable { .. } => true,
         Expr::BinaryOp { left, right, .. }
         | Expr::NullCoalesce { left, right }
         | Expr::Elvis { left, right } => {
@@ -2768,6 +2786,18 @@ fn invalid_runtime_callable_constant_expression(
             }
             _ => recurse(callable),
         },
+        Expr::FirstClassMemberCallable {
+            static_syntax,
+            line,
+            ..
+        } => Some((
+            if *static_syntax {
+                "Cannot use dynamic callable in constant expression"
+            } else {
+                "Constant expression contains invalid operations"
+            },
+            *line,
+        )),
         Expr::BinaryOp { left, right, .. }
         | Expr::NullCoalesce { left, right }
         | Expr::Elvis { left, right } => recurse(left).or_else(|| recurse(right)),
@@ -2817,7 +2847,8 @@ fn deferred_constant_expression_is_supported(expression: &Expr) -> bool {
         | Expr::ClassConstant { .. }
         | Expr::Closure { .. }
         | Expr::FirstClassFunctionCallable { .. }
-        | Expr::FirstClassCallable { .. } => true,
+        | Expr::FirstClassCallable { .. }
+        | Expr::FirstClassMemberCallable { .. } => true,
         Expr::MagicConstant { name, .. } => [
             "__LINE__",
             "__FILE__",
@@ -2902,6 +2933,8 @@ fn relative_static_expression_line(expression: &Expr) -> Option<usize> {
 fn forbidden_static_constant_expression(expression: &Expr) -> Option<(&'static str, usize)> {
     match expression {
         Expr::FirstClassCallable { callable, .. } => relative_static_expression_line(callable)
+            .map(|line| ("\"static\" is not allowed in compile-time constants", line)),
+        Expr::FirstClassMemberCallable { owner, .. } => relative_static_expression_line(owner)
             .map(|line| ("\"static\" is not allowed in compile-time constants", line)),
         Expr::ClassConstant {
             class_name,
@@ -8600,6 +8633,11 @@ impl Compiler {
         assign.op1 = cv_idx;
         assign.op2_type = val_type;
         assign.op2 = val_op;
+        // A runtime-only default has no expression result beyond the
+        // parameter binding. Transfer its TMP owner just like an ordinary
+        // statement assignment so object/Closure lifetime follows the PHP
+        // parameter rather than a hidden frame temporary.
+        assign._pad |= ASSIGN_CV_MOVE_SOURCE;
         compiler.instructions.push(assign);
 
         if check_generic_default {
@@ -12661,6 +12699,56 @@ impl Compiler {
                 }
                 (retained, retained_type)
             }
+            Expr::FirstClassMemberCallable {
+                owner,
+                member,
+                static_syntax,
+                line,
+            } => {
+                let (owner, owner_type) = self.compile_expr(owner);
+                let callable = self.alloc_tmp();
+                let mut init = Instruction::new(OpCode::InitArray);
+                init.result = callable;
+                init.result_type = OpType::Tmp;
+                init.extended_value = 2;
+                self.instructions.push(init);
+                let mut owner_element = Instruction::new(OpCode::AddArrayElement);
+                owner_element.op1 = callable;
+                owner_element.op1_type = OpType::Tmp;
+                owner_element.op2 = owner;
+                owner_element.op2_type = owner_type;
+                self.instructions.push(owner_element);
+
+                if *static_syntax {
+                    let mut ensure = Instruction::new(OpCode::EnsureFccClassLoaded);
+                    ensure.op1 = owner;
+                    ensure.op1_type = owner_type;
+                    self.push_instruction_at_line(ensure, *line);
+                }
+
+                let (member, member_type) = self.compile_expr(member);
+                let mut member_element = Instruction::new(OpCode::AddArrayElement);
+                member_element.op1 = callable;
+                member_element.op1_type = OpType::Tmp;
+                member_element.op2 = member;
+                member_element.op2_type = member_type;
+                self.instructions.push(member_element);
+
+                let result = self.alloc_tmp();
+                let mut create = Instruction::new(OpCode::CreateFirstClassCallable);
+                create.op1 = callable;
+                create.op1_type = OpType::Tmp;
+                create.result = result;
+                create.result_type = OpType::Tmp;
+                if self.compiling_constant_expression {
+                    create._pad |= crate::vm::instruction::FIRST_CLASS_CALLABLE_CONSTANT_EXPRESSION;
+                }
+                if *static_syntax {
+                    create._pad |= crate::vm::instruction::FIRST_CLASS_CALLABLE_CLASS_PRELOADED;
+                }
+                self.push_instruction_at_line(create, *line);
+                (result, OpType::Tmp)
+            }
             Expr::FirstClassCallable { callable, line } => {
                 let (callable, callable_type) = self.compile_expr(callable);
                 let result = self.alloc_tmp();
@@ -12669,16 +12757,23 @@ impl Compiler {
                 create.op1_type = callable_type;
                 create.result = result;
                 create.result_type = OpType::Tmp;
+                if self.compiling_constant_expression {
+                    create._pad |= crate::vm::instruction::FIRST_CLASS_CALLABLE_CONSTANT_EXPRESSION;
+                }
                 self.push_instruction_at_line(create, *line);
                 (result, OpType::Tmp)
             }
             Expr::FirstClassFunctionCallable { name, line } => {
                 let resolved = self.resolve_function_name(name);
-                let callable = self.add_literal(Value::string(resolved));
-                let fallback = if self.current_namespace.is_some()
+                let callable = self.add_literal(Value::string(resolved.clone()));
+                let has_namespace_fallback = self.current_namespace.is_some()
                     && !name.contains('\\')
-                    && !self.has_function_import(name)
-                {
+                    && !self.has_function_import(name);
+                let namespaced_function_is_unconditional = self
+                    .known_ref_args
+                    .keys()
+                    .any(|function| function.eq_ignore_ascii_case(&resolved));
+                let fallback = if has_namespace_fallback {
                     self.add_literal(Value::string(name.clone()))
                 } else {
                     0
@@ -12690,6 +12785,13 @@ impl Compiler {
                 create.result = result;
                 create.result_type = OpType::Tmp;
                 create.extended_value = fallback as u32;
+                if self.compiling_constant_expression {
+                    create._pad |= crate::vm::instruction::FIRST_CLASS_CALLABLE_CONSTANT_EXPRESSION;
+                }
+                if has_namespace_fallback && !namespaced_function_is_unconditional {
+                    create._pad |=
+                        crate::vm::instruction::FIRST_CLASS_CALLABLE_PREFER_GLOBAL_FALLBACK;
+                }
                 self.push_instruction_at_line(create, *line);
                 (result, OpType::Tmp)
             }

@@ -668,6 +668,40 @@ fn resolve_attribute_constant_name(
     (name.to_string(), None)
 }
 
+fn resolve_attribute_function_name(
+    name: &str,
+    scope: &AttributeEvaluationScope,
+) -> (String, Option<String>) {
+    if let Some(relative) = name.strip_prefix("namespace\\") {
+        return (
+            scope
+                .namespace
+                .as_ref()
+                .map_or_else(|| relative.to_string(), |ns| format!("{ns}\\{relative}")),
+            None,
+        );
+    }
+    if let Some(fully_qualified) = name.strip_prefix('\\') {
+        return (fully_qualified.to_string(), None);
+    }
+    if !name.contains('\\')
+        && let Some(imported) = scope
+            .function_imports
+            .iter()
+            .find(|(alias, _)| alias.eq_ignore_ascii_case(name))
+            .map(|(_, target)| target)
+    {
+        return (imported.clone(), None);
+    }
+    if let Some(namespace) = &scope.namespace {
+        return (
+            format!("{namespace}\\{name}"),
+            (!name.contains('\\')).then(|| name.to_string()),
+        );
+    }
+    (name.to_string(), None)
+}
+
 fn render_attribute_function_name(name: &str, scope: &AttributeEvaluationScope) -> String {
     if let Some(fully_qualified) = name.strip_prefix('\\') {
         return format!("\\{fully_qualified}");
@@ -695,6 +729,47 @@ fn render_attribute_function_name(name: &str, scope: &AttributeEvaluationScope) 
         || name.to_string(),
         |namespace| format!("{namespace}\\{name}"),
     )
+}
+
+fn evaluate_attribute_first_class_callable(
+    callable: Value,
+    fallback: Option<Value>,
+    scope: &AttributeEvaluationScope,
+    eg: &mut ExecutorGlobals,
+) -> Result<Value, DeferredAttributeError> {
+    if let Some(class_name) = callable.as_array().and_then(|array| {
+        (array.len() == 2 && array.get_value_at(1).and_then(Value::as_str).is_some())
+            .then(|| array.get_value_at(0).and_then(Value::as_str))
+            .flatten()
+    }) {
+        let class_name = class_name.trim_start_matches('\\');
+        if eg.find_class(class_name).is_none() {
+            let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, class_name)?;
+            if eg.exception.is_some() {
+                return Err(DeferredAttributeError::PendingException);
+            }
+        }
+    }
+
+    let caller_class = scope.lexical_class.as_deref();
+    let resolved = crate::stdlib::resolve_callback_with_cache(&callable, eg, caller_class, None)
+        .or_else(|| {
+            fallback.as_ref().and_then(|fallback| {
+                crate::stdlib::resolve_callback_with_cache(fallback, eg, caller_class, None)
+            })
+        });
+    let Some(resolved) = resolved else {
+        return Err(DeferredAttributeError::Message(
+            crate::stdlib::first_class_callable_error(&callable, eg, caller_class),
+        ));
+    };
+    if resolved.is_magic_call {
+        return Err(DeferredAttributeError::Message(
+            "Creating a callable for the magic __callStatic() method is not supported in constant expressions"
+                .to_string(),
+        ));
+    }
+    Ok(crate::stdlib::resolved_callback_into_closure(resolved, eg))
 }
 
 fn render_attribute_static_class_name(name: &str, scope: &AttributeEvaluationScope) -> String {
@@ -840,6 +915,20 @@ fn evaluate_deferred_attribute_expression(
             line,
         } => deferred_class_constant(class_name, constant, scope, eg)
             .map_err(|error| error.with_location_if_missing(source_file, *line)),
+        Expr::FirstClassFunctionCallable { name, .. } => {
+            let (primary, fallback) = resolve_attribute_function_name(name, scope);
+            evaluate_attribute_first_class_callable(
+                Value::string(primary),
+                fallback.map(Value::string),
+                scope,
+                eg,
+            )
+        }
+        Expr::FirstClassCallable { callable, .. } => {
+            let callable =
+                evaluate_deferred_attribute_expression(callable, scope, source_file, eg)?;
+            evaluate_attribute_first_class_callable(callable, None, scope, eg)
+        }
         Expr::DynamicNamedClassConstant {
             class_name,
             constant,

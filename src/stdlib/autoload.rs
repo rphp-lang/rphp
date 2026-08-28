@@ -248,7 +248,14 @@ fn invoke_entry(
     let resolved = ResolvedCallback {
         func_ptr: entry.func_ptr,
         prepend_args: entry.prepend_args.clone(),
-        use_vars: entry.use_vars.clone(),
+        // Closure captures are request-owned cells. An ordinary Value clone
+        // snapshots references, which would make each autoload invocation
+        // mutate a disposable copy and lose writes on both success and throw.
+        use_vars: entry
+            .use_vars
+            .iter()
+            .map(Value::clone_closure_capture)
+            .collect(),
         called_scope_class_id: entry.called_scope_class_id,
         bound_this: entry.bound_this.clone(),
         closure_static_vars: entry.closure_static_vars.clone(),

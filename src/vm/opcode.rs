@@ -248,6 +248,9 @@ pub enum OpCode {
     /// Stop at a reached class-like declaration with PHP's uncatchable
     /// compile-fatal presentation. op1 is the complete source-aware message.
     DeclarationCompileFatal = 172,
+    /// Validate a static FCC owner and run its autoload boundary before a
+    /// dynamic member-name expression is evaluated. op1 is the owner value.
+    EnsureFccClassLoaded = 173,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

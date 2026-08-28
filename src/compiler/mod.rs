@@ -770,9 +770,16 @@ impl Drop for OpArray {
         for (instruction, cache) in self.instructions.iter().zip(&self.cache) {
             if matches!(
                 instruction.opcode,
-                OpCode::DoFcall | OpCode::CallUserFuncArray | OpCode::InitUserCall
+                OpCode::DoFcall
+                    | OpCode::CallUserFuncArray
+                    | OpCode::InitUserCall
+                    | OpCode::EnsureFccClassLoaded
             ) {
-                let callback_string = cache.callback_string();
+                let callback_string = if instruction.opcode == OpCode::EnsureFccClassLoaded {
+                    cache.fcc_loaded_class_name()
+                } else {
+                    cache.callback_string()
+                };
                 if !callback_string.is_null() {
                     unsafe { Value::release_cached_string(callback_string) };
                 }

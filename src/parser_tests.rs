@@ -1203,14 +1203,22 @@ fn dynamic_and_namespace_relative_first_class_callables_keep_source_lines() {
     assert!(matches!(
         &body[3],
         Stmt::Assign {
-            expr: Expr::FirstClassCallable { line: 6, .. },
+            expr: Expr::FirstClassMemberCallable {
+                static_syntax: true,
+                line: 6,
+                ..
+            },
             ..
         }
     ));
     assert!(matches!(
         &body[5],
         Stmt::Assign {
-            expr: Expr::FirstClassCallable { line: 8, .. },
+            expr: Expr::FirstClassMemberCallable {
+                static_syntax: false,
+                line: 8,
+                ..
+            },
             ..
         }
     ));

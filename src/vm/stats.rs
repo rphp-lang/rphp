@@ -778,6 +778,7 @@ mod inner {
             170 => Some("ReportDeprecatedTraitUses"),
             171 => Some("DeclareClass"),
             172 => Some("DeclarationCompileFatal"),
+            173 => Some("EnsureFccClassLoaded"),
             200 => Some("Add_TmpTmp"),
             201 => Some("Sub_CvConst"),
             202 => Some("IsSmaller_CvConst"),
