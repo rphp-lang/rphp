@@ -8,6 +8,106 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`user-enum-reflection-property-projection`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. Engine-created
+`ReflectionProperty` wrappers now expose only PHP's two public readonly string
+properties, `name` and `class`, in that order. Unit-enum and backed-enum
+`getProperties()` results preserve their exact object handles and continue to
+read the synthetic `name` and `value` properties without publishing method
+metadata through `var_dump()`, `print_r()`, `var_export()`,
+`get_object_vars()`, serialization or JSON.
+
+The wrapper's target, property identity, modifiers, type and default metadata
+now live in a weak-owner request-local sidecar. Ordinary declared, inherited,
+static, readonly and typed properties therefore retain their existing method
+behavior without dynamic `__reflection_*` properties. Dynamic-property
+wrappers retain their target and public/default classification for lazy-object
+operations. Stale owners are swept at bounded sidecar growth points. Clone,
+serialization and unserialization use PHP's canonical forbidden-object
+errors, and JSON alone preserves the wrapper's canonical `name`, `class`
+order without changing the established projection of ordinary objects. No
+`Value`, `PhpArray` or `PhpObject` layout changes.
+
+Seven original CLI regressions cover unit/backed enum projection, ordinary
+inherited/static/readonly/type/default method state, exact forbidden clone and
+wire operations, repeated wrapper creation and stale owners, print/export,
+dynamic-property state and enum filters/case reads. Their source hashes to
+SHA-256
+`3355a9b093d3440936bfd651277d35e657131bc07015ac41da8d3589f8572878`.
+The bounded clean-room oracle hashes to
+`636a67a2e9fa09d4592c14590135c817eb0a97644c019dcff1b243ddbef1d802`;
+its PHP 8.5.9 and exact-candidate output both hash to
+`5ed29e2b97267146fb83d9146b5e68133fd57be961a3f0a9df16ecbee78b0b3f`.
+
+`Zend/tests/enum/name-property.phpt` changes from an output failure to pass.
+The complete 152-case enum directory moves from 140 pass / 3 fail to 141 pass
+/ 2 fail, with eight skips and one unsupported case unchanged; that path is
+the only status/category movement, an exact `+1/-0` gain. The final enum
+path/status/category projection hashes to
+`95e237f11c72d7c747cca74caa062c0f40f991a42722c74c9512df26fef594b2`
+and its pass set to
+`ff8527a5d969d1f13b51c3202852e710e94910f1e32e13d9f2e4f8a8998a4ba2`.
+The remaining enum failures are `ast-dumper.phpt` and
+`spl-object-storage.phpt`.
+
+The adjacent 493-case ext/reflection directory moves from 115 pass / 344 fail
+to 119 pass / 340 fail, retaining 17 skips and 17 unsupported cases with no
+timeout, crash or lost parent pass. The four additional passes are the two
+`ReflectionClass_getProperties` cases, `ReflectionClass_getProperty_001` and
+`ReflectionProperty_double_construct`. Its final projection and pass-set
+hashes are
+`f5f2d3f1fe8cdc3e645906a553fc94735f9ff897747759ef4100ee5f8990333d`
+and
+`5d2660e446523b9179dcd10853afe3631933f1beac060eca8194655165649402`.
+
+Two serial exact-final-binary 5,599-case Zend/lang runs have identical raw
+manifests at SHA-256
+`da1139b4aeb625c4e98a849c793cbc92aaef4679f5986bcbb33b4f5bef33efa4`:
+4,510 pass, 793 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Their path/status/category projection hashes to
+`246e8da7afb6efaaa3b955e265cd5a06ceb373dbaf22fedb2652f83c85111767`
+and exact pass set to
+`3895a6d305be06c3e199d9b5140bb0c3f4608f363de306296f2ce360a743b928`.
+Two serial 1,575-case strings/array runs have identical raw manifests at
+`9f5edf942abcc866a1c0c833bca1a4dbef97b344295e36fd07314f233e29b0ce`
+and retain the exact parent projection/pass set at
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`
+and
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,969 pass, 811 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 793 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`7f35c864d0c1753030db7c4d64bcff2e3ce085918759ccd2160ed4a63a3968f5`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+Two exact-final-binary CPU-2-pinned gates used four warmups and 32 balanced
+order pairs without outlier removal. Startup, ordinary-property read,
+enum-property read and ordinary-object printing stay below the +5% regression
+ceiling in both runs; their largest positive deltas are +3.05% and +1.04%.
+Reflection-property construction and enumeration improve by 32.60%-54.91%,
+while wrapper printing is reported separately as a changed path because the
+parent exposes additional metadata and does not produce equivalent output.
+Result hashes are
+`896a0758500029f60bd91b0deb90597accf061432de68de3cfa228d060aeee43`
+and
+`e1db5327c4a3958779f5767d8f1ac497fd69378af006fd01be6f2322edee1927`;
+the task harness hashes to
+`6578ce0febb6400426bae54df79c9d5cb6b8524b8c3678cf2907ba1ad8acc547`.
+
+This checkpoint does not claim the enum AST dumper, `SplObjectStorage` or
+broader SPL, general Reflection metadata beyond the wrapper projection,
+32-bit behavior or allocation-limit/OOM equivalence.
+
+The implementation checkpoint is commit `f76fe749`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `user-enum-json-encoding`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. `json_encode()` now gives user enums PHP 8.5's
 canonical default boundary: backed cases encode their scalar backing value,
