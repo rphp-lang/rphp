@@ -725,6 +725,10 @@ pub struct ExecutorGlobals {
     /// cannot invalidate a warmed site and inherited declarations can share
     /// one slot exactly.
     static_property_values: Vec<Value>,
+    /// Whether the canonical slot has completed its one publication walk for
+    /// compiler-deferred enum-case handles. Keeping the bit beside canonical
+    /// storage preserves O(1) warmed reads even for large array defaults.
+    static_property_handles_published: Vec<Cell<bool>>,
     /// Runtime writes may place destructor-bearing objects in class or named-
     /// function static storage. Ordinary requests leave this false and skip
     /// the cold fixed-point scan entirely.
@@ -1297,6 +1301,7 @@ impl ExecutorGlobals {
         // retain the one-shot registration invariant without relying on Vec's
         // growth policy at the former 16-value boundary.
         self.static_property_values.reserve(24);
+        self.static_property_handles_published.reserve(24);
         #[cfg(feature = "php-generics-reified")]
         self.static_generic_property_contracts.reserve(4);
     }
@@ -1406,6 +1411,7 @@ impl ExecutorGlobals {
             internal_class_id_limit: 0,
             class_by_id: vec![std::ptr::null()],
             static_property_values: Vec::new(),
+            static_property_handles_published: Vec::new(),
             request_static_values_may_retain_objects: false,
             static_property_slots_by_class: vec![Box::new([])],
             #[cfg(feature = "php-generics-reified")]
@@ -1525,6 +1531,7 @@ impl ExecutorGlobals {
             internal_class_id_limit: 0,
             class_by_id: vec![std::ptr::null()],
             static_property_values: Vec::new(),
+            static_property_handles_published: Vec::new(),
             request_static_values_may_retain_objects: false,
             static_property_slots_by_class: vec![Box::new([])],
             #[cfg(feature = "php-generics-reified")]
@@ -6156,6 +6163,8 @@ impl ExecutorGlobals {
                             Value::null()
                         }
                     }));
+                self.static_property_handles_published
+                    .push(Cell::new(false));
                 slot
             };
             resolved_static_slots.push(slot);
@@ -6636,6 +6645,42 @@ impl ExecutorGlobals {
         self.static_property_values.get(storage_slot)
     }
 
+    /// Publish every singleton owned by one backed enum in declaration order.
+    /// Zend builds the backing lookup table before reporting a table-wide
+    /// validation error, so even the failing ordinary-fetch path consumes the
+    /// same object handles. `cases()` and constant expressions intentionally
+    /// publish only the individual values they materialize.
+    pub(crate) fn publish_backed_enum_case_handles(&self, class_id: u32) {
+        let Some(class) = self.class_by_id(class_id) else {
+            return;
+        };
+        debug_assert!(class.is_enum);
+        let case_count = class.static_properties.len();
+        for case_index in 0..case_count {
+            if let Some(storage_slot) = self.static_property_storage_slot(class_id, case_index) {
+                self.publish_static_property_object_handles(storage_slot);
+            }
+        }
+    }
+
+    /// Complete the deferred enum-case publication walk for one canonical
+    /// static slot exactly once. Runtime writes cannot introduce an unpublished
+    /// case: evaluating the assigned enum expression publishes it first.
+    #[inline]
+    pub(crate) fn publish_static_property_object_handles(&self, storage_slot: usize) {
+        let Some(published) = self.static_property_handles_published.get(storage_slot) else {
+            return;
+        };
+        if published.get() {
+            return;
+        }
+        let Some(value) = self.static_property_values.get(storage_slot) else {
+            return;
+        };
+        value.publish_deferred_object_handles();
+        published.set(true);
+    }
+
     /// Canonical PHP static-property roots for cold ownership diagnostics.
     /// Compiler defaults and inline caches are deliberately excluded.
     pub(crate) fn static_property_values(&self) -> &[Value] {
@@ -6669,7 +6714,7 @@ impl ExecutorGlobals {
 
     /// A warmed static-property cache can skip the bounds branch: storage is
     /// append-only for the executor lifetime and cache slots are published
-    /// only after checked resolution.
+    /// only after checked resolution and deferred-handle publication.
     #[inline(always)]
     pub(crate) unsafe fn static_property_value_unchecked(&self, storage_slot: usize) -> &Value {
         debug_assert!(storage_slot < self.static_property_values.len());
@@ -8745,6 +8790,7 @@ mod stdlib_capacity_tests {
             eg.class_by_id.capacity(),
             eg.static_property_slots_by_class.capacity(),
             eg.static_property_values.capacity(),
+            eg.static_property_handles_published.capacity(),
         );
 
         let functions = crate::stdlib::register_stdlib(&mut eg);
@@ -8757,6 +8803,7 @@ mod stdlib_capacity_tests {
                 eg.class_by_id.capacity(),
                 eg.static_property_slots_by_class.capacity(),
                 eg.static_property_values.capacity(),
+                eg.static_property_handles_published.capacity(),
             ),
             capacities,
             "fixed stdlib registration must not grow a reserved registry"

@@ -2807,6 +2807,20 @@ fn clone_static_property_value(value: &Value) -> Value {
     }
 }
 
+/// Publish a compiler-deferred enum case from canonical static storage once,
+/// then retain the ordinary scalar/heap clone split for every warmed read.
+#[inline(always)]
+fn clone_published_static_property_value(
+    eg: &ExecutorGlobals,
+    storage_slot: usize,
+) -> Value {
+    eg.publish_static_property_object_handles(storage_slot);
+    let value = eg
+        .static_property_value(storage_slot)
+        .expect("resolved static-property storage slot must stay valid");
+    clone_static_property_value(value)
+}
+
 /// Keep reference counting and reference-wrapper cloning out of scalar static
 /// property dispatch. Inlining `Value::clone` here noticeably grows both
 /// monomorphized static-property write handlers and perturbs their hot layout.
@@ -2815,9 +2829,10 @@ fn clone_heap_static_property_value(value: &Value) -> Value {
     value.clone()
 }
 
-/// Publish one value from an already-guarded append-only static-property
-/// cache. Callers must prove that `storage_slot` belongs to their cache entry
-/// and `result_ptr` is the prepared result slot of the live frame.
+/// Clone one value from an already-published append-only static-property
+/// cache. Callers must prove that `storage_slot` belongs to their cache entry,
+/// its first miss completed deferred-handle publication, and `result_ptr` is
+/// the prepared result slot of the live frame.
 #[inline(always)]
 fn publish_cached_static_property_read(
     eg: &ExecutorGlobals,
@@ -2826,11 +2841,10 @@ fn publish_cached_static_property_read(
     storage_slot: usize,
 ) {
     // SAFETY: the private callers establish the cache-slot and frame-result
-    // invariants above; static storage is append-only for the executor life.
+    // invariants above; static storage is append-only for the executor life and
+    // the cache is installed only after the miss path publishes its slot.
     unsafe {
-        let value = clone_static_property_value(
-            eg.static_property_value_unchecked(storage_slot),
-        );
+        let value = clone_static_property_value(eg.static_property_value_unchecked(storage_slot));
         frame_tmp_set(frame, result_ptr, value);
     }
 }
@@ -3170,10 +3184,19 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             },
         )
     };
-    let set_result = |value| {
+    let set_result = |value: Value| {
         // SAFETY: `result_ptr` is the initialized writable result slot proven
         // above, and every call transfers exactly one owned Value into it.
         unsafe { frame_result_set(frame, result_ptr, opline.result_type, value) };
+    };
+    let set_published_result = |value: Value| {
+        if matches!(
+            value.value_type(),
+            ValueType::Object | ValueType::Array | ValueType::Reference
+        ) {
+            value.publish_deferred_object_handles();
+        }
+        set_result(value);
     };
     let dynamic_owner = opline._pad & CLASS_CONST_DYNAMIC_OWNER != 0;
     let dynamic_name = opline._pad & CLASS_CONST_DYNAMIC_NAME != 0;
@@ -3373,7 +3396,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             } else {
                 definition.value.clone()
             };
-            set_result(value);
+            set_published_result(value);
             return Ok(ColdResult::Done);
         }
     }
@@ -3414,10 +3437,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                 });
             }
         }
-        let stored = eg
-            .static_property_value(cache.property_slot())
-            .expect("cached enum-case storage slot must stay valid");
-        let value = clone_static_property_value(stored);
+        let value = clone_published_static_property_value(eg, cache.property_slot());
         set_result(value);
         return Ok(ColdResult::Done);
     }
@@ -3444,6 +3464,13 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                         && method.eq_ignore_ascii_case("cases")
                 },
             );
+            let is_backed = class
+                .implements
+                .iter()
+                .any(|interface| interface.eq_ignore_ascii_case("BackedEnum"));
+            if is_backed && !called_from_cases && !constant_expression {
+                eg.publish_backed_enum_case_handles(class_id);
+            }
             if !called_from_cases
                 && !constant_expression
                 && let Some(error) = class.enum_backing_error.as_ref()
@@ -3478,10 +3505,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                     });
                 }
             }
-            let stored = eg
-                .static_property_value(storage_slot)
-                .expect("resolved enum-case storage slot must stay valid");
-            let value = clone_static_property_value(stored);
+            let value = clone_published_static_property_value(eg, storage_slot);
             cache.set_enum_case(class_id, storage_slot, requires_deprecated_use_check);
             set_result(value);
             return Ok(ColdResult::Done);
@@ -3497,16 +3521,22 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     // class constants and build the backing lookup table. Undefined constants
     // and `Enum::class` return earlier; constant-expression materialization is
     // the intentional per-constant bypass mirrored above for enum cases.
-    if class.is_enum
-        && !constant_expression
-        && let Some(error) = class.enum_backing_error.as_ref()
-    {
-        return Ok(static_property_throw(
-            eg,
-            frame,
-            error.exception_class(),
-            error.message().to_string(),
-        )?);
+    if class.is_enum && !constant_expression {
+        let is_backed = class
+            .implements
+            .iter()
+            .any(|interface| interface.eq_ignore_ascii_case("BackedEnum"));
+        if is_backed {
+            eg.publish_backed_enum_case_handles(class_id);
+        }
+        if let Some(error) = class.enum_backing_error.as_ref() {
+            return Ok(static_property_throw(
+                eg,
+                frame,
+                error.exception_class(),
+                error.message().to_string(),
+            )?);
+        }
     }
     let caller = get_caller_class(frame, eg);
     if !eg.check_visibility(
@@ -3548,7 +3578,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     if !definition.requires_deprecated_use_check() {
         let value = definition.value.clone();
         cache.set_property(class_id, constant_index, 1);
-        set_result(value);
+        set_published_result(value);
         return Ok(ColdResult::Done);
     }
     let definition = definition.clone();
@@ -3600,7 +3630,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
         definition.value.clone()
     };
     cache.set_property(class_id, constant_index, 3);
-    set_result(value);
+    set_published_result(value);
     Ok(ColdResult::Done)
 }
 
@@ -4454,10 +4484,11 @@ fn resolve_static_property_read_cache_miss<'a>(
         return Ok(result);
     }
     let definition = unsafe { &*resolved.definition };
-    let stored = eg
+    let stored_is_undef = eg
         .static_property_value(resolved.storage_slot)
-        .ok_or_else(|| VmError::Fatal("Invalid static property storage slot".into()))?;
-    if stored.is_undef() {
+        .ok_or_else(|| VmError::Fatal("Invalid static property storage slot".into()))?
+        .is_undef();
+    if stored_is_undef {
         if silent {
             // SAFETY: result_ptr is the compiler-owned output slot for this
             // live frame and has been prepared for one result write.
@@ -4474,7 +4505,7 @@ fn resolve_static_property_read_cache_miss<'a>(
             ),
         )?);
     }
-    let value = clone_static_property_value(stored);
+    let value = clone_published_static_property_value(eg, resolved.storage_slot);
     if !indirect
         || definition
             .set_visibility

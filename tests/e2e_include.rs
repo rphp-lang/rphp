@@ -60,6 +60,49 @@ fn test_basic_require() {
 }
 
 #[test]
+fn included_enum_cases_publish_lazily_without_failed_or_unreachable_consumption() {
+    let dir = TempDir::new();
+    let valid = dir.path().join("enum-valid.php");
+    let unreachable = dir.path().join("enum-unreachable.php");
+    let failed = dir.path().join("enum-failed.php");
+    std::fs::write(
+        &valid,
+        "<?php enum IncludedMode { case First; case Second; }",
+    )
+    .unwrap();
+    std::fs::write(
+        &unreachable,
+        "<?php if (false) { enum IncludedCold { case First; case Second; } }",
+    )
+    .unwrap();
+    std::fs::write(
+        &failed,
+        "<?php if (true) { enum IncludedFailed implements MissingContract { case First; case Second; } }",
+    )
+    .unwrap();
+
+    let source = format!(
+        r#"<?php
+$prior = new stdClass;
+include '{}';
+include '{}';
+$second = IncludedMode::Second;
+$first = IncludedMode::First;
+try {{ include '{}'; }} catch (Throwable $error) {{ echo get_class($error), "\n"; }}
+$following = new stdClass;
+echo spl_object_id($prior), ':', spl_object_id($second), ':', spl_object_id($first), ':';
+echo enum_exists('IncludedCold', false) ? 'visible:' : 'hidden:';
+echo enum_exists('IncludedFailed', false) ? 'visible:' : 'hidden:';
+echo spl_object_id($following), "\n";
+"#,
+        valid.to_string_lossy(),
+        unreachable.to_string_lossy(),
+        failed.to_string_lossy(),
+    );
+    assert_eq!(run_php(&source), "Error\n1:2:3:hidden:hidden:5\n");
+}
+
+#[test]
 fn included_interface_graph_enforces_enum_only_and_serializable_contracts() {
     let dir = TempDir::new();
     let contracts = dir.path().join("enum-contracts.php");

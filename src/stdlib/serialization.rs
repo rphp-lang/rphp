@@ -834,6 +834,7 @@ impl<'a> Parser<'a> {
                 self.position,
             );
         };
+        case.publish_deferred_object_handles();
         Ok(case)
     }
 

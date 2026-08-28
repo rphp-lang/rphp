@@ -6588,7 +6588,7 @@ impl Compiler {
                             props.insert("value".to_string(), val);
                         }
                     }
-                    let obj = Value::object(PhpObject::dynamic(
+                    let obj = Value::deferred_object(PhpObject::dynamic(
                         resolved_enum.clone(),
                         0, // assigned at runtime registration
                         props,

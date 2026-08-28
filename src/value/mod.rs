@@ -1324,6 +1324,9 @@ fn register_object_identity(identity: usize) {
 }
 
 fn release_object_handle(identity: usize, handle: u32) {
+    if handle == 0 {
+        return;
+    }
     with_object_handles(|state| state.release(identity, handle));
 }
 
@@ -1398,7 +1401,10 @@ fn materialize_declared_property_defaults(defaults: &[Value]) -> Vec<Value> {
     } else if reused {
         stats::inc_declared_property_storage_reuse();
     }
-    values.extend(defaults.iter().cloned());
+    values.extend(defaults.iter().map(|value| {
+        value.publish_deferred_object_handles();
+        value.clone()
+    }));
     values
 }
 
@@ -1883,10 +1889,16 @@ const ARRAY_EXTERNAL_BYTE_KEYS: usize = 1usize << (usize::BITS - 3);
 // the Latin-1 bridge. This bit permits that one lookup normalization without
 // changing ordinary array-key representation.
 const ARRAY_UTF8_TEXT_KEYS: usize = 1usize << (usize::BITS - 4);
+// Deferred enum-case handles embedded in an array need one publication walk
+// when a declaration default is first materialized. Array storage is shared
+// across immutable default clones, so retaining completion in the spare cursor
+// metadata avoids turning every later property/static read into an O(n) scan.
+const ARRAY_DEFERRED_OBJECT_HANDLES_PUBLISHED: usize = 1usize << (usize::BITS - 5);
 const ARRAY_CURSOR_METADATA: usize = ARRAY_CURSOR_PRISTINE
     | ARRAY_INT_KEY_INITIALIZED
     | ARRAY_EXTERNAL_BYTE_KEYS
-    | ARRAY_UTF8_TEXT_KEYS;
+    | ARRAY_UTF8_TEXT_KEYS
+    | ARRAY_DEFERRED_OBJECT_HANDLES_PUBLISHED;
 
 /// Fast deterministic hashing for integer-only PHP array keys.
 ///
@@ -2613,6 +2625,17 @@ impl PhpArray {
 
     pub(crate) fn has_utf8_text_keys(&self) -> bool {
         self.cursor.get() & ARRAY_UTF8_TEXT_KEYS != 0
+    }
+
+    #[inline]
+    fn deferred_object_handles_published(&self) -> bool {
+        self.cursor.get() & ARRAY_DEFERRED_OBJECT_HANDLES_PUBLISHED != 0
+    }
+
+    #[inline]
+    fn mark_deferred_object_handles_published(&self) {
+        self.cursor
+            .set(self.cursor.get() | ARRAY_DEFERRED_OBJECT_HANDLES_PUBLISHED);
     }
 
     pub(crate) fn normalize_utf8_text_key(&self, key: ArrayKey, source: &Value) -> ArrayKey {
@@ -5110,6 +5133,23 @@ impl Value {
         }
     }
 
+    /// Create a compiler-owned user enum case whose request-local object
+    /// handle is assigned only when the case is actually materialized. Enum
+    /// declarations may be unreachable or fail during linking, and neither
+    /// path is allowed to consume an object-store handle.
+    #[inline]
+    pub(crate) fn deferred_object(mut obj: PhpObject) -> Self {
+        obj.lifecycle = 0;
+        let rc = Rc::new(RefCell::new(obj));
+        Self {
+            data: ValueData {
+                ptr: Rc::into_raw(rc) as *mut u8,
+            },
+            type_info: ValueType::Object as u32,
+            _not_send: PhantomData,
+        }
+    }
+
     /// Reconstitute a PHP object value from an existing strong owner without
     /// allocating a second object or changing its request-local identity.
     #[inline]
@@ -5319,12 +5359,96 @@ impl Value {
         }
     }
 
+    /// Assign a request-local handle to a deferred compiler-owned object and
+    /// return the stable handle for any ordinary object.
+    #[inline]
+    pub(crate) fn publish_object_handle(&self) -> Option<u32> {
+        if self.value_type() != ValueType::Object {
+            return None;
+        }
+        // PHP-visible inspectors commonly hold an immutable object borrow
+        // while asking for its already-published handle. RefCell admits the
+        // additional shared guard, which ends before deferred mutation.
+        let current = self
+            .as_object()
+            .expect("object tag must retain an object owner")
+            .lifecycle
+            & OBJECT_HANDLE_MASK;
+        if current != 0 {
+            return Some(current);
+        }
+        let mut object = self
+            .as_object_mut()
+            .expect("deferred object publication requires an unborrowed payload");
+        let (handle, in_request) = allocate_object_handle();
+        object.lifecycle = (object.lifecycle & OBJECT_DESTRUCTOR_RAN) | handle;
+        drop(object);
+        if !in_request {
+            register_object_identity(
+                self.object_identity()
+                    .expect("published object must retain its allocation identity"),
+            );
+        }
+        Some(handle)
+    }
+
+    /// Publish deferred enum-case objects embedded in a declaration default.
+    /// Declaration constants are acyclic, while a static-property value may
+    /// have acquired reference cycles before a later read. The cold container
+    /// walk therefore retains identity guards without charging scalar reads.
+    #[inline]
+    pub(crate) fn publish_deferred_object_handles(&self) {
+        match self.value_type() {
+            ValueType::Object => {
+                self.publish_object_handle();
+            }
+            ValueType::Array | ValueType::Reference => {
+                self.publish_deferred_object_handles_guarded(&mut Vec::new());
+            }
+            _ => {}
+        }
+    }
+
+    fn publish_deferred_object_handles_guarded(&self, active_references: &mut Vec<usize>) {
+        match self.value_type() {
+            ValueType::Object => {
+                self.publish_object_handle();
+            }
+            ValueType::Array => {
+                if let Some(array) = self.as_array() {
+                    if array.deferred_object_handles_published() {
+                        return;
+                    }
+                    for value in array.values() {
+                        value.publish_deferred_object_handles_guarded(active_references);
+                    }
+                    array.mark_deferred_object_handles_published();
+                }
+            }
+            ValueType::Reference => {
+                let Some(identity) = self.reference_identity() else {
+                    return;
+                };
+                if active_references.contains(&identity) {
+                    return;
+                }
+                active_references.push(identity);
+                self.dereferenced()
+                    .publish_deferred_object_handles_guarded(active_references);
+                active_references.pop();
+            }
+            _ => {}
+        }
+    }
+
     /// Request-local object-store handle used by PHP-visible diagnostics.
     #[inline]
     pub fn object_handle(&self) -> Option<u32> {
-        self.as_object()
-            .map(|object| object.lifecycle & OBJECT_HANDLE_MASK)
-            .or_else(|| self.as_closure().map(|closure| closure.object_handle))
+        if self.value_type() == ValueType::Object {
+            self.publish_object_handle()
+        } else {
+            self.as_closure().map(|closure| closure.object_handle)
+        }
     }
 
     /// Mark an Object allocation as having entered its destructor. Returns
