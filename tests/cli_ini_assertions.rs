@@ -79,3 +79,22 @@ fn completely_eliminated_assertions_cannot_be_enabled_at_runtime() {
     );
     assert_eq!(stderr, "");
 }
+
+#[test]
+fn disabled_enum_assertion_does_not_materialize_its_declaration() {
+    let source = r#"
+var_dump(assert((function () {
+    echo "evaluated\n";
+    enum DisabledAssertionState { case Value; }
+    return false;
+})()));
+var_dump(enum_exists('DisabledAssertionState', false));
+"#;
+    for mode in ["0", "-1"] {
+        let (status, stdout, stderr) =
+            run(&["-d", &format!("zend.assertions={mode}"), "-r", source]);
+        assert_eq!(status, 0);
+        assert_eq!(stdout, "bool(true)\nbool(false)\n");
+        assert_eq!(stderr, "");
+    }
+}

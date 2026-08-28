@@ -259,6 +259,15 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
     }
 
     fn render_parameter(parameter: &Param) -> Option<String> {
+        // Attribute grouping and constructor-promotion spelling are not
+        // retained in enough detail to synthesize a faithful parameter.
+        if !parameter.attributes.is_empty()
+            || parameter.promotion.is_some()
+            || parameter.promoted_property.is_some()
+            || !parameter.promotion_hooks.is_empty()
+        {
+            return None;
+        }
         let mut output = String::new();
         if let Some(hint) = &parameter.type_hint {
             output.push_str(&render_type_hint(hint)?);
@@ -277,6 +286,26 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
             output.push_str(&render(default, 0, false)?);
         }
         Some(output)
+    }
+
+    fn render_attributes(attributes: &[Attribute]) -> Option<String> {
+        // The parser currently flattens attribute groups. A single attribute
+        // is unambiguous; with several, declining the description is safer
+        // than changing `#[A, B]` into two source groups or vice versa.
+        if attributes.len() > 1 || attributes.iter().any(Attribute::is_non_enum_case_marker) {
+            return None;
+        }
+        match attributes.first() {
+            Some(attribute) => {
+                let arguments = if attribute.args.is_empty() {
+                    String::new()
+                } else {
+                    format!("({})", render_arguments(&attribute.args)?)
+                };
+                Some(format!("#[{}{arguments}]", attribute.name))
+            }
+            None => Some(String::new()),
+        }
     }
 
     fn visibility_source(visibility: Visibility) -> &'static str {
@@ -339,6 +368,95 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
         // PHP's assertion AST printer does not retain the final class-constant
         // flag even though ordinary declaration metadata does.
         Some(declaration)
+    }
+
+    fn render_enum_case(case: &EnumCase) -> Option<String> {
+        let attributes = render_attributes(&case.attributes)?;
+        let mut declaration = format!("case {}", case.name);
+        if let Some(value) = &case.value {
+            declaration.push_str(" = ");
+            declaration.push_str(&render(value, 0, false)?);
+        }
+        declaration.push(';');
+        Some(if attributes.is_empty() {
+            declaration
+        } else {
+            format!("{attributes}\n{declaration}")
+        })
+    }
+
+    fn render_enum_method(method: &ClassMethod) -> Option<String> {
+        if method.is_abstract || !method.generic_params.is_empty() {
+            return None;
+        }
+        let attributes = render_attributes(&method.attributes)?;
+        let params = method
+            .params
+            .iter()
+            .map(render_parameter)
+            .collect::<Option<Vec<_>>>()?
+            .join(", ");
+        let mut modifiers = vec![visibility_source(method.visibility)];
+        if method.is_static {
+            modifiers.push("static");
+        }
+        if method.is_final {
+            modifiers.push("final");
+        }
+        let reference = if method.returns_by_ref { "&" } else { "" };
+        let return_type = match &method.return_type {
+            Some(hint) => format!(": {}", render_type_hint(hint)?),
+            None => String::new(),
+        };
+        let declaration = format!(
+            "{} function {reference}{}({params}){return_type} {{\n{}}}",
+            modifiers.join(" "),
+            method.name,
+            render_block(&method.body)?,
+        );
+        Some(if attributes.is_empty() {
+            declaration
+        } else {
+            format!("{attributes}\n{declaration}")
+        })
+    }
+
+    fn render_enum_body(cases: &[EnumCase], methods: &[ClassMethod]) -> Option<String> {
+        if cases
+            .iter()
+            .map(|case| case.line)
+            .max()
+            .zip(methods.iter().map(|method| method.line).min())
+            .is_some_and(|(last_case, first_method)| first_method < last_case)
+        {
+            // Separate AST vectors cannot reproduce an interleaved member
+            // order. The supported form keeps cases before methods.
+            return None;
+        }
+        let mut members = cases
+            .iter()
+            .map(render_enum_case)
+            .collect::<Option<Vec<_>>>()?;
+        members.extend(
+            methods
+                .iter()
+                .map(render_enum_method)
+                .collect::<Option<Vec<_>>>()?,
+        );
+        let body = members
+            .iter()
+            .map(|member| indent_source(member, 4))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Some(if body.is_empty() {
+            "{\n}".to_string()
+        } else if methods.is_empty() {
+            format!("{{\n{body}\n}}")
+        } else {
+            // PHP's assertion AST formatter separates a method body from the
+            // enum's closing brace with one empty line.
+            format!("{{\n{body}\n\n}}")
+        })
     }
 
     fn render_class_body(
@@ -441,6 +559,37 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
                 let body = render_class_body(properties, constants)?;
                 Some(format!("class {name} {body}"))
             }
+            Stmt::Enum {
+                attributes,
+                name,
+                backing_type,
+                implements,
+                uses,
+                trait_aliases,
+                cases,
+                properties,
+                constants,
+                methods,
+                ..
+            } if implements.is_empty()
+                && uses.is_empty()
+                && trait_aliases.is_empty()
+                && properties.is_empty()
+                && constants.is_empty() =>
+            {
+                let attributes = render_attributes(attributes)?;
+                let backing_type = match backing_type {
+                    Some(hint) => format!(": {}", render_type_hint(hint)?),
+                    None => String::new(),
+                };
+                let body = render_enum_body(cases, methods)?;
+                let declaration = format!("enum {name}{backing_type} {body}");
+                Some(if attributes.is_empty() {
+                    declaration
+                } else {
+                    format!("{attributes}\n{declaration}")
+                })
+            }
             _ => None,
         }
     }
@@ -454,7 +603,7 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
             }
             output.push_str(&indent_source(&rendered, 4));
             output.push('\n');
-            if matches!(statement, Stmt::Class { .. }) {
+            if matches!(statement, Stmt::Class { .. } | Stmt::Enum { .. }) {
                 output.push('\n');
             }
         }

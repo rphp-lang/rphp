@@ -631,6 +631,100 @@ try {
 }
 
 #[test]
+fn assert_source_formats_unit_and_backed_enum_declarations() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function printEnumAssertion(Throwable $error) { echo $error->getMessage(), "\n--\n"; }
+
+try {
+    assert((function () {
+        enum UnitState {
+            case Ready;
+            case Done;
+        }
+
+        return false;
+    })());
+} catch (Throwable $error) { printEnumAssertion($error); }
+
+try {
+    assert((function () {
+        #[EnumMeta('backed', rank: 1 << 2)]
+        enum BackedState: int {
+            #[CaseMeta('first')]
+            case Ready = 1 << 0;
+            case Done = 1 << 1;
+
+            public function self(): self {
+                return $this;
+            }
+        }
+
+        return false;
+    })());
+} catch (Throwable $error) { printEnumAssertion($error); }
+"#,
+        ),
+        concat!(
+            "assert((function () {\n",
+            "    enum UnitState {\n",
+            "        case Ready;\n",
+            "        case Done;\n",
+            "    }\n",
+            "\n",
+            "    return false;\n",
+            "})())\n",
+            "--\n",
+            "assert((function () {\n",
+            "    #[EnumMeta('backed', rank: 1 << 2)]\n",
+            "    enum BackedState: int {\n",
+            "        #[CaseMeta('first')]\n",
+            "        case Ready = 1 << 0;\n",
+            "        case Done = 1 << 1;\n",
+            "        public function self(): self {\n",
+            "            return $this;\n",
+            "        }\n",
+            "\n",
+            "    }\n",
+            "\n",
+            "    return false;\n",
+            "})())\n",
+            "--\n",
+        )
+    );
+}
+
+#[test]
+fn enum_assert_source_preserves_runtime_state_and_description_priority() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$events = [];
+try {
+    assert((function () use (&$events) {
+        $events[] = 'entered';
+        enum MaterializedState: string { case Ready = 'ready'; }
+        $events[] = MaterializedState::Ready->value;
+        return false;
+    })(), 'manual-description');
+} catch (Throwable $error) {
+    echo $error->getMessage(), "\n";
+}
+echo implode(',', $events), ':', (int) enum_exists('MaterializedState', false), "\n";
+
+var_dump(assert(true || (function () {
+    enum ShortCircuitedState { case Never; }
+    return false;
+})()));
+var_dump(enum_exists('ShortCircuitedState', false));
+"#,
+        ),
+        "manual-description\nentered,ready:1\nbool(true)\nbool(false)\n"
+    );
+}
+
+#[test]
 fn assert_options_preserve_request_local_state_and_callback_contract() {
     assert_eq!(
         run_php(
