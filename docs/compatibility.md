@@ -8,6 +8,96 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`ordinary-abstract-method-compile-fatal-staging`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. A class that is not itself abstract
+but directly declares an ordinary abstract method now parses as valid grammar
+and fails during compilation with PHP's canonical, uncatchable `Fatal error`.
+The diagnostic uses the namespace-qualified class name, the first directly
+declared abstract method and that method's source line. Trait, interface,
+abstract-class and abstract property-hook declarations retain their valid
+paths.
+
+The compiler performs the ordinary check after class-name/import validation.
+Only source regions removed by constant-branch or post-return elimination use
+a recursive declaration preflight; this preserves source order without adding
+a whole-file scan to normal compilation. Parser and parser-deferred compile
+errors keep global priority, preceding import collisions still win, and a
+later eliminated branch cannot displace an earlier live declaration error.
+Runtime-compiled include/eval failures carry a distinct uncatchable compile-
+fatal boundary, so `display_errors=stderr` does not gain the runtime fatal's
+fresh-line prefix while the existing combined-output `display_errors=1`
+contract remains unchanged. Prior output, shutdown execution and source-unit
+metadata survive in the PHP order.
+
+Six original CLI regressions plus the strengthened parser unit cover the first
+method and line, namespaces, static methods, valid abstract-capable declaration
+kinds and property hooks, constant-true/false branches, code after `return`,
+import/parser/deferred-error priority, and uncatchable direct/include/eval
+behavior with prior and shutdown state. The CLI regression source hashes to
+SHA-256
+`7909cba0fd1a3e62a6bd5ac387f1757df1cf14bb08fabbdc402af7be868bb4f5`.
+Twelve clean-room oracle sources concatenate in lexical order to SHA-256
+`696381e4eb5b798f003a0abbf975e00e73f68b60b159970d390661f994c86e80`;
+their eleven direct/include/eval, conditional/dead, ordering and valid
+invocation scenarios match PHP 8.5.9 byte for byte in exit status, stdout and
+stderr under the matching `display_errors=stderr`, `log_errors=0`,
+`html_errors=0`, `fatal_error_backtraces=0` profile.
+
+`Zend/tests/abstract_implicit.phpt` and
+`Zend/tests/errmsg/errmsg_018.phpt` change from parse failure to pass.
+`Zend/tests/inheritance/bug44414.phpt` retains its byte-identical independent
+runtime failure because inherited interface method collection and the terminal
+class line remain separate contracts. The complete 16-case phrase-selected
+adjacent manifest records 14 pass, that one runtime failure and one existing
+CLI-INI unsupported case; all twelve property-hook/trait controls remain pass.
+Two exact-final-binary 5,599-case Zend/lang runs each record 4,493 pass, 810
+fail, 115 skip and 181 unsupported, with no timeout or crash. Their complete
+path/status/category projections are identical at SHA-256
+`e0b2689eefd797ee4d0cda552463bf60b1c7686d70ae86739aaceb5501654680`,
+and their exact pass-set hash is
+`955a4f1678b7cdbe66d79ddaf4e7cb28b7c886f122f16b3d1680cf8cee3b17c9`.
+The exact parent delta is `+2/-0`, with no other movement. Two serial
+1,575-case strings/array runs retain the exact parent projection at SHA-256
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`
+and pass-set hash
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,952 pass, 828 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 810 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`259dbf5d3c8fee87ec54863f0647fdcc713c1e95f73f8e709daa7beaf6af860c`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+One exact-final-binary CPU-2-pinned parser/compiler gate used four warmups and
+32 balanced order pairs without outlier removal. Paired median changes are
+-0.952% for startup, -0.030% for ordinary classes, +0.257% for abstract
+classes, +0.386% for trait/interface contracts, +0.007% for live constant
+branches, +0.080% for elided constant branches, +0.220% for functions with
+dead class declarations and +0.477% for repeated eval compilation. All 256
+output/exit pairs match. The result table and raw paired data hash respectively
+to `958b3aa24386e041e2af63ee842277e9992962771153cfafe0bd0180736cb926`
+and `24af64c88756dee25f8c01a1ffaba89e2843cbc09c13c952b3ed1ccc09a94b89`;
+the complete harness/source aggregate hashes to
+`a9e99bd8d8e1eb58d5a5fd87c46bf1f20ac3d3d47c1d7e0133b101e5e923516f`.
+
+This checkpoint does not claim abstract-property implementation, complete
+property-hook contracts, inherited abstract-method collection, general
+inheritance signature validation or class-link recovery, trait conflict
+resolution, 32-bit behavior or allocation-limit/OOM equivalence. Read-only
+final-manifest triage selects the remaining abstract-modifier compile-fatal
+pair `Zend/tests/access_modifiers/access_modifiers_013.phpt` and
+`Zend/tests/errmsg/errmsg_002.phpt` next; both are currently front-end parse
+failures and both pass under the pinned PHP oracle.
+
+The implementation checkpoint is commit `b68a1505`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `unclosed-brace-source-diagnostics`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. Reaching the end of an ordinary direct,
 include or eval source unit while `{` is the innermost still-open delimiter now
