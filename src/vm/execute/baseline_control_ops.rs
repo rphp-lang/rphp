@@ -168,6 +168,7 @@ fn op_declare_class<'a>(
         return Err(VmError::CompileFatal(error));
     }
     let class_name = class_def.name.clone();
+    let class_is_enum = class_def.is_enum;
     if let Some((active_parent, outstanding_dependencies)) =
         eg.active_parent_link_dependencies(&class_def)
     {
@@ -294,6 +295,13 @@ fn op_declare_class<'a>(
 
     if let Err(error) = eg.register_compiled_class(class_def) {
         eg.abort_runtime_class_link(&class_name);
+        // Reached enum declaration/link failures are uncatchable compile
+        // fatals. Dependency-kind errors have already taken their catchable
+        // Error path above; everything returned by registration here must
+        // preserve prior output without the runtime-fatal newline envelope.
+        if class_is_enum {
+            return Err(VmError::CompileFatal(error));
+        }
         return Err(VmError::Fatal(error));
     }
     eg.mark_runtime_class_declared(declaration_key, class_name);

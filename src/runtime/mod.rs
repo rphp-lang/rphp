@@ -3720,6 +3720,13 @@ impl ExecutorGlobals {
             }
             let Some(implementation) = self.find_effective_method(class_def, requirement.name)
             else {
+                // Ordinary classes still rely on their established
+                // post-composition validation below. Enums have no parent
+                // implementation to acquire during composition, so retain a
+                // missing interface method before the enum can be published.
+                if class_def.is_enum && seen_missing.insert(requirement.name.to_ascii_lowercase()) {
+                    missing.push(format!("{}::{}", requirement.owner, requirement.name));
+                }
                 continue;
             };
             let unforwarded_private_trait_requirement = implementation.is_abstract
@@ -3752,6 +3759,21 @@ impl ExecutorGlobals {
         }
         if !missing.is_empty() {
             let count = missing.len();
+            if class_def.is_enum {
+                let location = class_def
+                    .source_file
+                    .as_ref()
+                    .map_or_else(String::new, |file| {
+                        format!(" in {file} on line {}", class_def.declaration_line)
+                    });
+                return Err(format!(
+                    "Enum {} must implement {count} abstract {} ({}){}",
+                    class_def.name,
+                    if count == 1 { "method" } else { "methods" },
+                    missing.join(", "),
+                    location
+                ));
+            }
             if requires_private_trait_implementation {
                 let location = class_def
                     .source_file

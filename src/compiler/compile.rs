@@ -1207,18 +1207,46 @@ fn declared_method_facts(
     result
 }
 
-/// PHP cannot early-link a class that consumes a trait. Its declaration may
-/// emit a composition error after earlier top-level statements have already
-/// run. Descendants share that runtime dependency even when they do not use a
+/// PHP cannot early-link a class that consumes a trait, or an enum whose user
+/// interface has a method contract to check. Their declarations may emit link
+/// errors after earlier top-level statements have already run. Descendants
+/// share a trait consumer's runtime dependency even when they do not use a
 /// trait directly.
 fn runtime_class_declaration_names(class_defs: &[ClassDef]) -> HashSet<String> {
+    // Keep constant-only source interfaces on their established eager path.
+    // Unknown interfaces are deliberately absent from this set so their enum
+    // consumer reaches the declaration opcode and the dependency Error path.
+    let mut methodless_interfaces = HashSet::new();
+    loop {
+        let mut changed = false;
+        for interface in class_defs.iter().filter(|class| class.is_interface) {
+            if interface.methods.is_empty()
+                && interface
+                    .implements
+                    .iter()
+                    .all(|parent| methodless_interfaces.contains(&parent.to_ascii_lowercase()))
+            {
+                changed |= methodless_interfaces.insert(interface.name.to_ascii_lowercase());
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
     let mut runtime = class_defs
         .iter()
         .filter(|class| {
             !class.is_anonymous()
                 && !class.is_interface
                 && !class.is_trait
-                && !class.uses.is_empty()
+                && (!class.uses.is_empty()
+                    || (class.is_enum
+                        && class.implements.iter().any(|interface| {
+                            !interface.eq_ignore_ascii_case("UnitEnum")
+                                && !interface.eq_ignore_ascii_case("BackedEnum")
+                                && !methodless_interfaces.contains(&interface.to_ascii_lowercase())
+                        })))
         })
         .map(|class| class.name.to_ascii_lowercase())
         .collect::<HashSet<_>>();
