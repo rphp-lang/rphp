@@ -4203,12 +4203,33 @@ parser/compiler gate places affected and control paired medians between
 equal-length hardlinks measures +4.852% independently and +4.343% paired,
 below the +5% gate, with matching outputs.
 
-The monitored supported debt is now 823 failures: 18 strings, zero array and
-805 Zend/lang. Read-only enum-manifest triage selects the synthesized-method
-conflict pair `no-cases.phpt` and `no-from.phpt` next. Both already reach a
-later RPHP redeclaration error but do not yet reproduce the exact PHP 8.5
-compile-fatal source boundary. Abstract properties, general class-link recovery
-and runtime inheritance expansion remain separate.
+The `5ee1ffd9` `enum-synthesized-method-redeclaration-staging` checkpoint then
+moves Zend/lang from 4,498 to 4,500 pass, exactly `+2/-0`. Direct user enum
+methods colliding case-insensitively with engine-owned `cases()` and, for
+backed enums, `from()` or `tryFrom()` now stop at the reached declaration with
+the qualified enum, canonical lowercase method and declaration line. Engine
+selection order is `cases`, `from`, `tryfrom`; declaration-shape checks precede
+the collision, global method-body/constant-expression and later syntax errors
+retain priority, and magic/interface link checks follow it. Direct, include
+and eval paths preserve prior output and shutdown state, while unreachable,
+unit-enum and trait-provided controls retain their prior behavior. The targeted
+gains are `enum/no-cases.phpt` and `enum/no-from.phpt`; the remaining 150 enum
+outcomes do not move.
+
+Two serial exact-final-binary Zend/lang runs have identical
+path/status/category projections and pass sets; two strings/array projections
+also match the exact parent. All five Cargo configurations,
+all-feature/all-target, formatting, HTML data, PHPT runner, unsafe, Composer
+S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at the
+unsafe ceiling of 1,623 blocks and 289 functions. One CPU-2-pinned 32-pair
+parser/compiler gate places enum and non-startup control paired medians between
+-0.266% and +0.165%; 100-request startup is -4.067%, and all 288 outputs match.
+
+The monitored supported debt is now 821 failures: 18 strings, zero array and
+803 Zend/lang. Read-only enum-manifest triage selects the invalid
+constant-expression pair `backed-int-const-invalid-expr.phpt` and
+`offsetGet-in-const-expr.phpt` next. Enum Reflection/JSON/SPL behavior, general
+class-link recovery and runtime inheritance expansion remain separate.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
