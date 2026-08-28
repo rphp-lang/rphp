@@ -4050,11 +4050,27 @@ positive control at or below +3.540%, with matching outputs. The temporary
 object path records the required destructor-dispatch contract cost rather than
 a comparable regression.
 
-The monitored supported debt is now 840 failures: 18 strings, zero array and
-822 Zend/lang. Read-only final-manifest triage selects
-`Zend/tests/temporary_cleaning/temporary_cleaning_016.phpt` next: its bounded
-deprecated `${expr}` interpolation parse/live-range failure is separable from
-the broad 32-case `temporary_cleaning_013` operand/result-cleaning cluster.
+The `0a75b6c8` `deprecated-interpolation-live-range` checkpoint then moves
+Zend/lang from 4,481 to 4,484 pass, exactly `+3/-0`. The double-quoted-string
+scanner now crosses balanced deprecated `${expr}` and modern `{$...}` regions
+when locating the outer quote, allowing the existing tokenizer, parser and VM
+to own nested quoted expressions and their live ranges. Heredoc deprecations
+use the content line and empty `${}` retains PHP's canonical parse error. The
+three new passes are `expect_007.phpt`, `exception_in_nested_rope.phpt` and the
+selected `temporary_cleaning_016.phpt`; no AST, compiler or VM contract changes.
+
+Two exact-final-binary Zend/lang runs have the same path/status/category
+projection and pass set; two strings/array projections also match the exact
+parent. All five Cargo configurations, all-feature/all-target, formatting,
+HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9
+S2/S3 pass. Production remains at the unsafe ceiling of 1,623 blocks and 289
+functions. One CPU-2-pinned 32-pair release gate places every comparable
+paired median between -0.772% and +0.175%, with matching outputs.
+
+The monitored supported debt is now 837 failures: 18 strings, zero array and
+819 Zend/lang. Read-only final-manifest triage selects
+`Zend/tests/closures/closure_use_trailing_comma.phpt` next: its bounded closure
+capture-list parser failure is separable from broader closure semantics.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.

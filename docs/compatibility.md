@@ -8,6 +8,80 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`deprecated-interpolation-live-range`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.9. Double-quoted strings now keep scanning across
+a balanced deprecated `${expr}` interpolation when its expression contains
+quoted strings or nested interpolation. The existing expression parser then
+owns evaluation and temporary lifetime, so nested operands are evaluated once
+in PHP order and a conversion Throwable prevents publication of the outer
+string without changing the operand state.
+
+The scanner skips only balanced `${...}` and `{$...}` regions while finding
+the outer quote. Existing tokenization, AST, compiler and VM paths remain
+unchanged. Heredoc deprecations identify the actual content line, and an empty
+legacy expression retains PHP's canonical `unexpected token "}"` parse error.
+Modern `{$values["key"]}` interpolation, simple variables, non-interpolated
+quotes and ordinary expression strings keep their preceding paths.
+
+Five original regressions cover nested quoted expressions and evaluation
+order, a throwing Array-to-string handler with unpublished result and
+preserved operands, `error_reporting=0`, direct/include/eval contexts, modern
+syntax controls and the invalid empty form. Their concatenated source hashes
+to `e2fa35e7e15bfb956aa4271ffbc609a524e5ca43a06fc9a46069e7682623e893`.
+Eight clean-room oracle sources concatenate in lexical order to SHA-256
+`56798ad1f4563a09e5e9dcfa94ebbe8d623fd0afc082f3e0558ba5a3c90ef6f2`;
+all seven executed programs match PHP 8.5.9 byte for byte in stdout, stderr
+and exit status.
+
+`Zend/tests/assert/expect_007.phpt`,
+`Zend/tests/exception_in_nested_rope.phpt` and
+`Zend/tests/temporary_cleaning/temporary_cleaning_016.phpt` change from parse
+failure to pass. Two exact-final-binary 5,599-case Zend/lang runs each record
+4,484 pass, 819 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Their full path/status/category projections are identical at SHA-256
+`0c5c2980870a15fd917d17a37632e606abcfe8e12a4feed2348c7b4828db4246`,
+and their exact pass-set hash is
+`804f6ba3f25bdfbd303f2a46101badd63c6db2f80a763e788e6a96b25bc701e6`.
+The exact parent delta is `+3/-0`, with no other movement. Two 1,575-case
+strings/array runs retain the exact parent projection at SHA-256
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`
+and pass-set hash
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,943 pass, 837 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 819 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`7be7a1f43fc570ebb4b86084526a24b51ff798689c64f5b6d811e89f3fdab6dd`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+One exact-final-binary CPU-2-pinned parse/compiler gate used four warmups and
+32 balanced order pairs without outlier removal. Paired median changes are
++0.175% for startup, -0.116% for plain quoted strings, -0.772% for simple
+variable interpolation, +0.024% for modern complex interpolation and -0.008%
+for the legacy-expression positive control. Independent medians are +0.319%,
+-0.740%, -1.890%, +0.000% and -0.018%, respectively. All comparable outputs
+match. The nested target is a semantic control rather than a comparable timing
+because the parent exits with its parse error. The result table hashes to
+`db00e720f1dd08087d32a87a3d5bca902531d44c67460b6740a5aafbe853696c`
+and the complete harness/source aggregate to
+`9b047f6fb49e0611c5f6164f15039f51007674b6c9629233a5508c433e813edf`.
+
+This checkpoint does not claim general rope or operand/result cleanup,
+unrelated eval-heredoc outer-line normalization, new interpolation forms,
+`ArrayAccess` or SPL behavior, 32-bit behavior or allocation-limit/OOM
+equivalence. Read-only final-manifest triage selects
+`Zend/tests/closures/closure_use_trailing_comma.phpt` next: its bounded closure
+capture-list parser failure is separable from broader closure semantics.
+
+The implementation checkpoint is commit `0a75b6c8`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `frameless-call-operand-cleanup`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. A positional two- or three-argument global
 `in_array()` call now retires its compiler-owned operand temporaries at the
