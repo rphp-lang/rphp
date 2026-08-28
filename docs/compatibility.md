@@ -8,6 +8,92 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`unclosed-brace-source-diagnostics`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.9. Reaching the end of an ordinary direct,
+include or eval source unit while `{` is the innermost still-open delimiter now
+produces PHP's contextual `Unclosed '{'` parse error. The message includes the
+opening-brace line only when it differs from the terminal line; the diagnostic
+envelope and catchable `ParseError` use the terminal line. LF, CRLF and CR each
+advance that contract once.
+
+The lexer performs one linear delimiter-stack pass immediately before EOF and
+places the source-aware error after every earlier token, so an earlier lexer or
+parser error keeps priority. A separate amortized brace-line scanner avoids
+changing established punctuation metadata. `__halt_compiler()` uses its
+directive line as the terminal boundary only for an otherwise open braced
+namespace; an ordinary nested halt retains its existing outermost-scope compile
+fatal, and braces in opaque halt payload remain data. Include/eval error
+extraction recognizes the canonical message while preserving each source
+unit's filename and line.
+
+Six original CLI regressions plus two lexer regressions cover same- and
+different-line EOF, LF/CRLF/CR, nested delimiters, doc comments, earlier-error
+priority, direct/include/eval metadata, braced-namespace halt, valid function,
+class, closure and namespace blocks, retained class-constant documentation,
+close/open-tag segments, halt offsets and explicit unclosed-`(`/`[` negative
+controls. The CLI regression source hashes to SHA-256
+`f10faad15b502d110adbb22fe5f3d7d4e1f5d194f87be0b9446d370775ba951a`.
+Six clean-room oracle sources concatenate to SHA-256
+`000e2fd7830883864333601f5b65abccfb05bc6b24ab82e86cc7bb361c530893`;
+their five direct/include/eval/halt/valid invocation scenarios match PHP 8.5.9
+byte for byte in exit status, stdout and stderr under the matching
+`display_errors=stderr`, `log_errors=0`, `html_errors=0` profile.
+
+`Zend/tests/eval_parse_error_with_doc_comment.phpt`,
+`Zend/tests/grammar/bug60099.phpt` and the adjacent
+`Zend/tests/lazy_objects/init_fatal.phpt` change from parse failure to pass.
+`Zend/tests/require_parse_exception.phpt` remains explicitly unsupported on
+the pre-existing `allow_url_include` CLI-INI capability, and
+`tests/lang/syntax_errors.phpt` still exposes earlier independent unclosed-`(`
+and unclosed-`[` diagnostic gaps. Two exact-final-binary 5,599-case Zend/lang
+runs each record 4,491 pass, 812 fail, 115 skip and 181 unsupported, with no
+timeout or crash. Their path/status/category projections are identical at
+SHA-256
+`89c81e955f12d34d2de4fbc92f62749b7a54949e12584802fc2f63ea9345fda2`,
+and their exact pass-set hash is
+`1802e8bfa93f0dbd5d22e1cef06c77cf4f3e20080357e6a334c9c26134af9d6e`.
+The exact parent delta is `+3/-0`, with no other movement. Two serial
+1,575-case strings/array runs retain the exact parent projection at SHA-256
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`
+and pass-set hash
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,950 pass, 830 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 812 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`eab89490f8021a6398fafbaa9584368493629b07ab92724208135e890a10ac5d`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+One exact-final-binary CPU-2-pinned parser gate used four warmups and 32
+balanced order pairs without outlier removal. Paired median changes are
+-2.919% for startup, -0.066% for 30,000 balanced blocks, -0.033% for function
+declarations, -0.823% for documented class declarations, -8.545% for reopened
+PHP segments, -0.612% for a valid halt prefix and -0.492% for the unchanged
+unclosed-parenthesis control. All 224 output/exit pairs match. The result table
+and raw paired data hash respectively to
+`d34e0b485b208a000d91635e8efada1a42712de9a8314cb414acbde89743f313`
+and `6d649a46b2b92f48e1ba67c61ce29694f64cb7623fc0242d4defa760da80412f`;
+the complete harness/source aggregate hashes to
+`f3ee83c5f17845a58ce10f92dc1114dac229f530200b8f619f3c4621671992a9`.
+
+This checkpoint does not claim general token recovery, unclosed-parenthesis or
+unclosed-bracket diagnostics, delimiter-mismatch recovery, alternative-syntax
+recovery, source highlighting, invalid UTF-8, 32-bit behavior or
+allocation-limit/OOM equivalence. Read-only final-manifest triage selects the
+ordinary abstract-method compile-fatal staging cluster headed by
+`Zend/tests/abstract_implicit.phpt` and `Zend/tests/errmsg/errmsg_018.phpt`
+next; the adjacent property-hook and trait controls already pass, while
+`bug44414.phpt` retains an independent runtime blocker.
+
+The implementation checkpoint is commit `a7ed14a5`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `unterminated-block-comment-location`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. Reaching EOF inside either an ordinary
 `/* ...` or documentation `/** ...` comment now produces the canonical

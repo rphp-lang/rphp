@@ -4105,12 +4105,35 @@ blocks and 289 functions. One CPU-2-pinned 32-pair release gate places all six
 comment-scanner paired medians between -1.963% and +1.926%, with matching
 outputs.
 
-The monitored supported debt is now 833 failures: 18 strings, zero array and
-815 Zend/lang. Read-only final-manifest triage selects the unclosed-brace
-source-diagnostic cluster headed by
-`Zend/tests/eval_parse_error_with_doc_comment.phpt` next. Its direct/eval/
-include and halted-namespace line contract is bounded separately from general
-parser token recovery; five upstream expectations expose the likely fanout.
+The `a7ed14a5` `unclosed-brace-source-diagnostics` checkpoint then moves
+Zend/lang from 4,488 to 4,491 pass, exactly `+3/-0`. When `{` is the innermost
+delimiter left at ordinary direct/include/eval EOF, the lexer emits PHP 8.5's
+source-aware `Unclosed '{'` token at the terminal boundary. It reports the
+opener line only when different, counts LF/CRLF/CR, and remains after earlier
+syntax tokens so their errors keep priority. An otherwise open braced
+namespace ending in `__halt_compiler()` uses the directive line, while ordinary
+nested-halt compile fatals, opaque payloads, valid blocks and unmatched
+`(`/`[` controls retain their previous paths. The new passes are
+`eval_parse_error_with_doc_comment.phpt`, `grammar/bug60099.phpt` and
+`lazy_objects/init_fatal.phpt`.
+
+Two exact-final-binary Zend/lang runs have the same path/status/category
+projection and pass set; two serial strings/array projections are identical to
+the exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Production remains at the unsafe ceiling of 1,623
+blocks and 289 functions. One CPU-2-pinned 32-pair release gate places every
+valid parser-control paired median between -8.545% and -0.033%; the unchanged
+unclosed-parenthesis control is -0.492%, and all outputs match.
+
+The monitored supported debt is now 830 failures: 18 strings, zero array and
+812 Zend/lang. Read-only final-manifest triage selects the ordinary
+abstract-method compile-fatal staging cluster headed by
+`Zend/tests/abstract_implicit.phpt` and `Zend/tests/errmsg/errmsg_018.phpt`
+next. Thirteen adjacent abstract property-hook/trait controls already pass;
+`Zend/tests/inheritance/bug44414.phpt` retains an independent runtime blocker.
+That diagnostic-stage boundary remains separate from abstract-property
+implementation, general class-link recovery and runtime inheritance expansion.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
