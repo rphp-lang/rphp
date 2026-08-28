@@ -4291,8 +4291,30 @@ unsafe ceiling of 1,623 blocks and 289 functions. One CPU-2-pinned 32-pair
 release gate places all ten declaration/link and control medians between
 -0.296% and +1.037%, with all 320 output/status pairs matching.
 
-The monitored supported debt is now 817 failures: 18 strings, zero array and
-799 Zend/lang. The eight remaining enum failures are output or runtime gaps;
+The `b3b72587` `enum-interface-abstract-method-diagnostic` checkpoint then
+moves Zend/lang from 4,504 to 4,505 pass, exactly `+1/-0`. Reached unit and
+backed enums missing ordinary user-interface methods now raise the canonical
+uncatchable enum-specific fatal with qualified owner/method names, stable
+ordering, pluralization and the enum declaration location. Direct,
+case-insensitive and trait-provided implementations satisfy the contract;
+diamonds and repeated method names collapse to their first owner. Missing
+dependencies and signature/composition/shape/later-syntax errors retain
+priority, a failed enum is never published, and prior output, shutdown,
+include/eval locations and unreachable declarations retain PHP ordering. The
+only PHPT movement is `enum/gh7792_1.phpt`; the other 151 enum and all 216
+trait outcomes are stable.
+
+Two serial exact-final-binary Zend/lang runs have identical raw manifests,
+path/status/category projections and pass sets; two strings/array projections
+also match the exact parent. All five Cargo configurations,
+all-feature/all-target, formatting, HTML data, PHPT runner, unsafe, Composer
+S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at the
+unsafe ceiling of 1,623 blocks and 289 functions. One CPU-2-pinned 32-pair
+release gate places all ten declaration/link and control medians between
+-2.74% and +1.12%, with all 320 output/status pairs matching.
+
+The monitored supported debt is now 816 failures: 18 strings, zero array and
+798 Zend/lang. The seven remaining enum failures are output or runtime gaps;
 enum Reflection/JSON/SPL behavior, general class-link recovery and runtime
 inheritance expansion remain separate.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration

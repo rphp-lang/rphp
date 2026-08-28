@@ -8,6 +8,101 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`enum-interface-abstract-method-diagnostic`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. When execution reaches a unit or
+backed enum that does not implement every ordinary method required by a user
+interface, RPHP now raises PHP's canonical uncatchable
+`Enum E must implement N abstract method(s) (I::m, ...)` fatal at the enum
+declaration. Names are namespace-qualified, duplicate requirements collapse
+case-insensitively while retaining the first owner, and interface/declaration
+order determines the stable method list. Direct and trait-provided methods,
+including differently cased declarations, satisfy the contract.
+
+Enums with source interface method contracts are linked only when their
+declaration executes. This preserves prior output and shutdown behavior,
+keeps unreachable and post-return declarations inert, and prevents a failing
+enum from becoming visible. Missing dependencies remain catchable and retain
+priority over the abstract-method fatal. Signature, staticness, visibility,
+trait composition/adaptation, enum shape and later source-syntax diagnostics
+retain their established ordering. Constant-only source interfaces stay on
+their existing eager path, avoiding movement in their independent constant
+conflict diagnostics.
+
+Seven original CLI regressions cover unit, backed and namespaced enums,
+pluralization and ordering, inherited and diamond requirements, direct/trait
+and case-insensitive implementations, abstract trait aliases, validation
+priority, missing dependencies, reachability, include/eval source locations,
+shutdown behavior and publication rollback. Their source hashes to SHA-256
+`8a1e7c45d31bdee42c79cd1b8dfd721a4ac2806be45b048db2ca8f241d94f5cf`.
+The 42-file clean-room oracle/harness aggregate hashes to
+`556a3cccd65d38408a352f498888190203a47e786c6857380cf6fdc911c052dd`;
+its PHP 8.5.9 result manifest hashes to
+`abbada7c6afc62dbc000418ea7fca06b61e5e6289d45c25d10359525a45ba453`
+and the exact-candidate result manifest to
+`9d62fc58359b15aec6972f17e3593ef0456b13fde2d18f1055ed8c2851640922`.
+Thirty-seven of 40 scenarios match byte for byte in exit status, stdout and
+stderr. The three explicit non-claims are synthesized `cases()`/`from()`
+signature metadata, the pre-existing leading-newline envelope for one uncaught
+missing-interface error whose caught form is exact, and the declaration line
+in the general non-enum abstract-method diagnostic.
+
+`Zend/tests/enum/gh7792_1.phpt` changes from a runtime failure to pass. The
+complete 152-case enum directory moves from 135 pass / 8 fail to 136 pass / 7
+fail, with eight skips and one unsupported case in both runs; that path is the
+only status/category movement, an exact `+1/-0` gain. The candidate
+path/status/category projection hashes to
+`97ec2d3c47841a35c7f461bf397f86eaf9fdf5af75ef6f60b938a34f4b68ee4b`
+and its exact pass set to
+`bc4593f2eaa14df78b624f3fcc35ecf17e5de5351f31e8aece110564d81d605a`.
+The complete 216-case trait directory retains 214 pass, one skip and one
+unsupported case with no movement; its projection and pass-set hashes are
+`b90f85659f2194ff0fc003566c5504dc7e978c71aa98da62a9a522b777f18579`
+and `b46c468f103a02bd984ee3625077539a1633c0dfda62252175f67b3f5dfdf91c`.
+
+Two serial exact-final-binary 5,599-case Zend/lang runs have identical raw
+manifests at SHA-256
+`de5363aa16fe3d40d9a19f28bad12e7fa5c0711e38322312e67fe3dc971e639f`:
+4,505 pass, 798 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Their path/status/category projection hashes to
+`11fd95e05c89242913412240118cc86afc355bba70d11771069c4d0213a2cd8e`
+and exact pass set to
+`85b412591d356f911138f8c43065b0cd7b27a82cd5ebe5b14eb3e27fa11a1d4c`.
+Two serial 1,575-case strings/array runs retain the exact parent projection at
+`392587b16fee83fa2233b41d0bc8a1dd95d5d4b34a1b5365f25985f5c8515dbe`
+and pass-set hash
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,964 pass, 816 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 798 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`b9200138969e0a2bb2998bb486f038046a81c7c3dc7f392c5e5cb65559cac6aa`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+One exact-final-binary CPU-2-pinned declaration/link gate used four warmups and
+32 balanced order pairs without outlier removal. SHA-verified parent and
+candidate copies ran from the same tmpfs. Paired median changes range from
+-2.74% to +1.12% across startup, plain enums, methodless, direct, trait,
+inherited and case-insensitive interface enums, ordinary interface classes,
+unreachable valid enums and a function control. All 320 measured output/status
+pairs match. The result and benchmark-harness hashes are
+`00dfad8de9f160eece7bc673727ec2df1ce6741161a4855143ae3046bfbe4038`
+and `d6d7077d18fbb87d95c83a77ad401881d9194ecd3a41779d5bcca7decb9d246d`.
+
+This checkpoint does not claim the three oracle gaps above, Traversable
+misuse, built-in enum inheritance, general non-enum abstract diagnostics, AST
+dumper behavior, enum Reflection/JSON/SPL behavior, 32-bit behavior or
+allocation-limit/OOM equivalence. The remaining enum failures are reported
+independently.
+
+The implementation checkpoint is commit `b3b72587`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `enum-trait-case-constant-conflict`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. When execution reaches an enum declaration,
 an imported trait class constant whose case-sensitive name matches an enum
