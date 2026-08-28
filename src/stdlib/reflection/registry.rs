@@ -955,7 +955,20 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         uses: vec![],
         trait_aliases: vec![],
         trait_precedences: vec![],
-        properties: vec![],
+        properties: ["name", "class"]
+            .into_iter()
+            .map(|name| {
+                PropertyDefinition::declared(
+                    name.to_string(),
+                    None,
+                    Visibility::Public,
+                    "ReflectionProperty".to_string(),
+                    ParamTypeHint::String,
+                    true,
+                    false,
+                )
+            })
+            .collect(),
         static_properties: vec![],
         constants: [
             ("IS_PUBLIC", 1),
@@ -986,7 +999,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         .collect(),
         property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         property_defaults: std::rc::Rc::from([]),
-        readonly_props: vec![],
+        readonly_props: vec!["name".to_string(), "class".to_string()],
         methods: vec![],
         abstract_methods: vec![],
         enum_backing_error: None,

@@ -17892,9 +17892,16 @@ fn project_ordinary_json_object(
             )?,
         ));
     }
-    // Preserve the established deterministic object projection. PHP array
-    // insertion order is handled independently above.
-    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    // ReflectionProperty's two engine-declared public slots have a canonical
+    // PHP order (`name`, then `class`). Other objects retain the established
+    // deterministic projection until general property insertion order is a
+    // separately admitted runtime contract.
+    if val
+        .as_object()
+        .is_none_or(|object| object.class_name.as_ref() != "ReflectionProperty")
+    {
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+    }
     Ok(PhpJsonValue::Object(entries))
 }
 

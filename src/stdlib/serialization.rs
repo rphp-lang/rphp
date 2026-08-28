@@ -247,6 +247,7 @@ fn serialize_value(
                     | "weakmap"
                     | "internaliterator"
                     | "sensitiveparametervalue"
+                    | "reflectionproperty"
             ) {
                 Some(class_name.as_str())
             } else {
@@ -1027,7 +1028,11 @@ impl<'a> Parser<'a> {
                 if allowed
                     && matches!(
                         class_name.to_ascii_lowercase().as_str(),
-                        "generator" | "weakreference" | "weakmap" | "internaliterator"
+                        "generator"
+                            | "weakreference"
+                            | "weakmap"
+                            | "internaliterator"
+                            | "reflectionproperty"
                     )
                 {
                     eg.exception = Some(crate::value::make_error_value(
@@ -1093,7 +1098,11 @@ impl<'a> Parser<'a> {
                 if allowed
                     && matches!(
                         class_name.to_ascii_lowercase().as_str(),
-                        "generator" | "weakreference" | "weakmap" | "internaliterator"
+                        "generator"
+                            | "weakreference"
+                            | "weakmap"
+                            | "internaliterator"
+                            | "reflectionproperty"
                     )
                 {
                     eg.exception = Some(crate::value::make_error_value(

@@ -20,7 +20,7 @@ use crate::generics::{GenericDeclarationKind, GenericRuntimeCapabilities};
 use crate::parser::{Expr, Visibility};
 use crate::runtime::{
     ExecutorGlobals, LazyObjectStrategy, ReflectionAttributeDeclaration,
-    ReflectionAttributeDeclarationKind,
+    ReflectionAttributeDeclarationKind, ReflectionPropertyMetadata,
 };
 use crate::value::{
     ArrayKey, DynamicPropertyMap, PhpArray, PhpClosure, PhpObject, ReferencePropertyConstraint,
@@ -145,6 +145,14 @@ fn reflected_property(ed: *mut ExecuteData, name: &str) -> Option<Value> {
     with_argument(ed, 0, |value| {
         value.as_object()?.get_property(name).cloned()
     })
+}
+
+fn reflection_property_metadata<'a>(
+    ed: *mut ExecuteData,
+    eg: &'a ExecutorGlobals,
+) -> Option<&'a ReflectionPropertyMetadata> {
+    let receiver = with_argument(ed, 0, Clone::clone);
+    eg.reflection_property_metadata(&receiver)
 }
 
 fn with_reflected_property<R>(
@@ -3576,23 +3584,41 @@ fn parameter_to_string(
 fn parameter_get_type(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    if !parameter_property_bool(ed, "__reflection_has_type") {
+    let property_metadata = reflection_property_metadata(ed, eg);
+    let has_type = property_metadata.map_or_else(
+        || parameter_property_bool(ed, "__reflection_has_type"),
+        |metadata| metadata.has_type,
+    );
+    if !has_type {
         return return_value(rv, Value::null());
     }
-    let kind = reflected_property(ed, "__reflection_type_kind")
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "named".to_string());
-    let name = reflected_property(ed, "__reflection_type_name")
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_default();
+    let kind = property_metadata.map_or_else(
+        || {
+            reflected_property(ed, "__reflection_type_kind")
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "named".to_string())
+        },
+        |metadata| metadata.type_kind.clone(),
+    );
+    let name = property_metadata.map_or_else(
+        || {
+            reflected_property(ed, "__reflection_type_name")
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_default()
+        },
+        |metadata| metadata.type_name.clone(),
+    );
     let class = match kind.as_str() {
         "union" => "ReflectionUnionType",
         "intersection" => "ReflectionIntersectionType",
         _ => "ReflectionNamedType",
     };
-    let allows_null = parameter_property_bool(ed, "__reflection_allows_null");
+    let allows_null = property_metadata.map_or_else(
+        || parameter_property_bool(ed, "__reflection_allows_null"),
+        |metadata| metadata.allows_null,
+    );
     let rendered = if kind == "named"
         && allows_null
         && !matches!(name.to_ascii_lowercase().as_str(), "mixed" | "null")
@@ -3617,12 +3643,13 @@ fn parameter_get_type(
 fn parameter_has_type(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    return_value(
-        rv,
-        Value::bool(parameter_property_bool(ed, "__reflection_has_type")),
-    )
+    let has_type = reflection_property_metadata(ed, eg).map_or_else(
+        || parameter_property_bool(ed, "__reflection_has_type"),
+        |metadata| metadata.has_type,
+    );
+    return_value(rv, Value::bool(has_type))
 }
 
 fn parameter_is_variadic(
@@ -4061,20 +4088,22 @@ fn reflection_property_definition<'a>(
     ed: *mut ExecuteData,
     eg: &'a ExecutorGlobals,
 ) -> Option<(&'a PropertyDefinition, bool)> {
-    let class_name = reflected_property(ed, "__reflection_target")
-        .and_then(|target| {
-            target
+    let metadata = reflection_property_metadata(ed, eg);
+    let class_name = metadata
+        .and_then(|metadata| {
+            metadata
+                .target
                 .as_object()
                 .map(|object| object.class_name.to_string())
-                .or_else(|| target.as_str().map(str::to_owned))
+                .or_else(|| metadata.target.as_str().map(str::to_owned))
         })
         .or_else(|| {
             reflected_property(ed, "class").and_then(|class| class.as_str().map(str::to_owned))
         })?;
-    let name = reflected_property(ed, "__reflection_property")
-        .or_else(|| reflected_property(ed, "name"))?
-        .as_str()?
-        .to_string();
+    let name = metadata.map_or_else(
+        || reflected_property(ed, "name").and_then(|name| name.as_str().map(str::to_owned)),
+        |metadata| Some(metadata.property.clone()),
+    )?;
     let class = eg.find_class(&class_name)?;
     class
         .properties
@@ -4239,9 +4268,11 @@ fn property_to_string(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let name = reflected_property(ed, "__reflection_property")
-        .or_else(|| reflected_property(ed, "name"))
-        .and_then(|name| name.as_str().map(str::to_owned))
+    let name = reflection_property_metadata(ed, eg)
+        .map(|metadata| metadata.property.clone())
+        .or_else(|| {
+            reflected_property(ed, "name").and_then(|name| name.as_str().map(str::to_owned))
+        })
         .unwrap_or_default();
     let rendered = reflection_property_definition(ed, eg).map_or_else(
         || format!("Property [ <dynamic> public ${name} ]\n"),
@@ -6394,41 +6425,56 @@ fn property_modifiers(property: &PropertyDefinition, is_static: bool) -> i64 {
         }
 }
 
-fn reflected_property_value(property: &PropertyDefinition, is_static: bool) -> Value {
-    let declaring_class = property.declaring_class.clone();
+fn reflection_property_metadata_for_definition(
+    target: Value,
+    property: &PropertyDefinition,
+    is_static: bool,
+) -> ReflectionPropertyMetadata {
     let has_type = !matches!(property.type_hint, ParamTypeHint::None);
     let (type_kind, type_name, allows_null) = hint_metadata(&property.type_hint);
-    object_value(
-        "ReflectionProperty",
-        [
-            (
-                "__reflection_target",
-                Value::string(declaring_class.clone()),
-            ),
-            (
-                "__reflection_property",
-                Value::string(property.name.clone()),
-            ),
-            (
-                "__reflection_modifiers",
-                Value::long(property_modifiers(property, is_static)),
-            ),
-            ("__reflection_has_type", Value::bool(has_type)),
-            ("__reflection_type_kind", Value::string(type_kind)),
-            ("__reflection_type_name", Value::string(type_name)),
-            ("__reflection_allows_null", Value::bool(allows_null)),
-            (
-                "__reflection_has_default",
-                Value::bool(property.has_default()),
-            ),
-            (
-                "__reflection_default",
-                property.default.clone().unwrap_or_else(Value::null),
-            ),
-            ("name", Value::string(property.name.clone())),
-            ("class", Value::string(declaring_class)),
-        ],
-    )
+    ReflectionPropertyMetadata {
+        target,
+        property: property.name.clone(),
+        modifiers: property_modifiers(property, is_static),
+        has_type,
+        type_kind: type_kind.to_string(),
+        type_name,
+        allows_null,
+        has_default: property.has_default(),
+        default: property.default.clone().unwrap_or_else(Value::null),
+    }
+}
+
+fn reflection_property_public_value(
+    name: String,
+    declaring_class: String,
+    eg: &ExecutorGlobals,
+) -> Value {
+    let class = eg
+        .find_class("ReflectionProperty")
+        .expect("ReflectionProperty must be registered before use");
+    Value::object(PhpObject::with_layout(
+        class.class_id,
+        Rc::clone(&class.property_layout),
+        vec![Value::string(name), Value::string(declaring_class)],
+    ))
+}
+
+fn reflected_property_value(
+    property: &PropertyDefinition,
+    is_static: bool,
+    eg: &mut ExecutorGlobals,
+) -> Value {
+    let declaring_class = property.declaring_class.clone();
+    let reflected =
+        reflection_property_public_value(property.name.clone(), declaring_class.clone(), eg);
+    let metadata = reflection_property_metadata_for_definition(
+        Value::string(declaring_class),
+        property,
+        is_static,
+    );
+    eg.register_reflection_property(&reflected, metadata);
+    reflected
 }
 
 fn class_get_properties(
@@ -6447,22 +6493,25 @@ fn class_get_properties(
     let Some(class) = eg.find_class(&owner) else {
         return return_value(rv, Value::array(PhpArray::new()));
     };
+    let class_name = class.name.clone();
     let filter = with_argument(ed, 1, |value| value.as_long());
     let mut declarations = class
         .properties
         .iter()
+        .cloned()
         .map(|property| (property, false))
         .chain(
             class
                 .static_properties
                 .iter()
                 .filter(|_| !class.is_enum)
+                .cloned()
                 .map(|property| (property, true)),
         )
         .collect::<Vec<_>>();
     declarations.sort_by_key(|(property, _)| {
         let mut rank = 0usize;
-        let mut current = Some(class.name.as_str());
+        let mut current = Some(class_name.as_str());
         while let Some(owner) = current {
             if property.declaring_class.eq_ignore_ascii_case(owner) {
                 break;
@@ -6477,15 +6526,15 @@ fn class_get_properties(
     let mut properties = PhpArray::with_packed_capacity(declarations.len());
     for (property, is_static) in declarations {
         if property.visibility == Visibility::Private
-            && !property.declaring_class.eq_ignore_ascii_case(&class.name)
+            && !property.declaring_class.eq_ignore_ascii_case(&class_name)
         {
             continue;
         }
-        let modifiers = property_modifiers(property, is_static);
+        let modifiers = property_modifiers(&property, is_static);
         if filter.is_some_and(|filter| modifiers & filter == 0) {
             continue;
         }
-        properties.push(reflected_property_value(property, is_static));
+        properties.push(reflected_property_value(&property, is_static, eg));
     }
     return_value(rv, Value::array(properties))
 }
@@ -6515,7 +6564,7 @@ fn class_get_property(
                     && (property.visibility != Visibility::Private
                         || property.declaring_class.eq_ignore_ascii_case(&class.name))
             })
-            .map(|property| (property, false))
+            .map(|property| (property.clone(), false))
             .or_else(|| {
                 class
                     .static_properties
@@ -6525,7 +6574,7 @@ fn class_get_property(
                             && (property.visibility != Visibility::Private
                                 || property.declaring_class.eq_ignore_ascii_case(&class.name))
                     })
-                    .map(|property| (property, true))
+                    .map(|property| (property.clone(), true))
             })
     });
     let Some((property, is_static)) = property else {
@@ -6535,7 +6584,7 @@ fn class_get_property(
         );
         return Ok(());
     };
-    return_value(rv, reflected_property_value(property, is_static))
+    return_value(rv, reflected_property_value(&property, is_static, eg))
 }
 
 fn class_new_lazy_ghost(
@@ -7399,134 +7448,144 @@ fn property_construct(
         .as_object()
         .map(|object| object.class_name.to_string())
         .or_else(|| target.as_str().map(str::to_string));
-    let metadata = class_name.as_deref().and_then(|class_name| {
+    let definition = class_name.as_deref().and_then(|class_name| {
         let class = eg.find_class(class_name)?;
         class
             .properties
             .iter()
             .find(|property| property.name == name)
-            .map(|property| {
-                (
-                    property.declaring_class.clone(),
-                    property_modifiers(property, false),
-                    property.type_hint.clone(),
-                    property.has_default(),
-                    property.default.clone().unwrap_or_else(Value::null),
-                )
-            })
+            .cloned()
+            .map(|property| (property, false))
             .or_else(|| {
                 class
                     .static_properties
                     .iter()
                     .find(|property| property.name == name)
-                    .map(|property| {
-                        (
-                            property.declaring_class.clone(),
-                            property_modifiers(property, true),
-                            property.type_hint.clone(),
-                            property.has_default(),
-                            property.default.clone().unwrap_or_else(Value::null),
-                        )
-                    })
+                    .cloned()
+                    .map(|property| (property, true))
             })
     });
-    with_argument(ed, 0, |value| {
-        if let Some(mut object) = value.as_object_mut() {
-            object.set_property("__reflection_target", target);
-            object.set_property("__reflection_property", Value::string(name.clone()));
-            object.set_property("name", Value::string(name));
-            if let Some((declaring_class, modifiers, type_hint, has_default, default)) = metadata {
-                let has_type = !matches!(type_hint, ParamTypeHint::None);
-                let (type_kind, type_name, allows_null) = hint_metadata(&type_hint);
-                object.set_property("class", Value::string(declaring_class));
-                object.set_property("__reflection_modifiers", Value::long(modifiers));
-                object.set_property("__reflection_has_type", Value::bool(has_type));
-                object.set_property("__reflection_type_kind", Value::string(type_kind));
-                object.set_property("__reflection_type_name", Value::string(type_name));
-                object.set_property("__reflection_allows_null", Value::bool(allows_null));
-                object.set_property("__reflection_has_default", Value::bool(has_default));
-                object.set_property("__reflection_default", default);
-            }
+    let receiver = with_argument(ed, 0, Clone::clone);
+    if let Some(mut object) = receiver.as_object_mut() {
+        object.set_property("name", Value::string(name.clone()));
+        if let Some(declaring_class) = definition
+            .as_ref()
+            .map(|(property, _)| property.declaring_class.as_str())
+            .or(class_name.as_deref())
+        {
+            object.set_property("class", Value::string(declaring_class));
         }
-    });
+    }
+    if let Some((property, is_static)) = definition {
+        let metadata = reflection_property_metadata_for_definition(target, &property, is_static);
+        eg.register_reflection_property(&receiver, metadata);
+    } else if target.as_object().is_some_and(|object| {
+        object
+            .dynamic_properties
+            .as_ref()
+            .is_some_and(|properties| properties.get(&name).is_some())
+    }) {
+        eg.register_reflection_property(
+            &receiver,
+            ReflectionPropertyMetadata {
+                target,
+                property: name,
+                modifiers: 1,
+                has_type: false,
+                type_kind: "named".to_string(),
+                type_name: String::new(),
+                allows_null: true,
+                has_default: false,
+                default: Value::null(),
+            },
+        );
+    }
     Ok(())
 }
 
 fn property_get_modifiers(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    return_value(
-        rv,
-        reflected_property(ed, "__reflection_modifiers").unwrap_or_else(|| Value::long(0)),
+    return_value(rv, Value::long(reflection_property_modifiers(ed, eg)))
+}
+
+fn reflection_property_modifiers(ed: *mut ExecuteData, eg: &ExecutorGlobals) -> i64 {
+    reflection_property_metadata(ed, eg).map_or_else(
+        || {
+            reflected_property(ed, "__reflection_modifiers")
+                .and_then(|value| value.as_long())
+                .unwrap_or(0)
+        },
+        |metadata| metadata.modifiers,
     )
 }
 
 fn property_is_static(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let modifiers = reflected_property(ed, "__reflection_modifiers")
-        .and_then(|value| value.as_long())
-        .unwrap_or(0);
+    let modifiers = reflection_property_modifiers(ed, eg);
     return_value(rv, Value::bool(modifiers & 16 != 0))
 }
 
 fn property_is_readonly(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let modifiers = reflected_property(ed, "__reflection_modifiers")
-        .and_then(|value| value.as_long())
-        .unwrap_or(0);
+    let modifiers = reflection_property_modifiers(ed, eg);
     return_value(rv, Value::bool(modifiers & 128 != 0))
 }
 
 fn property_modifier_is(
     ed: *mut ExecuteData,
     rv: *mut Value,
+    eg: &ExecutorGlobals,
     expected: i64,
 ) -> Result<(), VmError> {
-    let modifiers = reflected_property(ed, "__reflection_modifiers")
-        .and_then(|value| value.as_long())
-        .unwrap_or(0);
+    let modifiers = reflection_property_modifiers(ed, eg);
     return_value(rv, Value::bool(modifiers & expected != 0))
 }
 
 fn property_is_final(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    property_modifier_is(ed, rv, 32)
+    property_modifier_is(ed, rv, eg, 32)
 }
 
 fn property_is_abstract(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    property_modifier_is(ed, rv, 64)
+    property_modifier_is(ed, rv, eg, 64)
 }
 
 fn property_is_virtual(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    property_modifier_is(ed, rv, 512)
+    property_modifier_is(ed, rv, eg, 512)
 }
 
 fn property_has_default_value(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let has_default =
-        reflected_property(ed, "__reflection_has_default").is_some_and(|value| value.is_truthy());
+    let has_default = reflection_property_metadata(ed, eg).map_or_else(
+        || {
+            reflected_property(ed, "__reflection_has_default")
+                .is_some_and(|value| value.is_truthy())
+        },
+        |metadata| metadata.has_default,
+    );
     return_value(rv, Value::bool(has_default))
 }
 
@@ -7535,8 +7594,16 @@ fn property_get_default_value(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let has_default =
-        reflected_property(ed, "__reflection_has_default").is_some_and(|value| value.is_truthy());
+    let (has_default, default) = reflection_property_metadata(ed, eg).map_or_else(
+        || {
+            (
+                reflected_property(ed, "__reflection_has_default")
+                    .is_some_and(|value| value.is_truthy()),
+                reflected_property(ed, "__reflection_default").unwrap_or_else(Value::null),
+            )
+        },
+        |metadata| (metadata.has_default, metadata.default.clone()),
+    );
     if !has_default {
         super::report_internal_deprecation(
             eg,
@@ -7544,73 +7611,90 @@ fn property_get_default_value(
             "ReflectionProperty::getDefaultValue() for a property without a default value is deprecated, use ReflectionProperty::hasDefaultValue() to check if the default value exists",
         )?;
     }
-    return_value(
-        rv,
-        reflected_property(ed, "__reflection_default").unwrap_or_else(Value::null),
-    )
+    return_value(rv, default)
 }
 
 fn property_is_default(
-    _ed: *mut ExecuteData,
+    ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    return_value(rv, Value::bool(true))
+    return_value(
+        rv,
+        Value::bool(reflection_property_definition(ed, eg).is_some()),
+    )
 }
 
 fn property_visibility_is(
     ed: *mut ExecuteData,
     rv: *mut Value,
+    eg: &ExecutorGlobals,
     expected: i64,
 ) -> Result<(), VmError> {
-    let modifiers = reflected_property(ed, "__reflection_modifiers")
-        .and_then(|value| value.as_long())
-        .unwrap_or(1);
+    let modifiers = reflection_property_metadata(ed, eg).map_or_else(
+        || {
+            reflected_property(ed, "__reflection_modifiers")
+                .and_then(|value| value.as_long())
+                .unwrap_or(1)
+        },
+        |metadata| metadata.modifiers,
+    );
     return_value(rv, Value::bool(modifiers & 7 == expected))
 }
 
 fn property_is_public(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    property_visibility_is(ed, rv, 1)
+    property_visibility_is(ed, rv, eg, 1)
 }
 
 fn property_is_protected(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    property_visibility_is(ed, rv, 2)
+    property_visibility_is(ed, rv, eg, 2)
 }
 
 fn property_is_private(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    property_visibility_is(ed, rv, 4)
+    property_visibility_is(ed, rv, eg, 4)
 }
 
-fn reflected_property_target(ed: *mut ExecuteData) -> Option<(Value, String)> {
-    with_argument(ed, 0, |value| {
-        let object = value.as_object()?;
-        let target = object.get_property("__reflection_target")?.clone();
-        let property = object
-            .get_property("__reflection_property")?
-            .as_str()?
-            .to_string();
-        Some((target, property))
-    })
+fn reflected_property_target(
+    ed: *mut ExecuteData,
+    eg: &ExecutorGlobals,
+) -> Option<(Value, String)> {
+    reflection_property_metadata(ed, eg)
+        .map(|metadata| (metadata.target.clone(), metadata.property.clone()))
+        .or_else(|| {
+            with_argument(ed, 0, |value| {
+                let object = value.as_object()?;
+                let target = object.get_property("__reflection_target")?.clone();
+                let property = object
+                    .get_property("__reflection_property")?
+                    .as_str()?
+                    .to_string();
+                Some((target, property))
+            })
+        })
 }
 
-fn reflected_property_object(ed: *mut ExecuteData, index: u32) -> Option<Value> {
+fn reflected_property_object(
+    ed: *mut ExecuteData,
+    eg: &ExecutorGlobals,
+    index: u32,
+) -> Option<Value> {
     with_argument(ed, index, |value| {
         (value.value_type() == crate::value::ValueType::Object).then(|| value.clone())
     })
     .or_else(|| {
-        reflected_property_target(ed).and_then(|(target, _)| {
+        reflected_property_target(ed, eg).and_then(|(target, _)| {
             (target.value_type() == crate::value::ValueType::Object).then_some(target)
         })
     })
@@ -7659,12 +7743,10 @@ fn reflected_lazy_property_operation_target(
     eg: &mut ExecutorGlobals,
     method: &str,
 ) -> Option<(Value, String, usize, Option<PropertyDefinition>)> {
-    let (_, property) = reflected_property_target(ed)?;
-    let mut target = reflected_property_object(ed, 1)?;
+    let (_, property) = reflected_property_target(ed, eg)?;
+    let mut target = reflected_property_object(ed, eg, 1)?;
     let reflected_scope = reflected_property_scope(ed);
-    let modifiers = reflected_property(ed, "__reflection_modifiers")
-        .and_then(|value| value.as_long())
-        .unwrap_or(0);
+    let modifiers = reflection_property_modifiers(ed, eg);
     let initial_class = target
         .as_object()
         .map(|object| object.class_name.to_string())?;
@@ -7774,11 +7856,11 @@ fn property_is_initialized(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some((_, property)) = reflected_property_target(ed) else {
+    let Some((_, property)) = reflected_property_target(ed, eg) else {
         return return_value(rv, Value::bool(false));
     };
     let reflected_scope = reflected_property_scope(ed);
-    let initialized = if let Some(target) = reflected_property_object(ed, 1) {
+    let initialized = if let Some(target) = reflected_property_object(ed, eg, 1) {
         let key = target
             .as_object()
             .map(|object| {
@@ -7802,11 +7884,11 @@ fn property_get_value(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some((_, property)) = reflected_property_target(ed) else {
+    let Some((_, property)) = reflected_property_target(ed, eg) else {
         return return_value(rv, Value::null());
     };
     let reflected_scope = reflected_property_scope(ed);
-    let value = if let Some(target) = reflected_property_object(ed, 1) {
+    let value = if let Some(target) = reflected_property_object(ed, eg, 1) {
         let key = target
             .as_object()
             .map(|object| {
@@ -7829,12 +7911,12 @@ fn property_set_value(
     _rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some((_, property)) = reflected_property_target(ed) else {
+    let Some((_, property)) = reflected_property_target(ed, eg) else {
         return Ok(());
     };
     let reflected_scope = reflected_property_scope(ed);
     let value = with_argument(ed, 2, Clone::clone);
-    if let Some(target) = reflected_property_object(ed, 1) {
+    if let Some(target) = reflected_property_object(ed, eg, 1) {
         let key = target
             .as_object()
             .map(|object| {
@@ -7870,10 +7952,10 @@ fn property_is_lazy(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some((_, property)) = reflected_property_target(ed) else {
+    let Some((_, property)) = reflected_property_target(ed, eg) else {
         return return_value(rv, Value::bool(false));
     };
-    let Some(mut target) = reflected_property_object(ed, 1) else {
+    let Some(mut target) = reflected_property_object(ed, eg, 1) else {
         return return_value(rv, Value::bool(false));
     };
     for _ in 0..16 {

@@ -371,6 +371,26 @@ pub(crate) struct ReflectionReferenceState {
     pub(crate) reference_identity: usize,
 }
 
+/// Cold engine-only metadata for one ReflectionProperty wrapper. PHP exposes
+/// only the wrapper's declared `name` and `class` properties; retaining the
+/// target and method metadata here keeps debug/object projections canonical.
+pub(crate) struct ReflectionPropertyMetadata {
+    pub(crate) target: crate::value::Value,
+    pub(crate) property: String,
+    pub(crate) modifiers: i64,
+    pub(crate) has_type: bool,
+    pub(crate) type_kind: String,
+    pub(crate) type_name: String,
+    pub(crate) allows_null: bool,
+    pub(crate) has_default: bool,
+    pub(crate) default: crate::value::Value,
+}
+
+pub(crate) struct ReflectionPropertyState {
+    pub(crate) owner: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    pub(crate) metadata: ReflectionPropertyMetadata,
+}
+
 /// Cold request-local scope for one engine-created ReflectionParameter.
 /// Dynamic properties remain compatible with Zend while attributes on trait
 /// methods and bound closures still evaluate in their effective class scope.
@@ -760,6 +780,9 @@ pub struct ExecutorGlobals {
     /// Engine-created ReflectionReference identities are equally sparse and
     /// must not leak as ordinary object properties.
     reflection_references: Option<Box<HashMap<usize, ReflectionReferenceState>>>,
+    /// ReflectionProperty method state is engine-only; PHP sees only the
+    /// wrapper's declared `name` and `class` properties.
+    reflection_properties: Option<Box<HashMap<usize, ReflectionPropertyState>>>,
     /// Effective attribute scopes for reflected parameters are equally rare;
     /// keeping them here preserves ReflectionParameter's observable shape.
     reflection_parameters: Option<Box<HashMap<usize, ReflectionParameterState>>>,
@@ -911,6 +934,34 @@ impl ExecutorGlobals {
         let identity = object.object_identity()?;
         let state = self.reflection_references.as_ref()?.get(&identity)?;
         (state.owner.strong_count() != 0).then_some(state.reference_identity)
+    }
+
+    #[cold]
+    pub(crate) fn register_reflection_property(
+        &mut self,
+        object: &crate::value::Value,
+        metadata: ReflectionPropertyMetadata,
+    ) {
+        let (Some(identity), Some(owner)) = (object.object_identity(), object.object_weak()) else {
+            return;
+        };
+        let properties = self
+            .reflection_properties
+            .get_or_insert_with(|| Box::new(HashMap::new()));
+        if properties.len() >= 256 && properties.len().is_power_of_two() {
+            properties.retain(|_, state| state.owner.strong_count() != 0);
+        }
+        properties.insert(identity, ReflectionPropertyState { owner, metadata });
+    }
+
+    #[inline]
+    pub(crate) fn reflection_property_metadata(
+        &self,
+        object: &crate::value::Value,
+    ) -> Option<&ReflectionPropertyMetadata> {
+        let identity = object.object_identity()?;
+        let state = self.reflection_properties.as_ref()?.get(&identity)?;
+        (state.owner.strong_count() != 0).then_some(&state.metadata)
     }
 
     #[cold]
@@ -1479,6 +1530,7 @@ impl ExecutorGlobals {
             ini_overrides: None,
             reflection_attributes: None,
             reflection_references: None,
+            reflection_properties: None,
             reflection_parameters: None,
             json_runtime: None,
         }
@@ -1600,6 +1652,7 @@ impl ExecutorGlobals {
             ini_overrides: None,
             reflection_attributes: None,
             reflection_references: None,
+            reflection_properties: None,
             reflection_parameters: None,
             json_runtime: None,
         }
