@@ -4345,6 +4345,33 @@ The monitored supported debt is now 815 failures: 18 strings, zero array and
 797 Zend/lang. The six remaining enum failures are output or runtime gaps;
 enum Reflection/JSON/SPL behavior, general class-link recovery and runtime
 inheritance expansion remain separate.
+
+The `abb65cf1` `builtin-roundingmode-enum-parent` checkpoint then moves
+Zend/lang from 4,506 to 4,507 pass, exactly `+1/-0`. PHP 8.5's internal unit
+enum `RoundingMode` is registered with its canonical identity and eight stable
+case singletons. Reached named, namespaced/aliased and anonymous classes that
+extend an enum now use the canonical parent and anonymous public names in an
+uncatchable source-aware compile fatal. Missing parents, modifiers and later
+syntax retain priority; failed declarations remain unpublished, and prior
+output, shutdown, include/eval and unreachable behavior preserve PHP ordering.
+The only PHPT movement is `enum/extending-builtin-error.phpt`; the other 151
+enum outcomes are stable.
+
+Two serial exact-final-binary Zend/lang runs have identical raw manifests,
+path/status/category projections and pass sets; two strings/array projections
+also match the exact parent. All five Cargo configurations,
+all-feature/all-target, formatting, HTML data, PHPT runner, unsafe, Composer
+S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at the
+unsafe ceiling of 1,623 blocks and 289 functions. One CPU-2-pinned 32-pair
+release gate places startup at +4.78% and the other 16 declaration/internal-
+class medians between -0.81% and +1.94%, with all 544 measured output/status
+pairs matching.
+
+The monitored supported debt is now 814 failures: 18 strings, zero array and
+796 Zend/lang. The five remaining enum failures are the AST dumper, object
+handle numbering, JSON encoding, detailed enum-property Reflection and
+`SplObjectStorage`; broader `round()`/`RoundingMode` integration remains a
+separate boundary.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.

@@ -8,6 +8,100 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`builtin-roundingmode-enum-parent`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. RPHP now registers PHP 8.5's internal unit enum
+`RoundingMode` with its canonical public identity, `UnitEnum` relation and
+eight stable case singletons in PHP order: `HalfAwayFromZero`,
+`HalfTowardsZero`, `HalfEven`, `HalfOdd`, `TowardsZero`, `AwayFromZero`,
+`NegativeInfinity` and `PositiveInfinity`. `cases()`, case names, identity,
+matching, generic enum serialization and ordinary enum Reflection controls
+use the shared enum machinery.
+
+The general enum-parent guard now reports the registered parent's canonical
+name, including when source spelling differs by case or an import alias is
+used. Reached named, namespaced, aliased and anonymous declarations that extend
+an enum raise the uncatchable, source-aware
+`Class C cannot extend enum RoundingMode` compile fatal. Runtime declarations,
+anonymous construction and separate include/eval source units preserve the
+compile-fatal presentation rather than adding a runtime-fatal newline or a
+second source location. Missing parents remain catchable; modifier and later
+syntax diagnostics retain priority. Prior output, shutdown, reachability and
+failed-class invisibility remain ordered as in PHP. The fixed request registry
+reserves the eight additional case slots up front, so stdlib registration does
+not grow its static-value vector.
+
+Six original CLI regressions cover public identity and case order, singleton
+and serialization behavior, direct/case-insensitive/namespaced/aliased and
+anonymous parents, modifier and syntax priority, output/shutdown/publication,
+unreachable and post-return declarations, include/eval origins, missing-parent
+catchability and existing user/internal enum controls. Their source hashes to
+SHA-256
+`3f9331690c50fce1d69b2c1fd8877855598b2c3edd0ca0e0bfe53a40871a88b9`.
+The clean-room oracle/harness aggregate hashes to
+`05e3734aed0e504985a7de6c48fc38003c920236b00f001da26ac828df8783ae`;
+its PHP 8.5.9 result manifest hashes to
+`0b9fecbd736c21780be5e69638f52c0fa59d646a59e50cfd36be392146987eaf`
+and the exact-candidate result manifest to
+`87f8cb6c62e9ed7198e374b1e43c12fce2cdc523e47a1240b828e3379b72c827`.
+Twenty-four of 28 scenarios match byte for byte in exit status, stdout and
+stderr. The four explicit non-claims are the independent uncaught presentation
+for direct construction, case cloning and the missing unit-enum `from()`
+method, plus `round()` argument integration.
+
+`Zend/tests/enum/extending-builtin-error.phpt` changes from an output failure
+to pass. The complete 152-case enum directory moves from 137 pass / 6 fail to
+138 pass / 5 fail, with eight skips and one unsupported case in both runs;
+that path is the only status/category movement, an exact `+1/-0` gain. The
+candidate path/status/category projection hashes to
+`5f2fb25e8c354f1e38946d0a14d3abf247d227631c6c6ec3514bfb485998f871`
+and its exact pass set to
+`c7a5af1c53707e15de546167dcf6f9cbe1ec9649041f657cb5f12787ba01f579`.
+The five remaining enum failures are `ast-dumper.phpt`, `gh8176.phpt`,
+`json_encode.phpt`, `name-property.phpt` and `spl-object-storage.phpt`.
+
+Two serial exact-final-binary 5,599-case Zend/lang runs have identical raw
+manifests at SHA-256
+`f55486c9604d0fefa7494f8e8dd735b5ae5f3e17496e8e4fd9e61525f3838f95`:
+4,507 pass, 796 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Their path/status/category projection hashes to
+`6eb98729b4904aecdf9aa262154beecda85ae48b02e4b9aaa4c7667162157332`
+and exact pass set to
+`6af0cf0fee3c091ce99bbe81a314e621b845b15fd6832f8b008f7d99e5e96dac`.
+Two serial 1,575-case strings/array runs retain the exact parent projection at
+`392587b16fee83fa2233b41d0bc8a1dd95d5d4b34a1b5365f25985f5c8515dbe`
+and pass-set hash
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,966 pass, 814 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 796 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`ecbcb9ba247bf0da99e1242e831da272b0f6b5129bdb1285e8b3ba82d695c072`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+One exact-final-binary CPU-2-pinned startup/declaration gate used four warmups
+and 32 balanced order pairs without outlier removal. SHA-verified parent and
+candidate copies ran from the same tmpfs. Startup is +4.78%; the other 16
+workload medians range from -0.81% to +1.94% across existing enum/interface
+controls, runtime and anonymous parents, include/eval class units and internal
+class lookups. All 544 measured output/status pairs match. The result and
+task-harness hashes are
+`8ba976224c7ac5ead5c4c04d3d3b8dca5e48012792ae80f6a7d1274a6494bb9f`
+and
+`05dfa94940c6f65fe64c9a4c6120ee87f5bd2e97dcc55797d925101549f8bc33`.
+
+This checkpoint does not claim the four oracle gaps above, full `round()`
+integration, general Reflection completeness, AST-dumper behavior, enum
+JSON/SPL expansion, 32-bit behavior or allocation-limit/OOM equivalence.
+
+The implementation checkpoint is commit `abb65cf1`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `enum-traversable-interface-diagnostic`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. A reached unit or backed enum whose
 complete user-interface closure contains the engine `Traversable` interface
