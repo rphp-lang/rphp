@@ -8,6 +8,95 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`non-enum-case-declaration-diagnostic`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.9. A class, interface, trait or anonymous-class
+member spelled `case Name;` is now consumed as PHP's enum-case-shaped grammar
+before the compiler emits the canonical uncatchable `Case can only be used in
+enums` fatal at the case-name line. Attributes and an assigned case value are
+consumed without creating a runtime member. A real enum case, a switch case and
+a method named `case` retain their existing behavior; a visibility modifier
+before `case` retains PHP's distinct property-grammar parse error.
+
+Header, name and import diagnostics still precede the case boundary. Member
+diagnostics on either side of the case retain source order, while a later
+source syntax error keeps global priority. The same compile boundary applies
+inside constant-elided and post-return declarations. Include and eval source
+units retain their filename, prior output and shutdown behavior without
+turning the fatal into a catchable runtime error. An internal parser marker is
+stored in an already heap-backed attribute list and removed before runtime
+attribute materialization, so this staging does not enlarge classlike AST
+variants or expose synthetic Reflection metadata.
+
+Eight original CLI regressions cover every classlike form, namespaces,
+multiline source locations, attributes and assigned values, first-case
+selection, header/member/later-syntax ordering, malformed forms, elided and
+post-return declarations, valid controls, include/eval origin and state
+preservation. Their source hashes to SHA-256
+`7679e17c1c472dbd9a5ab90d2643f1f5c5993441989ef1dfe0d088ba9302c6ac`.
+The 45-file clean-room oracle/harness aggregate hashes to
+`18e25a9d5c18f428c88c5c0ddc274e3a4fa46cf2fe64734b4d29de9824a6ad79`;
+its PHP 8.5.9 result manifest hashes to
+`07152a34ec6b4d32987119a8f134bc65089e26cce8fa945ebb8bf19ee5597745`.
+Thirty-nine of 43 scenarios match byte for byte in exit status, stdout and
+stderr. The four explicit non-claims are the pre-existing valid class-constant
+name `case`, malformed missing-semicolon diagnostic envelope, and two
+protected-interface-method ordering scenarios whose independent diagnostic is
+not yet implemented.
+
+`Zend/tests/enum/case-in-class.phpt` changes from a parse failure to pass. The
+complete 152-case enum directory moves from 133 pass / 10 fail to 134 pass / 9
+fail, with eight skips and one unsupported case in both runs; that path is the
+only status/category movement, an exact `+1/-0` gain. The candidate
+path/status/category projection hashes to
+`9567112482bf36a486d4f7c283fabde67aea7325499f771f08927a337145eb70`
+and its exact pass set to
+`681cea5f28e8d5494cbb91ae348cc60d60db63067aca1aea6e7e3b22488e955e`.
+Two serial exact-final-binary 5,599-case Zend/lang runs have identical raw
+manifests at SHA-256
+`0047cdadf32caa960672bada09a5534a0d01612a7029db2ca3f0bde5ea4b17f7`:
+4,503 pass, 800 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Their path/status/category projection hashes to
+`ac553449586ee1d87ee010b032a1954a66f09b5e6b45726c4e0fb11a8b5ad40b`
+and exact pass set to
+`e7d9c82d107cfb2294b16c9ef6fdc1046dfa07c2d9a651c578e23a04e8f7645f`.
+Two serial 1,575-case strings/array runs retain the exact parent projection at
+`392587b16fee83fa2233b41d0bc8a1dd95d5d4b34a1b5365f25985f5c8515dbe`
+and pass-set hash
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,962 pass, 818 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 800 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`5dbf91cb85b3e11f8bbea57289c01e1d56759772dead10592dc667843ed58620`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+One exact-final-binary CPU-2-pinned parser/compiler gate used four warmups and
+32 balanced order pairs without outlier removal. SHA-verified parent and
+candidate copies ran from the same tmpfs. Paired median changes range from
+-0.539% to +0.325% across 100-request startup, ordinary class, combined
+interface/trait/class, anonymous-class, method-body, constant/property, enum,
+constant-elided class and function-declaration control lanes. All 288
+output/status pairs match. The summary and raw paired-data hashes are
+`19444b30baf75a6e01747af1b23af2ba5d5f9763667268b2915a2c14bd34f423`
+and `dae5813c94af3d02300565b391bee6165cfd566694e10568669448dec5438921`;
+the benchmark harness hashes to
+`46c93804c60594cdea28cba69318604086035c3e3ce9067b8a9b878f742450bb`.
+
+This checkpoint does not claim the four oracle gaps above, broader enum
+class-link/Reflection/JSON/SPL behavior, runtime inheritance expansion, 32-bit
+behavior or allocation-limit/OOM equivalence. The remaining enum failures are
+reported independently rather than inferred as supported from this diagnostic
+boundary.
+
+The implementation checkpoint is commit `c7aa4c16`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `enum-constant-expression-operation-boundaries`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. A runtime variable nested anywhere
 in a backed enum case value now raises PHP's canonical uncatchable

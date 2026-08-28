@@ -4248,11 +4248,31 @@ release gate runs SHA-verified parent/candidate copies from the same tmpfs and
 places all eight paired medians between -0.348% and +0.083%, with all 256
 outputs and statuses matching.
 
-The monitored supported debt is now 819 failures: 18 strings, zero array and
-801 Zend/lang. Read-only enum-manifest triage selects
-`enum/case-in-class.phpt` next because it is the only remaining enum failure
-classified at the parser boundary. Enum Reflection/JSON/SPL behavior, general
-class-link recovery and runtime inheritance expansion remain separate.
+The `c7aa4c16` `non-enum-case-declaration-diagnostic` checkpoint then moves
+Zend/lang from 4,502 to 4,503 pass, exactly `+1/-0`. Enum-case-shaped members
+in classes, interfaces, traits and anonymous classes are consumed far enough
+to emit PHP's canonical uncatchable compile fatal at the case-name line.
+Header/name/import errors retain priority, member diagnostics retain source
+order, and later syntax errors still win globally. Attributes and assigned
+values are consumed without materializing a member; visibility-prefixed cases
+retain their property-grammar parse error. Real enums, switch cases, methods
+named `case`, constant-elided/post-return declarations and include/eval output,
+shutdown and source state retain their previous behavior.
+
+Two serial exact-final-binary Zend/lang runs have identical raw manifests,
+path/status/category projections and pass sets; two strings/array projections
+also match the exact parent. The 152-case enum directory has only the intended
+`case-in-class.phpt` movement. All five Cargo configurations,
+all-feature/all-target, formatting, HTML data, PHPT runner, unsafe, Composer
+S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at the
+unsafe ceiling of 1,623 blocks and 289 functions. One CPU-2-pinned 32-pair
+release gate places all nine parser/compiler medians between -0.539% and
++0.325%, with all 288 output/status pairs matching.
+
+The monitored supported debt is now 818 failures: 18 strings, zero array and
+800 Zend/lang. The nine remaining enum failures are output or runtime gaps;
+enum Reflection/JSON/SPL behavior, general class-link recovery and runtime
+inheritance expansion remain separate.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
