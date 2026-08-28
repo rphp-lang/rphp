@@ -8,6 +8,85 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`closure-use-trailing-comma`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. An explicit closure capture list now accepts one
+comma after its final variable. The comma terminates the list without adding
+an empty capture; by-value snapshots, by-reference cells and capture order
+remain unchanged across ordinary and static closures, attributes, parameter
+and return types, multiline sources, include and eval.
+
+The closure parser keeps the existing non-empty first-item rule, consumes a
+single terminal comma only after a complete variable and rejects leading,
+double or repeated commas and incomplete reference markers with PHP's token
+diagnostics and source lines. It also rejects a capture duplicated later in
+the same list and a capture that collides with a parameter, using the first
+capture or parameter declaration line respectively. Existing `$GLOBALS` and
+`$this` lexical errors retain priority. The AST, compiler and VM are unchanged,
+and the ordinary valid path adds no auxiliary collection allocation.
+
+Five original integration regressions plus the existing parser AST regression
+cover by-value snapshots, by-reference identity, capture order, static and
+attributed closures, return types, multiline and single captures, invalid
+empty/leading/double/repeated/reference forms, duplicate/parameter/auto-global
+errors, direct/include/eval contexts and arrow/call/parameter/array/list comma
+controls. The integration regression source hashes to
+`ef5bc475a76f409216beeef34a66d8da0121ff6bbbec8b308161402fbce87688`.
+Thirteen clean-room oracle sources concatenate in lexical order to SHA-256
+`0fee750cedc7efdc94916a0ab59a709944a0b7158c62649e9f38549e7a3a8aee`.
+Ten successful or syntactically invalid programs match PHP 8.5.9 byte for byte
+in stdout, stderr and exit status. Three semantic-invalid programs match exit,
+stdout and the canonical fatal line; PHP's raw CLI additionally prints its
+generic compile-fatal stack frame, outside the upstream PHPT expectation.
+
+`Zend/tests/closures/closure_use_parameter_name.phpt`,
+`closure_use_trailing_comma.phpt` and `closure_use_variable_twice.phpt` change
+from output/parse/output failure to pass. Two exact-final-binary 5,599-case
+Zend/lang runs each record 4,487 pass, 816 fail, 115 skip and 181 unsupported,
+with no timeout or crash. Their full path/status/category projections are
+identical at SHA-256
+`f35ebb457297f565fec0443b0a13f125d1d7f5c7c3489ebe2be0c3736d6feab7`,
+and their exact pass-set hash is
+`aee553e3d45bf70140d106c516ee9da24448ecc74ef473b388dcd660b697d7da`.
+The exact parent delta is `+3/-0`, with no other movement. Two 1,575-case
+strings/array runs retain the exact parent projection at SHA-256
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`
+and pass-set hash
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,946 pass, 834 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 816 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`33ec55b3af088209743c4862d4811a6d7921cc75561a1b819b3899e68a7bf2ed`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+One exact-final-binary CPU-2-pinned parser/compiler gate used four warmups and
+32 balanced order pairs without outlier removal. Paired median changes are
++0.919% for startup, +0.242% for closures without captures, +0.493% for
+by-value captures, +0.762% for by-reference captures, +0.313% for arrow
+functions and -0.067% for ordinary call trailing commas. All 192 comparable
+pairs have matching output hashes. The trailing-capture target is a semantic
+control rather than a comparable timing because the parent exits with its
+parse error. The result table hashes to
+`57018537b11e6c6769b7866894f947f01f84547c38550c002ad5c9e7d39bf799`
+and the complete harness/source aggregate to
+`c371f78686e03b0e1fab60f2ef90fa89ad06561d6e69b3cabec5f305bdbf5a25`.
+
+This checkpoint does not claim general closure lifecycle or GC changes,
+implicit arrow-capture changes, new comma grammar outside the listed controls,
+the full superglobal surface, `ArrayAccess` or SPL behavior, 32-bit behavior or
+allocation-limit/OOM equivalence. Read-only final-manifest triage selects
+`Zend/tests/unterminated_comment.phpt` next: its bounded block-comment start
+line/terminal diagnostic is separable from general parser recovery.
+
+The implementation checkpoint is commit `9a4ee798`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `deprecated-interpolation-live-range`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. Double-quoted strings now keep scanning across
 a balanced deprecated `${expr}` interpolation when its expression contains

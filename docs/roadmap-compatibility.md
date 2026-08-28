@@ -4067,10 +4067,29 @@ S2/S3 pass. Production remains at the unsafe ceiling of 1,623 blocks and 289
 functions. One CPU-2-pinned 32-pair release gate places every comparable
 paired median between -0.772% and +0.175%, with matching outputs.
 
-The monitored supported debt is now 837 failures: 18 strings, zero array and
-819 Zend/lang. Read-only final-manifest triage selects
-`Zend/tests/closures/closure_use_trailing_comma.phpt` next: its bounded closure
-capture-list parser failure is separable from broader closure semantics.
+The `9a4ee798` `closure-use-trailing-comma` checkpoint then moves Zend/lang
+from 4,484 to 4,487 pass, exactly `+3/-0`. Explicit closure `use` lists accept
+one comma after a complete final variable without adding a capture. By-value,
+by-reference, static, attributed, multiline, include and eval forms retain
+their existing AST and runtime paths. Invalid empty, leading, double and
+reference forms use canonical token diagnostics. Duplicate captures and
+parameter-name collisions fail at their first declaration lines. The selected
+`closure_use_trailing_comma.phpt` and the adjacent
+`closure_use_variable_twice.phpt` and `closure_use_parameter_name.phpt` are the
+only new passes; no AST, compiler or VM contract changes.
+
+Two exact-final-binary Zend/lang runs have the same path/status/category
+projection and pass set; two strings/array projections also match the exact
+parent. All five Cargo configurations, all-feature/all-target, formatting,
+HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9
+S2/S3 pass. Production remains at the unsafe ceiling of 1,623 blocks and 289
+functions. One CPU-2-pinned 32-pair release gate places every comparable
+paired median between -0.067% and +0.919%, with matching outputs.
+
+The monitored supported debt is now 834 failures: 18 strings, zero array and
+816 Zend/lang. Read-only final-manifest triage selects
+`Zend/tests/unterminated_comment.phpt` next: its bounded block-comment start
+line/terminal diagnostic is separable from general parser recovery.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
