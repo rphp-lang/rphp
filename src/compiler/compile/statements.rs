@@ -4168,6 +4168,10 @@ impl Compiler {
                 self.validate_no_discard_target(attributes, "class")?;
                 self.validate_override_target(attributes, "class", false)?;
                 let resolved_parent = parent.as_ref().map(|p| self.resolve_name(&p.name));
+                let directly_implements_countable = implements.iter().any(|interface| {
+                    self.resolve_name(&interface.name)
+                        .eq_ignore_ascii_case("Countable")
+                });
                 if crate::generics::GenericRuntimeCapabilities::CONFIGURED.syntax_enabled()
                     && (!generic_params.is_empty()
                         || parent.is_some()
@@ -4462,6 +4466,29 @@ impl Compiler {
                         // value-producing accessor and is projected as void by
                         // link diagnostics instead of runtime return checking.
                         cp.return_type_hint = crate::vm::function::ParamTypeHint::Void;
+                    }
+                    if directly_implements_countable
+                        && method.name.eq_ignore_ascii_case("count")
+                        && !matches!(
+                            cp.return_type_hint,
+                            crate::vm::function::ParamTypeHint::Int
+                                | crate::vm::function::ParamTypeHint::Never
+                        )
+                        && self
+                            .attribute_line(&method.attributes, "ReturnTypeWillChange")
+                            .is_none()
+                    {
+                        self.compile_deprecations
+                            .borrow_mut()
+                            .push(CompileDeprecation {
+                                message: format!(
+                                    "Return type of {resolved_class}::{}() should either be compatible with Countable::count(): int, or the #[\\ReturnTypeWillChange] attribute should be used to temporarily suppress the notice",
+                                    method.name
+                                ),
+                                file: self.source_file.clone(),
+                                line: method.line,
+                                warning: false,
+                            });
                     }
                     self.validate_attribute_target(&method.attributes, "method")?;
                     self.validate_deprecated_target(&method.attributes, "method")?;

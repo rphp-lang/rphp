@@ -464,6 +464,13 @@ impl Parser {
                 .unwrap_or(&attribute.name)
                 .eq_ignore_ascii_case("AllowDynamicProperties")
         });
+        let delayed_target_validation = attributes.iter().any(|attribute| {
+            attribute
+                .name
+                .strip_prefix('\\')
+                .unwrap_or(&attribute.name)
+                .eq_ignore_ascii_case("DelayedTargetValidation")
+        });
         match &mut statement {
             Stmt::Function {
                 attributes: target,
@@ -542,7 +549,9 @@ impl Parser {
                 Stmt::Enum { name, .. } => Some(format!("enum {name}")),
                 _ => None,
             };
-            if let Some(target) = invalid_target {
+            if let Some(target) = invalid_target
+                && !delayed_target_validation
+            {
                 return Ok(Stmt::ExprStmt(Expr::CompileError {
                     message: format!("Cannot apply #[\\AllowDynamicProperties] to {target}"),
                     line: attribute_line,

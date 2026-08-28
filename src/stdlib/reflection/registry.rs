@@ -17,19 +17,20 @@ use super::generic_parameters::{
 use super::{
     attribute_construct, attribute_get_arguments, attribute_get_name, attribute_get_target,
     attribute_is_repeated, attribute_new_instance, attribute_to_string, class_constant_construct,
-    class_construct, class_debug_info, class_file_name, class_get_attributes, class_get_constant,
-    class_get_constants, class_get_constructor, class_get_default_properties,
-    class_get_interface_names, class_get_interfaces, class_get_lazy_initializer, class_get_method,
-    class_get_methods, class_get_name, class_get_parent, class_get_properties, class_get_property,
-    class_get_reflection_constant, class_get_reflection_constants, class_get_trait_aliases,
-    class_get_trait_names, class_get_traits, class_has_method, class_implements_interface,
-    class_initialize_lazy_object, class_is_abstract, class_is_final, class_is_instantiable,
-    class_is_interface, class_is_internal, class_is_readonly, class_is_subclass_of, class_is_trait,
+    class_constant_to_string, class_construct, class_debug_info, class_file_name,
+    class_get_attributes, class_get_constant, class_get_constants, class_get_constructor,
+    class_get_default_properties, class_get_interface_names, class_get_interfaces,
+    class_get_lazy_initializer, class_get_method, class_get_methods, class_get_name,
+    class_get_parent, class_get_properties, class_get_property, class_get_reflection_constant,
+    class_get_reflection_constants, class_get_trait_aliases, class_get_trait_names,
+    class_get_traits, class_has_method, class_implements_interface, class_initialize_lazy_object,
+    class_is_abstract, class_is_final, class_is_instantiable, class_is_interface,
+    class_is_internal, class_is_readonly, class_is_subclass_of, class_is_trait,
     class_is_uninitialized_lazy_object, class_is_user_defined,
     class_mark_lazy_object_as_initialized, class_new_instance, class_new_instance_args,
     class_new_instance_without_constructor, class_new_lazy_ghost, class_new_lazy_proxy,
     class_reset_as_lazy_ghost, class_reset_as_lazy_proxy, class_to_string, constant_construct,
-    constant_get_value, deprecated_construct, enum_backed_case_construct,
+    constant_get_value, constant_to_string, deprecated_construct, enum_backed_case_construct,
     enum_case_get_backing_value, enum_case_get_enum, enum_case_get_value, enum_construct,
     enum_get_backing_type, enum_get_case, enum_get_cases, enum_has_case, enum_is_backed_reflection,
     enum_unit_case_construct, function_construct, function_get_closure,
@@ -75,6 +76,51 @@ use crate::vm::function::{
     AttributeArgument, AttributeDefinition, AttributeEvaluationScope, ParamTypeHint,
 };
 use crate::vm::function::{FunctionCommon, InternalFunction, InternalFunctionHandler};
+
+fn register_internal_marker_attribute(eg: &mut ExecutorGlobals, name: &str, target: i64) {
+    eg.register_class(ClassDef {
+        name: name.to_string(),
+        source_file: None,
+        declaration_line: 0,
+        parent: None,
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        is_final: true,
+        is_trait: false,
+        is_enum: false,
+        is_readonly: false,
+        allow_dynamic_properties: false,
+        uses: vec![],
+        trait_aliases: vec![],
+        trait_precedences: vec![],
+        properties: vec![],
+        static_properties: vec![],
+        constants: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec![],
+        methods: vec![],
+        abstract_methods: vec![],
+        enum_backing_error: None,
+        deferred_instance_defaults: None,
+        class_id: 0,
+        attributes: vec![AttributeDefinition {
+            name: "Attribute".to_string(),
+            arguments: vec![AttributeArgument {
+                name: None,
+                value: Ok(Value::long(target)),
+                deferred_expression: None,
+            }],
+            evaluation_scope: std::rc::Rc::new(AttributeEvaluationScope::default()),
+            target: 1,
+            source_file: String::new(),
+            source_line: 0,
+            strict_types: false,
+        }],
+    })
+    .unwrap();
+}
 
 fn register_reflection_class(
     eg: &mut ExecutorGlobals,
@@ -573,6 +619,26 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         .common
         .sig
         .param_type_hints = vec![ParamTypeHint::Int];
+
+    register_internal_marker_attribute(eg, "DelayedTargetValidation", 127);
+    register_internal_marker_attribute(eg, "AllowDynamicProperties", 1);
+    register_method!(
+        "AllowDynamicProperties",
+        "__construct",
+        override_construct,
+        1,
+        0,
+        []
+    );
+    register_internal_marker_attribute(eg, "ReturnTypeWillChange", 4);
+    register_method!(
+        "ReturnTypeWillChange",
+        "__construct",
+        override_construct,
+        1,
+        0,
+        []
+    );
 
     eg.register_class(ClassDef {
         name: "Override".to_string(),
@@ -1472,6 +1538,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     );
     register_method!(
         "ReflectionConstant",
+        "__tostring",
+        constant_to_string,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionConstant",
         "getattributes",
         class_get_attributes,
         3,
@@ -2069,6 +2143,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         "ReflectionClassConstant",
         "getname",
         parameter_get_name,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionClassConstant",
+        "__tostring",
+        class_constant_to_string,
         1,
         0,
         []

@@ -372,19 +372,17 @@ fn reflected_function_attributes(ed: *mut ExecuteData) -> Vec<AttributeDefinitio
         .collect()
 }
 
-fn reflected_user_function_from_common(
-    function: &'static FunctionCommon,
-) -> Option<&'static UserFunction> {
+fn reflected_user_function_from_common(function: &FunctionCommon) -> Option<&UserFunction> {
     reflected_invocation_metadata(function, None).0
 }
 
-fn reflected_invocation_metadata<'a>(
-    function: &'static FunctionCommon,
-    receiver: Option<&'a Value>,
+fn reflected_invocation_metadata<'function, 'receiver>(
+    function: &'function FunctionCommon,
+    receiver: Option<&'receiver Value>,
 ) -> (
-    Option<&'static UserFunction>,
-    Option<&'static InternalFunction>,
-    Option<(u32, &'a str)>,
+    Option<&'function UserFunction>,
+    Option<&'function InternalFunction>,
+    Option<(u32, &'receiver str)>,
 ) {
     let user = function.fn_type == FunctionType::User;
     let internal = function.fn_type == FunctionType::Internal;
@@ -1262,6 +1260,7 @@ fn emit_deprecated_symbol_diagnostic(
         repeated,
         eg,
         Some(use_site),
+        None,
     )?;
     if eg.exception.is_some() {
         return Ok(());
@@ -2463,9 +2462,19 @@ fn attribute_new_instance(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let receiver = with_argument(ed, 0, Value::clone);
-    let Some((definition, repeated)) = eg
-        .reflection_attribute_state(&receiver)
-        .map(|state| (state.definition.clone(), state.repeated))
+    let Some((definition, repeated, delayed_builtin_error)) =
+        eg.reflection_attribute_state(&receiver).map(|state| {
+            (
+                state.definition.clone(),
+                state.repeated,
+                delayed_builtin_class_form_error(
+                    &state.definition.name,
+                    state.definition.target & ATTRIBUTE_PUBLIC_TARGET_MASK,
+                    Some(&state.declaration),
+                    eg,
+                ),
+            )
+        })
     else {
         eg.exception = Some(make_error_value(
             "Error",
@@ -2473,7 +2482,15 @@ fn attribute_new_instance(
         ));
         return Ok(());
     };
-    instantiate_attribute_definition(ed, rv, &definition, repeated, eg)
+    instantiate_attribute_definition_at_use(
+        ed,
+        rv,
+        &definition,
+        repeated,
+        eg,
+        None,
+        delayed_builtin_error.as_deref(),
+    )
 }
 
 /// Instantiate one already-resolved attribute at its declaration site.
@@ -2486,7 +2503,49 @@ pub(crate) fn instantiate_attribute_definition(
     repeated: bool,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    instantiate_attribute_definition_at_use(ed, rv, definition, repeated, eg, None)
+    instantiate_attribute_definition_at_use(ed, rv, definition, repeated, eg, None, None)
+}
+
+fn delayed_builtin_class_form_error(
+    name: &str,
+    public_target: i64,
+    declaration: Option<&ReflectionAttributeDeclaration>,
+    eg: &ExecutorGlobals,
+) -> Option<String> {
+    if public_target != 1 {
+        return None;
+    }
+    let declaration = declaration?;
+    let class_name = declaration.name.as_str()?;
+    let class = eg.find_class(class_name)?;
+    let target = if name.eq_ignore_ascii_case("Attribute") {
+        if class.is_trait {
+            Some(format!("trait {}", class.name))
+        } else if class.is_interface {
+            Some(format!("interface {}", class.name))
+        } else if class.is_abstract {
+            Some(format!("abstract class {}", class.name))
+        } else if class.is_enum {
+            Some(format!("enum {}", class.name))
+        } else {
+            None
+        }
+    } else if name.eq_ignore_ascii_case("AllowDynamicProperties") {
+        if class.is_trait {
+            Some(format!("trait {}", class.name))
+        } else if class.is_interface {
+            Some(format!("interface {}", class.name))
+        } else if class.is_readonly {
+            Some(format!("readonly class {}", class.name))
+        } else if class.is_enum {
+            Some(format!("enum {}", class.name))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    target.map(|target| format!("Cannot apply #[\\{name}] to {target}"))
 }
 
 fn instantiate_attribute_definition_at_use(
@@ -2496,6 +2555,7 @@ fn instantiate_attribute_definition_at_use(
     repeated: bool,
     eg: &mut ExecutorGlobals,
     deprecated_use_site: Option<&DeprecatedUseSite>,
+    delayed_builtin_error: Option<&str>,
 ) -> Result<(), VmError> {
     let Some(arguments) = evaluate_attribute_arguments(definition, eg, deprecated_use_site)? else {
         return Ok(());
@@ -2573,6 +2633,10 @@ fn instantiate_attribute_definition_at_use(
             "Error",
             &format!("Attribute \"{name}\" must not be repeated"),
         ));
+        return Ok(());
+    }
+    if let Some(message) = delayed_builtin_error {
+        eg.exception = Some(make_error_value("Error", message));
         return Ok(());
     }
     if name.eq_ignore_ascii_case("Deprecated") && public_target == 1 {
@@ -4138,6 +4202,25 @@ fn constant_get_value(
     return_value(rv, eg.find_constant(&name).unwrap_or_else(Value::null))
 }
 
+fn constant_to_string(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let rendered = reflected_property(ed, "name")
+        .and_then(|name| {
+            let name = name.as_str()?;
+            let value = eg.find_constant(name)?;
+            Some(format!(
+                "Constant [ {} {name} ] {{ {} }}\n",
+                value.diagnostic_type_name(),
+                reflection_constant_value_name(&value)
+            ))
+        })
+        .unwrap_or_default();
+    return_value(rv, Value::string(rendered))
+}
+
 fn reflection_quoted_string(value: &str) -> String {
     let mut rendered = String::with_capacity(value.len() + 2);
     rendered.push('\'');
@@ -4197,6 +4280,61 @@ fn reflection_value_name(value: &Value, eg: &ExecutorGlobals) -> String {
         }),
         _ => "NULL".to_string(),
     }
+}
+
+fn reflection_constant_value_name(value: &Value) -> String {
+    match value.value_type() {
+        ValueType::Undef | ValueType::Null | ValueType::False => String::new(),
+        ValueType::True => "1".to_string(),
+        ValueType::Long => value.as_long().unwrap().to_string(),
+        ValueType::Double => value.echo_to_string(),
+        ValueType::String => value.as_str().unwrap().to_string(),
+        ValueType::Array => "Array".to_string(),
+        ValueType::Object | ValueType::Closure => value.diagnostic_type_name().into_owned(),
+        ValueType::Resource => "Resource".to_string(),
+        ValueType::Reference => reflection_constant_value_name(&value.dereferenced()),
+    }
+}
+
+fn render_reflection_class_constant(constant: &ClassConstantDefinition, value: &Value) -> String {
+    let final_modifier = if constant.is_final { "final " } else { "" };
+    let type_name = if matches!(constant.type_hint, ParamTypeHint::None) {
+        value.diagnostic_type_name().into_owned()
+    } else {
+        constant.type_hint.display_name()
+    };
+    format!(
+        "Constant [ {final_modifier}{} {type_name} {} ] {{ {} }}",
+        reflection_visibility(constant.visibility),
+        constant.name,
+        reflection_constant_value_name(value)
+    )
+}
+
+fn reflection_class_constant_definition<'a>(
+    ed: *mut ExecuteData,
+    eg: &'a ExecutorGlobals,
+) -> Option<&'a ClassConstantDefinition> {
+    let class = reflected_property(ed, "class")?;
+    let name = reflected_property(ed, "name")?;
+    eg.find_class(class.as_str()?)?
+        .constants
+        .iter()
+        .find(|constant| constant.name == name.as_str().unwrap_or_default())
+}
+
+fn class_constant_to_string(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let rendered =
+        reflection_class_constant_definition(ed, eg).map_or_else(String::new, |constant| {
+            let value = reflected_property(ed, "__reflection_value")
+                .unwrap_or_else(|| constant.value.clone());
+            format!("{}\n", render_reflection_class_constant(constant, &value))
+        });
+    return_value(rv, Value::string(rendered))
 }
 
 fn reflection_visibility(visibility: Visibility) -> &'static str {
@@ -4466,30 +4604,6 @@ fn property_to_string(
     return_value(rv, Value::string(rendered))
 }
 
-fn render_reflection_method(
-    name: &str,
-    visibility: Visibility,
-    is_static: bool,
-    is_final: bool,
-    is_abstract: bool,
-) -> String {
-    let mut declaration = String::new();
-    if is_final {
-        declaration.push_str("final ");
-    }
-    if is_abstract {
-        declaration.push_str("abstract ");
-    }
-    declaration.push_str(reflection_visibility(visibility));
-    declaration.push(' ');
-    if is_static {
-        declaration.push_str("static ");
-    }
-    declaration.push_str("method ");
-    declaration.push_str(name);
-    format!("Method [ <user> {declaration} ] {{\n    }}")
-}
-
 fn render_reflection_enum_builtin_method(name: &str) -> Option<String> {
     let (prototype, parameters, return_type) = if name.eq_ignore_ascii_case("cases") {
         ("UnitEnum", Vec::new(), "array")
@@ -4594,6 +4708,86 @@ fn reflection_user_source_span(user: &UserFunction) -> Option<(usize, usize)> {
     Some((start, end))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn render_reflection_method_details(
+    function: &FunctionCommon,
+    user: Option<&UserFunction>,
+    name: &str,
+    visibility: Visibility,
+    is_static: bool,
+    is_final: bool,
+    is_abstract: bool,
+    closure_method: bool,
+    eg: &ExecutorGlobals,
+) -> String {
+    let mut modifiers = String::new();
+    if is_final {
+        modifiers.push_str("final ");
+    }
+    if is_abstract {
+        modifiers.push_str("abstract ");
+    }
+    modifiers.push_str(reflection_visibility(visibility));
+    modifiers.push(' ');
+    if is_static {
+        modifiers.push_str("static ");
+    }
+    let provenance = if function.fn_type == FunctionType::User && !closure_method {
+        "user"
+    } else {
+        "internal"
+    };
+    let callable_kind = if name.eq_ignore_ascii_case("__construct") {
+        format!("{provenance}, ctor")
+    } else {
+        provenance.to_string()
+    };
+    let mut rendered = format!("Method [ <{callable_kind}> {modifiers}method {name} ] {{\n");
+    if closure_method {
+        rendered.push('\n');
+    }
+    if !closure_method
+        && let Some(user) = user
+        && !user.op_array.source_file.is_empty()
+        && let Some((start, end)) = reflection_user_source_span(user)
+    {
+        rendered.push_str(&format!(
+            "  @@ {} {start} - {end}\n\n",
+            user.op_array.source_file
+        ));
+    }
+    let fixed = function.sig.public_arity();
+    let parameter_count = fixed + u32::from(function.sig.is_variadic);
+    let implicit_setter_return = name.ends_with("::set");
+    let has_return =
+        !matches!(function.sig.return_type_hint, ParamTypeHint::None) || implicit_setter_return;
+    if parameter_count != 0 || has_return {
+        rendered.push_str(&format!("  - Parameters [{parameter_count}] {{\n"));
+        for index in 0..parameter_count {
+            let variadic = function.sig.is_variadic && index == fixed;
+            rendered.push_str("    ");
+            rendered.push_str(&render_reflection_signature_parameter(
+                function, index, variadic, eg,
+            ));
+            rendered.push('\n');
+        }
+        rendered.push_str("  }\n");
+    }
+    if !matches!(function.sig.return_type_hint, ParamTypeHint::None) {
+        rendered.push_str(&format!(
+            "  - Return [ {} ]\n",
+            function.sig.return_type_hint.display_name()
+        ));
+    } else if implicit_setter_return {
+        rendered.push_str("  - Return [ void ]\n");
+    }
+    if parameter_count == 0 && !has_return && rendered.ends_with("\n\n") {
+        rendered.pop();
+    }
+    rendered.push_str("}\n");
+    rendered
+}
+
 fn function_to_string(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -4656,6 +4850,12 @@ fn function_to_string(
             function.sig.return_type_hint.display_name()
         ));
     }
+    if parameter_count == 0
+        && matches!(function.sig.return_type_hint, ParamTypeHint::None)
+        && rendered.ends_with("\n\n")
+    {
+        rendered.pop();
+    }
     rendered.push_str("}\n");
     return_value(rv, Value::string(rendered))
 }
@@ -4674,79 +4874,26 @@ fn method_to_string(
     let visibility = reflected_property(ed, "__reflection_method_visibility")
         .and_then(|value| value.as_long())
         .unwrap_or(1);
-    let mut modifiers = String::new();
-    if parameter_property_bool(ed, "__reflection_method_final") {
-        modifiers.push_str("final ");
-    }
-    if parameter_property_bool(ed, "__reflection_method_abstract") {
-        modifiers.push_str("abstract ");
-    }
-    modifiers.push_str(match visibility {
-        2 => "protected ",
-        4 => "private ",
-        _ => "public ",
-    });
-    if parameter_property_bool(ed, "__reflection_method_static") {
-        modifiers.push_str("static ");
-    }
+    let visibility = match visibility {
+        2 => Visibility::Protected,
+        4 => Visibility::Private,
+        _ => Visibility::Public,
+    };
+    let is_final = parameter_property_bool(ed, "__reflection_method_final");
+    let is_abstract = parameter_property_bool(ed, "__reflection_method_abstract");
+    let is_static = parameter_property_bool(ed, "__reflection_method_static");
     let closure_method = parameter_property_bool(ed, "__reflection_closure_method");
-    let provenance = if function.fn_type == FunctionType::User && !closure_method {
-        "user"
-    } else {
-        "internal"
-    };
-    let callable_kind = if name.eq_ignore_ascii_case("__construct") {
-        format!("{provenance}, ctor")
-    } else {
-        provenance.to_string()
-    };
-    let mut rendered = format!("Method [ <{callable_kind}> {modifiers}method {name} ] {{\n");
-    if closure_method {
-        rendered.push('\n');
-    }
-
-    if !closure_method && let Some(user) = reflected_user_function(ed) {
-        if !user.op_array.source_file.is_empty()
-            && let Some((start, end)) = reflection_user_source_span(user)
-        {
-            rendered.push_str(&format!(
-                "  @@ {} {start} - {end}\n\n",
-                user.op_array.source_file
-            ));
-        }
-    }
-
-    let fixed = function.sig.public_arity();
-    let parameter_count = fixed + u32::from(function.sig.is_variadic);
-    let implicit_setter_return = name.ends_with("::set");
-    let has_return =
-        !matches!(function.sig.return_type_hint, ParamTypeHint::None) || implicit_setter_return;
-    if parameter_count != 0 || has_return {
-        rendered.push_str(&format!("  - Parameters [{parameter_count}] {{\n"));
-        for index in 0..parameter_count {
-            let variadic = function.sig.is_variadic && index == fixed;
-            rendered.push_str("    ");
-            rendered.push_str(&render_reflection_signature_parameter(
-                function, index, variadic, eg,
-            ));
-            rendered.push('\n');
-        }
-        rendered.push_str("  }\n");
-    }
-    if !matches!(function.sig.return_type_hint, ParamTypeHint::None) {
-        rendered.push_str(&format!(
-            "  - Return [ {} ]\n",
-            function.sig.return_type_hint.display_name()
-        ));
-    } else if implicit_setter_return {
-        // Property setters have an implicit void reflection contract even
-        // though the execution signature does not need a return-type guard.
-        rendered.push_str("  - Return [ void ]\n");
-    }
-    if parameter_count == 0 && !has_return && rendered.ends_with("\n\n") {
-        rendered.pop();
-    }
-    rendered.push_str("}\n");
+    let rendered = render_reflection_method_details(
+        function,
+        reflected_user_function(ed),
+        &name,
+        visibility,
+        is_static,
+        is_final,
+        is_abstract,
+        closure_method,
+        eg,
+    );
     return_value(rv, Value::string(rendered))
 }
 
@@ -4802,6 +4949,15 @@ fn class_to_string(
     } else {
         "Class"
     };
+    let iterateable = if class
+        .properties
+        .iter()
+        .any(|property| property.has_get_hook || property.has_set_hook)
+    {
+        " <iterateable>"
+    } else {
+        ""
+    };
     let enum_backing_type = is_user_enum.then(|| {
         class
             .properties
@@ -4820,13 +4976,32 @@ fn class_to_string(
         String::new()
     };
     let mut rendered = format!(
-        "{title} [ <{provenance}> {modifiers}{kind} {}{backing_declaration}{implements_declaration} ] {{\n",
+        "{title} [ <{provenance}>{iterateable} {modifiers}{kind} {}{backing_declaration}{implements_declaration} ] {{\n",
         class.name
     );
     if let Some(source_file) = &class.source_file {
+        let member_end = class
+            .methods
+            .iter()
+            .filter_map(|(_, _, _, _, method)| {
+                reflection_user_source_span(method).map(|(_, end)| end)
+            })
+            .chain(
+                class
+                    .properties
+                    .iter()
+                    .map(|property| property.reflection_order),
+            )
+            .max()
+            .unwrap_or(class.declaration_line);
+        let declaration_end = if member_end > class.declaration_line {
+            member_end + 1
+        } else {
+            class.declaration_line
+        };
         rendered.push_str(&format!(
-            "  @@ {source_file} {}-{}\n\n",
-            class.declaration_line, class.declaration_line
+            "  @@ {source_file} {}-{declaration_end}\n\n",
+            class.declaration_line
         ));
     }
 
@@ -4854,18 +5029,9 @@ fn class_to_string(
 
     rendered.push_str(&format!("  - Constants [{}] {{\n", class.constants.len()));
     for constant in &class.constants {
-        let final_modifier = if constant.is_final { "final " } else { "" };
-        let type_name = if matches!(constant.type_hint, ParamTypeHint::None) {
-            String::new()
-        } else {
-            format!("{} ", constant.type_hint.display_name())
-        };
-        rendered.push_str(&format!(
-            "    Constant [ {final_modifier}{} {type_name}{} ] {{ {} }}\n",
-            reflection_visibility(constant.visibility),
-            constant.name,
-            reflection_value_name(&constant.value, eg)
-        ));
+        rendered.push_str("    ");
+        rendered.push_str(&render_reflection_class_constant(constant, &constant.value));
+        rendered.push('\n');
     }
     rendered.push_str("  }\n\n");
 
@@ -4887,6 +5053,7 @@ fn class_to_string(
 
     let mut methods = Vec::new();
     collect_reflected_methods(eg, &owner, &mut methods, &mut HashSet::new());
+    methods.retain(|(name, ..)| !name.starts_with('$'));
     if is_user_enum {
         methods.sort_by_key(|(name, ..)| {
             if name.eq_ignore_ascii_case("cases") {
@@ -4906,27 +5073,40 @@ fn class_to_string(
         .count();
     rendered.push_str(&format!("  - Static methods [{static_method_count}] {{\n"));
     let mut rendered_static_method = false;
-    for (name, visibility, is_static, is_final, _, declaring_class) in &methods {
+    for (name, visibility, is_static, is_final, function, declaring_class) in &methods {
         if !is_static {
             continue;
         }
         if is_user_enum && rendered_static_method {
             rendered.push('\n');
         }
-        rendered.push_str("    ");
         if is_user_enum && let Some(method) = render_reflection_enum_builtin_method(name) {
+            rendered.push_str("    ");
             rendered.push_str(&method);
-        } else {
-            rendered.push_str(&render_reflection_method(
+            rendered.push('\n');
+        } else if let Some(function) = eg.registered_function_common(*function) {
+            let method = render_reflection_method_details(
+                function,
+                reflected_user_function_from_common(function),
                 name,
                 *visibility,
                 true,
                 *is_final,
                 eg.find_class(declaring_class)
                     .is_some_and(|class| class.method_is_abstract(name)),
-            ));
+                false,
+                eg,
+            );
+            for line in method.lines() {
+                if line.is_empty() {
+                    rendered.push('\n');
+                } else {
+                    rendered.push_str("    ");
+                    rendered.push_str(line);
+                    rendered.push('\n');
+                }
+            }
         }
-        rendered.push('\n');
         rendered_static_method = true;
     }
     rendered.push_str("  }\n\n");
@@ -4958,20 +5138,34 @@ fn class_to_string(
 
     let instance_method_count = methods.len() - static_method_count;
     rendered.push_str(&format!("  - Methods [{instance_method_count}] {{\n"));
-    for (name, visibility, is_static, is_final, _, declaring_class) in &methods {
+    for (name, visibility, is_static, is_final, function, declaring_class) in &methods {
         if *is_static {
             continue;
         }
-        rendered.push_str("    ");
-        rendered.push_str(&render_reflection_method(
+        let Some(function) = eg.registered_function_common(*function) else {
+            continue;
+        };
+        let method = render_reflection_method_details(
+            function,
+            reflected_user_function_from_common(function),
             name,
             *visibility,
             false,
             *is_final,
             eg.find_class(declaring_class)
                 .is_some_and(|class| class.method_is_abstract(name)),
-        ));
-        rendered.push('\n');
+            false,
+            eg,
+        );
+        for line in method.lines() {
+            if line.is_empty() {
+                rendered.push('\n');
+            } else {
+                rendered.push_str("    ");
+                rendered.push_str(line);
+                rendered.push('\n');
+            }
+        }
     }
     rendered.push_str("  }\n}\n");
     return_value(rv, Value::string(rendered))
