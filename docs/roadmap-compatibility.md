@@ -4455,6 +4455,35 @@ The monitored supported debt is now 811 failures: 18 strings, zero array and
 `SplObjectStorage`; general Reflection metadata beyond this wrapper
 projection, broader SPL, 32-bit behavior and allocation-limit/OOM equivalence
 remain separate boundaries.
+
+The `8baab028` `spl-object-storage-wire` checkpoint then moves Zend/lang from
+4,510 to 4,511 pass, exactly `+1/-0`. Built-in `SplObjectStorage` now writes
+the canonical two-field object wire with insertion-ordered object/info pairs
+and separate member state instead of serializing internal identity maps. The
+parser validates the whole alternating payload before restoring storage,
+preserves enum singletons, ordinary object graphs, nested reference cells,
+updates, detach order, COW and allowed-class behavior, and rejects odd or
+non-object-key payloads without partial mutation. General uppercase `R:`
+aliases no longer shift later lowercase object reference indices. The only
+enum movement is `enum/spl-object-storage.phpt`; the other 151 outcomes are
+stable.
+
+Two serial exact-final-binary Zend/lang runs have identical raw manifests,
+path/status/category projections and pass sets; two strings/array projections
+also match the exact parent. The focused 40-case ext/spl `SplObjectStorage`
+directory gains one pass without a lost parent pass. All five Cargo
+configurations, all-feature/all-target, formatting, HTML data, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Production remains at the unsafe ceiling of 1,623 blocks and 289 functions.
+Two CPU-2-pinned 32-pair release gates keep all unchanged serialization,
+property-read and storage-lookup controls below the +5% ceiling; corrected
+reference and storage wires remain separately reported changed-output paths.
+
+The monitored supported debt is now 810 failures: 18 strings, zero array and
+792 Zend/lang. The AST dumper is the sole remaining enum failure. General SPL,
+`SplFixedArray`, direct serialization-method APIs, subclass/custom-member and
+exhaustive malformed-stream parity, 32-bit behavior and allocation-limit/OOM
+equivalence remain separate boundaries.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.

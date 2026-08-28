@@ -8,6 +8,103 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`spl-object-storage-wire`, pinned to php-src 8.5 commit `fcc29c8` and validated
+against PHP 8.5.9. Built-in `SplObjectStorage` now emits PHP's canonical
+two-field `O:16` wire: index zero is an insertion-ordered array alternating
+object and info values, while index one contains ordinary member state. The
+engine's identity maps, iterator cursor and `__rphp_*` storage never become
+public serialized properties.
+
+Unserialization validates the complete alternating payload before committing
+storage state, restores enum singletons and ordinary object identities, and
+preserves duplicate-update order, detached entries, scalar/null/array info,
+nested object links and reference cells. Odd payloads and scalar keys throw the
+canonical catchable `UnexpectedValueException` without mutating another live
+storage. `allowed_classes=false` retains the ordinary incomplete-object path,
+and user member state remains separate from engine storage. Uppercase `R:`
+aliases now correctly reuse rather than consume a value-table index, keeping
+later lowercase object `r:` links byte-compatible for storage and ordinary
+arrays. No `Value`, `PhpArray` or `PhpObject` layout changes.
+
+Seven original CLI regressions cover enum wire/singleton round trips,
+update/detach order and source state, ordinary object graphs with nested
+references, malformed payload state preservation, member/allowed-class
+separation, general `R:`/`r:` numbering and empty-storage engine-property
+hiding. Their source hashes to SHA-256
+`2df9c17c8271e12b529c1853b9014d7a1d7366bf17ee6bc32efdc90d88a2ec50`.
+The clean-room oracle hashes to
+`0687a783a34ddb5fee12bdce972edcdd11e5cd95f28c579b54127aca4d130f82`;
+its PHP 8.5.9 and exact-candidate output both hash to
+`f2894152be74e6f45c4850506c9483652fc41274621eb2c0cd4435f29b7666f6`.
+
+`Zend/tests/enum/spl-object-storage.phpt` changes from a runtime failure to
+pass. The complete 152-case enum directory moves from 141 pass / 2 fail to 142
+pass / 1 fail, with eight skips and one unsupported case unchanged; that path
+is the only status/category movement, an exact `+1/-0` gain. The final enum
+path/status/category projection hashes to
+`aaab35304daf87cacc9d039ec8d833ced34c054b3900258d0d6353fec4ace5b1`
+and its pass set to
+`ab64af81768be595c7ef0d4b82bde57cc270bef1a93b1096e59ec5b6142856bf`.
+The enum AST dumper is the sole remaining enum failure.
+
+The focused 40-case ext/spl `SplObjectStorage` directory moves from six pass /
+30 fail to seven pass / 29 fail, retaining four unsupported cases with no
+timeout, crash or lost parent pass. The additional pass is `observer_003`.
+Its final projection and pass-set hashes are
+`7ef238970ef6b34eda8bfecc8a9b0085daf7e29c15996c0c81ac65c2f89ea6aa`
+and
+`b5680f1f631626e23303363987f73fd3e8f817017c24f4d41bfa0d8121c4e060`.
+
+Two serial exact-final-binary 5,599-case Zend/lang runs have identical raw
+manifests at SHA-256
+`f9cd2bd786a057cc51847645a4c830492399b6b8cae2e5d56f04ba5c6fd43940`:
+4,511 pass, 792 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Their path/status/category projection hashes to
+`954fdeda3ac023e1c38eeb88896fe9a8f4225631adf9040c016e81d16ea1248f`
+and exact pass set to
+`bd427b5ab38a317129d04e9fc0bf06cc60d180912547b0e6206436643804f25a`.
+Two serial 1,575-case strings/array runs have identical raw manifests at
+`9f5edf942abcc866a1c0c833bca1a4dbef97b344295e36fd07314f233e29b0ce`
+and retain the exact parent projection/pass set at
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`
+and
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,970 pass, 810 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 792 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`3481190196aba4d1c3374387641222bdc1fdb98f24a09c7d96f6b94c23747503`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+Two exact-final-binary CPU-2-pinned gates used four warmups and 32 balanced
+order pairs without outlier removal. Startup, ordinary property reads,
+ordinary array/object serialization, ordinary array unserialization and hot
+storage lookup stay below the +5% regression ceiling; their largest positive
+deltas are +1.13% and +3.31%. The corrected mixed `R:`/`r:` workload is
+reported separately because its output changes. Canonical storage-wire
+medians are 20.14%-21.97% lower, but its intentionally different output makes
+that a changed-path measurement rather than a regression or optimization
+claim. Result hashes are
+`6b140e8ee2439a7a4903ab8dcda9105c30826d415c7ed184d7e749e67fe8b07c`
+and
+`7ea4e2cd9a7e2248bff4c7a3c22e78a7a9930f7003c615f8513c58a7ab1dd050`;
+the task harness hashes to
+`88aed6cf2c20cc2aef61de4b0865dd35e86fcb42b980c66e301f6d0a73ba2163`.
+
+This checkpoint does not claim general SPL completeness, `SplFixedArray`, the
+direct `Serializable`/`__serialize` method API, subclass/custom-member or
+exhaustive malformed-stream parity, the enum AST dumper, 32-bit behavior or
+allocation-limit/OOM equivalence.
+
+The implementation checkpoint is commit `8baab028`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `user-enum-reflection-property-projection`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. Engine-created
 `ReflectionProperty` wrappers now expose only PHP's two public readonly string
