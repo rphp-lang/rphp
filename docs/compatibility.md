@@ -8,6 +8,77 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`delayed-attribute-validation`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. `#[\DelayedTargetValidation]` now retains
+declaration metadata while postponing built-in target validation until
+`ReflectionAttribute::newInstance()`. `#[\Attribute]` and
+`#[\AllowDynamicProperties]` produce the canonical catchable `Error` for
+invalid class forms without mutating the declaration; valid dynamic-property
+classes retain their runtime effect. The internal marker classes expose their
+real `#[\Attribute]` flags, and `#[\ReturnTypeWillChange]` suppresses only the
+bounded direct-`Countable::count()` tentative-return deprecation.
+
+Four original E2E regressions cover repeated invalid instantiation, valid
+dynamic-property state, every public attribute target, generic target errors,
+internal marker construction, delayed return-type suppression and the
+Reflection class/constant/property-hook projections required by the supplying
+cases. Their source hashes to
+`31ae06bd528969d358f96351085267a751e0d0d875724b1af670a95702dc4836`.
+Four clean-room probes cover class-form validators, all public targets,
+tentative returns and Reflection rendering. Three probes match PHP 8.5.9
+byte-for-byte on stdout, stderr and exit status; the tentative-return probe
+matches stdout and status while the system PHP CLI additionally duplicates
+the deprecation on stderr. The normalized PHPT diagnostic is exact.
+
+`has_runtime_errors.phpt`, `validator_AllowDynamicProperties.phpt`,
+`validator_Attribute.phpt`, `validator_success.phpt` and
+`with_ReturnTypeWillChange.phpt` are the only status/category movements, an
+exact `+5/-0` gain. The final target manifest hashes to
+`61db6f04e5bdc6663a12a44431bbccf163f28a974d5cca5d2aa87124c28fcb65`.
+The supported `Zend/tests/attributes/delayed_target_validation` directory is
+now 19 pass plus one unchanged unsupported opcache-directive case.
+
+The final 5,599-case Zend/lang manifest is byte-identical to two preceding
+candidate runs at SHA-256
+`771904015d9f61acfe4a615cdd668415ed70ce26c27621dd6c56587a5928a88d`:
+4,528 pass, 775 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Its exact pass set hashes to
+`c375fd95a7761553b45a17b41deae3bba5ee01d10f29e75851b456b0b8e03c58`.
+The final 1,575-case strings/array projection remains parent-identical at
+1,459 pass, 18 fail, 67 skip and 31 unsupported; its pass set remains
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`.
+The combined audit covers 7,174 cases: 5,987 pass, 793 fail, 182 skip and 212
+unsupported. Supported debt is 18 strings failures, zero array failures and
+775 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`bc1feee707bc078d8e3bbd79a2fec81fbedb684e8d0132e5963a5776a6d03690`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and both unsafe-policy checks pass. Production remains
+at the ceiling of 1,623 unsafe blocks and 289 unsafe functions, with 377 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+
+Two exact-final-binary CPU-2-pinned runs used four warmups and 32
+balanced-order pairs without outlier removal. Attribute-instantiation medians
+are +1.588% and -0.962%, empty-class Reflection is +2.729% and +2.775%,
+dynamic-property writes are -3.872% and -4.486%, ordinary calls are -1.190%
+and -0.557%, and startup is -4.131% and -3.977%. All comparable checksums are
+exact; candidate-only class-constant Reflection medians are 0.048231 and
+0.048112 seconds. Raw result hashes are
+`6eb66f597e4579eae1d6de1f94a605b0d5187aa70b66544dc697558fb4366493`
+and
+`9ec34d1dcb274bb4bca59004bff725583fdf7c0d6c61dc68b8de0ee1e3c55e0a`;
+the harness hashes to
+`f19a632bdc59b5c0ed137a2906ba0d63bd4df5c28b2f983c51ea860d4f3032c5`.
+
+This checkpoint does not claim opcache/preload validation, general
+user-defined attribute-target completion outside the delayed marker, other
+built-in validator families, tentative-return coverage beyond direct
+`Countable`, PHP 8.2, 32-bit behavior or allocation-limit/OOM equivalence. The
+implementation checkpoint is commit `2347a48c`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `first-class-callable-directory-closure`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. A first-class-callable placeholder
 inside an attribute now produces PHP's non-catchable `Cannot create Closure as

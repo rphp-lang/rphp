@@ -4592,6 +4592,35 @@ nullsafe write contexts outside FCC creation, notice suppression in other
 statement kinds, PHP 8.2, 32-bit behavior and allocation-limit/OOM equivalence
 remain separate boundaries.
 
+The `2347a48c` `delayed-attribute-validation` checkpoint then moves Zend/lang
+from 4,523 to 4,528 pass, exactly `+5/-0`, and closes the supported
+`Zend/tests/attributes/delayed_target_validation` directory at 19 pass plus
+one unchanged unsupported opcache-directive case. The delayed marker retains
+declaration metadata while `Attribute` and `AllowDynamicProperties` class-form
+validation moves to repeated `ReflectionAttribute::newInstance()` calls
+without mutation. Valid dynamic-property state remains effective, real
+internal marker classes expose their flags, and `ReturnTypeWillChange`
+suppresses only the bounded direct-`Countable::count()` tentative-return
+deprecation. Canonical class/global constant and property-hook class rendering
+supplies the adjacent Reflection contract.
+
+Three candidate Zend/lang manifests, including the exact final optimized
+binary, are byte-identical; the five named PHPTs are the only movements. The
+strings/array pass set remains exact-parent-identical. All five Cargo
+configurations, all-feature/all-target, formatting, PHPT runner, unsafe,
+Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains
+at the unsafe ceiling of 1,623 blocks and 289 functions. Two CPU-2-pinned
+32-pair release gates keep attribute instantiation, empty-class Reflection,
+dynamic-property writes, ordinary calls and startup below the +5% regression
+ceiling with exact checksums; the first hot-path candidate was rejected before
+the declaration clone was removed.
+
+The monitored supported debt is now 793 failures: 18 strings, zero array and
+775 Zend/lang. Opcache/preload, general user-defined target validation outside
+the delayed marker, other built-in validator families, tentative-return
+coverage beyond direct `Countable`, PHP 8.2, 32-bit behavior and
+allocation-limit/OOM equivalence remain separate boundaries.
+
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
