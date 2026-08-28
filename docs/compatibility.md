@@ -8,6 +8,93 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`abstract-enum-method-compile-fatal-staging`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. An abstract method declared directly
+inside an enum now remains valid method grammar through complete parsing and
+fails at compiler validation with PHP's canonical, uncatchable `Fatal error`.
+The diagnostic uses the namespace-qualified enum and source-spelled method
+name, selects the first direct abstract method and reports its `function`
+declaration line. Both semicolon declarations and otherwise forbidden braced
+bodies reach that enum-specific boundary.
+
+The enum parser now reuses the ordinary method-body staging path and preserves
+the abstract flag in `ClassMethod`; concrete enum method parsing is unchanged.
+A shared compiler validator runs after enum name/import, backing type, property
+and case-shape checks but before magic, interface and reserved synthesized
+method validation. The same targeted validator covers constant-elided enum
+declarations, while methods inside an unconditional declaration after `return`
+still use normal compilation. Parser-deferred duplicate/final-abstract errors
+and later syntax errors keep global priority. Direct, include and eval source
+units preserve filename, line, prior output and shutdown state.
+
+Eight original CLI regressions, the focused enum E2E test and the strengthened
+parser unit cover semicolon/body forms, visibility/static/final concrete
+controls, first-method and namespace spelling, backing/property/case/import,
+magic/reserved and parser-deferred ordering, constant-false and post-return
+declarations, and uncatchable direct/include/eval state. The CLI regression
+source hashes to SHA-256
+`0d5794b1c4837641a99a00159cbcb312c97ed982dad9fbff506d44537f20e15e`.
+The 23-file clean-room PHP 8.5 oracle aggregate hashes to
+`92c89f3c33050e3c89d2003e3f7e60167550be569304ec559c764b950f3cbdf8`;
+all 22 executed direct/include/eval, ordering, dead-code and valid scenarios
+match PHP 8.5.9 byte for byte in exit status, stdout and stderr.
+
+`Zend/tests/enum/no-abstract.phpt` changes from parse failure to pass. The
+complete 152-case enum directory moves from 126 pass / 17 fail to 127 pass / 16
+fail, with eight skips and one unsupported case in both runs; the only
+path/status/category movement is that exact `+1/-0` gain. The candidate
+path/status/category projection hashes to
+`a04edda8b1f8c131613156d17384591f5bfe0972579b761a1fa66ec50a8f17d4`
+and its exact pass set to
+`d836c9542bd3dc94181d8cb233b167a44f51303aaf24d6f4535506031f39a966`.
+Two serial exact-final-binary 5,599-case Zend/lang runs each record 4,496 pass,
+807 fail, 115 skip and 181 unsupported, with no timeout or crash. Their raw
+manifests are identical at SHA-256
+`3757c9cead0238e7baf51139030a0b19fa2006803f405341920d84adf0da8cb3`,
+their path/status/category projection hashes to
+`a69b7864567ffeb548ce3ad9a2f2ccd8f2e757f0be2acfb51cd05a6eb121b9cb`,
+and their exact pass-set hash is
+`24abe61aa785060807cea02f4c14c5414b70caf8a0664b1854273b821048ef62`.
+Two serial 1,575-case strings/array runs retain the exact parent projection at
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`
+and pass-set hash
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,955 pass, 825 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 807 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`6a62210b7a0fb96f9ff9f4046cedcc5ea83f46673b6327e4be299721ac623fb8`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+One exact-final-binary CPU-2-pinned parser/compiler gate used four warmups and
+32 balanced order pairs without outlier removal. Paired median changes are
+-5.240% for startup, -0.446% for ordinary enums, -0.374% for backed enums,
++0.367% for concrete enum methods, -0.219% for the abstract-class control,
+-0.211% for constant-elided enums and -1.445% for repeated enum eval. All 224
+output/exit pairs match. The summary and raw paired data hash respectively to
+`5cb58e719765284a1eece141f80f82cdce0672797de873c592b3a7b004c211b6`
+and `856886e2b79ba4c9784d26354e50193f57d60ec52beeaee54bd51d4285046795`;
+the complete harness/source aggregate hashes to
+`ef057358d18e72bbc042be795163d27371cecd8939a0c88080ffb67e8f985cde`.
+
+This checkpoint does not claim abstract enum properties/property hooks,
+abstract obligations inherited through interfaces or traits, general enum
+class-link/backing/case validation, trait conflict resolution, 32-bit behavior
+or allocation-limit/OOM equivalence. Read-only enum-manifest triage selects
+the two contextual `enum` identifier cases
+`Zend/tests/enum/enum-reserved-non-modifiers.phpt` and
+`Zend/tests/enum/keyword-no-bc-break.phpt` next; both are currently parser
+failures while the pinned PHP oracle executes them successfully.
+
+The implementation checkpoint is commit `ad0240c5`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `abstract-modifier-compile-fatal-staging`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. A class declaration combining
 `final` and `abstract` and a private abstract method in an ordinary class now
@@ -97,7 +184,7 @@ fatal.
 
 The implementation checkpoint is commit `bcc72568`.
 
-The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
+The checkpoint immediately before that is
 `ordinary-abstract-method-compile-fatal-staging`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. A class that is not itself abstract
 but directly declares an ordinary abstract method now parses as valid grammar
@@ -187,7 +274,7 @@ failures and both pass under the pinned PHP oracle.
 
 The implementation checkpoint is commit `b68a1505`.
 
-The checkpoint immediately before that is
+An earlier measured AMD64 PHP 8.5 contract checkpoint is
 `unclosed-brace-source-diagnostics`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. Reaching the end of an ordinary direct,
 include or eval source unit while `{` is the innermost still-open delimiter now
