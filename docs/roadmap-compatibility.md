@@ -4183,12 +4183,32 @@ unsafe ceiling of 1,623 blocks and 289 functions. One CPU-2-pinned 32-pair
 parser/compiler gate places enum and control paired medians between -1.445%
 and +0.367%; startup is -5.240%, and all 224 outputs match.
 
-The monitored supported debt is now 825 failures: 18 strings, zero array and
-807 Zend/lang. Read-only enum-manifest triage selects the contextual `enum`
-identifier pair `enum-reserved-non-modifiers.phpt` and
-`keyword-no-bc-break.phpt` next. Both currently fail at the parser boundary and
-execute under PHP 8.5.9. Abstract properties, general class-link recovery and
-runtime inheritance expansion remain separate.
+The `f4d2fa4c` `contextual-enum-identifier-grammar` checkpoint then moves
+Zend/lang from 4,496 to 4,498 pass, exactly `+2/-0`. `enum` retains its real
+declaration prefix while becoming a source-spelled contextual identifier for
+PHP's namespace, classlike, function, constant, member, type, import,
+qualified-name and label positions. Statement disambiguation preserves actual
+and malformed enum declarations as well as later-syntax-error priority. The
+targeted gains are `enum-reserved-non-modifiers.phpt` and
+`keyword-no-bc-break.phpt`; the remaining 150 enum outcomes do not move.
+
+Two serial exact-final-binary Zend/lang runs have identical manifests,
+path/status/category projections and pass sets; two strings/array projections
+also match the exact parent. All five Cargo configurations,
+all-feature/all-target, formatting, HTML data, PHPT runner, unsafe, Composer
+S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at the
+unsafe ceiling of 1,623 blocks and 289 functions. One CPU-2-pinned 32-pair
+parser/compiler gate places affected and control paired medians between
+-0.583% and +1.644%. A 64-pair control of 100 empty requests through
+equal-length hardlinks measures +4.852% independently and +4.343% paired,
+below the +5% gate, with matching outputs.
+
+The monitored supported debt is now 823 failures: 18 strings, zero array and
+805 Zend/lang. Read-only enum-manifest triage selects the synthesized-method
+conflict pair `no-cases.phpt` and `no-from.phpt` next. Both already reach a
+later RPHP redeclaration error but do not yet reproduce the exact PHP 8.5
+compile-fatal source boundary. Abstract properties, general class-link recovery
+and runtime inheritance expansion remain separate.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.

@@ -8,6 +8,97 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`contextual-enum-identifier-grammar`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.9. The `enum` token is now contextual: it remains
+a real enum-declaration prefix while also serving as a namespace, class,
+interface, trait, function, constant, class-constant, method, type, import,
+qualified-name, member and label identifier in the positions PHP admits.
+Source casing and lines survive tokenization, so mixed-case declarations and
+identifier spellings retain their observable names.
+
+Statement parsing distinguishes an enum declaration from calls, constants,
+qualified/static/member expressions and other expression continuations.
+Malformed `enum {}` and reserved `enum static {}` declarations retain their
+canonical syntax-error branches. Qualified names, namespace-relative names,
+imports, type hints, `new`, `instanceof`, named arguments and static/object
+members all share the same contextual-name handling; ordinary enum backing,
+case and method parsing is unchanged.
+
+Three original CLI regressions, two focused enum E2E regressions and a parser
+unit cover direct execution order, later-syntax-error priority, malformed
+declaration lines, namespace/classlike/function/constant/member/type/import/
+label contexts, mixed casing and true declaration disambiguation. The CLI
+regression source hashes to SHA-256
+`999344155a1d59601d22df1bfd431aa05f762e1b48173f32b70ce6c807aa5339`.
+The 15-source clean-room PHP 8.5 oracle aggregate hashes to
+`7342ea2611e8db8e68dacd318f228cb77d82df25907f57a832a85325c6c938ad`;
+all 14 executed direct/include/eval, valid, invalid and ordering scenarios
+match PHP 8.5.9 byte for byte in exit status, stdout and stderr. Their exact
+result manifest hashes to
+`1549307bd8d627c521ca9b489ad8f9cfe4ca7919233f3b457967418dca1a7a7c`.
+
+`Zend/tests/enum/enum-reserved-non-modifiers.phpt` and
+`Zend/tests/enum/keyword-no-bc-break.phpt` change from parse failures to pass.
+The complete 152-case enum directory moves from 127 pass / 16 fail to 129 pass
+/ 14 fail, with eight skips and one unsupported case in both runs; those two
+paths are the only status/category movements, an exact `+2/-0` gain. The
+candidate path/status/category projection hashes to
+`3364284273965194c846baf4cf47741852e7f0193a7362c03c80e959dfa63531`
+and its exact pass set to
+`f4b7ec2e119630656d17d25e47b0f5abb31ae2c55b486e1467029e0cb06b5964`.
+Two serial exact-final-binary 5,599-case Zend/lang runs each record 4,498 pass,
+805 fail, 115 skip and 181 unsupported, with no timeout or crash. Their raw
+manifests are identical at SHA-256
+`94c84bbdca1996efb36d7ef6cf3e3672e9eff49344ea4d836e6ae5aac3f769d1`,
+their path/status/category projection hashes to
+`c2bae37e7c2d0fb4f8a7c655c717fce674ea459f65b1f03eb5c08e5003280336`,
+and their exact pass-set hash is
+`638c1f8d98c84d4786c0957ff5c8b2c15183e64decfbe272caf82b33e3dfb70e`.
+Two serial 1,575-case strings/array runs retain the exact parent projection at
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`
+and pass-set hash
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,957 pass, 823 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 805 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`651b425145e83f010781fb75b3d3531f1ce6000ed02c00accf76df329e542af9`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+One exact-final-binary CPU-2-pinned parser/compiler gate used four warmups and
+32 balanced order pairs without outlier removal. Independent median changes
+are -0.277% for ordinary declarations, -0.030% for qualified names, -0.092%
+for ordinary enums, -0.250% for backed enums, -0.522% for concrete enum
+methods, +0.512% for the abstract-class control, +0.977% for constant-elided
+enums and +2.867% for repeated enum eval. The corresponding paired medians
+range from -0.583% to +1.644%. A separate 64-pair control of 100 empty
+requests through equal-length hardlinks measures startup at +4.852%
+independently and +4.343% paired; both order medians remain below 5%. All 288
+full-gate pairs and all 64 startup-control pairs have matching output and exit
+hashes. The full summary/data, startup summary/data and complete harness/source
+hash respectively to
+`35e2d4b3261256e0d59237ced36d04206b570b6577bc7cd199e15d59e86df6f0` /
+`e66650d646023c4e38a59663c78e657ef62550ce307d840f6a495c9fcae03545`,
+`5d65b796ee6613406587871c2c3865c70610fc4fda108dbd594027884748487e` /
+`487462e79dcc127c7199fa7e33fb533f8e301b398ce69f052fa52acfb23ae82b`
+and `45e12d8f2c82d5f5db9b0834f389de44c28202e8031b30f8b46fea0e6096510d`.
+
+This checkpoint does not claim a broad contextual-keyword rewrite, `case`
+outside enums, general enum class-link/backing/case validation, 32-bit behavior
+or allocation-limit/OOM equivalence. Read-only enum-manifest triage selects
+the paired synthetic-method conflicts `Zend/tests/enum/no-cases.phpt` and
+`Zend/tests/enum/no-from.phpt` next; both reach RPHP's later redeclaration path
+but do not yet reproduce the exact PHP 8.5 compile-fatal boundary.
+
+The implementation checkpoint is commit `f4d2fa4c`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `abstract-enum-method-compile-fatal-staging`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. An abstract method declared directly
 inside an enum now remains valid method grammar through complete parsing and
