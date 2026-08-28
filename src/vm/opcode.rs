@@ -245,6 +245,9 @@ pub enum OpCode {
     /// Ordinary eagerly linked declarations have no pending entry, so the
     /// same marker remains a cold no-op for them.
     DeclareClass = 171,
+    /// Stop at a reached class-like declaration with PHP's uncatchable
+    /// compile-fatal presentation. op1 is the complete source-aware message.
+    DeclarationCompileFatal = 172,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

@@ -9668,6 +9668,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::DeclarationCompileFatal => {
+                let message = op_array.literals[opline.op1 as usize]
+                    .as_str()
+                    .expect("DeclarationCompileFatal message must be a string literal")
+                    .to_string();
+                return Err(VmError::CompileFatal(message));
+            }
+
             OpCode::CreateClosure => {
                 op_create_closure(eg, frame, op_array, opline);
             }

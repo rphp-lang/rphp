@@ -4859,6 +4859,21 @@ impl Compiler {
         Ok(())
     }
 
+    fn enum_synthesized_method_conflict<'a>(
+        methods: &'a [ClassMethod],
+        is_backed: bool,
+    ) -> Option<&'a ClassMethod> {
+        ["cases"]
+            .into_iter()
+            .chain(is_backed.then_some("from"))
+            .chain(is_backed.then_some("tryfrom"))
+            .find_map(|reserved| {
+                methods
+                    .iter()
+                    .find(|method| method.name.eq_ignore_ascii_case(reserved))
+            })
+    }
+
     /// Validate declaration-stage constraints that PHP applies even when an
     /// optimizer can prove that the containing source region never executes.
     /// Ordinary class declarations nested in functions and control-flow

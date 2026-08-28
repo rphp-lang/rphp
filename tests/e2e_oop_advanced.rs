@@ -587,7 +587,10 @@ fn backed_enum_rejects_explicit_from_methods() {
         let source =
             format!("<?php enum Suit: int {{ public static function {method}(int $value) {{}} }}");
         let error = run_php_expect_error(&source);
-        assert!(format!("{error:?}").contains(&format!("Cannot redeclare Suit::{method}()")));
+        assert!(format!("{error:?}").contains(&format!(
+            "Cannot redeclare Suit::{}()",
+            method.to_ascii_lowercase()
+        )));
     }
 }
 

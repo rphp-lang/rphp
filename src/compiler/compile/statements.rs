@@ -6075,95 +6075,107 @@ impl Compiler {
 
                 self.validate_enum_abstract_methods(&resolved_enum, methods)?;
 
+                // PHP installs the engine-owned enum methods in a fixed order.
+                // Retain the selected collision while compiling the complete
+                // declaration so global method-body/constant-expression errors
+                // keep priority. The collision itself is reached only at the
+                // declaration marker, before magic/interface link checks.
+                let synthesized_method_conflict =
+                    Self::enum_synthesized_method_conflict(methods, is_backed);
+
                 // PHP validates forbidden enum magic methods before interface
                 // compatibility, including when Serializable is also present.
-                if let Some(method) = methods
-                    .iter()
-                    .find(|method| enum_magic_method_is_forbidden(&method.name))
-                {
-                    return Err(self.goto_error(
-                        &format!(
-                            "Enum {resolved_enum} cannot include magic method {}",
-                            method.name
-                        ),
-                        method.line,
-                    ));
-                }
                 let mut resolved_implements = Vec::with_capacity(implements.len() + 2);
-                let mut direct_interfaces = std::collections::HashSet::new();
-                for interface in implements {
-                    let resolved = self.resolve_name(&interface.name);
-                    if !direct_interfaces.insert(resolved.to_ascii_lowercase()) {
-                        return Err(self.goto_error(
-                            &format!(
-                                "Enum {resolved_enum} cannot implement previously implemented interface {resolved}"
-                            ),
-                            *enum_line,
-                        ));
-                    }
-                    if resolved.eq_ignore_ascii_case("BackedEnum") && !is_backed {
-                        return Err(self.goto_error(
-                            &format!(
-                                "Non-backed enum {resolved_enum} cannot implement interface BackedEnum"
-                            ),
-                            *enum_line,
-                        ));
-                    }
-                    if resolved.eq_ignore_ascii_case("UnitEnum")
-                        || resolved.eq_ignore_ascii_case("BackedEnum")
-                    {
-                        return Err(self.goto_error(
-                            &format!(
-                                "Enum {resolved_enum} cannot implement previously implemented interface {resolved}"
-                            ),
-                            *enum_line,
-                        ));
-                    }
-
-                    let inherited = self.compiled_interface_closure(&resolved);
-                    if !is_backed
-                        && inherited
-                            .iter()
-                            .any(|name| name.eq_ignore_ascii_case("BackedEnum"))
-                    {
-                        return Err(self.goto_error(
-                            &format!(
-                                "Non-backed enum {resolved_enum} cannot implement interface BackedEnum"
-                            ),
-                            *enum_line,
-                        ));
-                    }
-                    if inherited
+                if synthesized_method_conflict.is_none() {
+                    if let Some(method) = methods
                         .iter()
-                        .any(|name| name.eq_ignore_ascii_case("Serializable"))
+                        .find(|method| enum_magic_method_is_forbidden(&method.name))
                     {
-                        self.compile_deprecations
-                            .borrow_mut()
-                            .push(CompileDeprecation {
-                                message: format!(
-                                    "{resolved_enum} implements the Serializable interface, which is deprecated. Implement __serialize() and __unserialize() instead (or in addition, if support for old PHP versions is necessary)"
+                        return Err(self.goto_error(
+                            &format!(
+                                "Enum {resolved_enum} cannot include magic method {}",
+                                method.name
+                            ),
+                            method.line,
+                        ));
+                    }
+                    let mut direct_interfaces = std::collections::HashSet::new();
+                    for interface in implements {
+                        let resolved = self.resolve_name(&interface.name);
+                        if !direct_interfaces.insert(resolved.to_ascii_lowercase()) {
+                            return Err(self.goto_error(
+                                &format!(
+                                    "Enum {resolved_enum} cannot implement previously implemented interface {resolved}"
                                 ),
-                                file: self.source_file.clone(),
-                                line: *enum_line,
-                                warning: false,
-                            });
-                        return Err(self.goto_error(
-                            &format!(
-                                "Enum {resolved_enum} cannot implement the Serializable interface"
-                            ),
-                            *enum_line,
-                        ));
+                                *enum_line,
+                            ));
+                        }
+                        if resolved.eq_ignore_ascii_case("BackedEnum") && !is_backed {
+                            return Err(self.goto_error(
+                                &format!(
+                                    "Non-backed enum {resolved_enum} cannot implement interface BackedEnum"
+                                ),
+                                *enum_line,
+                            ));
+                        }
+                        if resolved.eq_ignore_ascii_case("UnitEnum")
+                            || resolved.eq_ignore_ascii_case("BackedEnum")
+                        {
+                            return Err(self.goto_error(
+                                &format!(
+                                    "Enum {resolved_enum} cannot implement previously implemented interface {resolved}"
+                                ),
+                                *enum_line,
+                            ));
+                        }
+
+                        let inherited = self.compiled_interface_closure(&resolved);
+                        if !is_backed
+                            && inherited
+                                .iter()
+                                .any(|name| name.eq_ignore_ascii_case("BackedEnum"))
+                        {
+                            return Err(self.goto_error(
+                                &format!(
+                                    "Non-backed enum {resolved_enum} cannot implement interface BackedEnum"
+                                ),
+                                *enum_line,
+                            ));
+                        }
+                        if inherited
+                            .iter()
+                            .any(|name| name.eq_ignore_ascii_case("Serializable"))
+                        {
+                            self.compile_deprecations
+                                .borrow_mut()
+                                .push(CompileDeprecation {
+                                    message: format!(
+                                        "{resolved_enum} implements the Serializable interface, which is deprecated. Implement __serialize() and __unserialize() instead (or in addition, if support for old PHP versions is necessary)"
+                                    ),
+                                    file: self.source_file.clone(),
+                                    line: *enum_line,
+                                    warning: false,
+                                });
+                            return Err(self.goto_error(
+                                &format!(
+                                    "Enum {resolved_enum} cannot implement the Serializable interface"
+                                ),
+                                *enum_line,
+                            ));
+                        }
+                        if inherited
+                            .iter()
+                            .any(|name| name.eq_ignore_ascii_case("Throwable"))
+                        {
+                            return Err(self.goto_error(
+                                &format!(
+                                    "Enum {resolved_enum} cannot implement interface Throwable"
+                                ),
+                                *enum_line,
+                            ));
+                        }
+                        resolved_implements.push(resolved);
                     }
-                    if inherited
-                        .iter()
-                        .any(|name| name.eq_ignore_ascii_case("Throwable"))
-                    {
-                        return Err(self.goto_error(
-                            &format!("Enum {resolved_enum} cannot implement interface Throwable"),
-                            *enum_line,
-                        ));
-                    }
-                    resolved_implements.push(resolved);
                 }
 
                 // Enum case values may reference constants inherited from an
@@ -6258,14 +6270,9 @@ impl Compiler {
                     }
                 }
 
-                if methods
-                    .iter()
-                    .any(|method| method.name.eq_ignore_ascii_case("cases"))
-                {
-                    return Err(format!("Cannot redeclare {name}::cases()"));
-                }
                 let mut enum_methods = methods.clone();
-                enum_methods.push(crate::parser::ClassMethod {
+                if synthesized_method_conflict.is_none() {
+                    enum_methods.push(crate::parser::ClassMethod {
                     line: 0,
                     attributes: Vec::new(),
                     visibility: Visibility::Public,
@@ -6296,17 +6303,9 @@ impl Compiler {
                     returns_by_ref: false,
                     return_type: None,
                     generic_params: vec![],
-                });
-                if is_backed {
-                    for reserved in ["from", "tryFrom"] {
-                        if methods
-                            .iter()
-                            .any(|method| method.name.eq_ignore_ascii_case(reserved))
-                        {
-                            return Err(format!("Cannot redeclare {name}::{reserved}()"));
-                        }
-                    }
-
+                    });
+                }
+                if is_backed && synthesized_method_conflict.is_none() {
                     let backing_validation_throw = enum_backing_error.as_ref().map(|error| {
                         Stmt::Throw {
                             expr: Expr::New {
@@ -6434,7 +6433,9 @@ impl Compiler {
                 // Compile methods
                 let mut compiled_methods = Vec::new();
                 for method in &enum_methods {
-                    if enum_magic_method_is_forbidden(&method.name) {
+                    if synthesized_method_conflict.is_none()
+                        && enum_magic_method_is_forbidden(&method.name)
+                    {
                         return Err(self.goto_error(
                             &format!(
                                 "Enum {resolved_enum} cannot include magic method {}",
@@ -6475,17 +6476,19 @@ impl Compiler {
                         &cp.return_type_hint,
                     )?;
                     self.validate_override_target(&method.attributes, "method", true)?;
-                    self.validate_magic_method_signature(
-                        &resolved_enum,
-                        &method.name,
-                        &method.params,
-                        &cp.type_hints,
-                        method.is_static,
-                        method.visibility,
-                        method.return_type.is_some(),
-                        &cp.return_type_hint,
-                        method.line,
-                    )?;
+                    if synthesized_method_conflict.is_none() {
+                        self.validate_magic_method_signature(
+                            &resolved_enum,
+                            &method.name,
+                            &method.params,
+                            &cp.type_hints,
+                            method.is_static,
+                            method.visibility,
+                            method.return_type.is_some(),
+                            &cp.return_type_hint,
+                            method.line,
+                        )?;
+                    }
                     func_compiler.return_type_context = cp.return_type_hint.clone();
                     self.validate_generator_return_type(
                         func_compiler.contains_yield,
@@ -6631,6 +6634,22 @@ impl Compiler {
 
                 let compiled_constants =
                     self.compile_class_constants(&resolved_enum, None, constants)?;
+                let compiled_attributes = self.compile_attributes_in_scope(
+                    attributes,
+                    1,
+                    Some(&resolved_enum),
+                    None,
+                );
+                if let Some(method) = synthesized_method_conflict {
+                    self.emit_declaration_compile_fatal(
+                        &format!(
+                            "Cannot redeclare {resolved_enum}::{}()",
+                            method.name.to_ascii_lowercase()
+                        ),
+                        *enum_line,
+                    );
+                    return Ok(());
+                }
                 let mut enum_properties = vec![PropertyDefinition::declared(
                     "name".to_string(),
                     None,
@@ -6671,12 +6690,7 @@ impl Compiler {
                     })
                     .collect();
                 self.class_defs.push(ClassDef {
-                    attributes: self.compile_attributes_in_scope(
-                        attributes,
-                        1,
-                        Some(&resolved_enum),
-                        None,
-                    ),
+                    attributes: compiled_attributes,
                     name: resolved_enum.clone(),
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
@@ -6729,6 +6743,15 @@ impl Compiler {
         let consumer = self.add_literal(Value::string(consumer.to_string()));
         let mut instruction = Instruction::new(OpCode::ReportDeprecatedTraitUses);
         instruction.op1 = consumer;
+        instruction.op1_type = OpType::Const;
+        self.push_instruction_at_line(instruction, line);
+    }
+
+    fn emit_declaration_compile_fatal(&mut self, message: &str, line: usize) {
+        let message = self.goto_error(message, line);
+        let message = self.add_literal(Value::string(message));
+        let mut instruction = Instruction::new(OpCode::DeclarationCompileFatal);
+        instruction.op1 = message;
         instruction.op1_type = OpType::Const;
         self.push_instruction_at_line(instruction, line);
     }
