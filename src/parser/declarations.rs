@@ -2131,25 +2131,7 @@ impl Parser {
         if matches!(self.peek(), Token::Use(_)) {
             self.advance();
             self.expect_lparen()?;
-            let is_ref = if self.peek() == Token::Ampersand {
-                self.advance();
-                true
-            } else {
-                false
-            };
-            let (v, line) = match self.advance() {
-                Token::Variable(n, line) => (n, line),
-                Token::This(line) => {
-                    (self.invalid_this_binding("lexical", line), line)
-                }
-                other => return Err(format!("Expected variable in use, got {:?}", other)),
-            };
-            if v == "GLOBALS" {
-                self.compile_error("Cannot use auto-global as lexical variable", line);
-            }
-            use_vars.push((v, is_ref, line));
-            while matches!(self.peek(), Token::Comma(_)) {
-                self.advance();
+            loop {
                 let is_ref = if self.peek() == Token::Ampersand {
                     self.advance();
                     true
@@ -2161,12 +2143,58 @@ impl Parser {
                     Token::This(line) => {
                         (self.invalid_this_binding("lexical", line), line)
                     }
-                    other => return Err(format!("Expected variable in use, got {:?}", other)),
+                    other => {
+                        let unexpected = match other {
+                            Token::RParen => "token \")\"".to_string(),
+                            Token::Comma(_) => "token \",\"".to_string(),
+                            Token::Ampersand => "token \"&\"".to_string(),
+                            Token::Integer(value) => format!("integer \"{value}\""),
+                            Token::Float(value) => format!("floating-point number \"{value}\""),
+                            Token::Identifier(name, _) => format!("identifier \"{name}\""),
+                            token => format!("token \"{token:?}\""),
+                        };
+                        let expecting = if is_ref {
+                            "variable"
+                        } else {
+                            "variable or \"&\" or token \"&\""
+                        };
+                        let line = self.closest_token_source_line();
+                        return Err(self.source_error(
+                            &format!(
+                                "syntax error, unexpected {unexpected}, expecting {expecting}"
+                            ),
+                            line,
+                        ));
+                    }
                 };
                 if v == "GLOBALS" {
                     self.compile_error("Cannot use auto-global as lexical variable", line);
                 }
+                if let Some(parameter) = params.iter().find(|parameter| parameter.name == v) {
+                    self.compile_error(
+                        format!("Cannot use lexical variable ${v} as a parameter name"),
+                        parameter.line,
+                    );
+                } else if let Some((_, _, first_line)) =
+                    use_vars.iter().find(|(name, _, _)| name == &v)
+                {
+                    self.compile_error(format!("Cannot use variable ${v} twice"), *first_line);
+                }
                 use_vars.push((v, is_ref, line));
+
+                let Token::Comma(_) = self.peek() else {
+                    break;
+                };
+                self.advance();
+                if self.peek() == Token::RParen {
+                    break;
+                }
+                if let Token::Comma(second_comma_line) = self.peek() {
+                    return Err(self.source_error(
+                        "syntax error, unexpected token \",\", expecting \")\"",
+                        second_comma_line,
+                    ));
+                }
             }
             self.expect(&Token::RParen)?;
         }

@@ -291,7 +291,7 @@ fn test_parse_bind_appended_array_element_reference() {
 
 #[test]
 fn test_parse_closure_reference_captures() {
-    let tokens = Lexer::new("<?php $fn = static function() use (&$left, &$right) {};")
+    let tokens = Lexer::new("<?php $fn = static function() use (&$left, &$right,) {};")
         .tokenize()
         .unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();
