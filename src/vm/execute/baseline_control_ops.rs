@@ -169,6 +169,11 @@ fn op_declare_class<'a>(
     }
     let class_name = class_def.name.clone();
     let class_is_enum = class_def.is_enum;
+    let class_parent_is_enum = class_def
+        .parent
+        .as_deref()
+        .and_then(|parent| eg.find_class(parent))
+        .is_some_and(|parent| parent.is_enum);
     if let Some((active_parent, outstanding_dependencies)) =
         eg.active_parent_link_dependencies(&class_def)
     {
@@ -215,6 +220,9 @@ fn op_declare_class<'a>(
             outstanding_variance_dependencies,
         ) {
             eg.abort_runtime_class_link(&class_name);
+            if class_is_enum || class_parent_is_enum {
+                return Err(VmError::CompileFatal(error));
+            }
             return Err(VmError::Fatal(error));
         }
         for dependency in method_variance_dependencies
@@ -299,7 +307,7 @@ fn op_declare_class<'a>(
         // fatals. Dependency-kind errors have already taken their catchable
         // Error path above; everything returned by registration here must
         // preserve prior output without the runtime-fatal newline envelope.
-        if class_is_enum {
+        if class_is_enum || class_parent_is_enum {
             return Err(VmError::CompileFatal(error));
         }
         return Err(VmError::Fatal(error));
@@ -599,10 +607,20 @@ fn execute_source_unit(
     }
     for class_def in compile_result.class_defs {
         if class_def.is_anonymous() {
-            eg.register_compiled_class(class_def)
-                .map_err(VmError::Fatal)?;
+            let class_parent_is_enum = class_def
+                .parent
+                .as_deref()
+                .and_then(|parent| eg.find_class(parent))
+                .is_some_and(|parent| parent.is_enum);
+            if let Err(error) = eg.register_compiled_class(class_def) {
+                if class_parent_is_enum {
+                    return Err(VmError::CompileFatal(error));
+                }
+                return Err(VmError::Fatal(error));
+            }
             continue;
         }
+        let class_is_enum = class_def.is_enum;
         let dependencies = class_def
             .parent
             .iter()
@@ -665,7 +683,17 @@ fn execute_source_unit(
                 return Ok(IncludeFileOutcome::Executed(Value::null()));
             }
         }
-        eg.register_class(class_def).map_err(|e| VmError::Fatal(e))?;
+        let class_parent_is_enum = class_def
+            .parent
+            .as_deref()
+            .and_then(|parent| eg.find_class(parent))
+            .is_some_and(|parent| parent.is_enum);
+        if let Err(error) = eg.register_class(class_def) {
+            if class_is_enum || class_parent_is_enum {
+                return Err(VmError::CompileFatal(error));
+            }
+            return Err(VmError::Fatal(error));
+        }
     }
 
     let mut inc_op_array_main = compile_result.main;

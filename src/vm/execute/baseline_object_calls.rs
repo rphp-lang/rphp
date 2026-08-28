@@ -320,7 +320,15 @@ fn op_new_obj<'a>(
                 });
             }
         }
+        let anonymous_parent_is_enum = class_def
+            .parent
+            .as_deref()
+            .and_then(|parent| eg.find_class(parent))
+            .is_some_and(|parent| parent.is_enum);
         if let Err(error) = eg.register_class(class_def) {
+            if anonymous_parent_is_enum {
+                return Err(VmError::CompileFatal(error));
+            }
             let line = op_array.source_line(ip).unwrap_or(0);
             return Err(VmError::Fatal(format!(
                 "{error} in {} on line {line}",

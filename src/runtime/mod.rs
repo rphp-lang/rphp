@@ -1293,7 +1293,10 @@ impl ExecutorGlobals {
         // free without relying on Vec's growth doubling at the boundary.
         self.class_by_id.reserve(96);
         self.static_property_slots_by_class.reserve(96);
-        self.static_property_values.reserve(16);
+        // RoundingMode contributes eight request-local case singleton slots;
+        // retain the one-shot registration invariant without relying on Vec's
+        // growth policy at the former 16-value boundary.
+        self.static_property_values.reserve(24);
         #[cfg(feature = "php-generics-reified")]
         self.static_generic_property_contracts.reserve(4);
     }
@@ -5501,10 +5504,15 @@ impl ExecutorGlobals {
                     ));
                 }
                 if parent.is_enum {
+                    let child_name = if class_def.is_anonymous() {
+                        format!("{}@anonymous", parent.name)
+                    } else {
+                        class_name.clone()
+                    };
                     return Err(format!(
                         "Class {} cannot extend enum {}{}",
-                        class_name,
-                        parent_name,
+                        child_name,
+                        parent.name,
                         declaration_location()
                     ));
                 }

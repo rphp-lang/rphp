@@ -5,7 +5,119 @@
 //! contracts remain shared without introducing a runtime abstraction.
 
 use super::*;
+use crate::compiler::compile::ClassDef;
 use crate::value::make_error_value;
+
+const ROUNDING_MODE_CLASS: &str = "RoundingMode";
+const ROUNDING_MODE_CASES: [&str; 8] = [
+    "HalfAwayFromZero",
+    "HalfTowardsZero",
+    "HalfEven",
+    "HalfOdd",
+    "TowardsZero",
+    "AwayFromZero",
+    "NegativeInfinity",
+    "PositiveInfinity",
+];
+
+fn rounding_mode_case(name: &str) -> PropertyDefinition {
+    let mut properties = std::collections::HashMap::with_capacity(1);
+    properties.insert("name".to_string(), Value::string(name));
+    PropertyDefinition::new(
+        name.to_string(),
+        Some(Value::object(PhpObject::dynamic(
+            ROUNDING_MODE_CLASS.to_string(),
+            0,
+            properties,
+        ))),
+        Visibility::Public,
+        ROUNDING_MODE_CLASS.to_string(),
+    )
+}
+
+fn fn_rounding_mode_cases(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let definition = eg
+        .find_class(ROUNDING_MODE_CLASS)
+        .expect("registered RoundingMode enum is available");
+    let class_id = definition.class_id;
+    let mut cases = PhpArray::with_packed_capacity(definition.static_properties.len());
+    for index in 0..definition.static_properties.len() {
+        let storage_slot = eg
+            .static_property_storage_slot(class_id, index)
+            .expect("registered RoundingMode case owns a static storage slot");
+        let value = eg
+            .static_property_value(storage_slot)
+            .expect("registered RoundingMode case storage remains live")
+            .clone();
+        cases.push(value);
+    }
+    super::write_return_value(rv, Value::array(cases));
+    Ok(())
+}
+
+fn register_rounding_mode(eg: &mut ExecutorGlobals) -> Box<InternalFunction> {
+    eg.register_class(ClassDef {
+        attributes: Vec::new(),
+        name: ROUNDING_MODE_CLASS.to_string(),
+        source_file: None,
+        declaration_line: 0,
+        parent: None,
+        implements: vec!["UnitEnum".to_string()],
+        is_interface: false,
+        is_abstract: false,
+        // Internal enums omit ReflectionClass's final modifier. The enum
+        // parent guard still rejects every attempt to extend them.
+        is_final: false,
+        is_readonly: false,
+        allow_dynamic_properties: false,
+        is_trait: false,
+        is_enum: true,
+        uses: Vec::new(),
+        trait_aliases: Vec::new(),
+        trait_precedences: Vec::new(),
+        properties: vec![PropertyDefinition::declared(
+            "name".to_string(),
+            None,
+            Visibility::Public,
+            ROUNDING_MODE_CLASS.to_string(),
+            ParamTypeHint::String,
+            true,
+            false,
+        )],
+        static_properties: ROUNDING_MODE_CASES
+            .iter()
+            .map(|name| rounding_mode_case(name))
+            .collect(),
+        constants: Vec::new(),
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec!["name".to_string()],
+        methods: Vec::new(),
+        abstract_methods: Vec::new(),
+        enum_backing_error: None,
+        deferred_instance_defaults: None,
+        class_id: 0,
+    })
+    .expect("RoundingMode registration is unique");
+
+    let mut cases_method = Box::new(make_internal_function(
+        fn_rounding_mode_cases,
+        0,
+        0,
+        Vec::new(),
+    ));
+    cases_method.common.sig.return_type_hint = ParamTypeHint::Array;
+    let cases_pointer = &cases_method.common as *const FunctionCommon;
+    eg.function_table
+        .insert("roundingmode::cases".to_string(), cases_pointer);
+    eg.method_declaring_class
+        .insert(cases_pointer, ROUNDING_MODE_CLASS.to_string());
+    cases_method
+}
 
 // ============================================================================
 // Built-in exception classes (Throwable hierarchy)
@@ -2045,6 +2157,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         eg.register_class(empty_internal_type(name, parents, true, false))
             .unwrap();
     }
+    funcs.push(register_rounding_mode(eg));
     funcs.extend(random::register(eg));
     eg.register_class(empty_internal_type(
         "Iterator",
