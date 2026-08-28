@@ -310,6 +310,12 @@ pub(crate) struct PhpErrorRecord {
     pub(crate) line: usize,
 }
 
+#[derive(Default)]
+struct JsonRuntimeState {
+    error_code: i64,
+    serializable_objects: Vec<usize>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LazyObjectStrategy {
     Ghost,
@@ -757,6 +763,9 @@ pub struct ExecutorGlobals {
     /// Effective attribute scopes for reflected parameters are equally rare;
     /// keeping them here preserves ReflectionParameter's observable shape.
     reflection_parameters: Option<Box<HashMap<usize, ReflectionParameterState>>>,
+    /// Request-local ext/json error and reentrant JsonSerializable guards.
+    /// Successful ordinary requests retain only this null sidecar word.
+    json_runtime: Option<Box<JsonRuntimeState>>,
 }
 
 pub(crate) enum ClassAliasRegistrationError {
@@ -767,6 +776,55 @@ pub(crate) enum ClassAliasRegistrationError {
 const PHP_82_SUPPRESSED_ERROR_REPORTING: i64 = 1 | 4 | 16 | 64 | 256 | 4096;
 
 impl ExecutorGlobals {
+    pub(crate) fn json_last_error(&self) -> i64 {
+        self.json_runtime
+            .as_deref()
+            .map_or(0, |state| state.error_code)
+    }
+
+    pub(crate) fn set_json_last_error(&mut self, code: i64) {
+        if code == 0
+            && self
+                .json_runtime
+                .as_deref()
+                .is_none_or(|state| state.serializable_objects.is_empty())
+        {
+            self.json_runtime = None;
+            return;
+        }
+        self.json_runtime
+            .get_or_insert_with(|| Box::new(JsonRuntimeState::default()))
+            .error_code = code;
+    }
+
+    pub(crate) fn enter_json_serializable_object(&mut self, identity: usize) -> bool {
+        let stack = self
+            .json_runtime
+            .get_or_insert_with(|| Box::new(JsonRuntimeState::default()));
+        let stack = &mut stack.serializable_objects;
+        if stack.contains(&identity) {
+            return false;
+        }
+        stack.push(identity);
+        true
+    }
+
+    pub(crate) fn leave_json_serializable_object(&mut self, identity: usize) {
+        let empty = {
+            let stack = self
+                .json_runtime
+                .as_deref_mut()
+                .expect("JsonSerializable recursion state disappeared");
+            let stack = &mut stack.serializable_objects;
+            let left = stack.pop();
+            debug_assert_eq!(left, Some(identity));
+            stack.is_empty()
+        };
+        if empty && self.json_last_error() == 0 {
+            self.json_runtime = None;
+        }
+    }
+
     /// Reset the request-local execution timer used by `set_time_limit()`.
     /// The worker is allocated only after the first positive limit; ordinary
     /// requests and explicit disable calls retain no timer thread.
@@ -1422,6 +1480,7 @@ impl ExecutorGlobals {
             reflection_attributes: None,
             reflection_references: None,
             reflection_parameters: None,
+            json_runtime: None,
         }
     }
 
@@ -1542,6 +1601,7 @@ impl ExecutorGlobals {
             reflection_attributes: None,
             reflection_references: None,
             reflection_parameters: None,
+            json_runtime: None,
         }
     }
 

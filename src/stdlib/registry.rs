@@ -1384,6 +1384,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- JSON ---
     reg!("json_encode", fn_json_encode, 2, 1, "value", "flags");
+    reg!("json_last_error", fn_json_last_error, 0, 0);
+    reg!("json_last_error_msg", fn_json_last_error_msg, 0, 0);
     reg_direct!(
         "json_decode",
         fn_json_decode,

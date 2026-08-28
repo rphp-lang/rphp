@@ -65,6 +65,7 @@ pub use registry::register_stdlib;
 
 const BUILTIN_EXCEPTION_SUBCLASSES: &[(&str, &str)] = &[
     ("ClosedGeneratorException", "Exception"),
+    ("JsonException", "Exception"),
     ("LogicException", "Exception"),
     ("BadFunctionCallException", "LogicException"),
     ("BadMethodCallException", "BadFunctionCallException"),
@@ -13703,23 +13704,92 @@ fn fn_constant(
 // JSON functions
 // ============================================================================
 
+const JSON_PARTIAL_OUTPUT_ON_ERROR_FLAG: i64 = 512;
 const JSON_PRESERVE_ZERO_FRACTION_FLAG: i64 = 1024;
+const JSON_THROW_ON_ERROR_FLAG: i64 = 4_194_304;
+
+const JSON_ERROR_NONE: i64 = 0;
+const JSON_ERROR_RECURSION: i64 = 6;
+const JSON_ERROR_INF_OR_NAN: i64 = 7;
+const JSON_ERROR_NON_BACKED_ENUM: i64 = 11;
+
+fn json_error_message(code: i64) -> &'static str {
+    match code {
+        0 => "No error",
+        1 => "Maximum stack depth exceeded",
+        2 => "State mismatch (invalid or malformed JSON)",
+        3 => "Control character error, possibly incorrectly encoded",
+        4 => "Syntax error",
+        5 => "Malformed UTF-8 characters, possibly incorrectly encoded",
+        6 => "Recursion detected",
+        7 => "Inf and NaN cannot be JSON encoded",
+        8 => "Type is not supported",
+        9 => "The decoded property name is invalid",
+        10 => "Single unpaired UTF-16 surrogate in unicode escape",
+        11 => "Non-backed enums have no default serialization",
+        _ => "Unknown error",
+    }
+}
+
+fn make_json_exception(code: i64) -> Value {
+    let exception = crate::value::make_error_value("JsonException", json_error_message(code));
+    if let Some(mut object) = exception.as_object_mut() {
+        object.set_property("code", Value::long(code));
+    }
+    exception
+}
 
 fn fn_json_encode(
     ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let value = initialize_lazy_output_value(eg, arg!(ed, 0).clone())?;
     if eg.exception.is_some() {
+        if flags & JSON_THROW_ON_ERROR_FLAG == 0 || flags & JSON_PARTIAL_OUTPUT_ON_ERROR_FLAG != 0 {
+            eg.set_json_last_error(JSON_ERROR_NONE);
+        }
         ret!(rv, Value::bool(false));
     }
-    let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let encoded = json_encode_value(&value, flags, eg)?;
     if eg.exception.is_some() {
+        if flags & JSON_THROW_ON_ERROR_FLAG == 0 || flags & JSON_PARTIAL_OUTPUT_ON_ERROR_FLAG != 0 {
+            eg.set_json_last_error(encoded.error_code);
+        }
         ret!(rv, Value::bool(false));
     }
-    ret!(rv, Value::string(encoded));
+    if encoded.error_code != JSON_ERROR_NONE {
+        if flags & JSON_THROW_ON_ERROR_FLAG != 0 && flags & JSON_PARTIAL_OUTPUT_ON_ERROR_FLAG == 0 {
+            eg.exception = Some(make_json_exception(encoded.error_code));
+            ret!(rv, Value::bool(false));
+        }
+        eg.set_json_last_error(encoded.error_code);
+        if flags & JSON_PARTIAL_OUTPUT_ON_ERROR_FLAG == 0 {
+            ret!(rv, Value::bool(false));
+        }
+    } else if flags & JSON_THROW_ON_ERROR_FLAG == 0
+        || flags & JSON_PARTIAL_OUTPUT_ON_ERROR_FLAG != 0
+    {
+        eg.set_json_last_error(JSON_ERROR_NONE);
+    }
+    ret!(rv, Value::string(encoded.output));
+}
+
+fn fn_json_last_error(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, Value::long(eg.json_last_error()));
+}
+
+fn fn_json_last_error_msg(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, Value::string(json_error_message(eg.json_last_error())));
 }
 
 fn fn_json_decode(
@@ -17730,12 +17800,158 @@ impl serde::Serialize for PhpJsonValue {
     }
 }
 
+#[derive(Default)]
+struct PhpJsonEncodeState {
+    error_code: i64,
+}
+
+struct PhpJsonContainer<'a> {
+    key: usize,
+    parent: Option<&'a PhpJsonContainer<'a>>,
+}
+
+impl PhpJsonEncodeState {
+    fn record_error(&mut self, code: i64) {
+        self.error_code = code;
+    }
+}
+
+fn json_container_is_recursive(mut container: Option<&PhpJsonContainer<'_>>, key: usize) -> bool {
+    while let Some(active) = container {
+        if active.key == key {
+            return true;
+        }
+        container = active.parent;
+    }
+    false
+}
+
+fn project_ordinary_json_object(
+    val: &Value,
+    class_id: u32,
+    eg: &mut ExecutorGlobals,
+    compact_formatter_compatible: &mut bool,
+    state: &mut PhpJsonEncodeState,
+    parent: Option<&PhpJsonContainer<'_>>,
+) -> Result<PhpJsonValue, VmError> {
+    let identity = val
+        .object_identity()
+        .expect("object JSON projection lost its identity");
+    debug_assert_eq!(identity & 1, 0);
+    let key = identity | 1;
+    if json_container_is_recursive(parent, key) {
+        state.record_error(JSON_ERROR_RECURSION);
+        return Ok(PhpJsonValue::Null);
+    }
+    let container = PhpJsonContainer { key, parent };
+
+    let slots = eg.visible_instance_property_slots(class_id, None);
+    let mut properties = Vec::with_capacity(slots.len());
+    let mut declared_names = std::collections::HashSet::new();
+    for slot in slots {
+        let definition = eg
+            .instance_property_definition(class_id, slot)
+            .expect("visible JSON property slot must retain its definition")
+            .clone();
+        declared_names.insert(definition.name.clone());
+        let property = if definition.has_get_hook {
+            crate::vm::execute::call_object_property_get_hook(eg, val, &definition.name)?
+                .map(|value| value.dereferenced().clone())
+        } else {
+            val.as_object().and_then(|object| {
+                object
+                    .get_property_slot(slot)
+                    .filter(|property| !property.is_undef())
+                    .cloned()
+            })
+        };
+        if eg.exception.is_some() {
+            return Ok(PhpJsonValue::Null);
+        }
+        if let Some(property) = property {
+            properties.push((definition.name, property));
+        }
+    }
+    if let Some(object) = val.as_object() {
+        object.for_each_dynamic_property(|name, property| {
+            if !property.is_undef() && !declared_names.contains(name) {
+                properties.push((name.to_string(), property.clone()));
+            }
+        });
+    }
+    let mut entries = Vec::with_capacity(properties.len());
+    for (key, value) in properties {
+        entries.push((
+            key,
+            value_to_json(
+                &value,
+                eg,
+                compact_formatter_compatible,
+                state,
+                Some(&container),
+            )?,
+        ));
+    }
+    // Preserve the established deterministic object projection. PHP array
+    // insertion order is handled independently above.
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(PhpJsonValue::Object(entries))
+}
+
+/// `JsonSerializable::jsonSerialize()` returning the receiver bypasses the
+/// callback and exposes the enum's engine-provided public properties.
+fn project_ordinary_json_enum(
+    val: &Value,
+    eg: &mut ExecutorGlobals,
+    compact_formatter_compatible: &mut bool,
+    state: &mut PhpJsonEncodeState,
+    parent: Option<&PhpJsonContainer<'_>>,
+) -> Result<PhpJsonValue, VmError> {
+    let identity = val
+        .object_identity()
+        .expect("enum JSON projection lost its identity");
+    debug_assert_eq!(identity & 1, 0);
+    let key = identity | 1;
+    if json_container_is_recursive(parent, key) {
+        state.record_error(JSON_ERROR_RECURSION);
+        return Ok(PhpJsonValue::Null);
+    }
+    let container = PhpJsonContainer { key, parent };
+    let Some(object) = val.as_object() else {
+        return Ok(PhpJsonValue::Null);
+    };
+    let mut properties = Vec::with_capacity(2);
+    for name in ["name", "value"] {
+        if let Some(value) = object.get_property(name).cloned() {
+            properties.push((name.to_string(), value));
+        }
+    }
+    drop(object);
+    let mut entries = Vec::with_capacity(properties.len());
+    for (key, value) in properties {
+        entries.push((
+            key,
+            value_to_json(
+                &value,
+                eg,
+                compact_formatter_compatible,
+                state,
+                Some(&container),
+            )?,
+        ));
+    }
+    Ok(PhpJsonValue::Object(entries))
+}
+
 /// Convert a PHP value to the order-preserving JSON projection used above.
 fn value_to_json(
     val: &Value,
     eg: &mut ExecutorGlobals,
     compact_formatter_compatible: &mut bool,
+    state: &mut PhpJsonEncodeState,
+    parent: Option<&PhpJsonContainer<'_>>,
 ) -> Result<PhpJsonValue, VmError> {
+    let referenced_container = val.is_reference();
     let val = val.dereferenced();
     Ok(match val.value_type() {
         ValueType::Null | ValueType::Undef => PhpJsonValue::Null,
@@ -17754,11 +17970,30 @@ fn value_to_json(
                     .map(PhpJsonValue::Number)
                     .unwrap_or(PhpJsonValue::Null)
             } else {
-                PhpJsonValue::Null
+                state.record_error(JSON_ERROR_INF_OR_NAN);
+                PhpJsonValue::Number(serde_json::Number::from(0))
             }
         }
         ValueType::String => PhpJsonValue::String(val.as_str().unwrap().to_string()),
         ValueType::Array => {
+            // A JsonSerializable callback reached through a referenced array
+            // may mutate or unset that array. Retain its current COW storage
+            // for the complete traversal so the encoder observes its input
+            // snapshot and never keeps dangling element borrows.
+            let retained = referenced_container.then(|| val.clone());
+            let val = retained.as_ref().unwrap_or(val);
+            let identity = val
+                .array_identity()
+                .expect("array JSON projection lost its identity");
+            debug_assert_eq!(identity & 1, 0);
+            if json_container_is_recursive(parent, identity) {
+                state.record_error(JSON_ERROR_RECURSION);
+                return Ok(PhpJsonValue::Null);
+            }
+            let container = PhpJsonContainer {
+                key: identity,
+                parent,
+            };
             let arr = val.as_array().unwrap();
             let is_list = arr
                 .iter()
@@ -17767,17 +18002,32 @@ fn value_to_json(
             if is_list {
                 let mut values = Vec::with_capacity(arr.len());
                 for value in arr.values() {
-                    values.push(value_to_json(value, eg, compact_formatter_compatible)?);
+                    values.push(value_to_json(
+                        value,
+                        eg,
+                        compact_formatter_compatible,
+                        state,
+                        Some(&container),
+                    )?);
                 }
                 PhpJsonValue::Array(values)
             } else {
                 let mut entries = Vec::with_capacity(arr.len());
-                for (k, v) in arr.iter() {
-                    let key = match k {
-                        ArrayKey::Int(n) => n.to_string(),
-                        ArrayKey::String(s) => s,
+                for (key, value) in arr.iter() {
+                    let key = match key {
+                        ArrayKey::Int(number) => number.to_string(),
+                        ArrayKey::String(string) => string,
                     };
-                    entries.push((key, value_to_json(v, eg, compact_formatter_compatible)?));
+                    entries.push((
+                        key,
+                        value_to_json(
+                            value,
+                            eg,
+                            compact_formatter_compatible,
+                            state,
+                            Some(&container),
+                        )?,
+                    ));
                 }
                 PhpJsonValue::Object(entries)
             }
@@ -17792,55 +18042,111 @@ fn value_to_json(
                 return Ok(PhpJsonValue::Null);
             }
             let val = projection_owner.as_ref().unwrap_or(val);
-            let Some(class_id) = val.as_object().map(|object| object.class_id) else {
+            let Some((class_id, identity)) = val.as_object().map(|object| {
+                (
+                    object.class_id,
+                    val.object_identity()
+                        .expect("object JSON projection lost its identity"),
+                )
+            }) else {
                 return Ok(PhpJsonValue::Null);
             };
-            let slots = eg.visible_instance_property_slots(class_id, None);
-            let mut properties = Vec::with_capacity(slots.len());
-            let mut declared_names = std::collections::HashSet::new();
-            for slot in slots {
-                let definition = eg
-                    .instance_property_definition(class_id, slot)
-                    .expect("visible JSON property slot must retain its definition")
-                    .clone();
-                declared_names.insert(definition.name.clone());
-                let property = if definition.has_get_hook {
-                    crate::vm::execute::call_object_property_get_hook(eg, val, &definition.name)?
-                        .map(|value| value.dereferenced().clone())
-                } else {
-                    val.as_object().and_then(|object| {
-                        object
-                            .get_property_slot(slot)
-                            .filter(|property| !property.is_undef())
-                            .cloned()
-                    })
-                };
-                if eg.exception.is_some() {
+
+            let (may_implement_protocol, is_enum, is_backed_enum) = eg
+                .class_by_id(class_id)
+                .map_or((false, false, false), |class| {
+                    (
+                        class.parent.is_some() || !class.implements.is_empty(),
+                        class.is_enum,
+                        class
+                            .implements
+                            .iter()
+                            .any(|name| name.eq_ignore_ascii_case("BackedEnum")),
+                    )
+                });
+            let is_json_serializable = if may_implement_protocol {
+                let class_name = val
+                    .as_object()
+                    .map(|object| object.class_name.to_string())
+                    .unwrap_or_default();
+                eg.class_is_a(&class_name, "JsonSerializable")
+            } else {
+                false
+            };
+            if is_json_serializable {
+                if !eg.enter_json_serializable_object(identity) {
+                    state.record_error(JSON_ERROR_RECURSION);
                     return Ok(PhpJsonValue::Null);
                 }
-                if let Some(property) = property {
-                    properties.push((definition.name, property));
-                }
-            }
-            if let Some(object) = val.as_object() {
-                object.for_each_dynamic_property(|name, property| {
-                    if !property.is_undef() && !declared_names.contains(name) {
-                        properties.push((name.to_string(), property.clone()));
+                let result = (|| {
+                    let Some(serialized) =
+                        call_object_public_method(eg, val, "jsonSerialize", &[])?
+                    else {
+                        return project_ordinary_json_object(
+                            val,
+                            class_id,
+                            eg,
+                            compact_formatter_compatible,
+                            state,
+                            parent,
+                        );
+                    };
+                    if eg.exception.is_some() {
+                        return Ok(PhpJsonValue::Null);
                     }
-                });
+                    if serialized.dereferenced().object_identity() == Some(identity) {
+                        if is_enum {
+                            project_ordinary_json_enum(
+                                val,
+                                eg,
+                                compact_formatter_compatible,
+                                state,
+                                parent,
+                            )
+                        } else {
+                            project_ordinary_json_object(
+                                val,
+                                class_id,
+                                eg,
+                                compact_formatter_compatible,
+                                state,
+                                parent,
+                            )
+                        }
+                    } else {
+                        value_to_json(&serialized, eg, compact_formatter_compatible, state, parent)
+                    }
+                })();
+                eg.leave_json_serializable_object(identity);
+                return result;
             }
-            let mut entries = Vec::with_capacity(properties.len());
-            for (key, value) in properties {
-                entries.push((
-                    key,
-                    value_to_json(&value, eg, compact_formatter_compatible)?,
-                ));
+
+            if is_enum {
+                if !is_backed_enum {
+                    state.record_error(JSON_ERROR_NON_BACKED_ENUM);
+                    return Ok(PhpJsonValue::Number(serde_json::Number::from(0)));
+                }
+                let backing_value = val
+                    .as_object()
+                    .and_then(|object| object.get_property("value").cloned())
+                    .unwrap_or_else(Value::null);
+                return value_to_json(
+                    &backing_value,
+                    eg,
+                    compact_formatter_compatible,
+                    state,
+                    parent,
+                );
             }
-            // Preserve the existing deterministic object projection. PHP
-            // array insertion order is handled above; object property-order
-            // storage is a separate runtime contract.
-            entries.sort_by(|left, right| left.0.cmp(&right.0));
-            PhpJsonValue::Object(entries)
+
+            project_ordinary_json_object(
+                val,
+                class_id,
+                eg,
+                compact_formatter_compatible,
+                state,
+                parent,
+            )?
         }
         _ => PhpJsonValue::Null,
     })
@@ -17885,26 +18191,42 @@ impl serde_json::ser::Formatter for PhpJsonFormatter {
     }
 }
 
-fn json_encode_value(val: &Value, flags: i64, eg: &mut ExecutorGlobals) -> Result<String, VmError> {
+struct PhpJsonEncodeResult {
+    output: String,
+    error_code: i64,
+}
+
+fn json_encode_value(
+    val: &Value,
+    flags: i64,
+    eg: &mut ExecutorGlobals,
+) -> Result<PhpJsonEncodeResult, VmError> {
     let preserve_zero_fraction = flags & JSON_PRESERVE_ZERO_FRACTION_FLAG != 0;
     let mut compact_formatter_compatible = eg.serialize_precision == -1 && !preserve_zero_fraction;
-    let value = value_to_json(val, eg, &mut compact_formatter_compatible)?;
-    if compact_formatter_compatible {
-        return Ok(serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string()));
-    }
-    let mut output = Vec::new();
-    let result = {
-        let formatter = PhpJsonFormatter {
-            serialize_precision: eg.serialize_precision,
-            preserve_zero_fraction,
+    let mut state = PhpJsonEncodeState::default();
+    let value = value_to_json(val, eg, &mut compact_formatter_compatible, &mut state, None)?;
+    let output = if compact_formatter_compatible {
+        serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string())
+    } else {
+        let mut output = Vec::new();
+        let result = {
+            let formatter = PhpJsonFormatter {
+                serialize_precision: eg.serialize_precision,
+                preserve_zero_fraction,
+            };
+            let mut serializer = serde_json::Serializer::with_formatter(&mut output, formatter);
+            value.serialize(&mut serializer)
         };
-        let mut serializer = serde_json::Serializer::with_formatter(&mut output, formatter);
-        value.serialize(&mut serializer)
+        if result.is_err() {
+            "null".to_string()
+        } else {
+            String::from_utf8(output).unwrap_or_else(|_| "null".to_string())
+        }
     };
-    if result.is_err() {
-        return Ok("null".to_string());
-    }
-    Ok(String::from_utf8(output).unwrap_or_else(|_| "null".to_string()))
+    Ok(PhpJsonEncodeResult {
+        output,
+        error_code: state.error_code,
+    })
 }
 
 pub(crate) fn json_decode_string(s: &str, assoc: bool) -> Value {
