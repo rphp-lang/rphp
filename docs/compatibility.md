@@ -8,6 +8,102 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`enum-traversable-interface-diagnostic`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.9. A reached unit or backed enum whose
+complete user-interface closure contains the engine `Traversable` interface
+but neither `Iterator` nor `IteratorAggregate` now raises PHP's canonical
+uncatchable `Enum E must implement interface Traversable as part of either
+Iterator or IteratorAggregate in Unknown on line 0` fatal. Direct, aliased,
+inherited and diamond relations use the namespace-qualified enum name and the
+same historical unknown location.
+
+The check runs at the existing declaration-interface boundary after dependency
+resolution, enum shape and trait composition, but before ordinary missing
+interface methods. Missing interfaces therefore stay catchable and prevent
+partial publication, while the `Traversable` restriction wins regardless of
+ordinary interface-list order. A valid `Iterator` or `IteratorAggregate`
+relation, including a trait-provided `getIterator()`, remains accepted.
+Namespaced user interfaces merely named `Traversable` are unaffected. Prior
+output, shutdown behavior, include/eval execution and unreachable or
+post-return declarations preserve their PHP ordering.
+
+Six original CLI regressions cover unit, backed and namespaced enums, import
+aliases, inherited and diamond relations, valid `Iterator` and
+`IteratorAggregate` controls, trait and namespaced-interface controls,
+dependency/composition/shape/syntax priority, publication rollback,
+reachability, include/eval and shutdown behavior. Their source hashes to
+SHA-256
+`06ed4f2082a34bb0ca81ae1b408a0746bd3fa0d51ece9b2c61479cdc6038619b`.
+The clean-room oracle/harness aggregate hashes to
+`ba34f56c1eb43a629ad55fb68faf19ecc27cbe6d76df0dbb7d89cd85486ed922`;
+its PHP 8.5.9 result manifest hashes to
+`cb8e0c804c8631f75862ab75bad992ed88e85b5dce6e2df418a3f75e0d822586`
+and the exact-candidate result manifest to
+`ec2b700d216a0922475ae04f39267b98b827031e97c0d470d9282fcfe115d2fe`.
+Twenty-nine of 34 scenarios match byte for byte in exit status, stdout and
+stderr. The five explicit non-claims are the missing built-in
+`Iterator`/`IteratorAggregate` abstract-method metadata, one independent
+internal return-type deprecation, and the ordinary and anonymous non-enum
+`Traversable` diagnostics.
+
+`Zend/tests/enum/gh7792_5.phpt` changes from an output failure to pass. The
+complete 152-case enum directory moves from 136 pass / 7 fail to 137 pass / 6
+fail, with eight skips and one unsupported case in both runs; that path is the
+only status/category movement, an exact `+1/-0` gain. The candidate
+path/status/category projection hashes to
+`277610e83fcb0cfdffb0447851b607e2ae1d0053fb11164669fb5e924365c919`
+and its exact pass set to
+`011d353cac11959517551dd3a1f927187e99c319f16258a04c9fc80fdab9f144`.
+The complete 216-case trait directory retains 214 pass, one skip and one
+unsupported case with no movement; its projection and pass-set hashes remain
+`b90f85659f2194ff0fc003566c5504dc7e978c71aa98da62a9a522b777f18579`
+and `b46c468f103a02bd984ee3625077539a1633c0dfda62252175f67b3f5dfdf91c`.
+The adjacent 22-case iterable/Iterator PHPT cluster also retains its exact
+parent projection and pass set.
+
+Two serial exact-final-binary 5,599-case Zend/lang runs have identical raw
+manifests at SHA-256
+`66d759d02e80f35f81dabe3253837a459dd4f40cc3baea4c2d9ec7dea5a3f624`:
+4,506 pass, 797 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Their path/status/category projection hashes to
+`2c8fd9c931502d6403bcb18f275b7f97b1d375fcf3d7cccc7c80629b4134503f`
+and exact pass set to
+`508943b9b91fbd117241af36aa8f1ac855786235367ccef0535b5c618d7eda23`.
+Two serial 1,575-case strings/array runs retain the exact parent projection at
+`392587b16fee83fa2233b41d0bc8a1dd95d5d4b34a1b5365f25985f5c8515dbe`
+and pass-set hash
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,965 pass, 815 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 797 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`e7e7ffe17c2dcd4f19ecb203aa2e2b929cdeacafb7230eb2fc195abc2db2a1cd`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+One exact-final-binary CPU-2-pinned declaration/link gate used four warmups and
+32 balanced order pairs without outlier removal. SHA-verified parent and
+candidate copies ran from the same tmpfs. Paired median changes range from
+-1.05% to +1.52% across ten established declaration/link controls plus valid
+`Iterator` and explicit `Traversable`/`IteratorAggregate` enum workloads. All
+384 measured output/status pairs match. The result and benchmark-harness
+aggregate hashes are
+`18051ec1ba633e23c85ca3eadb2bee84f93ccd55e691fbd278c7b6c6f9fc6010`
+and `4a5283bf8b10938dc4569846b003fb4421e2a9838463ce71b6595ad42f4b3f8c`.
+
+This checkpoint does not claim the five oracle gaps above, general iteration
+or SPL expansion, extending built-in enums, AST dumper behavior, enum
+Reflection/JSON/SPL behavior, 32-bit behavior or allocation-limit/OOM
+equivalence. The remaining enum failures are reported independently.
+
+The implementation checkpoint is commit `60b671f9`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `enum-interface-abstract-method-diagnostic`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.9. When execution reaches a unit or
 backed enum that does not implement every ordinary method required by a user

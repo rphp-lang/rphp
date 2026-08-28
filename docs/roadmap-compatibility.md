@@ -4317,6 +4317,34 @@ The monitored supported debt is now 816 failures: 18 strings, zero array and
 798 Zend/lang. The seven remaining enum failures are output or runtime gaps;
 enum Reflection/JSON/SPL behavior, general class-link recovery and runtime
 inheritance expansion remain separate.
+
+The `60b671f9` `enum-traversable-interface-diagnostic` checkpoint then moves
+Zend/lang from 4,505 to 4,506 pass, exactly `+1/-0`. A reached unit or backed
+enum whose full interface closure contains engine `Traversable` but neither
+`Iterator` nor `IteratorAggregate` now raises the canonical enum-specific
+uncatchable fatal with PHP's historical `Unknown on line 0` location. Direct,
+aliased, inherited and diamond relations are covered. Missing dependencies,
+enum shape, trait composition and later syntax retain priority, while the
+restriction precedes ordinary missing interface methods. Valid Iterator,
+IteratorAggregate, trait and namespaced user-interface controls remain valid;
+failed enums are not published, and prior output, shutdown, include/eval and
+unreachable behavior are preserved. The only PHPT movement is
+`enum/gh7792_5.phpt`; the other 151 enum, all 216 trait and all 22 adjacent
+iterable/Iterator outcomes are stable.
+
+Two serial exact-final-binary Zend/lang runs have identical raw manifests,
+path/status/category projections and pass sets; two strings/array projections
+also match the exact parent. All five Cargo configurations,
+all-feature/all-target, formatting, HTML data, PHPT runner, unsafe, Composer
+S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at the
+unsafe ceiling of 1,623 blocks and 289 functions. One CPU-2-pinned 32-pair
+release gate places all twelve declaration/link and control medians between
+-1.05% and +1.52%, with all 384 output/status pairs matching.
+
+The monitored supported debt is now 815 failures: 18 strings, zero array and
+797 Zend/lang. The six remaining enum failures are output or runtime gaps;
+enum Reflection/JSON/SPL behavior, general class-link recovery and runtime
+inheritance expansion remain separate.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
