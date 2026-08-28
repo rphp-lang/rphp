@@ -463,6 +463,7 @@ fn execute_source_unit(
             if error.starts_with("syntax error,")
                 || error.starts_with("Invalid indentation")
                 || error.starts_with("Invalid body indentation")
+                || error.starts_with("Unterminated comment starting line ")
             {
                 let location = format!(" in {canonical} on line ");
                 if let Some((message, line)) = error.rsplit_once(&location)

@@ -203,6 +203,28 @@ struct DeferredCompileDiagnostic {
     line: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LexicalParseError {
+    message: String,
+    line: usize,
+}
+
+impl LexicalParseError {
+    fn unterminated_comment(line: usize) -> Self {
+        Self {
+            message: format!("Unterminated comment starting line {line}"),
+            line,
+        }
+    }
+
+    fn new(message: impl Into<String>, line: usize) -> Self {
+        Self {
+            message: message.into(),
+            line,
+        }
+    }
+}
+
 enum StringPart {
     Literal(String, bool),
     Variable(String, usize),
@@ -340,7 +362,7 @@ impl<'a> Lexer<'a> {
     pub fn tokenize(&mut self) -> Result<Vec<Token>, String> {
         let mut tokens = Vec::new();
 
-        let _ = self.skip_whitespace()?;
+        let _ = self.skip_whitespace().map_err(|error| error.message)?;
 
         // Expect <?php opening tag
         if self.starts_with(b"<?php") {
@@ -351,8 +373,14 @@ impl<'a> Lexer<'a> {
         }
 
         loop {
-            if let Some(comment) = self.skip_whitespace()? {
-                tokens.push(Token::DocComment(comment));
+            match self.skip_whitespace() {
+                Ok(Some(comment)) => tokens.push(Token::DocComment(comment)),
+                Ok(None) => {}
+                Err(error) => {
+                    tokens.push(Token::ParseError(error.message, error.line));
+                    self.pos = self.src.len();
+                    continue;
+                }
             }
 
             if self.pos >= self.src.len() {
@@ -780,8 +808,8 @@ impl<'a> Lexer<'a> {
                                 });
                                 self.pos = self.src.len();
                             }
-                            Err(message) => {
-                                tokens.push(Token::ParseError(message, line));
+                            Err(error) => {
+                                tokens.push(Token::ParseError(error.message, error.line));
                                 self.pos = self.src.len();
                             }
                         }
@@ -929,7 +957,7 @@ impl<'a> Lexer<'a> {
         Ok(tokens)
     }
 
-    fn skip_whitespace(&mut self) -> Result<Option<std::sync::Arc<str>>, String> {
+    fn skip_whitespace(&mut self) -> Result<Option<std::sync::Arc<str>>, LexicalParseError> {
         let mut doc_comment = None;
         loop {
             // Skip whitespace
@@ -962,9 +990,8 @@ impl<'a> Lexer<'a> {
                 self.pos += 2;
                 loop {
                     if self.pos + 1 >= self.src.len() {
-                        return Err(format!(
-                            "Unterminated comment starting at position {}",
-                            start
+                        return Err(LexicalParseError::unterminated_comment(
+                            self.source_line_at(start),
                         ));
                     }
                     if self.src[self.pos] == b'*' && self.src[self.pos + 1] == b'/' {
@@ -1108,23 +1135,33 @@ impl<'a> Lexer<'a> {
         decode_php_source(&self.src[start..self.pos])
     }
 
-    fn scan_halt_compiler_end(&self, start: usize) -> Result<usize, String> {
+    fn scan_halt_compiler_end(&self, start: usize) -> Result<usize, LexicalParseError> {
+        let start_line = self.source_line_at(start);
         let mut pos = self.skip_halt_trivia(start)?;
         if self.src.get(pos) != Some(&b'(') {
-            return Err("syntax error, unexpected token, expecting \"(\"".to_string());
+            return Err(LexicalParseError::new(
+                "syntax error, unexpected token, expecting \"(\"",
+                start_line,
+            ));
         }
         pos = self.skip_halt_trivia(pos + 1)?;
         if self.src.get(pos) != Some(&b')') {
-            return Err("syntax error, unexpected token, expecting \")\"".to_string());
+            return Err(LexicalParseError::new(
+                "syntax error, unexpected token, expecting \")\"",
+                start_line,
+            ));
         }
         pos = self.skip_halt_trivia(pos + 1)?;
         if self.src.get(pos) != Some(&b';') {
-            return Err("syntax error, unexpected end of file, expecting \";\"".to_string());
+            return Err(LexicalParseError::new(
+                "syntax error, unexpected end of file, expecting \";\"",
+                start_line,
+            ));
         }
         Ok(pos + 1)
     }
 
-    fn skip_halt_trivia(&self, mut pos: usize) -> Result<usize, String> {
+    fn skip_halt_trivia(&self, mut pos: usize) -> Result<usize, LexicalParseError> {
         loop {
             while self.src.get(pos).is_some_and(u8::is_ascii_whitespace) {
                 pos += 1;
@@ -1156,7 +1193,9 @@ impl<'a> Lexer<'a> {
                     .windows(2)
                     .position(|window| window == b"*/")
                 else {
-                    return Err("Unterminated comment".to_string());
+                    return Err(LexicalParseError::unterminated_comment(
+                        self.source_line_at(pos),
+                    ));
                 };
                 pos += relative_end + 4;
                 continue;

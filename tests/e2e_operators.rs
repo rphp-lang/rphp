@@ -1167,9 +1167,18 @@ fn test_e2e_nested_ternary_in_then_branch_false() {
 
 #[test]
 fn test_e2e_unterminated_block_comment() {
-    let result = Lexer::new("<?php /* unterminated").tokenize();
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Unterminated comment"));
+    let tokens = Lexer::new("<?php\n/* unterminated\nbody")
+        .tokenize()
+        .unwrap();
+    let error = Parser::new(tokens)
+        .with_source_name("/virtual/unterminated.php")
+        .parse()
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        "Unterminated comment starting line 2 in /virtual/unterminated.php on line 2"
+    );
 }
 
 // === Extra userland args frame integrity ===
