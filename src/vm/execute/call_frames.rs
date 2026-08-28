@@ -1505,15 +1505,19 @@ fn take_pending_magic_call(eg: &mut ExecutorGlobals, call_key: usize) -> Option<
 fn pending_magic_call_name(eg: &ExecutorGlobals, call_key: usize) -> Option<String> {
     let tagged_key = call_key | PENDING_MAGIC_CALL_TAG;
     let stack = eg.pending_invoke_this.as_ref()?.as_array()?;
-    let key_index = stack.len().checked_sub(2)?;
-    (stack.get_value_at(key_index)?.as_long()? as usize == tagged_key)
-        .then(|| {
-            stack
+    let mut key_index = stack.len().checked_sub(2)?;
+    loop {
+        if stack.get_value_at(key_index)?.as_long()? as usize == tagged_key {
+            return stack
                 .get_value_at(key_index + 1)
                 .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .flatten()
+                .map(str::to_owned);
+        }
+        if key_index < 2 {
+            return None;
+        }
+        key_index -= 2;
+    }
 }
 
 /// Initialize the sparse argument ABI on the first named send. Keeping this

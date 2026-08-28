@@ -16977,6 +16977,49 @@ fn var_dump_value_inner(
                 );
                 out.push_str(&format!("{}}}\n", prefix));
                 out
+            } else if object.class_name.as_ref() == "ReflectionParameter" {
+                let name = object
+                    .get_property("name")
+                    .cloned()
+                    .unwrap_or_else(|| Value::string(""));
+                let mut out = dump_object_header(
+                    context,
+                    val,
+                    &prefix,
+                    "",
+                    "ReflectionParameter",
+                    val.object_handle()
+                        .expect("live reflection parameter must retain its object handle"),
+                    1,
+                    eg,
+                );
+                out.push_str(&format!("{}  [\"name\"]=>\n", prefix));
+                drop(object);
+                out.push_str(&var_dump_value_inner(
+                    &name,
+                    indent + 1,
+                    eg,
+                    true,
+                    context.child(),
+                    visited_arrays,
+                    visited_objects,
+                ));
+                out.push_str(&format!("{}}}\n", prefix));
+                out
+            } else if object.class_name.as_ref() == "ReflectionNamedType" {
+                let mut out = dump_object_header(
+                    context,
+                    val,
+                    &prefix,
+                    "",
+                    "ReflectionNamedType",
+                    val.object_handle()
+                        .expect("live reflected type must retain its object handle"),
+                    0,
+                    eg,
+                );
+                out.push_str(&format!("{}}}\n", prefix));
+                out
             } else if let Some(instance) = initialized_proxy {
                 let mut out = dump_object_header(
                     context,
@@ -21322,6 +21365,13 @@ fn call_resolved_with_source_unpack(
     source_file: &str,
     strict_types: bool,
 ) -> Result<Value, VmError> {
+    if resolved.is_magic_call {
+        let mut arguments = PhpArray::new();
+        for (key, value) in args.iter() {
+            arguments.set(key, value.dereferenced().clone());
+        }
+        return call_magic_resolved_with_array(eg, &resolved, arguments);
+    }
     let signature = resolved.signature();
     let function_name = displayed_function_name(eg, resolved.func_ptr);
     let fixed_count = signature.public_arity() as usize;

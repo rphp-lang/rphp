@@ -116,11 +116,17 @@ fn op_send_named<'a>(
     let name = name_val.as_str().unwrap_or("");
     let call = unsafe { (*frame).call };
     debug_assert!(!call.is_null());
-    let func_common = unsafe { &*(*call).func };
+    let (func_common, pending_magic_call) =
+        unsafe { (&*(*call).func, (*call).is_magic_call()) };
     let yield_snapshot = opline._pad & SEND_FLAG_YIELD_SNAPSHOT != 0;
+    let call_key = call as usize;
 
     if !unsafe { (*call).named_args_used } {
-        let positional = opline.extended_value.min(func_common.sig.public_arity());
+        let positional = if pending_magic_call {
+            opline.extended_value
+        } else {
+            opline.extended_value.min(func_common.sig.public_arity())
+        };
         prepare_named_call_frame(eg, call, func_common, positional);
     }
 
@@ -135,10 +141,12 @@ fn op_send_named<'a>(
 
     // Determine if the resolved index targets the variadic parameter itself.
     let public_max = func_common.sig.public_arity();
-    let is_variadic_target = func_common.sig.is_variadic && match resolved_idx {
-        Some(idx) => idx >= public_max,
-        None => true,
-    };
+    let is_variadic_target = pending_magic_call
+        || (func_common.sig.is_variadic
+            && match resolved_idx {
+                Some(idx) => idx >= public_max,
+                None => true,
+            });
 
     if is_variadic_target {
         let internal_function =
@@ -148,8 +156,9 @@ fn op_send_named<'a>(
         let forwards_named_arguments = registered_name
             .as_deref()
             .is_some_and(crate::stdlib::internal_variadic_forwards_named_arguments);
-        if !func_common.sig.is_variadic
-            || (internal_function && !forwards_named_arguments)
+        if !pending_magic_call
+            && (!func_common.sig.is_variadic
+                || (internal_function && !forwards_named_arguments))
         {
             let err = if internal_function && func_common.sig.is_variadic {
                 make_error_value(
@@ -171,7 +180,6 @@ fn op_send_named<'a>(
         }
 
         // Duplicate check: scan the pending buffer for this name
-        let call_key = call as usize;
         if let Some(existing) = eg.pending_named_variadic.get(&call_key) {
             if existing.iter().any(|(n, _)| n == name) {
                 let err = make_error_value("Error", &format!(

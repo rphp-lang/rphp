@@ -81,6 +81,7 @@ impl ExecuteData {
     const DEFERRED_SCALAR_CALL: u8 = 1;
     const ORIGINAL_CONSTRUCTOR_CALL: u8 = 1 << 1;
     const DETACHED_STRICT_CALL: u8 = 1 << 2;
+    const MAGIC_CALL: u8 = 1 << 3;
 
     #[inline(always)]
     pub fn is_deferred_scalar_call(&self) -> bool {
@@ -127,6 +128,20 @@ impl ExecuteData {
     #[inline(always)]
     pub fn is_detached_strict_call(&self) -> bool {
         self.call_kind_flags & Self::DETACHED_STRICT_CALL != 0
+    }
+
+    #[inline(always)]
+    pub fn set_magic_call(&mut self, enabled: bool) {
+        if enabled {
+            self.call_kind_flags |= Self::MAGIC_CALL;
+        } else {
+            self.call_kind_flags &= !Self::MAGIC_CALL;
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_magic_call(&self) -> bool {
+        self.call_kind_flags & Self::MAGIC_CALL != 0
     }
 
     /// Recover a late-called class stored in the unused half of the heap

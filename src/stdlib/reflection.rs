@@ -2811,6 +2811,57 @@ fn hint_metadata(hint: &ParamTypeHint) -> (&'static str, String, bool) {
     }
 }
 
+fn reflected_magic_call_trampoline(ed: *mut ExecuteData, eg: &ExecutorGlobals) -> bool {
+    reflected_property(ed, "__reflection_closure")
+        .and_then(|value| {
+            value
+                .as_closure()
+                .map(|closure| super::closure_is_magic_call(closure, eg))
+        })
+        .unwrap_or(false)
+}
+
+fn magic_call_trampoline_parameter(function: &FunctionCommon) -> Value {
+    object_value(
+        "ReflectionParameter",
+        [
+            ("name", Value::string("arguments")),
+            (
+                "__reflection_function_pointer",
+                Value::long(function as *const FunctionCommon as usize as i64),
+            ),
+            ("__reflection_position", Value::long(0)),
+            ("__reflection_has_type", Value::bool(true)),
+            ("__reflection_type_kind", Value::string("named")),
+            ("__reflection_type_name", Value::string("mixed")),
+            ("__reflection_allows_null", Value::bool(true)),
+            ("__reflection_variadic", Value::bool(true)),
+            ("__reflection_passed_by_reference", Value::bool(false)),
+            ("__reflection_has_default", Value::bool(false)),
+            ("__reflection_declaring_class", Value::null()),
+        ],
+    )
+}
+
+fn populate_magic_call_trampoline_parameter(receiver: &Value, function: &FunctionCommon) {
+    if let Some(mut object) = receiver.as_object_mut() {
+        object.set_property("name", Value::string("arguments"));
+        object.set_property(
+            "__reflection_function_pointer",
+            Value::long(function as *const FunctionCommon as usize as i64),
+        );
+        object.set_property("__reflection_position", Value::long(0));
+        object.set_property("__reflection_has_type", Value::bool(true));
+        object.set_property("__reflection_type_kind", Value::string("named"));
+        object.set_property("__reflection_type_name", Value::string("mixed"));
+        object.set_property("__reflection_allows_null", Value::bool(true));
+        object.set_property("__reflection_variadic", Value::bool(true));
+        object.set_property("__reflection_passed_by_reference", Value::bool(false));
+        object.set_property("__reflection_has_default", Value::bool(false));
+        object.set_property("__reflection_declaring_class", Value::null());
+    }
+}
+
 fn function_get_parameters(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -2819,6 +2870,11 @@ fn function_get_parameters(
     let Some(function) = reflected_function(ed) else {
         return return_value(rv, Value::array(PhpArray::new()));
     };
+    if reflected_magic_call_trampoline(ed, eg) {
+        let mut parameters = PhpArray::with_packed_capacity(1);
+        parameters.push(magic_call_trampoline_parameter(function));
+        return return_value(rv, Value::array(parameters));
+    }
     let fixed = function.sig.public_arity();
     let count = fixed + u32::from(function.sig.is_variadic);
     let declaring_class = eg
@@ -2880,8 +2936,11 @@ fn function_get_parameters(
 fn function_get_number_of_parameters(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if reflected_magic_call_trampoline(ed, eg) {
+        return return_value(rv, Value::long(1));
+    }
     let count = reflected_function(ed).map_or(0, |function| {
         function.sig.public_arity() + u32::from(function.sig.is_variadic)
     });
@@ -2891,8 +2950,11 @@ fn function_get_number_of_parameters(
 fn function_get_number_of_required_parameters(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if reflected_magic_call_trampoline(ed, eg) {
+        return return_value(rv, Value::long(0));
+    }
     let count = reflected_function(ed).map_or(0, |function| function.sig.required_num_args);
     return_value(rv, Value::long(i64::from(count)))
 }
@@ -3170,6 +3232,38 @@ fn parameter_construct(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let target = with_argument(ed, 1, Clone::clone);
+    if let Some(closure) = target.as_closure()
+        && super::closure_is_magic_call(closure, eg)
+    {
+        let selector = with_argument(ed, 2, Clone::clone);
+        let valid = selector.as_long() == Some(0) || selector.as_str() == Some("arguments");
+        if !valid {
+            if selector.as_long().is_some_and(|index| index < 0) {
+                eg.exception = Some(make_error_value(
+                    "ValueError",
+                    "ReflectionParameter::__construct(): Argument #2 ($param) must be greater than or equal to 0",
+                ));
+            } else {
+                let kind = if selector.as_str().is_some() {
+                    "name"
+                } else {
+                    "offset"
+                };
+                reflection_exception(
+                    eg,
+                    format!("The parameter specified by its {kind} could not be found"),
+                );
+            }
+            return Ok(());
+        }
+        let receiver = with_argument(ed, 0, Clone::clone);
+        let Some(function) = closure.common() else {
+            reflection_exception(eg, "ReflectionParameter has no resolved function");
+            return Ok(());
+        };
+        populate_magic_call_trampoline_parameter(&receiver, function);
+        return Ok(());
+    }
     let mut declaring_class = None;
     let mut type_scope_class = None;
     let function = if let Some(closure) = target.as_closure() {

@@ -3902,6 +3902,9 @@ fn op_init_method_call<'a>(
         };
         unsafe {
             (*frame).call = call;
+            if magic_method.is_some() {
+                (*call).set_magic_call(true);
+            }
             if common.plan.borrow_this() {
                 frame_set_borrowed_this(call, obj_val as *const Value);
             } else {
@@ -4346,6 +4349,9 @@ fn op_init_static_call<'a>(
     );
     unsafe {
         (*frame).call = call;
+        if magic_method.is_some() {
+            (*call).set_magic_call(true);
+        }
         let mut initialized_receiver = false;
         if target_is_instance && (*frame).num_cvs != 0 {
             let receiver = (*frame).cv(0);
@@ -4884,6 +4890,9 @@ fn init_resolved_user_call_mode(
     );
     unsafe {
         (*frame).call = call;
+        if magic_method.is_some() {
+            (*call).set_magic_call(true);
+        }
     }
     if called_scope_class_id != 0 {
         publish_late_static_call_class_id(eg, call, called_scope_class_id);
