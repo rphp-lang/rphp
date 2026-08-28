@@ -1197,7 +1197,7 @@ impl Parser {
                 let declaration = self.parse_stmt()?;
                 self.attach_attributes(declaration, attributes)
             }
-            Token::Class | Token::Abstract | Token::Final => self.parse_class(),
+            Token::Class | Token::Abstract(_) | Token::Final(_) => self.parse_class(),
             Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("class") => {
                 self.parse_class()
             }
@@ -1225,7 +1225,7 @@ impl Parser {
                 if name.eq_ignore_ascii_case("readonly")
                     && (matches!(
                         self.peek_at(1),
-                        Token::Class | Token::Abstract | Token::Final
+                        Token::Class | Token::Abstract(_) | Token::Final(_)
                     ) || matches!(
                         self.peek_at(1),
                         Token::Identifier(ref keyword, _)

@@ -1701,6 +1701,12 @@ fn test_abstract_method_modifier_boundaries() {
     };
     assert!(!is_abstract);
     assert!(methods[0].is_abstract);
+    let statements = parse("<?php\nfinal\nabstract\nclass C {}").unwrap();
+    assert!(matches!(
+        statements.last(),
+        Some(Stmt::ExprStmt(Expr::CompileError { message, line: 3 }))
+            if message == "Cannot use the final modifier on an abstract class"
+    ));
     let statements =
         parse("<?php abstract class C { final abstract public function run(); }").unwrap();
     assert!(matches!(
@@ -1708,11 +1714,16 @@ fn test_abstract_method_modifier_boundaries() {
         Some(Stmt::ExprStmt(Expr::CompileError { message, line: 1 }))
             if message == "Cannot use the final modifier on an abstract method"
     ));
-    assert!(
-        parse("<?php abstract class C { abstract private function run(); }")
-            .unwrap_err()
-            .contains("cannot be declared private")
-    );
+    let statements =
+        parse("<?php abstract class C { abstract private function run() { return; } }")
+            .expect("private abstract method remains a compiler-stage declaration");
+    let Stmt::Class { methods, .. } = &statements[0] else {
+        panic!("expected class declaration");
+    };
+    assert_eq!(methods[0].name, "run");
+    assert_eq!(methods[0].visibility, Visibility::Private);
+    assert!(methods[0].is_abstract);
+    assert_eq!(methods[0].body.len(), 1);
 
     let statements = parse("<?php trait T { abstract private function run(self $value): self; }")
         .expect("traits may declare private abstract method requirements");

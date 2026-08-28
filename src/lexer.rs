@@ -62,9 +62,9 @@ pub enum Token {
     Interface,       // interface
     Trait,           // trait
     Implements,      // implements
-    Abstract,        // abstract
+    Abstract(usize), // abstract with source line
     Declare,         // declare
-    Final,           // final
+    Final(usize),    // final with source line
     Enum,            // enum
     Namespace,       // namespace
     Backslash,       // \ (namespace separator)
@@ -913,8 +913,8 @@ impl<'a> Lexer<'a> {
                         "interface" => tokens.push(Token::Interface),
                         "trait" => tokens.push(Token::Trait),
                         "implements" => tokens.push(Token::Implements),
-                        "abstract" => tokens.push(Token::Abstract),
-                        "final" => tokens.push(Token::Final),
+                        "abstract" => tokens.push(Token::Abstract(line)),
+                        "final" => tokens.push(Token::Final(line)),
                         "enum" => tokens.push(Token::Enum),
                         "declare" => tokens.push(Token::Declare),
                         "namespace" => tokens.push(Token::Namespace),

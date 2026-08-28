@@ -33,6 +33,8 @@ impl Parser {
                 | Token::Fn(line)
                 | Token::Use(line)
                 | Token::Static(line)
+                | Token::Abstract(line)
+                | Token::Final(line)
                 | Token::Comma(line)
                 | Token::Case(line)
                 | Token::Default(line)
@@ -249,7 +251,7 @@ impl Parser {
             Token::Finally => Some("finally".to_string()),
             Token::Throw(_) => Some("throw".to_string()),
             Token::Instanceof => Some("instanceof".to_string()),
-            Token::Abstract => Some("abstract".to_string()),
+            Token::Abstract(_) => Some("abstract".to_string()),
             Token::Interface => Some("interface".to_string()),
             Token::Implements => Some("implements".to_string()),
             Token::Extends => Some("extends".to_string()),
@@ -264,7 +266,7 @@ impl Parser {
             Token::Use(_) => Some("use".to_string()),
             Token::Declare => Some("declare".to_string()),
             Token::Trait => Some("trait".to_string()),
-            Token::Final => Some("final".to_string()),
+            Token::Final(_) => Some("final".to_string()),
             Token::Enum => Some("enum".to_string()),
             Token::Namespace => Some("namespace".to_string()),
             Token::Yield(_) => Some("yield".to_string()),
@@ -595,7 +597,7 @@ impl Parser {
                 | Token::Public
                 | Token::Protected
                 | Token::Private
-                | Token::Final
+                | Token::Final(_)
                 | Token::AttributeStart(_)
         )
     }
@@ -1252,7 +1254,7 @@ impl Parser {
                     promo_readonly = true;
                     continue;
                 }
-                Token::Final => {
+                Token::Final(_) => {
                     self.advance();
                     promo_final = true;
                     continue;

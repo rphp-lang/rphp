@@ -23,8 +23,9 @@ use crate::generics::{
     PendingGenericUseSite,
 };
 use crate::parser::{
-    Attribute, BinOp, CallArg, CastType, ClassConstant, ClassProperty, Expr, ForeachTarget,
-    GenericAncestor, GlobalTarget, ListTarget, Param, Stmt, TypeHint, UseKind, Visibility,
+    Attribute, BinOp, CallArg, CastType, ClassConstant, ClassMethod, ClassProperty, Expr,
+    ForeachTarget, GenericAncestor, GlobalTarget, ListTarget, Param, Stmt, TypeHint, UseKind,
+    Visibility,
 };
 use crate::value::{
     ObjectLayout, Value, ValueType,
@@ -4800,6 +4801,44 @@ impl Compiler {
         Ok(())
     }
 
+    fn validate_ordinary_class_abstract_methods(
+        &self,
+        resolved_class: &str,
+        is_abstract: bool,
+        methods: &[ClassMethod],
+    ) -> Result<(), String> {
+        if !is_abstract {
+            if let Some(method) = methods
+                .iter()
+                .find(|method| method.is_abstract && !method.name.starts_with('$'))
+            {
+                return Err(self.goto_error(
+                    &format!(
+                        "Class {resolved_class} declares abstract method {}() and must therefore be declared abstract",
+                        method.name
+                    ),
+                    method.line,
+                ));
+            }
+            return Ok(());
+        }
+
+        if let Some(method) = methods.iter().find(|method| {
+            method.is_abstract
+                && method.visibility == Visibility::Private
+                && !method.name.starts_with('$')
+        }) {
+            return Err(self.goto_error(
+                &format!(
+                    "Abstract function {resolved_class}::{}() cannot be declared private",
+                    method.name
+                ),
+                method.line,
+            ));
+        }
+        Ok(())
+    }
+
     /// Validate declaration-stage constraints that PHP applies even when an
     /// optimizer can prove that the containing source region never executes.
     /// Ordinary class declarations nested in functions and control-flow
@@ -4827,19 +4866,11 @@ impl Compiler {
                             *line,
                         )?;
                     }
-                    if !*is_abstract
-                        && let Some(method) = methods
-                            .iter()
-                            .find(|method| method.is_abstract && !method.name.starts_with('$'))
-                    {
-                        return Err(self.goto_error(
-                            &format!(
-                                "Class {resolved_class} declares abstract method {}() and must therefore be declared abstract",
-                                method.name
-                            ),
-                            method.line,
-                        ));
-                    }
+                    self.validate_ordinary_class_abstract_methods(
+                        &resolved_class,
+                        *is_abstract,
+                        methods,
+                    )?;
                     for method in methods {
                         self.validate_elided_abstract_methods(&method.body)?;
                     }

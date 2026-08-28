@@ -1649,8 +1649,8 @@ impl Parser {
                                 && matches!(
                                     self.peek_at(1),
                                     Token::Class
-                                        | Token::Abstract
-                                        | Token::Final
+                                        | Token::Abstract(_)
+                                        | Token::Final(_)
                                         | Token::AttributeStart(_)
                                 )
                                 || name.eq_ignore_ascii_case("readonly")
@@ -1669,14 +1669,14 @@ impl Parser {
                             anonymous_readonly = true;
                             self.advance();
                         }
-                        Token::Abstract => {
+                        Token::Abstract(_) => {
                             self.compile_error(
                                 "Cannot use the abstract modifier on an anonymous class",
                                 line,
                             );
                             self.advance();
                         }
-                        Token::Final => {
+                        Token::Final(_) => {
                             self.compile_error(
                                 "Cannot use the final modifier on an anonymous class",
                                 line,

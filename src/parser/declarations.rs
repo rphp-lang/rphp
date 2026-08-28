@@ -78,7 +78,7 @@ impl Parser {
             Token::Public => Some(Visibility::Public),
             Token::Protected => Some(Visibility::Protected),
             Token::Private => Some(Visibility::Private),
-            Token::Final => {
+            Token::Final(_) => {
                 is_final = true;
                 None
             }
@@ -90,8 +90,7 @@ impl Parser {
                 );
                 None
             }
-            Token::Abstract => {
-                let line = self.closest_token_source_line();
+            Token::Abstract(line) => {
                 let _ = self.compile_error(
                     "Cannot use \"abstract\" as method modifier in trait alias",
                     line,
@@ -102,7 +101,7 @@ impl Parser {
         };
         if visibility.is_some()
             || is_final
-            || matches!(self.peek(), Token::Static(_) | Token::Abstract)
+            || matches!(self.peek(), Token::Static(_) | Token::Abstract(_))
         {
             self.advance();
         }
@@ -142,7 +141,7 @@ impl Parser {
         }
         while self.peek() != Token::RBrace && !self.at_eof() {
             let hook_attributes = self.parse_attribute_groups()?;
-            let hook_is_final = if self.peek() == Token::Final {
+            let hook_is_final = if matches!(self.peek(), Token::Final(_)) {
                 self.advance();
                 true
             } else {
@@ -348,7 +347,7 @@ impl Parser {
             }
             while self.peek() != Token::RBrace && !self.at_eof() {
                 let hook_attributes = self.parse_attribute_groups()?;
-                let hook_is_final = if self.peek() == Token::Final {
+                let hook_is_final = if matches!(self.peek(), Token::Final(_)) {
                     self.advance();
                     true
                 } else {
@@ -577,7 +576,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type(line, false)?;
-                let body = self.parse_method_body(&modifiers, &method_name, line, false)?;
+                let body = self.parse_method_body(&modifiers, line, false)?;
                 if modifiers.is_abstract {
                     self.compile_error(
                         format!("Anonymous class method {method_name}() must not be abstract"),
@@ -721,12 +720,24 @@ impl Parser {
         // Consume leading modifiers in any order before `class`.
         loop {
             match self.peek() {
-                Token::Abstract => {
+                Token::Abstract(line) => {
                     self.advance();
+                    if is_final {
+                        let _ = self.compile_error(
+                            "Cannot use the final modifier on an abstract class",
+                            line,
+                        );
+                    }
                     is_abstract = true;
                 }
-                Token::Final => {
+                Token::Final(line) => {
                     self.advance();
+                    if is_abstract {
+                        let _ = self.compile_error(
+                            "Cannot use the final modifier on an abstract class",
+                            line,
+                        );
+                    }
                     is_final = true;
                 }
                 Token::Identifier(ref name, line) if name.eq_ignore_ascii_case("readonly") => {
@@ -741,9 +752,6 @@ impl Parser {
                 }
                 _ => break,
             }
-        }
-        if is_abstract && is_final {
-            return Err("Cannot use the final modifier on an abstract class".into());
         }
         self.advance(); // consume 'class'
         let (name, line) = self.parse_classlike_declaration_name("class")?;
@@ -866,7 +874,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type(line, false)?;
-                let body = self.parse_method_body(&modifiers, &method_name, line, false)?;
+                let body = self.parse_method_body(&modifiers, line, false)?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
@@ -1028,7 +1036,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type(line, false)?;
-                let body = self.parse_method_body(&modifiers, &method_name, line, true)?;
+                let body = self.parse_method_body(&modifiers, line, true)?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
@@ -1517,14 +1525,14 @@ impl Parser {
                     }
                     modifiers.is_static = true;
                 }
-                Token::Final => {
+                Token::Final(_) => {
                     self.advance();
                     if modifiers.is_final {
                         record_duplicate(&mut modifiers, DuplicateMemberModifier::Final);
                     }
                     modifiers.is_final = true;
                 }
-                Token::Abstract => {
+                Token::Abstract(_) => {
                     self.advance();
                     if modifiers.is_abstract {
                         record_duplicate(&mut modifiers, DuplicateMemberModifier::Abstract);
@@ -1639,7 +1647,6 @@ impl Parser {
     fn parse_method_body(
         &mut self,
         modifiers: &MemberModifiers,
-        method_name: &str,
         method_line: usize,
         allow_private_abstract: bool,
     ) -> Result<Vec<Stmt>, String> {
@@ -1664,10 +1671,17 @@ impl Parser {
                 );
             }
             if modifiers.visibility == Visibility::Private && !allow_private_abstract {
-                return Err(format!(
-                    "Abstract function {}() cannot be declared private",
-                    method_name
-                ));
+                if matches!(self.peek(), Token::Semicolon(_)) {
+                    self.advance();
+                    return Ok(Vec::new());
+                }
+                self.expect(&Token::LBrace(0))?;
+                let mut body = Vec::new();
+                while self.peek() != Token::RBrace && !self.at_eof() {
+                    body.push(self.parse_stmt_in_scope(false)?);
+                }
+                self.expect(&Token::RBrace)?;
+                return Ok(body);
             }
             self.expect(&Token::Semicolon(0))?;
             return Ok(Vec::new());

@@ -4137,19 +4137,11 @@ impl Compiler {
                         *class_line,
                     )?;
                 }
-                if !*is_abstract
-                    && let Some(method) = methods
-                        .iter()
-                        .find(|method| method.is_abstract && !method.name.starts_with('$'))
-                {
-                    return Err(self.goto_error(
-                        &format!(
-                            "Class {resolved_class} declares abstract method {}() and must therefore be declared abstract",
-                            method.name
-                        ),
-                        method.line,
-                    ));
-                }
+                self.validate_ordinary_class_abstract_methods(
+                    &resolved_class,
+                    *is_abstract,
+                    methods,
+                )?;
                 self.validate_attribute_target(attributes, "class")?;
                 if *is_abstract {
                     self.validate_attribute_class_form(
