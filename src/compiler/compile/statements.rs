@@ -6030,50 +6030,18 @@ impl Compiler {
                 )?;
                 self.validate_no_discard_target(attributes, "class")?;
                 self.validate_override_target(attributes, "class", false)?;
-                if let Some(backing_type) = backing_type
-                    && !matches!(backing_type, TypeHint::Int | TypeHint::String)
-                {
-                    let display = self
-                        .convert_type_hint(&Some(backing_type.clone()))
-                        .diagnostic_display_name();
-                    return Err(self.goto_error(
-                        &format!(
-                            "Enum backing type must be int or string, {display} given"
-                        ),
-                        *enum_line,
-                    ));
-                }
-                if let Some(property) = properties.first() {
-                    return Err(self.goto_error(
-                        &format!("Enum {resolved_enum} cannot include properties"),
-                        property.line,
-                    ));
-                }
                 // Compile enum as a class. Each case becomes a static property
                 // holding a singleton object with `name` (and optionally `value`) properties.
-                let is_backed = backing_type.is_some();
-                for case in cases {
-                    let invalid = if is_backed {
-                        case.value.is_none().then(|| {
-                            format!(
-                                "Case {} of backed enum {resolved_enum} must have a value",
-                                case.name
-                            )
-                        })
-                    } else {
-                        case.value.is_some().then(|| {
-                            format!(
-                                "Case {} of non-backed enum {resolved_enum} must not have a value",
-                                case.name
-                            )
-                        })
-                    };
-                    if let Some(message) = invalid {
-                        return Err(self.goto_error(&message, case.line));
-                    }
-                }
+                let is_backed = self.validate_enum_declaration_shape(
+                    &resolved_enum,
+                    *enum_line,
+                    backing_type.as_ref(),
+                    properties,
+                    cases,
+                )?;
 
                 self.validate_enum_abstract_methods(&resolved_enum, methods)?;
+                self.validate_enum_case_constant_operations(cases)?;
 
                 // PHP installs the engine-owned enum methods in a fixed order.
                 // Retain the selected collision while compiling the complete
@@ -6917,7 +6885,8 @@ impl Compiler {
                     });
                     if !local_reference
                         && deferred_constant_expression_is_supported(&constants[*index].value)
-                        && constant_expression_dependency_is_unavailable(reason)
+                        && (constant_expression_dependency_is_unavailable(reason)
+                            || reason == OBJECT_OFFSET_CONSTANT_EXPRESSION_ERROR)
                     {
                         deferred_values[*index] = true;
                         remaining -= 1;

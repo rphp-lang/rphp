@@ -16,6 +16,9 @@ static ANONYMOUS_CLASS_COUNTER: AtomicU32 = AtomicU32::new(0);
 /// includes and evals that share one executor.
 static CLASS_DECLARATION_COUNTER: AtomicU32 = AtomicU32::new(0);
 
+pub(crate) const OBJECT_OFFSET_CONSTANT_EXPRESSION_ERROR: &str =
+    "Cannot use [] on objects in constant expression";
+
 use super::OpArray;
 use crate::generics::{
     GenericDeclarationKind, GenericInheritanceKind, GenericMetadata, GenericTypePosition,
@@ -23,7 +26,7 @@ use crate::generics::{
     PendingGenericUseSite,
 };
 use crate::parser::{
-    Attribute, BinOp, CallArg, CastType, ClassConstant, ClassMethod, ClassProperty, Expr,
+    Attribute, BinOp, CallArg, CastType, ClassConstant, ClassMethod, ClassProperty, EnumCase, Expr,
     ForeachTarget, GenericAncestor, GlobalTarget, ListTarget, Param, Stmt, TypeHint, UseKind,
     Visibility,
 };
@@ -2363,6 +2366,40 @@ fn constant_expression_references_symbol(expression: &Expr) -> bool {
             constant_expression_references_symbol(object)
                 || constant_expression_references_symbol(property)
         }
+        _ => false,
+    }
+}
+
+fn constant_expression_contains_runtime_variable(expression: &Expr) -> bool {
+    let recurse = constant_expression_contains_runtime_variable;
+    match expression {
+        Expr::Variable { .. } | Expr::DynamicVariable { .. } | Expr::Globals { .. } => true,
+        Expr::BinaryOp { left, right, .. }
+        | Expr::NullCoalesce { left, right }
+        | Expr::Elvis { left, right } => recurse(left) || recurse(right),
+        Expr::Not(inner)
+        | Expr::UnaryPlus(inner)
+        | Expr::UnaryMinus(inner)
+        | Expr::BitwiseNot(inner)
+        | Expr::ErrorSuppress(inner)
+        | Expr::Cast { expr: inner, .. } => recurse(inner),
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => recurse(condition) || recurse(then_expr) || recurse(else_expr),
+        Expr::ArrayLiteral(elements) => elements
+            .iter()
+            .any(|element| element.key.as_ref().is_some_and(recurse) || recurse(&element.value)),
+        Expr::ArrayAccess { array, index, .. } => recurse(array) || recurse(index),
+        Expr::PropertyAccess { object, .. } => recurse(object),
+        Expr::DynamicPropertyAccess {
+            object, property, ..
+        } => recurse(object) || recurse(property),
+        Expr::DynamicNamedClassConstant { constant, .. } => recurse(constant),
+        Expr::DynamicClassConstant {
+            class, constant, ..
+        } => recurse(class) || recurse(constant),
         _ => false,
     }
 }
@@ -4859,6 +4896,68 @@ impl Compiler {
         Ok(())
     }
 
+    fn validate_enum_declaration_shape(
+        &self,
+        resolved_enum: &str,
+        enum_line: usize,
+        backing_type: Option<&TypeHint>,
+        properties: &[ClassProperty],
+        cases: &[EnumCase],
+    ) -> Result<bool, String> {
+        if let Some(backing_type) = backing_type
+            && !matches!(backing_type, TypeHint::Int | TypeHint::String)
+        {
+            let display = self
+                .convert_type_hint(&Some(backing_type.clone()))
+                .diagnostic_display_name();
+            return Err(self.goto_error(
+                &format!("Enum backing type must be int or string, {display} given"),
+                enum_line,
+            ));
+        }
+        if let Some(property) = properties.first() {
+            return Err(self.goto_error(
+                &format!("Enum {resolved_enum} cannot include properties"),
+                property.line,
+            ));
+        }
+        let is_backed = backing_type.is_some();
+        for case in cases {
+            let invalid = if is_backed {
+                case.value.is_none().then(|| {
+                    format!(
+                        "Case {} of backed enum {resolved_enum} must have a value",
+                        case.name
+                    )
+                })
+            } else {
+                case.value.is_some().then(|| {
+                    format!(
+                        "Case {} of non-backed enum {resolved_enum} must not have a value",
+                        case.name
+                    )
+                })
+            };
+            if let Some(message) = invalid {
+                return Err(self.goto_error(&message, case.line));
+            }
+        }
+        Ok(is_backed)
+    }
+
+    fn validate_enum_case_constant_operations(&self, cases: &[EnumCase]) -> Result<(), String> {
+        if let Some(case) = cases.iter().find(|case| {
+            case.value
+                .as_ref()
+                .is_some_and(constant_expression_contains_runtime_variable)
+        }) {
+            return Err(
+                self.goto_error("Constant expression contains invalid operations", case.line)
+            );
+        }
+        Ok(())
+    }
+
     fn enum_synthesized_method_conflict<'a>(
         methods: &'a [ClassMethod],
         is_backed: bool,
@@ -4916,13 +5015,24 @@ impl Compiler {
                 Stmt::Enum {
                     line,
                     name,
+                    backing_type,
+                    cases,
+                    properties,
                     methods,
                     ..
                 } => {
                     self.validate_class_like_name(name, "enum", *line)?;
                     let resolved_enum = self.resolve_declaration_name(name);
                     self.validate_declaration_import(UseKind::Class, name, &resolved_enum, *line)?;
+                    self.validate_enum_declaration_shape(
+                        &resolved_enum,
+                        *line,
+                        backing_type.as_ref(),
+                        properties,
+                        cases,
+                    )?;
                     self.validate_enum_abstract_methods(&resolved_enum, methods)?;
+                    self.validate_enum_case_constant_operations(cases)?;
                     for method in methods {
                         self.validate_elided_abstract_methods(&method.body)?;
                     }
@@ -6985,6 +7095,9 @@ impl Compiler {
                     precision,
                     known_enum_classes,
                 )?;
+                if matches!(array.value_type(), ValueType::Object | ValueType::Closure) {
+                    return Err(OBJECT_OFFSET_CONSTANT_EXPRESSION_ERROR.to_string());
+                }
                 let index = Self::eval_const_expr_with_context_and_enum_classes(
                     index,
                     known,

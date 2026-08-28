@@ -1094,8 +1094,14 @@ fn evaluate_deferred_attribute_expression(
             }
             Ok(Value::array(result))
         }
-        Expr::ArrayAccess { array, index, .. } => {
+        Expr::ArrayAccess { array, index, line } => {
             let array = evaluate_deferred_attribute_expression(array, scope, source_file, eg)?;
+            if matches!(array.value_type(), ValueType::Object | ValueType::Closure) {
+                return Err(DeferredAttributeError::Message(
+                    crate::compiler::compile::OBJECT_OFFSET_CONSTANT_EXPRESSION_ERROR.to_string(),
+                )
+                .with_location_if_missing(source_file, *line));
+            }
             let index = evaluate_deferred_attribute_expression(index, scope, source_file, eg)?;
             let Some(array) = array.as_array() else {
                 return Err(DeferredAttributeError::Message(
