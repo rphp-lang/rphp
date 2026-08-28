@@ -4541,6 +4541,31 @@ The monitored supported debt is now 806 failures: 18 strings, zero array and
 missing-method diagnostics outside named packing, general Reflection/Closure
 completion, PHP 8.2, 32-bit behavior and allocation-limit/OOM equivalence
 remain separate boundaries.
+
+The `c593c083` `constant-expression-fcc-resolution` checkpoint then moves
+Zend/lang from 4,515 to 4,520 pass, exactly `+5/-0`. Deferred FCCs in constants,
+runtime defaults, property initializers and attributes now preserve lexical
+function fallback, Closure identity policy, visibility, static owner/autoload/
+member order, exception retry and reference-capture state. Abstract and missing
+methods use the canonical Error path; constant expressions reject magic
+`__callStatic` while ordinary runtime FCCs retain it. Assertion-source
+rendering preserves FCC-bearing attributes on anonymous functions and classes.
+
+Two serial exact-final-binary Zend/lang manifests are byte-identical, and the
+five named constexpr PHPTs are the only status/category movements. The
+strings/array projection remains exact-parent-identical. All five Cargo
+configurations, all-feature/all-target, formatting, PHPT runner, unsafe,
+Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains
+at the unsafe ceiling of 1,623 blocks and 289 functions. Three CPU-2-pinned
+32-pair release gates keep dynamic-static FCC below the +5% ceiling after the
+first slower candidate was rejected; constant FCC, runtime FCC, ordinary call
+and startup controls retain exact checksums.
+
+The monitored supported debt is now 801 failures: 18 strings, zero array and
+783 Zend/lang. General constant-expression and deferred attribute-Reflection
+completion, instance-call constant expressions, remaining FCC diagnostics,
+PHP 8.2, 32-bit behavior and allocation-limit/OOM equivalence remain separate
+boundaries.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.

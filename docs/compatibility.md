@@ -8,6 +8,99 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`constant-expression-fcc-resolution`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.9. First-class callables in constants, runtime
+defaults, property initializers and deferred attribute arguments now resolve
+at their PHP materialization boundary. Function names retain lexical namespace
+and import resolution, including a stable global fallback when a conditional
+namespaced declaration appears later. Each boundary preserves PHP's Closure
+identity policy: constants and property defaults retain their stored Closure,
+while omitted runtime parameters and repeated attribute reads materialize fresh
+instances.
+
+Static member FCCs preserve owner-before-autoload-before-member evaluation.
+Class autoload runs once at that boundary, exceptions leave operands intact and
+permit a clean retry, and abstract or missing methods produce the canonical
+catchable `Error`. Constant expressions reject a magic `__callStatic`
+trampoline while the same runtime FCC remains valid. Deferred attribute
+evaluation uses the declaring lexical scope for private methods, autoload and
+diagnostics. Autoloader Closure captures retain their reference cells across
+successful and throwing invocations. Attribute rendering on anonymous
+functions and anonymous classes preserves the original FCC syntax used by
+assertion-source diagnostics.
+
+Nine original E2E regressions cover anonymous-expression rendering, static and
+dynamic autoload order, exception retry and reference state, abstract and magic
+negative paths, namespace fallback stability, constant/default/property
+identity and COW, lexical attribute visibility and repeated attribute
+materialization. Their source hashes to SHA-256
+`4fd48c68a69d23315470ef96c64c0b2164f9c20e65959332b11e9a031ee60546`.
+The three clean-room oracle sources have aggregate digest
+`8d16fcd328edd6d51dd7a26dfd300bea14145c218b54eea60eb10e11ff067777`;
+PHP 8.5.9 and the exact candidate match byte-for-byte on stdout, stderr and
+exit status, with aggregate output digest
+`90d8de1ae08941005e318b468e75914f3f1f3ae021c8bad2fccbf76f51db016e`.
+
+The following five supplying cases change to exact pass:
+`attributes_ast_printing.phpt`, `autoload.phpt`, `error_abstract.phpt`,
+`error_magic_callStatic.phpt` and `namespace_004.phpt` under
+`Zend/tests/first_class_callable/constexpr`. They are the only
+status/category movements, an exact `+5/-0` gain. The five-case target manifest
+hashes to
+`58264d679cec16f63be3f96c2db89eb62df472c1e2d1b49f3961c72cb887a95f`;
+the complete 40-case constexpr neighborhood is 36 pass and four extension
+skips, with manifest hash
+`d86aadd39daa88435320bddfb9a627d18ddc5e1795d539ce7228e2051cefdd09`.
+
+Two serial exact-final-binary 5,599-case Zend/lang manifests are byte-identical
+at SHA-256
+`55115ca17b18d8ba8c9c4748b74f2bc80c8d4a1abbfc777716a279c4ddf318ca`:
+4,520 pass, 783 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Their path/status/category projection and exact pass set hash to
+`c3cb5a1228ce4eaec27855e8bd194e25637f616be1e989c497a9edf70f7d6f2d`
+and
+`03dae11da890bb2d5de608eb491119764cf805f2533833cd28ecf6bdbe0d185b`.
+Two serial 1,575-case strings/array projections remain exact-parent-identical:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. Their projection and pass set
+remain
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`
+and
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`.
+The combined audit covers 7,174 cases: 5,979 pass, 801 fail, 182 skip and 212
+unsupported. Supported debt is 18 strings failures, zero array failures and
+783 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`bc2fc1f645ee6a03be3f7e9f7139d7e55a144ed574a65ce5085a1eba25f8ea61`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and both unsafe-policy checks pass. Production remains
+at the ceiling of 1,623 unsafe blocks and 289 unsafe functions, with 377 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+
+Three exact-final-binary CPU-2-pinned runs used four warmups and 32
+balanced-order pairs without outlier removal. Dynamic-static FCC paired
+medians are +4.097%, +4.849% and +3.923%; constant FCC is +0.140%, +0.259%
+and +0.173%; ordinary calls are -0.436%, -0.263% and -0.283%. Runtime function
+FCC improves by 19.6--20.1%, omitted-default FCC by 36.0--38.8%, and every
+runtime-static and startup control remains below the +5% ceiling with exact
+checksums. The first unoptimized candidate was rejected at +6.904% on the
+dynamic-static lane before the loaded-class identity proof was added. Accepted
+raw result hashes are
+`50102ac74094fc15b5d320f3a978cd835d332c39efe5847da4db10a6f0ce7b50`,
+`da0804768155e26c35f76a49a94eae2cb906a038ce21e1c9582b5c784c71cb5c`
+and
+`58e576321a5e624e038a71a621dcbda4a8953c35a2289ea9b83cdbed8e944870`;
+the harness hashes to
+`07e2c24c8e2503dbf9a7db6d5ec3be515f37493d9edfe839177255766898dfed`.
+
+This checkpoint does not claim general constant-expression or deferred
+attribute-Reflection completeness, instance-call constant expressions,
+remaining first-class-callable diagnostics outside the five supplying cases,
+PHP 8.2, 32-bit behavior or allocation-limit/OOM equivalence. The
+implementation checkpoint is commit `c593c083`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `magic-call-named-argument-packing`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.9. Runtime dispatch through `__call()` and
 `__callStatic()` now treats every supplied named argument as an entry in the
