@@ -466,7 +466,16 @@ impl Parser {
             | Stmt::Const {
                 attributes: target,
                 ..
-            } => *target = attributes,
+            } => {
+                let non_enum_case_marker = target
+                    .iter()
+                    .find(|attribute| attribute.is_non_enum_case_marker())
+                    .cloned();
+                *target = attributes;
+                if let Some(marker) = non_enum_case_marker {
+                    target.push(marker);
+                }
+            }
             Stmt::ExprStmt(Expr::Closure {
                 attributes: target,
                 ..
@@ -474,7 +483,16 @@ impl Parser {
             | Stmt::ExprStmt(Expr::AnonymousNew {
                 attributes: target,
                 ..
-            }) => *target = attributes,
+            }) => {
+                let non_enum_case_marker = target
+                    .iter()
+                    .find(|attribute| attribute.is_non_enum_case_marker())
+                    .cloned();
+                *target = attributes;
+                if let Some(marker) = non_enum_case_marker {
+                    target.push(marker);
+                }
+            }
             _ => {
                 return Err(self.source_error(
                     "syntax error, unexpected token \"#[\"",

@@ -1,6 +1,6 @@
 /// AST → OpArray compiler.
 /// Converts parsed statements into VM instructions.
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -18,6 +18,34 @@ static CLASS_DECLARATION_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) const OBJECT_OFFSET_CONSTANT_EXPRESSION_ERROR: &str =
     "Cannot use [] on objects in constant expression";
+const NON_ENUM_CASE_ERROR: &str = "Case can only be used in enums";
+
+struct NonEnumCaseErrorScope {
+    previous: Option<usize>,
+}
+
+thread_local! {
+    static ACTIVE_NON_ENUM_CASE_LINE: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+impl NonEnumCaseErrorScope {
+    fn enter(line: usize) -> Self {
+        let previous = ACTIVE_NON_ENUM_CASE_LINE.with(Cell::get);
+        ACTIVE_NON_ENUM_CASE_LINE
+            .with(|active| active.set(Some(previous.map_or(line, |outer| outer.min(line)))));
+        Self { previous }
+    }
+}
+
+impl Drop for NonEnumCaseErrorScope {
+    fn drop(&mut self) {
+        ACTIVE_NON_ENUM_CASE_LINE.with(|active| active.set(self.previous));
+    }
+}
+
+fn active_non_enum_case_line() -> Option<usize> {
+    ACTIVE_NON_ENUM_CASE_LINE.with(Cell::get)
+}
 
 use super::OpArray;
 use crate::generics::{
@@ -4985,11 +5013,14 @@ impl Compiler {
             match statement {
                 Stmt::Class {
                     line,
+                    attributes,
                     name,
                     is_abstract,
                     methods,
                     ..
                 } => {
+                    let invalid_case_line = Attribute::non_enum_case_line(attributes);
+                    let _non_enum_case_scope = invalid_case_line.map(NonEnumCaseErrorScope::enter);
                     self.validate_class_like_name(name, "class", *line)?;
                     let resolved_class = self.resolve_declaration_name(name);
                     if !resolved_class.starts_with("class@anonymous#") {
@@ -5007,6 +5038,9 @@ impl Compiler {
                     )?;
                     for method in methods {
                         self.validate_elided_abstract_methods(&method.body)?;
+                    }
+                    if let Some(line) = invalid_case_line {
+                        return Err(self.goto_error(NON_ENUM_CASE_ERROR, line));
                     }
                 }
                 Stmt::Function { body, .. } | Stmt::Block(body) => {
@@ -5037,9 +5071,23 @@ impl Compiler {
                         self.validate_elided_abstract_methods(&method.body)?;
                     }
                 }
-                Stmt::Interface { methods, .. } | Stmt::Trait { methods, .. } => {
+                Stmt::Interface {
+                    attributes,
+                    methods,
+                    ..
+                }
+                | Stmt::Trait {
+                    attributes,
+                    methods,
+                    ..
+                } => {
+                    let invalid_case_line = Attribute::non_enum_case_line(attributes);
+                    let _non_enum_case_scope = invalid_case_line.map(NonEnumCaseErrorScope::enter);
                     for method in methods {
                         self.validate_elided_abstract_methods(&method.body)?;
+                    }
+                    if let Some(line) = invalid_case_line {
+                        return Err(self.goto_error(NON_ENUM_CASE_ERROR, line));
                     }
                 }
                 Stmt::If {
@@ -5465,7 +5513,11 @@ impl Compiler {
             }
         }
         if let Some((message, line)) = stmts.iter().find_map(|statement| match statement {
-            Stmt::ExprStmt(Expr::CompileError { message, line }) => Some((message, *line)),
+            Stmt::ExprStmt(Expr::CompileError { message, line })
+                if message != NON_ENUM_CASE_ERROR =>
+            {
+                Some((message, *line))
+            }
             _ => None,
         }) {
             return Err(self.goto_error(message, line));
@@ -6497,6 +6549,7 @@ impl Compiler {
         );
         attributes
             .iter()
+            .filter(|attribute| !attribute.is_non_enum_case_marker())
             .map(|attribute| AttributeDefinition {
                 name: self.resolve_name(&attribute.name),
                 arguments: attribute
@@ -12759,6 +12812,10 @@ impl Compiler {
     }
 
     fn goto_error(&self, message: &str, line: usize) -> String {
+        let (message, line) = match active_non_enum_case_line() {
+            Some(case_line) if line > case_line => (NON_ENUM_CASE_ERROR, case_line),
+            _ => (message, line),
+        };
         if self.source_file.is_empty() {
             format!("{message} on line {line}")
         } else {

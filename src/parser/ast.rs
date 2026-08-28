@@ -130,6 +130,29 @@ pub struct Attribute {
     pub line: usize,
 }
 
+impl Attribute {
+    const NON_ENUM_CASE_MARKER: &'static str = "\0rphp_non_enum_case";
+
+    pub(crate) fn non_enum_case_marker(line: usize) -> Self {
+        Self {
+            name: Self::NON_ENUM_CASE_MARKER.to_string(),
+            args: Vec::new(),
+            line,
+        }
+    }
+
+    pub(crate) fn is_non_enum_case_marker(&self) -> bool {
+        self.name == Self::NON_ENUM_CASE_MARKER
+    }
+
+    pub(crate) fn non_enum_case_line(attributes: &[Self]) -> Option<usize> {
+        attributes
+            .iter()
+            .find(|attribute| attribute.is_non_enum_case_marker())
+            .map(|attribute| attribute.line)
+    }
+}
+
 impl CallArg {
     /// Return a reference to the underlying expression.
     pub fn expr(&self) -> &Expr {

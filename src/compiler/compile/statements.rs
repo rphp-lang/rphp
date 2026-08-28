@@ -4127,6 +4127,8 @@ impl Compiler {
                 methods,
                 generic_params,
             } => {
+                let invalid_case_line = Attribute::non_enum_case_line(attributes);
+                let _non_enum_case_scope = invalid_case_line.map(NonEnumCaseErrorScope::enter);
                 self.validate_class_like_name(name, "class", *class_line)?;
                 let resolved_class = self.resolve_declaration_name(name);
                 if !resolved_class.starts_with("class@anonymous#") {
@@ -5118,6 +5120,9 @@ impl Compiler {
                 if !uses.is_empty() && !resolved_class.starts_with("class@anonymous#") {
                     self.emit_deprecated_trait_uses(&resolved_class, *class_line);
                 }
+                if let Some(line) = invalid_case_line {
+                    return Err(self.goto_error(NON_ENUM_CASE_ERROR, line));
+                }
             }
             Stmt::Interface {
                 line: interface_line,
@@ -5129,6 +5134,8 @@ impl Compiler {
                 methods,
                 generic_params,
             } => {
+                let invalid_case_line = Attribute::non_enum_case_line(attributes);
+                let _non_enum_case_scope = invalid_case_line.map(NonEnumCaseErrorScope::enter);
                 self.validate_class_like_name(name, "interface", *interface_line)?;
                 let resolved_iface = self.resolve_declaration_name(name);
                 self.validate_declaration_import(
@@ -5455,6 +5462,9 @@ impl Compiler {
                     declaration_key,
                     self.class_declarations_are_runtime,
                 )));
+                if let Some(line) = invalid_case_line {
+                    return Err(self.goto_error(NON_ENUM_CASE_ERROR, line));
+                }
             }
             Stmt::Trait {
                 line: trait_line,
@@ -5468,6 +5478,8 @@ impl Compiler {
                 trait_precedences,
                 generic_params,
             } => {
+                let invalid_case_line = Attribute::non_enum_case_line(attributes);
+                let _non_enum_case_scope = invalid_case_line.map(NonEnumCaseErrorScope::enter);
                 self.validate_class_like_name(name, "trait", *trait_line)?;
                 let resolved_trait = self.resolve_declaration_name(name);
                 self.validate_declaration_import(
@@ -5995,6 +6007,9 @@ impl Compiler {
                 )));
                 if !uses.is_empty() {
                     self.emit_deprecated_trait_uses(&resolved_trait, *trait_line);
+                }
+                if let Some(line) = invalid_case_line {
+                    return Err(self.goto_error(NON_ENUM_CASE_ERROR, line));
                 }
             }
             Stmt::Enum {
@@ -6944,10 +6959,23 @@ impl Compiler {
                             format!("Cannot declare self-referencing constant {reference}"),
                         ));
                     } else {
-                        return Err(format!(
+                        let message = format!(
                             "Cannot use non-constant expression as value for class constant {}::{}: {}",
                             owner, constants[index].name, reason
-                        ));
+                        );
+                        if active_non_enum_case_line().is_some() {
+                            let line = expression_source_line(&constants[index].value);
+                            if constant_expression_contains_runtime_variable(
+                                &constants[index].value,
+                            ) {
+                                return Err(self.goto_error(
+                                    "Constant expression contains invalid operations",
+                                    line,
+                                ));
+                            }
+                            return Err(self.goto_error(&message, line));
+                        }
+                        return Err(message);
                     }
                 }
                 for (index, error) in lazy_errors {

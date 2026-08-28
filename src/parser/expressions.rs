@@ -1727,8 +1727,18 @@ impl Parser {
                         Vec::new()
                     };
                     self.expect(&Token::LBrace(0))?;
-                    let (properties, constants, methods, uses, trait_aliases) =
+                    let (
+                        properties,
+                        constants,
+                        methods,
+                        uses,
+                        trait_aliases,
+                        invalid_case_line,
+                    ) =
                         self.parse_anonymous_class_body()?;
+                    if let Some(line) = invalid_case_line {
+                        attributes.push(Attribute::non_enum_case_marker(line));
+                    }
                     let expression = Expr::AnonymousNew {
                         attributes,
                         args,

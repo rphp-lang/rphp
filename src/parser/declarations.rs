@@ -502,6 +502,34 @@ impl Parser {
         Ok((properties, hook_methods))
     }
 
+    /// Consume the enum-case-shaped member grammar that PHP accepts in every
+    /// classlike body before rejecting it at the compile-error boundary. Keep
+    /// the member out of the AST: a non-enum case has no declaration semantics,
+    /// but parsing its complete shape lets later syntax errors retain priority.
+    fn parse_non_enum_case_declaration(&mut self) -> Result<usize, String> {
+        debug_assert!(matches!(self.peek(), Token::Case(_)));
+        self.advance();
+        let case_line = match self.advance() {
+            Token::Identifier(_, line) | Token::Enum { line, .. } | Token::Exit { line, .. } => {
+                line
+            }
+            Token::Semicolon(line) => {
+                return Err(self.source_error(
+                    "syntax error, unexpected token \";\"",
+                    line,
+                ));
+            }
+            token => return Err(format!("Expected case name, got {token:?}")),
+        };
+        let _ = self.compile_error("Case can only be used in enums", case_line);
+        if self.peek() == Token::Assign {
+            self.advance();
+            self.parse_expr()?;
+        }
+        self.expect(&Token::Semicolon(0))?;
+        Ok(case_line)
+    }
+
     fn parse_anonymous_class_body(
         &mut self,
     ) -> Result<
@@ -511,6 +539,7 @@ impl Parser {
             Vec<ClassMethod>,
             Vec<GenericAncestor>,
             Vec<TraitAlias>,
+            Option<usize>,
         ),
         String,
     > {
@@ -519,6 +548,7 @@ impl Parser {
         let mut methods = Vec::new();
         let mut uses = Vec::new();
         let mut trait_aliases = Vec::new();
+        let mut invalid_case_line = None;
         let previous_class_body = self.in_class_body;
         let previous_class_scope = self.class_scope_active;
         self.in_class_body = true;
@@ -527,6 +557,11 @@ impl Parser {
         while self.peek() != Token::RBrace && !self.at_eof() {
             let member_start = self.pos;
             let attributes = self.parse_attribute_groups()?;
+            if matches!(self.peek(), Token::Case(_)) {
+                let line = self.parse_non_enum_case_declaration()?;
+                invalid_case_line.get_or_insert(line);
+                continue;
+            }
             if matches!(self.peek(), Token::Use(_)) {
                 let use_line = match self.advance() {
                     Token::Use(line) => line,
@@ -606,6 +641,13 @@ impl Parser {
                     &attributes,
                     self.class_member_doc_comment(member_start, self.pos),
                 )?);
+            } else if let Token::Case(line) = self.peek()
+                && modifiers.has_visibility
+            {
+                return Err(self.source_error(
+                    "syntax error, unexpected token \"case\", expecting variable",
+                    line,
+                ));
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 let (declared, hooks) =
                     self.parse_property_declaration(&modifiers, &attributes)?;
@@ -621,7 +663,14 @@ impl Parser {
         self.expect(&Token::RBrace)?;
         self.in_class_body = previous_class_body;
         self.class_scope_active = previous_class_scope;
-        Ok((properties, constants, methods, uses, trait_aliases))
+        Ok((
+            properties,
+            constants,
+            methods,
+            uses,
+            trait_aliases,
+            invalid_case_line,
+        ))
     }
 
     /// Parse try { } catch (Type $e) { } finally { }
@@ -792,6 +841,7 @@ impl Parser {
         let mut uses = Vec::new();
         let mut trait_aliases = Vec::new();
         let mut trait_precedences = Vec::new();
+        let mut invalid_case_line = None;
 
         let prev_in_class = self.in_class_body;
         self.in_class_body = true;
@@ -799,6 +849,11 @@ impl Parser {
         while self.peek() != Token::RBrace && !self.at_eof() {
             let member_start = self.pos;
             let attributes = self.parse_attribute_groups()?;
+            if matches!(self.peek(), Token::Case(_)) {
+                let line = self.parse_non_enum_case_declaration()?;
+                invalid_case_line.get_or_insert(line);
+                continue;
+            }
             // Trait `use` statements: use Foo, Bar;
             if matches!(self.peek(), Token::Use(_)) {
                 let use_line = match self.advance() {
@@ -899,6 +954,13 @@ impl Parser {
                     &attributes,
                     self.class_member_doc_comment(member_start, self.pos),
                 )?);
+            } else if let Token::Case(line) = self.peek()
+                && modifiers.has_visibility
+            {
+                return Err(self.source_error(
+                    "syntax error, unexpected token \"case\", expecting variable",
+                    line,
+                ));
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 // Property — possibly with type hint: `private int $x = 0;`
                 let (declared, hooks) =
@@ -915,7 +977,10 @@ impl Parser {
 
         Ok(Stmt::Class {
             line,
-            attributes: Vec::new(),
+            attributes: invalid_case_line
+                .map(Attribute::non_enum_case_marker)
+                .into_iter()
+                .collect(),
             name,
             parent,
             implements,
@@ -960,10 +1025,16 @@ impl Parser {
         let mut uses = Vec::new();
         let mut trait_aliases = Vec::new();
         let mut trait_precedences = Vec::new();
+        let mut invalid_case_line = None;
 
         while self.peek() != Token::RBrace && !self.at_eof() {
             let member_start = self.pos;
             let attributes = self.parse_attribute_groups()?;
+            if matches!(self.peek(), Token::Case(_)) {
+                let line = self.parse_non_enum_case_declaration()?;
+                invalid_case_line.get_or_insert(line);
+                continue;
+            }
             if matches!(self.peek(), Token::Use(_)) {
                 let use_line = match self.advance() {
                     Token::Use(line) => line,
@@ -1061,6 +1132,13 @@ impl Parser {
                     &attributes,
                     self.class_member_doc_comment(member_start, self.pos),
                 )?);
+            } else if let Token::Case(line) = self.peek()
+                && modifiers.has_visibility
+            {
+                return Err(self.source_error(
+                    "syntax error, unexpected token \"case\", expecting variable",
+                    line,
+                ));
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 // Property — possibly with type hint
                 let (declared, hooks) =
@@ -1076,7 +1154,10 @@ impl Parser {
 
         Ok(Stmt::Trait {
             line,
-            attributes: Vec::new(),
+            attributes: invalid_case_line
+                .map(Attribute::non_enum_case_marker)
+                .into_iter()
+                .collect(),
             name,
             properties,
             constants,
@@ -1118,9 +1199,15 @@ impl Parser {
         let mut properties = Vec::new();
         let mut constants = Vec::new();
         let mut methods = Vec::new();
+        let mut invalid_case_line = None;
         while self.peek() != Token::RBrace && !self.at_eof() {
             let member_start = self.pos;
             let attributes = self.parse_attribute_groups()?;
+            if matches!(self.peek(), Token::Case(_)) {
+                let line = self.parse_non_enum_case_declaration()?;
+                invalid_case_line.get_or_insert(line);
+                continue;
+            }
             if matches!(self.peek(), Token::Use(_)) {
                 let use_line = match self.advance() {
                     Token::Use(line) => line,
@@ -1181,6 +1268,13 @@ impl Parser {
                     &attributes,
                     self.class_member_doc_comment(member_start, self.pos),
                 )?);
+            } else if let Token::Case(line) = self.peek()
+                && modifiers.has_visibility
+            {
+                return Err(self.source_error(
+                    "syntax error, unexpected token \"case\", expecting variable",
+                    line,
+                ));
             } else if matches!(self.peek(), Token::Function(_)) {
                 let line = match self.advance() {
                     Token::Function(line) => line,
@@ -1251,7 +1345,10 @@ impl Parser {
 
         Ok(Stmt::Interface {
             line,
-            attributes: Vec::new(),
+            attributes: invalid_case_line
+                .map(Attribute::non_enum_case_marker)
+                .into_iter()
+                .collect(),
             name,
             extends,
             properties,
