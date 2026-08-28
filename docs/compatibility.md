@@ -8,6 +8,73 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`attribute-front-end-diagnostics`, pinned to php-src 8.5 commit `fcc29c8` and
+validated byte-for-byte against PHP 8.5.9. Attribute arguments now reject
+function, method and dynamic calls during compilation at the annotated target
+line. A dynamic receiver in a compile-time class-constant reference retains
+its distinct fatal. Variable attribute names are parser errors, while an
+attribute on a comma-separated global constant declaration is a deferred
+compile fatal that yields only to a later syntax error. None of these paths
+autoloads, evaluates an argument or partially registers the declaration.
+
+Six original CLI regressions cover nested and dead-code declarations,
+evaluation priority, dynamic receivers, valid single attributed and plain
+grouped constants, namespaces/imports, Reflection materialization and exact
+stdout, stderr and status. Their source hashes to
+`b5bc5af355f9404b163eaab10c3471586b325711d293ed440280e57780f973b5`.
+Six clean-room sources exercise the four failures and two valid controls; the
+exact candidate matches PHP 8.5.9 byte-for-byte for every stream and exit
+status.
+
+`010_unsupported_const_expression.phpt`,
+`018_fatal_error_in_argument.phpt`, `019_variable_attribute_name.phpt` and
+`constants/multiple_constants_error.phpt` are the only status/category
+movements, an exact `+4/-0` gain. The four-case target manifest hashes to
+`86dc09716c60e8f7386274ac169b9a920b567ff991ad1b3c5efe688f406f4512`.
+The complete 204-case `Zend/tests/attributes` neighborhood is now 192 pass,
+four fail, five skip and three unsupported; its pass set hashes to
+`f631df358a834e2bc25087757d257741e67d0a87e015409bb75101f51b74644b`.
+
+Two serial exact-final-binary 5,599-case Zend/lang manifests are byte-identical
+at SHA-256
+`cefd268fe86b92272239436073126505cab67074015c2913adf514e514505170`:
+4,532 pass, 771 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Their exact pass set hashes to
+`88f9acdf9dc5e0d18e0c9a16ea4b1efba82a11789ef406a24be392df2068e0db`.
+Two serial 1,575-case strings/array projections retain 1,459 pass, 18 fail, 67
+skip and 31 unsupported with no parent movement; their path/status/category
+projection and pass set hash to
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`
+and
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`.
+The combined audit covers 7,174 cases: 5,991 pass, 789 fail, 182 skip and 212
+unsupported. Supported debt is 18 strings failures, zero array failures and
+771 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`c06ec5c4847841d541b0966766da515da1f0248fdc9c613e3e7d4200c57807bd`.
+All five Cargo configurations, locked all-feature/all-target, formatting, HTML
+data, PHPT runner and both unsafe-policy checks pass. Production remains at
+1,623 unsafe blocks and 289 unsafe functions, with 377 SAFETY annotations and
+seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates and PHP
+8.5.9 warmed-kernel S2 and cold-build S3 pass.
+
+Two exact-final-binary CPU-2-pinned runs used four warmups and 32 balanced-order
+pairs without outlier removal. Startup medians are +3.140% and +3.159%, 750
+plain declarations are +0.142% and +0.162%, and 750 valid attributed
+declarations are +0.375% and +0.193%; outputs match exactly. Raw result hashes
+are `ff047fea14dc1663c8d8c37ffca0478d277e4f1a483c0c59cdeb83cee91a5863`
+and `f5937654351fe04c91900a177a67d47471f7ddf495128b6abf29913752a011d2`;
+the harness hashes to
+`f95793425127e690199cd67241b09918901c81d82e1f7da2c077669c5e926f07`.
+
+This checkpoint does not claim assertion AST pretty-printing, Reflection of
+internal extension symbols, native `DateTime` `NoDiscard`, unknown named
+ReflectionAttribute parameters, general constant-expression completion, PHP
+8.2, 32-bit behavior or allocation-limit/OOM equivalence. The implementation
+checkpoint is commit `09682baa`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `delayed-attribute-validation`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. `#[\DelayedTargetValidation]` now retains
 declaration metadata while postponing built-in target validation until

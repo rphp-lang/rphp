@@ -4621,6 +4621,30 @@ the delayed marker, other built-in validator families, tentative-return
 coverage beyond direct `Countable`, PHP 8.2, 32-bit behavior and
 allocation-limit/OOM equivalence remain separate boundaries.
 
+The `09682baa` `attribute-front-end-diagnostics` checkpoint then moves
+Zend/lang from 4,528 to 4,532 pass, exactly `+4/-0`. Attribute calls and dynamic
+class-constant receivers now fail during compilation at the annotated target;
+variable attribute names use PHP's parser diagnostic, and attributed grouped
+global constants retain the compile-error priority that yields only to later
+syntax errors. Valid static class-constant arguments, single attributed
+constants, plain grouped constants, namespaces/imports, dead-code declarations
+and Reflection materialization retain their previous behavior.
+
+Two exact-final-binary Zend/lang manifests are byte-identical and the four
+named PHPTs are the only movements. Two strings/array projections retain the
+exact parent pass set. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Two CPU-2-pinned 32-pair release gates keep startup,
+750 plain declarations and 750 attributed declarations below the +5%
+regression ceiling with exact outputs; an earlier layout was rejected before
+the new checks were isolated behind cold attribute-only helpers.
+
+The monitored supported debt is now 789 failures: 18 strings, zero array and
+771 Zend/lang. Assertion AST rendering, internal-extension Reflection,
+`DateTime` `NoDiscard`, unknown named ReflectionAttribute parameters, general
+constant-expression completion, PHP 8.2, 32-bit behavior and allocation-limit/
+OOM equivalence remain separate boundaries.
+
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
