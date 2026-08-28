@@ -4146,13 +4146,31 @@ S2/S3 pass. Production remains at the unsafe ceiling of 1,623 blocks and 289
 functions. One CPU-2-pinned 32-pair parser/compiler gate places every paired
 median between -0.952% and +0.477%, with matching outputs.
 
-The monitored supported debt is now 828 failures: 18 strings, zero array and
-810 Zend/lang. Read-only final-manifest triage selects the remaining
-abstract-modifier compile-fatal pair
-`Zend/tests/access_modifiers/access_modifiers_013.phpt` and
-`Zend/tests/errmsg/errmsg_002.phpt` next. Both currently fail at the parser
-boundary and pass under PHP 8.5.9. Abstract enum methods, abstract properties,
-general class-link recovery and runtime inheritance expansion remain separate.
+The `bcc72568` `abstract-modifier-compile-fatal-staging` checkpoint then moves
+Zend/lang from 4,493 to 4,495 pass, exactly `+2/-0`. Conflicting
+`final abstract` class modifiers and ordinary private abstract methods remain
+declarations through full parsing, then select canonical compiler fatals with
+the terminal modifier or qualified method source line. Name/import and later
+parser errors retain priority, while constant-elided and post-return class
+declarations receive the same validation. Valid ordinary, trait, interface and
+property-hook modifier boundaries retain their prior paths. The targeted gains
+are `access_modifiers_013.phpt` and `errmsg_002.phpt`;
+`enum/no-abstract.phpt` remains a separate byte-identical parse failure.
+
+Two exact-final-binary Zend/lang runs have the same path/status/category
+projection and pass set; two strings/array projections also match the exact
+parent. All five Cargo configurations, all-feature/all-target, formatting,
+HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9
+S2/S3 pass. Production remains at the unsafe ceiling of 1,623 blocks and 289
+functions. One CPU-2-pinned 32-pair parser/compiler gate places every paired
+median between -1.117% and +0.093%, with matching outputs.
+
+The monitored supported debt is now 826 failures: 18 strings, zero array and
+808 Zend/lang. Read-only final-manifest triage selects
+`Zend/tests/enum/no-abstract.phpt` next. Its ordinary enum abstract method is
+still rejected at the parser boundary and must instead reach PHP 8.5's
+qualified declaration-stage fatal. Abstract properties, general class-link
+recovery and runtime inheritance expansion remain separate.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
