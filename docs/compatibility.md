@@ -8,6 +8,96 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`enum-assert-ast-rendering`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. Direct `assert()` calls with no explicit
+description now synthesize PHP's canonical source text when their expression
+contains a unit or backed enum declaration inside a closure. The compiler-only
+renderer preserves a single enum, case or method attribute and its positional
+or named arguments, backing type, ordered cases, backed-case expressions,
+ordinary methods, type hints and PHP's normalized indentation and blank lines.
+It uses the existing expression, parameter, statement and block renderers; no
+runtime enum, assertion, value, object or opcode representation changes.
+
+Explicit string or `Throwable` descriptions still win over synthesized text.
+Enabled assertions retain expression side effects and publish a declaration
+only after its closure runs, while short-circuited expressions and startup
+`zend.assertions=0/-1` keep the declaration absent. The renderer declines a
+description when the current AST cannot reconstruct source faithfully, such as
+flattened multiple attribute groups or interleaved/unsupported enum members,
+rather than emitting plausible but different PHP text.
+
+Three original regressions cover byte-exact unit/backed formatting, enum/case
+attributes and expressions, method bodies, declaration visibility after a
+failed assertion, explicit-description priority, short-circuit order and both
+disabled startup modes. The containing E2E and CLI suite files hash to SHA-256
+`c384ef6afcb60c2ac4b84cb19fa5e094b1f4bf3b709f1ca15563a6a6a9b9bd88`
+and
+`288420d4108f0621ecec317d954d5cf0b1cd5af471dcc2838d78df2eb5a33695`.
+The clean-room oracle hashes to
+`a6666b9e0cfd5eeeed576066edd20aa76e6ff4d4fbc837b697fdf2c40a3d4551`;
+its PHP 8.5.9 and exact-candidate output both hash to
+`beaa937b5f4729bdb63a31bbd570400fb5abc0d6b527f03bee08d22b94745dd9`
+with empty stderr.
+
+`Zend/tests/enum/ast-dumper.phpt` changes from an output failure to an exact
+pass. The complete 152-case enum directory is now 143 pass / zero fail / eight
+skip / one unsupported; that path is the only status/category movement, an
+exact `+1/-0` gain. The focused supplying manifest hashes to
+`786e17c51aef0f5cda50a30d36652ecec85d1a7f4b7ccfd1b792d8f7ecca540b`.
+The final enum path/status/category projection and pass set hash to
+`6903b639582aa106ae2bf3b64cec57c7843fc72220758ecbeb491527eb880452`
+and
+`8c7604babb463eb14b1d330cf630352842325e99957e3d1cb1977cb7e7360fa3`.
+
+Two serial exact-final-binary 5,599-case Zend/lang runs have identical raw
+manifests at SHA-256
+`bbb683a2281bfb75c0fc68950ca1f8f8d53c5a1f8c10d6479ec9d428f0ac0b09`:
+4,512 pass, 791 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Their path/status/category projection hashes to
+`18f9f3e3d318ff60fce929afe20a651221f1dadce499cee7db06c1602ba6577a`
+and exact pass set to
+`40a35a38dc54f6a423f0e55bf63adb8c4d5079171646e160f805c13c27f4bbd9`.
+Two serial 1,575-case strings/array runs remain byte-identical to the parent at
+`9f5edf942abcc866a1c0c833bca1a4dbef97b344295e36fd07314f233e29b0ce`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. Their projection and pass set
+remain
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`
+and
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`.
+The combined audit covers 7,174 cases: 5,971 pass, 809 fail, 182 skip and 212
+unsupported. Supported debt is 18 strings failures, zero array failures and
+791 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`76ea95aa20acb612123e232eb83fa9a21153dd8fad44b8bc2de7f5b170e2f77d`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy checks pass. Production remains at
+its ceiling of 1,623 unsafe blocks and 289 unsafe functions, with 375 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+
+Two exact-final-binary CPU-2-pinned gates used four warmups and 32 balanced
+order pairs without outlier removal. Startup, a ten-million-iteration hot
+expression, a disabled-assert loop, ordinary enum-declaration compilation and
+three million enum-case reads all remain below the +5% regression ceiling;
+their largest positive delta is +2.02% in the first run and +0.37% in the
+confirmation. The newly affected 4,000-eval enum assertion-rendering workload
+is reported separately at +7.02% and +7.20% because it deliberately performs
+additional cold source synthesis. Result hashes are
+`920914678f9942817c62fd8ef6ee10adc6ff5b80b3d33dbf4fc9ccd5179d8961`
+and
+`6837569114634e57fb0afe2f32b55ed2d8e1253f2c057172268e31654447bccc`;
+the task harness hashes to
+`74afaef625e70065d5ab7f3d581079f339e327bd53db67d185702dad6345e35e`.
+
+This checkpoint does not claim a general PHP source pretty-printer, retention
+of multiple attribute-group boundaries, enum trait/constant/implements
+rendering, `zend_test`, the eight native-extension enum skips, the observer
+INI case, 32-bit behavior or allocation-limit/OOM equivalence.
+
+The implementation checkpoint is commit `dc45e00b`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `spl-object-storage-wire`, pinned to php-src 8.5 commit `fcc29c8` and validated
 against PHP 8.5.9. Built-in `SplObjectStorage` now emits PHP's canonical
 two-field `O:16` wire: index zero is an insertion-ordered array alternating

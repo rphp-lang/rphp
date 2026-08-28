@@ -4484,6 +4484,36 @@ The monitored supported debt is now 810 failures: 18 strings, zero array and
 `SplFixedArray`, direct serialization-method APIs, subclass/custom-member and
 exhaustive malformed-stream parity, 32-bit behavior and allocation-limit/OOM
 equivalence remain separate boundaries.
+
+The `dc45e00b` `enum-assert-ast-rendering` checkpoint then moves Zend/lang
+from 4,511 to 4,512 pass, exactly `+1/-0`. The assertion source renderer now
+formats unit and backed enum declarations nested in closure expressions,
+including one unambiguously retained attribute per declaration/member, backing
+types, case expressions, ordinary methods and PHP's normalized whitespace.
+Explicit descriptions, Throwable priority, enabled-expression side effects,
+short-circuiting and startup-disabled assertion elimination retain their prior
+runtime behavior. When flattened attribute groups or separated member vectors
+cannot reconstruct source order faithfully, the renderer declines synthesis
+instead of emitting different PHP text.
+
+Two serial exact-final-binary Zend/lang runs have identical raw manifests,
+path/status/category projections and pass sets; two strings/array projections
+also match the exact parent. The complete enum directory is now 143 pass, zero
+ordinary fail, eight native-extension skips and one unsupported observer-INI
+case. All five Cargo configurations, all-feature/all-target, formatting, PHPT
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass.
+Production remains at the unsafe ceiling of 1,623 blocks and 289 functions.
+Two CPU-2-pinned 32-pair release gates keep startup, hot-expression,
+disabled-assert, ordinary enum-declaration and enum-case-read controls below
+the +5% ceiling; the newly affected cold assertion rendering path is reported
+separately at about +7.1%.
+
+The monitored supported debt is now 809 failures: 18 strings, zero array and
+791 Zend/lang. Every attempted ordinary enum case passes; the remaining enum
+skips and unsupported observer case require native `zend_test` capabilities.
+General source pretty-printing, attribute-group retention, skipped/unsupported
+enum capabilities, 32-bit behavior and allocation-limit/OOM equivalence remain
+separate boundaries.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
