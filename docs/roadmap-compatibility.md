@@ -4086,10 +4086,31 @@ S2/S3 pass. Production remains at the unsafe ceiling of 1,623 blocks and 289
 functions. One CPU-2-pinned 32-pair release gate places every comparable
 paired median between -0.067% and +0.919%, with matching outputs.
 
-The monitored supported debt is now 834 failures: 18 strings, zero array and
-816 Zend/lang. Read-only final-manifest triage selects
-`Zend/tests/unterminated_comment.phpt` next: its bounded block-comment start
-line/terminal diagnostic is separable from general parser recovery.
+The `88e3deb0` `unterminated-block-comment-location` checkpoint then moves
+Zend/lang from 4,487 to 4,488 pass, exactly `+1/-0`. EOF inside ordinary or doc
+block comments now becomes the source-aware PHP 8.5 parse error
+`Unterminated comment starting line N`; both its message and terminal
+diagnostic envelope retain the opening-comment line across LF, CRLF and CR.
+The ordinary and `__halt_compiler` trivia scanners share the structured error,
+and direct, reopened, include and eval source units retain their own source
+metadata. Valid block/doc/line/hash comments, doc metadata and comment-like
+strings retain their prior paths.
+
+Two exact-final-binary Zend/lang runs have the same path/status/category
+projection and pass set; two strings/array projections are identical to the
+exact parent. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Production remains at the unsafe ceiling of 1,623
+blocks and 289 functions. One CPU-2-pinned 32-pair release gate places all six
+comment-scanner paired medians between -1.963% and +1.926%, with matching
+outputs.
+
+The monitored supported debt is now 833 failures: 18 strings, zero array and
+815 Zend/lang. Read-only final-manifest triage selects the unclosed-brace
+source-diagnostic cluster headed by
+`Zend/tests/eval_parse_error_with_doc_comment.phpt` next. Its direct/eval/
+include and halted-namespace line contract is bounded separately from general
+parser token recovery; five upstream expectations expose the likely fanout.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.

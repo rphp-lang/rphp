@@ -8,6 +8,80 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`unterminated-block-comment-location`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.9. Reaching EOF inside either an ordinary
+`/* ...` or documentation `/** ...` comment now produces the canonical
+`Unterminated comment starting line N` parse error. Both the message and the
+terminal `on line` diagnostic envelope retain the opening-comment line, as PHP
+does even when the unfinished body crosses later LF, CRLF or CR lines.
+
+The ordinary trivia scanner and the separate `__halt_compiler` trivia scanner
+return one source-aware lexical error instead of byte offsets or an unlocated
+string. The main token stream carries that error into the parser, so direct,
+reopened PHP, include and eval source units preserve their own filename and
+line. Valid block/doc comments, class-constant doc metadata, line/hash
+comments, comment-like quoted/nowdoc/heredoc content and completed halt
+directives retain their preceding paths. Include/eval extraction recognizes
+the canonical lexical error as source-located; no runtime opcode or value path
+changes.
+
+Three original CLI integration regressions plus the strengthened existing
+parser regression cover ordinary and doc errors, comments after code, trailing
+newlines, LF/CRLF/CR, close/open-tag boundaries, halt trivia, direct/include/
+eval source metadata and the positive controls above. Their two source files
+hash together to SHA-256
+`9082b94965ff7cb79f54f8255409a24909f9ac41daef7e1c51447eedebeb1d83`.
+Thirteen clean-room oracle sources hash together to SHA-256
+`9c7b3d7edeaf2c5cf0b438bffadad6a3ffa2730c89bbe87ebbf2e0af4a80d178`;
+all 13 match PHP 8.5.9 byte for byte in exit status, stdout and stderr under
+the matching `display_errors=stderr`, `log_errors=0`, `html_errors=0` CLI
+diagnostic profile.
+
+`Zend/tests/unterminated_comment.phpt` changes from parse failure to pass. Two
+exact-final-binary 5,599-case Zend/lang runs each record 4,488 pass, 815 fail,
+115 skip and 181 unsupported, with no timeout or crash. Their full
+path/status/category projections are identical at SHA-256
+`5e16811afab263a0a83115ea81dfc4f244f922d876805f43c0068711f353b4c9`,
+and their exact pass-set hash is
+`ec7ede52cd2444441044232b6bd79961780e4ec53bf01c3610deac30ccb9aaf1`.
+The exact parent delta is `+1/-0`, with no other movement. Two 1,575-case
+strings/array runs retain the exact parent projection at SHA-256
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`
+and pass-set hash
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,947 pass, 833 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 815 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`46380ab6909ee14159b61449ccdc138579a842099813bd86a1c6e176780f5d97`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+One exact-final-binary CPU-2-pinned comment-scanner gate used four warmups and
+32 balanced order pairs without outlier removal. Paired median changes are
++1.926% for startup, +0.100% for ordinary block comments, -1.168% for doc
+comments, +0.702% for line/hash comments, +1.214% for mixed trivia and -1.963%
+for valid `__halt_compiler` trivia. Every output pair matches. The result table
+hashes to
+`e477919e5785ad1ed3dc07a71a25b1611712be8c6115d61214a5ae94993302e3`
+and the complete harness/source aggregate to
+`27977bbe172e5b719e45fce7e27a5f5005551fae6a2ba024b854c5eb20500f25`.
+
+This checkpoint does not claim general unclosed-brace/token recovery, nested
+comments, source-highlighting text, binary-invalid UTF-8 diagnostics, 32-bit
+behavior or allocation-limit/OOM equivalence. Read-only final-manifest triage
+selects the bounded unclosed-brace source-diagnostic cluster headed by
+`Zend/tests/eval_parse_error_with_doc_comment.phpt` next; direct/eval/include
+and halted-namespace source lines are separable from general recovery.
+
+The implementation checkpoint is commit `88e3deb0`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `closure-use-trailing-comma`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. An explicit closure capture list now accepts one
 comma after its final variable. The comma terminates the list without adding
