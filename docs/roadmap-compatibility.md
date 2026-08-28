@@ -4011,13 +4011,34 @@ CPU-2-pinned 32-pair release gate places the paired medians for startup, array
 foreach, direct Iterator, named aggregate and temporary internal/user aggregate
 paths between -4.362% and +2.524%, with matching outputs.
 
-The monitored supported debt is now 869 failures: 18 strings, zero array and
-851 Zend/lang. Read-only clustering selects
-`Zend/tests/temporary_cleaning/temporary_cleaning_017.phpt` next: return from an
-object foreach reaches the temporary receiver destructor, but its propagated
-error and stack boundary still differ. General Iterator/IteratorAggregate and
-generator lifecycle, object iteration expansion, `ArrayAccess`, `ArrayObject`,
-`SplObjectStorage`, `SplFixedArray` and broader SPL remain separate contracts.
+The `0ce9bd7e` `object-foreach-return-cleanup` checkpoint then moves Zend/lang
+from 4,452 to 4,480 pass, exactly `+28/-0`. A return inside by-value foreach over
+a compiler-owned temporary ordinary object now evaluates its result first,
+retires nested receivers inside out and lets a receiver destructor exception
+cancel the pending return through the ordinary catch/finally path. The
+Throwable keeps the destructor origin and identifies the return site in its
+first trace frame. The same source-line propagation for bare constants accounts
+for 27 additional existing passes. Arrays, Traversable sources, generators,
+by-reference loops and named/aliased receivers retain their prior lifetime.
+
+Two exact-final-binary Zend/lang runs have the same path/status/category
+projection and pass set; two strings/array projections also match the exact
+parent. The only non-pass movement is inspected `try_finally_022.phpt`
+runtime-to-output progress. All five Cargo configurations,
+all-feature/all-target, formatting, HTML data, PHPT runner, unsafe, Composer S0,
+four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at the
+unsafe ceiling of 1,623 blocks and 289 functions. One CPU-2-pinned 32-pair
+release gate places all six paired medians between -2.185% and +2.904%, with
+matching outputs.
+
+The monitored supported debt is now 841 failures: 18 strings, zero array and
+823 Zend/lang. Read-only clustering selects
+`Zend/tests/frameless_throwing_destructor.phpt` next: a frameless internal call
+currently exits successfully without retiring its temporary object operand, so
+the expected destructor exception is absent. General Iterator/IteratorAggregate
+and generator lifecycle, object iteration expansion, `ArrayAccess`,
+`ArrayObject`, `SplObjectStorage`, `SplFixedArray` and broader SPL remain
+separate contracts.
 The attempted 14-case `crypt()` platform approach did not meet the portability
 contract and remains deferred.
 Remaining deprecated-constant activation sites, generator extra-argument

@@ -8,6 +8,86 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`object-foreach-return-cleanup`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. A return expression inside by-value `foreach`
+over a compiler-owned temporary ordinary object is now evaluated before the
+loop binding and receiver are retired. Active nested receivers are released
+inside out. A receiver destructor exception cancels the pending return,
+releases its uncommitted value and follows the ordinary catch/finally path with
+PHP's exception-priority and previous-exception ordering.
+
+The compiler emits a flagged `ReleaseTemps` marker without adding an opcode or
+call-frame field. Functions without a try region execute it directly before
+`Return`; a return delayed through `finally` consumes the same marker only when
+the return actually commits. Runtime selection is limited to an owned ordinary
+object. Array literals, direct or aggregate `Traversable` sources, generators,
+by-reference loops, named or aliased receivers and returns outside the active
+loop retain their preceding lifetime. A destructor error keeps its own source
+line while the first trace frame identifies the return site, including direct,
+include and eval compilation. Bare constant fetches now retain their source
+line, which also corrects the same Error metadata outside this boundary.
+
+Six original regressions cover successful and throwing cleanup, pending-value
+retirement, expression/value/receiver exception priority, nested and finally
+ordering, named/aliased and non-object controls, exact return-site metadata and
+direct/include/eval parity. The committed regression source hashes to
+`dd88a2cc57d5de387ac9363fd4cf1f502161baa1e8a42ab8c3ba580c5a11d7a1`.
+Eleven clean-room oracle sources concatenate in lexical order to SHA-256
+`c00782fef6800d86b4436c4113ad06cf02c8f0b98a9eff5e41ea17aa30762270`.
+Nine catchable or successful programs are byte-exact with PHP 8.5.9. The
+generator control is unchanged from the exact parent, and the uncaught stack
+control now matches the Error origin, return call site and frame sequence while
+retaining the separately unclaimed global CLI fatal prefix.
+
+`Zend/tests/temporary_cleaning/temporary_cleaning_017.phpt` changes from
+runtime failure to pass. Source-line preservation also converts 27 existing
+bare-constant Error cases to pass. Two exact-final-binary 5,599-case Zend/lang
+runs each record 4,480 pass, 823 fail, 115 skip and 181 unsupported, with no
+timeout or crash. Their full path/status/category projections are identical at
+SHA-256
+`62b6c5977b70ecc3ab00c8eb362af38ebe7b4e06721ba69c28b129cd8b69b6be`,
+and their exact pass-set hash is
+`f226da7110809a96f8f93efc5a5559b094d8d32266c5edd41c106a1b373ed8b2`.
+The exact parent delta is `+28/-0`. The only non-pass movement is the inspected
+`Zend/tests/try/try_finally_022.phpt` runtime-to-output progression. Two
+1,575-case strings/array runs retain the exact parent path/status/category
+projection at SHA-256
+`e3af1942fdb0419de39e3e4b51245438a6dc9caf5a171363c365d8b6d714173f`:
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined audit covers
+7,174 cases: 5,939 pass, 841 fail, 182 skip and 212 unsupported. Supported debt
+is 18 strings failures, zero array failures and 823 Zend/lang failures.
+
+The exact final candidate SHA-256 is
+`e7619473097521513278a51d505b9d38832f5627fbff065a84e2461380e09eb7`.
+All five Cargo feature configurations, locked all-feature/all-target,
+formatting, HTML-entity-data, PHPT-runner and unsafe-policy checks pass.
+Production remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions, with 375 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass.
+
+One exact-final-binary CPU-2-pinned gate used four warmups and 32 balanced
+order pairs without outlier removal. Paired median changes are -2.091% for
+startup, -2.185% for bare constant calls, -1.815% for array returns, -0.651%
+for named-object returns, +2.904% for temporary-object returns and +2.440% for
+direct-Iterator returns. All outputs match and every control is below the
+five-percent regression ceiling. The harness and result hash to
+`4cf50932dd541b92ccc6379ec22b1559a49e7ffa4e8e809656957f2f7673691b`
+and
+`cb92ac0eaf6c4ddf1924bf7aa8d002666fa964ad5983a39c5f63b2dff6ac226e`.
+
+This checkpoint does not claim by-reference object iteration, broad operand or
+result cleaning, deprecated interpolation parsing, general object-iteration
+expansion, Iterator/IteratorAggregate protocols, generator or Fiber lifecycle,
+ArrayAccess or SPL behavior, shutdown-only fatal policy, 32-bit behavior or
+allocation-limit/OOM equivalence. Read-only clustering selects
+`Zend/tests/frameless_throwing_destructor.phpt` next: a frameless internal call
+currently exits successfully without retiring its temporary object operand, so
+the expected destructor exception is absent.
+
+The implementation checkpoint is commit `0ce9bd7e`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `empty-foreach-temporary-lifetime`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. A compiler-owned temporary
 `IteratorAggregate` receiver is now released while the source `foreach`
