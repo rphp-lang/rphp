@@ -1243,13 +1243,22 @@ fn forbidden_new_and_nullsafe_first_class_callables_are_compile_errors() {
             "<?php\n$object?->{$method}(...);",
             "Cannot combine nullsafe operator with Closure creation",
         ),
+        (
+            "<?php\n$object?->child\n    ->method(...);",
+            "Cannot combine nullsafe operator with Closure creation",
+        ),
+        (
+            "<?php\n($object?->child)::method(...);",
+            "Cannot combine nullsafe operator with Closure creation",
+        ),
     ] {
         let tokens = Lexer::new(source).tokenize().unwrap();
         let statements = Parser::new(tokens).parse().unwrap();
         assert!(matches!(
             statements.last(),
-            Some(Stmt::ExprStmt(Expr::CompileError { message, line: 2 }))
+            Some(Stmt::ExprStmt(Expr::CompileError { message, line }))
                 if message == expected
+                    && *line == if source.contains("child\n") { 3 } else { 2 }
         ));
     }
 }
@@ -1936,9 +1945,9 @@ fn forbidden_assert_and_first_class_new_forms_are_deferred_compile_errors() {
             2,
         ),
         (
-            "<?php\n#[Example(...)] class Subject {}",
+            "<?php\n#[Example(...)]\nclass Subject {}",
             "Cannot create Closure as attribute argument",
-            2,
+            3,
         ),
     ] {
         let tokens = Lexer::new(source).tokenize().unwrap();

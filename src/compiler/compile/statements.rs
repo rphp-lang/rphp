@@ -2679,6 +2679,15 @@ impl Compiler {
                 self.push_instruction_at_line(ret, *line);
             }
             Stmt::ExprStmt(expr) => {
+                // PHP does not perform an rvalue fetch for a bare CV whose
+                // value is discarded by the statement. In particular, an
+                // undefined variable here emits no notice and cannot invoke a
+                // user error handler. `$this` keeps its separate binding
+                // validation and all observed expression contexts still use
+                // the ordinary FetchCvR path.
+                if matches!(expr, Expr::Variable { name, .. } if name != "this") {
+                    return Ok(());
+                }
                 // Compile expression for side effects (e.g. function call), discard result
                 let release_nested_objects = self.is_zend_frameless_internal_call(expr);
                 let first_tmp = self.next_tmp as u16;

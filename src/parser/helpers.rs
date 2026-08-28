@@ -435,6 +435,28 @@ impl Parser {
         attributes: Vec<Attribute>,
     ) -> Result<Stmt, String> {
         let attribute_line = attributes.first().map_or(1, |attribute| attribute.line);
+        let target_line = match &statement {
+            Stmt::Function { line, .. }
+            | Stmt::Class { line, .. }
+            | Stmt::Interface { line, .. }
+            | Stmt::Trait { line, .. }
+            | Stmt::Enum { line, .. }
+            | Stmt::Const { line, .. } => Some(*line),
+            Stmt::ExprStmt(Expr::Closure { line, .. })
+            | Stmt::ExprStmt(Expr::AnonymousNew { line, .. }) => Some(*line),
+            _ => None,
+        };
+        if let (Some(target_line), Some((message, error_line))) =
+            (target_line, self.deferred_compile_error.as_mut())
+            && message == "Cannot create Closure as attribute argument"
+            && attributes
+                .iter()
+                .any(|attribute| attribute.line == *error_line)
+        {
+            // PHP reports this deferred declaration error at the annotated
+            // target, after the complete attribute group has been parsed.
+            *error_line = target_line;
+        }
         let allow_dynamic_properties = attributes.iter().any(|attribute| {
             attribute
                 .name

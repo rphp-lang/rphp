@@ -35,11 +35,18 @@ impl Parser {
     }
 
     fn first_class_member_callable(
+        &mut self,
         owner: Expr,
         member: Expr,
         static_syntax: bool,
         line: usize,
     ) -> Expr {
+        if Self::nullsafe_chain_line(&owner).is_some() {
+            return self.compile_error(
+                "Cannot combine nullsafe operator with Closure creation",
+                line,
+            );
+        }
         Expr::FirstClassMemberCallable {
             owner: Box::new(owner),
             member: Box::new(member),
@@ -258,7 +265,7 @@ impl Parser {
             if matches!(self.peek(), Token::LParen(_)) {
                 let line = self.expect_lparen()?;
                 if self.consume_first_class_callable_placeholder() {
-                    return Ok(Self::first_class_member_callable(
+                        return Ok(self.first_class_member_callable(
                         Expr::ClassConstant {
                             class_name,
                             constant: "class".to_string(),
@@ -295,7 +302,7 @@ impl Parser {
             if matches!(self.peek(), Token::LParen(_)) {
                 let line = self.expect_lparen()?;
                 if self.consume_first_class_callable_placeholder() {
-                    return Ok(Self::first_class_member_callable(
+                        return Ok(self.first_class_member_callable(
                         Expr::ClassConstant {
                             class_name,
                             constant: "class".to_string(),
@@ -342,7 +349,7 @@ impl Parser {
             if matches!(self.peek(), Token::LParen(_)) {
                 let line = self.expect_lparen()?;
                 if self.consume_first_class_callable_placeholder() {
-                    return Ok(Self::first_class_member_callable(
+                        return Ok(self.first_class_member_callable(
                         Expr::ClassConstant {
                             class_name,
                             constant: "class".to_string(),
@@ -536,7 +543,7 @@ impl Parser {
                                 line: dollar_line,
                             };
                             if self.consume_first_class_callable_placeholder() {
-                                expr = Self::first_class_member_callable(expr, method, true, line);
+                                expr = self.first_class_member_callable(expr, method, true, line);
                             } else {
                                 let args = self.parse_call_args()?;
                                 expr = Expr::DynamicStaticCall {
@@ -565,7 +572,7 @@ impl Parser {
                                 line: member_line,
                             };
                             if self.consume_first_class_callable_placeholder() {
-                                expr = Self::first_class_member_callable(expr, method, true, line);
+                                expr = self.first_class_member_callable(expr, method, true, line);
                             } else {
                                 let args = self.parse_call_args()?;
                                 expr = Expr::DynamicStaticCall {
@@ -601,7 +608,7 @@ impl Parser {
                     if matches!(self.peek(), Token::LParen(_)) {
                         let line = self.expect_lparen()?;
                         if self.consume_first_class_callable_placeholder() {
-                            expr = Self::first_class_member_callable(expr, constant, true, line);
+                            expr = self.first_class_member_callable(expr, constant, true, line);
                         } else {
                             let args = self.parse_call_args()?;
                             expr = Expr::DynamicStaticCall {
@@ -636,7 +643,7 @@ impl Parser {
                                         line,
                                     )
                                 } else {
-                                    Self::first_class_member_callable(expr, member, false, line)
+                                    self.first_class_member_callable(expr, member, false, line)
                                 };
                             } else {
                                 if nullsafe {
@@ -674,7 +681,7 @@ impl Parser {
                                         line,
                                     )
                                 } else {
-                                    Self::first_class_member_callable(expr, member, false, line)
+                                    self.first_class_member_callable(expr, member, false, line)
                                 };
                             } else {
                                 if nullsafe {
@@ -716,7 +723,7 @@ impl Parser {
                                         line,
                                     )
                                 } else {
-                                    Self::first_class_member_callable(expr, member, false, line)
+                                    self.first_class_member_callable(expr, member, false, line)
                                 };
                             } else {
                                 if nullsafe {
@@ -780,7 +787,7 @@ impl Parser {
                                     line,
                                 )
                             } else {
-                                Self::first_class_member_callable(
+                                self.first_class_member_callable(
                                     expr,
                                     Expr::StringLiteral(member),
                                     false,
