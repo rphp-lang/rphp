@@ -9710,13 +9710,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::ReleaseTemps => {
                 let return_cleanup = opline._pad & RELEASE_TEMPS_ON_RETURN != 0;
+                let nested_objects = opline._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0;
                 if !return_cleanup || op_array.try_entries.is_empty() {
+                    debug_assert!(!return_cleanup || !nested_objects);
                     release_statement_temps(
                         eg,
                         frame,
                         opline.op1 as usize,
                         opline.op2 as usize,
-                        return_cleanup,
+                        if return_cleanup {
+                            STATEMENT_TEMPS_FOREACH_OBJECT
+                        } else if nested_objects {
+                            STATEMENT_TEMPS_NESTED_OBJECTS
+                        } else {
+                            STATEMENT_TEMPS_ORDINARY
+                        },
                         return_cleanup,
                     )?;
                     resume_pending_exception!();

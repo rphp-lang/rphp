@@ -52,11 +52,11 @@ use crate::vm::instruction::{
     Instruction, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
     NEW_FLAG_UNPACKED_ARGUMENTS, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OpType,
     PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
-    REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, RELEASE_TEMPS_ON_RETURN, SEND_FLAG_GLOBALS,
-    SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_YIELD_SNAPSHOT,
-    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY,
-    STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT,
-    THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, RELEASE_TEMPS_NESTED_OBJECTS,
+    RELEASE_TEMPS_ON_RETURN, SEND_FLAG_GLOBALS, SEND_FLAG_INDIRECT_TEMPORARY,
+    SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME,
+    STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND,
+    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -4994,6 +4994,27 @@ impl Compiler {
                 })
             })
             .unwrap_or(false)
+    }
+
+    /// PHP 8.5 lowers these global call shapes through its frameless internal
+    /// ABI. Their argument zvals remain caller temporaries and are therefore
+    /// retired at the consuming statement rather than by a callee frame.
+    fn is_zend_frameless_internal_call(&self, expression: &Expr) -> bool {
+        let Expr::FunctionCall {
+            name,
+            args,
+            generic_args,
+            ..
+        } = expression
+        else {
+            return false;
+        };
+        generic_args.is_empty()
+            && matches!(args.len(), 2 | 3)
+            && args
+                .iter()
+                .all(|argument| matches!(argument, CallArg::Positional(_)))
+            && self.is_global_builtin_call(name, "in_array")
     }
 
     fn is_func_get_args_slice_write(&self, args: &[CallArg]) -> bool {

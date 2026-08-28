@@ -123,6 +123,55 @@ fn value_requires_vm_release(eg: &ExecutorGlobals, value: &Value) -> bool {
         })
 }
 
+/// Prove that a statement-owned value can be retired by its ordinary Rust
+/// drop without dispatching PHP cleanup. This deliberately recognizes only a
+/// shallow, acyclic shape: scalars, scalar arrays, and destructor-free objects
+/// whose properties are scalar. Anything nested or callback-capable falls
+/// through to the complete alias-aware destructor planner.
+#[inline]
+fn value_is_shallow_plain_drop(eg: &ExecutorGlobals, value: &Value) -> bool {
+    let value = value.dereferenced();
+    if value_requires_vm_release(eg, value) {
+        return false;
+    }
+    match value.value_type() {
+        ValueType::Array => value.as_array().is_some_and(|array| {
+            array.values().all(|nested| {
+                let nested = nested.dereferenced();
+                if value_requires_vm_release(eg, nested) {
+                    return false;
+                }
+                match nested.value_type() {
+                    ValueType::Array | ValueType::Closure => false,
+                    ValueType::Object => nested.as_object().is_some_and(|object| {
+                        let mut plain = true;
+                        object.for_each_property(|_, property| {
+                            plain &= !matches!(
+                                property.dereferenced().value_type(),
+                                ValueType::Array | ValueType::Object | ValueType::Closure
+                            );
+                        });
+                        plain
+                    }),
+                    _ => true,
+                }
+            })
+        }),
+        ValueType::Object => value.as_object().is_some_and(|object| {
+            let mut plain = true;
+            object.for_each_property(|_, property| {
+                plain &= !matches!(
+                    property.dereferenced().value_type(),
+                    ValueType::Array | ValueType::Object | ValueType::Closure
+                );
+            });
+            plain
+        }),
+        ValueType::Closure => false,
+        _ => true,
+    }
+}
+
 fn value_tree_requires_vm_release(
     eg: &ExecutorGlobals,
     value: &Value,
@@ -677,6 +726,18 @@ fn run_value_destructors_inner(
             }
         }
     }
+
+    run_collected_value_destructors(eg, candidates, logical_caller, true, false)
+}
+
+#[cold]
+fn run_collected_value_destructors(
+    eg: &mut ExecutorGlobals,
+    candidates: Vec<(usize, usize, Value)>,
+    logical_caller: *mut ExecuteData,
+    internal_trace_origin: bool,
+    logical_caller_at_current_site: bool,
+) -> Result<bool, VmError> {
     if candidates.is_empty() {
         return Ok(false);
     }
@@ -702,8 +763,8 @@ fn run_value_destructors_inner(
                 Some(&release_references),
                 false,
                 logical_caller,
-                true,
-                false,
+                internal_trace_origin,
+                logical_caller_at_current_site,
             )?;
             if eg.exception.is_some() {
                 return Ok(true);
@@ -1009,13 +1070,17 @@ pub(crate) fn run_prepared_value_destructor(
     Ok(())
 }
 
+const STATEMENT_TEMPS_ORDINARY: u8 = 0;
+const STATEMENT_TEMPS_FOREACH_OBJECT: u8 = 1;
+const STATEMENT_TEMPS_NESTED_OBJECTS: u8 = 2;
+
 #[cold]
 fn release_statement_temps(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     first: usize,
     end: usize,
-    ordinary_foreach_object_only: bool,
+    release_mode: u8,
     logical_caller_at_current_site: bool,
 ) -> Result<(), VmError> {
     // SAFETY: the compiler emits a bounded statement-temporary range inside
@@ -1033,7 +1098,7 @@ fn release_statement_temps(
             )
         };
 
-        if ordinary_foreach_object_only {
+        if release_mode == STATEMENT_TEMPS_FOREACH_OBJECT {
             debug_assert_eq!(end, first + 1);
             if !is_owned(first) {
                 return Ok(());
@@ -1075,6 +1140,76 @@ fn release_statement_temps(
                 }
                 return Ok(());
             }
+        }
+
+        if release_mode == STATEMENT_TEMPS_NESTED_OBJECTS {
+            let has_owned = (first..end).any(&is_owned);
+            if !has_owned {
+                return Ok(());
+            }
+            if (first..end).all(|index| {
+                !is_owned(index) || value_is_shallow_plain_drop(eg, &*base.add(index))
+            }) {
+                for index in first..end {
+                    if !is_owned(index) {
+                        continue;
+                    }
+                    let value = base.add(index);
+                    std::ptr::drop_in_place(value);
+                    std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
+                    if compact {
+                        (*frame).heap_bitmap &= !(1u64 << index);
+                    }
+                }
+                return Ok(());
+            }
+            // A failure while evaluating a later operand abandons the
+            // still-pending frameless activation. Drop its argument copies
+            // before proving which caller temporaries are on their final
+            // reference. On the ordinary post-call path the pending chain is
+            // already empty, so this is a no-op.
+            cleanup_pending_calls(eg, frame);
+            let mut candidates = Vec::<(usize, usize, Value)>::new();
+            let mut seen_arrays = std::collections::HashSet::new();
+            let mut seen_references = std::collections::HashSet::new();
+            let mut seen_closures = std::collections::HashSet::new();
+            let mut seen_generators = std::collections::HashSet::new();
+            for index in first..end {
+                if !is_owned(index) {
+                    continue;
+                }
+                collect_destructor_children(
+                    eg,
+                    &*base.add(index),
+                    &mut candidates,
+                    &mut seen_arrays,
+                    &mut seen_references,
+                    &mut seen_closures,
+                    &mut seen_generators,
+                );
+            }
+            let _ = run_collected_value_destructors(
+                eg,
+                candidates,
+                frame,
+                false,
+                logical_caller_at_current_site,
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            for index in first..end {
+                if !is_owned(index) {
+                    continue;
+                }
+                let value = base.add(index);
+                std::ptr::drop_in_place(value);
+                std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
+                if compact {
+                    (*frame).heap_bitmap &= !(1u64 << index);
+                }
+            }
+            return Ok(());
         }
 
         // Most exceptional statements either own no heap temporary or only a
@@ -1224,7 +1359,7 @@ fn release_return_foreach_sources(
             frame,
             release.op1 as usize,
             release.op2 as usize,
-            true,
+            STATEMENT_TEMPS_FOREACH_OBJECT,
             false,
         )?;
         if let Some(exception) = eg.exception.as_ref()
@@ -2277,17 +2412,41 @@ fn throw_in_frame<'a>(
                 && (entry.finally_start == u32::MAX || current_ip != entry.finally_end)
         });
         if let Some(active_handler) = active_handler {
-            let release = sf_op_array.instructions[current_ip as usize
-                ..active_handler.try_end as usize]
+            let release_window = &sf_op_array.instructions
+                [current_ip as usize..active_handler.try_end as usize];
+            let first_release = release_window
                 .iter()
                 .find(|instruction| instruction.opcode == OpCode::ReleaseTemps);
+            // An argument subexpression can publish its own smaller cleanup
+            // before the consuming frameless statement boundary. Prefer the
+            // marked outer range only when it encloses that first range;
+            // monotonically allocated TMP indexes keep a later unrelated
+            // statement from satisfying this containment proof.
+            let release = first_release.and_then(|first_release| {
+                if first_release._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0 {
+                    return Some(first_release);
+                }
+                release_window
+                    .iter()
+                    .find(|candidate| {
+                        candidate.opcode == OpCode::ReleaseTemps
+                            && candidate._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0
+                            && candidate.op1 <= first_release.op1
+                            && candidate.op2 >= first_release.op2
+                    })
+                    .or(Some(first_release))
+            });
             if let Some(release) = release {
                 release_statement_temps(
                     eg,
                     search_frame,
                     release.op1 as usize,
                     release.op2 as usize,
-                    false,
+                    if release._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0 {
+                        STATEMENT_TEMPS_NESTED_OBJECTS
+                    } else {
+                        STATEMENT_TEMPS_ORDINARY
+                    },
                     false,
                 )?;
                 if let Some(replacement) = eg.exception.take() {

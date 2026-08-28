@@ -2676,6 +2676,7 @@ impl Compiler {
             }
             Stmt::ExprStmt(expr) => {
                 // Compile expression for side effects (e.g. function call), discard result
+                let release_nested_objects = self.is_zend_frameless_internal_call(expr);
                 let first_tmp = self.next_tmp as u16;
                 let (result, result_type) = self.compile_expr(expr);
                 self.discard_unused_expr_result(result, result_type);
@@ -2686,7 +2687,12 @@ impl Compiler {
                     release.op1_type = OpType::Tmp;
                     release.op2 = end_tmp;
                     release.op2_type = OpType::Tmp;
-                    self.instructions.push(release);
+                    if release_nested_objects {
+                        release._pad |= RELEASE_TEMPS_NESTED_OBJECTS;
+                        self.push_instruction_at_line(release, expression_source_line(expr));
+                    } else {
+                        self.instructions.push(release);
+                    }
                 }
             }
             Stmt::While { condition, body } => {

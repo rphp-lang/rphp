@@ -352,6 +352,10 @@ pub const ASSIGN_CV_MOVE_SOURCE: u16 = 1 << 1;
 /// marker directly unless a try region requires Return dispatch to defer it
 /// through finally; arrays and Traversable sources retain their old lifetime.
 pub const RELEASE_TEMPS_ON_RETURN: u16 = 1;
+/// ReleaseTemps must traverse owned aggregate operands because Zend's
+/// frameless internal-call opcode releases their nested object handles at the
+/// call boundary rather than through an ordinary callee frame.
+pub const RELEASE_TEMPS_NESTED_OBJECTS: u16 = 1 << 1;
 
 /// AssignDim stores the source l-value's PHP reference cell in the selected
 /// element. Ordinary assignments intentionally dereference their source;

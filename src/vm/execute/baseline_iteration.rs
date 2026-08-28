@@ -975,7 +975,7 @@ fn release_temporary_foreach_source<'a>(
         frame,
         init.op1 as usize,
         init.op1 as usize + 1,
-        false,
+        STATEMENT_TEMPS_ORDINARY,
         false,
     )?;
     take_foreach_protocol_exception(eg, frame)
