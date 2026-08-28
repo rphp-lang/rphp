@@ -464,6 +464,7 @@ fn execute_source_unit(
                 || error.starts_with("Invalid indentation")
                 || error.starts_with("Invalid body indentation")
                 || error.starts_with("Unterminated comment starting line ")
+                || error.starts_with("Unclosed '{'")
             {
                 let location = format!(" in {canonical} on line ");
                 if let Some((message, line)) = error.rsplit_once(&location)

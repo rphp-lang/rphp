@@ -477,7 +477,7 @@ impl<'a> Lexer<'a> {
         1 + Self::count_logical_line_breaks(&self.src[..position.min(self.src.len())])
     }
 
-    fn count_logical_line_breaks(content: &[u8]) -> usize {
+    pub(super) fn count_logical_line_breaks(content: &[u8]) -> usize {
         let mut count = 0;
         let mut cursor = 0;
         while cursor < content.len() {

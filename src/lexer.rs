@@ -244,6 +244,8 @@ pub struct Lexer<'a> {
     source_offset_base: usize,
     punctuation_scan_pos: usize,
     punctuation_scan_line: usize,
+    brace_scan_pos: usize,
+    brace_scan_line: usize,
     deferred_compile_errors: Vec<(String, usize)>,
     deferred_compile_diagnostics: Vec<DeferredCompileDiagnostic>,
 }
@@ -349,6 +351,8 @@ impl<'a> Lexer<'a> {
             source_offset_base: 0,
             punctuation_scan_pos: 0,
             punctuation_scan_line: 1,
+            brace_scan_pos: 0,
+            brace_scan_line: 1,
             deferred_compile_errors: Vec::new(),
             deferred_compile_diagnostics: Vec::new(),
         }
@@ -384,6 +388,9 @@ impl<'a> Lexer<'a> {
             }
 
             if self.pos >= self.src.len() {
+                if let Some(error) = self.unclosed_brace_error(&tokens) {
+                    tokens.push(error);
+                }
                 tokens.extend(
                     self.deferred_compile_diagnostics
                         .drain(..)
@@ -700,7 +707,7 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                 }
                 b'{' => {
-                    let line = self.punctuation_source_line();
+                    let line = self.brace_source_line();
                     tokens.push(Token::LBrace(line));
                     self.pos += 1;
                 }
@@ -955,6 +962,73 @@ impl<'a> Lexer<'a> {
         }
 
         Ok(tokens)
+    }
+
+    /// Zend reports an unterminated `{` at the end of the current source unit,
+    /// but only when it is the innermost still-open delimiter. Keep the error
+    /// at EOF so a preceding lexer or parser error retains priority.
+    fn unclosed_brace_error(&self, tokens: &[Token]) -> Option<Token> {
+        #[derive(Clone, Copy)]
+        enum Delimiter {
+            Parenthesis,
+            Brace { line: usize, braced_namespace: bool },
+            Bracket,
+        }
+
+        let mut delimiters = Vec::new();
+        let mut namespace_declaration = false;
+        for token in tokens {
+            let braced_namespace = matches!(token, Token::LBrace(_)) && namespace_declaration;
+            match token {
+                Token::LParen(_) => delimiters.push(Delimiter::Parenthesis),
+                Token::LBrace(line) => delimiters.push(Delimiter::Brace {
+                    line: *line,
+                    braced_namespace,
+                }),
+                Token::LBracket(_) => delimiters.push(Delimiter::Bracket),
+                Token::RParen if matches!(delimiters.last(), Some(Delimiter::Parenthesis)) => {
+                    delimiters.pop();
+                }
+                Token::RBrace if matches!(delimiters.last(), Some(Delimiter::Brace { .. })) => {
+                    delimiters.pop();
+                }
+                Token::RBracket if matches!(delimiters.last(), Some(Delimiter::Bracket)) => {
+                    delimiters.pop();
+                }
+                _ => {}
+            }
+            namespace_declaration = match token {
+                Token::Namespace => true,
+                Token::Identifier(_, _) | Token::Backslash | Token::DocComment(_)
+                    if namespace_declaration =>
+                {
+                    true
+                }
+                _ => false,
+            };
+        }
+
+        let Delimiter::Brace {
+            line: opener_line,
+            braced_namespace,
+        } = delimiters.last()?
+        else {
+            return None;
+        };
+        let halt_line = tokens.iter().rev().find_map(|token| match token {
+            Token::HaltCompiler { line, .. } => Some(*line),
+            _ => None,
+        });
+        if halt_line.is_some() && !braced_namespace {
+            return None;
+        }
+        let terminal_line = halt_line.unwrap_or_else(|| self.source_line_at(self.src.len()));
+        let message = if *opener_line == terminal_line {
+            "Unclosed '{'".to_string()
+        } else {
+            format!("Unclosed '{{' on line {opener_line}")
+        };
+        Some(Token::ParseError(message, terminal_line))
     }
 
     fn skip_whitespace(&mut self) -> Result<Option<std::sync::Arc<str>>, LexicalParseError> {
@@ -1248,6 +1322,13 @@ impl<'a> Lexer<'a> {
         self.punctuation_scan_line
     }
 
+    fn brace_source_line(&mut self) -> usize {
+        self.brace_scan_line +=
+            Self::count_logical_line_breaks(&self.src[self.brace_scan_pos..self.pos]);
+        self.brace_scan_pos = self.pos;
+        self.brace_scan_line
+    }
+
     /// Close the current PHP segment, emit intervening inline HTML as an echo,
     /// and resume lexing at a later long opening tag. A closing tag also ends
     /// the current statement, so supply the semicolon when source omitted it.
@@ -1302,6 +1383,48 @@ impl<'a> Lexer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eof_reports_the_innermost_unclosed_brace_at_the_terminal_line() {
+        let cases = [
+            ("<?php {", "Unclosed '{'", 1),
+            ("<?php {\r\n\r", "Unclosed '{' on line 1", 3),
+            ("<?php (\n{", "Unclosed '{'", 2),
+        ];
+
+        for (source, message, terminal_line) in cases {
+            let tokens = Lexer::new(source).tokenize().unwrap();
+            assert!(tokens.contains(&Token::ParseError(message.into(), terminal_line)));
+        }
+
+        for source in ["<?php {}", "<?php {\n(", "<?php {\n["] {
+            let tokens = Lexer::new(source).tokenize().unwrap();
+            assert!(
+                tokens
+                    .iter()
+                    .all(|token| !matches!(token, Token::ParseError(message, _) if message.starts_with("Unclosed '{'")))
+            );
+        }
+    }
+
+    #[test]
+    fn halt_compiler_uses_the_directive_line_as_the_unclosed_brace_terminal() {
+        let tokens = Lexer::new("<?php\nnamespace {\n__halt_compiler();\npayload")
+            .tokenize()
+            .unwrap();
+        assert!(tokens.windows(3).any(|tokens| {
+            matches!(tokens[0], Token::HaltCompiler { line: 3, .. })
+                && tokens[1] == Token::ParseError("Unclosed '{' on line 2".into(), 3)
+                && tokens[2] == Token::Eof
+        }));
+
+        let nested_statement = Lexer::new("<?php\nif (true) {\n__halt_compiler();\npayload")
+            .tokenize()
+            .unwrap();
+        assert!(nested_statement.iter().all(
+            |token| !matches!(token, Token::ParseError(message, _) if message.starts_with("Unclosed '{'"))
+        ));
+    }
 
     #[test]
     fn php_85_pipe_is_distinct_from_bitwise_or_and_logical_or() {
