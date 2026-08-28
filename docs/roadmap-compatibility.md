@@ -4372,6 +4372,32 @@ The monitored supported debt is now 814 failures: 18 strings, zero array and
 handle numbering, JSON encoding, detailed enum-property Reflection and
 `SplObjectStorage`; broader `round()`/`RoundingMode` integration remains a
 separate boundary.
+
+The `07bd16d6` `user-enum-case-object-handles` checkpoint then moves Zend/lang
+from 4,507 to 4,508 pass, exactly `+1/-0`. User-enum cases now defer object
+handles until first PHP-visible materialization. Unit fetch, backed fetch,
+`cases()`, declared/static/class/function defaults, nested arrays,
+serialization and invalid backing-table errors preserve PHP 8.5's publication
+order; unreachable, failed and post-return declarations consume no case
+handles. Include/eval rollback, aliases, reuse and cyclic static references are
+covered by original regressions. One-shot array/static-slot markers keep warmed
+reads O(1) without changing `Value`, `PhpArray` or `PhpObject` layout.
+
+Two serial exact-final-binary Zend/lang runs have identical raw manifests,
+path/status/category projections and pass sets; two strings/array projections
+also match the exact parent. All five Cargo configurations,
+all-feature/all-target, formatting, HTML data, PHPT runner, unsafe, Composer
+S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production remains at the
+unsafe ceiling of 1,623 blocks and 289 functions. Two CPU-2-pinned 32-pair
+release gates place all 11 startup/declaration/object/enum/default/static/
+class-constant medians between -3.11% and +1.73%, with all 1,408 measured
+output/status samples matching.
+
+The monitored supported debt is now 813 failures: 18 strings, zero array and
+795 Zend/lang. The four remaining enum failures are the AST dumper, JSON
+encoding, detailed enum-property Reflection and `SplObjectStorage`; internal
+persistent-enum numbering, 32-bit behavior and allocation-limit/OOM
+equivalence remain separate boundaries.
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
