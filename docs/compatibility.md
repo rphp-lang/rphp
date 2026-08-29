@@ -8,6 +8,60 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`finally-abrupt-completion`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.10. Return, `break`, `continue` and `goto` now carry
+one ordered completion through every enclosing `finally`; a later throw or
+destructor error replaces that completion at PHP's observable boundary, while
+a locally caught nested exception preserves the older suspended exception.
+Compiler-owned `foreach` sources are released inside-out without retaining a
+temporary alias or repeating a destructor. Catch-only exception dispatch and
+scalar-array cleanup remain pay-for-use fast paths.
+
+The clean-room six-case oracle and focused 13-case manifest are byte-exact and
+hash to
+`1cfc38ac49b78ae33689a13d27059b41694885580188b16ef86dfd3c7dd55dc3`
+and
+`c398a65867940bebf88141fd34bac6671f9e9954b77d6f7a18912e575b7f1fc5`.
+The exact final-binary 5,599-case Zend/lang manifest hashes to
+`3776ada734cc4efc45c07574a455c8031a9a9e9a3697db3cb904a34eace78ecc`:
+4,592 pass, 711 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Its pass set hashes to
+`ffa92b8b63a4524ac5ad4755c519ca8bbd144cc20a5fb11d5ef1c72ad6ff62c6`;
+the exact delta is the twelve named `Zend/tests/try` failures changing to pass,
+`+12/-0` with no other status movement.
+
+The 1,575-case strings/array projection remains exact-parent-identical at
+1,459 pass, 18 fail, 67 skip and 31 unsupported; its manifest hashes to
+`9f5edf942abcc866a1c0c833bca1a4dbef97b344295e36fd07314f233e29b0ce`.
+The combined audit covers 7,174 cases: 6,051 pass, 729 fail, 182 skip and 212
+unsupported. Supported debt is 711 Zend/lang failures, 18 strings failures and
+zero array failures.
+
+The exact final candidate SHA-256 is
+`e083a0254a49b9706b8233d0df1e8c7d603167c5af07eae3acfe91cbbe068eeb`.
+All five Cargo configurations, all-feature/all-target checking, formatting,
+HTML data, PHPT runner and both unsafe-policy checks pass. Production remains
+at 1,623 unsafe blocks and 289 unsafe functions, with 387 SAFETY annotations
+and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates
+and PHP 8.5.10 warmed-kernel S2 and cold-build S3 pass.
+
+The fixed-baseline CPU-2 gate uses 32 balanced pairs with exact checksums.
+Paired medians are startup -3.561%, ordinary function calls -0.129%, ordinary
+method dispatch -1.321%, typed-method returns -5.326%, ordinary throw/catch
+-0.246%, single-finally return +1.667% and literal `foreach` -37.280%. The two
+short boundary samples were independently expanded: a five-times-longer
+32-pair throw/catch control is +0.082% and the 64-pair single-finally control is
++0.577%. The mixed, long-throw and finally result files hash to
+`2a75b4742120c4a5b0de9e9b416b406097e8704d62fab415cfa6ebd59879950a`,
+`f730be800777e2ca6a18b96b9eacc81a07ed8180cb447b60509f9576b7d220bd`
+and
+`3ef423dafd24fd454b4ab35e0885274c371c523073acdebd4c7da4dded0c03a5`.
+
+This checkpoint does not claim Fiber/generator suspension, property hooks,
+internal SPL metadata, PHP 8.2, 32-bit behavior or allocation-limit/OOM
+equivalence. The implementation checkpoint is commit `41327f50`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `namespace-front-end-state`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. Namespace declarations now retain compilation-unit
 placement and bracket-style state, contextual keyword segments, whitespace and

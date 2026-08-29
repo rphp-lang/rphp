@@ -4715,6 +4715,27 @@ exception wrapper diagnostics, property hooks, Fiber/generator suspension,
 PHP 8.2, 32-bit behavior and allocation-limit/OOM equivalence remain separate
 boundaries.
 
+The `41327f50` `finally-abrupt-completion` train then moves Zend/lang from
+4,580 to 4,592 pass, exactly `+12/-0`. One ordered completion boundary now
+carries return, `break`, `continue` and `goto` through nested `finally` blocks,
+preserves or replaces suspended exceptions in PHP order, and releases retained
+`foreach` sources without duplicate destructor effects. Catch-only exception
+dispatch and scalar-array cleanup remain pay-for-use paths.
+
+The final Zend/lang manifest and strings/array projection retain exact no-loss
+status sets. All five Cargo configurations, all-feature/all-target, formatting,
+HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates and PHP
+8.5.10 S2/S3 pass. Production remains at 1,623 unsafe blocks and 289 unsafe
+functions. The fixed-baseline CPU-2 packet keeps representative startup, call,
+method, typed-return, throw, finally and literal-foreach controls within the
+approximately one-percent boundary after expanded holdouts for both short
+exception samples.
+
+The monitored supported debt is now 729 failures: 18 strings, zero array and
+711 Zend/lang. Property hooks, internal SPL metadata, Fiber/generator
+suspension, PHP 8.2, 32-bit behavior and allocation-limit/OOM equivalence remain
+separate boundaries.
+
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
