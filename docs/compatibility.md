@@ -8,6 +8,59 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`property-hook-storage-and-dispatch`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.10. Declared property hooks now keep separate
+recursion guards from `__get()`/`__set()`, dispatch in the selected
+declaration's scope, and distinguish reference, identity-preserving object and
+by-value indirect modification results. Object iteration and projection,
+ordinary serialization, virtual-property unserialization and lazy proxy writes
+share the same backed-versus-virtual storage boundary.
+
+Five original clean-room E2E cases cover magic bridging and indirect l-values,
+foreach/dump/serialize projection, private and inherited hooks, virtual wire
+input rollback and lazy setter-before-initialization ordering. The 15-case PHP
+oracle hashes to
+`fa303f71c65231723cb23032274876bdc4a4f9a11ed275ad1a7db1cbf756bc3a`.
+The final 212-case property-hook/lazy focused manifest is 198 pass, 10 fail and
+four unsupported and hashes to
+`ea4037751b77ed919547842c86fbda3cefe7dc55fcd337bbba263485072bdbdd`.
+The retained failures are separate parent-hook callable/diagnostic, dump,
+foreach and overflow contracts.
+
+The final 5,599-case Zend/lang run is 4,658 pass, 645 fail, 115 skip and 181
+unsupported. The 1,575-case strings/array projection remains 1,459 pass, 18
+fail, 67 skip and 31 unsupported. The combined 7,174-case manifest and pass set
+hash to
+`4847f170fae6679e1aa03bfdaf0d4b6718ca9709659dc927a6b3b360721edf82`
+and
+`a7f9e81991b42f7916a8de2bb4920e448e0dcf1c2f4eea180ab27d9982a58d90`:
+6,117 pass, 663 fail, 182 skip and 212 unsupported, with no timeout or crash.
+The exact delta is `+11/-0`: ten selected property-hook cases plus the adjacent
+`lazy_objects/typed_properties_004.phpt` backing-access case. Supported debt is
+645 Zend/lang failures, 18 strings failures and zero array failures.
+
+The exact final candidate SHA-256 is
+`63172d9014a2b8b449abacde1fe2029c39716a122d943d849aa5e5c56e632d28`.
+All five Cargo configurations, formatting, HTML data, PHPT runner and unsafe
+policy pass. Production remains at 1,623 unsafe blocks and 289 unsafe
+functions, with 388 SAFETY annotations and seven `# Safety` sections. Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.10 warmed-kernel S2 and
+cold-build S3 pass.
+
+The fixed-baseline CPU-2 gate uses 32 balanced pairs with exact checksums and
+hashes to
+`1940ebbc3d4ff39c338a12708a00d446d58263abae5a6adcf7beef7bc0553560`.
+Paired medians are ordinary construction +0.609%, reads -0.025%, writes
+-5.724%, calls +0.389% and hooked projection -21.565%; startup is a noisy
++2.044% at roughly 2.6 ms. The public-hook fast path avoids rebuilding a
+visibility map per iteration while inherited, dynamic and by-reference cases
+retain the general path.
+
+This checkpoint does not claim the ten remaining property-hook PHPTs, general
+SPL, Fiber/generator suspension, PHP 8.2, 32-bit behavior or allocation-limit/
+OOM equivalence. The implementation checkpoint is commit `6e73c12f`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `magic-property-lvalue-transaction`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.10. Property append/dimension updates now use one
 deferred l-value transaction: `__get` observes the committed operand order,

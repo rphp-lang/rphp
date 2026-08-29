@@ -4798,6 +4798,26 @@ The monitored supported debt is now 674 failures: 18 strings, zero array and
 conversion cases, Fiber/generator suspension, PHP 8.2, 32-bit behavior and
 allocation-limit/OOM equivalence remain separate boundaries.
 
+The `6e73c12f` `property-hook-storage-and-dispatch` train then moves the
+combined 7,174-case corpus from 6,106 to 6,117 pass, exactly `+11/-0`. Separate
+declared-hook guards and declaring-scope dispatch now preserve magic bridges,
+backing recursion and indirect reference/object/by-value l-values. Foreach,
+object projection, ordinary serialization, virtual-property unserialization
+and lazy proxy writes use the same backed-versus-virtual storage decision.
+
+The final property-hook/lazy focused manifest is 198 pass, 10 fail and four
+unsupported. All five Cargo configurations, formatting, HTML data, PHPT
+runner, unsafe policy, Composer S0, four Symfony S1 gates and PHP 8.5.10 S2/S3
+pass. The fixed-baseline 32-pair gate keeps ordinary construction, read and call
+medians within one percent; writes and hooked projection improve by 5.724% and
+21.565% with exact checksums.
+
+The monitored supported debt is now 663 failures: 18 strings, zero array and
+645 Zend/lang. The ten remaining property-hook cases split across parent-hook
+callable diagnostics, dump/foreach layout and overflow; general SPL,
+Fiber/generator suspension, PHP 8.2, 32-bit behavior and allocation-limit/OOM
+equivalence remain separate boundaries.
+
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
