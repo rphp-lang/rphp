@@ -2877,7 +2877,35 @@ impl ExecutorGlobals {
         required: MethodDeclaration<'_>,
         implementation: MethodDeclaration<'_>,
         linking_class: &ClassDef,
-    ) -> Option<(Vec<String>, bool)> {
+    ) -> Option<(Vec<String>, bool, bool)> {
+        let mut referenced_classes = Vec::new();
+        let mut referenced_seen = std::collections::HashSet::new();
+        for declaration in [required, implementation] {
+            for hint in &declaration.function.sig.param_type_hints {
+                let hint =
+                    self.resolve_variance_type_hint(hint, declaration.owner, Some(linking_class));
+                collect_variance_class_names(&hint, &mut referenced_classes, &mut referenced_seen);
+            }
+            let return_hint = self.resolve_variance_type_hint(
+                &declaration.function.sig.return_type_hint,
+                declaration.owner,
+                Some(linking_class),
+            );
+            collect_variance_class_names(
+                &return_hint,
+                &mut referenced_classes,
+                &mut referenced_seen,
+            );
+        }
+        if !referenced_classes.iter().any(|dependency| {
+            !["self", "parent", "static", "object", "iterable"]
+                .iter()
+                .any(|pseudo_type| dependency.eq_ignore_ascii_case(pseudo_type))
+                && !self.variance_class_is_known(dependency, Some(linking_class))
+        }) {
+            return None;
+        }
+
         let errors = self.method_contract_errors(required, implementation, Some(linking_class));
         let potential_errors =
             self.method_contract_potential_errors(required, implementation, Some(linking_class));
@@ -2970,7 +2998,7 @@ impl ExecutorGlobals {
             );
             collect_variance_class_names(&return_hint, &mut dependencies, &mut seen);
         }
-        Some((dependencies, mentions_linking_class))
+        Some((dependencies, mentions_linking_class, errors.is_empty()))
     }
 
     fn visit_method_variance_contracts(
@@ -3085,28 +3113,98 @@ impl ExecutorGlobals {
         }
     }
 
+    #[inline]
+    fn variance_hint_mentions_unresolved_class(
+        &self,
+        hint: &crate::vm::function::ParamTypeHint,
+        linking_class: &ClassDef,
+    ) -> bool {
+        use crate::vm::function::ParamTypeHint;
+
+        match hint {
+            ParamTypeHint::ClassName(name) => {
+                ![
+                    "self", "parent", "static", "object", "iterable", "false", "true", "null",
+                ]
+                .iter()
+                .any(|builtin| name.eq_ignore_ascii_case(builtin))
+                    && !self.variance_class_is_known(name, Some(linking_class))
+            }
+            ParamTypeHint::Nullable(inner) => {
+                self.variance_hint_mentions_unresolved_class(inner, linking_class)
+            }
+            ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => parts
+                .iter()
+                .any(|part| self.variance_hint_mentions_unresolved_class(part, linking_class)),
+            _ => false,
+        }
+    }
+
+    /// Ordinary declarations whose complete reachable signature graph names
+    /// only built-ins or already linked classes cannot trigger variance
+    /// autoload. Keep them on the pre-existing registration path and reserve
+    /// the dependency algebra for its cold unresolved-name boundary.
+    fn class_variance_signatures_need_dependency_resolution(&self, class_def: &ClassDef) -> bool {
+        let mut definitions = vec![class_def];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(definition) = definitions.pop() {
+            if !seen.insert(definition as *const ClassDef as usize) {
+                continue;
+            }
+            if definition.methods.iter().any(|(_, _, _, _, function)| {
+                function
+                    .common
+                    .sig
+                    .param_type_hints
+                    .iter()
+                    .any(|hint| self.variance_hint_mentions_unresolved_class(hint, class_def))
+                    || self.variance_hint_mentions_unresolved_class(
+                        &function.common.sig.return_type_hint,
+                        class_def,
+                    )
+            }) {
+                return true;
+            }
+            for relation in definition
+                .parent
+                .iter()
+                .chain(definition.implements.iter())
+                .chain(definition.uses.iter())
+            {
+                if let Some(related) = self.find_class(relation) {
+                    definitions.push(related);
+                }
+            }
+        }
+        false
+    }
+
     /// Runtime declarations link after user code may have installed an
     /// autoloader. Return only unknown class names whose eventual hierarchy
     /// could turn an otherwise valid method contract into a compatible one.
     /// Definite arity, reference, staticness and scalar-type errors do not
     /// trigger observable autoload side effects.
-    pub(crate) fn method_variance_dependency_plan(
+    fn method_variance_dependency_plan_with_delay(
         &self,
         class_def: &ClassDef,
-    ) -> (Vec<String>, bool) {
-        if class_def.is_trait {
-            return (Vec::new(), false);
+    ) -> (Vec<String>, bool, bool) {
+        if class_def.is_trait
+            || !self.class_variance_signatures_need_dependency_resolution(class_def)
+        {
+            return (Vec::new(), false, false);
         }
 
         let mut dependencies = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let mut requires_provisional_publication = false;
+        let mut requires_delayed_linking = false;
 
         self.visit_method_variance_contracts(class_def, |required, implementation| {
-            if let Some((contract_dependencies, mentions_linking_class)) =
+            if let Some((contract_dependencies, mentions_linking_class, inconclusive)) =
                 self.method_contract_variance_dependency_names(required, implementation, class_def)
             {
                 requires_provisional_publication |= mentions_linking_class;
+                requires_delayed_linking |= inconclusive;
                 for dependency in contract_dependencies {
                     if seen.insert(dependency.to_ascii_lowercase()) {
                         dependencies.push(dependency);
@@ -3128,32 +3226,24 @@ impl ExecutorGlobals {
                     .iter()
                     .any(|pending| pending.name.eq_ignore_ascii_case(dependency))
         });
+        (
+            dependencies,
+            requires_provisional_publication,
+            requires_delayed_linking,
+        )
+    }
+
+    pub(crate) fn method_variance_dependency_plan(
+        &self,
+        class_def: &ClassDef,
+    ) -> (Vec<String>, bool) {
+        let (dependencies, requires_provisional_publication, _) =
+            self.method_variance_dependency_plan_with_delay(class_def);
         (dependencies, requires_provisional_publication)
     }
 
     pub(crate) fn method_variance_dependencies(&self, class_def: &ClassDef) -> Vec<String> {
         self.method_variance_dependency_plan(class_def).0
-    }
-
-    /// Two unresolved class names can still become the same identity through
-    /// runtime `class_alias()`. Keep an eager declaration pending only for
-    /// that inconclusive relation; a contract with one known side remains a
-    /// compile-time ordering error, matching PHP's early-link boundary.
-    fn method_variance_requires_delayed_linking(&self, class_def: &ClassDef) -> bool {
-        let mut requires_delayed_linking = false;
-        self.visit_method_variance_contracts(class_def, |required, implementation| {
-            let errors = self.method_contract_errors(required, implementation, Some(class_def));
-            if errors.is_empty()
-                && !self
-                    .method_contract_strict_errors(required, implementation, Some(class_def))
-                    .is_empty()
-            {
-                requires_delayed_linking = true;
-                return false;
-            }
-            true
-        });
-        requires_delayed_linking
     }
 
     pub(crate) fn unavailable_method_variance_dependency_error(
@@ -3163,7 +3253,7 @@ impl ExecutorGlobals {
     ) -> Option<String> {
         let mut error = None;
         self.visit_method_variance_contracts(class_def, |required, implementation| {
-            let Some((dependencies, _)) = self.method_contract_variance_dependency_names(
+            let Some((dependencies, _, _)) = self.method_contract_variance_dependency_names(
                 required,
                 implementation,
                 class_def,
@@ -4169,11 +4259,16 @@ impl ExecutorGlobals {
             {
                 return Err(Self::class_like_redeclaration_error(previous, &class_def));
             }
-            if self.class_definition_requires_delayed_linking(&class_def) {
+            let (variance_dependencies, _, variance_requires_delayed_linking) =
+                self.method_variance_dependency_plan_with_delay(&class_def);
+            if self.class_definition_requires_delayed_linking_with_variance(
+                &class_def,
+                variance_requires_delayed_linking,
+            ) {
                 self.pending_named_classes.push(class_def);
                 return Ok(());
             }
-            for dependency in self.method_variance_dependencies(&class_def) {
+            for dependency in variance_dependencies {
                 if self.find_class(&dependency).is_none()
                     && let Some(error) =
                         self.unavailable_method_variance_dependency_error(&class_def, &dependency)
@@ -4292,6 +4387,19 @@ impl ExecutorGlobals {
     }
 
     fn class_definition_requires_delayed_linking(&self, class_def: &ClassDef) -> bool {
+        let variance_requires_delayed_linking =
+            self.method_variance_dependency_plan_with_delay(class_def).2;
+        self.class_definition_requires_delayed_linking_with_variance(
+            class_def,
+            variance_requires_delayed_linking,
+        )
+    }
+
+    fn class_definition_requires_delayed_linking_with_variance(
+        &self,
+        class_def: &ClassDef,
+        variance_requires_delayed_linking: bool,
+    ) -> bool {
         class_def.parent.as_deref().is_some_and(|parent| {
             // A forward child cannot be checked against its interfaces
             // until a later source declaration supplies inherited
@@ -4299,7 +4407,7 @@ impl ExecutorGlobals {
             // retain the established eager-link behavior, including
             // unsupported internal parents that are intentionally absent.
             !class_def.implements.is_empty() && self.find_class(parent).is_none()
-        }) || self.method_variance_requires_delayed_linking(class_def)
+        }) || variance_requires_delayed_linking
             || property_hook_setter_variance_requires_delayed_linking(self, class_def)
             || class_def
                 .parent
