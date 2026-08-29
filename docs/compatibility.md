@@ -8,6 +8,57 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`throwable-internal-state-and-rendering`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.10. `Exception` and `Error` now
+materialize PHP's seven-slot declared layout, including canonical private
+`string`, `trace` and `previous` state. Inherited internal constructors enforce
+their reflected signatures, creation origins and traces survive rethrow,
+malformed reflected traces warn and render best effort, and exception
+replacement does not mutate a shared `previous` ancestor.
+
+The clean-room nine-case oracle is exact in seven cases. The two retained gaps,
+delayed message conversion and reference-returning `__toString()`, share the
+separate reentrant fatal-rendering boundary. The exact-final-binary 13-case
+focused manifest is 10 pass and three unchanged runtime failures and hashes to
+`ed228d849f3640fa357362528b03a3bdd6a3e7919b561515b82ea7022b7dc03f`.
+
+The final 5,599-case Zend/lang manifest hashes to
+`ad9222df529ba67e4eaae6bce90c2819af6402d46bdb00cff30510dec1e82ff8`:
+4,626 pass, 677 fail, 115 skip and 181 unsupported. The parent-identical
+1,575-case strings/array projection remains 1,459 pass, 18 fail, 67 skip and
+31 unsupported and hashes to
+`9f5edf942abcc866a1c0c833bca1a4dbef97b344295e36fd07314f233e29b0ce`.
+The combined 7,174-case manifest and pass set hash to
+`ebf96f28f161c0a899f251ba3645eac05649f6bcb280d3354239ba8b1b3b8774`
+and `4e762436008d3c57fdca65a0664170723fafbf96dab96383bd44aa37d3294586`:
+6,085 pass, 695 fail, 182 skip and 212 unsupported, with no timeout or crash.
+The exact delta is `+10/-0`, with no other status or failure-stage movement;
+supported debt is 677 Zend/lang failures, 18 strings failures and zero array
+failures.
+
+The exact final candidate SHA-256 is
+`9ec3374c2b9b2143537ad6a44c7cb36120dbb7983c6afad1ac46edb66126b2b0`.
+All five Cargo configurations, all-feature/all-target checking, formatting,
+HTML data, PHPT runner and unsafe policy pass. Production remains at 1,623
+unsafe blocks and 289 unsafe functions, with 388 SAFETY annotations and seven
+`# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates and PHP
+8.5.10 warmed-kernel S2 and cold-build S3 pass.
+
+The fixed-baseline CPU-2 gate uses 32 balanced pairs with exact checksums and
+hashes to
+`4d9ced072fcdd249722110557d127895b9085e27b27b04e85cc7782ef15aaf73`.
+Paired medians are ordinary calls -0.077%, ordinary construction -0.347%,
+property reads -0.383% and property writes +0.440%. The deliberately expanded
+Throwable layout measures +4.431% for construction and +5.622% for throw/catch;
+that localized cost remains explicit optimization work rather than weakening
+the PHP state contract.
+
+This checkpoint does not claim reentrant fatal message conversion, internal
+Reflection file/line type metadata, property hooks, general SPL,
+Fiber/generator suspension, PHP 8.2, 32-bit behavior or allocation-limit/OOM
+equivalence. The implementation checkpoint is commit `2bda0141`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `magic-call-trampoline-resolution`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.10. Instance, static, late-static and dynamic-static
 calls now classify concrete, inaccessible, missing and abstract methods before

@@ -4756,6 +4756,26 @@ The monitored supported debt is now 705 failures: 18 strings, zero array and
 suspension, PHP 8.2, 32-bit behavior and allocation-limit/OOM equivalence remain
 separate boundaries.
 
+The `2bda0141` `throwable-internal-state-and-rendering` train then moves
+Zend/lang from 4,616 to 4,626 pass, exactly `+10/-0`. `Exception` and `Error`
+share PHP's canonical seven declared slots; inherited constructors validate
+their internal signatures, creation origin and trace remain immutable across
+rethrow, malformed reflected traces warn and render best effort, and
+replacement exceptions do not mutate a shared `previous` ancestor.
+
+The exact final Zend/lang manifest and parent-identical strings/array projection
+cover 7,174 cases with no loss or failure-stage movement. All five Cargo
+configurations, all-feature/all-target, formatting, HTML data, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.10 S2/S3 pass. The fixed
+baseline 32-pair gate keeps ordinary call/object/property paired medians within
+one percent; the changed Throwable construction and throw/catch lanes are
+explicitly +4.431% and +5.622% pending a separate optimized region.
+
+The monitored supported debt is now 695 failures: 18 strings, zero array and
+677 Zend/lang. Three reentrant fatal-rendering cases remain one separate root;
+property hooks, internal SPL metadata, Fiber/generator suspension, PHP 8.2,
+32-bit behavior and allocation-limit/OOM equivalence remain separate boundaries.
+
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
