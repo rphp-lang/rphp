@@ -2796,7 +2796,11 @@ fn array_column_object_value(
             let definition = eg.instance_property_definition(class_id, slot);
             if definition.is_some_and(|definition| definition.has_get_hook) {
                 drop(object);
-                return call_object_property_get_hook(eg, object_value, &name)
+                let declaring_class = definition
+                    .expect("hooked array_column property must retain its definition")
+                    .declaring_class
+                    .clone();
+                return call_object_property_get_hook(eg, object_value, &name, &declaring_class)
                     .map(|value| value.map(|value| value.dereferenced().clone()));
             }
             if let Some(value) = object.get_property_slot(slot)
@@ -12166,12 +12170,14 @@ fn fn_get_class_vars(
     let mut result =
         PhpArray::with_hash_capacity(class.properties.len() + class.static_properties.len());
     for property in class.properties.iter().chain(&class.static_properties) {
-        if method_visible_from_scope(
-            eg,
-            property.visibility,
-            &property.declaring_class,
-            caller_class.as_deref(),
-        ) {
+        if !property.is_virtual_hook_property()
+            && method_visible_from_scope(
+                eg,
+                property.visibility,
+                &property.declaring_class,
+                caller_class.as_deref(),
+            )
+        {
             result.set_str(
                 &property.name,
                 property.default.clone().unwrap_or_else(Value::null),
@@ -12228,28 +12234,52 @@ fn fn_get_object_vars(
     };
 
     let caller_class = crate::vm::execute::lexical_class_name_for_internal_call(eg, ed);
+    let class_id = object.class_id;
     let dynamic_len = object
         .dynamic_properties
         .as_ref()
         .map_or(0, |properties| properties.len());
     let mut result = PhpArray::with_hash_capacity(object.property_values.len() + dynamic_len);
+    drop(object);
     let mut declared_names = std::collections::HashSet::new();
-    for slot in eg.visible_instance_property_slots(object.class_id, caller_class.as_deref()) {
-        let value = &object.property_values[slot];
-        if value.is_undef() {
-            continue;
-        }
-        let Some(definition) = eg.instance_property_definition(object.class_id, slot) else {
+    for slot in eg.visible_instance_property_slots(class_id, caller_class.as_deref()) {
+        let Some(definition) = eg.instance_property_definition(class_id, slot).cloned() else {
             continue;
         };
         declared_names.insert(definition.name.clone());
-        set_object_var(&mut result, &definition.name, clone_object_var(value));
-    }
-    object.for_each_dynamic_property(|name, value| {
-        if !value.is_undef() && !declared_names.contains(name) {
-            set_object_var(&mut result, name, clone_object_var(value));
+        if !definition.has_get_hook {
+            let Some(object) = target.as_object() else {
+                continue;
+            };
+            let Some(value) = object.get_property_slot(slot) else {
+                continue;
+            };
+            if !value.is_undef() {
+                set_object_var(&mut result, &definition.name, clone_object_var(value));
+            }
+            continue;
         }
-    });
+        let value = crate::vm::execute::call_object_property_get_hook(
+            eg,
+            target,
+            &definition.name,
+            &definition.declaring_class,
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        let Some(value) = value.filter(|value| !value.is_undef()) else {
+            continue;
+        };
+        set_object_var(&mut result, &definition.name, clone_object_var(&value));
+    }
+    if let Some(object) = target.as_object() {
+        object.for_each_dynamic_property(|name, value| {
+            if !value.is_undef() && !declared_names.contains(name) {
+                set_object_var(&mut result, name, clone_object_var(value));
+            }
+        });
+    }
     ret!(rv, Value::array(result));
 }
 
@@ -17211,9 +17241,7 @@ fn var_dump_value_inner(
                         let Some(value) = object.get_property_slot(slot) else {
                             continue;
                         };
-                        if definition.is_virtual_hook_property()
-                            && value.value_type() != ValueType::Undef
-                        {
+                        if definition.is_virtual_hook_property() {
                             continue;
                         }
                         if value.value_type() == ValueType::Undef {
@@ -17898,8 +17926,13 @@ fn project_ordinary_json_object(
             .clone();
         declared_names.insert(definition.name.clone());
         let property = if definition.has_get_hook {
-            crate::vm::execute::call_object_property_get_hook(eg, val, &definition.name)?
-                .map(|value| value.dereferenced().clone())
+            crate::vm::execute::call_object_property_get_hook(
+                eg,
+                val,
+                &definition.name,
+                &definition.declaring_class,
+            )?
+            .map(|value| value.dereferenced().clone())
         } else {
             val.as_object().and_then(|object| {
                 object

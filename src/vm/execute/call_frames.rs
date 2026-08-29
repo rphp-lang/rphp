@@ -2084,6 +2084,8 @@ const PROPERTY_GUARD_GET: u8 = 1;
 const PROPERTY_GUARD_SET: u8 = 1 << 1;
 const PROPERTY_GUARD_ISSET: u8 = 1 << 2;
 const PROPERTY_GUARD_UNSET: u8 = 1 << 3;
+const PROPERTY_GUARD_HOOK_GET: u8 = 1 << 4;
+const PROPERTY_GUARD_HOOK_SET: u8 = 1 << 5;
 
 #[inline]
 fn property_guard_active(
@@ -2181,6 +2183,47 @@ fn call_guarded_property_magic_method(
     result
 }
 
+/// Invoke a declared property hook without sharing the overload guard used by
+/// `__get()` and `__set()`. A magic method may legitimately bridge an
+/// inaccessible property access back to its declared hook; only recursive
+/// entry into the same hook operation falls through to backing storage.
+fn call_guarded_property_hook_method(
+    eg: &mut ExecutorGlobals,
+    object: &Value,
+    name: &str,
+    operation: u8,
+    declaring_class: &str,
+    method: &str,
+    arguments: &[Value],
+) -> Result<Option<Value>, VmError> {
+    debug_assert!(matches!(
+        operation,
+        PROPERTY_GUARD_HOOK_GET | PROPERTY_GUARD_HOOK_SET
+    ));
+    let receiver = object.clone();
+    if property_guard_active(eg, &receiver, name, operation) {
+        return Ok(None);
+    }
+    set_property_guard(&receiver, name, operation, true);
+    let full_name = format!("{}::{method}", declaring_class.to_ascii_lowercase());
+    let result = if let Some(func_ptr) = eg.find_function(&full_name) {
+        let mut call_args = Vec::with_capacity(arguments.len() + 1);
+        call_args.push(receiver.clone());
+        call_args.extend_from_slice(arguments);
+        call_function_iter_from_current_site(
+            eg,
+            func_ptr,
+            call_args.len(),
+            call_args.iter(),
+        )
+        .map(Some)
+    } else {
+        Ok(None)
+    };
+    set_property_guard(&receiver, name, operation, false);
+    result
+}
+
 /// Reuse a declared property getter from internal object projections such as
 /// JSON encoding and by-value foreach. The ordinary property guard remains
 /// shared with opcode reads, so recursive access observes the backing storage
@@ -2189,13 +2232,15 @@ pub(crate) fn call_object_property_get_hook(
     eg: &mut ExecutorGlobals,
     object: &Value,
     name: &str,
+    declaring_class: &str,
 ) -> Result<Option<Value>, VmError> {
     let hook_name = format!("${name}::get");
-    call_guarded_property_magic_method(
+    call_guarded_property_hook_method(
         eg,
         object,
         name,
-        PROPERTY_GUARD_GET,
+        PROPERTY_GUARD_HOOK_GET,
+        declaring_class,
         &hook_name,
         &[],
     )

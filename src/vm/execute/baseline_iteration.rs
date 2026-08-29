@@ -685,6 +685,19 @@ fn set_foreach_object_entry(array: &mut PhpArray, name: &str, value: Value) {
     }
 }
 
+#[inline]
+fn object_uses_direct_property_iteration(value: &Value, eg: &ExecutorGlobals) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.is_dynamic_std_class()
+            || eg.class_by_id(object.class_id).is_some_and(|class| {
+                class
+                    .properties
+                    .iter()
+                    .any(|property| property.has_get_hook || property.has_set_hook)
+            })
+    })
+}
+
 fn materialize_foreach_object(
     value: &Value,
     eg: &mut ExecutorGlobals,
@@ -713,7 +726,12 @@ fn materialize_foreach_object(
             .clone();
         declared_names.insert(definition.name.clone());
         let property = if definition.has_get_hook {
-            call_object_property_get_hook(eg, value, &definition.name)?
+            call_object_property_get_hook(
+                eg,
+                value,
+                &definition.name,
+                &definition.declaring_class,
+            )?
                 .map(|value| value.dereferenced().clone())
         } else {
             value.as_object().and_then(|object| {
@@ -1314,10 +1332,8 @@ fn op_foreach_init<'a>(
                 .flatten()
         });
         let object_values = if iterator_values.is_none() && arr_val.as_object().is_some() {
-            let direct_std_class = arr_val
-                .as_object()
-                .is_some_and(|object| object.is_dynamic_std_class());
-            let materialized = if by_reference || direct_std_class {
+            let direct_property_iteration = object_uses_direct_property_iteration(arr_val, eg);
+            let materialized = if by_reference || direct_property_iteration {
                 arr_val.clone()
             } else {
                 materialize_foreach_object(arr_val, eg, frame)?
@@ -1676,17 +1692,31 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                 false
             }
         } else if arr_val.value_type() == ValueType::Object
-            && (BY_REFERENCE_LOOP
-                || arr_val
-                    .as_object()
-                    .is_some_and(|object| object.is_dynamic_std_class()))
+            && (BY_REFERENCE_LOOP || object_uses_direct_property_iteration(arr_val, eg))
         {
             let caller_class = get_caller_class(frame, eg);
             let class_id = arr_val
                 .as_object()
                 .map(|object| object.class_id)
                 .unwrap_or(0);
-            let slots = {
+            let compact_slot_count = {
+                let object = arr_val.as_object().unwrap();
+                eg.class_by_id(class_id)
+                    .filter(|class| {
+                        class.parent.is_none()
+                            && class.properties.iter().all(|definition| {
+                                definition.visibility == Visibility::Public
+                            })
+                            && class.properties.iter().enumerate().all(|(slot, definition)| {
+                                (!object.property_values[slot].is_undef()
+                                    || definition.has_get_hook)
+                                    && (!definition.is_virtual_hook_property()
+                                        || definition.has_get_hook)
+                            })
+                    })
+                    .map(|class| class.properties.len())
+            };
+            let slots = compact_slot_count.is_none().then(|| {
                 let object = arr_val.as_object().unwrap();
                 eg.visible_instance_property_slots(class_id, caller_class.as_deref())
                     .into_iter()
@@ -1699,14 +1729,30 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                             })
                     })
                     .collect::<Vec<_>>()
-            };
-            let dynamic_names = (!slots.is_empty()).then(|| {
+            });
+            let declared_len = compact_slot_count
+                .unwrap_or_else(|| slots.as_ref().map_or(0, Vec::len));
+            let has_dynamic_properties = arr_val.as_object().is_some_and(|object| {
+                object
+                    .dynamic_properties
+                    .as_ref()
+                    .is_some_and(|properties| !properties.is_empty())
+            });
+            let dynamic_names = has_dynamic_properties.then(|| {
                 let object = arr_val.as_object().unwrap();
-                let declared_names = slots
-                    .iter()
-                    .filter_map(|slot| eg.instance_property_definition(class_id, *slot))
-                    .map(|definition| definition.name.as_str())
-                    .collect::<std::collections::HashSet<_>>();
+                let declared_names = if let Some(slots) = slots.as_ref() {
+                    slots
+                        .iter()
+                        .filter_map(|slot| eg.instance_property_definition(class_id, *slot))
+                        .map(|definition| definition.name.as_str())
+                        .collect::<std::collections::HashSet<_>>()
+                } else {
+                    eg.class_by_id(class_id)
+                        .into_iter()
+                        .flat_map(|class| class.properties.iter())
+                        .map(|definition| definition.name.as_str())
+                        .collect::<std::collections::HashSet<_>>()
+                };
                 let mut names = Vec::new();
                 object.for_each_dynamic_property(|name, property| {
                     if !property.is_undef() && !declared_names.contains(name) {
@@ -1729,14 +1775,17 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                 },
                 Vec::len,
             );
-            if pos < slots.len() + dynamic_len {
-                let name = if pos < slots.len() {
-                    eg.instance_property_definition(class_id, slots[pos])
+            if pos < declared_len + dynamic_len {
+                let slot = (pos < declared_len).then(|| {
+                    slots.as_ref().map_or(pos, |slots| slots[pos])
+                });
+                let name = if let Some(slot) = slot {
+                    eg.instance_property_definition(class_id, slot)
                         .expect("visible property slot must retain its definition")
                         .name
                         .clone()
                 } else {
-                    let dynamic_position = pos - slots.len();
+                    let dynamic_position = pos - declared_len;
                     dynamic_names.as_ref().map_or_else(
                         || {
                             arr_val
@@ -1762,8 +1811,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                     return Ok(control);
                 }
 
-                let value = if pos < slots.len() {
-                    let slot = slots[pos];
+                let value = if let Some(slot) = slot {
                     let (
                         declaring_class,
                         type_scope,
@@ -1801,11 +1849,12 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                     }
                     if BY_REFERENCE_LOOP && has_get_hook {
                         let hook_name = format!("${name}::get");
-                        let returned = call_guarded_property_magic_method(
+                        let returned = call_guarded_property_hook_method(
                             eg,
                             arr_val,
                             &name,
-                            PROPERTY_GUARD_GET,
+                            PROPERTY_GUARD_HOOK_GET,
+                            &declaring_class,
                             &hook_name,
                             &[],
                         )?
@@ -1868,7 +1917,12 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                         }
                         binding
                     } else if has_get_hook {
-                        let returned = call_object_property_get_hook(eg, arr_val, &name)?
+                        let returned = call_object_property_get_hook(
+                            eg,
+                            arr_val,
+                            &name,
+                            &declaring_class,
+                        )?
                             .map(|value| value.dereferenced().clone())
                             .unwrap_or_else(Value::null);
                         if let Some(control) = take_foreach_protocol_exception(eg, frame)? {

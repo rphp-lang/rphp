@@ -49,9 +49,29 @@ fn serialized_property_key(eg: &ExecutorGlobals, object: &PhpObject, storage_key
 fn ordinary_object_properties(value: &Value, eg: &ExecutorGlobals) -> PhpArray {
     let mut properties = PhpArray::new();
     if let Some(object) = value.as_object() {
-        object.for_each_property(|name, member| {
+        for slot in eg.instance_property_slots_in_iteration_order(object.class_id) {
+            let Some(definition) = eg.instance_property_definition(object.class_id, slot) else {
+                continue;
+            };
+            if definition.is_virtual_hook_property() {
+                continue;
+            }
+            let Some(member) = object.get_property_slot(slot) else {
+                continue;
+            };
             if member.value_type() != ValueType::Undef {
-                properties.set_str(&serialized_property_key(eg, &object, name), member.clone());
+                let storage_key = object
+                    .property_name_at_slot(slot)
+                    .unwrap_or(definition.name.as_str());
+                properties.set_str(
+                    &serialized_property_key(eg, &object, storage_key),
+                    member.clone(),
+                );
+            }
+        }
+        object.for_each_dynamic_property(|name, member| {
+            if member.value_type() != ValueType::Undef {
+                properties.set_str(name, member.clone());
             }
         });
     }
@@ -552,6 +572,36 @@ fn unserialized_property_storage_key(
         plain_name,
         Some(object.class_name.as_ref()),
     )
+}
+
+fn unserialized_virtual_property_name(
+    eg: &ExecutorGlobals,
+    object: &PhpObject,
+    class_name: &str,
+    serialized_key: &str,
+) -> Option<String> {
+    let storage_key = unserialized_property_storage_key(eg, object, serialized_key);
+    let definition = object
+        .property_slot(&storage_key)
+        .and_then(|slot| eg.instance_property_definition(object.class_id, slot))
+        .or_else(|| {
+            eg.find_class(class_name).and_then(|class| {
+                class.properties.iter().find(|property| {
+                    let key = if property.visibility == crate::parser::Visibility::Private {
+                        crate::runtime::mangle_private_prop(
+                            &property.declaring_class,
+                            &property.name,
+                        )
+                    } else {
+                        property.name.clone()
+                    };
+                    key == storage_key
+                })
+            })
+        })?;
+    definition
+        .is_virtual_hook_property()
+        .then(|| definition.name.clone())
 }
 
 fn populate_object_properties(
@@ -1074,12 +1124,17 @@ impl<'a> Parser<'a> {
                 // close self-references and longer object cycles.
                 self.publish_partial_reference(reference, &object)?;
                 let mut properties = PhpArray::with_hash_capacity(property_count);
+                let mut property_value_offsets = Vec::with_capacity(property_count);
                 for _ in 0..property_count {
                     let key = self.counted_key()?;
+                    let value_offset = self.position;
                     let member = self.value_mode::<UPPERCASE_REFERENCES>(eg, allowed_classes)?;
                     match key {
                         ArrayKey::Int(key) => properties.set_int(key, member),
-                        ArrayKey::String(key) => properties.set_str(&key, member),
+                        ArrayKey::String(key) => {
+                            property_value_offsets.push((key.clone(), value_offset));
+                            properties.set_str(&key, member);
+                        }
                     }
                 }
                 self.expect(b'}')?;
@@ -1129,7 +1184,23 @@ impl<'a> Parser<'a> {
                     .map_err(|_| ())?
                     {
                         Some(_) => {}
-                        None => populate_object_properties(eg, &object, class_name, &properties)?,
+                        None => {
+                            let virtual_property = object.as_object().and_then(|object| {
+                                property_value_offsets.iter().find_map(|(key, offset)| {
+                                    unserialized_virtual_property_name(eg, &object, class_name, key)
+                                        .map(|name| (name, *offset))
+                                })
+                            });
+                            if let Some((name, offset)) = virtual_property {
+                                return self.reject(
+                                    Some(format!(
+                                        "Cannot unserialize value for virtual property {class_name}::${name}"
+                                    )),
+                                    offset,
+                                );
+                            }
+                            populate_object_properties(eg, &object, class_name, &properties)?
+                        }
                     }
                     Ok(object)
                 }

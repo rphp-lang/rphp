@@ -12703,6 +12703,8 @@ impl Compiler {
                         nullsafe: false,
                         line,
                     } => {
+                        let hook_bypass = matches!(object.as_ref(), Expr::Variable { name, .. } if name == "this")
+                            && self.current_hook_matches(property);
                         let (object, object_type) = self.compile_property_modify_base(object);
                         let property = self.add_literal(Value::string(property.clone()));
                         let mut bind = Instruction::new(OpCode::BindObjPropRef);
@@ -12712,6 +12714,9 @@ impl Compiler {
                         bind.op2_type = OpType::Const;
                         bind.result = destination;
                         bind.result_type = OpType::Cv;
+                        if hook_bypass {
+                            bind._pad |= OBJ_PROP_HOOK_BYPASS;
+                        }
                         self.push_instruction_at_line(bind, *line);
                         (destination, OpType::Cv)
                     }

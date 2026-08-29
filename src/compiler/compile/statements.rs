@@ -107,7 +107,10 @@ fn compiled_hook_uses_backing_property(
             && function.op_array.instructions.iter().any(|instruction| {
                 matches!(
                     instruction.opcode,
-                    OpCode::FetchObjR | OpCode::AssignObjProp | OpCode::BindObjPropRef
+                    OpCode::FetchObjR
+                        | OpCode::AssignObjProp
+                        | OpCode::BindObjPropRef
+                        | OpCode::IssetObj
                 ) && instruction.op1_type == OpType::Cv
                     && instruction.op1 == 0
                     && instruction.op2_type == OpType::Const
@@ -1639,6 +1642,11 @@ impl Compiler {
         if let Expr::Globals { line } = source {
             return Err(self.goto_error("Cannot acquire reference to $GLOBALS", *line));
         }
+        let target_hook_bypass = matches!(target,
+            Expr::PropertyAccess { object, property, .. }
+                if matches!(object.as_ref(), Expr::Variable { name, .. } if name == "this")
+                    && self.current_hook_matches(property)
+        );
         if let Expr::ArrayAppendArgument { target, .. } = target {
             let (array, array_type, writeback) =
                 self.compile_array_append_source(target, true, false)?;
@@ -1718,6 +1726,9 @@ impl Compiler {
                 bind.result = source;
                 bind.result_type = source_type;
                 bind._pad |= OBJ_PROP_REFERENCE_BIND;
+                if target_hook_bypass {
+                    bind._pad |= crate::vm::instruction::OBJ_PROP_HOOK_BYPASS;
+                }
                 if source_is_internal {
                     bind._pad |= REFERENCE_RESULT_INTERNAL;
                 }

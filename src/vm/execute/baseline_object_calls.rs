@@ -1566,6 +1566,11 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
             eg.instance_property_definition(obj.class_id, slot)
         });
         let has_get_hook = definition.is_some_and(|definition| definition.has_get_hook);
+        let get_hook_declaring_class = definition
+            .filter(|definition| definition.has_get_hook)
+            .map(|definition| definition.declaring_class.clone());
+        let has_property_hook = definition
+            .is_some_and(|definition| definition.has_get_hook || definition.has_set_hook);
         let write_only_property = definition.is_some_and(|definition| {
             definition.has_set_hook
                 && !definition.has_get_hook
@@ -1646,15 +1651,17 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
         }
         if has_get_hook
             && opline._pad & crate::vm::instruction::OBJ_PROP_HOOK_BYPASS == 0
-            && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_GET)
-            && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_SET)
+            && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_HOOK_GET)
         {
             let hook_name = format!("${name}::get");
-            let hook_value = call_guarded_property_magic_method(
+            let hook_value = call_guarded_property_hook_method(
                 eg,
                 magic_receiver,
                 &name,
-                PROPERTY_GUARD_GET,
+                PROPERTY_GUARD_HOOK_GET,
+                get_hook_declaring_class
+                    .as_deref()
+                    .expect("get hook must retain its declaring class"),
                 &hook_name,
                 &[],
             )?;
@@ -1677,14 +1684,44 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                         format!("Indirect modification of {class_name}::${name} is not allowed"),
                     )?);
                 }
-                if opline._pad & FETCH_OBJ_MODIFY != 0 && value.is_reference() {
-                    value.mark_indirect_property_modification_reference();
+                if opline._pad & FETCH_OBJ_MODIFY != 0 {
+                    if value.is_reference() {
+                        value.mark_indirect_property_modification_reference();
+                    } else if matches!(
+                        value.dereferenced().value_type(),
+                        ValueType::Object | ValueType::Closure
+                    ) {
+                        value.mark_indirect_property_modification_result();
+                    }
                 }
                 set_result(value);
                 return Ok(ColdResult::Done);
             }
         }
-        if let Some(val) = found_val {
+        if let Some(mut val) = found_val {
+            if has_property_hook
+                && opline._pad & FETCH_OBJ_MODIFY != 0
+                && opline._pad & (FETCH_OBJ_INCDEC | FETCH_OBJ_COMPOUND) == 0
+                && !val.is_reference()
+            {
+                if matches!(
+                    val.dereferenced().value_type(),
+                    ValueType::Object | ValueType::Closure
+                ) {
+                    val.mark_indirect_property_modification_result();
+                } else {
+                    let class_name = obj_val
+                        .as_object()
+                        .map(|object| object.class_name.to_string())
+                        .unwrap_or_else(|| "object".to_string());
+                    return Ok(object_property_throw(
+                        eg,
+                        frame,
+                        "Error",
+                        format!("Indirect modification of {class_name}::${name} is not allowed"),
+                    )?);
+                }
+            }
             if opline._pad & FETCH_OBJ_REFERENCE_SOURCE != 0
                 && !matches!(
                     val.dereferenced().value_type(),
@@ -2049,12 +2086,16 @@ fn op_isset_obj<'a>(
             effective_caller,
         )
     };
-    let has_get_hook = accessible
-        && !hidden_parent_private
-        && object_ref
+    let get_hook_declaring_class = (accessible && !hidden_parent_private)
+        .then_some(())
+        .and_then(|()| {
+            object_ref
             .property_slot(&key)
             .and_then(|slot| eg.instance_property_definition(object_ref.class_id, slot))
-            .is_some_and(|definition| definition.has_get_hook);
+            .filter(|definition| definition.has_get_hook)
+            .map(|definition| definition.declaring_class.clone())
+        });
+    let has_get_hook = get_hook_declaring_class.is_some();
     let declared_property = object_ref.property_slot(&key).is_some();
     let explicitly_unset_declared = declared_property
         && object_ref
@@ -2079,15 +2120,17 @@ fn op_isset_obj<'a>(
     let magic_receiver = object;
     let object = initialized_target.as_ref().unwrap_or(object);
     if has_get_hook
-        && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_GET)
-        && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_SET)
+        && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_HOOK_GET)
     {
         let hook_name = format!("${name}::get");
-        let value = call_guarded_property_magic_method(
+        let value = call_guarded_property_hook_method(
             eg,
             magic_receiver,
             &name,
-            PROPERTY_GUARD_GET,
+            PROPERTY_GUARD_HOOK_GET,
+            get_hook_declaring_class
+                .as_deref()
+                .expect("get hook must retain its declaring class"),
             &hook_name,
             &[],
         )?;
@@ -2613,15 +2656,16 @@ fn op_bind_obj_prop_ref<'a>(
 
         if let Some(definition) = definition
             && definition.has_get_hook
-            && !property_guard_active(eg, &receiver, &name, PROPERTY_GUARD_GET)
-            && !property_guard_active(eg, &receiver, &name, PROPERTY_GUARD_SET)
+            && opline._pad & crate::vm::instruction::OBJ_PROP_HOOK_BYPASS == 0
+            && !property_guard_active(eg, &receiver, &name, PROPERTY_GUARD_HOOK_GET)
         {
             let hook_name = format!("${name}::get");
-            let returned = call_guarded_property_magic_method(
+            let returned = call_guarded_property_hook_method(
                 eg,
                 &receiver,
                 &name,
-                PROPERTY_GUARD_GET,
+                PROPERTY_GUARD_HOOK_GET,
+                &definition.declaring_class,
                 &hook_name,
                 &[],
             )?;
@@ -2665,6 +2709,38 @@ fn op_bind_obj_prop_ref<'a>(
                 frame_slot_set(frame, destination, binding);
                 return Ok(ColdResult::Done);
             }
+        }
+
+        if let Some(definition) = definition
+            && !definition.has_get_hook
+            && definition.has_set_hook
+            && opline._pad & crate::vm::instruction::OBJ_PROP_HOOK_BYPASS == 0
+            && let Some(mut returned) = receiver
+                .as_object()
+                .and_then(|object| object.get_property_slot(declared_slot?).cloned())
+        {
+            if !matches!(
+                returned.dereferenced().value_type(),
+                ValueType::Object | ValueType::Closure
+            ) {
+                return Ok(object_property_throw_at(
+                    eg,
+                    frame,
+                    op_array,
+                    instruction_index,
+                    "Error",
+                    format!("Indirect modification of {class_name}::${name} is not allowed"),
+                )?);
+            }
+            if !returned.is_reference() {
+                returned = Value::owned_reference(returned);
+            }
+            if internal_result {
+                returned.mark_internal_reference_alias();
+            }
+            let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
+            frame_slot_set(frame, destination, returned);
+            return Ok(ColdResult::Done);
         }
 
         let missing_property = declared_slot.is_none()
@@ -3506,6 +3582,12 @@ fn op_assign_obj_prop_inner<'a>(
             effective_caller,
         );
         let lazy_declared_property = php_obj.property_slot(&lazy_key).is_some();
+        let lazy_set_hook_declaring_class = property_accessible
+            .then(|| php_obj.property_slot(&lazy_key))
+            .flatten()
+            .and_then(|slot| eg.instance_property_definition(php_obj.class_id, slot))
+            .filter(|definition| definition.has_set_hook)
+            .map(|definition| definition.declaring_class.clone());
         let lazy_declared_explicitly_unset = lazy_declared_property
             && php_obj
                 .get_property(&lazy_key)
@@ -3525,6 +3607,28 @@ fn op_assign_obj_prop_inner<'a>(
                     lazy_class_name.to_ascii_lowercase()
                 ))
                 .is_some();
+        if let Some(declaring_class) = lazy_set_hook_declaring_class.as_deref()
+            && opline._pad & crate::vm::instruction::OBJ_PROP_HOOK_BYPASS == 0
+            && !property_guard_active(eg, obj, &name, PROPERTY_GUARD_HOOK_SET)
+            && eg.lazy_property_requires_initialization(obj, &lazy_key)
+        {
+            let hook_name = format!("${name}::set");
+            let hook_value = call_guarded_property_hook_method(
+                eg,
+                obj,
+                &name,
+                PROPERTY_GUARD_HOOK_SET,
+                declaring_class,
+                &hook_name,
+                std::slice::from_ref(&assigned),
+            )?;
+            if let Some(result) = take_magic_exception(eg, frame)? {
+                return Ok(result);
+            }
+            if hook_value.is_some() {
+                return Ok(ColdResult::Done);
+            }
+        }
         let must_initialize = (property_accessible || force_dynamic)
             && !lazy_dynamic_property
             && !lazy_declared_explicitly_unset
@@ -3696,6 +3800,9 @@ fn op_assign_obj_prop_inner<'a>(
                 && !definition.get_hook_is_backed
         });
         let has_set_hook = definition.is_some_and(|definition| definition.has_set_hook);
+        let set_hook_declaring_class = definition
+            .filter(|definition| definition.has_set_hook)
+            .map(|definition| definition.declaring_class.clone());
         let property_constraints = if force_dynamic {
             php_obj
                 .get_dynamic_property_with_position(&key)
@@ -3733,15 +3840,17 @@ fn op_assign_obj_prop_inner<'a>(
         drop(php_obj);
         if has_set_hook
             && opline._pad & crate::vm::instruction::OBJ_PROP_HOOK_BYPASS == 0
-            && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_SET)
-            && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_GET)
+            && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_HOOK_SET)
         {
             let hook_name = format!("${name}::set");
-            let hook_value = call_guarded_property_magic_method(
+            let hook_value = call_guarded_property_hook_method(
                 eg,
                 magic_receiver,
                 &name,
-                PROPERTY_GUARD_SET,
+                PROPERTY_GUARD_HOOK_SET,
+                set_hook_declaring_class
+                    .as_deref()
+                    .expect("set hook must retain its declaring class"),
                 &hook_name,
                 std::slice::from_ref(&assigned),
             )?;
