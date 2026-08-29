@@ -34,6 +34,20 @@ SAPI, or production-readiness claim beyond its exact differential gate.
    Public specifications and clean-room differential observation define the
    expected behavior; repository-owned regression tests must be original.
 
+## Current measured checkpoint
+
+The accepted AMD64 `typed-property-coercion-and-reference-constraints` train
+at implementation commit `5ebb95dd` retains 6,130 exact passes across the
+7,174-case PHP 8.5 corpus, with 650 supported failures, 182 skips, 212
+unsupported cases and no timeout or crash. Its pass-set hash is
+`c3f3123f0699d80c39e47181a3c0d4a4971bcf4599daaf3b39099365d82d76fd`;
+the exact parent delta is `+13/-0` with no other status or stage movement.
+Current compatibility work is selected as a 10–30-case train around one shared
+root-cause hypothesis and one cumulative full/performance evidence packet.
+Smaller checkpoints require a crash, security issue, framework blocker or
+similarly explicit reason; Fiber/generator suspension additionally requires a
+pay-for-use performance design.
+
 ## Starting evidence
 
 The public platform identity is PHP 8.5.0. The reproducible contract corpus is

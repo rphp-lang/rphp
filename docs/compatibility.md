@@ -8,6 +8,58 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`typed-property-coercion-and-reference-constraints`, pinned to php-src 8.5
+commit `fcc29c8` and validated against PHP 8.5.10. Unset typed properties now
+validate and weakly coerce `__get()` results before exposing them; direct,
+static and reference-backed string properties accept Stringable objects at the
+transactional PHP boundary. Shared references use one conversion compatible
+with every owning property or reject the write without mutation. Reentrant
+conversion preserves the outer-write ordering, chains a throwing
+`__toString()` behind the canonical `TypeError`, and reports a receiver released
+during conversion as a catchable `Error`. Uninitialized property dumps use the
+declaration's canonical union order.
+
+Five original E2E regressions cover magic reads, scalar and Stringable
+conversion, shared-reference intersections, rollback, exception chaining,
+receiver release and explicit-unset compound writes. The focused 14-case PHPT
+manifest is 12 pass and two retained failures and hashes to
+`0e6b92fbe9efbbe8a70547fdad20aef9e3883c6d06d4e13062691eee2ec26e7c`.
+`typed_properties_073.phpt` disagrees with the pinned expectation under the
+PHP 8.5.10 oracle itself; `typed_properties_class_loading.phpt` differs only in
+global object-handle numbering while preserving the required no-autoload
+behavior.
+
+The final 5,599-case Zend/lang run is 4,671 pass, 632 fail, 115 skip and 181
+unsupported. The 1,575-case strings/array projection remains 1,459 pass, 18
+fail, 67 skip and 31 unsupported. The combined manifest and pass set hash to
+`f9782bccc1835bf61fb5130bf0555efd208e46fb73317edaf073fc4c0cafcc12`
+and `c3f3123f0699d80c39e47181a3c0d4a4971bcf4599daaf3b39099365d82d76fd`:
+6,130 pass, 650 fail, 182 skip and 212 unsupported, with no timeout or crash.
+The exact delta is `+13/-0`, with no other status or failure-stage movement.
+Supported debt is 632 Zend/lang failures, 18 strings failures and zero array
+failures.
+
+The exact final candidate SHA-256 is
+`0effdfd9165991cf014cb83bb65db23ff931daa066bbe4ba732439b89e84373d`.
+All five Cargo configurations, all-feature/all-target checking, formatting,
+HTML data, PHPT runner and both unsafe-policy checks pass. Production remains
+at 1,623 unsafe blocks and 289 unsafe functions, with 390 SAFETY annotations
+and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates
+and PHP 8.5.10 warmed-kernel S2 and cold-build S3 pass.
+
+The fixed-baseline CPU-2 gate uses 32 balanced pairs across eight interleaved
+copies of each exact binary; its result hashes to
+`537151c7b0edfe7bbe8181d5afc6e80adbe6a1ce8493afc22026f4098f223779`.
+Paired medians are ordinary calls +0.864%, construction +0.845%, property reads
++0.644%, property writes -0.365%, startup +0.141% and typed-reference writes
+-12.495%, with exact checksums throughout.
+
+This checkpoint does not claim the two focused holdouts, complete type
+declarations, general SPL, Fiber/generator suspension, PHP 8.2, 32-bit behavior
+or allocation-limit/OOM equivalence. The implementation checkpoint is commit
+`5ebb95dd`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `property-hook-storage-and-dispatch`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.10. Declared property hooks now keep separate
 recursion guards from `__get()`/`__set()`, dispatch in the selected
