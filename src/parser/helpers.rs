@@ -20,6 +20,7 @@ impl Parser {
 
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
     fn current_token_source_line(&self) -> usize {
         match self.peek() {
             Token::This(line)
@@ -797,6 +798,9 @@ impl Parser {
     /// Namespace declaration names admit PHP's relaxed keyword segments.
     /// Keep this contextual rather than reclassifying keywords globally: the
     /// same tokens still have their ordinary grammar roles everywhere else.
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
     fn parse_namespace_declaration_name(&mut self) -> Result<String, String> {
         let mut parts = Vec::new();
         loop {
