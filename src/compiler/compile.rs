@@ -14582,8 +14582,13 @@ impl Compiler {
                     root = array.as_ref();
                 }
                 reversed_indices.reverse();
-                let path =
-                    self.compile_mutable_array_path(root, &reversed_indices, false, false)?;
+                let path = self.compile_mutable_array_path(
+                    root,
+                    &reversed_indices,
+                    false,
+                    false,
+                    expression_source_line(target),
+                )?;
                 let &(container, container_type) = path.containers.last().unwrap();
                 let &(key, key_type) = path.keys.last().unwrap();
                 let mut assign = Instruction::new(OpCode::AssignDim);

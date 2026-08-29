@@ -645,6 +645,7 @@ impl InlineCache {
     const GENERIC_CLASS_SCOPE: u32 = 1 << 31;
     const DIRECT_STATIC_TRAIT_ACCESS: u32 = 2;
     const CONSTRUCTOR_HAS_DESTRUCTOR: u32 = 1;
+    const CONSTRUCTOR_IS_THROWABLE: u32 = 1 << 1;
 
     pub fn empty() -> Self {
         Self {
@@ -958,11 +959,13 @@ impl InlineCache {
         func: *const FunctionCommon,
         class_id: u32,
         has_destructor: bool,
+        is_throwable: bool,
     ) {
         debug_assert!(class_id != 0);
         self.func = func;
         self.class_id = class_id;
-        self.prop_info = u32::from(has_destructor) * Self::CONSTRUCTOR_HAS_DESTRUCTOR;
+        self.prop_info = u32::from(has_destructor) * Self::CONSTRUCTOR_HAS_DESTRUCTOR
+            | u32::from(is_throwable) * Self::CONSTRUCTOR_IS_THROWABLE;
     }
 
     /// Whether this constructor site must defer automatic destruction until
@@ -971,6 +974,14 @@ impl InlineCache {
     #[inline(always)]
     pub fn constructor_has_destructor(&self) -> bool {
         self.prop_info & Self::CONSTRUCTOR_HAS_DESTRUCTOR != 0
+    }
+
+    /// Whether the cached class implements Throwable. The relation is stable
+    /// for the lifetime of a registered class ID, so repeated allocations can
+    /// avoid hashing and walking the same hierarchy solely to attach origins.
+    #[inline(always)]
+    pub fn constructor_is_throwable(&self) -> bool {
+        self.prop_info & Self::CONSTRUCTOR_IS_THROWABLE != 0
     }
 
     /// Cache a monomorphic method resolution and whether its already-proven

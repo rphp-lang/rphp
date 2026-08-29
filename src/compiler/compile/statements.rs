@@ -317,7 +317,13 @@ impl Compiler {
             root = array.as_ref();
         }
         reversed_indices.reverse();
-        let path = self.compile_mutable_array_path(root, &reversed_indices, true, false)?;
+        let path = self.compile_mutable_array_path(
+            root,
+            &reversed_indices,
+            true,
+            false,
+            expression_source_line(source),
+        )?;
         let &(container, container_type) = path.containers.last().unwrap();
         let &(key, key_type) = path.keys.last().unwrap();
         let mut bind = Instruction::new(OpCode::BindArrayDimRef);
@@ -824,6 +830,7 @@ impl Compiler {
                     &reversed_indices,
                     silent_fetch,
                     warn_undefined_root,
+                    expression_source_line(source),
                 )?;
                 let &(container, container_type) = path.containers.last().unwrap();
                 let &(key, key_type) = path.keys.last().unwrap();
@@ -1012,7 +1019,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
-                ..
+                line,
             } => {
                 let (object, object_type) = self.compile_property_modify_base(object);
                 let property = self.add_literal(Value::string(property.clone()));
@@ -1025,7 +1032,7 @@ impl Compiler {
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
                 fetch._pad |= FETCH_OBJ_SILENT;
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(fetch, *line);
                 (
                     current,
                     OpType::Tmp,
@@ -1041,7 +1048,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
-                ..
+                line,
             } => {
                 let (object, object_type) = self.compile_property_modify_base(object);
                 let (property, property_type) = self.compile_expr(property);
@@ -1054,7 +1061,7 @@ impl Compiler {
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
                 fetch._pad |= FETCH_OBJ_SILENT;
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(fetch, *line);
                 (
                     current,
                     OpType::Tmp,
@@ -1135,8 +1142,13 @@ impl Compiler {
                         root = array.as_ref();
                     }
                     reversed_indices.reverse();
-                    let path =
-                        self.compile_mutable_array_path(root, &reversed_indices, true, false)?;
+                    let path = self.compile_mutable_array_path(
+                        root,
+                        &reversed_indices,
+                        true,
+                        false,
+                        expression_source_line(target),
+                    )?;
                     let &(container, container_type) = path.containers.last().unwrap();
                     let &(key, key_type) = path.keys.last().unwrap();
                     let current = self.alloc_tmp();
@@ -1297,6 +1309,7 @@ impl Compiler {
                 object_type: OpType,
                 property: u16,
                 property_type: OpType,
+                line: usize,
             },
             Static {
                 class: u16,
@@ -1312,6 +1325,15 @@ impl Compiler {
                 array: u16,
                 array_type: OpType,
                 writeback: ForeachArrayWriteback,
+            },
+            DeferredObjectAppend {
+                object: u16,
+                object_type: OpType,
+                property: u16,
+                property_type: OpType,
+                array: u16,
+                deferred_fetches: Vec<(Instruction, usize)>,
+                line: usize,
             },
         }
 
@@ -1337,7 +1359,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
-                ..
+                line,
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let property = self.add_literal(Value::string(property.clone()));
@@ -1346,13 +1368,14 @@ impl Compiler {
                     object_type,
                     property,
                     property_type: OpType::Const,
+                    line: *line,
                 }
             }
             Expr::DynamicPropertyAccess {
                 object,
                 property,
                 nullsafe: false,
-                ..
+                line,
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let (property, property_type) = self.compile_expr(property);
@@ -1361,6 +1384,7 @@ impl Compiler {
                     object_type,
                     property,
                     property_type,
+                    line: *line,
                 }
             }
             static_property @ (Expr::StaticProperty { .. }
@@ -1400,17 +1424,60 @@ impl Compiler {
                     &reversed_indices,
                     true,
                     false,
+                    expression_source_line(target),
                 )?)
             }
-            Expr::ArrayAppendArgument { target, .. } => {
-                let (array, array_type, writeback) =
-                    self.compile_array_append_source(target, true, false)?;
-                WriteTarget::Append {
-                    array,
-                    array_type,
-                    writeback,
+            Expr::ArrayAppendArgument { target, .. } => match target.as_ref() {
+                Expr::PropertyAccess {
+                    object,
+                    property,
+                    nullsafe: false,
+                    line,
+                } => {
+                    let (object, object_type, deferred_fetches) =
+                        self.prepare_property_modify_base(object);
+                    let property = self.add_literal(Value::string(property.clone()));
+                    let array = self.alloc_tmp();
+                    WriteTarget::DeferredObjectAppend {
+                        object,
+                        object_type,
+                        property,
+                        property_type: OpType::Const,
+                        array,
+                        deferred_fetches,
+                        line: *line,
+                    }
                 }
-            }
+                Expr::DynamicPropertyAccess {
+                    object,
+                    property,
+                    nullsafe: false,
+                    line,
+                } => {
+                    let (object, object_type, deferred_fetches) =
+                        self.prepare_property_modify_base(object);
+                    let (property, property_type) = self.compile_expr(property);
+                    let array = self.alloc_tmp();
+                    WriteTarget::DeferredObjectAppend {
+                        object,
+                        object_type,
+                        property,
+                        property_type,
+                        array,
+                        deferred_fetches,
+                        line: *line,
+                    }
+                }
+                _ => {
+                    let (array, array_type, writeback) =
+                        self.compile_array_append_source(target, true, false)?;
+                    WriteTarget::Append {
+                        array,
+                        array_type,
+                        writeback,
+                    }
+                }
+            },
             _ => return Err("Invalid assignment target".into()),
         };
 
@@ -1441,6 +1508,7 @@ impl Compiler {
                 object_type,
                 property,
                 property_type,
+                line,
             } => {
                 let mut assign = Instruction::new(OpCode::AssignObjProp);
                 assign.op1 = object;
@@ -1450,7 +1518,7 @@ impl Compiler {
                 assign.result = result;
                 assign.result_type = OpType::Tmp;
                 assign._pad |= ASSIGN_PROP_RESULT_VALUE;
-                self.instructions.push(assign);
+                self.push_instruction_at_line(assign, line);
             }
             WriteTarget::Static {
                 class,
@@ -1508,6 +1576,46 @@ impl Compiler {
                 append.op2_type = OpType::Tmp;
                 self.instructions.push(append);
                 self.emit_foreach_reference_source_writeback(writeback, array, array_type);
+            }
+            WriteTarget::DeferredObjectAppend {
+                object,
+                object_type,
+                property,
+                property_type,
+                array,
+                deferred_fetches,
+                line,
+            } => {
+                for (fetch, line) in deferred_fetches {
+                    self.push_instruction_at_line(fetch, line);
+                }
+                let mut fetch = Instruction::new(OpCode::FetchObjR);
+                fetch.op1 = object;
+                fetch.op1_type = object_type;
+                fetch.op2 = property;
+                fetch.op2_type = property_type;
+                fetch.result = array;
+                fetch.result_type = OpType::Tmp;
+                fetch._pad |=
+                    FETCH_OBJ_MODIFY | FETCH_OBJ_SILENT | FETCH_OBJ_REFERENCE_SOURCE;
+                self.push_instruction_at_line(fetch, line);
+
+                let mut append = Instruction::new(OpCode::ArrayPushOp);
+                append.op1 = array;
+                append.op1_type = OpType::Tmp;
+                append.op2 = result;
+                append.op2_type = OpType::Tmp;
+                self.push_instruction_at_line(append, line);
+
+                let mut writeback = Instruction::new(OpCode::AssignObjProp);
+                writeback.op1 = object;
+                writeback.op1_type = object_type;
+                writeback.op2 = property;
+                writeback.op2_type = property_type;
+                writeback.result = array;
+                writeback.result_type = OpType::Tmp;
+                writeback._pad |= ASSIGN_OBJ_MODIFY;
+                self.push_instruction_at_line(writeback, line);
             }
         }
 
@@ -1794,7 +1902,13 @@ impl Compiler {
                     root = array.as_ref();
                 }
                 reversed_indices.reverse();
-                let path = self.compile_mutable_array_path(root, &reversed_indices, true, false)?;
+                let path = self.compile_mutable_array_path(
+                    root,
+                    &reversed_indices,
+                    true,
+                    false,
+                    expression_source_line(target),
+                )?;
                 Ok(CoalesceWrite::Array(path))
             }
             _ => Err("Invalid reference assignment target".into()),
@@ -1807,6 +1921,7 @@ impl Compiler {
         indices: &[Expr],
         silent_root_fetch: bool,
         warn_undefined_root: bool,
+        root_source_line: usize,
     ) -> Result<MutableArrayPath, String> {
         if indices.is_empty() {
             return Err("Array mutation requires at least one dimension".into());
@@ -1875,7 +1990,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
-                ..
+                line,
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let property = self.add_literal(Value::string(property.clone()));
@@ -1887,11 +2002,14 @@ impl Compiler {
                 fetch.op2_type = OpType::Const;
                 fetch.result = container;
                 fetch.result_type = OpType::Tmp;
-                fetch._pad |= FETCH_OBJ_MODIFY;
+                fetch._pad |= FETCH_OBJ_MODIFY | FETCH_OBJ_REFERENCE_SOURCE;
                 if silent_root_fetch {
                     fetch._pad |= FETCH_OBJ_SILENT;
                 }
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(
+                    fetch,
+                    if *line == 0 { root_source_line } else { *line },
+                );
                 (
                     (container, OpType::Tmp),
                     ArrayRootWriteback::Object {
@@ -1907,7 +2025,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
-                ..
+                line,
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let (property, property_type) = self.compile_expr(property);
@@ -1919,11 +2037,14 @@ impl Compiler {
                 fetch.op2_type = property_type;
                 fetch.result = container;
                 fetch.result_type = OpType::Tmp;
-                fetch._pad |= FETCH_OBJ_MODIFY;
+                fetch._pad |= FETCH_OBJ_MODIFY | FETCH_OBJ_REFERENCE_SOURCE;
                 if silent_root_fetch {
                     fetch._pad |= FETCH_OBJ_SILENT;
                 }
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(
+                    fetch,
+                    if *line == 0 { root_source_line } else { *line },
+                );
                 (
                     (container, OpType::Tmp),
                     ArrayRootWriteback::Object {
@@ -3209,7 +3330,8 @@ impl Compiler {
                 expr,
                 line,
             } => {
-                let path = self.compile_mutable_array_path(root, indices, true, false)?;
+                let path =
+                    self.compile_mutable_array_path(root, indices, true, false, *line)?;
 
                 let (value, value_type) = self.compile_expr(expr);
                 let &(leaf, leaf_type) = path.containers.last().unwrap();
@@ -3243,16 +3365,98 @@ impl Compiler {
                 self.definitely_defined_cvs.insert(cv_idx);
             }
             Stmt::ArrayAppend { target, expr } => {
-                let (array, array_type, writeback) =
-                    self.compile_array_append_source(target, true, false)?;
-                let (value, value_type) = self.compile_expr(expr);
-                let mut append = Instruction::new(OpCode::ArrayPushOp);
-                append.op1 = array;
-                append.op1_type = array_type;
-                append.op2 = value;
-                append.op2_type = value_type;
-                self.instructions.push(append);
-                self.emit_foreach_reference_source_writeback(writeback, array, array_type);
+                let deferred_object = match target {
+                    Expr::PropertyAccess {
+                        object,
+                        property,
+                        nullsafe: false,
+                        line,
+                    } => {
+                        let (object, object_type, deferred_fetches) =
+                            self.prepare_property_modify_base(object);
+                        let property = self.add_literal(Value::string(property.clone()));
+                        Some((
+                            object,
+                            object_type,
+                            property,
+                            OpType::Const,
+                            deferred_fetches,
+                            *line,
+                        ))
+                    }
+                    Expr::DynamicPropertyAccess {
+                        object,
+                        property,
+                        nullsafe: false,
+                        line,
+                    } => {
+                        let (object, object_type, deferred_fetches) =
+                            self.prepare_property_modify_base(object);
+                        let (property, property_type) = self.compile_expr(property);
+                        Some((
+                            object,
+                            object_type,
+                            property,
+                            property_type,
+                            deferred_fetches,
+                            *line,
+                        ))
+                    }
+                    _ => None,
+                };
+                if let Some((
+                    object,
+                    object_type,
+                    property,
+                    property_type,
+                    deferred_fetches,
+                    line,
+                )) = deferred_object
+                {
+                    let (value, value_type) = self.compile_expr(expr);
+                    for (fetch, line) in deferred_fetches {
+                        self.push_instruction_at_line(fetch, line);
+                    }
+                    let array = self.alloc_tmp();
+                    let mut fetch = Instruction::new(OpCode::FetchObjR);
+                    fetch.op1 = object;
+                    fetch.op1_type = object_type;
+                    fetch.op2 = property;
+                    fetch.op2_type = property_type;
+                    fetch.result = array;
+                    fetch.result_type = OpType::Tmp;
+                    fetch._pad |=
+                        FETCH_OBJ_MODIFY | FETCH_OBJ_SILENT | FETCH_OBJ_REFERENCE_SOURCE;
+                    self.push_instruction_at_line(fetch, line);
+
+                    let mut append = Instruction::new(OpCode::ArrayPushOp);
+                    append.op1 = array;
+                    append.op1_type = OpType::Tmp;
+                    append.op2 = value;
+                    append.op2_type = value_type;
+                    self.push_instruction_at_line(append, line);
+
+                    let mut writeback = Instruction::new(OpCode::AssignObjProp);
+                    writeback.op1 = object;
+                    writeback.op1_type = object_type;
+                    writeback.op2 = property;
+                    writeback.op2_type = property_type;
+                    writeback.result = array;
+                    writeback.result_type = OpType::Tmp;
+                    writeback._pad |= ASSIGN_OBJ_MODIFY;
+                    self.push_instruction_at_line(writeback, line);
+                } else {
+                    let (array, array_type, writeback) =
+                        self.compile_array_append_source(target, true, false)?;
+                    let (value, value_type) = self.compile_expr(expr);
+                    let mut append = Instruction::new(OpCode::ArrayPushOp);
+                    append.op1 = array;
+                    append.op1_type = array_type;
+                    append.op2 = value;
+                    append.op2_type = value_type;
+                    self.instructions.push(append);
+                    self.emit_foreach_reference_source_writeback(writeback, array, array_type);
+                }
             }
             Stmt::BindArrayAppendReference { var, target } => {
                 let (array, array_type, writeback) =
@@ -3594,8 +3798,13 @@ impl Compiler {
                                 self.instructions.push(unset);
                                 continue;
                             }
-                            let path =
-                                self.compile_mutable_array_path(root, &indices, true, true)?;
+                            let path = self.compile_mutable_array_path(
+                                root,
+                                &indices,
+                                true,
+                                true,
+                                *line,
+                            )?;
                             let &(leaf, leaf_type) = path.containers.last().unwrap();
                             let &(key, key_type) = path.keys.last().unwrap();
                             let mut unset = Instruction::new(OpCode::UnsetDim);
@@ -3933,16 +4142,36 @@ impl Compiler {
                     self.push_instruction_at_line(fetch, line);
                 }
                 let prop_idx = self.add_literal(Value::string(property.clone()));
+                let current = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchObjR);
+                fetch.op1 = obj_op;
+                fetch.op1_type = obj_type;
+                fetch.op2 = prop_idx;
+                fetch.op2_type = OpType::Const;
+                fetch.result = current;
+                fetch.result_type = OpType::Tmp;
+                fetch._pad |=
+                    FETCH_OBJ_MODIFY | FETCH_OBJ_SILENT | FETCH_OBJ_REFERENCE_SOURCE;
+                self.push_instruction_at_line(fetch, *line);
 
-                let mut instr = Instruction::new(OpCode::AssignObjDim);
-                instr.op1 = obj_op;
-                instr.op1_type = obj_type;
-                instr.op2 = idx_op;
-                instr.op2_type = idx_type;
-                instr.result = val_op;
-                instr.result_type = val_type;
-                instr.extended_value = prop_idx as u32;
-                self.push_instruction_at_line(instr, *line);
+                let mut assign_dimension = Instruction::new(OpCode::AssignDim);
+                assign_dimension.op1 = current;
+                assign_dimension.op1_type = OpType::Tmp;
+                assign_dimension.op2 = idx_op;
+                assign_dimension.op2_type = idx_type;
+                assign_dimension.result = val_op;
+                assign_dimension.result_type = val_type;
+                self.push_instruction_at_line(assign_dimension, *line);
+
+                let mut writeback = Instruction::new(OpCode::AssignObjProp);
+                writeback.op1 = obj_op;
+                writeback.op1_type = obj_type;
+                writeback.op2 = prop_idx;
+                writeback.op2_type = OpType::Const;
+                writeback.result = current;
+                writeback.result_type = OpType::Tmp;
+                writeback._pad |= ASSIGN_OBJ_MODIFY;
+                self.push_instruction_at_line(writeback, *line);
             }
             Stmt::Include {
                 path,

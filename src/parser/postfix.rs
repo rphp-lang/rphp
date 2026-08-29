@@ -106,16 +106,16 @@ impl Parser {
                         };
                         continue;
                     }
-                    if let Token::Variable(property, _) = self.peek() {
+                    if let Token::Variable(property, property_line) = self.peek() {
                         self.advance();
                         expr = Expr::DynamicPropertyAccess {
                             object: Box::new(expr),
                             property: Box::new(Expr::Variable {
                                 name: property,
-                                line: 0,
+                                line: property_line,
                             }),
                             nullsafe,
-                            line: self.last_primary_line.unwrap_or(0),
+                            line: property_line,
                         };
                         continue;
                     }

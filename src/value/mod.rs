@@ -1652,7 +1652,7 @@ impl PhpObject {
                     instance_property_reference_owner(handle, slot),
                 );
             }
-            self.property_values[slot] = Value::undef();
+            self.property_values[slot] = Value::explicitly_unset_property();
             true
         } else {
             self.dynamic_properties
@@ -4999,16 +4999,31 @@ impl Value {
     /// `var_dump()` display a reference wrapper after the last source alias is
     /// unset.
     const INTERNAL_REFERENCE_ALIAS_FLAG: u32 = 1 << 10;
-    /// Marks an alias returned by a property or magic getter for an indirect
-    /// modification. Mutating that alias updates its exposed storage directly,
-    /// so the compiler's later synthetic property writeback is redundant.
-    const INDIRECT_PROPERTY_MODIFICATION_REFERENCE_FLAG: u32 = 1 << 11;
+    /// Marks a value returned by a property or magic getter for an indirect
+    /// modification. A reference exposes its storage directly; an object is
+    /// mutated through its identity; and a by-value scalar/container is only a
+    /// temporary (with PHP's overloaded-property notice). In every case the
+    /// compiler's later synthetic property writeback is redundant.
+    const INDIRECT_PROPERTY_MODIFICATION_RESULT_FLAG: u32 = 1 << 11;
+    /// Distinguishes a declared property explicitly removed by `unset()` from
+    /// its initial uninitialized sentinel. Magic accessors observe the former,
+    /// while typed-property initialization rules still own the latter.
+    const EXPLICITLY_UNSET_PROPERTY_FLAG: u32 = 1 << 15;
 
     #[inline]
     pub fn undef() -> Self {
         Self {
             data: ValueData { long: 0 },
             type_info: ValueType::Undef as u32,
+            _not_send: PhantomData,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn explicitly_unset_property() -> Self {
+        Self {
+            data: ValueData { long: 0 },
+            type_info: ValueType::Undef as u32 | Self::EXPLICITLY_UNSET_PROPERTY_FLAG,
             _not_send: PhantomData,
         }
     }
@@ -6362,6 +6377,11 @@ impl Value {
         self.value_type() == ValueType::Undef
     }
 
+    #[inline]
+    pub(crate) fn is_explicitly_unset_property(&self) -> bool {
+        self.is_undef() && self.type_info & Self::EXPLICITLY_UNSET_PROPERTY_FLAG != 0
+    }
+
     /// PHP truthiness — matches PHP's casting rules for (bool).
     #[inline]
     pub fn is_truthy(&self) -> bool {
@@ -6594,13 +6614,17 @@ impl Value {
     #[inline]
     pub(crate) fn mark_indirect_property_modification_reference(&mut self) {
         debug_assert!(self.is_reference());
-        self.type_info |= Self::INDIRECT_PROPERTY_MODIFICATION_REFERENCE_FLAG;
+        self.mark_indirect_property_modification_result();
     }
 
     #[inline]
-    pub(crate) fn is_indirect_property_modification_reference(&self) -> bool {
-        self.is_reference()
-            && self.type_info & Self::INDIRECT_PROPERTY_MODIFICATION_REFERENCE_FLAG != 0
+    pub(crate) fn mark_indirect_property_modification_result(&mut self) {
+        self.type_info |= Self::INDIRECT_PROPERTY_MODIFICATION_RESULT_FLAG;
+    }
+
+    #[inline]
+    pub(crate) fn is_indirect_property_modification_result(&self) -> bool {
+        self.type_info & Self::INDIRECT_PROPERTY_MODIFICATION_RESULT_FLAG != 0
     }
 
     /// Whether this request-owned reference cell is still reachable through

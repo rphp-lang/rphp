@@ -694,7 +694,13 @@ fn op_new_obj_resolved<'a>(
         frame_tmp_set(frame, result_ptr, Value::object(obj));
         &*result_ptr
     };
-    if eg.class_is_a(name, "Throwable") {
+    let constructor_cache_hit = class_id != 0 && ic.class_id == class_id;
+    let is_throwable = if constructor_cache_hit {
+        ic.constructor_is_throwable()
+    } else {
+        eg.class_is_a(name, "Throwable")
+    };
+    if is_throwable {
         attach_new_throwable_origin(object, eg, frame, op_array, ip);
     }
     #[cfg(feature = "php-generics-reified")]
@@ -729,7 +735,7 @@ fn op_new_obj_resolved<'a>(
     // name every time. A changed/re-registered class gets a different ID and
     // therefore resolves again.
     let num_args = opline.extended_value;
-    let (func_ptr, constructor_has_destructor) = if class_id != 0 && ic.class_id == class_id {
+    let (func_ptr, constructor_has_destructor) = if constructor_cache_hit {
         (ic.func, ic.constructor_has_destructor())
     } else {
         let construct_name = format!("{}::__construct", name);
@@ -741,7 +747,7 @@ fn op_new_obj_resolved<'a>(
                 &mut *(op_array.cache.as_ptr().add(ip)
                     as *mut crate::vm::instruction::InlineCache)
             };
-            ic_mut.set_constructor(resolved, class_id, has_destructor);
+            ic_mut.set_constructor(resolved, class_id, has_destructor, is_throwable);
         }
         (resolved, has_destructor)
     };
@@ -1451,6 +1457,10 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
         // the ghost or the real proxy instance without repeating name side
         // effects.
         let declared_property = obj.property_slot(&key).is_some();
+        let explicitly_unset_declared = declared_property
+            && obj
+                .get_property(&key)
+                .is_some_and(Value::is_explicitly_unset_property);
         let dynamic_property = obj.get_dynamic_property_with_position(&key).is_some();
         let class_name = obj.class_name.clone();
         drop(obj);
@@ -1463,7 +1473,7 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                 class_name.to_ascii_lowercase()
             ))
             .is_some();
-        let magic_get_can_handle = !declared_property
+        let magic_get_can_handle = (!declared_property || explicitly_unset_declared)
             && !dynamic_property
             && ((has_magic_get
                 && !property_guard_active(eg, obj_val, &name, PROPERTY_GUARD_GET))
@@ -1564,7 +1574,11 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
         let typed_property = definition
             .filter(|definition| definition.is_typed())
             .map(|definition| (definition.type_scope.clone(), definition.name.clone()));
-        let (found_val, dynamic_position) = if force_dynamic {
+        let explicitly_unset_declared = declared_slot.is_some()
+            && obj
+                .get_property(&key)
+                .is_some_and(Value::is_explicitly_unset_property);
+        let (mut found_val, dynamic_position) = if force_dynamic {
             match obj.get_dynamic_property_with_position(&key) {
                 Some((value, position)) => (Some(value.clone()), position),
                 None => (None, None),
@@ -1587,6 +1601,18 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
             ic_mut.set_dynamic_property_read(obj.property_layout_ptr(), dynamic_position);
         }
         drop(obj); // Release borrow before potential magic method call
+        let explicitly_unset_uses_missing_path = explicitly_unset_declared
+            && (typed_property.is_none()
+                || (has_magic_get
+                    && !property_guard_active(
+                        eg,
+                        magic_receiver,
+                        &name,
+                        PROPERTY_GUARD_GET,
+                    )));
+        if explicitly_unset_uses_missing_path {
+            found_val = None;
+        }
         let current_incdec_value = || {
             obj_val
                 .as_object()
@@ -1726,7 +1752,19 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
         } else {
             // An intermediate property in `isset($object->a->b)` first asks
             // `__isset(a)` and invokes `__get(a)` only when it returns true.
-            if opline._pad & FETCH_OBJ_SILENT != 0 {
+            // A compiler-silent modification fetch is different: the RHS has
+            // already committed and PHP must fetch the overloaded l-value via
+            // `__get`, without consulting `__isset`.
+            if opline._pad & FETCH_OBJ_SILENT != 0 && write_flags != 0 && !has_magic_get {
+                // Missing ordinary properties are auto-vivified by the later
+                // canonical writeback. The silent l-value fetch must not emit
+                // the read-side undefined-property warning (or eagerly create
+                // the member), while an overloaded property still needs to
+                // reach __get below.
+                set_result(Value::null());
+                return Ok(ColdResult::Done);
+            }
+            if opline._pad & FETCH_OBJ_SILENT != 0 && write_flags == 0 {
                 let directly_isset_guarded = magic_receiver
                     .as_object()
                     .is_some_and(|object| {
@@ -1762,6 +1800,10 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                     set_result(Value::null());
                     return Ok(ColdResult::Done);
                 }
+                if !has_magic_get {
+                    set_result(Value::null());
+                    return Ok(ColdResult::Done);
+                }
             }
             // Property not found (or accepted by __isset) — try __get.
             if name.starts_with('\0')
@@ -1786,8 +1828,46 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                 return Ok(result);
             }
             if let Some(mut result) = magic_value {
-                if opline._pad & FETCH_OBJ_MODIFY != 0 && result.is_reference() {
-                    result.mark_indirect_property_modification_reference();
+                if opline._pad & FETCH_OBJ_MODIFY != 0 {
+                    if result.is_reference() {
+                        result.mark_indirect_property_modification_reference();
+                    } else {
+                        let indirect_container_write = opline._pad
+                            & (FETCH_OBJ_INCDEC | FETCH_OBJ_COMPOUND)
+                            == 0;
+                        let identity_preserving_object = matches!(
+                            result.dereferenced().value_type(),
+                            ValueType::Object | ValueType::Closure
+                        );
+                        if indirect_container_write
+                            && !identity_preserving_object
+                        {
+                            let class_name = obj_val
+                                .as_object()
+                                .map(|object| object.class_name.to_string())
+                                .unwrap_or_else(|| "object".to_string());
+                            report_php_notice(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                &format!(
+                                    "Indirect modification of overloaded property {class_name}::${name} has no effect"
+                                ),
+                            )?;
+                            if let Some(result) = take_magic_exception(eg, frame)? {
+                                return Ok(result);
+                            }
+                        }
+                        if indirect_container_write {
+                            if identity_preserving_object {
+                                result.mark_indirect_property_modification_result();
+                            } else {
+                                result = Value::owned_reference(result);
+                                result.mark_indirect_property_modification_result();
+                            }
+                        }
+                    }
                 }
                 set_result(result);
             } else if name.starts_with('\0') {
@@ -1976,10 +2056,15 @@ fn op_isset_obj<'a>(
             .and_then(|slot| eg.instance_property_definition(object_ref.class_id, slot))
             .is_some_and(|definition| definition.has_get_hook);
     let declared_property = object_ref.property_slot(&key).is_some();
+    let explicitly_unset_declared = declared_property
+        && object_ref
+            .get_property(&key)
+            .is_some_and(Value::is_explicitly_unset_property);
     drop(object_ref);
     let initialized_target = if accessible
         && !hidden_parent_private
         && declared_property
+        && !explicitly_unset_declared
         && eg.lazy_property_requires_initialization(object, &key)
     {
         Some(crate::stdlib::reflection::initialize_lazy_object(
@@ -2017,7 +2102,9 @@ fn op_isset_obj<'a>(
     let object_ref = object
         .as_object()
         .expect("lazy initialization must preserve an object receiver");
-    let property_state = if hidden_parent_private {
+    let property_state = if explicitly_unset_declared {
+        None
+    } else if hidden_parent_private {
         object_ref
             .get_dynamic_property_with_position(&name)
             .map(|(value, _)| !value.is_undef() && value.value_type() != ValueType::Null)
@@ -2134,6 +2221,10 @@ fn op_unset_obj<'a>(
             effective_caller,
         )
     };
+    let explicitly_unset_declared = object_ref.property_slot(&key).is_some()
+        && object_ref
+            .get_property(&key)
+            .is_some_and(Value::is_explicitly_unset_property);
     if eg
         .class_table
         .get(object_ref.class_name.as_ref())
@@ -2148,11 +2239,45 @@ fn op_unset_obj<'a>(
             format!("Cannot unset readonly property {class_name}::${name}"),
         )?);
     }
+    let readonly_property = eg
+        .class_table
+        .get(object_ref.class_name.as_ref())
+        .is_some_and(|class| class.readonly_props.contains(&name));
+    if readonly_property {
+        let initialized = object_ref
+            .get_property(&key)
+            .is_some_and(|value| !value.is_undef());
+        let clone_reinitialization =
+            initialized && readonly_clone_reinitialization_allowed(eg, object, &name);
+        let magic_unset_can_handle = explicitly_unset_declared
+            && !property_guard_active(eg, object, &name, PROPERTY_GUARD_UNSET)
+            && eg
+                .find_function(&format!(
+                    "{}::__unset",
+                    object_ref.class_name.to_ascii_lowercase()
+                ))
+                .is_some();
+        if (initialized && !clone_reinitialization)
+            || (!receiver_in_scope && !magic_unset_can_handle)
+        {
+            let defining_class = eg
+                .find_property_visibility(&object_ref.class_name, &name)
+                .map(|(_, defining_class)| defining_class)
+                .unwrap_or_else(|| object_ref.class_name.to_string());
+            let message = if initialized {
+                format!("Cannot unset readonly property {defining_class}::${name}")
+            } else {
+                format!(
+                    "Cannot unset protected(set) readonly property {defining_class}::${name} from global scope"
+                )
+            };
+            drop(object_ref);
+            return Ok(object_property_throw(eg, frame, "Error", message)?);
+        }
+    }
     if !accessible
         && eg.property_has_asymmetric_set_visibility(&object_ref.class_name, &name)
-        && object_ref
-            .get_property(&key)
-            .is_some_and(|value| !value.is_undef())
+        && !explicitly_unset_declared
     {
         let (visibility, defining_class) = eg
             .find_property_set_visibility(&object_ref.class_name, &name)
@@ -2199,7 +2324,7 @@ fn op_unset_obj<'a>(
             .is_some_and(Value::is_undef);
     let lazy_class_name = object_ref.class_name.clone();
     drop(object_ref);
-    let magic_unset_can_handle = !lazy_declared_property
+    let magic_unset_can_handle = (!lazy_declared_property || explicitly_unset_declared)
         && !lazy_dynamic_property
         && !property_guard_active(eg, object, &name, PROPERTY_GUARD_UNSET)
         && eg
@@ -2209,6 +2334,7 @@ fn op_unset_obj<'a>(
             ))
             .is_some();
     let lazy_undefined = (lazy_declared_undefined
+        && !explicitly_unset_declared
         && eg.lazy_property_requires_initialization(object, &key))
         || (accessible
             && !hidden_parent_private
@@ -2231,10 +2357,16 @@ fn op_unset_obj<'a>(
     let object_ref = object
         .as_object()
         .expect("lazy initialization must preserve an object receiver");
+    let explicitly_unset_declared = object_ref.property_slot(&key).is_some()
+        && object_ref
+            .get_property(&key)
+            .is_some_and(Value::is_explicitly_unset_property);
     let removed = if hidden_parent_private {
         object_ref.get_dynamic_property_with_position(&key).is_some()
     } else {
-        accessible && object_ref.contains_property(&key)
+        accessible
+            && object_ref.contains_property(&key)
+            && !explicitly_unset_declared
     };
     drop(object_ref);
 
@@ -2246,6 +2378,21 @@ fn op_unset_obj<'a>(
             eg.mark_initializing_lazy_property_written(object, &key);
         }
         return Ok(ColdResult::Done);
+    }
+    if name.starts_with('\0')
+        && property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_UNSET)
+    {
+        let instruction_index = (opline as *const Instruction as usize
+            - op_array.instructions.as_ptr() as usize)
+            / std::mem::size_of::<Instruction>();
+        return Ok(object_property_throw_at(
+            eg,
+            frame,
+            op_array,
+            instruction_index,
+            "Error",
+            "Cannot access property starting with \"\\0\"".into(),
+        )?);
     }
     let _ = call_guarded_property_magic_method(
         eg,
@@ -3154,7 +3301,7 @@ fn op_assign_obj_prop_inner<'a>(
         // visibility. Consume a compiler temporary now so it does not remain
         // observable as an additional PHP reference alias until frame exit.
         if opline._pad & ASSIGN_OBJ_MODIFY != 0
-            && source.is_indirect_property_modification_reference()
+            && source.is_indirect_property_modification_result()
         {
             if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
                 let source = (*frame).get_op_mut(opline.result as u32, opline.result_type);
@@ -3217,6 +3364,7 @@ fn op_assign_obj_prop_inner<'a>(
         )?);
     }
 
+    let setter_guarded = property_guard_active(eg, obj, &name, PROPERTY_GUARD_SET);
     if let Some(php_obj) = obj.as_object_mut() {
         let caller_class = get_caller_class(frame, eg);
         let object_display_class_name = if php_obj.class_name.starts_with("class@anonymous#") {
@@ -3304,7 +3452,7 @@ fn op_assign_obj_prop_inner<'a>(
                                 php_obj.class_name.to_ascii_lowercase()
                             ))
                             .is_some();
-                        if has_setter {
+                        if has_setter && !setter_guarded {
                             prop_is_public = false;
                             property_accessible = false;
                         } else {
@@ -3335,7 +3483,17 @@ fn op_assign_obj_prop_inner<'a>(
                                 format!("Cannot access {vis_str} property {defining_class}::${name}")
                             };
                             drop(php_obj);
-                            return Ok(object_property_throw(eg, frame, "Error", message)?);
+                            let instruction_index = (opline as *const Instruction as usize
+                                - op_array.instructions.as_ptr() as usize)
+                                / std::mem::size_of::<Instruction>();
+                            return Ok(object_property_throw_at(
+                                eg,
+                                frame,
+                                op_array,
+                                instruction_index,
+                                "Error",
+                                message,
+                            )?);
                         }
                     }
                 }
@@ -3348,12 +3506,17 @@ fn op_assign_obj_prop_inner<'a>(
             effective_caller,
         );
         let lazy_declared_property = php_obj.property_slot(&lazy_key).is_some();
+        let lazy_declared_explicitly_unset = lazy_declared_property
+            && php_obj
+                .get_property(&lazy_key)
+                .is_some_and(Value::is_explicitly_unset_property);
         let lazy_dynamic_property = php_obj
             .get_dynamic_property_with_position(&lazy_key)
             .is_some();
         let lazy_class_name = php_obj.class_name.clone();
         drop(php_obj);
-        let magic_set_can_handle = !lazy_declared_property
+        let magic_set_can_handle = (!lazy_declared_property
+            || lazy_declared_explicitly_unset)
             && !lazy_dynamic_property
             && !property_guard_active(eg, obj, &name, PROPERTY_GUARD_SET)
             && eg
@@ -3364,6 +3527,7 @@ fn op_assign_obj_prop_inner<'a>(
                 .is_some();
         let must_initialize = (property_accessible || force_dynamic)
             && !lazy_dynamic_property
+            && !lazy_declared_explicitly_unset
             && !magic_set_can_handle
             && eg.lazy_property_requires_initialization(obj, &lazy_key);
         let initialized_target = if must_initialize {
@@ -3378,12 +3542,56 @@ fn op_assign_obj_prop_inner<'a>(
         }
         let magic_receiver = obj;
         let obj = initialized_target.as_ref().unwrap_or(obj);
+        let explicitly_unset_declared = !force_dynamic
+            && obj.as_object().is_some_and(|object| {
+                object.property_slot(&lazy_key).is_some()
+                    && object
+                        .get_property(&lazy_key)
+                        .is_some_and(Value::is_explicitly_unset_property)
+            });
+        if explicitly_unset_declared
+            && !setter_guarded
+            && eg
+                .find_function(&format!(
+                    "{}::__set",
+                    lazy_class_name.to_ascii_lowercase()
+                ))
+                .is_some()
+        {
+            let magic = call_guarded_property_magic_method(
+                eg,
+                magic_receiver,
+                &name,
+                PROPERTY_GUARD_SET,
+                "__set",
+                &[Value::string(name.clone()), assigned.clone()],
+            )?;
+            if let Some(result) = take_magic_exception(eg, frame)? {
+                return Ok(result);
+            }
+            if magic.is_some() {
+                return Ok(ColdResult::Done);
+            }
+        }
         let php_obj = obj
             .as_object_mut()
             .expect("lazy initialization must preserve an object receiver");
         // Enum guard: enum cases are sealed — no property writes allowed
         // Track writability for cache population — enum/readonly are not cacheable for writes.
         let mut prop_is_writable = true;
+        // A declared property explicitly removed by unset() is overloaded by
+        // __set on its next assignment. Keep that pay-for-use class family on
+        // the canonical handler instead of charging every ordinary cached
+        // property write for a per-instance unset-state guard.
+        if eg
+            .find_function(&format!(
+                "{}::__set",
+                php_obj.class_name.to_ascii_lowercase()
+            ))
+            .is_some()
+        {
+            prop_is_writable = false;
+        }
         if let Some(class_def) = eg.class_table.get(php_obj.class_name.as_ref()) {
             if class_def.is_enum {
                 let message = if class_def.readonly_props.contains(&name) {
@@ -3458,7 +3666,7 @@ fn op_assign_obj_prop_inner<'a>(
                     let in_declaring_scope = receiver_in_scope;
                     if !in_declaring_scope {
                         let err = make_error_value("Error", &format!(
-                            "Cannot initialize readonly property {}::${} from {}",
+                            "Cannot modify protected(set) readonly property {}::${} from {}",
                             readonly_display_class, name,
                             caller_class.as_deref().map_or("global scope".to_string(), |c| format!("scope {}", c))
                         ));
@@ -3705,13 +3913,15 @@ fn op_assign_obj_prop_inner<'a>(
                 property.and_then(|value| prepare_replaced_value_destructor(eg, value))
             };
             if let Some(mut php_obj) = obj.as_object_mut() {
-                let property = if force_dynamic {
-                    php_obj.get_dynamic_property_mut(&key)
-                } else {
-                    php_obj.get_property_mut(&key)
+                {
+                    let property = if force_dynamic {
+                        php_obj.get_dynamic_property_mut(&key)
+                    } else {
+                        php_obj.get_property_mut(&key)
+                    }
+                        .expect("existing property must remain addressable during assignment");
+                    assignment_slot_set(property, assigned);
                 }
-                    .expect("existing property must remain addressable during assignment");
-                assignment_slot_set(property, assigned);
             }
             if let Some(assignment_result) = assignment_result.as_ref() {
                 publish_property_assignment_result(frame, opline, assignment_result);
@@ -3724,9 +3934,14 @@ fn op_assign_obj_prop_inner<'a>(
             // Property not found — try __set magic method
             let guarded = property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_SET);
             if name.starts_with('\0') && guarded {
-                return Ok(object_property_throw(
+                let instruction_index = (opline as *const Instruction as usize
+                    - op_array.instructions.as_ptr() as usize)
+                    / std::mem::size_of::<Instruction>();
+                return Ok(object_property_throw_at(
                     eg,
                     frame,
+                    op_array,
+                    instruction_index,
                     "Error",
                     "Cannot access property starting with \"\\0\"".into(),
                 )?);
@@ -3744,9 +3959,14 @@ fn op_assign_obj_prop_inner<'a>(
             }
             if guarded || magic.is_none() {
                 if name.starts_with('\0') {
-                    return Ok(object_property_throw(
+                    let instruction_index = (opline as *const Instruction as usize
+                        - op_array.instructions.as_ptr() as usize)
+                        / std::mem::size_of::<Instruction>();
+                    return Ok(object_property_throw_at(
                         eg,
                         frame,
+                        op_array,
+                        instruction_index,
                         "Error",
                         "Cannot access property starting with \"\\0\"".into(),
                     )?);
