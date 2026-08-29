@@ -936,6 +936,108 @@ class RecursiveResult extends MissingDependency implements RecursiveResult {}
 }
 
 #[test]
+fn method_variance_accepts_callable_and_dnf_subtypes_but_rejects_partial_unions() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface AlgebraLeft {}
+interface AlgebraRight {}
+class AlgebraBoth implements AlgebraLeft, AlgebraRight {}
+interface AlgebraFactory {
+    public function make(): (AlgebraLeft&AlgebraRight)|string;
+}
+interface NarrowAlgebraFactory extends AlgebraFactory {
+    public function make(): AlgebraBoth|string;
+}
+class CallableParent {
+    public function map(Closure $callback): callable { return $callback; }
+}
+class CallableChild extends CallableParent {
+    public function map(callable $callback): Closure {
+        return Closure::fromCallable($callback);
+    }
+}
+echo ((new CallableChild)->map(static fn(): string => 'valid'))();
+"#
+        ),
+        "valid"
+    );
+
+    let error = run_php_expect_error(
+        r#"<?php
+interface PartialLeft {}
+interface PartialRight {}
+class CompleteResult implements PartialLeft, PartialRight {}
+class PartialResult implements PartialLeft {}
+interface CompleteFactory { public function make(): PartialLeft&PartialRight; }
+interface BrokenFactory extends CompleteFactory {
+    public function make(): CompleteResult|PartialResult;
+}
+"#,
+    );
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Declaration of BrokenFactory::make(): CompleteResult|PartialResult must be compatible with CompleteFactory::make(): PartialLeft&PartialRight\")"
+    );
+}
+
+#[test]
+fn unresolved_method_variance_reports_the_directional_dependency() {
+    for (source, expected) in [
+        (
+            r#"<?php
+class OrderedParent { public function make(): OrderedMiddle {} }
+class OrderedMiddle extends OrderedParent { public function make(): OrderedLater {} }
+class OrderedLater extends OrderedMiddle {}
+"#,
+            "Fatal(\"Could not check compatibility between OrderedMiddle::make(): OrderedLater and OrderedParent::make(): OrderedMiddle, because class OrderedLater is not available\")",
+        ),
+        (
+            r#"<?php
+class ConstructorToken {}
+abstract class ConstructorRequirement {
+    abstract public function __construct(ConstructorToken $token);
+}
+class WideConstructor extends ConstructorRequirement {
+    public function __construct(object $token) {}
+}
+class BrokenConstructor extends WideConstructor {
+    public function __construct(MissingConstructorToken $token) {}
+}
+"#,
+            "Fatal(\"Could not check compatibility between BrokenConstructor::__construct(MissingConstructorToken $token) and ConstructorRequirement::__construct(ConstructorToken $token), because class MissingConstructorToken is not available\")",
+        ),
+    ] {
+        assert_eq!(format!("{:?}", run_php_expect_error(source)), expected);
+    }
+}
+
+#[test]
+fn runtime_method_variance_autoloads_every_intersection_member_in_source_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+spl_autoload_register(function (string $class): void {
+    echo 'load:', $class, "\n";
+    if ($class === 'RuntimeVarianceLeft') {
+        eval('interface RuntimeVarianceLeft {}');
+    } elseif ($class === 'RuntimeVarianceRight') {
+        eval('interface RuntimeVarianceRight {}');
+    }
+});
+class RuntimeVarianceParent { public function inspect(): object {} }
+trait RuntimeVarianceTypes {
+    public function inspect(): RuntimeVarianceLeft&RuntimeVarianceRight {}
+}
+class RuntimeVarianceChild extends RuntimeVarianceParent { use RuntimeVarianceTypes; }
+echo class_exists('RuntimeVarianceChild', false) ? 'linked' : 'missing';
+"#
+        ),
+        "load:RuntimeVarianceLeft\nload:RuntimeVarianceRight\nlinked"
+    );
+}
+
+#[test]
 fn method_compatibility_diagnostics_canonicalize_union_iterable_and_dnf_types() {
     for (source, expected) in [
         (

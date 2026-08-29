@@ -2940,15 +2940,31 @@ impl ExecutorGlobals {
 
         let mut dependencies = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        for declaration in [required, implementation] {
-            let signature = &declaration.function.sig;
-            for hint in &signature.param_type_hints {
+        let parameter_count = required
+            .function
+            .sig
+            .param_type_hints
+            .len()
+            .max(implementation.function.sig.param_type_hints.len());
+        for index in 0..parameter_count {
+            // Parameter contravariance asks whether the required input is a
+            // subtype of the implementation input. PHP resolves that relation
+            // in the same direction, which also fixes the observable autoload
+            // and first-unavailable diagnostic order.
+            for declaration in [required, implementation] {
+                let Some(hint) = declaration.function.sig.param_type_hints.get(index) else {
+                    continue;
+                };
                 let hint =
                     self.resolve_variance_type_hint(hint, declaration.owner, Some(linking_class));
                 collect_variance_class_names(&hint, &mut dependencies, &mut seen);
             }
+        }
+        // Return covariance has the inverse direction: resolve the
+        // implementation subtype before the required supertype.
+        for declaration in [implementation, required] {
             let return_hint = self.resolve_variance_type_hint(
-                &signature.return_type_hint,
+                &declaration.function.sig.return_type_hint,
                 declaration.owner,
                 Some(linking_class),
             );
@@ -2962,7 +2978,28 @@ impl ExecutorGlobals {
         class_def: &ClassDef,
         mut visit: impl FnMut(MethodDeclaration<'_>, MethodDeclaration<'_>) -> bool,
     ) {
-        if class_def.is_interface || class_def.is_trait {
+        if class_def.is_trait {
+            return;
+        }
+
+        if class_def.is_interface {
+            let mut effective = std::collections::HashMap::new();
+            for method in &class_def.methods {
+                let declaration = Self::method_declaration(class_def, method);
+                effective.insert(declaration.name.to_ascii_lowercase(), declaration);
+            }
+            for parent in &class_def.implements {
+                for requirement in self.collect_interface_methods(parent) {
+                    let key = requirement.name.to_ascii_lowercase();
+                    let Some(implementation) = effective.get(&key).copied() else {
+                        effective.insert(key, requirement);
+                        continue;
+                    };
+                    if !visit(requirement, implementation) {
+                        return;
+                    }
+                }
+            }
             return;
         }
 
@@ -3002,6 +3039,24 @@ impl ExecutorGlobals {
                     return;
                 }
             }
+            for method in self.effective_composed_trait_methods(class_def) {
+                let Some(implementation) =
+                    self.composed_trait_method_declaration(class_def, &method)
+                else {
+                    continue;
+                };
+                let Some(required) = self.find_effective_method(parent, implementation.name) else {
+                    continue;
+                };
+                if required.visibility == Visibility::Private
+                    || (required.name.eq_ignore_ascii_case("__construct") && !required.is_abstract)
+                {
+                    continue;
+                }
+                if !visit(required, implementation) {
+                    return;
+                }
+            }
         }
 
         let mut requirements = Vec::new();
@@ -3010,6 +3065,16 @@ impl ExecutorGlobals {
             &mut requirements,
             &mut std::collections::HashSet::new(),
         );
+        let mut interface_roots = class_def.implements.clone();
+        if let Some(parent) = &class_def.parent {
+            interface_roots.extend(self.collect_all_interfaces(parent));
+        }
+        let mut seen_interfaces = std::collections::HashSet::new();
+        for interface in interface_roots {
+            if seen_interfaces.insert(interface.to_ascii_lowercase()) {
+                requirements.extend(self.collect_interface_methods(&interface));
+            }
+        }
         for required in requirements {
             let Some(implementation) = self.find_effective_method(class_def, required.name) else {
                 continue;
@@ -3029,7 +3094,7 @@ impl ExecutorGlobals {
         &self,
         class_def: &ClassDef,
     ) -> (Vec<String>, bool) {
-        if class_def.is_interface || class_def.is_trait {
+        if class_def.is_trait {
             return (Vec::new(), false);
         }
 
@@ -3943,11 +4008,11 @@ impl ExecutorGlobals {
     }
 
     /// Parent interfaces may contribute the same abstract method only when
-    /// their effective declarations agree on staticness. The first effective
-    /// declaration (or an explicit declaration on the child interface) is the
-    /// implementation side of PHP's diagnostic.
+    /// their effective declarations satisfy the complete inherited callable
+    /// contract. The first effective declaration (or an explicit declaration
+    /// on the child interface) is the implementation side of PHP's diagnostic.
     #[cold]
-    fn validate_interface_method_staticness<'a>(
+    fn validate_interface_method_contracts<'a>(
         &'a self,
         class_def: &'a ClassDef,
     ) -> Result<(), String> {
@@ -3979,13 +4044,7 @@ impl ExecutorGlobals {
                 ) else {
                     continue;
                 };
-                if implementation.is_static != requirement.is_static {
-                    return Err(error);
-                }
-                // Preserve the first conflicting contract as PHP's diagnostic
-                // boundary. Other interface-signature dimensions are separate
-                // checkpoints and must not be skipped to report a later method.
-                return Ok(());
+                return Err(error);
             }
         }
         Ok(())
@@ -4092,6 +4151,14 @@ impl ExecutorGlobals {
             if self.class_definition_requires_delayed_linking(&class_def) {
                 self.pending_named_classes.push(class_def);
                 return Ok(());
+            }
+            for dependency in self.method_variance_dependencies(&class_def) {
+                if self.find_class(&dependency).is_none()
+                    && let Some(error) =
+                        self.unavailable_method_variance_dependency_error(&class_def, &dependency)
+                {
+                    return Err(error);
+                }
             }
             self.register_class(class_def)?;
             self.retry_pending_named_classes()
@@ -4380,7 +4447,7 @@ impl ExecutorGlobals {
             return Err(error);
         }
         if class_def.is_interface {
-            return self.validate_interface_method_staticness(class_def);
+            return self.validate_interface_method_contracts(class_def);
         }
         if class_def.is_trait {
             return Ok(());
@@ -7174,7 +7241,7 @@ impl ExecutorGlobals {
             return Err(ClassAliasRegistrationError::DelayedLink(error));
         }
         if let Some(error) = aliases_interface
-            .then(|| self.interface_method_staticness_error())
+            .then(|| self.interface_method_contract_error())
             .flatten()
         {
             return Err(ClassAliasRegistrationError::DelayedLink(error));
@@ -7184,12 +7251,12 @@ impl ExecutorGlobals {
 
     /// Top-level declarations may be linked before a later runtime
     /// `class_alias()` publishes one of their interface edges. Recheck the
-    /// staticness contract in declaration order on that alias boundary.
-    fn interface_method_staticness_error(&self) -> Option<String> {
+    /// complete method contract in declaration order on that alias boundary.
+    fn interface_method_contract_error(&self) -> Option<String> {
         (1..self.next_class_id).find_map(|class_id| {
             self.class_by_id(class_id)
                 .filter(|class| class.is_interface)
-                .and_then(|class| self.validate_interface_method_staticness(class).err())
+                .and_then(|class| self.validate_interface_method_contracts(class).err())
         })
     }
 
@@ -8334,6 +8401,13 @@ impl ExecutorGlobals {
             return !matches!(impl_hint, ParamTypeHint::Void);
         }
 
+        // Closure is the concrete object subtype of PHP's callable type.
+        if matches!(iface_hint, ParamTypeHint::Callable)
+            && matches!(impl_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("Closure"))
+        {
+            return true;
+        }
+
         // Exact match
         if impl_hint == iface_hint {
             return true;
@@ -8512,7 +8586,9 @@ impl ExecutorGlobals {
             // This is what permits a trait method returning `static` to
             // implement an interface method returning `object`.
             if iface_class.eq_ignore_ascii_case("object") {
-                return true;
+                return impl_class.eq_ignore_ascii_case("static")
+                    || self.variance_class_is_known(impl_class, linking_class)
+                    || allow_any_unresolved_relation;
             }
             // `static` remains late-bound in a return declaration. Replacing
             // it with the implementation class is therefore safe only when
@@ -8633,6 +8709,14 @@ impl ExecutorGlobals {
 
         // Mixed accepts anything — always compatible
         if matches!(impl_hint, ParamTypeHint::Mixed) {
+            return true;
+        }
+
+        // Parameter variance reverses the relation: an implementation that
+        // accepts callable is wider than a declaration restricted to Closure.
+        if matches!(impl_hint, ParamTypeHint::Callable)
+            && matches!(iface_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("Closure"))
+        {
             return true;
         }
 
@@ -8774,8 +8858,9 @@ impl ExecutorGlobals {
         match (impl_hint, iface_hint) {
             (ParamTypeHint::ClassName(impl_class), ParamTypeHint::ClassName(iface_class)) => {
                 if impl_class.eq_ignore_ascii_case("object") {
-                    return allow_unresolved_relation
-                        || self.variance_class_is_known(iface_class, linking_class);
+                    return iface_class.eq_ignore_ascii_case("static")
+                        || self.variance_class_is_known(iface_class, linking_class)
+                        || allow_any_unresolved_relation;
                 }
                 return if allow_any_unresolved_relation
                     && (!self.variance_class_is_known(iface_class, linking_class)

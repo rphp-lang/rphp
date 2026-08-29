@@ -261,6 +261,7 @@ fn op_declare_class<'a>(
     }
 
     if !requires_provisional_publication {
+        let mut unavailable_dependencies = Vec::new();
         for dependency in method_variance_dependencies {
             if eg.find_class(&dependency).is_some() {
                 continue;
@@ -275,7 +276,15 @@ fn op_declare_class<'a>(
                     ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                 });
             }
-            if !loaded
+            if !loaded {
+                unavailable_dependencies.push(dependency);
+            }
+        }
+        // PHP attempts every type needed by one variance contract before
+        // naming the first still-unavailable dependency. A later loader may
+        // also publish an earlier name, so recheck after the complete pass.
+        for dependency in unavailable_dependencies {
+            if eg.find_class(&dependency).is_none()
                 && let Some(error) = eg
                     .unavailable_method_variance_dependency_error(&class_def, &dependency)
             {
@@ -644,6 +653,7 @@ fn execute_source_unit(
                 )));
             }
         }
+        let mut unavailable_variance_dependencies = Vec::new();
         for dependency in eg.method_variance_dependencies(&class_def) {
             if eg.find_class(&dependency).is_some() {
                 continue;
@@ -659,7 +669,12 @@ fn execute_source_unit(
                 eg.exception = Some(exception);
                 return Ok(IncludeFileOutcome::Executed(Value::null()));
             }
-            if !loaded
+            if !loaded {
+                unavailable_variance_dependencies.push(dependency);
+            }
+        }
+        for dependency in unavailable_variance_dependencies {
+            if eg.find_class(&dependency).is_none()
                 && let Some(error) = eg
                     .unavailable_method_variance_dependency_error(&class_def, &dependency)
             {
