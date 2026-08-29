@@ -4736,6 +4736,26 @@ The monitored supported debt is now 729 failures: 18 strings, zero array and
 suspension, PHP 8.2, 32-bit behavior and allocation-limit/OOM equivalence remain
 separate boundaries.
 
+The `a14644b9` `magic-call-trampoline-resolution` train then moves Zend/lang
+from 4,592 to 4,616 pass, exactly `+24/-0`. One canonical method classifier now
+orders concrete, inaccessible, missing and abstract targets before instance or
+static magic fallback, preserving receiver, called scope, method spelling and
+named/reference argument identity. A dedicated dynamic-static initializer
+keeps this receiver rule off the ordinary dynamic-call path.
+
+The exact final Zend/lang manifest and parent-identical strings/array projection
+cover 7,174 cases with no loss or failure-stage movement. All five Cargo
+configurations, all-feature/all-target, formatting, HTML data, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.10 S2/S3 pass.
+Production remains at 1,623 unsafe blocks and 289 unsafe functions. The fixed
+baseline CPU-2 32-pair gate keeps ordinary calls at +0.576%; direct static,
+dynamic and magic controls are neutral or faster with exact checksums.
+
+The monitored supported debt is now 705 failures: 18 strings, zero array and
+687 Zend/lang. Property hooks, internal SPL metadata, Fiber/generator
+suspension, PHP 8.2, 32-bit behavior and allocation-limit/OOM equivalence remain
+separate boundaries.
+
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.

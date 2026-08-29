@@ -8,60 +8,65 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
-`finally-abrupt-completion`, pinned to php-src 8.5 commit `fcc29c8` and
-validated against PHP 8.5.10. Return, `break`, `continue` and `goto` now carry
-one ordered completion through every enclosing `finally`; a later throw or
-destructor error replaces that completion at PHP's observable boundary, while
-a locally caught nested exception preserves the older suspended exception.
-Compiler-owned `foreach` sources are released inside-out without retaining a
-temporary alias or repeating a destructor. Catch-only exception dispatch and
-scalar-array cleanup remain pay-for-use fast paths.
+`magic-call-trampoline-resolution`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.10. Instance, static, late-static and dynamic-static
+calls now classify concrete, inaccessible, missing and abstract methods before
+selecting `__call` or `__callStatic`. Trampolines retain the compatible live
+receiver, called scope, original method spelling and positional/named argument
+identity. Ordinary warmed method and static-call caches remain allocation-free;
+dynamic static-member syntax uses a separate pay-for-use opcode.
 
-The clean-room six-case oracle and focused 13-case manifest are byte-exact and
-hash to
-`1cfc38ac49b78ae33689a13d27059b41694885580188b16ef86dfd3c7dd55dc3`
+The clean-room eight-case oracle and focused 16-case manifest are byte-exact
+and hash to
+`ee6cd632deb5b5d3ebbb92fcecf871a3b630504236afd377be18585f9d5389ae`
 and
-`c398a65867940bebf88141fd34bac6671f9e9954b77d6f7a18912e575b7f1fc5`.
+`51009b19d32c4d7c1396d0f3796c50f8b9d88e204de78036ca035fe3d5062679`.
 The exact final-binary 5,599-case Zend/lang manifest hashes to
-`3776ada734cc4efc45c07574a455c8031a9a9e9a3697db3cb904a34eace78ecc`:
-4,592 pass, 711 fail, 115 skip and 181 unsupported, with no timeout or crash.
+`4eb503b5d8d8ce261606d4fcfe1d585968947efe0c0d2c3e63b929f2e6a3eb49`:
+4,616 pass, 687 fail, 115 skip and 181 unsupported, with no timeout or crash.
 Its pass set hashes to
-`ffa92b8b63a4524ac5ad4755c519ca8bbd144cc20a5fb11d5ef1c72ad6ff62c6`;
-the exact delta is the twelve named `Zend/tests/try` failures changing to pass,
-`+12/-0` with no other status movement.
+`56437f78a6977c40f5cfa36e5b5ff3c86b820afa53334aafe0ec851e4dc64982`;
+the exact delta is `+24/-0`, with no failure-stage movement.
 
 The 1,575-case strings/array projection remains exact-parent-identical at
-1,459 pass, 18 fail, 67 skip and 31 unsupported; its manifest hashes to
-`9f5edf942abcc866a1c0c833bca1a4dbef97b344295e36fd07314f233e29b0ce`.
-The combined audit covers 7,174 cases: 6,051 pass, 729 fail, 182 skip and 212
-unsupported. Supported debt is 711 Zend/lang failures, 18 strings failures and
+1,459 pass, 18 fail, 67 skip and 31 unsupported; its manifest and pass set hash
+to
+`9f5edf942abcc866a1c0c833bca1a4dbef97b344295e36fd07314f233e29b0ce`
+and
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`.
+The combined audit covers 7,174 cases: 6,075 pass, 705 fail, 182 skip and 212
+unsupported. Supported debt is 687 Zend/lang failures, 18 strings failures and
 zero array failures.
 
 The exact final candidate SHA-256 is
-`e083a0254a49b9706b8233d0df1e8c7d603167c5af07eae3acfe91cbbe068eeb`.
+`2da956d6407169cdac95f405fae541611f75e83b3a375acc7b75d446e19b5a41`.
 All five Cargo configurations, all-feature/all-target checking, formatting,
-HTML data, PHPT runner and both unsafe-policy checks pass. Production remains
-at 1,623 unsafe blocks and 289 unsafe functions, with 387 SAFETY annotations
-and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates
-and PHP 8.5.10 warmed-kernel S2 and cold-build S3 pass.
+HTML data, PHPT runner and unsafe policy pass. Production remains at 1,623
+unsafe blocks and 289 unsafe functions, with 388 SAFETY annotations and seven
+`# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates and PHP
+8.5.10 warmed-kernel S2 and cold-build S3 pass.
 
 The fixed-baseline CPU-2 gate uses 32 balanced pairs with exact checksums.
-Paired medians are startup -3.561%, ordinary function calls -0.129%, ordinary
-method dispatch -1.321%, typed-method returns -5.326%, ordinary throw/catch
--0.246%, single-finally return +1.667% and literal `foreach` -37.280%. The two
-short boundary samples were independently expanded: a five-times-longer
-32-pair throw/catch control is +0.082% and the 64-pair single-finally control is
-+0.577%. The mixed, long-throw and finally result files hash to
-`2a75b4742120c4a5b0de9e9b416b406097e8704d62fab415cfa6ebd59879950a`,
-`f730be800777e2ca6a18b96b9eacc81a07ed8180cb447b60509f9576b7d220bd`
+Paired medians are startup -7.297%, ordinary calls +0.576%, ordinary named
+methods -1.598%, direct static calls -2.111%, dynamic named calls -0.775%,
+dynamic array calls -1.311%, direct magic calls -2.426%, trampoline magic calls
+-1.479% and static magic calls -8.750%. The result and harness hash to
+`6b202e7b17a931092671afef9a52c807e1c5a0711199ff93d75688b807827112`
 and
-`3ef423dafd24fd454b4ab35e0885274c371c523073acdebd4c7da4dded0c03a5`.
+`f30fce82787adad8de41b9bf86fdffc8bfe9e4539b83326c1be174d42257d610`.
 
-This checkpoint does not claim Fiber/generator suspension, property hooks,
-internal SPL metadata, PHP 8.2, 32-bit behavior or allocation-limit/OOM
-equivalence. The implementation checkpoint is commit `41327f50`.
+This checkpoint does not claim property hooks, internal SPL metadata,
+Fiber/generator suspension, PHP 8.2, 32-bit behavior or allocation-limit/OOM
+equivalence. The implementation checkpoint is commit `a14644b9`.
 
 The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
+`finally-abrupt-completion`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.10. Return, `break`, `continue` and `goto` carry one
+ordered completion through every enclosing `finally`; a later throw or
+destructor error replaces that completion at PHP's observable boundary, while
+a locally caught nested exception preserves the older suspended exception.
+
+The earlier measured AMD64 PHP 8.5 contract checkpoint is
 `namespace-front-end-state`, pinned to php-src 8.5 commit `fcc29c8` and
 validated against PHP 8.5.9. Namespace declarations now retain compilation-unit
 placement and bracket-style state, contextual keyword segments, whitespace and
