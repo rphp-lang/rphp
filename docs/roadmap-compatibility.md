@@ -4669,6 +4669,30 @@ The monitored supported debt is now 777 failures: 18 strings, zero array and
 typed-property cases, Fiber/generator suspension, PHP 8.2, 32-bit behavior and
 allocation-limit/OOM equivalence remain separate boundaries.
 
+The `be905ebd` `method-variance-type-algebra` train then moves Zend/lang from
+4,544 to 4,560 pass, exactly `+16/-0`. One directional type-algebra boundary
+now covers interface inheritance, trait-composed overrides, DNF/intersection
+variance, `Closure`/`callable`, unresolved dependency ordering and runtime
+alias identity. Resolved classes retain an allocation-free cold guard. Enum
+forward binding and internal SPL/tentative signatures remain three explicit
+holdouts; two exception tests newly reach their still-incomplete runtime
+wrapper path.
+
+Two exact-final-binary Zend/lang manifests are byte-identical and the
+strings/array projection is exact-parent-identical. All five Cargo
+configurations, all-feature/all-target, formatting, HTML data, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. Production
+remains at 1,623 unsafe blocks and 289 unsafe functions. The fixed-baseline
+CPU-2 32-pair gate keeps class linking, startup, ordinary function/method and
+typed-method controls at the approximately one-percent boundary or better;
+runtime alias linking improves by about 14% with exact checksums.
+
+The monitored supported debt is now 761 failures: 18 strings, zero array and
+743 Zend/lang. Internal method metadata, enum compiler early binding, remaining
+exception wrapper diagnostics, property hooks, Fiber/generator suspension,
+PHP 8.2, 32-bit behavior and allocation-limit/OOM equivalence remain separate
+boundaries.
+
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.

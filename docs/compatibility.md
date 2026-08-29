@@ -8,6 +8,64 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`method-variance-type-algebra`, pinned to php-src 8.5 commit `fcc29c8` and
+validated against PHP 8.5.9. Interface inheritance and trait-composed methods
+now use the complete callable contract, parameter and return dependencies load
+in PHP's directional order, `Closure` participates in `callable` variance, and
+runtime aliases can complete an otherwise unresolved relationship without
+prematurely publishing or rejecting the class. Resolved declarations stay on
+the allocation-free registration path; dependency work is cold and pay-for-use.
+
+The 19-case target is 16 pass and three unchanged failures: enum forward
+compatibility remains a compiler early-binding boundary, while tentative SPL
+returns and `ArrayAccess` signatures require internal method metadata. The
+focused manifest hashes to
+`a9e7f09e94546055493f1499887b4898f1595138d11b52fb84c6a97d1dfd36d7`.
+Two serial exact-final-binary 5,599-case Zend/lang manifests are byte-identical
+at SHA-256
+`162ae00dc084ef17b20c0a591c0210d05329f29e67199e524d5e4cf45dbb01d6`:
+4,560 pass, 743 fail, 115 skip and 181 unsupported, with no timeout or crash.
+Their exact pass set hashes to
+`7fba93f27bc85884b28ebb86d4a8cf0c02a0fabb47b32031d9c89123c0ced0fb`.
+The exact delta is `+16/-0`. Two still-failing variance-autoload exception
+cases now reach their runtime exception paths instead of producing no output;
+the enum holdout moves to its earlier compiler boundary. All three stage-only
+movements remain visible and are separate diagnostic/early-binding roots.
+
+Two serial 1,575-case strings/array projections retain the exact parent status
+set at 1,459 pass, 18 fail, 67 skip and 31 unsupported. Their normalized
+path/status/category projection and pass set hash to
+`392587b16fee83fa2233b41d0bc8a1dd95d5d4b34a1b5365f25985f5c8515dbe`
+and
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`.
+The combined audit covers 7,174 cases: 6,019 pass, 761 fail, 182 skip and 212
+unsupported. Supported debt is 743 Zend/lang failures, 18 strings failures and
+zero array failures.
+
+The exact final candidate SHA-256 is
+`71fb638c2c786ca9b8f830fd49c8d1f0f29efd76d88aaca365027b12f77d036a`.
+All five Cargo configurations, all-feature/all-target checking, formatting,
+HTML data, PHPT runner and both unsafe-policy checks pass. Production remains
+at 1,623 unsafe blocks and 289 unsafe functions, with 382 SAFETY annotations
+and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates
+and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+
+The final fixed-baseline CPU-2 gate uses 32 balanced pairs with exact
+checksums. Independent/paired median deltas are class-contract linking
+-0.126%/-0.268%, ordinary function calls +0.199%/+0.494%, ordinary method
+dispatch -4.920%/-5.002%, typed-method returns -2.598%/-2.559%, startup
+-4.214%/-4.735% and runtime alias linking -14.018%/-14.150%. The raw results
+hash to
+`ec82399e8088de565895bc9eb582782a5b106a3c03bb34647d502c2bd24bfa49`
+and the harness to
+`88766d6bab5f8989fbcc58b56f0cb44697dd1a13a5d83bf8d2043cf0d36b424b`.
+
+This checkpoint does not claim internal SPL/tentative signature metadata,
+enum compiler forward binding, complete exception-wrapper diagnostics,
+Fiber/generator suspension, PHP 8.2, 32-bit behavior or allocation-limit/OOM
+equivalence. The implementation checkpoint is commit `be905ebd`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `typed-property-reference-provenance`, pinned to php-src 8.5 commit `fcc29c8`
 and validated byte-for-byte against PHP 8.5.9. Typed-property constraints now
 survive runtime-named property call arguments, indirect property/array writes,
