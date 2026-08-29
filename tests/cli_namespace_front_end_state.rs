@@ -36,6 +36,7 @@ fn reserved_namespace_segments_and_qualified_alias_calls_execute() {
 namespace iter\fn { function test() { echo __FUNCTION__, "\n"; } }
 namespace fn { function test() { echo __FUNCTION__, "\n"; } }
 namespace self { function test() { echo __FUNCTION__, "\n"; } }
+namespace class { function test() { echo __FUNCTION__, "\n"; } }
 namespace {
     use iter\fn;
     use function fn\test as test2;
@@ -43,6 +44,7 @@ namespace {
     fn\test();
     test2();
     test3();
+    \class\test();
     $arrow = fn($value) => $value + 1;
     echo "arrow:", $arrow(4), "\n";
 }
@@ -50,7 +52,10 @@ namespace {
 
     let (status, stdout, stderr) = run_stdin(source);
     assert_eq!(status, 0);
-    assert_eq!(stdout, "iter\\fn\\test\nfn\\test\nself\\test\narrow:5\n");
+    assert_eq!(
+        stdout,
+        "iter\\fn\\test\nfn\\test\nself\\test\nclass\\test\narrow:5\n"
+    );
     assert_eq!(stderr, "");
 }
 

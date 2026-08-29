@@ -18,8 +18,6 @@ impl Parser {
         self.closest_token_source_line_before(self.pos)
     }
 
-    #[cold]
-    #[inline(never)]
     fn current_token_source_line(&self) -> usize {
         match self.peek() {
             Token::This(line)
@@ -800,25 +798,15 @@ impl Parser {
     fn parse_namespace_declaration_name(&mut self) -> Result<String, String> {
         let mut parts = Vec::new();
         loop {
+            let line = self.current_token_source_line();
             let token = self.advance();
-            let line = self.closest_token_source_line();
-            let part = match token {
-                Token::Identifier(name, token_line) | Token::Enum { name, line: token_line } => {
-                    self.last_primary_line = Some(token_line);
-                    name
-                }
-                Token::Fn(token_line) => {
-                    self.last_primary_line = Some(token_line);
-                    "fn".to_string()
-                }
-                Token::Namespace => "namespace".to_string(),
-                other => {
-                    return Err(self.source_error(
-                        &format!("Expected identifier in qualified name, got {other:?}"),
-                        line,
-                    ));
-                }
-            };
+            let part = Self::token_as_named_arg_label(&token).ok_or_else(|| {
+                self.source_error(
+                    &format!("Expected identifier in qualified name, got {token:?}"),
+                    line,
+                )
+            })?;
+            self.last_primary_line = Some(line);
             parts.push(part);
             if self.peek() != Token::Backslash {
                 break;

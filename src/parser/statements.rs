@@ -4,7 +4,10 @@ impl Parser {
     /// generated parser cannot grow its stack; RPHP must likewise reject a
     /// hostile source unit instead of aborting the process.
     const MAX_SYNTAX_NESTING: usize = 256;
-    const DEDICATED_STACK_NESTING: usize = 16;
+    // The statement grammar has a deliberately broad match frame. Move
+    // moderately nested sources before a six-level closure/block chain can
+    // exhaust a small caller-provided thread stack.
+    const DEDICATED_STACK_NESTING: usize = 5;
     const DEDICATED_STACK_SIZE: usize = 64 * 1024 * 1024;
 
     fn parse_foreach_destructure(&mut self) -> Result<Option<Vec<ListTarget>>, String> {
@@ -192,82 +195,6 @@ impl Parser {
         )
     }
 
-    #[inline(never)]
-    fn parse_namespace_statement(
-        &mut self,
-        declaration_was_allowed: bool,
-    ) -> Result<Stmt, String> {
-        self.advance(); // consume 'namespace'
-        // The bracketed global namespace has no name: `namespace { ... }`.
-        // Keep the empty spelling in the AST so compilation can restore
-        // global resolution while retaining the namespace block boundary.
-        let name = if matches!(self.peek(), Token::LBrace(_)) {
-            String::new()
-        } else {
-            self.parse_namespace_declaration_name()?
-        };
-        let line = self
-            .last_primary_line
-            .unwrap_or_else(|| self.current_token_source_line());
-        let style = if matches!(self.peek(), Token::LBrace(_)) {
-            NamespaceDeclarationStyle::Bracketed
-        } else {
-            NamespaceDeclarationStyle::Unbracketed
-        };
-        if self.namespace_style.is_none() && !declaration_was_allowed {
-            self.compile_error(
-                "Namespace declaration statement has to be the very first statement or after any declare call in the script",
-                line,
-            );
-        }
-        if let Some(previous) = self.namespace_style
-            && previous != style
-        {
-            self.compile_error(
-                "Cannot mix bracketed namespace declarations with unbracketed namespace declarations",
-                line,
-            );
-        } else if !self.outermost_scope {
-            self.compile_error("Namespace declarations cannot be nested", line);
-        }
-        self.namespace_style.get_or_insert(style);
-        if name.eq_ignore_ascii_case("namespace") {
-            self.compile_error(format!("Cannot use '{name}' as namespace name"), line);
-        } else if name
-            .split_once('\\')
-            .is_some_and(|(prefix, _)| prefix.eq_ignore_ascii_case("namespace"))
-        {
-            return Err(self.source_error(
-                &format!(
-                    "syntax error, unexpected namespace-relative name \"{name}\", expecting \"{{\""
-                ),
-                line,
-            ));
-        }
-        if style == NamespaceDeclarationStyle::Bracketed {
-            self.advance(); // consume '{'
-            let mut body = Vec::new();
-            while self.peek() != Token::RBrace && self.peek() != Token::Eof {
-                body.push(self.parse_stmt_in_scope(false)?);
-            }
-            if self.halted && self.at_eof() {
-                return Err(self.source_error("Unclosed '{'", 1));
-            }
-            self.expect(&Token::RBrace)?;
-            Ok(Stmt::Namespace { name, body })
-        } else {
-            self.expect(&Token::Semicolon(0))?;
-            let mut body = Vec::new();
-            while self.peek() != Token::Eof
-                && self.peek() != Token::Namespace
-                && self.peek() != Token::RBrace
-            {
-                body.push(self.parse_stmt_in_scope(true)?);
-            }
-            Ok(Stmt::Namespace { name, body })
-        }
-    }
-
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
         let strict_types_allowed = self.strict_types_allowed;
         if self.outermost_scope
@@ -410,7 +337,79 @@ impl Parser {
                     Ok(Stmt::Declare { directive, value })
                 }
             }
-            Token::Namespace => self.parse_namespace_statement(strict_types_allowed),
+            Token::Namespace => {
+                self.advance(); // consume 'namespace'
+                // The bracketed global namespace has no name: `namespace { ... }`.
+                // Keep the empty spelling in the AST so compilation can restore
+                // global resolution while retaining the namespace block boundary.
+                let name = if matches!(self.peek(), Token::LBrace(_)) {
+                    String::new()
+                } else {
+                    self.parse_namespace_declaration_name()?
+                };
+                let line = self
+                    .last_primary_line
+                    .unwrap_or_else(|| self.current_token_source_line());
+                let style = if matches!(self.peek(), Token::LBrace(_)) {
+                    NamespaceDeclarationStyle::Bracketed
+                } else {
+                    NamespaceDeclarationStyle::Unbracketed
+                };
+                if self.namespace_style.is_none() && !strict_types_allowed {
+                    self.compile_error(
+                        "Namespace declaration statement has to be the very first statement or after any declare call in the script",
+                        line,
+                    );
+                }
+                if let Some(previous) = self.namespace_style
+                    && previous != style
+                {
+                    self.compile_error(
+                        "Cannot mix bracketed namespace declarations with unbracketed namespace declarations",
+                        line,
+                    );
+                } else if !self.outermost_scope {
+                    self.compile_error("Namespace declarations cannot be nested", line);
+                }
+                self.namespace_style.get_or_insert(style);
+                if name.eq_ignore_ascii_case("namespace") {
+                    self.compile_error(format!("Cannot use '{name}' as namespace name"), line);
+                } else if name
+                    .split_once('\\')
+                    .is_some_and(|(prefix, _)| prefix.eq_ignore_ascii_case("namespace"))
+                {
+                    return Err(self.source_error(
+                        &format!(
+                            "syntax error, unexpected namespace-relative name \"{name}\", expecting \"{{\""
+                        ),
+                        line,
+                    ));
+                }
+                if style == NamespaceDeclarationStyle::Bracketed {
+                    // Braced namespace: namespace App\Models { ... }
+                    self.advance(); // consume '{'
+                    let mut body = Vec::new();
+                    while self.peek() != Token::RBrace && self.peek() != Token::Eof {
+                        body.push(self.parse_stmt_in_scope(false)?);
+                    }
+                    if self.halted && self.at_eof() {
+                        return Err(self.source_error("Unclosed '{'", 1));
+                    }
+                    self.expect(&Token::RBrace)?;
+                    Ok(Stmt::Namespace { name, body })
+                } else {
+                    // Unbraced namespace: namespace App\Models; (rest of file belongs to this namespace)
+                    self.expect(&Token::Semicolon(0))?;
+                    let mut body = Vec::new();
+                    while self.peek() != Token::Eof
+                        && self.peek() != Token::Namespace
+                        && self.peek() != Token::RBrace
+                    {
+                        body.push(self.parse_stmt_in_scope(true)?);
+                    }
+                    Ok(Stmt::Namespace { name, body })
+                }
+            }
             Token::Use(use_line) if !self.in_class_body => {
                 // Top-level class/function import. Their alias tables are
                 // separate in PHP even when the source alias is identical.
