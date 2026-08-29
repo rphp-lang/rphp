@@ -192,13 +192,11 @@ impl Parser {
         )
     }
 
-    #[cold]
     #[inline(never)]
-    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
-    fn parse_namespace_declaration_header(
+    fn parse_namespace_statement(
         &mut self,
         declaration_was_allowed: bool,
-    ) -> Result<(String, NamespaceDeclarationStyle), String> {
+    ) -> Result<Stmt, String> {
         self.advance(); // consume 'namespace'
         // The bracketed global namespace has no name: `namespace { ... }`.
         // Keep the empty spelling in the AST so compilation can restore
@@ -246,16 +244,6 @@ impl Parser {
                 line,
             ));
         }
-        Ok((name, style))
-    }
-
-    #[cold]
-    #[inline(never)]
-    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
-    fn parse_namespace_body(
-        &mut self,
-        style: NamespaceDeclarationStyle,
-    ) -> Result<Vec<Stmt>, String> {
         if style == NamespaceDeclarationStyle::Bracketed {
             self.advance(); // consume '{'
             let mut body = Vec::new();
@@ -266,7 +254,7 @@ impl Parser {
                 return Err(self.source_error("Unclosed '{'", 1));
             }
             self.expect(&Token::RBrace)?;
-            Ok(body)
+            Ok(Stmt::Namespace { name, body })
         } else {
             self.expect(&Token::Semicolon(0))?;
             let mut body = Vec::new();
@@ -276,7 +264,7 @@ impl Parser {
             {
                 body.push(self.parse_stmt_in_scope(true)?);
             }
-            Ok(body)
+            Ok(Stmt::Namespace { name, body })
         }
     }
 
@@ -422,12 +410,7 @@ impl Parser {
                     Ok(Stmt::Declare { directive, value })
                 }
             }
-            Token::Namespace => {
-                let (name, style) =
-                    self.parse_namespace_declaration_header(strict_types_allowed)?;
-                let body = self.parse_namespace_body(style)?;
-                Ok(Stmt::Namespace { name, body })
-            }
+            Token::Namespace => self.parse_namespace_statement(strict_types_allowed),
             Token::Use(use_line) if !self.in_class_body => {
                 // Top-level class/function import. Their alias tables are
                 // separate in PHP even when the source alias is identical.
