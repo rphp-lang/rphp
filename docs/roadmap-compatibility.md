@@ -4693,6 +4693,28 @@ exception wrapper diagnostics, property hooks, Fiber/generator suspension,
 PHP 8.2, 32-bit behavior and allocation-limit/OOM equivalence remain separate
 boundaries.
 
+The `030fbdbf` `namespace-front-end-state` train then moves Zend/lang from
+4,560 to 4,580 pass, exactly `+20/-0`. One compilation-unit namespace state
+covers declaration placement, bracket-style exclusion, code outside bracketed
+blocks, contextual keyword segments, qualified aliases and group-use
+diagnostics. The existing dedicated parser stack now activates before a
+six-level syntax chain can exhaust a small caller thread, while shallower
+sources retain the direct path.
+
+The final Zend/lang manifest and strings/array projection retain exact no-loss
+status sets. All five Cargo configurations, all-feature/all-target, formatting,
+HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9
+S2/S3 pass. Production remains at 1,623 unsafe blocks and 289 unsafe functions.
+The fixed-baseline 32-pair gate and independent method/typed holdout keep every
+representative control within the approximately one-percent boundary with
+exact checksums.
+
+The monitored supported debt is now 741 failures: 18 strings, zero array and
+723 Zend/lang. Internal method metadata, enum compiler early binding, remaining
+exception wrapper diagnostics, property hooks, Fiber/generator suspension,
+PHP 8.2, 32-bit behavior and allocation-limit/OOM equivalence remain separate
+boundaries.
+
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
