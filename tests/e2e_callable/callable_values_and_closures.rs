@@ -430,7 +430,12 @@ fn invalid_dynamic_call_preserves_source_line_and_validation_order() {
         .main
         .instructions
         .iter()
-        .position(|instruction| instruction.opcode == OpCode::InitDynamicCall)
+        .position(|instruction| {
+            matches!(
+                instruction.opcode,
+                OpCode::InitDynamicCall | OpCode::InitDynamicStaticCall
+            )
+        })
         .unwrap();
 
     assert_eq!(compiled.main.source_line(init_index), Some(4));

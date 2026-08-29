@@ -4598,6 +4598,7 @@ impl Compiler {
                     func_compiler.bindable_closure_scope = false;
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_class, method.name);
+                    func_compiler.static_method_context = method.is_static;
                     func_compiler.current_property_name = hook_property.clone();
                     func_compiler.returns_reference_context = method.returns_by_ref;
                     func_compiler.contains_yield = method.body.iter().any(Stmt::contains_yield);
@@ -5417,6 +5418,7 @@ impl Compiler {
                     func_compiler.bindable_closure_scope = false;
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_iface, method.name);
+                    func_compiler.static_method_context = method.is_static;
                     func_compiler.current_property_name = hook_property.clone();
                     func_compiler.returns_reference_context = method.returns_by_ref;
                     func_compiler.contains_yield = method.body.iter().any(Stmt::contains_yield);
@@ -5755,6 +5757,7 @@ impl Compiler {
                     func_compiler.bindable_closure_scope = false;
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_trait, method.name);
+                    func_compiler.static_method_context = method.is_static;
                     func_compiler.current_property_name = hook_property.clone();
                     func_compiler.returns_reference_context = method.returns_by_ref;
                     func_compiler.contains_yield = method.body.iter().any(Stmt::contains_yield);
@@ -6653,6 +6656,7 @@ impl Compiler {
                     func_compiler.bindable_closure_scope = false;
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_enum, method.name);
+                    func_compiler.static_method_context = method.is_static;
                     func_compiler.returns_reference_context = method.returns_by_ref;
                     func_compiler.contains_yield = method.body.iter().any(Stmt::contains_yield);
                     func_compiler.known_ref_args = self.build_known_ref_args();

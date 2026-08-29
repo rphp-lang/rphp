@@ -712,6 +712,7 @@ mod inner {
             104 => Some("FetchStaticProp"),
             105 => Some("InitStaticCall"),
             106 => Some("InitDynamicCall"),
+            174 => Some("InitDynamicStaticCall"),
             107 => Some("Instanceof"),
             108 => Some("FetchConst"),
             109 => Some("BindDefaultParam"),

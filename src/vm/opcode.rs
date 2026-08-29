@@ -251,6 +251,10 @@ pub enum OpCode {
     /// Validate a static FCC owner and run its autoload boundary before a
     /// dynamic member-name expression is evaluated. op1 is the owner value.
     EnsureFccClassLoaded = 173,
+    /// `$value::method()` after the compiler has materialized its owner/member
+    /// pair. Keeping this separate from InitDynamicCall makes the static
+    /// receiver/magic rule entirely pay-for-use on ordinary dynamic calls.
+    InitDynamicStaticCall = 174,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

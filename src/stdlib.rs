@@ -18929,7 +18929,9 @@ fn find_method_in_class_hierarchy<'a>(
     while let Some(class) = current {
         if let Some((_, visibility, is_static, _, function)) =
             class.methods.iter().find(|(name, _, _, _, _)| {
-                name.eq_ignore_ascii_case(method_name) && !class.method_is_abstract(name)
+                name.eq_ignore_ascii_case(method_name)
+                    && !class.is_interface
+                    && !class.method_is_abstract(name)
             })
         {
             return Some((
@@ -18965,7 +18967,11 @@ fn find_method_in_class_hierarchy<'a>(
         // Inherited aliases also live in the child namespace, but their user
         // ABI does not encode `static` in `this_offset`; defer those aliases
         // to the declaring parent's metadata instead of misclassifying them.
-        if let Some(function) = eg.find_function(&format!("{}::{method_name}", class.name))
+        if !class
+            .methods
+            .iter()
+            .any(|(name, _, _, _, _)| name.eq_ignore_ascii_case(method_name))
+            && let Some(function) = eg.find_function(&format!("{}::{method_name}", class.name))
             && eg
                 .declaring_class_of(function)
                 .is_some_and(|declaring| declaring.eq_ignore_ascii_case(&class.name))
@@ -19001,7 +19007,8 @@ fn find_abstract_method_in_class_hierarchy<'a>(
     let mut current = find_class_case_insensitive(eg, class_name);
     while let Some(class) = current {
         if let Some((name, _, _, _, _)) = class.methods.iter().find(|(name, _, _, _, _)| {
-            name.eq_ignore_ascii_case(method_name) && class.method_is_abstract(name)
+            name.eq_ignore_ascii_case(method_name)
+                && (class.is_interface || class.method_is_abstract(name))
         }) {
             return Some((class.name.as_str(), name.as_str()));
         }
@@ -19216,6 +19223,7 @@ impl ResolvedCallback {
                         | OpCode::InitMethodCall
                         | OpCode::InitStaticCall
                         | OpCode::InitDynamicCall
+                        | OpCode::InitDynamicStaticCall
                         | OpCode::InitLateStaticCall
                         | OpCode::Throw
                         | OpCode::NewObj

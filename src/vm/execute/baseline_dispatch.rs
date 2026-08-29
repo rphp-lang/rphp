@@ -8769,6 +8769,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::InitDynamicStaticCall => {
+                match op_init_dynamic_static_member_call(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => {
+                        frame = nf;
+                        op_array = no;
+                        continue;
+                    }
+                    ColdResult::Unhandled(exc) => {
+                        eg.exception = Some(exc);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+
             OpCode::CheckGenericArgs => {
                 op_check_generic_args(eg, frame, op_array, opline)?;
             }

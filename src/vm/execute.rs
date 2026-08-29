@@ -2828,6 +2828,7 @@ fn call_initializer_before<'a>(
             | OpCode::InitStaticCall
             | OpCode::InitLateStaticCall
             | OpCode::InitDynamicCall
+            | OpCode::InitDynamicStaticCall
             | OpCode::NewObj => {
                 if nested_calls == 0 {
                     return Some(instruction);
@@ -3009,7 +3010,10 @@ pub(crate) fn displayed_frame_function_name(
                             caller_op_array,
                         );
                         selected_method = method.as_str().map(str::to_owned);
-                    } else if initializer.opcode == OpCode::InitDynamicCall {
+                    } else if matches!(
+                        initializer.opcode,
+                        OpCode::InitDynamicCall | OpCode::InitDynamicStaticCall
+                    ) {
                         let callback = &*(*caller).get_op_ptr(
                             initializer.op1 as u32,
                             initializer.op1_type,
@@ -3018,7 +3022,15 @@ pub(crate) fn displayed_frame_function_name(
                         selected_method = callback
                             .as_str()
                             .and_then(|name| name.rsplit_once("::"))
-                            .map(|(_, method)| method.to_owned());
+                            .map(|(_, method)| method.to_owned())
+                            .or_else(|| {
+                                callback.as_array().and_then(|array| {
+                                    array
+                                        .get_value_at(1)
+                                        .and_then(Value::as_str)
+                                        .map(str::to_owned)
+                                })
+                            });
                     }
                     static_called_class_id =
                         static_site_called_class_id(eg, caller, caller_op_array, do_fcall_ptr, 0);

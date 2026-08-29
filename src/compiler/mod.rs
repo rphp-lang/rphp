@@ -857,6 +857,7 @@ fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
                 | OpCode::AssignStaticProp
                 | OpCode::AssignLateStaticProp
                 | OpCode::InitDynamicCall
+                | OpCode::InitDynamicStaticCall
                 | OpCode::SendVal
                 | OpCode::SendRef
                 | OpCode::SendVarEx

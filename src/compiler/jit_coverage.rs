@@ -84,6 +84,7 @@ pub(super) fn loop_miss_reason(
             | OpCode::SendUser
             | OpCode::SendUserChecked
             | OpCode::InitDynamicCall
+            | OpCode::InitDynamicStaticCall
             | OpCode::CreateClosure
             | OpCode::ClosureUseVar
             | OpCode::CreateFirstClassCallable

@@ -1126,6 +1126,7 @@ fn instructions_may_access_globals(instructions: &[Instruction]) -> bool {
             instruction.opcode,
             OpCode::InitFcall
                 | OpCode::InitDynamicCall
+                | OpCode::InitDynamicStaticCall
                 | OpCode::InitUserCall
                 | OpCode::CallUserFuncArray
                 | OpCode::InitMethodCall
@@ -1204,6 +1205,7 @@ fn refine_function_global_access(functions: &mut [(String, UserFunction)]) {
                     }
                 }
                 OpCode::InitDynamicCall
+                | OpCode::InitDynamicStaticCall
                 | OpCode::InitUserCall
                 | OpCode::CallUserFuncArray
                 | OpCode::InitMethodCall
@@ -1869,6 +1871,7 @@ fn propagate_declared_scalar_types(
             OpCode::InitStaticCall
             | OpCode::InitLateStaticCall
             | OpCode::InitDynamicCall
+            | OpCode::InitDynamicStaticCall
             | OpCode::InitUserCall
             | OpCode::NewObj => pending_calls.push(PendingScalarCallFacts {
                 return_type: KnownScalarType::Unknown,
@@ -3574,6 +3577,10 @@ pub struct Compiler {
     class_declarations_are_runtime: bool,
     /// Current function name (for static variable keying)
     current_function_name: String,
+    /// `$this` keeps a reserved CV in every method frame, but a static method
+    /// must diagnose an attempted read instead of treating that Undef slot as
+    /// an ordinary nullable variable.
+    static_method_context: bool,
     /// Property name visible to PHP 8.5's `__PROPERTY__` magic constant while
     /// compiling a property hook body. Nested closures deliberately start
     /// without this context, matching PHP's lexical boundary.
@@ -3961,6 +3968,7 @@ impl Compiler {
             closure_capture_names: HashSet::new(),
             class_declarations_are_runtime: false,
             current_function_name: String::new(),
+            static_method_context: false,
             current_property_name: None,
             returns_reference_context: false,
             return_type_context: ParamTypeHint::None,
@@ -9310,6 +9318,27 @@ impl Compiler {
 
     fn compile_variable_read(&mut self, name: &str, line: usize) -> (u16, OpType) {
         let cv = self.resolve_cv(name);
+        if line != 0 && name == "this" && self.static_method_context {
+            // Keep the ordinary FetchCvR handler branch-free. This source-only
+            // error is equivalent to `throw new Error(...)`, so lower it
+            // through the existing object/call/throw path instead of making
+            // every compiled-variable read pay for a static-method boundary.
+            let error = Expr::New {
+                class_name: "Error".to_string(),
+                args: vec![CallArg::Positional(Expr::StringLiteral(
+                    "Using $this when not in object context".to_string(),
+                ))],
+                generic_args: Vec::new(),
+                line,
+                call_line: line,
+            };
+            let (error, error_type) = self.compile_expr(&error);
+            let mut throw = Instruction::new(OpCode::Throw);
+            throw.op1 = error;
+            throw.op1_type = error_type;
+            self.push_instruction_at_line(throw, line);
+            return (self.add_literal(Value::null()), OpType::Const);
+        }
         // `$this` has its own "not in object context" contract; it is never
         // an ordinary undefined-variable warning.
         if line == 0 || name == "this" || self.definitely_defined_cvs.contains(&cv) {
@@ -12475,6 +12504,7 @@ impl Compiler {
                     callable_type,
                     args,
                     generic_args,
+                    false,
                     *line,
                 );
                 self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
@@ -12578,6 +12608,7 @@ impl Compiler {
                     OpType::Tmp,
                     args,
                     generic_args,
+                    true,
                     *line,
                 );
                 self.publish_nullsafe_receiver_patches(result, receiver_patches);
@@ -14178,6 +14209,7 @@ impl Compiler {
         callable_type: OpType,
         args: &[CallArg],
         generic_args: &[TypeHint],
+        static_member_syntax: bool,
         line: usize,
     ) -> (u16, OpType) {
         let (callable, callable_type) = if args.iter().any(CallArg::contains_yield) {
@@ -14219,7 +14251,11 @@ impl Compiler {
             0,
             OpType::Unused,
         );
-        let mut init = Instruction::new(OpCode::InitDynamicCall);
+        let mut init = Instruction::new(if static_member_syntax {
+            OpCode::InitDynamicStaticCall
+        } else {
+            OpCode::InitDynamicCall
+        });
         init.op1 = callable;
         init.op1_type = callable_type;
         init.extended_value = args.len() as u32;

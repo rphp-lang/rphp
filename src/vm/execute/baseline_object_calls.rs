@@ -3887,32 +3887,78 @@ fn op_init_method_call<'a>(
             };
 
             let full_name = format!("{}::{}", dispatch_class, method);
-            let (resolved, magic_method) = match eg.find_function(&full_name) {
-                Some(ptr) => (ptr, None),
-                None => {
-                    let magic = eg
-                        .find_method_info(&target_class_name, "__call")
-                        .filter(|(visibility, is_static, _)| {
-                            *visibility == Visibility::Public && !*is_static
-                        })
-                        .and_then(|(_, _, defining)| {
-                            eg.find_function(&format!("{defining}::__call"))
-                        });
-                    if let Some(magic) = magic {
-                        (magic, Some(Value::string(method)))
-                    } else {
-                        let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", dispatch_class, method));
-                        match throw_in_frame(eg, frame, err)? {
-                            ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
-                            ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+            let method_info = eg.find_method_info(&dispatch_class, method);
+            let inaccessible = method_info.as_ref().is_some_and(
+                |(visibility, _, defining_class)| {
+                    *visibility != Visibility::Public
+                        && !eg.check_instance_method_visibility(
+                            caller_class.as_deref(),
+                            &target_class_name,
+                            method,
+                            defining_class,
+                            *visibility,
+                        )
+                },
+            );
+            let direct = eg.find_function(&full_name);
+            let magic = (direct.is_none() || inaccessible)
+                .then(|| resolve_magic_call_method(eg, &target_class_name, "__call", false));
+            let (resolved, magic_method) = match magic {
+                Some(MagicCallMethod::Concrete(magic)) => {
+                    (magic, Some(Value::string(method)))
+                }
+                _ if inaccessible => {
+                    let (visibility, _, defining_class) = method_info
+                        .as_ref()
+                        .expect("inaccessible method retains declaration metadata");
+                    let visibility = match visibility {
+                        Visibility::Protected => "protected",
+                        Visibility::Private => "private",
+                        Visibility::Public => unreachable!(),
+                    };
+                    let scope = caller_class.as_deref().map_or_else(
+                        || "global scope".to_string(),
+                        |scope| format!("scope {scope}"),
+                    );
+                    let error = make_error_value(
+                        "Error",
+                        &format!(
+                            "Call to {visibility} method {defining_class}::{method}() from {scope}"
+                        ),
+                    );
+                    attach_throwable_origin(&error, eg, frame, op_array, ip);
+                    return Ok(match throw_in_frame(eg, frame, error)? {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            ColdResult::NewFrame(new_frame, new_op_array)
                         }
-                    }
+                        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                    });
+                }
+                _ => {
+                    let Some(direct) = direct else {
+                        let error = make_error_value(
+                            "Error",
+                            &format!(
+                                "Call to undefined method {dispatch_class}::{method}()"
+                            ),
+                        );
+                        return Ok(match throw_in_frame(eg, frame, error)? {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                ColdResult::NewFrame(new_frame, new_op_array)
+                            }
+                            ThrowResult::Unhandled(thrown) => {
+                                ColdResult::Unhandled(thrown)
+                            }
+                        });
+                    };
+                    (direct, None)
                 }
             };
             let resolved_has_generic_contract = cfg!(any(
                 feature = "php-generics-erased",
                 feature = "php-generics-reified"
             ))
+                && magic_method.is_none()
                 && eg
                     .generic_metadata
                     .has_instance_method_contract(&target_class_name, method);
@@ -3920,6 +3966,7 @@ fn op_init_method_call<'a>(
                 feature = "php-generics-erased",
                 feature = "php-generics-reified"
             ))
+                && magic_method.is_none()
                 && eg
                     .generic_metadata
                     .linked_instance_method_contract_admits_exact_long(
@@ -3935,42 +3982,6 @@ fn op_init_method_call<'a>(
             } else {
                 0
             };
-
-            // Visibility check
-            if let Some((vis, defining_class)) = eg.find_method_visibility(&dispatch_class, method) {
-                if vis != Visibility::Public {
-                    if !eg.check_instance_method_visibility(
-                        caller_class.as_deref(),
-                        &target_class_name,
-                        method,
-                        &defining_class,
-                        vis,
-                    ) {
-                        let vis_str = match vis {
-                            Visibility::Protected => "protected",
-                            Visibility::Private => "private",
-                            _ => "public",
-                        };
-                        let scope = caller_class.as_deref().map_or_else(
-                            || "global scope".to_string(),
-                            |scope| format!("scope {scope}"),
-                        );
-                        let error = make_error_value(
-                            "Error",
-                            &format!(
-                                "Call to {vis_str} method {defining_class}::{method}() from {scope}"
-                            ),
-                        );
-                        attach_throwable_origin(&error, eg, frame, op_array, ip);
-                        return Ok(match throw_in_frame(eg, frame, error)? {
-                            ThrowResult::Handled(new_frame, new_op_array) => {
-                                ColdResult::NewFrame(new_frame, new_op_array)
-                            }
-                            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-                        });
-                    }
-                }
-            }
 
             // Cache the resolution (don't cache if class_id is 0 = unknown)
             if obj_class_id != 0 && magic_method.is_none() {
@@ -4113,20 +4124,145 @@ fn op_init_method_call<'a>(
     }
     Ok(ColdResult::Done)
 }
+enum MagicCallMethod {
+    Concrete(*const FunctionCommon),
+    Abstract,
+    Missing,
+}
+
+#[cold]
+fn find_abstract_method_declaration(
+    eg: &ExecutorGlobals,
+    class: &str,
+    method: &str,
+) -> Option<(String, String)> {
+    let mut current = eg.find_public_class(class).or_else(|| eg.find_class(class));
+    while let Some(definition) = current {
+        if let Some((name, _, _, _, _)) = definition.methods.iter().find(|(name, _, _, _, _)| {
+            name.eq_ignore_ascii_case(method)
+                && (definition.is_interface || definition.method_is_abstract(name))
+        }) {
+            return Some((definition.name.clone(), name.clone()));
+        }
+        for trait_name in &definition.uses {
+            let Some(trait_definition) = eg.find_class(trait_name) else {
+                continue;
+            };
+            if let Some((name, _, _, _, _)) = trait_definition
+                .methods
+                .iter()
+                .find(|(name, _, _, _, _)| {
+                    name.eq_ignore_ascii_case(method)
+                        && trait_definition.method_is_abstract(name)
+                })
+            {
+                return Some((definition.name.clone(), name.clone()));
+            }
+        }
+        current = definition
+            .parent
+            .as_deref()
+            .and_then(|parent| eg.find_class(parent));
+    }
+    None
+}
+
+#[cold]
+fn resolve_magic_call_method(
+    eg: &ExecutorGlobals,
+    class: &str,
+    magic: &str,
+    require_static: bool,
+) -> MagicCallMethod {
+    // Concrete magic methods declared directly on the target class are the
+    // overwhelmingly common trampoline case. Classify that one declaration
+    // before walking the hierarchy for an abstract shadow; repeated magic
+    // calls intentionally remain uncached, so this must stay one bounded
+    // metadata probe rather than two full hierarchy traversals.
+    if let Some(definition) = eg.find_public_class(class).or_else(|| eg.find_class(class))
+        && let Some((name, visibility, is_static, _, _)) = definition
+            .methods
+            .iter()
+            .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case(magic))
+    {
+        if definition.is_interface || definition.method_is_abstract(name) {
+            return MagicCallMethod::Abstract;
+        }
+        if *visibility == Visibility::Public
+            && *is_static == require_static
+            && let Some(function) = eg.find_function(&format!("{}::{magic}", definition.name))
+        {
+            return MagicCallMethod::Concrete(function);
+        }
+        return MagicCallMethod::Missing;
+    }
+    if find_abstract_method_declaration(eg, class, magic).is_some() {
+        return MagicCallMethod::Abstract;
+    }
+    let lookup_class = eg
+        .find_public_class(class)
+        .or_else(|| eg.find_class(class))
+        .map_or(class, |definition| definition.name.as_str());
+    if let Some((visibility, is_static, defining)) = eg.find_method_info(lookup_class, magic)
+        && visibility == Visibility::Public
+        && is_static == require_static
+        && let Some(function) = eg.find_function(&format!("{defining}::{magic}"))
+    {
+        return MagicCallMethod::Concrete(function);
+    }
+    MagicCallMethod::Missing
+}
+
 #[inline(never)]
 fn class_callback_requires_instance(
     eg: &ExecutorGlobals,
     class: &str,
     method: &str,
+    caller_class: Option<&str>,
 ) -> bool {
-    if let Some((_, is_static, _)) = eg.find_method_info(class, method) {
-        return !is_static;
+    if let Some((visibility, is_static, defining)) = eg.find_method_info(class, method) {
+        return !is_static
+            && (visibility == Visibility::Public
+                || eg.check_visibility(caller_class, &defining, visibility));
     }
     if eg.find_method_info(class, "__callStatic").is_some() {
         return false;
     }
     eg.find_method_info(class, "__call")
         .is_some_and(|(_, is_static, _)| !is_static)
+}
+
+/// Locate the DoFcall paired with a call initializer while stepping over
+/// complete nested calls used to evaluate arguments. Static-call init opcodes
+/// deliberately carry no duplicate source entry, so their cold errors use the
+/// paired call's line and trace origin.
+#[cold]
+fn call_site_instruction_index(
+    op_array: &crate::compiler::OpArray,
+    initializer_index: usize,
+) -> usize {
+    let mut nested_calls = 0usize;
+    for (index, instruction) in op_array
+        .instructions
+        .iter()
+        .enumerate()
+        .skip(initializer_index.saturating_add(1))
+    {
+        match instruction.opcode {
+            OpCode::InitFcall
+            | OpCode::InitUserCall
+            | OpCode::InitMethodCall
+            | OpCode::InitStaticCall
+            | OpCode::InitLateStaticCall
+            | OpCode::InitDynamicCall
+            | OpCode::InitDynamicStaticCall
+            | OpCode::NewObj => nested_calls += 1,
+            OpCode::DoFcall if nested_calls == 0 => return index,
+            OpCode::DoFcall => nested_calls -= 1,
+            _ => {}
+        }
+    }
+    initializer_index
 }
 
 // InitStaticCall uses the two low bits of a cached FunctionCommon pointer to
@@ -4157,6 +4293,191 @@ fn throw_non_static_callback_error<'a>(
         }
         ThrowResult::Unhandled(error) => ColdResult::Unhandled(error),
     })
+}
+
+#[cold]
+#[inline(never)]
+fn throw_located_call_error<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    instruction_index: usize,
+    message: &str,
+) -> Result<ColdResult<'a>, VmError> {
+    let error = make_error_value("Error", message);
+    attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+    Ok(match throw_in_frame(eg, frame, error)? {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(error) => ColdResult::Unhandled(error),
+    })
+}
+
+enum StaticCallTargetResolution<'a> {
+    Resolved(*const FunctionCommon, bool, Option<Value>),
+    Flow(ColdResult<'a>),
+}
+
+#[cold]
+#[inline(never)]
+fn resolve_static_call_target<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    instruction_index: usize,
+    class: &str,
+    method: &str,
+    dynamic_scope: bool,
+) -> Result<StaticCallTargetResolution<'a>, VmError> {
+    let method_info = eg.find_method_info(class, method);
+    let caller_class = if dynamic_scope {
+        resolve_static_call_class(eg, frame, "self", true)
+    } else {
+        get_caller_class(frame, eg)
+    };
+    let inaccessible = method_info.as_ref().is_some_and(
+        |(visibility, _, defining_class)| {
+            *visibility != Visibility::Public
+                && !eg.check_visibility(caller_class.as_deref(), defining_class, *visibility)
+        },
+    );
+    let direct = eg.find_function(&format!("{class}::{method}"));
+    if let Some((defining_class, declared_method)) =
+        find_abstract_method_declaration(eg, class, method)
+    {
+        return Ok(StaticCallTargetResolution::Flow(
+            throw_located_call_error(
+                eg,
+                frame,
+                op_array,
+                instruction_index,
+                &format!("Cannot call abstract method {defining_class}::{declared_method}()"),
+            )?,
+        ));
+    }
+
+    let (resolved, magic_method, instance_magic) = if direct.is_some() && !inaccessible {
+        (direct.expect("checked direct static method"), None, false)
+    } else {
+        // A scoped static spelling retains a compatible live `$this` and
+        // therefore prefers __call over __callStatic. Global static syntax has
+        // no receiver and continues directly to the static trampoline.
+        let live_receiver = get_caller_class(frame, eg).and_then(|_| {
+            closure_bound_this(frame, op_array, false).filter(|receiver| {
+                receiver
+                    .as_object()
+                    .is_some_and(|object| eg.class_is_a(&object.class_name, class))
+            })
+        });
+        match live_receiver
+            .as_ref()
+            .map(|_| resolve_magic_call_method(eg, class, "__call", false))
+        {
+            Some(MagicCallMethod::Concrete(magic)) => {
+                (magic, Some(Value::string(method)), true)
+            }
+            Some(MagicCallMethod::Abstract) => {
+                let diagnostic_class = eg
+                    .find_public_class(class)
+                    .map_or(class, |definition| definition.name.as_str());
+                return Ok(StaticCallTargetResolution::Flow(
+                    throw_located_call_error(
+                        eg,
+                        frame,
+                        op_array,
+                        instruction_index,
+                        &format!("Cannot call abstract method {diagnostic_class}::{method}()"),
+                    )?,
+                ));
+            }
+            Some(MagicCallMethod::Missing) | None => {
+                if direct.is_none() && method.eq_ignore_ascii_case("__construct") {
+                    return Ok(StaticCallTargetResolution::Flow(
+                        throw_located_call_error(
+                            eg,
+                            frame,
+                            op_array,
+                            instruction_index,
+                            "Cannot call constructor",
+                        )?,
+                    ));
+                }
+                match resolve_magic_call_method(eg, class, "__callStatic", true) {
+                    MagicCallMethod::Concrete(magic) => {
+                        (magic, Some(Value::string(method)), false)
+                    }
+                    MagicCallMethod::Abstract => {
+                        let diagnostic_class = eg
+                            .find_public_class(class)
+                            .map_or(class, |definition| definition.name.as_str());
+                        return Ok(StaticCallTargetResolution::Flow(
+                            throw_located_call_error(
+                                eg,
+                                frame,
+                                op_array,
+                                instruction_index,
+                                &format!(
+                                    "Cannot call abstract method {diagnostic_class}::{method}()"
+                                ),
+                            )?,
+                        ));
+                    }
+                    MagicCallMethod::Missing if inaccessible => {
+                        let (visibility, _, defining_class) = method_info
+                            .as_ref()
+                            .expect("inaccessible method retains declaration metadata");
+                        let visibility = match visibility {
+                            Visibility::Protected => "protected",
+                            Visibility::Private => "private",
+                            Visibility::Public => unreachable!(),
+                        };
+                        let scope = caller_class.as_deref().map_or_else(
+                            || "global scope".to_string(),
+                            |scope| format!("scope {scope}"),
+                        );
+                        return Ok(StaticCallTargetResolution::Flow(
+                            throw_located_call_error(
+                                eg,
+                                frame,
+                                op_array,
+                                instruction_index,
+                                &format!(
+                                    "Call to {visibility} method {defining_class}::{method}() from {scope}"
+                                ),
+                            )?,
+                        ));
+                    }
+                    MagicCallMethod::Missing => {
+                        let diagnostic_class = eg
+                            .find_public_class(class)
+                            .map_or(class, |definition| definition.name.as_str());
+                        return Ok(StaticCallTargetResolution::Flow(
+                            throw_located_call_error(
+                                eg,
+                                frame,
+                                op_array,
+                                instruction_index,
+                                &format!(
+                                    "Call to undefined method {diagnostic_class}::{method}()"
+                                ),
+                            )?,
+                        ));
+                    }
+                }
+            }
+        }
+    };
+    let method_is_non_static = instance_magic
+        || (magic_method.is_none()
+            && method_info
+                .as_ref()
+                .is_some_and(|(_, is_static, _)| !is_static));
+    Ok(StaticCallTargetResolution::Resolved(
+        resolved,
+        method_is_non_static,
+        magic_method,
+    ))
 }
 
 fn op_init_static_call<'a>(
@@ -4337,70 +4658,24 @@ fn op_init_static_call<'a>(
             }
         }
 
-        let full_name = format!("{}::{}", class, method);
-        let (resolved, magic_method, instance_magic) = match eg.find_function(&full_name) {
-            Some(ptr) => (ptr, None, false),
-            None => {
-                // A scoped `self::missing()`/`Class::missing()` call keeps the
-                // live instance receiver. PHP therefore prefers `__call` over
-                // `__callStatic` when the receiver is compatible with the
-                // requested class.
-                let live_receiver = closure_bound_this(frame, op_array, false).filter(|receiver| {
-                    receiver
-                        .as_object()
-                        .is_some_and(|object| eg.class_is_a(&object.class_name, &class))
-                });
-                let instance_magic = live_receiver.as_ref().and_then(|_| {
-                    eg.find_method_info(&class, "__call")
-                        .filter(|(visibility, is_static, _)| {
-                            *visibility == Visibility::Public && !*is_static
-                        })
-                        .and_then(|(_, _, defining)| {
-                            eg.find_function(&format!("{defining}::__call"))
-                        })
-                });
-                if let Some(magic) = instance_magic {
-                    (magic, Some(Value::string(&method)), true)
-                } else {
-                if class_callback_requires_instance(eg, &class, &method) {
-                    return Ok(throw_non_static_callback_error(
-                        eg, frame, op_array, ip, &class, &method,
-                    )?);
-                }
-                let magic = eg
-                    .find_method_info(&class, "__callStatic")
-                    .filter(|(visibility, is_static, _)| {
-                        *visibility == Visibility::Public && *is_static
-                    })
-                    .and_then(|(_, _, defining)| {
-                        eg.find_function(&format!("{defining}::__callStatic"))
-                    });
-                if let Some(magic) = magic {
-                    (magic, Some(Value::string(&method)), false)
-                } else {
-                    let diagnostic_class = eg
-                        .find_public_class(&class)
-                        .map_or(class.as_str(), |definition| definition.name.as_str());
-                    let err = make_error_value(
-                        "Error",
-                        &format!("Call to undefined method {diagnostic_class}::{method}()"),
-                    );
-                    match throw_in_frame(eg, frame, err)? {
-                        ThrowResult::Handled(new_frame, new_op_array) => {
-                            return Ok(ColdResult::NewFrame(new_frame, new_op_array));
-                        }
-                        ThrowResult::Unhandled(thrown) => {
-                            return Ok(ColdResult::Unhandled(thrown));
-                        }
-                    }
-                }
-                }
-            }
-        };
-        let method_info = eg.find_method_info(&class, &method);
-        let method_is_non_static = instance_magic || method_info
-            .as_ref()
-            .is_some_and(|(_, is_static, _)| !is_static);
+        let call_site_ip = call_site_instruction_index(op_array, ip);
+        let (resolved, method_is_non_static, magic_method) =
+            match resolve_static_call_target(
+                eg,
+                frame,
+                op_array,
+                call_site_ip,
+                &class,
+                &method,
+                dynamic_scope,
+            )? {
+                StaticCallTargetResolution::Resolved(
+                    resolved,
+                    method_is_non_static,
+                    magic_method,
+                ) => (resolved, method_is_non_static, magic_method),
+                StaticCallTargetResolution::Flow(result) => return Ok(result),
+            };
         // SAFETY: `find_function` returns a request-owned immutable function
         // descriptor that remains live throughout execution.
         let trait_scope_class_id = if unsafe { &*resolved }
@@ -4411,25 +4686,6 @@ fn op_init_static_call<'a>(
         } else {
             0
         };
-
-        // Visibility check on first resolve for each dynamic class.
-        if let Some((vis, _, defining_class)) = method_info.as_ref() {
-            if *vis != Visibility::Public {
-                let caller_class = if dynamic_scope {
-                    resolve_static_call_class(eg, frame, "self", true)
-                } else {
-                    get_caller_class(frame, eg)
-                };
-                if !eg.check_visibility(caller_class.as_deref(), defining_class, *vis) {
-                    let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
-                    return Err(VmError::Fatal(format!(
-                        "Call to {} method {}::{}() from scope {}",
-                        vis_str, defining_class, method,
-                        caller_class.as_deref().unwrap_or("global")
-                    )));
-                }
-            }
-        }
 
         // Shared trait op arrays can be entered through different consuming
         // classes. Leaving their call cache empty keeps ordinary static calls'
@@ -4470,8 +4726,14 @@ fn op_init_static_call<'a>(
                     .is_some_and(|receiver| eg.class_is_a(&receiver.class_name, &class))
         };
         if !compatible_this {
+            let call_site_ip = call_site_instruction_index(op_array, ip);
             return Ok(throw_non_static_callback_error(
-                eg, frame, op_array, ip, &class, &method,
+                eg,
+                frame,
+                op_array,
+                call_site_ip,
+                &class,
+                &method,
             )?);
         }
     }
@@ -4605,15 +4867,18 @@ fn op_init_late_static_call<'a>(
         }
     }
     let cache = &op_array.cache[ip];
-    let (func_ptr, trait_scope_class_id) = if cache.class_id == class_id && !cache.func.is_null() {
-        (cache.func, cache.method_trait_scope_class_id())
+    let (func_ptr, trait_scope_class_id, magic_method) = if cache.class_id == class_id
+        && !cache.func.is_null()
+    {
+        (cache.func, cache.method_trait_scope_class_id(), None)
     } else {
+        let call_site_ip = call_site_instruction_index(op_array, ip);
         let Some(class_definition) = eg.class_by_id(class_id) else {
             let error = make_error_value(
                 "Error",
                 "Cannot access \"static\" when no class scope is active",
             );
-            attach_throwable_origin(&error, eg, frame, op_array, ip);
+            attach_throwable_origin(&error, eg, frame, op_array, call_site_ip);
             return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
@@ -4623,20 +4888,166 @@ fn op_init_late_static_call<'a>(
         };
         let class = class_definition.name.clone();
         let method = method_name.as_str().unwrap_or("");
+        let method_info = eg.find_method_info(&class, method);
+        let caller_class = if opline._pad & CALL_FLAG_DYNAMIC_STATIC_SCOPE != 0 {
+            resolve_static_call_class(eg, frame, "self", true)
+        } else {
+            get_caller_class(frame, eg)
+        };
+        let inaccessible = method_info.as_ref().is_some_and(
+            |(visibility, _, defining_class)| {
+                *visibility != Visibility::Public
+                    && !eg.check_visibility(
+                        caller_class.as_deref(),
+                        defining_class,
+                        *visibility,
+                    )
+            },
+        );
         let full_name = format!("{}::{}", class, method);
-        let resolved = match eg.find_function(&full_name) {
-            Some(pointer) => pointer,
-            None => {
-                let error = make_error_value(
-                    "Error",
-                    &format!("Call to undefined method {}::{}()", class, method),
-                );
-                return Ok(match throw_in_frame(eg, frame, error)? {
-                    ThrowResult::Handled(new_frame, new_op_array) => {
-                        ColdResult::NewFrame(new_frame, new_op_array)
+        let direct = eg.find_function(&full_name);
+        if let Some((defining_class, declared_method)) =
+            find_abstract_method_declaration(eg, &class, method)
+        {
+            let error = make_error_value(
+                "Error",
+                &format!(
+                    "Cannot call abstract method {defining_class}::{declared_method}()"
+                ),
+            );
+            attach_throwable_origin(&error, eg, frame, op_array, call_site_ip);
+            return Ok(match throw_in_frame(eg, frame, error)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+
+        let (resolved, magic_method) = if direct.is_some() && !inaccessible {
+            (direct.expect("checked direct late-static method"), None)
+        } else {
+            let live_receiver = get_caller_class(frame, eg).and_then(|_| {
+                closure_bound_this(frame, op_array, false).filter(|receiver| {
+                    receiver
+                        .as_object()
+                        .is_some_and(|object| eg.class_is_a(&object.class_name, &class))
+                })
+            });
+            match live_receiver
+                .as_ref()
+                .map(|_| resolve_magic_call_method(eg, &class, "__call", false))
+            {
+                Some(MagicCallMethod::Concrete(magic)) => {
+                    (magic, Some(Value::string(method)))
+                }
+                Some(MagicCallMethod::Abstract) => {
+                    let error = make_error_value(
+                        "Error",
+                        &format!("Cannot call abstract method {class}::{method}()"),
+                    );
+                    attach_throwable_origin(&error, eg, frame, op_array, call_site_ip);
+                    return Ok(match throw_in_frame(eg, frame, error)? {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            ColdResult::NewFrame(new_frame, new_op_array)
+                        }
+                        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                    });
+                }
+                Some(MagicCallMethod::Missing) | None => {
+                    if direct.is_none() && method.eq_ignore_ascii_case("__construct") {
+                        let error = make_error_value("Error", "Cannot call constructor");
+                        attach_throwable_origin(&error, eg, frame, op_array, call_site_ip);
+                        return Ok(match throw_in_frame(eg, frame, error)? {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                ColdResult::NewFrame(new_frame, new_op_array)
+                            }
+                            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                        });
                     }
-                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-                });
+                    match resolve_magic_call_method(eg, &class, "__callStatic", true) {
+                        MagicCallMethod::Concrete(magic) => {
+                            (magic, Some(Value::string(method)))
+                        }
+                        MagicCallMethod::Abstract => {
+                            let error = make_error_value(
+                                "Error",
+                                &format!("Cannot call abstract method {class}::{method}()"),
+                            );
+                            attach_throwable_origin(
+                                &error,
+                                eg,
+                                frame,
+                                op_array,
+                                call_site_ip,
+                            );
+                            return Ok(match throw_in_frame(eg, frame, error)? {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    ColdResult::NewFrame(new_frame, new_op_array)
+                                }
+                                ThrowResult::Unhandled(thrown) => {
+                                    ColdResult::Unhandled(thrown)
+                                }
+                            });
+                        }
+                        MagicCallMethod::Missing if inaccessible => {
+                            let (visibility, _, defining_class) = method_info
+                                .as_ref()
+                                .expect("inaccessible method retains declaration metadata");
+                            let visibility = match visibility {
+                                Visibility::Protected => "protected",
+                                Visibility::Private => "private",
+                                Visibility::Public => unreachable!(),
+                            };
+                            let scope = caller_class.as_deref().map_or_else(
+                                || "global scope".to_string(),
+                                |scope| format!("scope {scope}"),
+                            );
+                            let error = make_error_value(
+                                "Error",
+                                &format!(
+                                    "Call to {visibility} method {defining_class}::{method}() from {scope}"
+                                ),
+                            );
+                            attach_throwable_origin(
+                                &error,
+                                eg,
+                                frame,
+                                op_array,
+                                call_site_ip,
+                            );
+                            return Ok(match throw_in_frame(eg, frame, error)? {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    ColdResult::NewFrame(new_frame, new_op_array)
+                                }
+                                ThrowResult::Unhandled(thrown) => {
+                                    ColdResult::Unhandled(thrown)
+                                }
+                            });
+                        }
+                        MagicCallMethod::Missing => {
+                            let error = make_error_value(
+                                "Error",
+                                &format!("Call to undefined method {class}::{method}()"),
+                            );
+                            attach_throwable_origin(
+                                &error,
+                                eg,
+                                frame,
+                                op_array,
+                                call_site_ip,
+                            );
+                            return Ok(match throw_in_frame(eg, frame, error)? {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    ColdResult::NewFrame(new_frame, new_op_array)
+                                }
+                                ThrowResult::Unhandled(thrown) => {
+                                    ColdResult::Unhandled(thrown)
+                                }
+                            });
+                        }
+                    }
+                }
             }
         };
         // SAFETY: `find_function` returns a request-owned immutable function
@@ -4650,45 +5061,24 @@ fn op_init_late_static_call<'a>(
             0
         };
 
-        if let Some((visibility, defining_class)) = eg.find_method_visibility(&class, method) {
-            if visibility != Visibility::Public {
-                let caller_class = if opline._pad & CALL_FLAG_DYNAMIC_STATIC_SCOPE != 0 {
-                    resolve_static_call_class(eg, frame, "self", true)
-                } else {
-                    get_caller_class(frame, eg)
-                };
-                if !eg.check_visibility(caller_class.as_deref(), &defining_class, visibility) {
-                    let visibility = match visibility {
-                        Visibility::Protected => "protected",
-                        Visibility::Private => "private",
-                        Visibility::Public => "public",
-                    };
-                    return Err(VmError::Fatal(format!(
-                        "Call to {} method {}::{}() from scope {}",
-                        visibility,
-                        defining_class,
-                        method,
-                        caller_class.as_deref().unwrap_or("global")
-                    )));
+        if magic_method.is_none() {
+            unsafe {
+                let cache = &mut *(op_array.cache.as_ptr().add(ip)
+                    as *mut crate::vm::instruction::InlineCache);
+                cache.class_id = class_id;
+                cache.func = resolved;
+                if trait_scope_class_id != 0 {
+                    cache.set_method_trait_scope_class_id(trait_scope_class_id);
                 }
             }
         }
-
-        unsafe {
-            let cache = &mut *(op_array.cache.as_ptr().add(ip)
-                as *mut crate::vm::instruction::InlineCache);
-            cache.class_id = class_id;
-            cache.func = resolved;
-            if trait_scope_class_id != 0 {
-                cache.set_method_trait_scope_class_id(trait_scope_class_id);
-            }
-        }
-        (resolved, trait_scope_class_id)
+        (resolved, trait_scope_class_id, magic_method)
     };
 
     let num_args = opline.extended_value;
     let common = unsafe { &*func_ptr };
-    if !common.plan.needs_trait_class_scope()
+    if magic_method.is_none()
+        && !common.plan.needs_trait_class_scope()
         && common.fn_type == FunctionType::User
         && num_args == common.sig.public_arity()
     {
@@ -4716,25 +5106,64 @@ fn op_init_late_static_call<'a>(
     }
 
     let pending_call = unsafe { (*frame).call };
-    let call = eg.vm_stack.push_call_frame(
-        func_ptr,
-        num_args + 1,
-        num_args,
-        frame,
-        pending_call,
-    );
+    let target_is_instance = !common.plan.is_static_method();
+    let live_receiver = target_is_instance
+        .then(|| closure_bound_this(frame, op_array, false))
+        .flatten()
+        .filter(|receiver| {
+            receiver.as_object().is_some_and(|object| {
+                eg.class_by_id(class_id)
+                    .is_some_and(|class| eg.class_is_a(&object.class_name, &class.name))
+            })
+        });
+    if target_is_instance && live_receiver.is_none() {
+        let call_site_ip = call_site_instruction_index(op_array, ip);
+        let class = eg
+            .class_by_id(class_id)
+            .map_or_else(|| "static".to_string(), |definition| definition.name.clone());
+        return Ok(throw_non_static_callback_error(
+            eg,
+            frame,
+            op_array,
+            call_site_ip,
+            &class,
+            method_name.as_str().unwrap_or(""),
+        )?);
+    }
+    let storage_slots = if magic_method.is_some() {
+        (num_args + 1).max(3)
+    } else {
+        num_args + 1
+    };
+    let call = eg
+        .vm_stack
+        .push_call_frame(func_ptr, storage_slots, num_args, frame, pending_call);
     unsafe {
         (*frame).call = call;
-        // Late-static method calls use the same hidden class-method slot as
-        // ordinary static calls. A genuine static target has no receiver to
-        // publish there, so initialize it before SendVal fills CV 1..N. This
-        // is required by wide frames, whose cleanup scans all CVs.
-        frame_slot_init(call, (*call).cv_mut(0) as *mut Value, Value::undef());
+        if magic_method.is_some() {
+            (*call).set_magic_call(true);
+        }
+        if let Some(receiver) = live_receiver {
+            if common.plan.borrow_this() {
+                frame_set_borrowed_this(call, (*frame).cv(0) as *const Value);
+            } else {
+                frame_set_this(call, receiver);
+            }
+        } else {
+            // Late-static method calls use the same hidden class-method slot
+            // as ordinary static calls. A genuine static target has no
+            // receiver to publish there, so initialize it before SendVal
+            // fills CV 1..N. Wide-frame cleanup scans every CV.
+            frame_slot_init(call, (*call).cv_mut(0) as *mut Value, Value::undef());
+        }
     }
     if class_id != 0 {
         publish_late_static_call_class_id(eg, call, class_id);
     }
     initialize_trait_class_scope(eg, call, func_ptr, trait_scope_class_id);
+    if let Some(method) = magic_method {
+        push_pending_magic_call(eg, call as usize, method);
+    }
     Ok(ColdResult::Done)
 }
 
@@ -5123,6 +5552,233 @@ fn init_resolved_user_call_mode(
     initialize_trait_class_scope(eg, call, resolved.func_ptr, trait_scope_class_id);
 }
 
+#[cold]
+#[inline(never)]
+fn unresolved_array_callable_message(
+    eg: &ExecutorGlobals,
+    callable_array: &PhpArray,
+    closure_receiver: bool,
+    class_name: Option<&str>,
+    static_semantics: bool,
+) -> String {
+    if closure_receiver {
+        let method = callable_array
+            .get_value_at(1)
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        return format!("Call to undefined method Closure::{method}()");
+    }
+    let Some(method) = callable_array.get_value_at(1).and_then(Value::as_str) else {
+        return "Array is not callable".to_string();
+    };
+    let class = class_name.map(str::to_string).or_else(|| {
+        callable_array.get_value_at(0).and_then(|receiver| {
+            receiver
+                .as_object()
+                .map(|object| object.class_name.to_string())
+                .or_else(|| receiver.as_str().map(str::to_string))
+        })
+    });
+    let Some(class) = class else {
+        return "Array is not callable".to_string();
+    };
+    if let Some((defining, declared_method)) =
+        find_abstract_method_declaration(eg, &class, method)
+    {
+        return format!("Cannot call abstract method {defining}::{declared_method}()");
+    }
+    if matches!(
+        resolve_magic_call_method(
+            eg,
+            &class,
+            if static_semantics {
+                "__callStatic"
+            } else {
+                "__call"
+            },
+            static_semantics,
+        ),
+        MagicCallMethod::Abstract
+    ) {
+        let diagnostic_class = eg
+            .find_public_class(&class)
+            .map_or(class.as_str(), |definition| definition.name.as_str());
+        return format!("Cannot call abstract method {diagnostic_class}::{method}()");
+    }
+    format!("Call to undefined method {class}::{method}()")
+}
+
+#[inline(never)]
+fn op_init_dynamic_static_member_call<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    let (callable, instruction_index) = dynamic_call_operand(frame, op_array, opline);
+    let Some(callable_array) = callable.as_array() else {
+        return Ok(throw_located_call_error(
+            eg,
+            frame,
+            op_array,
+            instruction_index,
+            "Array is not callable",
+        )?);
+    };
+    if callable_array.len() != 2 {
+        return Ok(throw_located_call_error(
+            eg,
+            frame,
+            op_array,
+            instruction_index,
+            "Array callback must have exactly two elements",
+        )?);
+    }
+    let Some(owner) = callable_array.get_value_at(0) else {
+        unreachable!("two-element callback has an owner")
+    };
+    let Some(method) = callable_array.get_value_at(1).and_then(Value::as_str) else {
+        return Ok(throw_located_call_error(
+            eg,
+            frame,
+            op_array,
+            instruction_index,
+            "Method name must be a string",
+        )?);
+    };
+    let class_name = owner
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| owner.as_object().map(|object| object.class_name.to_string()));
+    let Some(class_name) = class_name else {
+        return Ok(throw_located_call_error(
+            eg,
+            frame,
+            op_array,
+            instruction_index,
+            "Class name must be a valid object or a string",
+        )?);
+    };
+    if matches!(
+        class_name.to_ascii_lowercase().as_str(),
+        "self" | "parent" | "static"
+    ) && get_caller_class(frame, eg).is_none()
+    {
+        return Ok(throw_located_call_error(
+            eg,
+            frame,
+            op_array,
+            instruction_index,
+            &format!(
+                "Cannot access \"{}\" when no class scope is active",
+                class_name.to_ascii_lowercase()
+            ),
+        )?);
+    }
+    if eg.find_class(&class_name).is_none() {
+        let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &class_name)?;
+        if let Some(exception) = eg.exception.take() {
+            return Ok(match throw_in_frame(eg, frame, exception)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+            });
+        }
+        if !loaded {
+            return Ok(throw_located_call_error(
+                eg,
+                frame,
+                op_array,
+                instruction_index,
+                &format!("Class \"{class_name}\" not found"),
+            )?);
+        }
+    }
+    if class_callback_requires_instance(
+        eg,
+        &class_name,
+        method,
+        get_caller_class(frame, eg).as_deref(),
+    ) {
+        return Ok(throw_non_static_callback_error(
+            eg,
+            frame,
+            op_array,
+            instruction_index,
+            &class_name,
+            method,
+        )?);
+    }
+
+    let transformed = owner.as_object().map(|_| {
+        let mut callback = PhpArray::with_packed_capacity(2);
+        callback.push(Value::string(&class_name));
+        callback.push(Value::string(method));
+        Value::array(callback)
+    });
+    let resolved = if let Some(callback) = transformed.as_ref() {
+        let caller_class = get_caller_class(frame, eg);
+        let ordinary = crate::stdlib::resolve_callback_with_cache(
+            callback,
+            eg,
+            caller_class.as_deref(),
+            None,
+        );
+        if ordinary
+            .as_ref()
+            .is_some_and(|resolved| !resolved.is_magic_call)
+        {
+            ordinary
+        } else {
+            let receiver = closure_bound_this(frame, op_array, false);
+            crate::stdlib::resolve_live_scoped_instance_callback(
+                callback,
+                eg,
+                caller_class.as_deref(),
+                receiver.as_ref(),
+            )
+            .or(ordinary)
+        }
+    } else {
+        resolve_user_call_at_opline(eg, frame, op_array, opline)
+    };
+    let Some(resolved) = resolved else {
+        let message = unresolved_array_callable_message(
+            eg,
+            &callable_array,
+            false,
+            Some(&class_name),
+            true,
+        );
+        return Ok(throw_located_call_error(
+            eg,
+            frame,
+            op_array,
+            instruction_index,
+            &message,
+        )?);
+    };
+    init_resolved_user_call_mode(eg, frame, opline.extended_value, resolved, true);
+    Ok(ColdResult::Done)
+}
+
+#[inline(always)]
+fn dynamic_call_operand<'a>(
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> (&'a Value, usize) {
+    // SAFETY: dispatch supplies the live frame and an instruction from this
+    // op array; the compiler validated the operand kind and slot index.
+    unsafe {
+        (
+            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
+            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
+        )
+    }
+}
+
 #[inline(never)]
 fn op_init_dynamic_call<'a>(
     eg: &mut ExecutorGlobals,
@@ -5130,13 +5786,7 @@ fn op_init_dynamic_call<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let (callable, instruction_index) = unsafe {
-        (
-            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
-            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
-        )
-    };
-
+    let (callable, instruction_index) = dynamic_call_operand(frame, op_array, opline);
     if callable.value_type() == ValueType::Array {
         let callable_array = callable
             .as_array()
@@ -5238,7 +5888,12 @@ fn op_init_dynamic_call<'a>(
         }
         if let Some(class_name) = class_name.as_deref()
             && let Some(method) = callable_array.get_value_at(1).and_then(Value::as_str)
-            && class_callback_requires_instance(eg, class_name, method)
+            && class_callback_requires_instance(
+                eg,
+                class_name,
+                method,
+                get_caller_class(frame, eg).as_deref(),
+            )
         {
             return Ok(throw_non_static_callback_error(
                 eg,
@@ -5249,27 +5904,17 @@ fn op_init_dynamic_call<'a>(
                 method,
             )?);
         }
-        let Some(resolved) = resolve_user_call_at_opline(eg, frame, op_array, opline) else {
-            let message = if closure_receiver {
-                let method = callable_array
-                    .get_value_at(1)
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                format!("Call to undefined method Closure::{method}()")
-            } else if let Some(method) = callable_array
-                .get_value_at(1)
-                .and_then(Value::as_str)
-                && let Some(class) = callable_array.get_value_at(0).and_then(|receiver| {
-                    receiver
-                        .as_object()
-                        .map(|object| object.class_name.to_string())
-                        .or_else(|| receiver.as_str().map(str::to_string))
-                })
-            {
-                format!("Call to undefined method {class}::{method}()")
-            } else {
-                "Array is not callable".to_string()
-            };
+        let resolved = resolve_user_call_at_opline(eg, frame, op_array, opline);
+        let Some(resolved) = resolved else {
+            let message = unresolved_array_callable_message(
+                eg,
+                &callable_array,
+                closure_receiver,
+                class_name.as_deref(),
+                callable_array
+                    .get_value_at(0)
+                    .is_some_and(|receiver| receiver.as_str().is_some()),
+            );
             let error = make_error_value("Error", &message);
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
             return Ok(match throw_in_frame(eg, frame, error)? {
@@ -5318,7 +5963,12 @@ fn op_init_dynamic_call<'a>(
         // Simple string function call: $func = "my_func"; $func()
         if let Some((class_name, method)) = func_name.rsplit_once("::") {
             let class_name = class_name.trim_start_matches('\\');
-            if class_callback_requires_instance(eg, class_name, method) {
+            if class_callback_requires_instance(
+                eg,
+                class_name,
+                method,
+                get_caller_class(frame, eg).as_deref(),
+            ) {
                 return Ok(throw_non_static_callback_error(
                     eg,
                     frame,
