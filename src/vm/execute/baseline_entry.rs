@@ -134,9 +134,10 @@ fn format_throwable_chain(eg: &ExecutorGlobals, thrown: &Value, uncaught: bool) 
         location: Option<(String, i64, PhpArray)>,
     }
 
-    fn snapshot(value: &Value) -> Option<Segment> {
+    fn snapshot(eg: &ExecutorGlobals, value: &Value) -> Option<Segment> {
         let object = value.as_object()?;
         let class_name = object.class_name.to_string();
+        let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
         let message = object
             .get_property("message")
             .map(Value::dereferenced)
@@ -146,7 +147,6 @@ fn format_throwable_chain(eg: &ExecutorGlobals, thrown: &Value, uncaught: bool) 
             .get_property("file")
             .map(Value::dereferenced)
             .and_then(Value::as_str)
-            .filter(|file| !file.is_empty())
             .zip(
                 object
                     .get_property("line")
@@ -155,7 +155,7 @@ fn format_throwable_chain(eg: &ExecutorGlobals, thrown: &Value, uncaught: bool) 
             )
             .zip(
                 object
-                    .get_property("trace")
+                    .get_property(&trace_key)
                     .map(Value::dereferenced)
                     .and_then(Value::as_array)
                     .cloned(),
@@ -189,7 +189,7 @@ fn format_throwable_chain(eg: &ExecutorGlobals, thrown: &Value, uncaught: bool) 
             .cloned()
     }
 
-    let Some(final_segment) = snapshot(thrown) else {
+    let Some(final_segment) = snapshot(eg, thrown) else {
         let message = thrown.echo_to_string();
         return if message.is_empty() {
             if uncaught {
@@ -220,7 +220,7 @@ fn format_throwable_chain(eg: &ExecutorGlobals, thrown: &Value, uncaught: bool) 
         if !seen.insert(identity) {
             break;
         }
-        let Some(segment) = snapshot(&candidate) else {
+        let Some(segment) = snapshot(eg, &candidate) else {
             break;
         };
         segments.push(segment);
@@ -262,7 +262,7 @@ fn format_throwable_chain(eg: &ExecutorGlobals, thrown: &Value, uncaught: bool) 
     }
     if uncaught && let Some((file, line)) = final_location {
         rendered.push_str("\n  thrown in ");
-        rendered.push_str(&file);
+        rendered.push_str(if file.is_empty() { "Unknown" } else { &file });
         rendered.push_str(" on line ");
         rendered.push_str(&line.to_string());
     }
@@ -1300,7 +1300,9 @@ where
             {
                 object.set_property("file", Value::string(file));
                 object.set_property("line", Value::long(line as i64));
-                object.set_property("trace", Value::array(trace));
+                let trace_key =
+                    crate::runtime::throwable_private_property_key(eg, &object, "trace");
+                object.set_property(&trace_key, Value::array(trace));
             }
             eg.discard_detached_trace_caller(frame as usize);
             cleanup_frame_slots(frame);
@@ -1447,6 +1449,8 @@ where
             && !trace_caller.is_null()
             && eg.exception.as_ref().is_some_and(|exception| {
                 exception.as_object().is_some_and(|object| {
+                    let trace_key =
+                        crate::runtime::throwable_private_property_key(eg, &object, "trace");
                     object
                         .get_property("file")
                         .and_then(Value::as_str)
@@ -1456,7 +1460,7 @@ where
                             .and_then(Value::as_long)
                             .is_some_and(|line| line > 0)
                         && object
-                            .get_property("trace")
+                            .get_property(&trace_key)
                             .and_then(Value::as_array)
                             .is_none_or(PhpArray::is_empty)
                 })
@@ -1483,7 +1487,10 @@ where
                 (*trace_caller).opline = caller_opline.unwrap();
             }
             if let Some(mut exception) = eg.exception.as_ref().and_then(Value::as_object_mut) {
-                exception.set_property("trace", Value::array(trace));
+                let trace_key = crate::runtime::throwable_private_property_key(
+                    eg, &exception, "trace",
+                );
+                exception.set_property(&trace_key, Value::array(trace));
             }
         }
         eg.discard_detached_trace_caller(frame as usize);
@@ -2422,8 +2429,10 @@ fn complete_escaped_generator_trace(
     let existing_trace = exception
         .as_object()
         .and_then(|object| {
+            let trace_key =
+                crate::runtime::throwable_private_property_key(eg, &object, "trace");
             object
-                .get_property("trace")
+                .get_property(&trace_key)
                 .and_then(Value::as_array)
                 .map(|trace| trace.values().cloned().collect::<Vec<_>>())
         })
@@ -2443,7 +2452,8 @@ fn complete_escaped_generator_trace(
         complete
     };
     if let Some(mut object) = exception.as_object_mut() {
-        object.set_property("trace", Value::array(trace));
+        let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
+        object.set_property(&trace_key, Value::array(trace));
     }
 }
 
@@ -2472,8 +2482,10 @@ fn prepare_injected_generator_exception(
     let existing_trace = exception
         .as_object()
         .and_then(|object| {
+            let trace_key =
+                crate::runtime::throwable_private_property_key(eg, &object, "trace");
             object
-                .get_property("trace")
+                .get_property(&trace_key)
                 .and_then(Value::as_array)
                 .map(|trace| trace.values().cloned().collect::<Vec<_>>())
         })
@@ -2490,7 +2502,8 @@ fn prepare_injected_generator_exception(
         extend_generator_delegation_trace(existing_trace, &continuation, origin.as_ref())
     };
     if let Some(mut object) = exception.as_object_mut() {
-        object.set_property("trace", Value::array(trace));
+        let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
+        object.set_property(&trace_key, Value::array(trace));
     }
 }
 
@@ -2879,7 +2892,9 @@ pub(crate) fn initialize_suspended_callback_frame(
                 Value::shared_string(user.op_array.source_file.clone()),
             );
             object.set_property("line", Value::long(line as i64));
-            object.set_property("trace", Value::array(trace));
+            let trace_key =
+                crate::runtime::throwable_private_property_key(eg, &object, "trace");
+            object.set_property(&trace_key, Value::array(trace));
         }
         eg.exception = Some(error);
     }

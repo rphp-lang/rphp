@@ -20,6 +20,91 @@ const ROUNDING_MODE_CASES: [&str; 8] = [
     "PositiveInfinity",
 ];
 
+static NULLABLE_THROWABLE_HINT: std::sync::LazyLock<ParamTypeHint> =
+    std::sync::LazyLock::new(|| {
+        ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName("Throwable".to_string())))
+    });
+static NULLABLE_STRING_HINT: std::sync::LazyLock<ParamTypeHint> =
+    std::sync::LazyLock::new(|| ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)));
+static NULLABLE_INT_HINT: std::sync::LazyLock<ParamTypeHint> =
+    std::sync::LazyLock::new(|| ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)));
+
+#[inline]
+fn throwable_property_key<'a>(
+    eg: &ExecutorGlobals,
+    object: &'a PhpObject,
+    property: &str,
+) -> &'static str {
+    crate::runtime::throwable_private_property_key(eg, object, property)
+}
+
+enum PreparedThrowableArgument {
+    Missing,
+    Value(Value),
+    Invalid,
+}
+
+fn prepare_throwable_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function_name: &str,
+    callee_class: &str,
+    public_index: usize,
+    parameter: &str,
+    hint: &ParamTypeHint,
+) -> Result<PreparedThrowableArgument, VmError> {
+    let Some(argument) = arg_opt!(ed, public_index as u32 + 1) else {
+        return Ok(PreparedThrowableArgument::Missing);
+    };
+    let argument = argument.dereferenced().clone();
+    // Throwable construction is hot during throw/catch loops. Preserve the
+    // compact internal call ABI and make exact arguments a tag-only guard;
+    // only weak scalar or Stringable conversion enters the canonical helper.
+    let exact = match hint {
+        ParamTypeHint::String => argument.value_type() == ValueType::String,
+        ParamTypeHint::Int => argument.value_type() == ValueType::Long,
+        ParamTypeHint::Nullable(inner) => {
+            argument.value_type() == ValueType::Null
+                || matches!(
+                    (argument.value_type(), inner.as_ref()),
+                    (ValueType::String, ParamTypeHint::String)
+                        | (ValueType::Long, ParamTypeHint::Int)
+                )
+        }
+        _ => false,
+    };
+    if exact {
+        return Ok(PreparedThrowableArgument::Value(argument));
+    }
+    let prepared =
+        crate::vm::execute::prepare_call_argument(&argument, hint, eg, false, Some(callee_class))?;
+    match prepared {
+        crate::vm::execute::CallArgumentPreparation::Exact => {
+            Ok(PreparedThrowableArgument::Value(argument))
+        }
+        crate::vm::execute::CallArgumentPreparation::Coerced(value) => {
+            Ok(PreparedThrowableArgument::Value(value))
+        }
+        crate::vm::execute::CallArgumentPreparation::Invalid => {
+            let actual = match argument.value_type() {
+                ValueType::True => "true".to_string(),
+                ValueType::False => "false".to_string(),
+                _ => argument.diagnostic_type_name().into_owned(),
+            };
+            let error = make_error_value(
+                "TypeError",
+                &format!(
+                    "{function_name}(): Argument #{} (${parameter}) must be of type {}, {actual} given",
+                    public_index + 1,
+                    hint.diagnostic_display_name(),
+                ),
+            );
+            eg.exception = Some(error);
+            Ok(PreparedThrowableArgument::Invalid)
+        }
+    }
+}
+
 fn rounding_mode_case(name: &str) -> PropertyDefinition {
     let mut properties = std::collections::HashMap::with_capacity(1);
     properties.insert("name".to_string(), Value::string(name));
@@ -132,25 +217,75 @@ fn fn_throwable_construct(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let this_val = arg!(ed, 0);
-    let message = arg_opt!(ed, 1);
-    let code = arg_opt!(ed, 2);
-    let previous = arg_opt!(ed, 3);
+    let (function_name, callee_class) =
+        this_val
+            .as_object()
+            .map_or(("Error::__construct", "Error"), |object| {
+                if eg.class_is_a(&object.class_name, "Exception") {
+                    ("Exception::__construct", "Exception")
+                } else {
+                    ("Error::__construct", "Error")
+                }
+            });
+    let message = prepare_throwable_argument(
+        ed,
+        eg,
+        function_name,
+        callee_class,
+        0,
+        "message",
+        &ParamTypeHint::String,
+    )?;
+    let code = prepare_throwable_argument(
+        ed,
+        eg,
+        function_name,
+        callee_class,
+        1,
+        "code",
+        &ParamTypeHint::Int,
+    )?;
+    let previous = prepare_throwable_argument(
+        ed,
+        eg,
+        function_name,
+        callee_class,
+        2,
+        "previous",
+        &NULLABLE_THROWABLE_HINT,
+    )?;
+    if matches!(
+        (&message, &code, &previous),
+        (PreparedThrowableArgument::Invalid, _, _)
+            | (_, PreparedThrowableArgument::Invalid, _)
+            | (_, _, PreparedThrowableArgument::Invalid)
+    ) {
+        return Ok(());
+    }
     if let Some(mut obj) = this_val.as_object_mut() {
         let msg = match message {
-            Some(v) => v.clone(),
-            None => Value::string(""),
+            PreparedThrowableArgument::Value(value) => value,
+            PreparedThrowableArgument::Missing => Value::string(""),
+            PreparedThrowableArgument::Invalid => unreachable!(),
         };
         obj.set_property("message", msg);
-        obj.set_property("code", code.cloned().unwrap_or_else(|| Value::long(0)));
-        let previous_key = eg
-            .find_property_visibility(&obj.class_name, "previous")
-            .map_or_else(
-                || "previous".to_string(),
-                |(_, declaring_class)| {
-                    crate::runtime::mangle_private_prop(&declaring_class, "previous")
-                },
-            );
-        obj.set_property(&previous_key, previous.cloned().unwrap_or_else(Value::null));
+        obj.set_property(
+            "code",
+            match code {
+                PreparedThrowableArgument::Value(value) => value,
+                PreparedThrowableArgument::Missing => Value::long(0),
+                PreparedThrowableArgument::Invalid => unreachable!(),
+            },
+        );
+        let previous_key = throwable_property_key(eg, &obj, "previous");
+        obj.set_property(
+            &previous_key,
+            match previous {
+                PreparedThrowableArgument::Value(value) => value,
+                PreparedThrowableArgument::Missing => Value::null(),
+                PreparedThrowableArgument::Invalid => unreachable!(),
+            },
+        );
     }
     Ok(())
 }
@@ -164,44 +299,122 @@ fn fn_error_exception_construct(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let this_val = arg!(ed, 0);
-    let message = arg_opt!(ed, 1);
-    let code = arg_opt!(ed, 2);
-    let severity = arg_opt!(ed, 3);
-    let filename = arg_opt!(ed, 4);
-    let line = arg_opt!(ed, 5);
-    let previous = arg_opt!(ed, 6);
+    let message = prepare_throwable_argument(
+        ed,
+        eg,
+        "ErrorException::__construct",
+        "ErrorException",
+        0,
+        "message",
+        &ParamTypeHint::String,
+    )?;
+    let code = prepare_throwable_argument(
+        ed,
+        eg,
+        "ErrorException::__construct",
+        "ErrorException",
+        1,
+        "code",
+        &ParamTypeHint::Int,
+    )?;
+    let severity = prepare_throwable_argument(
+        ed,
+        eg,
+        "ErrorException::__construct",
+        "ErrorException",
+        2,
+        "severity",
+        &ParamTypeHint::Int,
+    )?;
+    let filename = prepare_throwable_argument(
+        ed,
+        eg,
+        "ErrorException::__construct",
+        "ErrorException",
+        3,
+        "filename",
+        &NULLABLE_STRING_HINT,
+    )?;
+    let line = prepare_throwable_argument(
+        ed,
+        eg,
+        "ErrorException::__construct",
+        "ErrorException",
+        4,
+        "line",
+        &NULLABLE_INT_HINT,
+    )?;
+    let previous = prepare_throwable_argument(
+        ed,
+        eg,
+        "ErrorException::__construct",
+        "ErrorException",
+        5,
+        "previous",
+        &NULLABLE_THROWABLE_HINT,
+    )?;
+    if [&message, &code, &severity, &filename, &line, &previous]
+        .into_iter()
+        .any(|argument| matches!(argument, PreparedThrowableArgument::Invalid))
+    {
+        return Ok(());
+    }
     if let Some(mut object) = this_val.as_object_mut() {
         object.set_property(
             "message",
-            message.cloned().unwrap_or_else(|| Value::string("")),
+            match message {
+                PreparedThrowableArgument::Value(value) => value,
+                PreparedThrowableArgument::Missing => Value::string(""),
+                PreparedThrowableArgument::Invalid => unreachable!(),
+            },
         );
-        object.set_property("code", code.cloned().unwrap_or_else(|| Value::long(0)));
+        object.set_property(
+            "code",
+            match code {
+                PreparedThrowableArgument::Value(value) => value,
+                PreparedThrowableArgument::Missing => Value::long(0),
+                PreparedThrowableArgument::Invalid => unreachable!(),
+            },
+        );
         object.set_property(
             "severity",
-            severity.cloned().unwrap_or_else(|| Value::long(1)),
+            match severity {
+                PreparedThrowableArgument::Value(value) => value,
+                PreparedThrowableArgument::Missing => Value::long(1),
+                PreparedThrowableArgument::Invalid => unreachable!(),
+            },
         );
 
-        if filename.is_some_and(|value| value.value_type() != ValueType::Null) {
-            object.set_property("file", filename.cloned().unwrap());
+        if let PreparedThrowableArgument::Value(filename) = filename
+            && filename.value_type() != ValueType::Null
+        {
+            object.set_property("file", filename);
             object.set_property(
                 "line",
-                line.filter(|value| value.value_type() != ValueType::Null)
-                    .cloned()
-                    .unwrap_or_else(|| Value::long(0)),
-            );
-        } else if let Some(line) = line.filter(|value| value.value_type() != ValueType::Null) {
-            object.set_property("line", line.clone());
-        }
-
-        let previous_key = eg
-            .find_property_visibility(&object.class_name, "previous")
-            .map_or_else(
-                || "previous".to_string(),
-                |(_, declaring_class)| {
-                    crate::runtime::mangle_private_prop(&declaring_class, "previous")
+                match line {
+                    PreparedThrowableArgument::Value(line)
+                        if line.value_type() != ValueType::Null =>
+                    {
+                        line
+                    }
+                    _ => Value::long(0),
                 },
             );
-        object.set_property(&previous_key, previous.cloned().unwrap_or_else(Value::null));
+        } else if let PreparedThrowableArgument::Value(line) = line
+            && line.value_type() != ValueType::Null
+        {
+            object.set_property("line", line);
+        }
+
+        let previous_key = throwable_property_key(eg, &object, "previous");
+        object.set_property(
+            &previous_key,
+            match previous {
+                PreparedThrowableArgument::Value(value) => value,
+                PreparedThrowableArgument::Missing => Value::null(),
+                PreparedThrowableArgument::Invalid => unreachable!(),
+            },
+        );
     }
     Ok(())
 }
@@ -239,14 +452,7 @@ fn fn_throwable_get_previous(
 ) -> Result<(), VmError> {
     let this_val = arg!(ed, 0);
     if let Some(obj) = this_val.as_object() {
-        let previous_key = eg
-            .find_property_visibility(&obj.class_name, "previous")
-            .map_or_else(
-                || "previous".to_string(),
-                |(_, declaring_class)| {
-                    crate::runtime::mangle_private_prop(&declaring_class, "previous")
-                },
-            );
+        let previous_key = throwable_property_key(eg, &obj, "previous");
         if let Some(previous) = obj.get_property(&previous_key) {
             ret!(rv, previous.clone());
         }
@@ -299,12 +505,18 @@ fn fn_throwable_get_line(
 fn fn_throwable_get_trace(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let value = arg!(ed, 0)
-        .as_object()
-        .and_then(|object| object.get_property("trace").cloned())
-        .unwrap_or_else(|| Value::array(PhpArray::new()));
+    let value = arg!(ed, 0).as_object().map_or_else(
+        || Value::array(PhpArray::new()),
+        |object| {
+            let key = throwable_property_key(eg, &object, "trace");
+            object
+                .get_property(&key)
+                .cloned()
+                .unwrap_or_else(|| Value::array(PhpArray::new()))
+        },
+    );
     ret!(rv, value);
 }
 
@@ -315,17 +527,26 @@ fn fn_throwable_get_trace_as_string(
 ) -> Result<(), VmError> {
     let trace = arg!(ed, 0)
         .as_object()
-        .and_then(|object| object.get_property("trace").cloned())
-        .and_then(|trace| trace.as_array().cloned())
-        .unwrap_or_else(PhpArray::new);
-    ret!(
-        rv,
-        Value::string(crate::vm::trace::format_throwable_trace(
-            &trace,
-            exception_string_param_max_len(eg),
-            eg,
-        ))
+        .map_or_else(PhpArray::new, |object| {
+            let key = throwable_property_key(eg, &object, "trace");
+            object
+                .get_property(&key)
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_else(PhpArray::new)
+        });
+    let (rendered, warnings) = crate::vm::trace::format_throwable_trace_checked(
+        &trace,
+        exception_string_param_max_len(eg),
+        eg,
     );
+    for warning in warnings {
+        super::report_internal_diagnostic(eg, ed, 2, "Warning", &warning)?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    ret!(rv, Value::string(rendered));
 }
 
 fn fn_throwable_to_string(
@@ -333,10 +554,12 @@ fn fn_throwable_to_string(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(
-        rv,
-        Value::string(crate::vm::execute::format_throwable_string(eg, arg!(ed, 0)))
-    );
+    let rendered = crate::vm::execute::format_throwable_string(eg, arg!(ed, 0));
+    if let Some(mut object) = arg!(ed, 0).as_object_mut() {
+        let key = throwable_property_key(eg, &object, "string");
+        object.set_property(&key, Value::string(&rendered));
+    }
+    ret!(rv, Value::string(rendered));
 }
 
 fn bind_closure_value(
@@ -1578,6 +1801,15 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 Visibility::Protected,
                 "Exception".to_string(),
             ),
+            PropertyDefinition::declared(
+                "string".to_string(),
+                Some(Value::string("")),
+                Visibility::Private,
+                "Exception".to_string(),
+                ParamTypeHint::String,
+                false,
+                false,
+            ),
             PropertyDefinition::new(
                 "code".to_string(),
                 Some(Value::long(0)),
@@ -1595,6 +1827,15 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 Some(Value::long(0)),
                 Visibility::Protected,
                 "Exception".to_string(),
+            ),
+            PropertyDefinition::declared(
+                "trace".to_string(),
+                Some(Value::array(PhpArray::new())),
+                Visibility::Private,
+                "Exception".to_string(),
+                ParamTypeHint::Array,
+                false,
+                false,
             ),
             PropertyDefinition::declared(
                 "previous".to_string(),
@@ -1718,6 +1959,15 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 Visibility::Protected,
                 "Error".to_string(),
             ),
+            PropertyDefinition::declared(
+                "string".to_string(),
+                Some(Value::string("")),
+                Visibility::Private,
+                "Error".to_string(),
+                ParamTypeHint::String,
+                false,
+                false,
+            ),
             PropertyDefinition::new(
                 "code".to_string(),
                 Some(Value::long(0)),
@@ -1735,6 +1985,15 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 Some(Value::long(0)),
                 Visibility::Protected,
                 "Error".to_string(),
+            ),
+            PropertyDefinition::declared(
+                "trace".to_string(),
+                Some(Value::array(PhpArray::new())),
+                Visibility::Private,
+                "Error".to_string(),
+                ParamTypeHint::Array,
+                false,
+                false,
             ),
             PropertyDefinition::declared(
                 "previous".to_string(),
@@ -1988,6 +2247,23 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 "line",
                 "previous"
             );
+            let constructor = funcs
+                .last_mut()
+                .expect("ErrorException constructor was just registered");
+            constructor.common.sig.param_type_hints = vec![
+                ParamTypeHint::String,
+                ParamTypeHint::Int,
+                ParamTypeHint::Int,
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+                    "Throwable".to_string(),
+                ))),
+            ];
+            constructor.handler_validates_types = true;
+            let pointer = &constructor.common as *const FunctionCommon;
+            eg.method_declaring_class
+                .insert(pointer, "ErrorException".to_string());
             reg_method!(class, "getseverity", fn_error_exception_get_severity, 1, 0);
         } else {
             reg_method!(
@@ -2000,6 +2276,27 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 "code",
                 "previous"
             );
+            let constructor = funcs
+                .last_mut()
+                .expect("Throwable constructor was just registered");
+            constructor.common.sig.param_type_hints = vec![
+                ParamTypeHint::String,
+                ParamTypeHint::Int,
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+                    "Throwable".to_string(),
+                ))),
+            ];
+            constructor.handler_validates_types = true;
+            let pointer = &constructor.common as *const FunctionCommon;
+            let declaring_class = if eg.class_is_a(class, "Exception") {
+                "Exception"
+            } else if eg.class_is_a(class, "Error") {
+                "Error"
+            } else {
+                class
+            };
+            eg.method_declaring_class
+                .insert(pointer, declaring_class.to_string());
         }
         // getMessage: num_args=1 (CV 0=$this), required=0 (no explicit args)
         reg_method!(class, "getmessage", fn_throwable_get_message, 1, 0);

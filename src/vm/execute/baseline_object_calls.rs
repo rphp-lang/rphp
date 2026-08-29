@@ -411,11 +411,12 @@ fn attach_constant_expression_origin(
     ip: usize,
 ) {
     let already_stamped = throwable.as_object().is_some_and(|object| {
+        let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
         object
             .get_property("file")
             .and_then(Value::as_str)
             .is_some_and(|file| !file.is_empty())
-            && object.contains_property("trace")
+            && object.contains_property(&trace_key)
     });
     if already_stamped || definition.source_file.is_empty() {
         return;
@@ -426,7 +427,11 @@ fn attach_constant_expression_origin(
         .is_some_and(crate::stdlib::ini_boolean);
     let caller_trace = throwable
         .as_object()
-        .and_then(|object| object.get_property("trace").cloned())
+        .and_then(|object| {
+            let trace_key =
+                crate::runtime::throwable_private_property_key(eg, &object, "trace");
+            object.get_property(&trace_key).cloned()
+        })
         .and_then(|trace| trace.as_array().cloned())
         .unwrap_or_else(PhpArray::new);
     let mut trace = PhpArray::new();
@@ -451,7 +456,8 @@ fn attach_constant_expression_origin(
     if let Some(mut object) = throwable.as_object_mut() {
         object.set_property("file", Value::string(definition.source_file.clone()));
         object.set_property("line", Value::long(definition.source_line as i64));
-        object.set_property("trace", Value::array(trace));
+        let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
+        object.set_property(&trace_key, Value::array(trace));
     }
 }
 
@@ -689,7 +695,7 @@ fn op_new_obj_resolved<'a>(
         &*result_ptr
     };
     if eg.class_is_a(name, "Throwable") {
-        attach_throwable_origin(object, eg, frame, op_array, ip);
+        attach_new_throwable_origin(object, eg, frame, op_array, ip);
     }
     #[cfg(feature = "php-generics-reified")]
     if let Some(binding) = eg.reified_bindings.last().copied().filter(|binding| {

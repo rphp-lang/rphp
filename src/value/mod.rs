@@ -1034,6 +1034,11 @@ thread_local! {
     /// one slot per width still covers the steady state after two allocations.
     static DECLARED_PROPERTY_STORAGE_POOL: RefCell<[Option<Vec<Value>>; 6]> =
         RefCell::new(std::array::from_fn(|_| None));
+    /// Exception and Error use seven declared slots in PHP 8.5. Keep their
+    /// wider buffers out of the common-width pool so ordinary object creation
+    /// retains the same compact thread-local footprint and hot lookup path.
+    static THROWABLE_PROPERTY_STORAGE_POOL: RefCell<[Option<Vec<Value>>; 3]> =
+        RefCell::new(std::array::from_fn(|_| None));
     /// Zend exposes a request-local object-store handle in var_dump(),
     /// spl_object_id() and related diagnostics. Keep that compatibility state
     /// beside the Rc allocation rather than enlarging every PhpObject.
@@ -1376,18 +1381,24 @@ pub(crate) fn end_object_handle_request() {
     });
 }
 
-const MAX_POOLED_DECLARED_PROPERTIES: usize = 5;
+const MAX_COMMON_POOLED_DECLARED_PROPERTIES: usize = 5;
+const MIN_THROWABLE_POOLED_DECLARED_PROPERTIES: usize = 6;
+const MAX_THROWABLE_POOLED_DECLARED_PROPERTIES: usize = 8;
 
 fn materialize_declared_property_defaults(defaults: &[Value]) -> Vec<Value> {
     if defaults.is_empty() {
         return Vec::new();
     }
 
-    let pooled = (defaults.len() <= MAX_POOLED_DECLARED_PROPERTIES)
-        .then(|| {
-            DECLARED_PROPERTY_STORAGE_POOL.with(|pool| pool.borrow_mut()[defaults.len()].take())
+    let pooled = if defaults.len() <= MAX_COMMON_POOLED_DECLARED_PROPERTIES {
+        DECLARED_PROPERTY_STORAGE_POOL.with(|pool| pool.borrow_mut()[defaults.len()].take())
+    } else if defaults.len() <= MAX_THROWABLE_POOLED_DECLARED_PROPERTIES {
+        THROWABLE_PROPERTY_STORAGE_POOL.with(|pool| {
+            pool.borrow_mut()[defaults.len() - MIN_THROWABLE_POOLED_DECLARED_PROPERTIES].take()
         })
-        .flatten();
+    } else {
+        None
+    };
     let reused = pooled.is_some();
     let mut values = pooled.unwrap_or_else(|| {
         stats::inc_declared_property_storage_allocation();
@@ -1726,7 +1737,7 @@ impl Drop for PhpObject {
             }
         }
         let width = self.property_values.len();
-        if width == 0 || width > MAX_POOLED_DECLARED_PROPERTIES {
+        if width == 0 || width > MAX_THROWABLE_POOLED_DECLARED_PROPERTIES {
             return;
         }
 
@@ -1741,17 +1752,32 @@ impl Drop for PhpObject {
             return;
         }
         let mut available = Some(values);
-        let retained = DECLARED_PROPERTY_STORAGE_POOL
-            .try_with(|pool| {
-                let mut pool = pool.borrow_mut();
-                if pool[width].is_none() {
-                    pool[width] = available.take();
-                    true
-                } else {
-                    false
-                }
-            })
-            .unwrap_or(false);
+        let retained = if width <= MAX_COMMON_POOLED_DECLARED_PROPERTIES {
+            DECLARED_PROPERTY_STORAGE_POOL
+                .try_with(|pool| {
+                    let mut pool = pool.borrow_mut();
+                    if pool[width].is_none() {
+                        pool[width] = available.take();
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(false)
+        } else {
+            THROWABLE_PROPERTY_STORAGE_POOL
+                .try_with(|pool| {
+                    let mut pool = pool.borrow_mut();
+                    let slot = width - MIN_THROWABLE_POOLED_DECLARED_PROPERTIES;
+                    if pool[slot].is_none() {
+                        pool[slot] = available.take();
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(false)
+        };
         if retained {
             stats::inc_declared_property_storage_return();
         }

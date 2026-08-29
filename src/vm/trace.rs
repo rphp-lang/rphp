@@ -95,52 +95,83 @@ fn format_trace(
     append_main: bool,
     string_max_len: usize,
     eg: &ExecutorGlobals,
+    mut warnings: Option<&mut Vec<String>>,
 ) -> String {
     let mut output = String::new();
     let mut index = 0usize;
-    for (_, value) in trace.iter() {
+    for (frame_index, (_, value)) in trace.iter().enumerate() {
         let Some(entry) = value.as_array() else {
+            if let Some(warnings) = warnings.as_deref_mut() {
+                warnings.push(format!("Expected array for frame {frame_index}"));
+            }
             continue;
         };
         if index != 0 {
             output.push('\n');
         }
         let _ = write!(output, "#{index} ");
-        match (
-            entry.get_str("file").and_then(Value::as_str),
-            entry.get_str("line").and_then(Value::as_long),
-        ) {
-            (Some(file), Some(line)) => {
+        match (entry.get_str("file"), entry.get_str("line")) {
+            (Some(file), Some(line)) if file.as_str().is_some() && line.as_long().is_some() => {
+                let file = file.as_str().unwrap();
+                let line = line.as_long().unwrap();
                 let _ = write!(output, "{file}({line}): ");
+            }
+            (None, None) => output.push_str("[internal function]: "),
+            (Some(file), _) if file.as_str().is_none() => {
+                if let Some(warnings) = warnings.as_deref_mut() {
+                    warnings.push("File name is not a string".to_string());
+                }
+                output.push_str("[unknown file]: ");
             }
             _ => output.push_str("[internal function]: "),
         }
-        if let Some(class) = entry.get_str("class").and_then(Value::as_str) {
-            output.push_str(displayed_trace_class_name(class));
-            output.push_str(
-                entry
-                    .get_str("type")
-                    .and_then(Value::as_str)
-                    .unwrap_or("::"),
-            );
+        if let Some(class) = entry.get_str("class") {
+            if let Some(class) = class.as_str() {
+                output.push_str(displayed_trace_class_name(class));
+            } else {
+                if let Some(warnings) = warnings.as_deref_mut() {
+                    warnings.push("Value for class is not a string".to_string());
+                }
+                output.push_str("[unknown]");
+            }
         }
-        output.push_str(
-            entry
-                .get_str("function")
-                .and_then(Value::as_str)
-                .unwrap_or("{unknown}"),
-        );
+        if let Some(kind) = entry.get_str("type") {
+            if let Some(kind) = kind.as_str() {
+                output.push_str(kind);
+            } else {
+                if let Some(warnings) = warnings.as_deref_mut() {
+                    warnings.push("Value for type is not a string".to_string());
+                }
+                output.push_str("[unknown]");
+            }
+        } else if entry.get_str("class").and_then(Value::as_str).is_some() {
+            output.push_str("::");
+        }
+        if let Some(function) = entry.get_str("function") {
+            if let Some(function) = function.as_str() {
+                output.push_str(function);
+            } else {
+                if let Some(warnings) = warnings.as_deref_mut() {
+                    warnings.push("Value for function is not a string".to_string());
+                }
+                output.push_str("[unknown]");
+            }
+        }
         output.push('(');
-        if let Some(arguments) = entry.get_str("args").and_then(Value::as_array) {
-            for (argument_index, (key, argument)) in arguments.iter().enumerate() {
-                if argument_index != 0 {
-                    output.push_str(", ");
+        if let Some(arguments) = entry.get_str("args") {
+            if let Some(arguments) = arguments.as_array() {
+                for (argument_index, (key, argument)) in arguments.iter().enumerate() {
+                    if argument_index != 0 {
+                        output.push_str(", ");
+                    }
+                    if let ArrayKey::String(name) = key {
+                        output.push_str(&name);
+                        output.push_str(": ");
+                    }
+                    append_trace_argument(&mut output, argument, string_max_len, eg);
                 }
-                if let ArrayKey::String(name) = key {
-                    output.push_str(&name);
-                    output.push_str(": ");
-                }
-                append_trace_argument(&mut output, argument, string_max_len, eg);
+            } else if let Some(warnings) = warnings.as_deref_mut() {
+                warnings.push("args element is not an array".to_string());
             }
         }
         output.push(')');
@@ -165,7 +196,7 @@ pub(crate) fn format_debug_print_backtrace(
     string_max_len: usize,
     eg: &ExecutorGlobals,
 ) -> String {
-    format_trace(trace, false, string_max_len, eg)
+    format_trace(trace, false, string_max_len, eg, None)
 }
 
 /// Render a stored Throwable trace. The final `{main}` sentinel is not part of
@@ -175,7 +206,19 @@ pub(crate) fn format_throwable_trace(
     string_max_len: usize,
     eg: &ExecutorGlobals,
 ) -> String {
-    format_trace(trace, true, string_max_len, eg)
+    format_trace(trace, true, string_max_len, eg, None)
+}
+
+/// Render a user-mutated Throwable trace and retain the diagnostics that PHP
+/// emits before returning the best-effort string representation.
+pub(crate) fn format_throwable_trace_checked(
+    trace: &PhpArray,
+    string_max_len: usize,
+    eg: &ExecutorGlobals,
+) -> (String, Vec<String>) {
+    let mut warnings = Vec::new();
+    let rendered = format_trace(trace, true, string_max_len, eg, Some(&mut warnings));
+    (rendered, warnings)
 }
 
 pub(crate) fn format_exception_string_argument(value: &str, string_max_len: usize) -> String {

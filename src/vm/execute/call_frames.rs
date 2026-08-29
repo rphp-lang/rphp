@@ -1401,10 +1401,12 @@ fn replace_throwable_first_trace_site(
     throwable: &Value,
     file: std::rc::Rc<String>,
     line: usize,
+    eg: &ExecutorGlobals,
 ) {
-    let Some(mut trace_value) = throwable
-        .as_object()
-        .and_then(|object| object.get_property("trace").cloned())
+    let Some((trace_key, mut trace_value)) = throwable.as_object().and_then(|object| {
+        let key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
+        object.get_property(&key).cloned().map(|value| (key, value))
+    })
     else {
         return;
     };
@@ -1421,7 +1423,7 @@ fn replace_throwable_first_trace_site(
     entry.set_str("line", Value::long(line as i64));
     trace.set_int(0, first);
     if let Some(mut object) = throwable.as_object_mut() {
-        object.set_property("trace", trace_value);
+        object.set_property(&trace_key, trace_value);
     }
 }
 
@@ -1497,6 +1499,7 @@ fn release_return_foreach_sources(
                 exception,
                 op_array.source_file.clone(),
                 line,
+                eg,
             );
         }
         if eg.exception.is_some() {
@@ -1765,6 +1768,7 @@ fn attach_internal_call_trace_if_missing(
     eg: &ExecutorGlobals,
 ) {
     let missing_trace = throwable.as_object().is_some_and(|object| {
+        let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
         let has_origin = object
             .get_property("file")
             .and_then(Value::as_str)
@@ -1775,7 +1779,7 @@ fn attach_internal_call_trace_if_missing(
                 .is_some_and(|line| line > 0);
         !has_origin
             && object
-                .get_property("trace")
+                .get_property(&trace_key)
                 .and_then(Value::as_array)
                 .is_none_or(PhpArray::is_empty)
     });
@@ -1783,8 +1787,28 @@ fn attach_internal_call_trace_if_missing(
         return;
     }
     let trace = collect_internal_call_trace(call, caller, eg);
+    let origin = trace
+        .get_value_at(0)
+        .and_then(Value::as_array)
+        .and_then(|frame| {
+            frame
+                .get_str("file")
+                .filter(|file| file.value_type() == ValueType::String)
+                .cloned()
+                .zip(
+                    frame
+                        .get_str("line")
+                        .filter(|line| line.value_type() == ValueType::Long)
+                        .cloned(),
+                )
+        });
     if let Some(mut object) = throwable.as_object_mut() {
-        object.set_property("trace", Value::array(trace));
+        let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
+        if let Some((file, line)) = origin {
+            object.set_property("file", file);
+            object.set_property("line", line);
+        }
+        object.set_property(&trace_key, Value::array(trace));
     }
 }
 
@@ -1802,7 +1826,7 @@ pub(crate) fn attach_constant_expression_trace(
     op_array: &crate::compiler::OpArray,
     instruction_index: usize,
 ) {
-    if !located_throwable_needs_trace(throwable) {
+    if !located_throwable_needs_trace(throwable, eg) {
         return;
     }
     let Some(line) = op_array.source_line(instruction_index) else {
@@ -1822,6 +1846,7 @@ pub(crate) fn attach_constant_expression_trace(
         trace,
         Value::shared_string(op_array.source_file.clone()),
         line,
+        eg,
     );
 }
 
@@ -1835,7 +1860,7 @@ pub(crate) fn attach_internal_constant_expression_trace(
     call: *mut ExecuteData,
     eg: &ExecutorGlobals,
 ) {
-    if !located_throwable_needs_trace(throwable) {
+    if !located_throwable_needs_trace(throwable, eg) {
         return;
     }
     // SAFETY: an internal handler executes beneath its linked, live caller.
@@ -1852,7 +1877,7 @@ pub(crate) fn attach_internal_constant_expression_trace(
     let Some((file, line)) = use_site else {
         return;
     };
-    attach_constant_expression_trace_value(throwable, trace, Value::string(file), line);
+    attach_constant_expression_trace_value(throwable, trace, Value::string(file), line, eg);
 }
 
 fn attach_constant_expression_trace_value(
@@ -1860,6 +1885,7 @@ fn attach_constant_expression_trace_value(
     trace: PhpArray,
     file: Value,
     line: usize,
+    eg: &ExecutorGlobals,
 ) {
     let mut constant_frame = PhpArray::with_hash_capacity(3);
     constant_frame.set_str("file", file);
@@ -1871,12 +1897,14 @@ fn attach_constant_expression_trace_value(
         with_constant_frame.push(entry.clone());
     }
     if let Some(mut object) = throwable.as_object_mut() {
-        object.set_property("trace", Value::array(with_constant_frame));
+        let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
+        object.set_property(&trace_key, Value::array(with_constant_frame));
     }
 }
 
-fn located_throwable_needs_trace(throwable: &Value) -> bool {
+fn located_throwable_needs_trace(throwable: &Value, eg: &ExecutorGlobals) -> bool {
     throwable.as_object().is_some_and(|object| {
+        let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
         let has_origin = object
             .get_property("file")
             .and_then(Value::as_str)
@@ -1887,7 +1915,7 @@ fn located_throwable_needs_trace(throwable: &Value) -> bool {
                 .is_some_and(|line| line > 0);
         has_origin
             && object
-                .get_property("trace")
+                .get_property(&trace_key)
                 .and_then(Value::as_array)
                 .is_none_or(PhpArray::is_empty)
     })
@@ -2244,7 +2272,7 @@ fn append_replaced_exception(
     displaced: &Value,
     eg: &ExecutorGlobals,
 ) {
-    let Some(displaced_identity) = displaced.object_identity() else {
+    let Some(_) = displaced.object_identity() else {
         return;
     };
     if !displaced.as_object().is_some_and(|object| {
@@ -2258,7 +2286,7 @@ fn append_replaced_exception(
     // Do not create a cycle when the displaced exception already names the
     // newly escaping Throwable somewhere in its explicit previous chain.
     let mut probe = displaced.clone();
-    let mut probed = std::collections::HashSet::new();
+    let mut displaced_chain = std::collections::HashSet::new();
     loop {
         let Some(identity) = probe.object_identity() else {
             break;
@@ -2266,21 +2294,14 @@ fn append_replaced_exception(
         if identity == thrown_identity {
             return;
         }
-        if !probed.insert(identity) {
+        if !displaced_chain.insert(identity) {
             break;
         }
         let Some(object) = probe.as_object() else {
             break;
         };
-        let class_name = object.class_name.to_string();
-        let previous_key = eg
-            .find_property_visibility(&class_name, "previous")
-            .map_or_else(
-                || "previous".to_string(),
-                |(_, declaring_class)| {
-                    crate::runtime::mangle_private_prop(&declaring_class, "previous")
-                },
-            );
+        let previous_key =
+            crate::runtime::throwable_private_property_key(eg, &object, "previous");
         let previous = object
             .get_property(&previous_key)
             .filter(|value| {
@@ -2301,21 +2322,17 @@ fn append_replaced_exception(
         let Some(identity) = current.object_identity() else {
             return;
         };
-        if identity == displaced_identity || !seen.insert(identity) {
+        // A shared explicit ancestor already preserves the relevant causal
+        // chain. Appending the displaced Throwable below that ancestor would
+        // mutate the shared object and duplicate the pending exception.
+        if displaced_chain.contains(&identity) || !seen.insert(identity) {
             return;
         }
         let Some(object) = current.as_object() else {
             return;
         };
-        let class_name = object.class_name.to_string();
-        let previous_key = eg
-            .find_property_visibility(&class_name, "previous")
-            .map_or_else(
-                || "previous".to_string(),
-                |(_, declaring_class)| {
-                    crate::runtime::mangle_private_prop(&declaring_class, "previous")
-                },
-            );
+        let previous_key =
+            crate::runtime::throwable_private_property_key(eg, &object, "previous");
         let previous = object
             .get_property(&previous_key)
             .filter(|value| {
@@ -2347,7 +2364,32 @@ fn attach_throwable_origin(
     op_array: &crate::compiler::OpArray,
     instruction_index: usize,
 ) {
+    attach_throwable_origin_mode(throwable, eg, frame, op_array, instruction_index, false);
+}
+
+/// A declared Throwable starts with an initialized empty private trace slot,
+/// so object creation must seed it once even though ordinary rethrow logic
+/// treats an existing trace as the immutable-origin marker.
+fn attach_new_throwable_origin(
+    throwable: &Value,
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    instruction_index: usize,
+) {
+    attach_throwable_origin_mode(throwable, eg, frame, op_array, instruction_index, true);
+}
+
+fn attach_throwable_origin_mode(
+    throwable: &Value,
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    instruction_index: usize,
+    force_initial_trace: bool,
+) {
     let (has_origin, has_trace) = throwable.as_object().map_or((false, false), |object| {
+        let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
         let has_origin = object
             .get_property("file")
             .and_then(Value::as_str)
@@ -2356,10 +2398,10 @@ fn attach_throwable_origin(
                 .get_property("line")
                 .and_then(Value::as_long)
                 .is_some();
-        let has_trace = object.contains_property("trace");
+        let has_trace = object.contains_property(&trace_key);
         (has_origin, has_trace)
     });
-    if has_origin && has_trace {
+    if has_trace && !force_initial_trace {
         return;
     }
     let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
@@ -2410,7 +2452,7 @@ fn attach_throwable_origin(
     let Some(mut object) = throwable.as_object_mut() else {
         return;
     };
-    if !has_origin {
+    if force_initial_trace || !has_origin {
         if object
             .get_property("file")
             .and_then(Value::as_str)
@@ -2429,8 +2471,9 @@ fn attach_throwable_origin(
             object.set_property("line", Value::long(line as i64));
         }
     }
-    if !object.contains_property("trace") {
-        object.set_property("trace", Value::array(trace));
+    if force_initial_trace || !has_trace {
+        let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
+        object.set_property(&trace_key, Value::array(trace));
     }
 }
 
@@ -2444,6 +2487,7 @@ fn attach_argument_type_error_origin(
     mut trace: PhpArray,
     caller_op_array: &crate::compiler::OpArray,
     call_instruction: &Instruction,
+    eg: &ExecutorGlobals,
 ) {
     let call_index = caller_op_array
         .instructions
@@ -2466,7 +2510,8 @@ fn attach_argument_type_error_origin(
     };
     object.set_property("file", Value::shared_string(source_file));
     object.set_property("line", Value::long(declaration_line as i64));
-    object.set_property("trace", Value::array(trace));
+    let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
+    object.set_property(&trace_key, Value::array(trace));
 }
 
 enum CatchOnlyThrowResult<'a> {

@@ -15,7 +15,7 @@ use crate::compiler::compile::{
 use crate::generics::GenericType;
 use crate::generics::{GenericMetadata, GenericMethodContract, ReifiedBinding};
 use crate::parser::Visibility;
-use crate::value::{ClosureStaticVars, ObjectLayout, PhpArray, Value};
+use crate::value::{ClosureStaticVars, ObjectLayout, PhpArray, PhpObject, Value};
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::{Function, FunctionCommon};
 use crate::vm::instruction::OpType;
@@ -203,6 +203,33 @@ pub fn resolve_property_key(
         return mangle_private_prop(&defining_class, prop_name);
     }
     prop_name.to_string()
+}
+
+/// Resolve the three private slots shared by PHP's two built-in Throwable
+/// roots without allocating a mangled name on every construction or throw.
+/// Declared objects reveal their root directly through the immutable layout;
+/// VM-created dynamic errors use the registered hierarchy as a cold fallback.
+#[inline(always)]
+pub(crate) fn throwable_private_property_key(
+    eg: &ExecutorGlobals,
+    object: &PhpObject,
+    property: &str,
+) -> &'static str {
+    let (exception_key, error_key) = match property {
+        "previous" => ("Exception\0previous", "Error\0previous"),
+        "string" => ("Exception\0string", "Error\0string"),
+        "trace" => ("Exception\0trace", "Error\0trace"),
+        _ => unreachable!("only built-in private Throwable slots use this resolver"),
+    };
+    if object.contains_property(exception_key) {
+        exception_key
+    } else if object.contains_property(error_key) {
+        error_key
+    } else if eg.class_is_a(&object.class_name, "Exception") {
+        exception_key
+    } else {
+        error_key
+    }
 }
 
 include!("property_definitions.rs");
@@ -5785,6 +5812,15 @@ impl ExecutorGlobals {
         {
             return Err(Self::class_like_redeclaration_error(previous, &class_def));
         }
+        // Class-like names are case-insensitive in PHP. Keep the canonical
+        // registered parent spelling in linked metadata so the later layout
+        // and method materialization hits the same parent that validation
+        // already resolved case-insensitively.
+        if let Some(parent_name) = class_def.parent.as_deref()
+            && let Some(parent) = self.find_class(parent_name)
+        {
+            class_def.parent = Some(parent.name.clone());
+        }
         let relation_location = || {
             class_def
                 .source_file
@@ -7942,7 +7978,7 @@ impl ExecutorGlobals {
         class_name: &str,
         prop_name: &str,
     ) -> Option<(Visibility, String)> {
-        if let Some(class_def) = self.class_table.get(class_name) {
+        if let Some(class_def) = self.find_class(class_name) {
             for property in &class_def.properties {
                 if property.name == prop_name {
                     return Some((property.visibility, property.declaring_class.clone()));

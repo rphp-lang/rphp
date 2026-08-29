@@ -3299,8 +3299,9 @@ fn too_few_arguments_error(
         {
             object.set_property("file", Value::string(file));
             object.set_property("line", Value::long(line as i64));
+            let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
             object.set_property(
-                "trace",
+                &trace_key,
                 Value::array(collect_internal_call_trace(call, caller, eg)),
             );
         }
@@ -3781,6 +3782,27 @@ fn execute_full_call<'a>(
                             trace,
                             op_array,
                             opline,
+                            eg,
+                        );
+                    }
+                } else if function.fn_type() == FunctionType::Internal {
+                    let call_index = op_array
+                        .instructions
+                        .iter()
+                        .position(|instruction| std::ptr::eq(instruction, opline));
+                    if let Some(call_line) =
+                        call_index.and_then(|index| op_array.source_line(index))
+                        && !op_array.source_file.is_empty()
+                    {
+                        let trace = collect_internal_call_trace(call, frame, eg);
+                        attach_argument_type_error_origin(
+                            &err,
+                            op_array.source_file.clone(),
+                            call_line,
+                            trace,
+                            op_array,
+                            opline,
+                            eg,
                         );
                     }
                 }
