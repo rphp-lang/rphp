@@ -2872,6 +2872,8 @@ impl ExecutorGlobals {
             .is_some_and(|index| signature.is_param_by_ref(index))
     }
 
+    #[cold]
+    #[inline(never)]
     fn method_contract_variance_dependency_names(
         &self,
         required: MethodDeclaration<'_>,
@@ -3001,6 +3003,8 @@ impl ExecutorGlobals {
         Some((dependencies, mentions_linking_class, errors.is_empty()))
     }
 
+    #[cold]
+    #[inline(never)]
     fn visit_method_variance_contracts(
         &self,
         class_def: &ClassDef,
@@ -3113,7 +3117,8 @@ impl ExecutorGlobals {
         }
     }
 
-    #[inline]
+    #[cold]
+    #[inline(never)]
     fn variance_hint_mentions_unresolved_class(
         &self,
         hint: &crate::vm::function::ParamTypeHint,
@@ -3144,14 +3149,11 @@ impl ExecutorGlobals {
     /// only built-ins or already linked classes cannot trigger variance
     /// autoload. Keep them on the pre-existing registration path and reserve
     /// the dependency algebra for its cold unresolved-name boundary.
+    #[cold]
+    #[inline(never)]
     fn class_variance_signatures_need_dependency_resolution(&self, class_def: &ClassDef) -> bool {
-        let mut definitions = vec![class_def];
-        let mut seen = std::collections::HashSet::new();
-        while let Some(definition) = definitions.pop() {
-            if !seen.insert(definition as *const ClassDef as usize) {
-                continue;
-            }
-            if definition.methods.iter().any(|(_, _, _, _, function)| {
+        let definition_mentions_unresolved = |definition: &ClassDef| {
+            definition.methods.iter().any(|(_, _, _, _, function)| {
                 function
                     .common
                     .sig
@@ -3162,7 +3164,35 @@ impl ExecutorGlobals {
                         &function.common.sig.return_type_hint,
                         class_def,
                     )
-            }) {
+            })
+        };
+        if definition_mentions_unresolved(class_def) {
+            return true;
+        }
+        if class_def.parent.is_none()
+            && class_def.implements.is_empty()
+            && class_def.uses.is_empty()
+        {
+            return false;
+        }
+
+        let mut definitions = Vec::new();
+        for relation in class_def
+            .parent
+            .iter()
+            .chain(class_def.implements.iter())
+            .chain(class_def.uses.iter())
+        {
+            if let Some(related) = self.find_class(relation) {
+                definitions.push(related);
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        while let Some(definition) = definitions.pop() {
+            if !seen.insert(definition as *const ClassDef as usize) {
+                continue;
+            }
+            if definition_mentions_unresolved(definition) {
                 return true;
             }
             for relation in definition
@@ -3184,6 +3214,8 @@ impl ExecutorGlobals {
     /// could turn an otherwise valid method contract into a compatible one.
     /// Definite arity, reference, staticness and scalar-type errors do not
     /// trigger observable autoload side effects.
+    #[cold]
+    #[inline(never)]
     fn method_variance_dependency_plan_with_delay(
         &self,
         class_def: &ClassDef,
@@ -3233,6 +3265,8 @@ impl ExecutorGlobals {
         )
     }
 
+    #[cold]
+    #[inline(never)]
     pub(crate) fn method_variance_dependency_plan(
         &self,
         class_def: &ClassDef,
@@ -3242,6 +3276,8 @@ impl ExecutorGlobals {
         (dependencies, requires_provisional_publication)
     }
 
+    #[cold]
+    #[inline(never)]
     pub(crate) fn method_variance_dependencies(&self, class_def: &ClassDef) -> Vec<String> {
         self.method_variance_dependency_plan(class_def).0
     }
@@ -4386,6 +4422,8 @@ impl ExecutorGlobals {
             .insert(declaration_key, class_name);
     }
 
+    #[cold]
+    #[inline(never)]
     fn class_definition_requires_delayed_linking(&self, class_def: &ClassDef) -> bool {
         let variance_requires_delayed_linking =
             self.method_variance_dependency_plan_with_delay(class_def).2;
@@ -4395,6 +4433,8 @@ impl ExecutorGlobals {
         )
     }
 
+    #[cold]
+    #[inline(never)]
     fn class_definition_requires_delayed_linking_with_variance(
         &self,
         class_def: &ClassDef,
