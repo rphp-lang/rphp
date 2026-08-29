@@ -8,6 +8,63 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`typed-property-reference-provenance`, pinned to php-src 8.5 commit `fcc29c8`
+and validated byte-for-byte against PHP 8.5.9. Typed-property constraints now
+survive runtime-named property call arguments, indirect property/array writes,
+catch-variable rebinding, private-property shadowing and array promotion.
+Property-assignment expressions publish the coerced committed value, and
+compound or increment/decrement failures preserve the original reference,
+property and COW state. Runtime-named declared-property reads also guard the
+cached slot with the retained property name.
+
+The only Zend/lang movements are `typed_properties_023`, `045`, `055`, `062`,
+`063`, `064`, `070`, `077`, `083`, `090`, `108` and
+`varSyntax/tempPropFetchByRefError.phpt`, exactly `+12/-0`. The focused
+15-case manifest is 12 pass and three unchanged failures at
+`typed_properties_065`, `089` and `107`; it hashes to
+`d94a445676c2bc77ba918ae7d0ddb1f614b59e029ecf5ac4f691eb3a8acfa99c`.
+Two serial exact-final-binary 5,599-case Zend/lang manifests are byte-identical
+at SHA-256
+`4a8c78f4f9d7f5e602922cd299ba9b59a88a90345963f3c61c57c13e5d35dbfc`:
+4,544 pass, 759 fail, 115 skip and 181 unsupported, with no timeout or crash;
+their exact pass set hashes to
+`11156f881c4b6db194c888a8114725e0d748c92618ee69f5458da2733a81608b`.
+The 1,575-case strings/array projection remains exact-parent-identical at
+1,459 pass, 18 fail, 67 skip and 31 unsupported; its normalized projection and
+pass set hash to
+`392587b16fee83fa2233b41d0bc8a1dd95d5d4b34a1b5365f25985f5c8515dbe`
+and
+`2c379bd87d24d868cfe3215804541f753cef8a1e772ad5e8abe8e39265d1f62a`.
+The combined audit covers 7,174 cases: 6,003 pass, 777 fail, 182 skip and 212
+unsupported. Supported debt is 759 Zend/lang failures, 18 strings failures and
+zero array failures.
+
+The exact final candidate SHA-256 is
+`81754fd47e8a927c027baa48b1a2bc0e4621e5f0dab08ae14143dd5ff973e7ec`.
+All five Cargo configurations, all-feature/all-target checking, formatting,
+HTML data, PHPT runner and both unsafe-policy checks pass. Production remains
+at 1,623 unsafe blocks and 289 unsafe functions, with 382 SAFETY annotations
+and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates
+and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+
+The cumulative fixed-baseline CPU-2 gate used 32 balanced pairs with exact
+checksums. Paired medians are startup +0.215%, ordinary property read +1.009%,
+ordinary write -3.229%, typed-property write -4.663%, typed-reference write
++0.435% and container-reference write -0.013%. The corrected pay-for-use
+dynamic-name read and runtime-resolved property-argument lanes are +3.823% and
++13.719%, respectively; unrelated property/call paths do not take those
+branches. The raw results hash to
+`accad8c06c712897584c94ab48f2af410998d9d7ca9e303f0e29c18f0ea604c6`
+and the harness to
+`d25bb744b76bdec4b7796b1312b792ce5fdae25b35c62b6b62fee5f42a82e7de`.
+
+This checkpoint does not claim the remaining ArrayAccess case
+`typed_properties_065`, reentrant `__toString` cases `089`/`107`, general
+property hooks, Fiber/generator suspension, PHP 8.2, 32-bit behavior or
+allocation-limit/OOM equivalence. The implementation checkpoint is commit
+`b4c4b7eb`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `attribute-front-end-diagnostics`, pinned to php-src 8.5 commit `fcc29c8` and
 validated byte-for-byte against PHP 8.5.9. Attribute arguments now reject
 function, method and dynamic calls during compilation at the annotated target

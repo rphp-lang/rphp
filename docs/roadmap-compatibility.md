@@ -4645,6 +4645,30 @@ The monitored supported debt is now 789 failures: 18 strings, zero array and
 constant-expression completion, PHP 8.2, 32-bit behavior and allocation-limit/
 OOM equivalence remain separate boundaries.
 
+The `b4c4b7eb` `typed-property-reference-provenance` train then moves
+Zend/lang from 4,532 to 4,544 pass, exactly `+12/-0`. One shared typed-property
+constraint boundary now covers runtime-named property call arguments,
+indirect property/array writes, catch rebinding, private shadowing, array
+promotion, assignment-result coercion and compound/inc-dec rollback. The three
+focused holdouts (`typed_properties_065`, `089` and `107`) remain classified as
+separate ArrayAccess and reentrant-string-conversion roots.
+
+Two exact-final-binary Zend/lang manifests are byte-identical and the twelve
+named PHPTs are the only movements; the strings/array projection is
+exact-parent-identical. All five Cargo configurations, all-feature/all-target,
+formatting, HTML data, PHPT runner, unsafe, Composer S0, four Symfony S1 gates
+and PHP 8.5.9 S2/S3 pass. Production remains at 1,623 unsafe blocks and 289
+unsafe functions. The cumulative fixed-baseline 32-pair performance gate keeps
+startup and representative ordinary/typed/reference/container controls at the
+approximately one-percent boundary or better with exact checksums. Dynamic
+name reads and runtime-resolved property arguments carry localized +3.823% and
++13.719% pay-for-use costs; unrelated hot paths do not take those branches.
+
+The monitored supported debt is now 777 failures: 18 strings, zero array and
+759 Zend/lang. General property hooks, the remaining ArrayAccess/reentrant
+typed-property cases, Fiber/generator suspension, PHP 8.2, 32-bit behavior and
+allocation-limit/OOM equivalence remain separate boundaries.
+
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
