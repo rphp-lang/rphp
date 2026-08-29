@@ -499,24 +499,44 @@ enum FalseArrayConversion {
 }
 
 #[inline]
+fn inspect_operand<R>(
+    frame: *mut ExecuteData,
+    operand: u16,
+    operand_type: OpType,
+    follow_cv_reference: bool,
+    inspect: impl FnOnce(&Value) -> R,
+) -> R {
+    // SAFETY: mutable-write opcodes only pass compiler-owned slots in their
+    // current live frame. The callback cannot retain the temporary borrow.
+    unsafe {
+        let value = if operand_type == OpType::Cv && !follow_cv_reference {
+            (*frame).cv(operand as u32)
+        } else {
+            &*(*frame).get_op_mut(operand as u32, operand_type)
+        };
+        inspect(value)
+    }
+}
+
+#[inline]
 fn operand_value_type(
     frame: *mut ExecuteData,
     operand: u16,
     operand_type: OpType,
 ) -> ValueType {
-    // SAFETY: mutable-write opcodes only pass compiler-owned slots in their
-    // current live frame. Dereferencing an Rc-backed PHP reference is valid
-    // for the duration of this non-reentrant type check.
-    unsafe {
-        (&*(*frame).get_op_mut(operand as u32, operand_type))
-            .dereferenced()
-            .value_type()
-    }
+    inspect_operand(frame, operand, operand_type, true, |value| {
+        value.dereferenced().value_type()
+    })
 }
 
 #[inline]
 fn operand_is_false(frame: *mut ExecuteData, operand: u16, operand_type: OpType) -> bool {
     operand_value_type(frame, operand, operand_type) == ValueType::False
+}
+
+#[inline]
+fn operand_is_reference(frame: *mut ExecuteData, operand: u16, operand_type: OpType) -> bool {
+    inspect_operand(frame, operand, operand_type, false, Value::is_reference)
 }
 
 /// Convert one mutable false location before the rest of its write operation.
@@ -3780,20 +3800,30 @@ fn commit_constrained_static_property_value<'a>(
 fn commit_cached_static_property_value<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
+    opline: &Instruction,
     storage_slot: usize,
     value: Value,
     strict: bool,
 ) -> Result<ColdResult<'a>, VmError> {
-    if !eg
+    let assignment_result = (opline._pad & ASSIGN_PROP_RESULT_VALUE != 0)
+        .then(|| value.clone());
+    let result = if !eg
         .static_property_value(storage_slot)
         .is_some_and(Value::is_owned_reference)
     {
         // SAFETY: cache-hit callers provide a published append-only storage
         // slot; the non-reference guard preserves the ordinary direct write.
         unsafe { eg.set_static_property_value_unchecked(storage_slot, value) };
-        return Ok(ColdResult::Done);
+        ColdResult::Done
+    } else {
+        commit_constrained_static_property_value(eg, frame, storage_slot, value, strict)?
+    };
+    if matches!(result, ColdResult::Done)
+        && let Some(assignment_result) = assignment_result.as_ref()
+    {
+        publish_property_assignment_result(frame, opline, assignment_result);
     }
-    commit_constrained_static_property_value(eg, frame, storage_slot, value, strict)
+    Ok(result)
 }
 
 #[inline(always)]
@@ -3852,6 +3882,7 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
                 return commit_cached_static_property_value(
                     eg,
                     frame,
+                    opline,
                     cache.property_slot(),
                     value,
                     op_array.strict_types,
@@ -3889,6 +3920,7 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
             return commit_cached_static_property_value(
                 eg,
                 frame,
+                opline,
                 cache.property_slot(),
                 value,
                 op_array.strict_types,
@@ -3903,6 +3935,7 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
                 return commit_cached_static_property_value(
                     eg,
                     frame,
+                    opline,
                     cache.property_slot(),
                     value,
                     op_array.strict_types,
@@ -3925,6 +3958,7 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
                 return commit_cached_static_property_value(
                     eg,
                     frame,
+                    opline,
                     cache.property_slot(),
                     value,
                     op_array.strict_types,
@@ -3953,6 +3987,7 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
                 return commit_cached_static_property_value(
                     eg,
                     frame,
+                    opline,
                     cache.property_slot(),
                     value,
                     op_array.strict_types,
@@ -3965,6 +4000,7 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
                 cache,
                 class_id,
                 raw_class,
+                opline,
                 opline._pad,
                 value,
             );
@@ -4057,6 +4093,7 @@ fn assign_cached_direct_static_trait_property<'a>(
         return commit_cached_static_property_value(
             eg,
             frame,
+            opline,
             cache.property_slot(),
             value,
             op_array.strict_types,
@@ -4069,6 +4106,7 @@ fn assign_cached_direct_static_trait_property<'a>(
         cache,
         class_id,
         raw_class,
+        opline,
         opline._pad,
         value,
     )
@@ -4218,6 +4256,7 @@ fn validate_cached_typed_static_property<'a>(
     cache: &mut crate::vm::instruction::InlineCache,
     class_id: u32,
     raw_class: &str,
+    opline: &Instruction,
     assignment_flags: u16,
     mut value: Value,
 ) -> Result<ColdResult<'a>, VmError> {
@@ -4246,6 +4285,21 @@ fn validate_cached_typed_static_property<'a>(
     let called_class = eg
         .class_by_id(class_id)
         .map_or(raw_class, |class| class.name.as_str());
+    if assignment_flags & STATIC_PROP_INDIRECT_MODIFY != 0
+        && value.value_type() == ValueType::Array
+        && let Some(stored) = eg.static_property_value(cache.property_slot())
+        && matches!(
+            stored.dereferenced().value_type(),
+            ValueType::Null | ValueType::Undef
+        )
+    {
+        let constraints = stored.reference_property_constraints();
+        let message = reference_array_auto_init_error(&constraints, eg)
+            .or_else(|| property_array_auto_init_error(definition, eg, called_class));
+        if let Some(message) = message {
+            return Ok(static_property_throw(eg, frame, "TypeError", message)?);
+        }
+    }
     if let Some(overflow) =
         PropertyIncDecOverflow::from_assignment_flags(assignment_flags)
         && let Some(stored) = eg.static_property_value(cache.property_slot())
@@ -4298,6 +4352,7 @@ fn validate_cached_typed_static_property<'a>(
     commit_cached_static_property_value(
         eg,
         frame,
+        opline,
         cache.property_slot(),
         value,
         op_array.strict_types,
@@ -4345,6 +4400,21 @@ fn assign_static_property_cache_miss<'a>(
         let called_class = eg
             .class_by_id(class_id)
             .map_or(raw_class, |class| class.name.as_str());
+        if assignment_flags & STATIC_PROP_INDIRECT_MODIFY != 0
+            && value.value_type() == ValueType::Array
+            && let Some(stored) = eg.static_property_value(resolved.storage_slot)
+            && matches!(
+                stored.dereferenced().value_type(),
+                ValueType::Null | ValueType::Undef
+            )
+        {
+            let constraints = stored.reference_property_constraints();
+            let message = reference_array_auto_init_error(&constraints, eg)
+                .or_else(|| property_array_auto_init_error(definition, eg, called_class));
+            if let Some(message) = message {
+                return Ok(static_property_throw(eg, frame, "TypeError", message)?);
+            }
+        }
         if let Some(overflow) =
             PropertyIncDecOverflow::from_assignment_flags(assignment_flags)
             && let Some(stored) = eg.static_property_value(resolved.storage_slot)
@@ -4412,8 +4482,13 @@ fn assign_static_property_cache_miss<'a>(
             )?);
         }
     };
+    let assignment_result = (opline._pad & ASSIGN_PROP_RESULT_VALUE != 0)
+        .then(|| value.clone());
     if !eg.set_static_property_value(resolved.storage_slot, value) {
         return Err(VmError::Fatal("Invalid static property storage slot".into()));
+    }
+    if let Some(assignment_result) = assignment_result.as_ref() {
+        publish_property_assignment_result(frame, opline, assignment_result);
     }
     let cacheable_write = definition
         .set_visibility

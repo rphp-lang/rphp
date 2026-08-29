@@ -100,6 +100,12 @@ fn try_assign_cached_typed_instance_property<'a>(
         )
     };
     let tag = cache.typed_instance_property_tag();
+    if opline._pad & ASSIGN_OBJ_MODIFY != 0 && source.value_type() == ValueType::Array {
+        // Array auto-initialization needs the stored null/undef state and its
+        // exact property/reference diagnostic. Keep this rare modify case on
+        // the canonical cold path instead of widening every typed cache hit.
+        return Ok(None);
+    }
     if let (Some(overflow), Some(stored)) = (overflow, overflow_stored.as_ref()) {
         let called_class = eg
             .class_by_id(object_class_id)
@@ -123,6 +129,7 @@ fn try_assign_cached_typed_instance_property<'a>(
         unsafe {
             let property = object.object_property_slot_unchecked(cache.property_slot())
                 as *mut Value;
+            publish_property_assignment_result(frame, opline, &value);
             assignment_slot_set(&mut *property, value);
         };
     };

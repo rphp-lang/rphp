@@ -832,6 +832,164 @@ var_dump($alias, EscapedTypedReference::$value);
 }
 
 #[test]
+fn typed_property_assignment_publishes_the_coerced_value_transactionally() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class TransactionalTypedWrite {
+    public int $number = 1;
+    public float $decimal = 1.5;
+    public string $text = "seed";
+    public static int $staticNumber = 2;
+}
+$object = new TransactionalTypedWrite;
+var_dump($object->number = "41");
+var_dump(TransactionalTypedWrite::$staticNumber = "42");
+$decimal =& $object->decimal;
+var_dump($decimal = 7);
+"#
+        ),
+        "int(41)\nint(42)\nfloat(7)\n"
+    );
+}
+
+#[test]
+fn dynamic_foreach_references_keep_each_typed_property_constraint() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class IteratedTypedState {
+    public int $count = 4;
+    public float $ratio = 1.25;
+}
+$state = new IteratedTypedState;
+foreach ($state as $name => &$cell) {
+    echo $name, ":", get_debug_type($cell), "\n";
+    $cell = 11;
+    var_dump($state->{$name});
+    try { $cell = new stdClass; } catch (TypeError $error) {
+        echo $error->getMessage(), "\n";
+    }
+    var_dump($state->{$name});
+}
+"#
+        ),
+        "count:int\nint(11)\nCannot assign stdClass to reference held by property IteratedTypedState::$count of type int\nint(11)\nratio:float\nfloat(11)\nCannot assign stdClass to reference held by property IteratedTypedState::$ratio of type float\nfloat(11)\n"
+    );
+}
+
+#[test]
+fn runtime_resolved_property_arguments_preserve_reference_provenance() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class RuntimeArgumentState { public int $count = 8; }
+$state = new RuntimeArgumentState;
+$property = "count";
+$byValue = function ($value) { return $value + 1; };
+var_dump($byValue($state->{$property}), $state->count);
+$byReference = function (&$value) { $value = []; };
+try { $byReference($state->{$property}); } catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+var_dump($state->count);
+$source = 12;
+$state->count =& $source;
+$mutateCopy = function ($value) { $value = 99; return $value; };
+var_dump($mutateCopy($state->{$property}), $state->count, $source);
+try { $byReference([8]->{$property}); } catch (Error $error) {
+    echo "temporary:", $error->getMessage(), "\n";
+}
+"#
+        ),
+        "int(9)\nint(8)\nCannot assign array to reference held by property RuntimeArgumentState::$count of type int\nint(8)\nint(99)\nint(12)\nint(12)\ntemporary:Cannot use temporary expression in write context\n"
+    );
+}
+
+#[test]
+fn typed_reference_constraints_cover_indirect_assignment_targets_and_catch_variables() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class IndirectTypedWrite { public int $number = 9; }
+$object = new IndirectTypedWrite;
+$alias =& $object->number;
+$holder = new stdClass;
+$holder->slot =& $alias;
+$array = [&$alias];
+foreach ([
+    "property" => function () use ($holder) { $holder->slot = []; },
+    "array" => function () use (&$array) { $array[0] = new stdClass; },
+] as $label => $write) {
+    try { $write(); } catch (TypeError $error) {
+        echo $label, ":", $error->getMessage(), "\n";
+    }
+}
+try {
+    try { throw new Exception("payload"); }
+    catch (Exception $alias) { echo "unreachable\n"; }
+} catch (TypeError $error) {
+    echo "catch:", $error->getMessage(), "\n";
+}
+var_dump($object->number);
+"#
+        ),
+        "property:Cannot assign array to reference held by property IndirectTypedWrite::$number of type int\narray:Cannot assign stdClass to reference held by property IndirectTypedWrite::$number of type int\ncatch:Cannot assign Exception to reference held by property IndirectTypedWrite::$number of type int\nint(9)\n"
+    );
+}
+
+#[test]
+fn typed_property_array_promotion_preserves_uninitialized_and_null_state_on_failure() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class TypedPromotionState {
+    public ?iterable $iterable;
+    public ?string $text;
+    public static ?array $array;
+    public static ?string $staticText;
+}
+$object = new TypedPromotionState;
+$object->iterable[] = "ok";
+var_dump($object->iterable);
+try { $object->text[] = "bad"; } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { var_dump($object->text); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+$object->text = null;
+try { $object->text["nested"][] = "bad"; } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+var_dump($object->text);
+TypedPromotionState::$array["key"] = 6;
+var_dump(TypedPromotionState::$array);
+try { TypedPromotionState::$staticText[] = "bad"; } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { var_dump(TypedPromotionState::$staticText); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+"#
+        ),
+        "array(1) {\n  [0]=>\n  string(2) \"ok\"\n}\nCannot auto-initialize an array inside property TypedPromotionState::$text of type ?string\nTyped property TypedPromotionState::$text must not be accessed before initialization\nCannot auto-initialize an array inside property TypedPromotionState::$text of type ?string\nNULL\narray(1) {\n  [\"key\"]=>\n  int(6)\n}\nCannot auto-initialize an array inside property TypedPromotionState::$staticText of type ?string\nTyped static property TypedPromotionState::$staticText must not be accessed before initialization\n"
+    );
+}
+
+#[test]
+fn unsetting_a_private_typed_property_detaches_its_reference_constraint() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class PrivateConstraintOwner {
+    private int $hidden = 12;
+    public function detach(): void {
+        $alias =& $this->hidden;
+        unset($this->hidden);
+        $alias = "free";
+        var_dump($alias);
+    }
+}
+class PrivateConstraintShadow extends PrivateConstraintOwner { private $hidden; }
+(new PrivateConstraintShadow)->detach();
+"#
+        ),
+        "string(4) \"free\"\n"
+    );
+}
+
+#[test]
 fn compiler_reference_cvs_do_not_create_visible_aliases() {
     assert_eq!(
         run_php(

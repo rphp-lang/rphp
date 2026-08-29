@@ -1003,7 +1003,7 @@ fn convert_object_property_name<'a>(
 }
 
 #[inline(always)]
-fn finish_cached_fetch_obj_r(
+fn finish_cached_fetch_obj_r<const FUNC_ARG: bool>(
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
@@ -1041,21 +1041,54 @@ fn finish_cached_fetch_obj_r(
     let result_ptr = unsafe {
         (*frame).get_op_mut(opline.result as u32, opline.result_type)
     };
-    unsafe { frame_slot_set(frame, result_ptr, (*property_ptr).clone()) };
+    let value = if FUNC_ARG && property.is_reference() {
+        property.dereferenced().clone()
+    } else {
+        unsafe { (*property_ptr).clone() }
+    };
+    unsafe { frame_slot_set(frame, result_ptr, value) };
     CachedFetchObjResult::Complete
 }
 
 #[inline(always)]
-fn try_cached_fetch_obj_r(
+fn try_cached_fetch_obj_r<const RUNTIME_NAME: bool, const FUNC_ARG: bool>(
     eg: &ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> CachedFetchObjResult {
-    let obj_val = unsafe {
-        &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-    }
-    .dereferenced();
+    let ip = unsafe {
+        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    };
+    let cache = &op_array.cache[ip];
+    // SAFETY: both compiler operands belong to the live frame. A retained
+    // dynamic-name cache key stays alive until replacement or op-array drop.
+    let (obj_val, declared_name_matches) = unsafe {
+        let object = (&*(*frame).get_op_ptr(
+            opline.op1 as u32,
+            opline.op1_type,
+            op_array,
+        ))
+            .dereferenced();
+        let name_matches = if !RUNTIME_NAME || cache.class_id == 0 {
+            true
+        } else {
+            let requested = (&*(*frame).get_op_ptr(
+                opline.op2 as u32,
+                opline.op2_type,
+                op_array,
+            ))
+                .dereferenced();
+            let cached_name = cache.declared_property_name();
+            requested.string_rc_ptr().is_some_and(|requested_name| {
+                requested_name == cached_name
+                    || (!cached_name.is_null()
+                        && (&*cached_name).as_str()
+                            == requested.as_str().unwrap_unchecked())
+            })
+        };
+        (object, name_matches)
+    };
     if obj_val.value_type() != ValueType::Object {
         return CachedFetchObjResult::Miss;
     }
@@ -1069,10 +1102,6 @@ fn try_cached_fetch_obj_r(
         }
     }
 
-    let ip = unsafe {
-        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
-    };
-    let cache = &op_array.cache[ip];
     if cache.is_dynamic_property_read() {
         if unsafe { obj_val.object_property_layout_ptr_unchecked() }
             != cache.dynamic_property_layout()
@@ -1097,7 +1126,7 @@ fn try_cached_fetch_obj_r(
         if property_ptr.is_null() {
             return CachedFetchObjResult::Miss;
         }
-        return finish_cached_fetch_obj_r(frame, op_array, opline, property_ptr);
+        return finish_cached_fetch_obj_r::<FUNC_ARG>(frame, op_array, opline, property_ptr);
     }
 
     let object_class_id = unsafe { obj_val.object_class_id_unchecked() };
@@ -1107,11 +1136,14 @@ fn try_cached_fetch_obj_r(
     {
         return CachedFetchObjResult::Miss;
     }
+    if !declared_name_matches {
+        return CachedFetchObjResult::Miss;
+    }
 
     let property_ptr = unsafe {
         obj_val.object_property_slot_unchecked(cache.property_slot())
     };
-    finish_cached_fetch_obj_r(frame, op_array, opline, property_ptr)
+    finish_cached_fetch_obj_r::<FUNC_ARG>(frame, op_array, opline, property_ptr)
 }
 
 #[cold]
@@ -1158,7 +1190,7 @@ fn op_fetch_obj_r_slow<'a>(
     if suppressed {
         eg.begin_error_suppression(frame as usize);
     }
-    let result = op_fetch_obj_r_slow_inner(eg, frame, op_array, opline);
+    let result = op_fetch_obj_r_slow_inner::<false>(eg, frame, op_array, opline);
     if suppressed {
         eg.end_error_suppression(frame as usize);
     }
@@ -1166,7 +1198,45 @@ fn op_fetch_obj_r_slow<'a>(
 }
 
 #[inline(never)]
-fn op_fetch_obj_r_slow_inner<'a>(
+fn op_fetch_obj_func_arg_slow<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    op_fetch_obj_r_slow_inner::<true>(eg, frame, op_array, opline)
+}
+
+#[inline(never)]
+fn op_runtime_call_property_argument<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    if pending_call_argument_is_ref(
+        frame,
+        RuntimeCallArgument::Position(opline.extended_value),
+    ) {
+        return op_bind_obj_prop_ref(eg, frame, op_array, opline);
+    }
+    let cached = if opline.op2_type == OpType::Const {
+        try_cached_fetch_obj_r::<false, true>(eg, frame, op_array, opline)
+    } else {
+        try_cached_fetch_obj_r::<true, true>(eg, frame, op_array, opline)
+    };
+    Ok(match cached {
+        CachedFetchObjResult::Miss => {
+            return op_fetch_obj_func_arg_slow(eg, frame, op_array, opline);
+        }
+        CachedFetchObjResult::Complete | CachedFetchObjResult::CompleteAndSkipNext => {
+            ColdResult::Done
+        }
+    })
+}
+
+#[inline(never)]
+fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &'a crate::compiler::OpArray,
@@ -1182,9 +1252,14 @@ fn op_fetch_obj_r_slow_inner<'a>(
             (*frame).get_op_mut(opline.result as u32, opline.result_type),
         )
     };
-    let set_result = |value| {
+    let set_result = |value: Value| {
         // SAFETY: `result_ptr` is the live compiler-emitted slot proven above;
         // each invocation transfers exactly one owned Value into it.
+        let value = if FUNC_ARG && value.is_reference() {
+            value.dereferenced().clone()
+        } else {
+            value
+        };
         unsafe { frame_slot_set(frame, result_ptr, value) };
     };
 
@@ -1420,7 +1495,6 @@ fn op_fetch_obj_r_slow_inner<'a>(
                 let has_get_hook = eg
                     .instance_property_definition(obj.class_id, slot)
                     .is_some_and(|definition| definition.has_get_hook);
-                let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
                 let mut flags: u32 = 1; // read-safe
                 let writable = eg.class_table.get(obj.class_name.as_ref()).is_none_or(|cd| {
                     !cd.is_enum
@@ -1432,8 +1506,39 @@ fn op_fetch_obj_r_slow_inner<'a>(
                 if writable {
                     flags |= 2;
                 }
-                if !has_get_hook {
-                    ic_mut.set_property(obj.class_id, slot, flags);
+                let dynamic_name = (opline.op2_type != OpType::Const)
+                    .then(|| prop_name.dereferenced().string_rc_ptr())
+                    .flatten();
+                if !has_get_hook
+                    && (opline.op2_type == OpType::Const || dynamic_name.is_some())
+                {
+                    // SAFETY: the opcode owns this cache entry for the op-array
+                    // lifetime. Retaining a runtime string makes the pointer
+                    // identity guard stable across CV replacement and COW.
+                    unsafe {
+                        let ic_mut = &mut *(op_array.cache.as_ptr().add(ip)
+                            as *mut crate::vm::instruction::InlineCache);
+                        let old_name = if opline.op2_type != OpType::Const
+                            && ic_mut.class_id != 0
+                            && ic_mut.property_flags() != 0
+                        {
+                            ic_mut.declared_property_name()
+                        } else {
+                            std::ptr::null()
+                        };
+                        if old_name != dynamic_name.unwrap_or(std::ptr::null()) {
+                            if let Some(dynamic_name) = dynamic_name {
+                                Value::retain_cached_string(dynamic_name);
+                            }
+                            if !old_name.is_null() {
+                                Value::release_cached_string(old_name);
+                            }
+                        }
+                        ic_mut.set_property(obj.class_id, slot, flags);
+                        if let Some(dynamic_name) = dynamic_name {
+                            ic_mut.set_declared_property_name(dynamic_name);
+                        }
+                    }
                 }
             }
         }
@@ -1986,18 +2091,26 @@ fn op_unset_obj<'a>(
     let effective_caller = receiver_in_scope
         .then_some(caller_class.as_deref())
         .flatten();
-    let accessible = eg
-        .find_property_set_visibility(&object_ref.class_name, &name)
-        .is_none_or(|(visibility, defining_class)| {
-            visibility == Visibility::Public
-                || eg.check_instance_property_visibility(
-                    caller_class.as_deref(),
-                    &object_ref.class_name,
-                    &name,
-                    &defining_class,
-                    visibility,
-                )
-        });
+    let caller_has_own = receiver_in_scope && caller_class.as_ref().is_some_and(|caller| {
+        eg.find_property_visibility(caller, &name)
+            .is_some_and(|(visibility, defining_class)| {
+                visibility == Visibility::Private
+                    && defining_class.eq_ignore_ascii_case(caller)
+            })
+    });
+    let accessible = caller_has_own
+        || eg
+            .find_property_set_visibility(&object_ref.class_name, &name)
+            .is_none_or(|(visibility, defining_class)| {
+                visibility == Visibility::Public
+                    || eg.check_instance_property_visibility(
+                        caller_class.as_deref(),
+                        &object_ref.class_name,
+                        &name,
+                        &defining_class,
+                        visibility,
+                    )
+            });
     let hidden_parent_private = eg
         .find_property_visibility(&object_ref.class_name, &name)
         .is_some_and(|(visibility, defining_class)| {
@@ -2154,6 +2267,9 @@ fn op_bind_obj_prop_ref<'a>(
     // The receiver is cloned before its CV can be replaced, and the owned
     // reference cell keeps the property target stable across object growth.
     unsafe {
+        let internal_result = opline._pad
+            & (REFERENCE_RESULT_INTERNAL | OBJ_PROP_FUNC_ARG)
+            != 0;
         let instruction_index =
             (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
         let receiver = (&*(*frame).get_op_ptr(
@@ -2178,6 +2294,16 @@ fn op_bind_obj_prop_ref<'a>(
             ConvertedPropertyName::Name(name) => name,
             ConvertedPropertyName::Control(result) => return Ok(result),
         };
+        if opline._pad & OBJ_PROP_TEMPORARY_RECEIVER != 0 {
+            return Ok(object_property_throw_at(
+                eg,
+                frame,
+                op_array,
+                instruction_index,
+                "Error",
+                "Cannot use temporary expression in write context".to_string(),
+            )?);
+        }
         let Some(object) = receiver.as_object() else {
             return Ok(object_property_throw(
                 eg,
@@ -2199,11 +2325,19 @@ fn op_bind_obj_prop_ref<'a>(
         let effective_caller = receiver_in_scope
             .then_some(caller_class.as_deref())
             .flatten();
+        let caller_has_own = receiver_in_scope && caller_class.as_ref().is_some_and(|caller| {
+            eg.find_property_visibility(caller, &name)
+                .is_some_and(|(visibility, defining_class)| {
+                    visibility == Visibility::Private
+                        && defining_class.eq_ignore_ascii_case(caller)
+                })
+        });
         let mut force_dynamic = false;
         let mut property_accessible = true;
         if let Some((visibility, defining_class)) =
             eg.find_property_set_visibility(&class_name, &name)
             && visibility != Visibility::Public
+            && !caller_has_own
             && !eg.check_instance_property_visibility(
                 caller_class.as_deref(),
                 &class_name,
@@ -2357,7 +2491,7 @@ fn op_bind_obj_prop_ref<'a>(
                 } else if returned.is_reference() {
                     Value::reference(returned.as_ref_ptr())
                 } else {
-                    let message = if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+                    let message = if internal_result {
                         format!("Indirect modification of {class_name}::${name} is not allowed")
                     } else {
                         format!("Cannot create reference to property {class_name}::${name}")
@@ -2371,7 +2505,7 @@ fn op_bind_obj_prop_ref<'a>(
                         message,
                     )?);
                 };
-                if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+                if internal_result {
                     binding.mark_internal_reference_alias();
                 }
                 let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
@@ -2403,7 +2537,7 @@ fn op_bind_obj_prop_ref<'a>(
                 return Ok(result);
             }
             let mut binding = Value::owned_reference(Value::null());
-            if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+            if internal_result {
                 binding.mark_internal_reference_alias();
             }
             let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
@@ -2482,7 +2616,7 @@ fn op_bind_obj_prop_ref<'a>(
                 } else {
                     Value::owned_reference(returned)
                 };
-                if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+                if internal_result {
                     binding.mark_internal_reference_alias();
                 }
                 let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
@@ -2560,7 +2694,7 @@ fn op_bind_obj_prop_ref<'a>(
         if creates_dynamic_property
             && !dynamic_properties_allowed
             && !has_magic_get
-            && opline._pad & REFERENCE_RESULT_INTERNAL == 0
+            && !internal_result
         {
             report_php_deprecation(
                 eg,
@@ -2593,7 +2727,7 @@ fn op_bind_obj_prop_ref<'a>(
                 }
             }
             let binding = materialize_reference_alias(frame, source);
-            if opline._pad & REFERENCE_RESULT_INTERNAL != 0
+            if internal_result
                 && (&*source).is_owned_reference()
             {
                 (&mut *source).mark_internal_reference_alias();
@@ -2723,7 +2857,7 @@ fn op_bind_obj_prop_ref<'a>(
             );
         }
 
-        if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+        if internal_result {
             binding.mark_internal_reference_alias();
         }
 
@@ -3426,6 +3560,36 @@ fn op_assign_obj_prop_inner<'a>(
         let definition = declared_slot
             .and_then(|slot| eg.instance_property_definition(object_class_id, slot));
         if let Some(definition_ref) = definition {
+            if opline._pad & ASSIGN_OBJ_MODIFY != 0
+                && assigned.value_type() == ValueType::Array
+                && let Some((stored_type, constraints)) = obj
+                    .as_object()
+                    .and_then(|object| {
+                        object.get_property(&key).map(|stored| {
+                            (
+                                stored.dereferenced().value_type(),
+                                stored.reference_property_constraints(),
+                            )
+                        })
+                    })
+                && matches!(stored_type, ValueType::Null | ValueType::Undef)
+            {
+                let message = reference_array_auto_init_error(&constraints, eg).or_else(|| {
+                    property_array_auto_init_error(
+                        definition_ref,
+                        eg,
+                        &object_class_name,
+                    )
+                });
+                if let Some(message) = message {
+                    return Ok(object_property_throw(
+                        eg,
+                        frame,
+                        "TypeError",
+                        message,
+                    )?);
+                }
+            }
             if !definition_ref.has_get_hook
                 && !definition_ref.has_set_hook
                 && let Some(overflow) =
@@ -3521,6 +3685,8 @@ fn op_assign_obj_prop_inner<'a>(
         }
 
         if prop_exists {
+            let assignment_result = (opline._pad & ASSIGN_PROP_RESULT_VALUE != 0)
+                .then(|| assigned.clone());
             let destructor = {
                 let object = obj.as_object().unwrap();
                 let property = if force_dynamic {
@@ -3540,6 +3706,9 @@ fn op_assign_obj_prop_inner<'a>(
                 }
                     .expect("existing property must remain addressable during assignment");
                 assignment_slot_set(property, assigned);
+            }
+            if let Some(assignment_result) = assignment_result.as_ref() {
+                publish_property_assignment_result(frame, opline, assignment_result);
             }
             run_prepared_value_destructor(eg, destructor)?;
             if let Some(result) = take_magic_exception(eg, frame)? {

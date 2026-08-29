@@ -19,6 +19,41 @@ fn exception_matches_catch(thrown: &Value, types: &[String], eg: &ExecutorGlobal
     false
 }
 
+fn prepare_catch_variable_assignment(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    catch_cv: u32,
+    catch_start: u32,
+    thrown: &Value,
+    eg: &ExecutorGlobals,
+) -> Result<Option<Value>, String> {
+    // SAFETY: the catch table names a CV in this live frame. Validation is
+    // non-reentrant for Throwable objects, and an error resumes lookup at the
+    // catch boundary before any handler body or CV mutation can occur.
+    unsafe {
+        let catch_variable = (*frame).cv(catch_cv);
+        if !catch_variable.is_reference() {
+            return Ok(None);
+        }
+        let constraints = catch_variable.reference_property_constraints();
+        match prepare_reference_assignment(
+            thrown.clone(),
+            &constraints,
+            eg,
+            op_array.strict_types,
+        ) {
+            Ok(value) => Ok(Some(value)),
+            Err(message) => {
+                (*frame).opline = op_array
+                    .instructions
+                    .as_ptr()
+                    .add(catch_start as usize);
+                Err(message)
+            }
+        }
+    }
+}
+
 /// Drop all heap-backed slot values in a frame before popping it.
 ///
 /// Three-tier cleanup:
@@ -2494,6 +2529,32 @@ fn throw_in_frame<'a>(
                 .find(|c| exception_matches_catch(&thrown, &c.types, eg));
 
             if let Some(catch) = matched_catch {
+                let mut prepared_reference_assignment = None;
+                if let Some(catch_cv) = catch.catch_cv {
+                    match prepare_catch_variable_assignment(
+                        search_frame,
+                        sf_op_array,
+                        catch_cv,
+                        catch.catch_start,
+                        &thrown,
+                        eg,
+                    ) {
+                        Ok(value) => prepared_reference_assignment = value,
+                        Err(message) => {
+                            let replacement = make_error_value("TypeError", &message);
+                            attach_throwable_origin(
+                                &replacement,
+                                eg,
+                                search_frame,
+                                sf_op_array,
+                                catch.catch_start as usize,
+                            );
+                            thrown = replacement;
+                            frame = search_frame;
+                            continue 'search;
+                        }
+                    }
+                }
                 if let Some((owner, displaced)) = displaced_exception.as_ref() {
                     let catch_stays_in_finally = search_frame == *owner
                         && sf_op_array.try_entries.iter().any(|active| {
@@ -2529,14 +2590,21 @@ fn throw_in_frame<'a>(
                 }
                 unsafe { cleanup_pending_calls(eg, search_frame) };
                 let base_ptr = sf_op_array.instructions.as_ptr();
-                if let Some(catch_cv) = catch.catch_cv {
-                    let catch_cv_ptr =
-                        unsafe { (*search_frame).get_op_mut(catch_cv, OpType::Cv) };
-                    unsafe { slot_set(catch_cv_ptr, thrown.clone()) };
+                // SAFETY: unwind reached the selected live frame. The catch
+                // CV and next opline come from its validated table;
+                // assignment_slot_set preserves a pre-existing reference.
+                unsafe {
+                    if let Some(catch_cv) = catch.catch_cv {
+                        assignment_slot_set(
+                            (*search_frame).cv_mut(catch_cv),
+                            prepared_reference_assignment
+                                .unwrap_or_else(|| thrown.clone()),
+                        );
+                    }
+                    (*frame).opline = base_ptr.add(catch.catch_start as usize);
+                    let new_op_array = (*frame).op_array();
+                    return Ok(ThrowResult::Handled(frame, new_op_array));
                 }
-                unsafe { (*frame).opline = base_ptr.add(catch.catch_start as usize) };
-                let new_op_array = unsafe { (*frame).op_array() };
-                return Ok(ThrowResult::Handled(frame, new_op_array));
             } else if entry.finally_start != 0xFFFFFFFF {
                 while frame != search_frame {
                     let prev = unsafe { (*frame).prev_execute_data };

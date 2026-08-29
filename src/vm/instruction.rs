@@ -90,6 +90,11 @@ pub const SEND_FLAG_YIELD_SNAPSHOT: u16 = 1 << 4;
 /// `SEND_FLAG_NONREFERENCEABLE` instead and remain errors.
 pub const SEND_FLAG_INDIRECT_TEMPORARY: u16 = 1 << 5;
 
+/// A preceding runtime-argument property fetch already selected value or
+/// reference context from the pending signature. SendVarEx can inspect the
+/// prepared internal CV instead of resolving the same signature twice.
+pub const SEND_FLAG_PREPARED_PROPERTY_ARGUMENT: u16 = 1 << 6;
+
 /// FetchCvR flag: evaluate this read under PHP's `@` reporting mask. Custom
 /// handlers still run and observe the suppressed mask.
 pub const FETCH_CV_ERROR_SUPPRESS: u16 = 1;
@@ -227,7 +232,6 @@ pub const FETCH_OBJ_REFERENCE_SOURCE: u16 = 1 << 6;
 /// permits enum-case receivers in this context; ordinary object receivers are
 /// rejected after the dynamic property name has been evaluated and converted.
 pub const FETCH_OBJ_CONSTANT_EXPRESSION: u16 = 1 << 7;
-
 /// `AssignObjProp` is materializing a reference binding, which uses PHP's
 /// modification diagnostic for a null or scalar receiver.
 pub const ASSIGN_OBJ_MODIFY: u16 = 1;
@@ -247,12 +251,25 @@ pub const ASSIGN_OBJ_ERROR_SUPPRESS: u16 = 1 << 4;
 /// TMP/VAR source can be transferred into property storage instead of leaving
 /// a compiler-only object handle alive until frame teardown.
 pub const ASSIGN_PROP_MOVE_SOURCE: u16 = 1 << 10;
+/// The source TMP is also the observable result of a property-assignment
+/// expression. Typed/reference validation may coerce the committed value, so
+/// publish that prepared value back into the TMP only after the write succeeds.
+pub const ASSIGN_PROP_RESULT_VALUE: u16 = 1 << 11;
 /// `CloneObj` is followed by the PHP 8.5 property-update loop.
 pub const CLONE_OBJ_WITH_PROPERTIES: u16 = 1;
 /// `BindObjPropRef` rebinds the property to the reference supplied in its
 /// result CV. Without this flag the opcode promotes/fetches the property cell
 /// and rebinds the result CV instead.
 pub const OBJ_PROP_REFERENCE_BIND: u16 = 1 << 1;
+/// BindObjPropRef is a runtime-resolved call argument. The pending signature
+/// selects an internal property reference or an ordinary dereferenced read;
+/// unrelated FetchObjR sites pay no argument-context branch.
+pub const OBJ_PROP_FUNC_ARG: u16 = 1 << 2;
+/// The receiver of a runtime-resolved property argument is a direct
+/// non-writeable temporary (for example an array literal). Value parameters
+/// retain ordinary read diagnostics; reference parameters reject the write
+/// context after the receiver and property name have both been evaluated.
+pub const OBJ_PROP_TEMPORARY_RECEIVER: u16 = 1 << 3;
 
 /// `FetchDimR` is the terminal probe of `isset($container[$offset])`. Arrays
 /// can answer directly; ArrayAccess objects dispatch `offsetExists()` instead
@@ -389,6 +406,11 @@ pub const ASSIGN_DIM_KEY_ALREADY_NORMALIZED: u16 = 1 << 3;
 /// A dimension assignment performed under PHP's `@` reporting mask. String
 /// offset conversions and object protocol calls still execute under that mask.
 pub const ASSIGN_DIM_ERROR_SUPPRESS: u16 = 1 << 4;
+/// AssignDim writeback follows an increment/decrement that crossed the native
+/// integer boundary. A referenced typed-property constraint owns the specific
+/// diagnostic and must reject before the element target is mutated.
+pub const ASSIGN_DIM_INCDEC_INCREMENT: u16 = 1 << 5;
+pub const ASSIGN_DIM_INCDEC_DECREMENT: u16 = 1 << 6;
 /// UnsetDim addresses the leaf of a multi-dimensional path. String parents use
 /// PHP's nested-offset diagnostic rather than the flat string-unset message.
 pub const UNSET_DIM_NESTED: u16 = 1;
@@ -686,6 +708,21 @@ impl InlineCache {
         self.func = std::ptr::null();
         self.class_id = class_id;
         self.prop_info = ((slot as u32) << 2) | flags;
+    }
+
+    /// Retained Rc string identity guarding a runtime-named declared-property
+    /// read. FetchObjR owns this pointer until the cache is replaced or its
+    /// op-array is dropped; constant-name and write caches leave it null.
+    #[inline(always)]
+    pub fn declared_property_name(&self) -> *const String {
+        self.func.cast()
+    }
+
+    #[inline(always)]
+    pub fn set_declared_property_name(&mut self, name: *const String) {
+        debug_assert_ne!(self.class_id, 0);
+        debug_assert_ne!(self.property_flags(), 0);
+        self.func = name.cast();
     }
 
     /// Static-property opcodes reserve cache state 2 for a resolved owner that

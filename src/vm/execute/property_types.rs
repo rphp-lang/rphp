@@ -3,6 +3,26 @@
 // object layouts or instruction operands.
 
 #[inline(always)]
+fn publish_property_assignment_result(
+    frame: *mut ExecuteData,
+    opline: &Instruction,
+    value: &Value,
+) {
+    if opline._pad & ASSIGN_PROP_RESULT_VALUE == 0 {
+        return;
+    }
+    debug_assert!(matches!(opline.result_type, OpType::Tmp | OpType::Var));
+    // SAFETY: the compiler sets the flag only when the source TMP is also the
+    // expression result. The caller invokes this after all validation and a
+    // successful property commit, while the compiler-owned result and frame
+    // remain live.
+    unsafe {
+        let result = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+        frame_slot_set(frame, result, value.clone());
+    }
+}
+
+#[inline(always)]
 fn property_type_matches_exact(
     value: &Value,
     hint: &ParamTypeHint,
@@ -52,6 +72,73 @@ fn property_type_matches_exact(
     }
 }
 
+#[cold]
+#[inline(never)]
+fn property_array_auto_init_error(
+    definition: &crate::compiler::compile::PropertyDefinition,
+    eg: &ExecutorGlobals,
+    called_class: &str,
+) -> Option<String> {
+    let array = Value::array(PhpArray::new());
+    (!property_type_matches_exact(
+        &array,
+        &definition.type_hint,
+        eg,
+        &definition.type_scope,
+        called_class,
+    ))
+    .then(|| {
+        format!(
+            "Cannot auto-initialize an array inside property {}::${} of type {}",
+            property_diagnostic_class_name(&definition.type_scope),
+            definition.name,
+            definition.type_hint.property_declaration_display_name(),
+        )
+    })
+}
+
+#[cold]
+#[inline(never)]
+fn reference_array_auto_init_error(
+    constraints: &[crate::value::ReferencePropertyConstraint],
+    eg: &ExecutorGlobals,
+) -> Option<String> {
+    let array = Value::array(PhpArray::new());
+    let constraint = constraints.iter().find(|constraint| {
+        !property_type_matches_exact(
+            &array,
+            &constraint.type_hint,
+            eg,
+            &constraint.type_scope,
+            &constraint.called_class,
+        )
+    })?;
+    Some(format!(
+        "Cannot auto-initialize an array inside a reference held by property {}::${} of type {}",
+        property_diagnostic_class_name(&constraint.declaring_class),
+        constraint.property,
+        constraint.type_hint.property_declaration_display_name(),
+    ))
+}
+
+#[inline(always)]
+fn operand_reference_property_constraints(
+    frame: *mut ExecuteData,
+    operand: u16,
+    operand_type: OpType,
+) -> Vec<crate::value::ReferencePropertyConstraint> {
+    match operand_type {
+        OpType::Cv | OpType::Tmp | OpType::Var => inspect_operand(
+            frame,
+            operand,
+            operand_type,
+            false,
+            Value::reference_property_constraints,
+        ),
+        OpType::Const | OpType::Unused => return Vec::new(),
+    }
+}
+
 /// Apply PHP's property-assignment scalar conversions. Long → Double is
 /// accepted even in strict mode; the remaining conversions are weak-mode
 /// only. Exact union members are tested before this function, preserving an
@@ -84,7 +171,14 @@ fn coerce_property_value(value: &Value, hint: &ParamTypeHint, weak: bool) -> Opt
                 numeric
                     .parse::<i64>()
                     .ok()
-                    .or_else(|| numeric.parse::<f64>().ok().map(|number| number as i64))
+                    .or_else(|| {
+                        numeric.parse::<f64>().ok().and_then(|number| {
+                            (number.is_finite()
+                                && (-PHP_LONG_UPPER_BOUND..PHP_LONG_UPPER_BOUND)
+                                    .contains(&number))
+                            .then_some(number as i64)
+                        })
+                    })
                     .map(Value::long)
             }
             _ => None,
@@ -138,8 +232,7 @@ fn coerce_union_value(value: &Value, parts: &[ParamTypeHint], weak: bool) -> Opt
             if member(&ParamTypeHint::Int)
                 && let Ok(number) = numeric.parse::<f64>()
                 && number.is_finite()
-                && number >= i64::MIN as f64
-                && number <= i64::MAX as f64
+                && (-PHP_LONG_UPPER_BOUND..PHP_LONG_UPPER_BOUND).contains(&number)
             {
                 return Some(Value::long(number as i64));
             }
@@ -149,8 +242,7 @@ fn coerce_union_value(value: &Value, parts: &[ParamTypeHint], weak: bool) -> Opt
             let number = value.as_double()?;
             if member(&ParamTypeHint::Int)
                 && number.is_finite()
-                && number >= i64::MIN as f64
-                && number <= i64::MAX as f64
+                && (-PHP_LONG_UPPER_BOUND..PHP_LONG_UPPER_BOUND).contains(&number)
             {
                 return Some(Value::long(number as i64));
             }
@@ -224,6 +316,17 @@ impl PropertyIncDecOverflow {
         if flags & PROPERTY_INCDEC_INCREMENT != 0 {
             Some(Self::Increment)
         } else if flags & PROPERTY_INCDEC_DECREMENT != 0 {
+            Some(Self::Decrement)
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    fn from_dim_assignment_flags(flags: u16) -> Option<Self> {
+        if flags & ASSIGN_DIM_INCDEC_INCREMENT != 0 {
+            Some(Self::Increment)
+        } else if flags & ASSIGN_DIM_INCDEC_DECREMENT != 0 {
             Some(Self::Decrement)
         } else {
             None

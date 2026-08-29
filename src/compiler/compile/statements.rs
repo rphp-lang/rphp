@@ -501,6 +501,68 @@ impl Compiler {
         Ok(destination)
     }
 
+    pub(super) fn compile_runtime_call_property_argument(
+        &mut self,
+        source: &Expr,
+        parameter_index: usize,
+    ) -> Result<u16, String> {
+        let destination =
+            self.resolve_cv(&format!("\0function_argument_property_{}", self.next_cv));
+        let (object, object_type, property, property_type, temporary_receiver, line) = match source {
+            Expr::PropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+                line,
+            } => {
+                let temporary_receiver = self.nonreferenceable_call_argument_line(object).is_some();
+                let (object, object_type) = self.compile_property_modify_base(object);
+                let property = self.add_literal(Value::string(property.clone()));
+                (
+                    object,
+                    object_type,
+                    property,
+                    OpType::Const,
+                    temporary_receiver,
+                    *line,
+                )
+            }
+            Expr::DynamicPropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+                line,
+            } => {
+                let temporary_receiver = self.nonreferenceable_call_argument_line(object).is_some();
+                let (object, object_type) = self.compile_property_modify_base(object);
+                let (property, property_type) = self.compile_expr(property);
+                (
+                    object,
+                    object_type,
+                    property,
+                    property_type,
+                    temporary_receiver,
+                    *line,
+                )
+            }
+            _ => return Err("Runtime call property argument must be a mutable property".into()),
+        };
+        let mut fetch = Instruction::new(OpCode::BindObjPropRef);
+        fetch.op1 = object;
+        fetch.op1_type = object_type;
+        fetch.op2 = property;
+        fetch.op2_type = property_type;
+        fetch.result = destination;
+        fetch.result_type = OpType::Cv;
+        fetch._pad |= OBJ_PROP_FUNC_ARG;
+        if temporary_receiver {
+            fetch._pad |= OBJ_PROP_TEMPORARY_RECEIVER;
+        }
+        fetch.extended_value = parameter_index as u32;
+        self.push_instruction_at_line(fetch, line);
+        Ok(destination)
+    }
+
     /// Resolve the container for `target[] = value` without widening the
     /// stricter by-reference `foreach` source contract. Calls retain their
     /// returned reference cell when present and otherwise mutate a discarded
@@ -1387,6 +1449,7 @@ impl Compiler {
                 assign.op2_type = property_type;
                 assign.result = result;
                 assign.result_type = OpType::Tmp;
+                assign._pad |= ASSIGN_PROP_RESULT_VALUE;
                 self.instructions.push(assign);
             }
             WriteTarget::Static {
@@ -1409,7 +1472,7 @@ impl Compiler {
                 assign.op2_type = property_type;
                 assign.result = result;
                 assign.result_type = OpType::Tmp;
-                assign._pad |= STATIC_PROP_INDIRECT_MODIFY;
+                assign._pad |= ASSIGN_PROP_RESULT_VALUE;
                 if dynamic_owner {
                     assign._pad |= STATIC_PROP_DYNAMIC_OWNER;
                 }

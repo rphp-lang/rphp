@@ -29,7 +29,7 @@ use crate::vm::function::{
 };
 use crate::vm::instruction::{
     FETCH_DIM_FUNC_ARG, FETCH_DIM_REFERENCE_SOURCE, InlineCache, Instruction, KnownScalarType,
-    LATE_STATIC_PROP_EMBEDDED_SCOPE, OpType, SEND_FLAG_YIELD_SNAPSHOT,
+    LATE_STATIC_PROP_EMBEDDED_SCOPE, OBJ_PROP_FUNC_ARG, OpType, SEND_FLAG_YIELD_SNAPSHOT,
 };
 use crate::vm::opcode::OpCode;
 use crate::vm::planner::{BlockInfo, BlockPlan};
@@ -765,24 +765,29 @@ impl OpArray {
 
 impl Drop for OpArray {
     fn drop(&mut self) {
-        // A DoFcall cache may retain an Rc-backed callback-name string. Pair
-        // that reference here; all other cache kinds own no heap allocation.
+        // Dynamic callback and declared-property caches may retain an Rc-backed
+        // name. Pair that reference here; all other cache kinds own no heap.
         for (instruction, cache) in self.instructions.iter().zip(&self.cache) {
-            if matches!(
+            let retained_string = if matches!(
                 instruction.opcode,
-                OpCode::DoFcall
-                    | OpCode::CallUserFuncArray
-                    | OpCode::InitUserCall
-                    | OpCode::EnsureFccClassLoaded
+                OpCode::DoFcall | OpCode::CallUserFuncArray | OpCode::InitUserCall
             ) {
-                let callback_string = if instruction.opcode == OpCode::EnsureFccClassLoaded {
-                    cache.fcc_loaded_class_name()
-                } else {
-                    cache.callback_string()
-                };
-                if !callback_string.is_null() {
-                    unsafe { Value::release_cached_string(callback_string) };
-                }
+                cache.callback_string()
+            } else if instruction.opcode == OpCode::EnsureFccClassLoaded {
+                cache.fcc_loaded_class_name()
+            } else if (instruction.opcode == OpCode::FetchObjR
+                || (instruction.opcode == OpCode::BindObjPropRef
+                    && instruction._pad & OBJ_PROP_FUNC_ARG != 0))
+                && instruction.op2_type != OpType::Const
+                && cache.class_id != 0
+                && cache.property_flags() != 0
+            {
+                cache.declared_property_name()
+            } else {
+                std::ptr::null()
+            };
+            if !retained_string.is_null() {
+                unsafe { Value::release_cached_string(retained_string) };
             }
         }
     }
@@ -3820,6 +3825,43 @@ fn build_object_array_function_plan(
             OpCode::FetchObjR => {
                 if instruction.op2_type != OpType::Const
                     || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+                    || op_array
+                        .literals
+                        .get(instruction.op2 as usize)
+                        .and_then(Value::as_str)
+                        .is_none()
+                {
+                    return None;
+                }
+                let object = match object_array_source(
+                    function,
+                    &aliases,
+                    &initialized_long,
+                    instruction.op1_type,
+                    instruction.op1,
+                )? {
+                    ObjectArraySource::Receiver => ObjectLongObjectSource::Receiver,
+                    ObjectArraySource::Argument(argument) => {
+                        ObjectLongObjectSource::Argument(argument)
+                    }
+                    _ => return None,
+                };
+                aliases[instruction.result as usize] = Some(ObjectArraySource::Property {
+                    object,
+                    cache_ip: ip as u16,
+                });
+                initialized_long[instruction.result as usize] = false;
+            }
+            OpCode::BindObjPropRef if instruction._pad & OBJ_PROP_FUNC_ARG != 0 => {
+                // Runtime-resolved property arguments use a CV so the
+                // canonical path can preserve an l-value when the eventual
+                // callee requires a reference. This read-only plan already
+                // rejects such callees at activation through `ref_args != 0`,
+                // so the by-value case may retain the same virtual property
+                // source without materializing the compiler CV.
+                if pending_call.is_none()
+                    || instruction.op2_type != OpType::Const
+                    || instruction.result_type != OpType::Cv
                     || op_array
                         .literals
                         .get(instruction.op2 as usize)

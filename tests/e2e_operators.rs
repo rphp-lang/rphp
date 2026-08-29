@@ -1013,6 +1013,38 @@ echo 'static-held-state:', OverflowBox::$staticNarrow, ':', $staticReference, "\
 }
 
 #[test]
+fn typed_reference_compound_and_array_writes_commit_only_after_validation() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ConstrainedCompoundTarget { public int $number = 21; }
+$target = new ConstrainedCompoundTarget;
+$alias =& $target->number;
+try { $alias .= "e50"; } catch (TypeError $error) { echo "alias:", $error->getMessage(), "\n"; }
+var_dump($target->number);
+$holder = new stdClass;
+$holder->slot =& $alias;
+try { $holder->slot .= "e50"; } catch (TypeError $error) { echo "property:", $error->getMessage(), "\n"; }
+var_dump($target->number);
+$array = [&$alias];
+try { $array[0] .= "e50"; } catch (TypeError $error) { echo "array:", $error->getMessage(), "\n"; }
+var_dump($target->number);
+$copy = $array;
+try { $copy[0] = new stdClass; } catch (TypeError $error) { echo "copy:", $error->getMessage(), "\n"; }
+var_dump($target->number, $array[0], $copy[0]);
+$target->number = PHP_INT_MAX;
+try { $array[0]++; } catch (TypeError $error) { echo "overflow:", $error->getMessage(), "\n"; }
+var_dump($target->number);
+$target->number = PHP_INT_MIN;
+try { --$copy[0]; } catch (TypeError $error) { echo "underflow:", $error->getMessage(), "\n"; }
+var_dump($target->number, $array[0], $copy[0]);
+"#
+        ),
+        "alias:Cannot assign string to reference held by property ConstrainedCompoundTarget::$number of type int\nint(21)\nproperty:Cannot assign string to reference held by property ConstrainedCompoundTarget::$number of type int\nint(21)\narray:Cannot assign string to reference held by property ConstrainedCompoundTarget::$number of type int\nint(21)\ncopy:Cannot assign stdClass to reference held by property ConstrainedCompoundTarget::$number of type int\nint(21)\nint(21)\nint(21)\noverflow:Cannot increment a reference held by property ConstrainedCompoundTarget::$number of type int past its maximal value\nint(9223372036854775807)\nunderflow:Cannot decrement a reference held by property ConstrainedCompoundTarget::$number of type int past its minimal value\nint(-9223372036854775808)\nint(-9223372036854775808)\nint(-9223372036854775808)\n"
+    );
+}
+
+#[test]
 fn test_e2e_array_append_assignments_chain_and_produce_the_assigned_value() {
     assert_eq!(
         run_php(

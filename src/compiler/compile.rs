@@ -67,11 +67,12 @@ use crate::vm::instruction::{
     ARRAY_ELEMENT_FINAL_IMMUTABLE_LITERAL, ARRAY_ELEMENT_IMMUTABLE_CONTAINER,
     ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_DYNAMIC_CALL_CLASS, ARRAY_INIT_HASH_HINT,
     ARRAY_INIT_IMMUTABLE_LITERAL, ARRAY_UNPACK_CONSTANT_EXPRESSION, ASSIGN_CV_MOVE_SOURCE,
-    ASSIGN_CV_REBIND, ASSIGN_DIM_ERROR_SUPPRESS, ASSIGN_DIM_KEY_ALREADY_NORMALIZED,
-    ASSIGN_DIM_REFERENCE, ASSIGN_DIM_RESULT_VALUE, ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_CLONE_WITH,
+    ASSIGN_CV_REBIND, ASSIGN_DIM_ERROR_SUPPRESS, ASSIGN_DIM_INCDEC_DECREMENT,
+    ASSIGN_DIM_INCDEC_INCREMENT, ASSIGN_DIM_KEY_ALREADY_NORMALIZED, ASSIGN_DIM_REFERENCE,
+    ASSIGN_DIM_RESULT_VALUE, ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_CLONE_WITH,
     ASSIGN_OBJ_ERROR_SUPPRESS, ASSIGN_OBJ_MODIFY, ASSIGN_PROP_MOVE_SOURCE,
-    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS,
-    CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_RETURN_EXPLICITLY_IGNORED,
+    ASSIGN_PROP_RESULT_VALUE, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE,
+    CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_RETURN_EXPLICITLY_IGNORED,
     CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME,
     CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_CALL_OWNER, CLASS_CONST_DYNAMIC_NAME,
     CLASS_CONST_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES, EVAL_FLAG_ERROR_SUPPRESS,
@@ -82,13 +83,14 @@ use crate::vm::instruction::{
     FETCH_OBJ_CONSTANT_EXPRESSION, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY,
     FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache,
     Instruction, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
-    NEW_FLAG_UNPACKED_ARGUMENTS, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OpType,
-    PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
-    REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, RELEASE_TEMPS_NESTED_OBJECTS,
-    RELEASE_TEMPS_ON_RETURN, SEND_FLAG_GLOBALS, SEND_FLAG_INDIRECT_TEMPORARY,
-    SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME,
-    STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND,
-    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    NEW_FLAG_UNPACKED_ARGUMENTS, OBJ_PROP_FUNC_ARG, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND,
+    OBJ_PROP_TEMPORARY_RECEIVER, OpType, PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT,
+    REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE,
+    RELEASE_TEMPS_NESTED_OBJECTS, RELEASE_TEMPS_ON_RETURN, SEND_FLAG_GLOBALS,
+    SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_PREPARED_PROPERTY_ARGUMENT,
+    SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
+    STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH,
+    STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -4079,6 +4081,24 @@ impl Compiler {
             PROPERTY_INCDEC_INCREMENT
         } else {
             PROPERTY_INCDEC_DECREMENT
+        };
+    }
+
+    fn mark_array_incdec_writeback(&mut self, value: u16, value_type: OpType, increment: bool) {
+        let writeback = self
+            .instructions
+            .iter_mut()
+            .rev()
+            .find(|instruction| {
+                instruction.opcode == OpCode::AssignDim
+                    && instruction.result == value
+                    && instruction.result_type == value_type
+            })
+            .expect("array inc/dec emits a terminal dimension writeback");
+        writeback._pad |= if increment {
+            ASSIGN_DIM_INCDEC_INCREMENT
+        } else {
+            ASSIGN_DIM_INCDEC_DECREMENT
         };
     }
 
@@ -9957,6 +9977,7 @@ impl Compiler {
                     ForeachArrayWriteback::ObjectProperty { .. }
                         | ForeachArrayWriteback::StaticProperty { .. }
                 );
+                let array_writeback = matches!(&writeback, ForeachArrayWriteback::Array(_));
                 let original = self.alloc_tmp();
                 let mut preserve = Instruction::new(OpCode::AssignCv);
                 preserve.op1 = original;
@@ -9982,6 +10003,12 @@ impl Compiler {
                         expr,
                         Expr::PostIncTarget(_)
                     ));
+                } else if array_writeback {
+                    self.mark_array_incdec_writeback(
+                        updated,
+                        OpType::Tmp,
+                        matches!(expr, Expr::PostIncTarget(_)),
+                    );
                 }
                 (original, OpType::Tmp)
             }
@@ -10048,6 +10075,7 @@ impl Compiler {
                     ForeachArrayWriteback::ObjectProperty { .. }
                         | ForeachArrayWriteback::StaticProperty { .. }
                 );
+                let array_writeback = matches!(&writeback, ForeachArrayWriteback::Array(_));
                 let result = self.alloc_tmp();
                 let mut operation = Instruction::new(if matches!(expr, Expr::PreIncTarget(_)) {
                     OpCode::PreInc
@@ -10062,6 +10090,12 @@ impl Compiler {
                 self.emit_foreach_reference_source_writeback(writeback, result, OpType::Tmp);
                 if property_writeback {
                     self.mark_last_property_incdec_writeback(matches!(expr, Expr::PreIncTarget(_)));
+                } else if array_writeback {
+                    self.mark_array_incdec_writeback(
+                        result,
+                        OpType::Tmp,
+                        matches!(expr, Expr::PreIncTarget(_)),
+                    );
                 }
                 (result, OpType::Tmp)
             }
@@ -13538,19 +13572,34 @@ impl Compiler {
                             ) || matches!(
                                 expr,
                                 Expr::PropertyAccess {
-                                    object,
                                     nullsafe: false,
                                     ..
                                 } | Expr::DynamicPropertyAccess {
-                                    object,
                                     nullsafe: false,
                                     ..
-                                } if matches!(object.as_ref(), Expr::Variable { name, .. } if name == "this")
+                                }
                             ))) =>
                 {
-                    let source = self
-                        .compile_array_element_reference_source(expr)
-                        .expect("matched mutable call argument must compile as a reference source");
+                    let runtime_property_argument = use_var_ex
+                        && matches!(
+                            expr,
+                            Expr::PropertyAccess {
+                                nullsafe: false,
+                                ..
+                            } | Expr::DynamicPropertyAccess {
+                                nullsafe: false,
+                                ..
+                            }
+                        );
+                    let source = if runtime_property_argument {
+                        self.compile_runtime_call_property_argument(expr, i).expect(
+                            "matched runtime property argument must compile as a reference source",
+                        )
+                    } else {
+                        self.compile_array_element_reference_source(expr).expect(
+                            "matched mutable call argument must compile as a reference source",
+                        )
+                    };
                     let mut send = Instruction::new(if use_var_ex {
                         OpCode::SendVarEx
                     } else {
@@ -13561,6 +13610,9 @@ impl Compiler {
                     send.op2 = (i as u32 + cv_offset) as u16;
                     if set_extended_value {
                         send.extended_value = i as u32;
+                    }
+                    if runtime_property_argument {
+                        send._pad |= SEND_FLAG_PREPARED_PROPERTY_ARGUMENT;
                     }
                     self.instructions.push(send);
                 }

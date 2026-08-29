@@ -1685,11 +1685,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             let instruction_index = (opline_ptr as usize
                                 - op_array.instructions.as_ptr() as usize)
                                 / std::mem::size_of::<Instruction>();
-                            match throw_illegal_offset_type(
+                            match throw_operator_error(
                                 eg,
                                 frame,
                                 op_array,
                                 instruction_index,
+                                "TypeError",
                                 &message,
                             )? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
@@ -4649,10 +4650,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let call = unsafe { (*frame).call };
                 debug_assert!(!call.is_null());
                 let param_idx = opline.extended_value;
-                let is_ref = pending_call_argument_is_ref(
-                    frame,
-                    RuntimeCallArgument::Position(param_idx),
-                );
+                let is_ref = if opline._pad & SEND_FLAG_PREPARED_PROPERTY_ARGUMENT != 0 {
+                    operand_is_reference(frame, opline.op1, opline.op1_type)
+                } else {
+                    pending_call_argument_is_ref(
+                        frame,
+                        RuntimeCallArgument::Position(param_idx),
+                    )
+                };
 
                 let yield_snapshot =
                     opline._pad & crate::vm::instruction::SEND_FLAG_YIELD_SNAPSHOT != 0;
@@ -6955,6 +6960,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 );
                 // Auto-create array if variable is null/undef
                 if arr.value_type() == ValueType::Null || arr.value_type() == ValueType::Undef {
+                    let constraints = operand_reference_property_constraints(
+                        frame,
+                        opline.op1,
+                        opline.op1_type,
+                    );
+                    if let Some(message) = reference_array_auto_init_error(&constraints, eg) {
+                        throw_operator!("TypeError", &message);
+                    }
                     unsafe { slot_set(arr_ptr, Value::array(PhpArray::new())) };
                     let arr = unsafe { &mut *arr_ptr };
                     arr.as_array_mut().unwrap().set(key, cloned_val);
@@ -6968,6 +6981,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             // to the wrong cell on the next foreach iteration.
                             *element = cloned_val;
                         } else {
+                            if let Some(overflow) =
+                                PropertyIncDecOverflow::from_dim_assignment_flags(opline._pad)
+                                && let Some(message) = reference_incdec_overflow_message(
+                                    element,
+                                    element.dereferenced(),
+                                    eg,
+                                    overflow,
+                                )
+                            {
+                                throw_operator!("TypeError", &message);
+                            }
                             cloned_val = prepare_constrained_write!(
                                 element.reference_property_constraints(),
                                 cloned_val
@@ -7178,6 +7202,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     // Auto-create array if variable is null/undef
                     if arr.value_type() == ValueType::Null || arr.value_type() == ValueType::Undef {
+                        let constraints = operand_reference_property_constraints(
+                            frame,
+                            opline.op1,
+                            opline.op1_type,
+                        );
+                        if let Some(message) = reference_array_auto_init_error(&constraints, eg) {
+                            throw_operator!("TypeError", &message);
+                        }
                         slot_set(arr_ptr, Value::array(PhpArray::new()));
                     }
                     let array_can_push = (&*arr_ptr)
@@ -7608,7 +7640,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::FetchObjR => {
-                match try_cached_fetch_obj_r(eg, frame, op_array, opline) {
+                let cached = if opline.op2_type == OpType::Const {
+                    try_cached_fetch_obj_r::<false, false>(eg, frame, op_array, opline)
+                } else {
+                    try_cached_fetch_obj_r::<true, false>(eg, frame, op_array, opline)
+                };
+                match cached {
                     CachedFetchObjResult::Miss => {
                         match op_fetch_obj_r_slow(eg, frame, op_array, opline)? {
                             ColdResult::NewFrame(nf, no) => {
@@ -7658,7 +7695,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             },
 
             OpCode::BindObjPropRef => {
-                match op_bind_obj_prop_ref(eg, frame, op_array, opline)? {
+                let result = if opline._pad & OBJ_PROP_FUNC_ARG == 0 {
+                    op_bind_obj_prop_ref(eg, frame, op_array, opline)?
+                } else {
+                    op_runtime_call_property_argument(eg, frame, op_array, opline)?
+                };
+                match result {
                     ColdResult::NewFrame(new_frame, new_op_array) => {
                         frame = new_frame;
                         op_array = new_op_array;
@@ -7797,6 +7839,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 (&*property).reference_property_constraints(),
                                 cloned
                             );
+                            publish_property_assignment_result(frame, opline, &cloned);
                             let destructor = prepare_replaced_value_destructor(eg, &*property);
                             let destructor_ran = destructor.is_some();
                             assignment_slot_set(&mut *property, cloned);
@@ -7892,6 +7935,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                         cloned = prepare_constrained_write!(
                                             (&*property).reference_property_constraints(),
                                             cloned
+                                        );
+                                        publish_property_assignment_result(
+                                            frame, opline, &cloned,
                                         );
                                         assignment_slot_set(&mut *property, cloned);
                                     };
