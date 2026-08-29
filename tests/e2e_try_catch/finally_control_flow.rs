@@ -194,6 +194,121 @@ echo outer();
 }
 
 #[test]
+fn one_return_completion_traverses_every_enclosing_finally() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function finishFromInnerCatch(): string {
+    try {
+        try {
+            echo "try>";
+            throw new Exception("recover");
+        } catch (Exception $error) {
+            echo "catch>";
+            return "result";
+        } finally {
+            echo "inner>";
+        }
+    } finally {
+        echo "outer>";
+    }
+}
+echo finishFromInnerCatch();
+"#,
+        ),
+        "try>catch>inner>outer>result"
+    );
+}
+
+#[test]
+fn throw_from_catch_runs_its_own_finally_before_outer_handling() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+try {
+    try {
+        throw new Exception("first");
+    } catch (Exception $error) {
+        echo "catch>";
+        throw new RuntimeException("second");
+    } finally {
+        echo "inner-finally>";
+    }
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), ">";
+} finally {
+    echo "outer-finally";
+}
+"#,
+        ),
+        "catch>inner-finally>RuntimeException:second>outer-finally"
+    );
+}
+
+#[test]
+fn exception_from_later_finally_cancels_only_the_deferred_return() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function chooseCompletion(): int {
+    try {
+        throw new Exception("original");
+    } finally {
+        try {
+            try {
+                return 9;
+            } finally {
+                throw new RuntimeException("replacement");
+            }
+        } catch (RuntimeException $error) {
+            echo "caught-replacement>";
+        }
+    }
+}
+
+try {
+    echo chooseCompletion();
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage();
+}
+"#,
+        ),
+        "caught-replacement>Exception:original"
+    );
+}
+
+#[test]
+fn caught_nested_finally_exception_preserves_the_outer_pending_exception() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function preserveOuter(): void {
+    try {
+        throw new Exception("outer");
+    } finally {
+        try {
+            try {
+                throw new RuntimeException("nested");
+            } finally {
+                echo "nested-finally>";
+            }
+        } catch (RuntimeException $error) {
+            echo "caught-nested>";
+        }
+    }
+}
+try {
+    preserveOuter();
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage();
+}
+"#,
+        ),
+        "nested-finally>caught-nested>Exception:outer"
+    );
+}
+
+#[test]
 fn test_return_in_finally_suppresses_exception() {
     // PHP semantics: return inside finally suppresses any pending exception.
     assert_eq!(

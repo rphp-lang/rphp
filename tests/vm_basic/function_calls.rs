@@ -57,6 +57,8 @@ fn test_internal_function_call() {
         instructions: vec![init, send, do_fcall, echo, ret],
         literals: vec![Value::string("my_double"), Value::long(21), Value::null()],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],
@@ -109,6 +111,8 @@ fn test_user_function_call() {
         instructions: vec![add, fn_ret],
         literals: vec![Value::long(1)],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],
@@ -164,6 +168,8 @@ fn test_user_function_call() {
         instructions: vec![init, send, do_fcall, echo, ret],
         literals: vec![Value::string("add_one"), Value::long(41), Value::null()],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],
@@ -211,6 +217,8 @@ fn test_undefined_function_error() {
         instructions: vec![init, do_fcall, ret],
         literals: vec![Value::string("nonexistent"), Value::null()],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],
@@ -282,6 +290,8 @@ fn test_nested_calls() {
             instructions: vec![add, fn_ret],
             literals: vec![Value::long(1)],
             try_entries: vec![],
+
+            has_finally: false,
             strict_types: false,
             is_generator: false,
             global_vars: vec![],
@@ -366,6 +376,8 @@ fn test_nested_calls() {
             Value::null(),
         ],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],

@@ -796,12 +796,18 @@ fn promote_foreach_property_reference(property: &mut Value) -> Value {
 fn set_foreach_iteration_state(
     frame: *mut ExecuteData,
     opline: &Instruction,
-    iterable: Value,
+    iterable: Option<Value>,
     position: i64,
 ) {
-    // SAFETY: ForeachInit's result and position operands are compiler-allocated
-    // live TMP slots in this frame and neither pointer escapes this helper.
+    // SAFETY: ForeachInit's source, result, and position operands are
+    // compiler-allocated live TMP slots in this frame and no pointer escapes
+    // this helper. `None` selects the source's unique-consumer move form.
     unsafe {
+        let iterable = iterable.unwrap_or_else(|| {
+            debug_assert!(matches!(opline.op1_type, OpType::Tmp | OpType::Var));
+            let source = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+            frame_tmp_take!(frame, source)
+        });
         let result = (*frame).get_op_mut(opline.result as u32, opline.result_type);
         frame_result_set(frame, result, opline.result_type, iterable);
         let cursor = (*frame).get_op_mut(opline.extended_value, OpType::Tmp);
@@ -1265,7 +1271,7 @@ fn op_foreach_init<'a>(
         }
         // Position 0 means the generator was already started and must not be
         // resumed again before its first value is consumed.
-        set_foreach_iteration_state(frame, opline, arr_val.clone(), 0);
+        set_foreach_iteration_state(frame, opline, Some(arr_val.clone()), 0);
     } else {
         if uses_user_iterator_protocol(arr_val, eg) {
             if by_reference && !eg.weak_iterator_allows_references(arr_val) {
@@ -1296,7 +1302,7 @@ fn op_foreach_init<'a>(
             // Negative cursor values identify the user Iterator protocol. Each
             // successful fetch decrements it, retaining first-vs-next state
             // without a class lookup in the hot ForeachNext path.
-            set_foreach_iteration_state(frame, opline, arr_val.clone(), -1);
+            set_foreach_iteration_state(frame, opline, Some(arr_val.clone()), -1);
             return Ok(ColdResult::Done);
         }
         let iterator_values = arr_val.as_object().and_then(|object| {
@@ -1361,8 +1367,8 @@ fn op_foreach_init<'a>(
             }
         };
         if is_empty {
-            if resolved_iterable.is_some()
-                && matches!(opline.op1_type, OpType::Tmp | OpType::Var)
+            if matches!(opline.op1_type, OpType::Tmp | OpType::Var)
+                && (resolved_iterable.is_some() || raw_source.value_type() == ValueType::Array)
                 && let Some(control) = release_temporary_foreach_source(eg, frame, opline)?
             {
                 return Ok(control);
@@ -1372,16 +1378,29 @@ fn op_foreach_init<'a>(
             unsafe { (*frame).opline = base_ptr.add(target) };
             return Ok(ColdResult::Continue);
         }
-        // Copy array to result TMP
+        // A direct temporary array has exactly one compiler consumer. Move it
+        // into the iteration state instead of cloning and immediately
+        // releasing the source slot; CVs, references, objects, and resolved
+        // Traversables retain their existing snapshot semantics.
+        let temporary_array_source = matches!(opline.op1_type, OpType::Tmp | OpType::Var)
+            && raw_source.value_type() == ValueType::Array
+            && resolved_iterable.is_none()
+            && iterator_values.is_none()
+            && object_values.is_none();
         let cloned = if let Some(live_source_alias) = live_source_alias.as_ref()
             && resolved_iterable.is_none()
             && iterator_values.is_none()
         {
             clone_foreach_value::<true>(live_source_alias)
+        } else if temporary_array_source {
+            // The helper consumes the unique compiler TMP/VAR and clears its
+            // ownership bitmap before publishing the iteration state.
+            set_foreach_iteration_state(frame, opline, None, 0);
+            return Ok(ColdResult::Done);
         } else {
             iterable.clone()
         };
-        set_foreach_iteration_state(frame, opline, cloned, 0);
+        set_foreach_iteration_state(frame, opline, Some(cloned), 0);
         if resolved_iterable.is_some()
             && matches!(opline.op1_type, OpType::Tmp | OpType::Var)
             && let Some(control) = release_temporary_foreach_source(eg, frame, opline)?

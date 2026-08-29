@@ -2,7 +2,8 @@ use std::rc::Rc;
 
 use super::{
     ArrayEntryKey, ArrayKey, ArrayStorage, IntIndexValue, NativeLongArraySetContext, PhpArray,
-    Value, native_indexed_long_lookup, native_long_array_set, native_long_array_set_deferred,
+    PhpObject, Value, native_indexed_long_lookup, native_long_array_set,
+    native_long_array_set_deferred,
 };
 
 #[test]
@@ -32,6 +33,28 @@ fn pristine_empty_marker_shares_cursor_storage_and_clears_before_mutation() {
     assert_eq!(array.cursor_key(), Some(ArrayKey::Int(0)));
     assert_eq!(array.pop().and_then(|value| value.as_long()), Some(7));
     assert!(!array.is_pristine_empty());
+}
+
+#[test]
+fn nested_release_marker_is_compact_monotonic_and_clone_stable() {
+    let mut scalar = PhpArray::new();
+    scalar.push(Value::long(1));
+    scalar.push(Value::string("two"));
+    let mut nested_scalar = PhpArray::new();
+    nested_scalar.push(Value::bool(true));
+    scalar.push(Value::array(nested_scalar));
+    assert!(!scalar.may_require_nested_release());
+    assert!(!scalar.clone().may_require_nested_release());
+
+    scalar.push(Value::object(PhpObject::std_class(Default::default())));
+    assert!(scalar.may_require_nested_release());
+    assert!(scalar.clone().may_require_nested_release());
+    assert!(scalar.project_values().may_require_nested_release());
+
+    let mut exposed = PhpArray::new();
+    exposed.push(Value::long(1));
+    *exposed.get_int_mut(0).unwrap() = Value::long(2);
+    assert!(exposed.may_require_nested_release());
 }
 
 #[test]

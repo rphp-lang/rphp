@@ -65,11 +65,11 @@ use crate::value::{
 use crate::vm::instruction::{
     ARITHMETIC_COMPOUND_ASSIGN, ARRAY_ELEMENT_DEFER_NONREFERENCEABLE_NOTICE,
     ARRAY_ELEMENT_FINAL_IMMUTABLE_LITERAL, ARRAY_ELEMENT_IMMUTABLE_CONTAINER,
-    ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_DYNAMIC_CALL_CLASS, ARRAY_INIT_HASH_HINT,
-    ARRAY_INIT_IMMUTABLE_LITERAL, ARRAY_UNPACK_CONSTANT_EXPRESSION, ASSIGN_CV_MOVE_SOURCE,
-    ASSIGN_CV_REBIND, ASSIGN_DIM_ERROR_SUPPRESS, ASSIGN_DIM_INCDEC_DECREMENT,
-    ASSIGN_DIM_INCDEC_INCREMENT, ASSIGN_DIM_KEY_ALREADY_NORMALIZED, ASSIGN_DIM_REFERENCE,
-    ASSIGN_DIM_RESULT_VALUE, ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_CLONE_WITH,
+    ARRAY_ELEMENT_MOVE_SOURCE, ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_DYNAMIC_CALL_CLASS,
+    ARRAY_INIT_HASH_HINT, ARRAY_INIT_IMMUTABLE_LITERAL, ARRAY_UNPACK_CONSTANT_EXPRESSION,
+    ASSIGN_CV_MOVE_SOURCE, ASSIGN_CV_REBIND, ASSIGN_DIM_ERROR_SUPPRESS,
+    ASSIGN_DIM_INCDEC_DECREMENT, ASSIGN_DIM_INCDEC_INCREMENT, ASSIGN_DIM_KEY_ALREADY_NORMALIZED,
+    ASSIGN_DIM_REFERENCE, ASSIGN_DIM_RESULT_VALUE, ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_CLONE_WITH,
     ASSIGN_OBJ_ERROR_SUPPRESS, ASSIGN_OBJ_MODIFY, ASSIGN_PROP_MOVE_SOURCE,
     ASSIGN_PROP_RESULT_VALUE, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE,
     CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_RETURN_EXPLICITLY_IGNORED,
@@ -86,11 +86,11 @@ use crate::vm::instruction::{
     NEW_FLAG_UNPACKED_ARGUMENTS, OBJ_PROP_FUNC_ARG, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND,
     OBJ_PROP_TEMPORARY_RECEIVER, OpType, PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT,
     REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE,
-    RELEASE_TEMPS_NESTED_OBJECTS, RELEASE_TEMPS_ON_RETURN, SEND_FLAG_GLOBALS,
-    SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_PREPARED_PROPERTY_ARGUMENT,
-    SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
-    STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH,
-    STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    RELEASE_TEMPS_NESTED_OBJECTS, RELEASE_TEMPS_ON_RETURN, RELEASE_TEMPS_RETURN_COMPLETION_SITE,
+    SEND_FLAG_GLOBALS, SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE,
+    SEND_FLAG_PREPARED_PROPERTY_ARGUMENT, SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME,
+    STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND,
+    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -3378,17 +3378,33 @@ impl ClassDef {
 
 /// Tracks loop context for break/continue patching
 struct LoopContext {
+    /// Structural region identifying this loop/switch in the goto stack.
+    /// Break/continue validation uses it to reject only transfers that really
+    /// leave a surrounding finally block.
+    goto_region_id: u32,
     /// Instruction index to Jmp back to (loop start / update section).
     /// None if not yet known (do..while, for — set after body).
     continue_target: Option<usize>,
     /// Indices of Jmp instructions that need patching to after-loop
     break_patches: Vec<usize>,
+    /// Multi-level breaks first leave this foreach through a private cleanup
+    /// trampoline, then continue toward the requested outer loop.
+    outward_break_patches: Vec<(usize, usize)>,
     /// Indices of Jmp instructions that need patching to continue target
     continue_patches: Vec<usize>,
     /// True if this is a switch context (continue acts as break)
     is_switch: bool,
     /// Compiler-owned by-value foreach source retained until a return commits.
     return_cleanup_temp: Option<u16>,
+    /// Foreach iteration state whose arrays may own nested objects.  Unlike a
+    /// direct object source this boundary must traverse aggregate children.
+    return_cleanup_nested_temp: Option<u16>,
+    /// Iteration-state temporary that a goto leaving this loop must retire
+    /// before it enters any crossed finally block.
+    abrupt_cleanup_temp: Option<u16>,
+    /// Temporary source expression released at the lexical loop exit.  Object
+    /// receivers retain this owner separately from their iteration state.
+    exit_cleanup_temp: Option<u16>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3413,7 +3429,15 @@ struct GotoPatch {
     instruction: usize,
     label: String,
     regions: Vec<GotoRegion>,
+    cleanups: Vec<GotoCleanupPatch>,
     line: usize,
+}
+
+#[derive(Clone, Copy)]
+struct GotoCleanupPatch {
+    instruction: usize,
+    loop_region_id: u32,
+    temp: u16,
 }
 
 #[derive(Clone, Copy)]
@@ -4210,6 +4234,10 @@ impl Compiler {
             source_lines: factory.materialize_source_lines_with_declaration(declaration_line),
             instructions: factory.instructions,
             literals: factory.literals,
+            has_finally: factory
+                .try_entries
+                .iter()
+                .any(|entry| entry.finally_start != u32::MAX),
             try_entries: factory.try_entries,
             strict_types: self.strict_types,
             is_generator: false,
@@ -6026,6 +6054,10 @@ impl Compiler {
                 instructions: self.instructions,
                 source_lines,
                 literals: self.literals,
+                has_finally: self
+                    .try_entries
+                    .iter()
+                    .any(|entry| entry.finally_start != u32::MAX),
                 try_entries: self.try_entries,
                 strict_types: self.strict_types,
                 is_generator: false,
@@ -10853,6 +10885,12 @@ impl Compiler {
                     if elem.by_reference {
                         add._pad |= ARRAY_ELEMENT_REFERENCE;
                     }
+                    if !elem.unpack
+                        && !elem.by_reference
+                        && matches!(val_type, OpType::Tmp | OpType::Var)
+                    {
+                        add._pad |= ARRAY_ELEMENT_MOVE_SOURCE;
+                    }
                     if immutable_literal && element_index + 1 == elements.len() {
                         add._pad |= ARRAY_ELEMENT_FINAL_IMMUTABLE_LITERAL;
                     }
@@ -11488,6 +11526,10 @@ impl Compiler {
                     source_lines: func_compiler.materialize_source_lines_with_declaration(*line),
                     instructions: func_compiler.instructions,
                     literals: func_compiler.literals,
+                    has_finally: func_compiler
+                        .try_entries
+                        .iter()
+                        .any(|entry| entry.finally_start != u32::MAX),
                     try_entries: func_compiler.try_entries,
                     strict_types: self.strict_types,
                     is_generator: func_compiler.contains_yield,
@@ -13263,7 +13305,7 @@ impl Compiler {
         cv
     }
 
-    fn enter_goto_region(&mut self, kind: GotoRegionKind) {
+    fn enter_goto_region(&mut self, kind: GotoRegionKind) -> u32 {
         let region = GotoRegion {
             id: self.next_goto_region_id,
             kind,
@@ -13273,6 +13315,47 @@ impl Compiler {
             .checked_add(1)
             .expect("too many structural goto regions");
         self.goto_regions.push(region);
+        region.id
+    }
+
+    fn loop_control_leaves_finally(&self, target_loop: usize, is_continue: bool) -> bool {
+        let context = &self.loop_stack[target_loop];
+        let Some(region_index) = self
+            .goto_regions
+            .iter()
+            .position(|region| region.id == context.goto_region_id)
+        else {
+            return false;
+        };
+        let retained_regions = if is_continue && !context.is_switch {
+            region_index + 1
+        } else {
+            region_index
+        };
+        self.goto_regions[retained_regions..]
+            .iter()
+            .any(|region| region.kind == GotoRegionKind::Finally)
+    }
+
+    fn emit_foreach_exit_cleanup(&mut self, iteration_temp: u16, source_temp: Option<u16>) {
+        let mut release_iterable = Instruction::new(OpCode::ReleaseTemps);
+        release_iterable.op1 = iteration_temp;
+        release_iterable.op1_type = OpType::Tmp;
+        release_iterable.op2 = iteration_temp + 1;
+        release_iterable.op2_type = OpType::Tmp;
+        release_iterable._pad |=
+            RELEASE_TEMPS_NESTED_OBJECTS | RELEASE_TEMPS_RETURN_COMPLETION_SITE;
+        self.instructions.push(release_iterable);
+
+        if let Some(source_temp) = source_temp {
+            let mut release_source = Instruction::new(OpCode::ReleaseTemps);
+            release_source.op1 = source_temp;
+            release_source.op1_type = OpType::Tmp;
+            release_source.op2 = source_temp + 1;
+            release_source.op2_type = OpType::Tmp;
+            release_source._pad |= RELEASE_TEMPS_RETURN_COMPLETION_SITE;
+            self.instructions.push(release_source);
+        }
     }
 
     fn leave_goto_region(&mut self) {
@@ -13338,6 +13421,7 @@ impl Compiler {
                 let patch = self.goto_patches.swap_remove(index);
                 self.validate_goto_regions(&patch.regions, &target_regions, patch.line)?;
                 self.instructions[patch.instruction].op1 = target;
+                self.patch_goto_cleanups(&patch.cleanups, &target_regions);
                 if Self::goto_leaves_finally_region(&patch.regions, &target_regions) {
                     self.instructions[patch.instruction]._pad |=
                         crate::vm::instruction::JMP_FLAG_TARGET_OUTSIDE_TRY;
@@ -13357,11 +13441,15 @@ impl Compiler {
     }
 
     fn emit_goto(&mut self, name: &str, line: usize) -> Result<(), String> {
+        let cleanups = self.emit_goto_cleanup_placeholders();
         let mut instruction = Instruction::new(OpCode::Jmp);
         if let Some(target) = self.labels.get(name) {
-            self.validate_goto_regions(&self.goto_regions, &target.regions, line)?;
-            instruction.op1 = target.instruction;
-            if Self::goto_leaves_finally_region(&self.goto_regions, &target.regions) {
+            let target_instruction = target.instruction;
+            let target_regions = target.regions.clone();
+            self.validate_goto_regions(&self.goto_regions, &target_regions, line)?;
+            self.patch_goto_cleanups(&cleanups, &target_regions);
+            instruction.op1 = target_instruction;
+            if Self::goto_leaves_finally_region(&self.goto_regions, &target_regions) {
                 instruction._pad |= crate::vm::instruction::JMP_FLAG_TARGET_OUTSIDE_TRY;
             }
         } else {
@@ -13369,11 +13457,59 @@ impl Compiler {
                 instruction: self.instructions.len(),
                 label: name.to_string(),
                 regions: self.goto_regions.clone(),
+                cleanups,
                 line,
             });
         }
         self.instructions.push(instruction);
         Ok(())
+    }
+
+    fn emit_goto_cleanup_placeholders(&mut self) -> Vec<GotoCleanupPatch> {
+        let candidates = self
+            .loop_stack
+            .iter()
+            .rev()
+            .filter_map(|context| {
+                context
+                    .abrupt_cleanup_temp
+                    .map(|temp| (context.goto_region_id, temp))
+            })
+            .collect::<Vec<_>>();
+        candidates
+            .into_iter()
+            .map(|(loop_region_id, temp)| {
+                let instruction = self.instructions.len();
+                let mut release = Instruction::new(OpCode::ReleaseTemps);
+                release.op1_type = OpType::Tmp;
+                release.op2_type = OpType::Tmp;
+                release._pad |= RELEASE_TEMPS_NESTED_OBJECTS;
+                self.instructions.push(release);
+                GotoCleanupPatch {
+                    instruction,
+                    loop_region_id,
+                    temp,
+                }
+            })
+            .collect()
+    }
+
+    fn patch_goto_cleanups(
+        &mut self,
+        cleanups: &[GotoCleanupPatch],
+        target_regions: &[GotoRegion],
+    ) {
+        for cleanup in cleanups {
+            if target_regions
+                .iter()
+                .any(|region| region.id == cleanup.loop_region_id)
+            {
+                continue;
+            }
+            let instruction = &mut self.instructions[cleanup.instruction];
+            instruction.op1 = cleanup.temp;
+            instruction.op2 = cleanup.temp + 1;
+        }
     }
 
     fn finalize_gotos(&mut self) -> Result<(), String> {

@@ -1894,11 +1894,18 @@ const ARRAY_UTF8_TEXT_KEYS: usize = 1usize << (usize::BITS - 4);
 // across immutable default clones, so retaining completion in the spare cursor
 // metadata avoids turning every later property/static read into an O(n) scan.
 const ARRAY_DEFERRED_OBJECT_HANDLES_PUBLISHED: usize = 1usize << (usize::BITS - 5);
+// Statement cleanup needs a complete alias-aware walk only when an array may
+// own an object, closure, reference, or another array with the same property.
+// Track that fact monotonically as values enter the array. The spare cursor
+// bit keeps the common scalar-array test O(1) without enlarging PhpArray; any
+// API exposing a mutable element conservatively sets the marker first.
+const ARRAY_NESTED_RELEASE_CANDIDATE: usize = 1usize << (usize::BITS - 6);
 const ARRAY_CURSOR_METADATA: usize = ARRAY_CURSOR_PRISTINE
     | ARRAY_INT_KEY_INITIALIZED
     | ARRAY_EXTERNAL_BYTE_KEYS
     | ARRAY_UTF8_TEXT_KEYS
-    | ARRAY_DEFERRED_OBJECT_HANDLES_PUBLISHED;
+    | ARRAY_DEFERRED_OBJECT_HANDLES_PUBLISHED
+    | ARRAY_NESTED_RELEASE_CANDIDATE;
 
 /// Fast deterministic hashing for integer-only PHP array keys.
 ///
@@ -2638,6 +2645,38 @@ impl PhpArray {
             .set(self.cursor.get() | ARRAY_DEFERRED_OBJECT_HANDLES_PUBLISHED);
     }
 
+    #[inline]
+    fn value_may_require_nested_release(value: &Value) -> bool {
+        match value.value_type() {
+            ValueType::Array => value
+                .as_array()
+                .is_none_or(PhpArray::may_require_nested_release),
+            ValueType::Object | ValueType::Reference | ValueType::Closure => true,
+            _ => false,
+        }
+    }
+
+    #[inline]
+    fn track_nested_release_value(&self, value: &Value) {
+        if self.cursor.get() & ARRAY_NESTED_RELEASE_CANDIDATE == 0
+            && Self::value_may_require_nested_release(value)
+        {
+            self.cursor
+                .set(self.cursor.get() | ARRAY_NESTED_RELEASE_CANDIDATE);
+        }
+    }
+
+    #[inline]
+    fn mark_nested_release_candidate(&self) {
+        self.cursor
+            .set(self.cursor.get() | ARRAY_NESTED_RELEASE_CANDIDATE);
+    }
+
+    #[inline]
+    pub(crate) fn may_require_nested_release(&self) -> bool {
+        self.cursor.get() & ARRAY_NESTED_RELEASE_CANDIDATE != 0
+    }
+
     pub(crate) fn normalize_utf8_text_key(&self, key: ArrayKey, source: &Value) -> ArrayKey {
         if !self.has_utf8_text_keys() || !source.is_binary_string() {
             return key;
@@ -2973,6 +3012,7 @@ impl PhpArray {
         if !self.can_push() {
             return false;
         }
+        self.track_nested_release_value(&val);
         let key = self.next_int_key;
         if key == 0 && self.cursor.get() & ARRAY_INT_KEY_INITIALIZED == 0 {
             self.cursor
@@ -3120,6 +3160,7 @@ impl PhpArray {
 
     /// Set by integer key
     pub fn set_int(&mut self, key: i64, val: Value) {
+        self.track_nested_release_value(&val);
         if self.next_int_key == 0 && self.cursor.get() & ARRAY_INT_KEY_INITIALIZED == 0 {
             self.cursor
                 .set(self.cursor.get() | ARRAY_INT_KEY_INITIALIZED);
@@ -3240,6 +3281,7 @@ impl PhpArray {
 
     /// Set by string key
     pub fn set_str(&mut self, key: &str, val: Value) {
+        self.track_nested_release_value(&val);
         // String key → always hash mode
         if matches!(&self.storage, ArrayStorage::Packed(_)) {
             self.transition_to_hash();
@@ -3291,6 +3333,7 @@ impl PhpArray {
     /// allocation. Streaming decoders use this to move parsed object keys
     /// directly into PHP array storage instead of copying their bytes.
     pub(crate) fn set_owned_str(&mut self, key: String, val: Value) {
+        self.track_nested_release_value(&val);
         if matches!(&self.storage, ArrayStorage::Packed(_)) {
             self.transition_to_hash();
         }
@@ -3363,6 +3406,7 @@ impl PhpArray {
     /// the source Value. This avoids materializing an intermediate ArrayKey and
     /// allocating a second copy of the same immutable key bytes.
     pub fn set_str_value(&mut self, key: &Value, val: Value) {
+        self.track_nested_release_value(&val);
         let key_text = key.as_str().expect("set_str_value requires a string Value");
         if matches!(&self.storage, ArrayStorage::Packed(_)) {
             self.transition_to_hash();
@@ -3498,6 +3542,7 @@ impl PhpArray {
     /// ownership. Replacing the returned entry cannot change array structure.
     #[inline(always)]
     pub(crate) fn get_int_mut(&mut self, key: i64) -> Option<&mut Value> {
+        self.mark_nested_release_candidate();
         match &mut self.storage {
             ArrayStorage::Packed(values) if key >= 0 => values.get_mut(key as usize),
             ArrayStorage::Packed(_) => None,
@@ -3818,6 +3863,7 @@ impl PhpArray {
     /// entry. The key/index storage remains untouched.
     #[inline(always)]
     pub(crate) fn get_str_mut(&mut self, key: &str) -> Option<&mut Value> {
+        self.mark_nested_release_candidate();
         match &mut self.storage {
             ArrayStorage::Packed(_) => None,
             ArrayStorage::SmallHash(small) => {
@@ -3943,6 +3989,7 @@ impl PhpArray {
     /// storage value. Live internal iterators use the returned owner to recycle
     /// an unescaped reference cell without changing array order or layout.
     pub(crate) fn replace_value_at(&mut self, pos: usize, value: Value) -> Option<Value> {
+        self.track_nested_release_value(&value);
         let slot = match &mut self.storage {
             ArrayStorage::Packed(values) => values.get_mut(pos),
             ArrayStorage::SmallHash(small) => small
@@ -3963,6 +4010,7 @@ impl PhpArray {
     /// changing array order. Frame-free callback proofs use this only after
     /// exact scalar guards have succeeded.
     pub(crate) fn assign_dereferenced_at(&mut self, pos: usize, value: Value) -> bool {
+        self.track_nested_release_value(&value);
         let slot = match &mut self.storage {
             ArrayStorage::Packed(values) => values.get_mut(pos),
             ArrayStorage::SmallHash(small) => small
@@ -3986,6 +4034,7 @@ impl PhpArray {
     /// alias for a source-level argument-unpack call. Array copy-on-write is
     /// resolved by `Value::as_array_mut()` before this method is entered.
     pub(crate) fn argument_unpack_reference_at(&mut self, pos: usize) -> Option<Value> {
+        self.mark_nested_release_candidate();
         let slot = match &mut self.storage {
             ArrayStorage::Packed(values) => values.get_mut(pos),
             ArrayStorage::SmallHash(small) => small
@@ -4380,7 +4429,9 @@ impl PhpArray {
         Self {
             next_int_key: values.len() as i64,
             storage: ArrayStorage::Packed(values),
-            cursor: Cell::new(ARRAY_CURSOR_PRISTINE),
+            cursor: Cell::new(
+                ARRAY_CURSOR_PRISTINE | (self.cursor.get() & ARRAY_NESTED_RELEASE_CANDIDATE),
+            ),
         }
     }
 

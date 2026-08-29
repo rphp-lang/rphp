@@ -2586,6 +2586,10 @@ impl Compiler {
                     source_lines: func_compiler.materialize_source_lines_with_declaration(*line),
                     instructions: func_compiler.instructions,
                     literals: func_compiler.literals,
+                    has_finally: func_compiler
+                        .try_entries
+                        .iter()
+                        .any(|entry| entry.finally_start != u32::MAX),
                     try_entries: func_compiler.try_entries,
                     strict_types: self.strict_types,
                     is_generator: func_compiler.contains_yield,
@@ -2722,15 +2726,28 @@ impl Compiler {
                         .loop_stack
                         .iter()
                         .rev()
-                        .filter_map(|context| context.return_cleanup_temp)
+                        .flat_map(|context| {
+                            context
+                                .return_cleanup_nested_temp
+                                .map(|temp| (temp, true))
+                                .into_iter()
+                                .chain(
+                                    context
+                                        .return_cleanup_temp
+                                        .map(|temp| (temp, false)),
+                                )
+                        })
                         .collect::<Vec<_>>();
-                    for temp in cleanup_temps {
+                    for (temp, nested_objects) in cleanup_temps {
                         let mut release = Instruction::new(OpCode::ReleaseTemps);
                         release.op1 = temp;
                         release.op1_type = OpType::Tmp;
                         release.op2 = temp + 1;
                         release.op2_type = OpType::Tmp;
                         release._pad |= RELEASE_TEMPS_ON_RETURN;
+                        if nested_objects {
+                            release._pad |= RELEASE_TEMPS_NESTED_OBJECTS;
+                        }
                         self.push_instruction_at_line(release, *line);
                     }
                 }
@@ -2786,14 +2803,19 @@ impl Compiler {
                 self.instructions.push(jmpz);
 
                 // Push loop context — continue jumps to loop_start (re-test condition)
+                let goto_region_id = self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
                 self.loop_stack.push(LoopContext {
+                    goto_region_id,
                     continue_target: Some(loop_start),
                     break_patches: Vec::new(),
+                    outward_break_patches: Vec::new(),
                     continue_patches: Vec::new(),
                     is_switch: false,
                     return_cleanup_temp: None,
+                    return_cleanup_nested_temp: None,
+                    abrupt_cleanup_temp: None,
+                    exit_cleanup_temp: None,
                 });
-                self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
 
                 // Compile body
                 for s in body {
@@ -2821,14 +2843,19 @@ impl Compiler {
                 let loop_start = self.instructions.len();
 
                 // Push loop context — continue target not yet known
+                let goto_region_id = self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
                 self.loop_stack.push(LoopContext {
+                    goto_region_id,
                     continue_target: None,
                     break_patches: Vec::new(),
+                    outward_break_patches: Vec::new(),
                     continue_patches: Vec::new(),
                     is_switch: false,
                     return_cleanup_temp: None,
+                    return_cleanup_nested_temp: None,
+                    abrupt_cleanup_temp: None,
+                    exit_cleanup_temp: None,
                 });
-                self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
 
                 // Compile body
                 for s in body {
@@ -2894,14 +2921,19 @@ impl Compiler {
                 let loop_exit_definitions = self.definitely_defined_cvs.clone();
 
                 // Push loop context — continue target not yet known
+                let goto_region_id = self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
                 self.loop_stack.push(LoopContext {
+                    goto_region_id,
                     continue_target: None,
                     break_patches: Vec::new(),
+                    outward_break_patches: Vec::new(),
                     continue_patches: Vec::new(),
                     is_switch: false,
                     return_cleanup_temp: None,
+                    return_cleanup_nested_temp: None,
+                    abrupt_cleanup_temp: None,
+                    exit_cleanup_temp: None,
                 });
-                self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
 
                 // Compile body
                 for s in body {
@@ -2951,11 +2983,30 @@ impl Compiler {
                     return Err(self.goto_error(&message, *line));
                 }
                 let target_idx = self.loop_stack.len() - depth;
+                if self.loop_control_leaves_finally(target_idx, false) {
+                    return Err(self.goto_error(
+                        "jump out of a finally block is disallowed",
+                        *line,
+                    ));
+                }
                 let jmp_idx = self.instructions.len();
                 let mut jmp = Instruction::new(OpCode::Jmp);
                 jmp.op1 = 0; // placeholder — patched when loop ends
                 self.instructions.push(jmp);
-                self.loop_stack[target_idx].break_patches.push(jmp_idx);
+                if depth > 1
+                    && self
+                        .loop_stack
+                        .last()
+                        .is_some_and(|context| context.exit_cleanup_temp.is_some())
+                {
+                    self.loop_stack
+                        .last_mut()
+                        .unwrap()
+                        .outward_break_patches
+                        .push((jmp_idx, depth - 1));
+                } else {
+                    self.loop_stack[target_idx].break_patches.push(jmp_idx);
+                }
             }
             Stmt::Continue { level, line } => {
                 let depth = level.unwrap_or(1) as usize;
@@ -2968,6 +3019,12 @@ impl Compiler {
                     return Err(self.goto_error(&message, *line));
                 }
                 let target_idx = self.loop_stack.len() - depth;
+                if self.loop_control_leaves_finally(target_idx, true) {
+                    return Err(self.goto_error(
+                        "jump out of a finally block is disallowed",
+                        *line,
+                    ));
+                }
                 let ctx = &mut self.loop_stack[target_idx];
                 if ctx.is_switch {
                     // PHP: "continue" targeting switch is equivalent to "break"
@@ -3001,14 +3058,19 @@ impl Compiler {
                 self.instructions.push(assign);
 
                 // Push switch context — break works, continue acts as break
+                let goto_region_id = self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
                 self.loop_stack.push(LoopContext {
+                    goto_region_id,
                     continue_target: None,
                     break_patches: Vec::new(),
+                    outward_break_patches: Vec::new(),
                     continue_patches: Vec::new(),
                     is_switch: true,
                     return_cleanup_temp: None,
+                    return_cleanup_nested_temp: None,
+                    abrupt_cleanup_temp: None,
+                    exit_cleanup_temp: None,
                 });
-                self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
 
                 // Phase 1: emit comparison chain for ALL cases (skip default)
                 // For each case value: compare switch_tmp == value, JmpZ → next, Jmp → body
@@ -3358,17 +3420,23 @@ impl Compiler {
                 }
 
                 // Push loop context — continue jumps to loop_start (ForeachNext)
+                let goto_region_id = self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
                 self.loop_stack.push(LoopContext {
+                    goto_region_id,
                     continue_target: Some(loop_start),
                     break_patches: Vec::new(),
+                    outward_break_patches: Vec::new(),
                     continue_patches: Vec::new(),
                     is_switch: false,
                     return_cleanup_temp: (!reference_iteration
                         && !matches!(array, Expr::ArrayLiteral(_))
                         && matches!(arr_type, OpType::Tmp | OpType::Var))
                     .then_some(arr_op),
+                    return_cleanup_nested_temp: Some(arr_copy_tmp),
+                    abrupt_cleanup_temp: Some(arr_copy_tmp),
+                    exit_cleanup_temp: matches!(arr_type, OpType::Tmp | OpType::Var)
+                        .then_some(arr_op),
                 });
-                self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
 
                 // Compile body
                 for s in body {
@@ -3428,18 +3496,46 @@ impl Compiler {
                 // foreach state TMP. Retire it at the loop boundary so its
                 // object-store handle and any iterator-owned state have the
                 // same lifetime as Zend's transient iterator.
-                let mut release_iterable = Instruction::new(OpCode::ReleaseTemps);
-                release_iterable.op1 = arr_copy_tmp;
-                release_iterable.op1_type = OpType::Tmp;
-                release_iterable.op2 = arr_copy_tmp + 1;
-                release_iterable.op2_type = OpType::Tmp;
-                self.instructions.push(release_iterable);
+                let source_cleanup =
+                    matches!(arr_type, OpType::Tmp | OpType::Var).then_some(arr_op);
+                self.emit_foreach_exit_cleanup(arr_copy_tmp, source_cleanup);
+
+                let ctx = self.loop_stack.pop().unwrap();
+                let skip_trampolines = (!ctx.outward_break_patches.is_empty()).then(|| {
+                    let index = self.instructions.len();
+                    self.instructions.push(Instruction::new(OpCode::Jmp));
+                    index
+                });
+                for (source_jump, remaining_levels) in &ctx.outward_break_patches {
+                    let trampoline = self.instructions.len() as u16;
+                    self.instructions[*source_jump].op1 = trampoline;
+                    self.emit_foreach_exit_cleanup(arr_copy_tmp, source_cleanup);
+                    let next_jump = self.instructions.len();
+                    self.instructions.push(Instruction::new(OpCode::Jmp));
+                    let target_idx = self.loop_stack.len() - *remaining_levels;
+                    if *remaining_levels > 1
+                        && self
+                            .loop_stack
+                            .last()
+                            .is_some_and(|context| context.exit_cleanup_temp.is_some())
+                    {
+                        self.loop_stack
+                            .last_mut()
+                            .unwrap()
+                            .outward_break_patches
+                            .push((next_jump, remaining_levels - 1));
+                    } else {
+                        self.loop_stack[target_idx].break_patches.push(next_jump);
+                    }
+                }
 
                 // Patch jumps
                 let after_loop = self.instructions.len() as u16;
+                if let Some(skip) = skip_trampolines {
+                    self.instructions[skip].op1 = after_loop;
+                }
                 self.instructions[foreach_init_idx].op2 = after_loop; // empty array jump
                 self.instructions[jmpz_idx].op2 = epilogue;
-                let ctx = self.loop_stack.pop().unwrap();
                 for patch_idx in ctx.break_patches {
                     self.instructions[patch_idx].op1 = epilogue;
                 }
@@ -4651,6 +4747,10 @@ impl Compiler {
                             .materialize_source_lines_with_declaration(method.line),
                         instructions: func_compiler.instructions,
                         literals: func_compiler.literals,
+                        has_finally: func_compiler
+                            .try_entries
+                            .iter()
+                            .any(|entry| entry.finally_start != u32::MAX),
                         try_entries: func_compiler.try_entries,
                         strict_types: self.strict_types,
                         is_generator: func_compiler.contains_yield,
@@ -5376,6 +5476,10 @@ impl Compiler {
                             .materialize_source_lines_with_declaration(method.line),
                         instructions: func_compiler.instructions,
                         literals: func_compiler.literals,
+                        has_finally: func_compiler
+                            .try_entries
+                            .iter()
+                            .any(|entry| entry.finally_start != u32::MAX),
                         try_entries: func_compiler.try_entries,
                         strict_types: self.strict_types,
                         is_generator: func_compiler.contains_yield,
@@ -5714,6 +5818,10 @@ impl Compiler {
                             .materialize_source_lines_with_declaration(method.line),
                         instructions: func_compiler.instructions,
                         literals: func_compiler.literals,
+                        has_finally: func_compiler
+                            .try_entries
+                            .iter()
+                            .any(|entry| entry.finally_start != u32::MAX),
                         try_entries: func_compiler.try_entries,
                         strict_types: self.strict_types,
                         is_generator: func_compiler.contains_yield,
@@ -6606,6 +6714,10 @@ impl Compiler {
                             .materialize_source_lines_with_declaration(method.line),
                         instructions: func_compiler.instructions,
                         literals: func_compiler.literals,
+                        has_finally: func_compiler
+                            .try_entries
+                            .iter()
+                            .any(|entry| entry.finally_start != u32::MAX),
                         try_entries: func_compiler.try_entries,
                         strict_types: self.strict_types,
                         is_generator: func_compiler.contains_yield,

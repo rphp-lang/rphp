@@ -50,6 +50,9 @@ pub struct OpArray {
     pub source_lines: Vec<(u32, u32)>,
     pub literals: Vec<Value>,
     pub try_entries: Vec<compile::TryEntry>,
+    /// Cached once at compilation so ordinary catch-only exception dispatch
+    /// does not pay nested-finally bookkeeping on every throw.
+    pub has_finally: bool,
     /// Per-file strict_types flag, set by `declare(strict_types=1);`
     pub strict_types: bool,
     /// True if this function contains yield — it's a generator
@@ -6130,6 +6133,7 @@ pub fn clone_trait_method_with_static_storage(
         source_lines: source_op.source_lines.clone(),
         literals: source_op.literals.clone(),
         try_entries: source_op.try_entries.clone(),
+        has_finally: source_op.has_finally,
         strict_types: source_op.strict_types,
         is_generator: source_op.is_generator,
         global_vars: source_op.global_vars.clone(),

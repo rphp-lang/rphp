@@ -32,6 +32,8 @@ fn test_recursive_countdown() {
         instructions: vec![f1_ret],
         literals: vec![Value::long(42)],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],
@@ -70,6 +72,8 @@ fn test_recursive_countdown() {
         instructions: vec![f2_init, f2_do, f2_ret],
         literals: vec![Value::string("f1")],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],
@@ -108,6 +112,8 @@ fn test_recursive_countdown() {
         instructions: vec![f3_init, f3_do, f3_ret],
         literals: vec![Value::string("f2")],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],
@@ -150,6 +156,8 @@ fn test_recursive_countdown() {
         instructions: vec![main_init, main_do, main_echo, main_ret],
         literals: vec![Value::string("f3"), Value::null()],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],
@@ -201,6 +209,8 @@ fn test_interrupt_during_deep_call() {
         instructions: vec![f1_echo, f1_ret],
         literals: vec![Value::long(1), Value::null()],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],
@@ -242,6 +252,8 @@ fn test_interrupt_during_deep_call() {
         instructions: vec![init, do_fcall, echo2, ret],
         literals: vec![Value::string("f1"), Value::long(2), Value::null()],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],
@@ -314,6 +326,8 @@ fn test_assign_result_used() {
         instructions: vec![assign_b, assign_a, echo, ret],
         literals: vec![Value::long(42), Value::null()],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],

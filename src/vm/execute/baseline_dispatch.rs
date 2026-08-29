@@ -1819,11 +1819,29 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             });
             if at_finally_end {
                 if frame_pending {
+                    // A return crossing nested try/finally regions is one
+                    // completion, not a frame exit at the first marker.  The
+                    // marker itself is still inside every enclosing try body,
+                    // so continue with the next innermost finally before the
+                    // return value and frame-owned foreach sources commit.
                     // SAFETY: `frame` is the live activation whose finally-end
-                    // instruction is currently dispatched. Its caller-provided
-                    // return slot stays writable until this branch either
-                    // resumes exception dispatch or retires the frame.
+                    // instruction is currently dispatched. Every selected
+                    // finally start belongs to this immutable op-array, and its
+                    // caller-provided return slot remains writable until this
+                    // branch resumes dispatch or retires the frame.
                     unsafe {
+                        if let Some(entry) = crossed_finally_for_jump(
+                            op_array,
+                            current_ip,
+                            op_array.instructions.len() as u32,
+                            false,
+                        ) {
+                            (*frame).opline = op_array
+                                .instructions
+                                .as_ptr()
+                                .add(entry.finally_start as usize);
+                            continue;
+                        }
                         (*frame).pending_return_after_finally = false;
                         release_return_foreach_sources(eg, frame, op_array)?;
                         if let Some(exception) = eg.exception.take() {
@@ -1845,14 +1863,43 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     }
                     // Deferred return — pop frame now (return value already written)
-                    let prev = unsafe { (*frame).prev_execute_data };
+                    // SAFETY: the active frame keeps both its caller link and
+                    // immutable function metadata live until it is popped below.
+                    let (prev, func_common) = unsafe {
+                        ((*frame).prev_execute_data, &*(*frame).func)
+                    };
                     if prev.is_null() {
                         return Ok(());
                     }
                     run_frame_destructors(eg, frame)?;
+                    if let Some(exception) = eg.exception.take() {
+                        // A final local/foreach value may outlive its explicit
+                        // iteration-state marker.  Its destructor still runs
+                        // at the return commit boundary and replaces the
+                        // return before the frame is retired, so same-frame or
+                        // caller catches can observe it normally.
+                        // SAFETY: the live frame's caller-provided return slot
+                        // stays writable until exception dispatch completes.
+                        unsafe {
+                            let return_target = (*frame).return_value;
+                            if !return_target.is_null() {
+                                frame_return_set(frame, return_target, Value::null());
+                            }
+                        }
+                        match throw_in_frame(eg, frame, exception)? {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue 'vm;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
-                    let func_common = unsafe { &*(*frame).func };
                     if func_common.plan.needs_late_static_scope() {
                         eg.discard_late_static_scope(frame as usize);
                     }
@@ -5708,12 +5755,23 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             binding
                         }
                     } else {
-                        let val = &*(*frame).get_op_ptr(
-                            opline.op2 as u32,
-                            opline.op2_type,
-                            op_array,
-                        );
-                        val.clone()
+                        if opline._pad & ARRAY_ELEMENT_MOVE_SOURCE != 0 {
+                            // An array-literal element expression has exactly
+                            // one consumer.  Transfer its compiler temporary
+                            // into the array so the scratch slot cannot retain
+                            // an extra object handle past the array/foreach
+                            // lifetime boundary.
+                            let source = (*frame)
+                                .get_op_mut(opline.op2 as u32, opline.op2_type);
+                            frame_tmp_take!(frame, source)
+                        } else {
+                            (&*(*frame).get_op_ptr(
+                                opline.op2 as u32,
+                                opline.op2_type,
+                                op_array,
+                            ))
+                                .clone()
+                        }
                     };
                     if opline._pad & ARRAY_ELEMENT_IMMUTABLE_CONTAINER != 0 {
                         cloned_val.demote_nested_immutable_array_owner();
@@ -9461,7 +9519,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if eg.exception.is_some() {
                     eg.exception = None;
                 }
-                eg.finally_exceptions.remove(&(frame as usize));
 
                 if !op_array.try_entries.is_empty() {
                     release_return_foreach_sources(eg, frame, op_array)?;
@@ -9479,6 +9536,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     }
                 }
+                // The return has now crossed every finally and completed all
+                // fallible foreach cleanup.  Only this commit point suppresses
+                // an older exception whose finally contained the return; a
+                // cleanup exception caught in that finally cancels the return
+                // and must leave the older completion available to resume.
+                eg.finally_exceptions.remove(&(frame as usize));
 
                 if func_common_ret.plan.needs_late_static_scope() {
                     eg.discard_late_static_scope(frame as usize);
@@ -9781,16 +9844,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let return_cleanup = opline._pad & RELEASE_TEMPS_ON_RETURN != 0;
                 let nested_objects = opline._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0;
                 if !return_cleanup || op_array.try_entries.is_empty() {
-                    debug_assert!(!return_cleanup || !nested_objects);
                     release_statement_temps(
                         eg,
                         frame,
                         opline.op1 as usize,
                         opline.op2 as usize,
-                        if return_cleanup {
-                            STATEMENT_TEMPS_FOREACH_OBJECT
-                        } else if nested_objects {
+                        if nested_objects {
                             STATEMENT_TEMPS_NESTED_OBJECTS
+                        } else if return_cleanup {
+                            STATEMENT_TEMPS_FOREACH_OBJECT
                         } else {
                             STATEMENT_TEMPS_ORDINARY
                         },

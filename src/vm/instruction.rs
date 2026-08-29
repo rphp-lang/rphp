@@ -386,6 +386,11 @@ pub const RELEASE_TEMPS_ON_RETURN: u16 = 1;
 /// frameless internal-call opcode releases their nested object handles at the
 /// call boundary rather than through an ordinary callee frame.
 pub const RELEASE_TEMPS_NESTED_OBJECTS: u16 = 1 << 1;
+/// Ordinary foreach epilogue site that may serve as the lexical dispatch
+/// location when a destructor interrupts a return completion.  The flag is
+/// inert during normal execution; the pending-return marker distinguishes the
+/// temporary remapping used by the cold cleanup path.
+pub const RELEASE_TEMPS_RETURN_COMPLETION_SITE: u16 = 1 << 2;
 
 /// AssignDim stores the source l-value's PHP reference cell in the selected
 /// element. Ordinary assignments intentionally dereference their source;
@@ -460,6 +465,9 @@ pub const ARRAY_ELEMENT_IMMUTABLE_CONTAINER: u16 = 1 << 3;
 /// the append. This preserves PHP's overflow-error priority over the later
 /// non-variable reference notice.
 pub const ARRAY_ELEMENT_DEFER_NONREFERENCEABLE_NOTICE: u16 = 1 << 4;
+/// The compiler proved that this array-literal value temporary has no consumer
+/// after AddArrayElement and may transfer its owner into the array.
+pub const ARRAY_ELEMENT_MOVE_SOURCE: u16 = 1 << 5;
 
 /// Arithmetic/bitwise opcode flag: the operation is the read phase of a
 /// compound assignment. PHP validates commutative binary operands as an

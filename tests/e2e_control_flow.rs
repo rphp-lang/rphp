@@ -518,6 +518,32 @@ try {
 }
 
 #[test]
+fn break_and_continue_may_not_escape_a_finally_region() {
+    let break_error = compile_error_with_source(
+        "<?php\ndo {\n    try {} finally { break; }\n} while (false);",
+        "/fixture/finally-loop-transfer.php",
+    );
+    assert_eq!(
+        break_error,
+        "jump out of a finally block is disallowed in /fixture/finally-loop-transfer.php on line 3"
+    );
+
+    let continue_error = compile_error_with_source(
+        "<?php\nfor ($i = 0; $i < 1; ++$i) {\n    try {} finally { continue; }\n}",
+        "/fixture/finally-loop-transfer.php",
+    );
+    assert_eq!(
+        continue_error,
+        "jump out of a finally block is disallowed in /fixture/finally-loop-transfer.php on line 3"
+    );
+
+    assert_eq!(
+        run_php("<?php try {} finally { while (true) { echo 'inside'; break; } }"),
+        "inside"
+    );
+}
+
+#[test]
 fn goto_leaving_try_runs_intervening_finally_blocks_in_order() {
     assert_eq!(
         run_php(

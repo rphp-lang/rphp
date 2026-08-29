@@ -16,6 +16,8 @@ fn test_echo_int() {
         instructions: vec![echo, ret],
         literals: vec![Value::long(42), Value::null()],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],
@@ -58,6 +60,8 @@ fn test_echo_negative() {
         instructions: vec![echo, ret],
         literals: vec![Value::long(-1), Value::null()],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],
@@ -109,6 +113,8 @@ fn test_add_and_echo() {
         instructions: vec![add, echo, ret],
         literals: vec![Value::long(20), Value::long(22), Value::null()],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],
@@ -154,6 +160,8 @@ fn test_overflow_to_float() {
         instructions: vec![add, ret],
         literals: vec![Value::long(i64::MAX), Value::long(1)],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],
@@ -196,6 +204,8 @@ fn test_timeout_interrupt() {
         instructions: vec![echo, ret],
         literals: vec![Value::long(1), Value::null()],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],
@@ -260,6 +270,8 @@ fn test_assign_and_echo_cv() {
         instructions: vec![assign, echo, ret],
         literals: vec![Value::long(42), Value::null()],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],
@@ -327,6 +339,8 @@ fn test_assign_add_echo() {
         instructions: vec![assign_a, assign_b, add, echo, ret],
         literals: vec![Value::long(20), Value::long(22), Value::null()],
         try_entries: vec![],
+
+        has_finally: false,
         strict_types: false,
         is_generator: false,
         global_vars: vec![],

@@ -19,6 +19,54 @@ fn exception_matches_catch(thrown: &Value, types: &[String], eg: &ExecutorGlobal
     false
 }
 
+#[cold]
+#[inline(never)]
+fn match_nested_finally_entry<'a>(
+    op_array: &'a crate::compiler::OpArray,
+    current_ip: u32,
+    thrown: &Value,
+    eg: &ExecutorGlobals,
+    skip_current_finally: bool,
+) -> Option<&'a crate::compiler::compile::TryEntry> {
+    op_array
+        .try_entries
+        .iter()
+        .filter(|entry| {
+            current_ip >= entry.try_start
+                && (current_ip < entry.try_end
+                    // A throw from a catch cannot be caught by a sibling
+                    // clause, but it must still traverse this entry's own
+                    // finally before an enclosing handler is considered.
+                    || (entry.finally_start != u32::MAX && current_ip < entry.finally_start))
+        })
+        // Re-entering exception dispatch at the instruction immediately after
+        // a completed finally must not select that same finally a second time.
+        .filter(|entry| entry.finally_start == u32::MAX || current_ip != entry.finally_end)
+        .find(|entry| {
+            (entry.finally_start != u32::MAX && !skip_current_finally)
+                || entry
+                    .catches
+                    .iter()
+                    .any(|catch| exception_matches_catch(thrown, &catch.types, eg))
+        })
+}
+
+#[cold]
+#[inline(never)]
+fn nested_finally_keeps_displaced_exception(
+    op_array: &crate::compiler::OpArray,
+    current_ip: u32,
+    next_finally_start: u32,
+) -> bool {
+    op_array.try_entries.iter().any(|active| {
+        active.finally_start != u32::MAX
+            && current_ip >= active.finally_start
+            && current_ip < active.finally_end
+            && next_finally_start >= active.finally_start
+            && next_finally_start < active.finally_end
+    })
+}
+
 fn prepare_catch_variable_assignment(
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
@@ -170,6 +218,13 @@ fn value_is_shallow_plain_drop(eg: &ExecutorGlobals, value: &Value) -> bool {
         return false;
     }
     match value.value_type() {
+        ValueType::Array
+            if value
+                .as_array()
+                .is_some_and(|array| !array.may_require_nested_release()) =>
+        {
+            true
+        }
         ValueType::Array => value.as_array().is_some_and(|array| {
             array.values().all(|nested| {
                 let nested = nested.dereferenced();
@@ -1389,14 +1444,48 @@ fn release_return_foreach_sources(
                 && instruction._pad & RELEASE_TEMPS_ON_RETURN != 0
         })
     {
-        release_statement_temps(
-            eg,
-            frame,
-            release.op1 as usize,
-            release.op2 as usize,
-            STATEMENT_TEMPS_FOREACH_OBJECT,
-            false,
-        )?;
+        // Publish the compiler-owned return-cleanup marker while destructors
+        // run.  If one throws through this frame, exception dispatch can
+        // distinguish a cleanup that is committing an already-selected return
+        // from an ordinary expression failure: matching catches remain live,
+        // but finally blocks already traversed by that return must not run a
+        // second time.  Successful cleanup restores both existing frame fields.
+        let completion_site = op_array
+            .instructions
+            .iter()
+            .find(|instruction| {
+                instruction.opcode == OpCode::ReleaseTemps
+                    && instruction._pad & RELEASE_TEMPS_RETURN_COMPLETION_SITE != 0
+                    && instruction.op1 == release.op1
+                    && instruction.op2 == release.op2
+            })
+            .map_or(release as *const Instruction, |instruction| {
+                instruction as *const Instruction
+            });
+        // SAFETY: `frame` is the live activation owning every compiler-marked
+        // release slot. The temporary opline remap stays inside synchronous
+        // cleanup, and is restored only if exception dispatch did not replace it.
+        unsafe {
+            let saved = ((*frame).opline, (*frame).pending_return_after_finally);
+            (*frame).opline = completion_site;
+            (*frame).pending_return_after_finally = true;
+            release_statement_temps(
+                eg,
+                frame,
+                release.op1 as usize,
+                release.op2 as usize,
+                if release._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0 {
+                    STATEMENT_TEMPS_NESTED_OBJECTS
+                } else {
+                    STATEMENT_TEMPS_FOREACH_OBJECT
+                },
+                false,
+            )?;
+            if eg.exception.is_none() && std::ptr::eq((*frame).opline, completion_site) {
+                (*frame).opline = saved.0;
+                (*frame).pending_return_after_finally = saved.1;
+            }
+        }
         if let Some(exception) = eg.exception.as_ref()
             && let Some(release_index) = op_array
                 .instructions
@@ -2380,6 +2469,152 @@ fn attach_argument_type_error_origin(
     object.set_property("trace", Value::array(trace));
 }
 
+enum CatchOnlyThrowResult<'a> {
+    Finished(ThrowResult<'a>),
+    NeedsGeneralDispatch(*mut ExecuteData, Value),
+}
+
+#[inline(never)]
+fn throw_through_catch_only_frames<'a>(
+    eg: &mut ExecutorGlobals,
+    mut frame: *mut ExecuteData,
+    mut thrown: Value,
+) -> Result<CatchOnlyThrowResult<'a>, VmError> {
+    // SAFETY: `frame` and every predecessor form the live VM caller chain.
+    // Compiler try entries, opcodes, CV indexes and cleanup ranges all belong
+    // to the immutable op-array stored in the corresponding frame. Each frame
+    // is retired exactly once before traversal advances to its predecessor.
+    unsafe {
+        'search: loop {
+            let op_array = (*frame).op_array();
+            if op_array.has_finally
+                || (*frame).pending_return_after_finally
+                || !eg.finally_exceptions.is_empty()
+            {
+                return Ok(CatchOnlyThrowResult::NeedsGeneralDispatch(frame, thrown));
+            }
+            let current_ip = (*frame)
+                .opline
+                .offset_from(op_array.instructions.as_ptr()) as u32;
+
+            if let Some(active_handler) = op_array.try_entries.iter().find(|entry| {
+                current_ip >= entry.try_start && current_ip < entry.try_end
+            }) {
+                let release_window = &op_array.instructions
+                    [current_ip as usize..active_handler.try_end as usize];
+                let first_release = release_window.iter().find(|instruction| {
+                    instruction.opcode == OpCode::ReleaseTemps
+                        && instruction._pad & RELEASE_TEMPS_ON_RETURN == 0
+                });
+                let release = first_release.and_then(|first_release| {
+                    if first_release._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0 {
+                        return Some(first_release);
+                    }
+                    release_window
+                        .iter()
+                        .find(|candidate| {
+                            candidate.opcode == OpCode::ReleaseTemps
+                                && candidate._pad & RELEASE_TEMPS_ON_RETURN == 0
+                                && candidate._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0
+                                && candidate.op1 <= first_release.op1
+                                && candidate.op2 >= first_release.op2
+                        })
+                        .or(Some(first_release))
+                });
+                if let Some(release) = release {
+                    release_statement_temps(
+                        eg,
+                        frame,
+                        release.op1 as usize,
+                        release.op2 as usize,
+                        if release._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0 {
+                            STATEMENT_TEMPS_NESTED_OBJECTS
+                        } else {
+                            STATEMENT_TEMPS_ORDINARY
+                        },
+                        false,
+                    )?;
+                    if let Some(replacement) = eg.exception.take() {
+                        append_replaced_exception(&replacement, &thrown, eg);
+                        thrown = replacement;
+                        continue 'search;
+                    }
+                }
+            }
+
+            let matched_catch = op_array
+                .try_entries
+                .iter()
+                .filter(|entry| current_ip >= entry.try_start && current_ip < entry.try_end)
+                .find_map(|entry| {
+                    entry
+                        .catches
+                        .iter()
+                        .find(|catch| exception_matches_catch(&thrown, &catch.types, eg))
+                });
+            if let Some(catch) = matched_catch {
+                let prepared_reference_assignment = if let Some(catch_cv) = catch.catch_cv {
+                    match prepare_catch_variable_assignment(
+                        frame,
+                        op_array,
+                        catch_cv,
+                        catch.catch_start,
+                        &thrown,
+                        eg,
+                    ) {
+                        Ok(value) => value,
+                        Err(message) => {
+                            let replacement = make_error_value("TypeError", &message);
+                            attach_throwable_origin(
+                                &replacement,
+                                eg,
+                                frame,
+                                op_array,
+                                catch.catch_start as usize,
+                            );
+                            thrown = replacement;
+                            continue 'search;
+                        }
+                    }
+                } else {
+                    None
+                };
+                cleanup_pending_calls(eg, frame);
+                if let Some(catch_cv) = catch.catch_cv {
+                    assignment_slot_set(
+                        (*frame).cv_mut(catch_cv),
+                        prepared_reference_assignment.unwrap_or_else(|| thrown.clone()),
+                    );
+                }
+                (*frame).opline = op_array
+                    .instructions
+                    .as_ptr()
+                    .add(catch.catch_start as usize);
+                return Ok(CatchOnlyThrowResult::Finished(ThrowResult::Handled(
+                    frame, op_array,
+                )));
+            }
+
+            let previous = (*frame).prev_execute_data;
+            if previous.is_null() {
+                return Ok(CatchOnlyThrowResult::Finished(ThrowResult::Unhandled(
+                    thrown,
+                )));
+            }
+            thrown = run_exception_unwind_destructors(eg, frame, thrown)?;
+            eg.current_execute_data.set(previous);
+            #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+            eg.discard_generic_member_call(frame as usize);
+            #[cfg(feature = "php-generics-reified")]
+            eg.discard_active_reified_binding_scope(frame as usize);
+            cleanup_pending_calls(eg, frame);
+            cleanup_frame_slots(frame);
+            pop_vm_call_frame(eg, frame);
+            frame = previous;
+        }
+    }
+}
+
 /// Walk frames starting from `frame` looking for a try/catch handler for `thrown`.
 /// On success: unwinds frames and returns the handler frame + op_array.
 /// On failure: returns Unhandled with the original exception value.
@@ -2403,43 +2638,90 @@ fn throw_in_frame<'a>(
     // its opline points into the immutable instruction slice of its op-array.
     // SAFETY: every traversed pointer belongs to the live caller chain rooted
     // at `frame`; the chain remains allocated for the whole unwind search.
-    let (origin_op_array, origin_ip, displaced_exception) = unsafe {
+    let (origin_op_array, origin_ip, origin_pending_return, displaced_exception) = unsafe {
         let origin_op_array = (*frame).op_array();
         let origin_ip =
         (*frame)
             .opline
             .offset_from(origin_op_array.instructions.as_ptr()) as usize;
-        let mut pending_owner = frame;
-        let displaced_exception = loop {
-            if let Some(pending) = eg
-                .finally_exceptions
-                .get(&(pending_owner as usize))
-                .and_then(|pending| pending.last())
-                .filter(|pending| pending.object_identity() != thrown.object_identity())
-            {
-                break Some((pending_owner, pending.clone()));
+        let origin_pending_return = (*frame).pending_return_after_finally;
+        let displaced_exception = if eg.finally_exceptions.is_empty() {
+            // Ordinary throw/catch has no suspended completion. Avoid a hash
+            // lookup and caller-chain walk on that overwhelmingly common path;
+            // nested-finally bookkeeping remains entirely pay-for-use.
+            None
+        } else {
+            let mut pending_owner = frame;
+            loop {
+                if let Some(pending) = eg
+                    .finally_exceptions
+                    .get(&(pending_owner as usize))
+                    .and_then(|pending| pending.last())
+                    .filter(|pending| pending.object_identity() != thrown.object_identity())
+                {
+                    break Some((pending_owner, pending.clone()));
+                }
+                let previous = (*pending_owner).prev_execute_data;
+                if previous.is_null() {
+                    break None;
+                }
+                pending_owner = previous;
             }
-            let previous = (*pending_owner).prev_execute_data;
-            if previous.is_null() {
-                break None;
-            }
-            pending_owner = previous;
         };
-        (origin_op_array, origin_ip, displaced_exception)
+        (
+            origin_op_array,
+            origin_ip,
+            origin_pending_return,
+            displaced_exception,
+        )
     };
     attach_throwable_origin(&thrown, eg, frame, origin_op_array, origin_ip);
 
-    let mut search_frame = frame;
-    'search: loop {
-        let sf_op_array = unsafe { (*search_frame).op_array() };
-        // An exception raised while a finally block is completing replaces a
-        // pending goto/break continuation in that frame.
-        finally_jump_state(search_frame, sf_op_array, FINALLY_JUMP_CLEAR, 0, false);
-        let current_ip = unsafe {
-            (*search_frame)
-                .opline
-                .offset_from(sf_op_array.instructions.as_ptr()) as u32
+    if !origin_op_array.has_finally
+        && !origin_pending_return
+        && eg.finally_exceptions.is_empty()
+    {
+        return match throw_through_catch_only_frames(eg, frame, thrown)? {
+            CatchOnlyThrowResult::Finished(result) => Ok(result),
+            CatchOnlyThrowResult::NeedsGeneralDispatch(frame, thrown) => {
+                throw_in_frame(eg, frame, thrown)
+            }
         };
+    }
+
+    let mut search_frame = frame;
+    let mut return_cleanup_owner = None;
+    'search: loop {
+        // Once a later operation throws while a deferred return is traversing
+        // finally blocks, the exception replaces that return.  Clear the
+        // frame-local marker as soon as exception dispatch reaches the frame;
+        // older exceptions saved for an enclosing finally remain in their
+        // ordered side stack and are deliberately not discarded here.
+        // SAFETY: `search_frame` walks the live caller chain rooted at `frame`;
+        // its opline always belongs to the immutable op-array returned here.
+        let (sf_op_array, current_ip) = unsafe {
+            let sf_op_array = (*search_frame).op_array();
+            let current = &*(*search_frame).opline;
+            if sf_op_array.has_finally && (*search_frame).pending_return_after_finally {
+                if current.opcode == OpCode::ReleaseTemps
+                    && current._pad & RELEASE_TEMPS_RETURN_COMPLETION_SITE != 0
+                {
+                    return_cleanup_owner = Some(search_frame as usize);
+                }
+                (*search_frame).pending_return_after_finally = false;
+            }
+            let current_ip = (*search_frame)
+                .opline
+                .offset_from(sf_op_array.instructions.as_ptr()) as u32;
+            (sf_op_array, current_ip)
+        };
+        // An exception raised while a finally block is completing replaces a
+        // pending goto/break continuation in that frame. Catch-only op-arrays
+        // cannot own that hidden continuation, so keep the cold helper fully
+        // pay-for-use on the ordinary throw/catch path.
+        if sf_op_array.has_finally {
+            finally_jump_state(search_frame, sf_op_array, FINALLY_JUMP_CLEAR, 0, false);
+        }
 
         // A handler in this activation abandons the interrupted expression's
         // TMP/VAR values but keeps every CV live for the catch/finally body.
@@ -2455,7 +2737,10 @@ fn throw_in_frame<'a>(
                 [current_ip as usize..active_handler.try_end as usize];
             let first_release = release_window
                 .iter()
-                .find(|instruction| instruction.opcode == OpCode::ReleaseTemps);
+                .find(|instruction| {
+                    instruction.opcode == OpCode::ReleaseTemps
+                        && instruction._pad & RELEASE_TEMPS_ON_RETURN == 0
+                });
             // An argument subexpression can publish its own smaller cleanup
             // before the consuming frameless statement boundary. Prefer the
             // marked outer range only when it encloses that first range;
@@ -2469,6 +2754,7 @@ fn throw_in_frame<'a>(
                     .iter()
                     .find(|candidate| {
                         candidate.opcode == OpCode::ReleaseTemps
+                            && candidate._pad & RELEASE_TEMPS_ON_RETURN == 0
                             && candidate._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0
                             && candidate.op1 <= first_release.op1
                             && candidate.op2 >= first_release.op2
@@ -2501,32 +2787,39 @@ fn throw_in_frame<'a>(
         // catches. Continue through catch-only inner regions and select the
         // innermost enclosing region that can actually handle the value or
         // execute a finally block.
-        let matched_entry = sf_op_array
-            .try_entries
-            .iter()
-            .filter(|entry| current_ip >= entry.try_start && current_ip < entry.try_end)
-            // Re-entering exception dispatch at the instruction immediately
-            // after a completed finally must not select that same finally a
-            // second time.
-            .filter(|entry| {
-                entry.finally_start == u32::MAX || current_ip != entry.finally_end
-            })
-            .filter(|entry| {
-                entry.finally_start != 0xFFFFFFFF
-                    || entry
+        let matched_entry = if sf_op_array.has_finally {
+            match_nested_finally_entry(
+                sf_op_array,
+                current_ip,
+                &thrown,
+                eg,
+                return_cleanup_owner == Some(search_frame as usize),
+            )
+        } else {
+            // Preserve the compact ordinary catch-only path. No frame in this
+            // op-array can carry a pending finally completion.
+            sf_op_array
+                .try_entries
+                .iter()
+                .filter(|entry| current_ip >= entry.try_start && current_ip < entry.try_end)
+                .filter(|entry| {
+                    entry
                         .catches
                         .iter()
                         .any(|catch| exception_matches_catch(&thrown, &catch.types, eg))
-            })
-            // Nested entries are appended before their enclosing entry by
-            // the compiler, including when they share the same try_start.
-            .next();
+                })
+                .next()
+        };
 
         if let Some(entry) = matched_entry {
-            let matched_catch = entry
-                .catches
-                .iter()
-                .find(|c| exception_matches_catch(&thrown, &c.types, eg));
+            let matched_catch = if !sf_op_array.has_finally || current_ip < entry.try_end {
+                entry
+                    .catches
+                    .iter()
+                    .find(|c| exception_matches_catch(&thrown, &c.types, eg))
+            } else {
+                None
+            };
 
             if let Some(catch) = matched_catch {
                 let mut prepared_reference_assignment = None;
@@ -2588,12 +2881,12 @@ fn throw_in_frame<'a>(
                     pop_vm_call_frame(eg, frame);
                     frame = prev;
                 }
-                unsafe { cleanup_pending_calls(eg, search_frame) };
                 let base_ptr = sf_op_array.instructions.as_ptr();
                 // SAFETY: unwind reached the selected live frame. The catch
                 // CV and next opline come from its validated table;
                 // assignment_slot_set preserves a pre-existing reference.
                 unsafe {
+                    cleanup_pending_calls(eg, search_frame);
                     if let Some(catch_cv) = catch.catch_cv {
                         assignment_slot_set(
                             (*search_frame).cv_mut(catch_cv),
@@ -2624,7 +2917,19 @@ fn throw_in_frame<'a>(
                 }
                 unsafe { cleanup_pending_calls(eg, search_frame) };
                 let base_ptr = sf_op_array.instructions.as_ptr();
-                if let Some((owner, displaced)) = displaced_exception.as_ref() {
+                let nested_inside_displaced_finally = displaced_exception
+                    .as_ref()
+                    .is_some_and(|(owner, _)| {
+                        search_frame == *owner
+                            && nested_finally_keeps_displaced_exception(
+                                sf_op_array,
+                                current_ip,
+                                entry.finally_start,
+                            )
+                    });
+                if let Some((owner, displaced)) = displaced_exception.as_ref()
+                    && !nested_inside_displaced_finally
+                {
                     append_replaced_exception(&thrown, displaced, eg);
                     if let Some(pending) = eg.finally_exceptions.get_mut(&(*owner as usize)) {
                         pending.pop();

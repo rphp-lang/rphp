@@ -278,6 +278,117 @@ echo returnFromIterator(), '|', returnFromArray();
 }
 
 #[test]
+fn array_and_object_foreach_abrupt_completions_release_at_php_boundaries() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ArrayLoopValue {
+    public function __construct(private string $label) {}
+    public function __destruct() { echo "destroy:$this->label|"; }
+}
+foreach ([new ArrayLoopValue('outer')] as $outer) {
+    $outer = null;
+    try {
+        foreach ([new ArrayLoopValue('inner')] as $inner) {
+            $inner = null;
+            goto afterInner;
+        }
+    } finally {
+        echo 'inner-finally|';
+    }
+afterInner:
+}
+echo 'goto-complete|';
+
+class ThrowingObjectLoopSource {
+    public int $entry = 1;
+    public function __destruct() {
+        echo 'source-destroy|';
+        throw new RuntimeException('source-cleanup');
+    }
+}
+foreach ([0] as $sentinel) {
+    try {
+        foreach (new ThrowingObjectLoopSource as $entry) {
+            try {
+                break 2;
+            } finally {
+                echo 'break-finally|';
+            }
+        }
+    } catch (Throwable $error) {
+        echo 'caught:', $error->getMessage(), '|';
+    } finally {
+        echo 'outer-finally|';
+    }
+}
+echo 'break-complete|';
+
+class RetainedReturnValue {
+    public function __destruct() {
+        echo 'return-destroy|';
+        throw new Exception('return-cleanup');
+    }
+}
+function returnWithRetainedIterationValue(): int {
+    try {
+        foreach ([new RetainedReturnValue] as $value) {
+            try {
+                echo 'return|';
+                return 7;
+            } finally {
+                echo 'return-inner-finally|';
+            }
+        }
+    } finally {
+        echo 'return-outer-finally|';
+    }
+}
+try {
+    echo returnWithRetainedIterationValue();
+} catch (Throwable $error) {
+    echo get_class($error), ':', $error->getMessage(), '|';
+}
+"#,
+        ),
+        concat!(
+            "destroy:inner|inner-finally|destroy:outer|goto-complete|",
+            "break-finally|source-destroy|caught:source-cleanup|outer-finally|break-complete|",
+            "return|return-inner-finally|return-outer-finally|return-destroy|",
+            "Exception:return-cleanup|",
+        )
+    );
+}
+
+#[test]
+fn caught_iteration_exception_keeps_the_remaining_array_snapshot_live() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class FailingIterationEntry {
+    public function visit() {
+        echo 'visit|';
+        throw new RuntimeException('continue');
+    }
+}
+$entries = [new FailingIterationEntry, new FailingIterationEntry];
+foreach ($entries as $entry) {
+    try {
+        if ($entry->visit()) {
+            return;
+        }
+    } catch (RuntimeException $error) {
+        echo 'caught|';
+    }
+}
+echo 'done:', count($entries), '|';
+"#,
+        ),
+        "visit|caught|visit|caught|done:2|"
+    );
+}
+
+#[test]
 fn direct_include_and_eval_keep_destructor_origin_and_trace_frames() {
     let body = r#"static function (string $label): string {
     foreach (new OriginObjectSource($label) as $entry) {
