@@ -8,36 +8,41 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
-`throwable-internal-state-and-rendering`, pinned to php-src 8.5 commit
-`fcc29c8` and validated against PHP 8.5.10. `Exception` and `Error` now
-materialize PHP's seven-slot declared layout, including canonical private
-`string`, `trace` and `previous` state. Inherited internal constructors enforce
-their reflected signatures, creation origins and traces survive rethrow,
-malformed reflected traces warn and render best effort, and exception
-replacement does not mutate a shared `previous` ancestor.
+`magic-property-lvalue-transaction`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.10. Property append/dimension updates now use one
+deferred l-value transaction: `__get` observes the committed operand order,
+by-reference results expose their storage, object results retain identity, and
+by-value containers emit the indirect-modification notice without a synthetic
+`__set` writeback. A declared property explicitly removed by `unset()` retains
+distinct state from an initially uninitialized typed property, so magic access,
+clone, readonly reinitialization and later type validation run at PHP's
+observable boundary. Recursive NUL property writes and unsets raise the
+canonical catchable error without mutation.
 
-The clean-room nine-case oracle is exact in seven cases. The two retained gaps,
-delayed message conversion and reference-returning `__toString()`, share the
-separate reentrant fatal-rendering boundary. The exact-final-binary 13-case
-focused manifest is 10 pass and three unchanged runtime failures and hashes to
-`ed228d849f3640fa357362528b03a3bdd6a3e7919b561515b82ea7022b7dc03f`.
+Seven original clean-room E2E cases cover by-value, by-reference, object,
+ordinary-missing, explicit-unset, readonly-clone and failed typed-write paths.
+The exact 16-case focused manifest is 11 pass and five retained failures and
+hashes to
+`84bfb7aa1d1a98a8593322acde9a451695207dfe7d1b4f8fe9dd3b19a2f42b73`.
+Those holdouts are the separate `ArrayObject`/SPL boundary, three broader
+`bug75420` typed-property conversions and property-hook integration.
 
 The final 5,599-case Zend/lang manifest hashes to
-`ad9222df529ba67e4eaae6bce90c2819af6402d46bdb00cff30510dec1e82ff8`:
-4,626 pass, 677 fail, 115 skip and 181 unsupported. The parent-identical
+`36dafaf8492005858baaa206150730badd6a5117bda7bdb46c5ee5a5bddad82a`:
+4,647 pass, 656 fail, 115 skip and 181 unsupported. The parent-identical
 1,575-case strings/array projection remains 1,459 pass, 18 fail, 67 skip and
 31 unsupported and hashes to
 `9f5edf942abcc866a1c0c833bca1a4dbef97b344295e36fd07314f233e29b0ce`.
 The combined 7,174-case manifest and pass set hash to
-`ebf96f28f161c0a899f251ba3645eac05649f6bcb280d3354239ba8b1b3b8774`
-and `4e762436008d3c57fdca65a0664170723fafbf96dab96383bd44aa37d3294586`:
-6,085 pass, 695 fail, 182 skip and 212 unsupported, with no timeout or crash.
-The exact delta is `+10/-0`, with no other status or failure-stage movement;
-supported debt is 677 Zend/lang failures, 18 strings failures and zero array
-failures.
+`4828721c6dec5e8720651c48ffea25977b8792d0aab7268a65f8144aef2578b3`
+and `334b34a0f6d06a7b4c0c7930ced58915cfdf163d5d15cc890e61c10c71c6039a`:
+6,106 pass, 674 fail, 182 skip and 212 unsupported, with no timeout or crash.
+The exact delta is `+21/-0`; four non-passing typed-property cases advance from
+a premature runtime fatal to their later output mismatch. Supported debt is
+656 Zend/lang failures, 18 strings failures and zero array failures.
 
 The exact final candidate SHA-256 is
-`9ec3374c2b9b2143537ad6a44c7cb36120dbb7983c6afad1ac46edb66126b2b0`.
+`2081b86800f7fb31b86b76f3fa411ec2b74cf48e961374b05e9ea01a46c76e06`.
 All five Cargo configurations, all-feature/all-target checking, formatting,
 HTML data, PHPT runner and unsafe policy pass. Production remains at 1,623
 unsafe blocks and 289 unsafe functions, with 388 SAFETY annotations and seven
@@ -46,17 +51,17 @@ unsafe blocks and 289 unsafe functions, with 388 SAFETY annotations and seven
 
 The fixed-baseline CPU-2 gate uses 32 balanced pairs with exact checksums and
 hashes to
-`4d9ced072fcdd249722110557d127895b9085e27b27b04e85cc7782ef15aaf73`.
-Paired medians are ordinary calls -0.077%, ordinary construction -0.347%,
-property reads -0.383% and property writes +0.440%. The deliberately expanded
-Throwable layout measures +4.431% for construction and +5.622% for throw/catch;
-that localized cost remains explicit optimization work rather than weakening
-the PHP state contract.
+`a2c63364046d173817a17e9ac49539f53553aded5149e62edb7eb2973abe528e`.
+Paired medians are startup -2.265%, ordinary construction -24.738%, property
+reads -0.124%, property writes +0.837% and ordinary calls +0.217%. Constructor
+sites reuse the existing 16-byte inline-cache word for the stable Throwable
+relation, avoiding a repeated string hierarchy lookup without changing the
+cache ABI.
 
-This checkpoint does not claim reentrant fatal message conversion, internal
-Reflection file/line type metadata, property hooks, general SPL,
-Fiber/generator suspension, PHP 8.2, 32-bit behavior or allocation-limit/OOM
-equivalence. The implementation checkpoint is commit `2bda0141`.
+This checkpoint does not claim `ArrayObject` or general SPL, property hooks,
+the remaining typed-property conversion cases, Fiber/generator suspension,
+PHP 8.2, 32-bit behavior or allocation-limit/OOM equivalence. The
+implementation checkpoint is commit `8b272d9b`.
 
 The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `magic-call-trampoline-resolution`, pinned to php-src 8.5 commit `fcc29c8` and

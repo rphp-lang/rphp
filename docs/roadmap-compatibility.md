@@ -4776,6 +4776,28 @@ The monitored supported debt is now 695 failures: 18 strings, zero array and
 property hooks, internal SPL metadata, Fiber/generator suspension, PHP 8.2,
 32-bit behavior and allocation-limit/OOM equivalence remain separate boundaries.
 
+The `8b272d9b` `magic-property-lvalue-transaction` train then moves Zend/lang
+from 4,626 to 4,647 pass, exactly `+21/-0`. One deferred property l-value
+transaction preserves getter/operand order and distinguishes reference,
+identity-preserving object and by-value container results. Explicitly unset
+declared properties retain separate state from initially uninitialized typed
+properties across magic access, clone, readonly reinitialization and failed
+typed writes; recursive NUL property operations now fail without mutation.
+
+The exact final Zend/lang manifest and parent-identical strings/array projection
+cover 7,174 cases with no lost pass, timeout or crash. Four remaining typed
+cases advance from a premature fatal to a later output mismatch. All five Cargo
+configurations, all-feature/all-target, formatting, HTML data, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.10 S2/S3 pass. The fixed
+baseline CPU-2 32-pair gate measures ordinary construction -24.738%, property
+read -0.124%, property write +0.837% and calls +0.217%; a cached stable
+Throwable relation fits the existing 16-byte constructor cache.
+
+The monitored supported debt is now 674 failures: 18 strings, zero array and
+656 Zend/lang. `ArrayObject`/general SPL, property hooks, remaining typed
+conversion cases, Fiber/generator suspension, PHP 8.2, 32-bit behavior and
+allocation-limit/OOM equivalence remain separate boundaries.
+
 General Iterator/IteratorAggregate and generator lifecycle, object iteration
 expansion, `ArrayAccess`, `ArrayObject`, `SplObjectStorage`, `SplFixedArray` and
 broader SPL remain separate contracts.
