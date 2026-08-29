@@ -1663,7 +1663,7 @@ pub(crate) unsafe fn compact_scalar_call_types_match(
 }
 
 /// VM error — replaces panic! in all runtime paths
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum VmError {
     Fatal(String),
     /// An uncatchable declaration/compile failure from a runtime-compiled

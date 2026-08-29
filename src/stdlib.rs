@@ -17251,7 +17251,7 @@ fn var_dump_value_inner(
                                 out.push_str(&format!(
                                     "{}  uninitialized({})\n",
                                     prefix,
-                                    definition.type_hint.display_name()
+                                    definition.type_hint.property_declaration_display_name()
                                 ));
                             }
                             continue;

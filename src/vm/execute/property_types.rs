@@ -460,7 +460,7 @@ pub(crate) fn prepare_property_assignment(
 
 #[cold]
 #[inline(never)]
-fn prepare_reference_assignment(
+fn prepare_reference_assignment_scalar(
     value: Value,
     constraints: &[crate::value::ReferencePropertyConstraint],
     eg: &ExecutorGlobals,
@@ -473,12 +473,27 @@ fn prepare_reference_assignment(
     let mut candidates = Vec::with_capacity(constraints.len() + 1);
     candidates.push(value.clone());
     for constraint in constraints {
-        if let Some(coerced) =
-            coerce_property_value(&value, &constraint.type_hint, !strict)
-        {
-            candidates.push(coerced);
+        if !property_type_matches_exact(
+            &value,
+            &constraint.type_hint,
+            eg,
+            &constraint.type_scope,
+            &constraint.called_class,
+        ) {
+            if let Some(coerced) = coerce_property_value(&value, &constraint.type_hint, !strict) {
+                candidates.push(coerced);
+            } else {
+                return Err(format!(
+                    "Cannot assign {} to reference held by property {}::${} of type {}",
+                    property_assignment_type_name(&value),
+                    property_diagnostic_class_name(&constraint.declaring_class),
+                    constraint.property,
+                    constraint.type_hint.property_declaration_display_name()
+                ));
+            }
         }
     }
+
     if let Some(candidate) = candidates.into_iter().find(|candidate| {
         constraints.iter().all(|constraint| {
             property_type_matches_exact(
@@ -493,24 +508,185 @@ fn prepare_reference_assignment(
         return Ok(candidate);
     }
 
-    let constraint = constraints
+    let owners = constraints
         .iter()
-        .find(|constraint| {
+        .map(|constraint| {
+            format!(
+                "property {}::${} of type {}",
+                property_diagnostic_class_name(&constraint.declaring_class),
+                constraint.property,
+                constraint.type_hint.property_declaration_display_name()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" and ");
+    Err(format!(
+        "Cannot assign {} to reference held by {owners}, as this would result in an inconsistent type conversion",
+        property_assignment_type_name(&value),
+    ))
+}
+
+#[inline]
+fn property_type_accepts_string(hint: &ParamTypeHint) -> bool {
+    match hint {
+        ParamTypeHint::String => true,
+        ParamTypeHint::Nullable(inner) => property_type_accepts_string(inner),
+        ParamTypeHint::Union(parts) => parts.iter().any(property_type_accepts_string),
+        _ => false,
+    }
+}
+
+/// Canonical CV reference-assignment boundary. The dispatch caller already
+/// routes every ordinary type failure through `throw_operator_error`; retain
+/// that hot ABI while carrying a rare engine control result only in the cold
+/// error value.
+enum ReferenceAssignmentError {
+    Type(String),
+    Vm(VmError),
+}
+
+#[cold]
+#[inline(never)]
+fn prepare_reference_assignment(
+    value: Value,
+    constraints: &[crate::value::ReferencePropertyConstraint],
+    eg: &mut ExecutorGlobals,
+    strict: bool,
+) -> Result<Value, ReferenceAssignmentError> {
+    let prepared = prepare_reference_assignment_scalar(value.clone(), constraints, eg, strict);
+    if prepared.is_ok()
+        || strict
+        || value.dereferenced().value_type() != ValueType::Object
+        || constraints.is_empty()
+        || !constraints.iter().all(|constraint| {
             !property_type_matches_exact(
                 &value,
                 &constraint.type_hint,
                 eg,
                 &constraint.type_scope,
                 &constraint.called_class,
-            )
+            ) && property_type_accepts_string(&constraint.type_hint)
         })
-        .unwrap_or(&constraints[0]);
-    Err(format!(
-        "Cannot assign {} to reference held by property {}::${} of type {}",
-        property_assignment_type_name(&value),
-        property_diagnostic_class_name(&constraint.declaring_class),
-        constraint.property,
-        constraint.type_hint.property_declaration_display_name()
+    {
+        return prepared.map_err(ReferenceAssignmentError::Type);
+    }
+    let rendered = match call_magic_method(eg, &value, "__tostring", &[]) {
+        Ok(rendered) => rendered,
+        Err(error) => return Err(ReferenceAssignmentError::Vm(error)),
+    };
+    if eg.exception.is_some() {
+        return prepared.map_err(ReferenceAssignmentError::Type);
+    }
+    let Some(rendered) = rendered else {
+        return prepared.map_err(ReferenceAssignmentError::Type);
+    };
+    if rendered.dereferenced().value_type() != ValueType::String {
+        return prepared.map_err(ReferenceAssignmentError::Type);
+    }
+    prepare_reference_assignment_scalar(
+        rendered.dereferenced().clone(),
+        constraints,
+        eg,
+        strict,
+    )
+    .map_err(ReferenceAssignmentError::Type)
+}
+
+/// Extend the non-reentrant scalar property guard with PHP's weak Stringable
+/// conversion. The user hook runs before the caller commits storage, so a
+/// reentrant write remains visible during conversion but the outer assignment
+/// wins only after the converted value passes the complete property contract.
+#[cold]
+#[inline(never)]
+fn prepare_property_assignment_with_stringable(
+    value: Value,
+    definition: &crate::compiler::compile::PropertyDefinition,
+    eg: &mut ExecutorGlobals,
+    strict: bool,
+    called_class: &str,
+    receiver: *const Value,
+) -> Result<Result<Value, String>, VmError> {
+    let prepared = prepare_property_assignment(
+        value.clone(),
+        definition,
+        eg,
+        strict,
+        called_class,
+    );
+    if prepared.is_ok()
+        || strict
+        || value.dereferenced().value_type() != ValueType::Object
+        || !property_type_accepts_string(&definition.type_hint)
+    {
+        return Ok(prepared);
+    }
+    let Some(rendered) = call_magic_method(eg, &value, "__tostring", &[])? else {
+        return Ok(prepared);
+    };
+    if rendered.dereferenced().value_type() != ValueType::String {
+        return Ok(prepared);
+    }
+    let prepared = prepare_property_assignment(
+        rendered.dereferenced().clone(),
+        definition,
+        eg,
+        strict,
+        called_class,
+    );
+    // SAFETY: the active opcode still owns the receiver slot. Re-read it only
+    // after user code returns because that code may have replaced its value.
+    if unsafe { (&*receiver).as_object().is_none() } {
+        eg.exception = Some(make_error_value(
+            "Error",
+            &format!(
+                "Object was released while assigning to property {}::${}",
+                property_diagnostic_class_name(called_class),
+                definition.name,
+            ),
+        ));
+    }
+    Ok(prepared)
+}
+
+/// Apply the same deferred Stringable conversion to a cell owned by typed
+/// properties. Every owner must independently choose string conversion; mixed
+/// exact/coerced outcomes retain the canonical inconsistent-conversion error.
+#[cold]
+#[inline(never)]
+fn prepare_reference_assignment_with_stringable(
+    value: Value,
+    constraints: &[crate::value::ReferencePropertyConstraint],
+    eg: &mut ExecutorGlobals,
+    strict: bool,
+) -> Result<Result<Value, String>, VmError> {
+    let prepared = prepare_reference_assignment_scalar(value.clone(), constraints, eg, strict);
+    if prepared.is_ok()
+        || strict
+        || value.dereferenced().value_type() != ValueType::Object
+        || constraints.is_empty()
+        || !constraints.iter().all(|constraint| {
+            !property_type_matches_exact(
+                &value,
+                &constraint.type_hint,
+                eg,
+                &constraint.type_scope,
+                &constraint.called_class,
+            ) && property_type_accepts_string(&constraint.type_hint)
+        })
+    {
+        return Ok(prepared);
+    }
+    let Some(rendered) = call_magic_method(eg, &value, "__tostring", &[])? else {
+        return Ok(prepared);
+    };
+    if rendered.dereferenced().value_type() != ValueType::String {
+        return Ok(prepared);
+    }
+    Ok(prepare_reference_assignment_scalar(
+        rendered.dereferenced().clone(),
+        constraints,
+        eg,
+        strict,
     ))
 }
 

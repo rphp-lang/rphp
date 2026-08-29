@@ -1576,8 +1576,11 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                 && !definition.has_get_hook
                 && !definition.set_hook_is_backed
         });
-        let typed_property = definition
+        let typed_property_definition = definition
             .filter(|definition| definition.is_typed())
+            .cloned();
+        let typed_property = typed_property_definition
+            .as_ref()
             .map(|definition| (definition.type_scope.clone(), definition.name.clone()));
         let explicitly_unset_declared = declared_slot.is_some()
             && obj
@@ -1760,7 +1763,8 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                     "Error",
                     &format!(
                         "Typed property {}::${} must not be accessed before initialization",
-                        type_scope, property_name
+                        property_diagnostic_class_name(type_scope),
+                        property_name
                     ),
                 );
                 return Ok(match throw_in_frame(eg, frame, error)? {
@@ -1865,6 +1869,39 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                 return Ok(result);
             }
             if let Some(mut result) = magic_value {
+                if explicitly_unset_declared
+                    && let Some(definition) = typed_property_definition.as_ref()
+                {
+                    let original = result.dereferenced().clone();
+                    let original_type = property_assignment_type_name(&original).to_string();
+                    let prepared = match prepare_property_assignment(
+                        original,
+                        definition,
+                        eg,
+                        op_array.strict_types,
+                        &class_name,
+                    ) {
+                        Ok(prepared) => prepared,
+                        Err(_) => {
+                            return Ok(object_property_throw(
+                                eg,
+                                frame,
+                                "TypeError",
+                                format!(
+                                    "Value of type {original_type} returned from {class_name}::__get() must be compatible with unset property {}::${} of type {}",
+                                    property_diagnostic_class_name(&definition.declaring_class),
+                                    definition.name,
+                                    definition.type_hint.property_declaration_display_name(),
+                                ),
+                            )?);
+                        }
+                    };
+                    if result.is_reference() {
+                        result.assign_dereferenced(prepared);
+                    } else {
+                        result = prepared;
+                    }
+                }
                 if opline._pad & FETCH_OBJ_MODIFY != 0 {
                     if result.is_reference() {
                         result.mark_indirect_property_modification_reference();
@@ -1949,7 +1986,7 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                                 .get(object.class_name.as_ref())
                                 .is_some_and(|class_def| class_def.allow_dynamic_properties)
                     });
-                    if !dynamic_properties_allowed {
+                    if !dynamic_properties_allowed && !explicitly_unset_declared {
                         report_php_deprecation(
                             eg,
                             frame,
@@ -2879,7 +2916,8 @@ fn op_bind_obj_prop_ref<'a>(
                 "Error",
                 format!(
                     "Cannot access uninitialized non-nullable property {}::${} by reference",
-                    definition.declaring_class, definition.name
+                    property_diagnostic_class_name(&definition.declaring_class),
+                    definition.name
                 ),
             )?);
         }
@@ -3955,13 +3993,19 @@ fn op_assign_obj_prop_inner<'a>(
                 )?);
             }
             if definition_ref.is_typed() && definition_ref.generic_declaration.is_none() {
-                assigned = match prepare_property_assignment(
+                let definition = (*definition_ref).clone();
+                let prepared = prepare_property_assignment_with_stringable(
                     assigned,
-                    definition_ref,
+                    &definition,
                     eg,
                     op_array.strict_types,
                     &object_class_name,
-                ) {
+                    obj as *const Value,
+                )?;
+                if let Some(result) = take_magic_exception(eg, frame)? {
+                    return Ok(result);
+                }
+                assigned = match prepared {
                     Ok(value) => value,
                     Err(message) => {
                         return Ok(object_property_throw(
@@ -3974,7 +4018,7 @@ fn op_assign_obj_prop_inner<'a>(
                 };
             }
         }
-        assigned = match prepare_reference_assignment(
+        assigned = match prepare_reference_assignment_scalar(
             assigned,
             &property_constraints,
             eg,
@@ -3988,10 +4032,16 @@ fn op_assign_obj_prop_inner<'a>(
 
         // Cache: if public, not enum, not readonly, key == name → mark for write fast path.
         if prop_is_public && prop_is_writable && key == name && object_class_id != 0 {
-            let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
-            let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
+            // SAFETY: `opline` belongs to `op_array.instructions`, and the
+            // instruction-indexed cache slot remains live for this op array.
+            let ic_mut = unsafe {
+                let ip = (opline as *const Instruction)
+                    .offset_from(op_array.instructions.as_ptr()) as usize;
+                &mut *(op_array.cache.as_ptr().add(ip)
+                    as *mut crate::vm::instruction::InlineCache)
+            };
             if let Some(slot) = declared_slot {
-                if let Some(definition) = definition
+                if let Some(definition) = eg.instance_property_definition(object_class_id, slot)
                     && definition.is_typed()
                 {
                     ic_mut.set_typed_instance_property(definition, object_class_id, slot);

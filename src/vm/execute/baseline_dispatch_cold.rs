@@ -1060,7 +1060,7 @@ fn caller_scope_operation(
                         frame_slot_set(owner, slot, value);
                     } else {
                         let constraints = slot.reference_property_constraints();
-                        value = match prepare_reference_assignment(value, &constraints, eg, strict) {
+                        value = match prepare_reference_assignment_scalar(value, &constraints, eg, strict) {
                             Ok(value) => value,
                             Err(error) => return CallerScopeResult::Written(Err(error)),
                         };
@@ -1075,7 +1075,7 @@ fn caller_scope_operation(
                             .get(name)
                             .map(Value::reference_property_constraints)
                             .unwrap_or_default();
-                        value = match prepare_reference_assignment(value, &constraints, eg, strict) {
+                        value = match prepare_reference_assignment_scalar(value, &constraints, eg, strict) {
                             Ok(value) => value,
                             Err(error) => return CallerScopeResult::Written(Err(error)),
                         };
@@ -1096,7 +1096,7 @@ fn caller_scope_operation(
                             .and_then(|variables| variables.get(name))
                             .map(Value::reference_property_constraints)
                             .unwrap_or_default();
-                        value = match prepare_reference_assignment(value, &constraints, eg, strict) {
+                        value = match prepare_reference_assignment_scalar(value, &constraints, eg, strict) {
                             Ok(value) => value,
                             Err(error) => return CallerScopeResult::Written(Err(error)),
                         };
@@ -1323,7 +1323,7 @@ fn op_dynamic_variable<'a>(
                     let raw = (*owner).cv_mut(cv);
                     if raw.is_reference() {
                         let constraints = raw.reference_property_constraints();
-                        value = match prepare_reference_assignment(
+                        value = match prepare_reference_assignment_scalar(
                             value,
                             &constraints,
                             eg,
@@ -1350,7 +1350,7 @@ fn op_dynamic_variable<'a>(
                     .get(&name)
                     .map(Value::reference_property_constraints)
                     .unwrap_or_default();
-                value = match prepare_reference_assignment(
+                value = match prepare_reference_assignment_scalar(
                     value,
                     &constraints,
                     eg,
@@ -1375,7 +1375,7 @@ fn op_dynamic_variable<'a>(
                     .and_then(|variables| variables.get(&name))
                     .map(Value::reference_property_constraints)
                     .unwrap_or_default();
-                value = match prepare_reference_assignment(
+                value = match prepare_reference_assignment_scalar(
                     value,
                     &constraints,
                     eg,
@@ -3752,17 +3752,17 @@ fn op_unset_static_prop<'a>(
 #[cold]
 #[inline(never)]
 fn prepare_other_static_reference_constraints(
-    eg: &ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
     storage_slot: usize,
     value: Value,
     strict: bool,
-) -> Result<Value, String> {
+) -> Result<Result<Value, String>, VmError> {
     let mut constraints = eg
         .static_property_value(storage_slot)
         .map(Value::reference_property_constraints)
         .unwrap_or_default();
     constraints.retain(|constraint| constraint.owner != storage_slot);
-    prepare_reference_assignment(value, &constraints, eg, strict)
+    prepare_reference_assignment_with_stringable(value, &constraints, eg, strict)
 }
 
 #[cold]
@@ -3774,12 +3774,16 @@ fn commit_constrained_static_property_value<'a>(
     value: Value,
     strict: bool,
 ) -> Result<ColdResult<'a>, VmError> {
-    let value = match prepare_other_static_reference_constraints(
+    let prepared = prepare_other_static_reference_constraints(
         eg,
         storage_slot,
         value,
         strict,
-    ) {
+    )?;
+    if let Some(result) = take_magic_exception(eg, frame)? {
+        return Ok(result);
+    }
+    let value = match prepared {
         Ok(value) => value,
         Err(message) => {
             return Ok(static_property_throw(
@@ -4466,12 +4470,16 @@ fn assign_static_property_cache_miss<'a>(
     } else {
         std::ptr::null()
     };
-    value = match prepare_other_static_reference_constraints(
+    let prepared = prepare_other_static_reference_constraints(
         eg,
         resolved.storage_slot,
         value,
         op_array.strict_types,
-    ) {
+    )?;
+    if let Some(result) = take_magic_exception(eg, frame)? {
+        return Ok(result);
+    }
+    value = match prepared {
         Ok(value) => value,
         Err(message) => {
             return Ok(static_property_throw(
@@ -5295,7 +5303,7 @@ fn op_global_dimension<'a>(
                 {
                     constraints = (*frame).cv(cv).reference_property_constraints();
                 }
-                value = match prepare_reference_assignment(
+                value = match prepare_reference_assignment_scalar(
                     value,
                     &constraints,
                     eg,

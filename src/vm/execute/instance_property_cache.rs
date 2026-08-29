@@ -46,7 +46,7 @@ fn prepare_cached_instance_reference_write(
     let constraints = unsafe {
         (&*object.object_property_slot_unchecked(slot)).reference_property_constraints()
     };
-    prepare_reference_assignment(value, &constraints, eg, strict)
+    prepare_reference_assignment_scalar(value, &constraints, eg, strict)
 }
 
 /// Complete typed-property path for conversions, complex declarations and

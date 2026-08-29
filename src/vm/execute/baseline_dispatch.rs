@@ -1199,17 +1199,60 @@ fn string_offset_key(value: &Value) -> StringOffsetKey {
     }
 }
 
+trait OperatorErrorMessage {
+    fn message(&self) -> &str;
+
+    fn vm_error(&self) -> Option<VmError> {
+        None
+    }
+}
+
+impl OperatorErrorMessage for str {
+    fn message(&self) -> &str {
+        self
+    }
+}
+
+impl OperatorErrorMessage for String {
+    fn message(&self) -> &str {
+        self
+    }
+}
+
+impl OperatorErrorMessage for ReferenceAssignmentError {
+    fn message(&self) -> &str {
+        match self {
+            ReferenceAssignmentError::Type(message) => message,
+            ReferenceAssignmentError::Vm(_) => "",
+        }
+    }
+
+    fn vm_error(&self) -> Option<VmError> {
+        match self {
+            ReferenceAssignmentError::Type(_) => None,
+            ReferenceAssignmentError::Vm(error) => Some(error.clone()),
+        }
+    }
+}
+
 #[cold]
 #[inline(never)]
-fn throw_operator_error<'a>(
+fn throw_operator_error<'a, M: OperatorErrorMessage + ?Sized>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &'a crate::compiler::OpArray,
     instruction_index: usize,
     class_name: &str,
-    message: &str,
+    message: &M,
 ) -> Result<ThrowResult<'a>, VmError> {
-    let error = make_error_value(class_name, message);
+    if let Some(error) = message.vm_error() {
+        return Err(error);
+    }
+    let displaced = eg.exception.take();
+    let error = make_error_value(class_name, message.message());
+    if let Some(displaced) = displaced.as_ref() {
+        append_replaced_exception(&error, displaced, eg);
+    }
     // Arithmetic bytecode is commonly emitted before the located statement
     // consumer (Return, call, echo or constant definition). Use that nearest
     // source entry while the failing frame is still live; a preceding entry

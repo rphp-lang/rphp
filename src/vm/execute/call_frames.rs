@@ -84,7 +84,7 @@ fn prepare_catch_variable_assignment(
             return Ok(None);
         }
         let constraints = catch_variable.reference_property_constraints();
-        match prepare_reference_assignment(
+        match prepare_reference_assignment_scalar(
             thrown.clone(),
             &constraints,
             eg,
