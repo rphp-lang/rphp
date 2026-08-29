@@ -4,6 +4,12 @@ use crate::lexer::Token;
 
 include!("parser/ast.rs");
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NamespaceDeclarationStyle {
+    Bracketed,
+    Unbracketed,
+}
+
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
@@ -31,6 +37,11 @@ pub struct Parser {
     /// eligibility. The state is shared by nested and namespace parsers
     /// because the rule applies to the complete source unit.
     strict_types_allowed: bool,
+    /// Namespace declarations are a source-unit grammar, not an ordinary
+    /// block statement. Retain the first declaration form so later parsing
+    /// can reject mixing, nesting and code between bracketed blocks before
+    /// any of that code reaches compilation or execution.
+    namespace_style: Option<NamespaceDeclarationStyle>,
     /// Empty dimensions use a distinct diagnostic in unset() targets.
     empty_dimension_unset_context: bool,
     /// Some write/reference grammars parse the target prefix first and consume

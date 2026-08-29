@@ -865,6 +865,16 @@ impl<'a> Lexer<'a> {
                             continue;
                         }
                     }
+                    // A reserved word followed immediately by a namespace
+                    // separator is a qualified-name segment in PHP. Keep the
+                    // explicit `namespace\Name` marker contextual, but do not
+                    // let names such as `fn\test` enter arrow-function grammar.
+                    if !ident.eq_ignore_ascii_case("namespace")
+                        && self.src.get(self.pos) == Some(&b'\\')
+                    {
+                        tokens.push(Token::Identifier(ident, line));
+                        continue;
+                    }
                     match ident.as_str() {
                         "echo" => {
                             tokens.push(Token::Echo { line });
@@ -959,6 +969,38 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                 }
                 b'\\' => {
+                    let group_use_boundary = matches!(
+                        tokens.last(),
+                        Some(Token::Identifier(_, _) | Token::Enum { .. })
+                    ) && self.src[self.pos + 1..]
+                        .iter()
+                        .copied()
+                        .find(|byte| !byte.is_ascii_whitespace())
+                        == Some(b'{');
+                    let separated_from_left_name = self
+                        .pos
+                        .checked_sub(1)
+                        .and_then(|position| self.src.get(position))
+                        .is_some_and(u8::is_ascii_whitespace)
+                        && matches!(
+                            tokens.last(),
+                            Some(Token::Identifier(_, _) | Token::Enum { .. } | Token::Namespace)
+                        );
+                    let separated_from_right_name = self
+                        .src
+                        .get(self.pos + 1)
+                        .is_some_and(u8::is_ascii_whitespace);
+                    if !group_use_boundary
+                        && (separated_from_left_name || separated_from_right_name)
+                    {
+                        let line = self.source_line_at(self.pos);
+                        tokens.push(Token::ParseError(
+                            "syntax error, unexpected token \"\\\"".to_string(),
+                            line,
+                        ));
+                        self.pos = self.src.len();
+                        continue;
+                    }
                     tokens.push(Token::Backslash);
                     self.pos += 1;
                 }

@@ -18,6 +18,47 @@ impl Parser {
         self.closest_token_source_line_before(self.pos)
     }
 
+    fn current_token_source_line(&self) -> usize {
+        match self.peek() {
+            Token::This(line)
+            | Token::Variable(_, line)
+            | Token::Identifier(_, line)
+            | Token::Dollar(line)
+            | Token::LParen(line)
+            | Token::LBracket(line)
+            | Token::LBrace(line)
+            | Token::Fn(line)
+            | Token::Use(line)
+            | Token::Static(line)
+            | Token::Abstract(line)
+            | Token::Final(line)
+            | Token::Enum { line, .. }
+            | Token::Comma(line)
+            | Token::Case(line)
+            | Token::Default(line)
+            | Token::DotDotDot(line)
+            | Token::PipeGreater(line)
+            | Token::Function(line)
+            | Token::Exit { line, .. }
+            | Token::Match(line)
+            | Token::Yield(line)
+            | Token::Clone(line)
+            | Token::AttributeStart(line)
+            | Token::ParseError(_, line)
+            | Token::CompileError(_, line)
+            | Token::CompileWarning(_, line)
+            | Token::CompileDeprecation(_, line)
+            | Token::MagicConstant { line, .. }
+            | Token::Goto { line, .. }
+            | Token::Echo { line }
+            | Token::Return { line }
+            | Token::Foreach { line }
+            | Token::As(line) => line,
+            Token::New(line) | Token::Throw(line) => line as usize,
+            _ => self.closest_token_source_line(),
+        }
+    }
+
     fn closest_token_source_line_before(&self, position: usize) -> usize {
         self.tokens[..position]
             .iter()
@@ -751,6 +792,40 @@ impl Parser {
         }
     }
 
+    /// Namespace declaration names admit PHP's relaxed keyword segments.
+    /// Keep this contextual rather than reclassifying keywords globally: the
+    /// same tokens still have their ordinary grammar roles everywhere else.
+    fn parse_namespace_declaration_name(&mut self) -> Result<String, String> {
+        let mut parts = Vec::new();
+        loop {
+            let token = self.advance();
+            let line = self.closest_token_source_line();
+            let part = match token {
+                Token::Identifier(name, token_line) | Token::Enum { name, line: token_line } => {
+                    self.last_primary_line = Some(token_line);
+                    name
+                }
+                Token::Fn(token_line) => {
+                    self.last_primary_line = Some(token_line);
+                    "fn".to_string()
+                }
+                Token::Namespace => "namespace".to_string(),
+                other => {
+                    return Err(self.source_error(
+                        &format!("Expected identifier in qualified name, got {other:?}"),
+                        line,
+                    ));
+                }
+            };
+            parts.push(part);
+            if self.peek() != Token::Backslash {
+                break;
+            }
+            self.advance();
+        }
+        Ok(parts.join("\\"))
+    }
+
     /// Parse PHP's explicit namespace-relative form, `namespace\\Name`.
     /// The marker is retained so resolution can bypass ordinary imports.
     fn parse_namespace_relative_name(&mut self) -> Result<String, String> {
@@ -837,6 +912,7 @@ impl Parser {
         };
         let (mut parts, name_line) = match self.advance() {
             Token::Identifier(name, line) | Token::Enum { name, line } => (vec![name], line),
+            Token::Fn(line) => (vec!["fn".to_string()], line),
             Token::Exit { line, .. } => {
                 return Err(self.source_error(
                     "syntax error, unexpected token \"exit\", expecting identifier or fully qualified name or namespaced name",
@@ -862,6 +938,7 @@ impl Parser {
             }
             match self.advance() {
                 Token::Identifier(name, _) | Token::Enum { name, .. } => parts.push(name),
+                Token::Fn(_) => parts.push("fn".to_string()),
                 other => {
                     return Err(format!(
                         "Expected identifier after '\\' in use declaration, got {:?}",

@@ -47,6 +47,7 @@ impl Parser {
             deferred_compile_error: None,
             deferred_compile_deprecations: Vec::new(),
             strict_types_allowed: true,
+            namespace_style: None,
             empty_dimension_unset_context: false,
             preserve_empty_dimension_suffix: false,
             new_postfix_error_suffix: None,
@@ -193,6 +194,16 @@ impl Parser {
 
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
         let strict_types_allowed = self.strict_types_allowed;
+        if self.outermost_scope
+            && self.namespace_style == Some(NamespaceDeclarationStyle::Bracketed)
+            && !matches!(
+                self.peek(),
+                Token::Namespace | Token::Semicolon(_) | Token::HaltCompiler { .. } | Token::Eof
+            )
+        {
+            let line = self.current_token_source_line();
+            self.compile_error("No code may exist outside of namespace {}", line);
+        }
         if !matches!(self.peek(), Token::Declare | Token::Semicolon(_)) {
             self.strict_types_allowed = false;
         }
@@ -331,9 +342,47 @@ impl Parser {
                 let name = if matches!(self.peek(), Token::LBrace(_)) {
                     String::new()
                 } else {
-                    self.parse_qualified_name()?
+                    self.parse_namespace_declaration_name()?
                 };
-                if matches!(self.peek(), Token::LBrace(_)) {
+                let line = self
+                    .last_primary_line
+                    .unwrap_or_else(|| self.current_token_source_line());
+                let style = if matches!(self.peek(), Token::LBrace(_)) {
+                    NamespaceDeclarationStyle::Bracketed
+                } else {
+                    NamespaceDeclarationStyle::Unbracketed
+                };
+                if self.namespace_style.is_none() && !strict_types_allowed {
+                    self.compile_error(
+                        "Namespace declaration statement has to be the very first statement or after any declare call in the script",
+                        line,
+                    );
+                }
+                if let Some(previous) = self.namespace_style
+                    && previous != style
+                {
+                    self.compile_error(
+                        "Cannot mix bracketed namespace declarations with unbracketed namespace declarations",
+                        line,
+                    );
+                } else if !self.outermost_scope {
+                    self.compile_error("Namespace declarations cannot be nested", line);
+                }
+                self.namespace_style.get_or_insert(style);
+                if name.eq_ignore_ascii_case("namespace") {
+                    self.compile_error(format!("Cannot use '{name}' as namespace name"), line);
+                } else if name
+                    .split_once('\\')
+                    .is_some_and(|(prefix, _)| prefix.eq_ignore_ascii_case("namespace"))
+                {
+                    return Err(self.source_error(
+                        &format!(
+                            "syntax error, unexpected namespace-relative name \"{name}\", expecting \"{{\""
+                        ),
+                        line,
+                    ));
+                }
+                if style == NamespaceDeclarationStyle::Bracketed {
                     // Braced namespace: namespace App\Models { ... }
                     self.advance(); // consume '{'
                     let mut body = Vec::new();
@@ -349,7 +398,10 @@ impl Parser {
                     // Unbraced namespace: namespace App\Models; (rest of file belongs to this namespace)
                     self.expect(&Token::Semicolon(0))?;
                     let mut body = Vec::new();
-                    while self.peek() != Token::Eof && self.peek() != Token::Namespace {
+                    while self.peek() != Token::Eof
+                        && self.peek() != Token::Namespace
+                        && self.peek() != Token::RBrace
+                    {
                         body.push(self.parse_stmt_in_scope(true)?);
                     }
                     Ok(Stmt::Namespace { name, body })
@@ -380,19 +432,19 @@ impl Parser {
                     loop {
                         let item_kind = if matches!(self.peek(), Token::Function(_)) {
                             if kind != UseKind::Class {
-                                return Err(
-                                    "Typed group use declaration cannot override its kind"
-                                        .to_string(),
-                                );
+                                return Err(self.source_error(
+                                    "syntax error, unexpected token \"function\", expecting \"}\"",
+                                    self.current_token_source_line(),
+                                ));
                             }
                             self.advance();
                             UseKind::Function
                         } else if self.peek() == Token::Const {
                             if kind != UseKind::Class {
-                                return Err(
-                                    "Typed group use declaration cannot override its kind"
-                                        .to_string(),
-                                );
+                                return Err(self.source_error(
+                                    "syntax error, unexpected token \"const\", expecting \"}\"",
+                                    self.current_token_source_line(),
+                                ));
                             }
                             self.advance();
                             UseKind::Const
@@ -410,10 +462,15 @@ impl Parser {
                             ));
                         }
                         if self.peek() == Token::Backslash {
-                            return Err(
-                                "Group use item cannot start with a namespace separator"
-                                    .to_string(),
-                            );
+                            let line = self.current_token_source_line();
+                            let name = Self::token_as_named_arg_label(&self.peek_at(1))
+                                .unwrap_or_default();
+                            return Err(self.source_error(
+                                &format!(
+                                    "syntax error, unexpected fully qualified name \"\\{name}\", expecting identifier or namespaced name or \"function\" or \"const\""
+                                ),
+                                line,
+                            ));
                         }
                         let (relative_name, nested_group, _) = self.parse_use_name()?;
                         if nested_group {
@@ -456,6 +513,12 @@ impl Parser {
                                 use_line,
                             ));
                         }
+                    }
+                    if let Token::LBrace(line) = self.peek() {
+                        return Err(self.source_error(
+                            "syntax error, unexpected token \"{\", expecting \"}\"",
+                            line,
+                        ));
                     }
                     self.expect(&Token::RBrace)?;
                 } else {
@@ -509,6 +572,22 @@ impl Parser {
                                 "syntax error, unexpected token \"exit\", expecting identifier",
                                 line,
                             ));
+                        }
+                        Token::Null | Token::True | Token::False => {
+                            let line = self
+                                .following_semicolon_source_line()
+                                .unwrap_or_else(|| self.closest_token_source_line());
+                            let name = match self.tokens[self.pos - 1] {
+                                Token::Null => "NULL",
+                                Token::True => "TRUE",
+                                Token::False => "FALSE",
+                                _ => unreachable!(),
+                            };
+                            self.compile_error(
+                                format!("Cannot redeclare constant '{name}'"),
+                                line,
+                            );
+                            (name.to_string(), line)
                         }
                         other => {
                             return Err(format!(

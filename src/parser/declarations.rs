@@ -833,6 +833,18 @@ impl Parser {
         } else {
             Vec::new()
         };
+        if matches!(self.peek(), Token::Identifier(_, _))
+            && self.peek_at(1) == Token::Backslash
+        {
+            let line = self.current_token_source_line();
+            let unexpected = self.parse_qualified_name()?;
+            return Err(self.source_error(
+                &format!(
+                    "syntax error, unexpected namespaced name \"{unexpected}\", expecting \"{{\""
+                ),
+                line,
+            ));
+        }
         self.expect(&Token::LBrace(0))?;
 
         let mut properties = Vec::new();

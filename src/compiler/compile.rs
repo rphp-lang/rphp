@@ -4933,8 +4933,10 @@ impl Compiler {
         name.to_string()
     }
 
-    /// Resolve a source-level function name. Function imports are separate
-    /// from class aliases and apply only to unqualified calls.
+    /// Resolve a source-level function name. Explicit function imports apply
+    /// to unqualified calls. A qualified call may instead begin with an
+    /// ordinary namespace/class alias (`use Vendor\Package as Alias;`), which
+    /// PHP expands before selecting the function in that namespace.
     fn resolve_function_name(&self, name: &str) -> String {
         if let Some(relative) = name.strip_prefix("namespace\\") {
             return self
@@ -4949,6 +4951,13 @@ impl Compiler {
             && let Some(fqn) = self.function_use_map.get(&name.to_ascii_lowercase())
         {
             return fqn.clone();
+        }
+        if let Some((first_segment, rest)) = name.split_once('\\')
+            && let Some(fqn) = self
+                .class_import_map
+                .get(&first_segment.to_ascii_lowercase())
+        {
+            return format!("{fqn}\\{rest}");
         }
         if let Some(namespace) = &self.current_namespace {
             return format!("{namespace}\\{name}");
