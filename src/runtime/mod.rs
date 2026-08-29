@@ -3135,6 +3135,27 @@ impl ExecutorGlobals {
         self.method_variance_dependency_plan(class_def).0
     }
 
+    /// Two unresolved class names can still become the same identity through
+    /// runtime `class_alias()`. Keep an eager declaration pending only for
+    /// that inconclusive relation; a contract with one known side remains a
+    /// compile-time ordering error, matching PHP's early-link boundary.
+    fn method_variance_requires_delayed_linking(&self, class_def: &ClassDef) -> bool {
+        let mut requires_delayed_linking = false;
+        self.visit_method_variance_contracts(class_def, |required, implementation| {
+            let errors = self.method_contract_errors(required, implementation, Some(class_def));
+            if errors.is_empty()
+                && !self
+                    .method_contract_strict_errors(required, implementation, Some(class_def))
+                    .is_empty()
+            {
+                requires_delayed_linking = true;
+                return false;
+            }
+            true
+        });
+        requires_delayed_linking
+    }
+
     pub(crate) fn unavailable_method_variance_dependency_error(
         &self,
         class_def: &ClassDef,
@@ -4278,7 +4299,8 @@ impl ExecutorGlobals {
             // retain the established eager-link behavior, including
             // unsupported internal parents that are intentionally absent.
             !class_def.implements.is_empty() && self.find_class(parent).is_none()
-        }) || property_hook_setter_variance_requires_delayed_linking(self, class_def)
+        }) || self.method_variance_requires_delayed_linking(class_def)
+            || property_hook_setter_variance_requires_delayed_linking(self, class_def)
             || class_def
                 .parent
                 .as_deref()
@@ -4354,6 +4376,38 @@ impl ExecutorGlobals {
             if let Some(error) = dependency_error {
                 self.active_runtime_class_relations.remove(&relation_key);
                 return Err(error);
+            }
+
+            let mut unavailable_variance_dependencies = Vec::new();
+            for dependency in self.method_variance_dependencies(&class_def) {
+                if self.find_class(&dependency).is_some() {
+                    continue;
+                }
+                match crate::stdlib::autoload::ensure_symbol_loaded(self, &dependency) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        if let Some(exception) = self.exception.take() {
+                            self.active_runtime_class_relations.remove(&relation_key);
+                            return Err(crate::vm::execute::VmError::Fatal(
+                                crate::vm::execute::format_uncaught_throwable(self, &exception),
+                            ));
+                        }
+                        unavailable_variance_dependencies.push(dependency);
+                    }
+                    Err(error) => {
+                        self.active_runtime_class_relations.remove(&relation_key);
+                        return Err(error);
+                    }
+                }
+            }
+            for dependency in unavailable_variance_dependencies {
+                if self.find_class(&dependency).is_none()
+                    && let Some(error) =
+                        self.unavailable_method_variance_dependency_error(&class_def, &dependency)
+                {
+                    self.active_runtime_class_relations.remove(&relation_key);
+                    return Err(crate::vm::execute::VmError::Fatal(error));
+                }
             }
 
             let result = self
