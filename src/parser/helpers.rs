@@ -18,6 +18,8 @@ impl Parser {
         self.closest_token_source_line_before(self.pos)
     }
 
+    #[cold]
+    #[inline(never)]
     fn current_token_source_line(&self) -> usize {
         match self.peek() {
             Token::This(line)
