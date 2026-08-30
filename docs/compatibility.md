@@ -7,6 +7,71 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The latest measured AMD64 PHP 8.5 builtin checkpoint is
+`high-reach-call-contracts-and-byte-provenance`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.10. `class_exists()`,
+`interface_exists()`, `trait_exists()`, `enum_exists()`, `preg_quote()` and
+`base64_encode()` now expose their exact PHP 8.5 reflected signatures and
+named-argument contracts. The existence probes preserve PHP kind filtering,
+autoload order, active-link visibility and reentrant source snapshots;
+`preg_quote()` preserves weak and strict conversion order, delimiters and
+arbitrary bytes; and `base64_encode()` returns the exact PHP byte sequence.
+The earlier pinned Symfony vendor trace ranked these six targets among 358
+static builtin calls.
+
+The same checkpoint closes the byte-provenance boundary exercised by those
+calls. Admitted filesystem, stream, process, coroutine, digest, JSON,
+serialization, output, array, generator, unpack, `ArrayObject`, concatenation
+and constant-fold paths now retain PHP bytes without conflating them with
+Unicode text. Mixed-provenance array keys keep PHP collision, reference, COW,
+append-index and cursor behavior, including definite misses that must not
+allocate or alias a Unicode key. Nineteen original E2E cases and the adjacent
+325-case class-link/autoload/namespace/include/JSON/unserialize/filesystem/
+array/generator/stream set pass.
+
+The committed on-demand reflection audit reports 1,201 PHP functions: 462
+names are present, 739 are missing, 23 present functions retain a call-shape
+mismatch, 387 retain a metadata mismatch and 52 are exact. All six target
+functions are exact. In the Symfony-base prioritization set, 461 of 733 names
+are present, 272 are missing, 23 retain a shape mismatch and 52 are exact. The
+fresh audit did not receive a vendor tree, so the 358-call ranking remains the
+earlier pinned trace rather than a new vendor measurement.
+
+Two exact final runs of the pinned 5,599-case Zend/lang set are byte-identical
+to the class-link parent: 4,785 pass, 518 fail, 115 skip and 181 unsupported,
+with no timeout or crash and exact delta `+0/-0`. Their manifest and summary
+hash to
+`7adeb4637b05046e2bc788007149707f37bd27c2b62e3fda5efcae76c43e8eb8`
+and `57e77ad30e6bf824e32e980118fd7cccf53c73dfee4b1a5cb7409f7fbb8ea776`.
+All default, no-default, erased-generics, reified-generics and all-feature Cargo
+test configurations, all-feature/all-target checking, formatting, HTML data,
+PHPT runner and both unsafe-policy checks pass. Production uses 1,621 unsafe
+blocks against a ceiling of 1,623, 289 unsafe functions, 397 SAFETY annotations
+and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates and
+PHP 8.5.10 warmed-kernel S2 and cold-build S3 pass on the final implementation.
+
+The fixed-parent CPU-2 release gate retains all 32 balanced randomized A/B
+pairs per workload, three warmups and exact output checksums, with no outlier
+removal. Paired medians are startup -0.375%, ordinary arrays -0.549%, ordinary
+string concatenation +0.227%, ordinary user calls +0.439%, generator resume
+-0.928% and associative JSON decode +0.036%. Pay-for-use workloads improve:
+`base64_encode()` -22.614%, `preg_quote()` -6.734%, `class_exists()` -9.638%,
+binary concatenation -2.583% and binary array/generator composition -2.079%.
+The raw 352-observation file and summary hash to
+`61c6e7d0d7a683b036f8403317e27f377bff831d8f93177b431287c215aa377c`
+and `7cc249a2014fceddf24e2ba957d2cabb3699110051fe05aad8df508d47aa40fd`.
+The parent and candidate binaries hash to
+`bd997afe0d56082004afa90c910b358c421e463514e6055c1c50463a377a8100`
+and `f0ce5a210cdd11c3d9b074ec60547254e3399a6097005e5eba2a2ab6c4e00dfa`;
+the candidate grows by 47,888 bytes (0.355%).
+
+This checkpoint does not claim the 739 missing functions, the remaining 23
+call-shape or 387 metadata mismatches, complete SPL or user stream-wrapper
+behavior, every extension's byte semantics, exit/shutdown output-buffer
+lifecycle, 32-bit behavior or allocation-limit/OOM equivalence. The exact
+implementation checkpoint is `5a5a8252`; the documentation-only status commit
+does not change its measured binary.
+
 The latest measured AMD64 PHP 8.5 language checkpoint is
 `class-link-validation-and-publication`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.10. Class-like declarations now cross
