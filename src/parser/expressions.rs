@@ -13,6 +13,7 @@ impl Parser {
                 op: BinOp::Or,
                 left: Box::new(left),
                 right: Box::new(right),
+                line: 0,
             };
         }
         Ok(left)
@@ -26,6 +27,7 @@ impl Parser {
                 op: BinOp::And,
                 left: Box::new(left),
                 right: Box::new(right),
+                line: 0,
             };
         }
         while self.peek() == Token::LogicalXor {
@@ -35,6 +37,7 @@ impl Parser {
                 op: BinOp::LogicalXor,
                 left: Box::new(left),
                 right: Box::new(right),
+                line: 0,
             };
         }
         while self.peek() == Token::LogicalOr {
@@ -44,6 +47,7 @@ impl Parser {
                 op: BinOp::Or,
                 left: Box::new(left),
                 right: Box::new(right),
+                line: 0,
             };
         }
         Ok(left)
@@ -58,6 +62,7 @@ impl Parser {
                 op: BinOp::LogicalXor,
                 left: Box::new(left),
                 right: Box::new(right),
+                line: 0,
             };
         }
         Ok(left)
@@ -72,6 +77,7 @@ impl Parser {
                 op: BinOp::And,
                 left: Box::new(left),
                 right: Box::new(right),
+                line: 0,
             };
         }
         Ok(left)
@@ -572,6 +578,7 @@ impl Parser {
                 op: BinOp::Or,
                 left: Box::new(left),
                 right: Box::new(right),
+                line: 0,
             };
         }
 
@@ -594,6 +601,7 @@ impl Parser {
                 op: BinOp::And,
                 left: Box::new(left),
                 right: Box::new(right),
+                line: 0,
             };
         }
 
@@ -624,6 +632,7 @@ impl Parser {
                 op: BinOp::BitwiseOr,
                 left: Box::new(left),
                 right: Box::new(right),
+                line: 0,
             };
         }
 
@@ -642,6 +651,7 @@ impl Parser {
                 op: BinOp::BitwiseXor,
                 left: Box::new(left),
                 right: Box::new(right),
+                line: 0,
             };
         }
 
@@ -660,6 +670,7 @@ impl Parser {
                 op: BinOp::BitwiseAnd,
                 left: Box::new(left),
                 right: Box::new(right),
+                line: 0,
             };
         }
 
@@ -727,6 +738,7 @@ impl Parser {
                 op,
                 left: Box::new(left),
                 right: Box::new(right),
+                line: 0,
             };
         }
 
@@ -781,6 +793,7 @@ impl Parser {
                 op: BinOp::Concat,
                 left: Box::new(left),
                 right: Box::new(right),
+                line: 0,
             };
         }
 
@@ -792,9 +805,9 @@ impl Parser {
         let mut left = self.parse_additive()?;
 
         loop {
-            let op = match self.peek() {
-                Token::ShiftLeft => BinOp::ShiftLeft,
-                Token::ShiftRight => BinOp::ShiftRight,
+            let (op, line) = match self.peek() {
+                Token::ShiftLeft(line) => (BinOp::ShiftLeft, line),
+                Token::ShiftRight(line) => (BinOp::ShiftRight, line),
                 _ => break,
             };
             self.advance();
@@ -804,6 +817,7 @@ impl Parser {
                 op,
                 left: Box::new(left),
                 right: Box::new(right),
+                line,
             };
         }
 
@@ -827,6 +841,7 @@ impl Parser {
                 op,
                 left: Box::new(left),
                 right: Box::new(right),
+                line: 0,
             };
         }
 
@@ -838,10 +853,21 @@ impl Parser {
         let mut left = self.parse_unary()?;
 
         loop {
-            let op = match self.peek() {
-                Token::Star => BinOp::Mul,
-                Token::Slash => BinOp::Div,
-                Token::Percent => BinOp::Mod,
+            let (op, line) = match self.peek() {
+                Token::Star => (BinOp::Mul, 0),
+                Token::Slash => (BinOp::Div, 0),
+                Token::Percent(line) => {
+                    self.advance();
+                    let right = self.parse_unary()?;
+                    let right = self.finish_assignment_tail(right)?;
+                    left = Expr::BinaryOp {
+                        op: BinOp::Mod,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                        line,
+                    };
+                    continue;
+                }
                 _ => break,
             };
             self.advance();
@@ -851,6 +877,7 @@ impl Parser {
                 op,
                 left: Box::new(left),
                 right: Box::new(right),
+                line,
             };
         }
 
@@ -925,10 +952,13 @@ impl Parser {
                 let expr = self.parse_unary()?;
                 Ok(Expr::ErrorSuppress(Box::new(expr)))
             }
-            Token::Tilde => {
+            Token::Tilde(line) => {
                 self.advance();
                 let expr = self.parse_unary()?;
-                Ok(Expr::BitwiseNot(Box::new(expr)))
+                Ok(Expr::BitwiseNot {
+                    expr: Box::new(expr),
+                    line,
+                })
             }
             Token::Clone(line) => {
                 self.advance();
@@ -1082,6 +1112,7 @@ impl Parser {
                 op: BinOp::Pow,
                 left: Box::new(base),
                 right: Box::new(exp),
+                line: 0,
             })
         } else {
             Ok(base)

@@ -582,44 +582,38 @@ fn report_incdec_diagnostic(
 }
 
 #[cold]
-fn report_return_coercion_diagnostic(
+fn report_scalar_coercion_diagnostic(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
     source: &Value,
-    diagnostic: ReturnCoercionDiagnostic,
+    diagnostic: ScalarCoercionDiagnostic,
 ) -> Result<(), VmError> {
-    match diagnostic {
-        ReturnCoercionDiagnostic::FloatToInt => report_php_deprecation(
-            eg,
-            frame,
-            op_array,
-            opline,
-            &format!(
-                "Implicit conversion from float {} to int loses precision",
-                source.echo_to_string_with_precision(-1)
-            ),
-        ),
-        ReturnCoercionDiagnostic::FloatStringToInt => report_php_deprecation(
-            eg,
-            frame,
-            op_array,
-            opline,
-            &format!(
-                "Implicit conversion from float-string \"{}\" to int loses precision",
-                source.as_str().unwrap_or("")
-            ),
-        ),
-        ReturnCoercionDiagnostic::NanTo(target) => report_php_warning(
-            eg,
-            frame,
-            op_array,
-            opline,
-            &format!("unexpected NAN value was coerced to {target}"),
-            false,
-        ),
+    let (level, label, message) = diagnostic.details(source);
+    report_php_diagnostic(
+        eg, frame, op_array, opline, &message, level, label, false,
+    )
+}
+
+#[cold]
+fn report_scalar_coercion_diagnostic_at(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    source: &Value,
+    diagnostic: ScalarCoercionDiagnostic,
+    file: &str,
+    line: usize,
+) -> Result<(), VmError> {
+    let (level, label, message) = diagnostic.details(source);
+    let handled = crate::stdlib::dispatch_php_error(eg, frame, level, &message, file, line)?;
+    if !handled {
+        eg.record_last_error(level, &message, file, line);
     }
+    if !handled && eg.error_reporting & level != 0 {
+        eg.write_output(format!("\n{label}: {message} in {file} on line {line}\n").as_bytes());
+    }
+    Ok(())
 }
 
 pub(crate) fn increment_php_alphanumeric_string(value: &str) -> String {
@@ -1177,7 +1171,7 @@ fn string_offset_key(value: &Value) -> StringOffsetKey {
     let value = value.dereferenced();
     match value.value_type() {
         ValueType::Long => StringOffsetKey::Exact(value.as_long().unwrap()),
-        ValueType::Double => StringOffsetKey::Cast(value.as_double().unwrap() as i64),
+        ValueType::Double => StringOffsetKey::Cast(php_float_to_long(value.as_double().unwrap())),
         ValueType::True => StringOffsetKey::Cast(1),
         ValueType::False | ValueType::Null | ValueType::Undef => StringOffsetKey::Cast(0),
         ValueType::Resource => StringOffsetKey::Cast(value.as_resource_id().unwrap()),
@@ -8990,6 +8984,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 op_check_generic_default(eg, frame, opline)?;
             }
 
+            OpCode::CheckDefaultType => {
+                match op_check_default_type(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(new_frame, new_op_array) => {
+                        frame = new_frame;
+                        op_array = new_op_array;
+                        continue 'vm;
+                    }
+                    ColdResult::Unhandled(thrown) => {
+                        eg.exception = Some(thrown);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+
             OpCode::FetchStaticProp => {
                 match op_fetch_static_prop(eg, frame, op_array, opline)? {
                     ColdResult::NewFrame(nf, no) => {
@@ -9280,7 +9289,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 ReturnTypePreparation::Exact => {}
                                 ReturnTypePreparation::Coerced(value, diagnostic) => {
                                     if let Some(diagnostic) = diagnostic {
-                                        report_return_coercion_diagnostic(
+                                        report_scalar_coercion_diagnostic(
                                             eg,
                                             frame,
                                             op_array,
@@ -9291,8 +9300,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                         if let Some(exception) = eg.exception.take() {
                                             if matches!(
                                                 diagnostic,
-                                                ReturnCoercionDiagnostic::FloatToInt
-                                                    | ReturnCoercionDiagnostic::FloatStringToInt
+                                                ScalarCoercionDiagnostic::FloatToInt
+                                                    | ScalarCoercionDiagnostic::FloatStringToInt
                                             ) {
                                                 let outcome = format!(
                                                     "{} returned",
@@ -9576,7 +9585,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     ReturnTypePreparation::Exact => {}
                                     ReturnTypePreparation::Coerced(value, diagnostic) => {
                                         if let Some(diagnostic) = diagnostic {
-                                            report_return_coercion_diagnostic(
+                                            report_scalar_coercion_diagnostic(
                                                 eg,
                                                 frame,
                                                 op_array,
@@ -9587,8 +9596,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                             if let Some(exception) = eg.exception.take() {
                                                 if matches!(
                                                     diagnostic,
-                                                    ReturnCoercionDiagnostic::FloatToInt
-                                                        | ReturnCoercionDiagnostic::FloatStringToInt
+                                                    ScalarCoercionDiagnostic::FloatToInt
+                                                        | ScalarCoercionDiagnostic::FloatStringToInt
                                                 ) {
                                                     let outcome = format!(
                                                         "{} returned",

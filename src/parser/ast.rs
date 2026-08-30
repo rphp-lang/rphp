@@ -208,6 +208,7 @@ pub enum Expr {
         op: BinOp,
         left: Box<Expr>,
         right: Box<Expr>,
+        line: usize,
     },
     Pipe {
         input: Box<Expr>,
@@ -512,7 +513,10 @@ pub enum Expr {
         line: usize,
     }, // yield from $expr
     Print(Box<Expr>),      // print expr (returns 1)
-    BitwiseNot(Box<Expr>), // ~expr
+    BitwiseNot {
+        expr: Box<Expr>,
+        line: usize,
+    }, // ~expr
     Clone {
         expr: Box<Expr>,
         with_properties: Option<Box<Expr>>,
@@ -539,7 +543,7 @@ impl Expr {
             | Expr::Throw { expr: inner, .. }
             | Expr::Include { path: inner, .. }
             | Expr::Eval { source: inner, .. }
-            | Expr::BitwiseNot(inner)
+            | Expr::BitwiseNot { expr: inner, .. }
             | Expr::DynamicVariable { name: inner, .. } => inner.contains_yield(),
             Expr::Clone {
                 expr,

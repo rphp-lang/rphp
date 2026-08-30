@@ -1353,7 +1353,7 @@ impl Parser {
                         | Token::Minus
                         | Token::Star
                         | Token::Slash
-                        | Token::Percent
+                        | Token::Percent(_)
                         | Token::Dot
                         | Token::PlusPlus
                         | Token::MinusMinus
@@ -1379,8 +1379,8 @@ impl Parser {
                         | Token::Caret
                         | Token::StarStar
                         | Token::Spaceship
-                        | Token::ShiftLeft
-                        | Token::ShiftRight
+                        | Token::ShiftLeft(_)
+                        | Token::ShiftRight(_)
                 ) => {
                     let expr = self.parse_expr()?;
                     self.finish_static_property_statement(expr)
@@ -1422,7 +1422,7 @@ impl Parser {
             | Token::Plus
             | Token::Minus
             | Token::At
-            | Token::Tilde
+            | Token::Tilde(_)
             | Token::PlusPlus
             | Token::MinusMinus
             | Token::ArrayKw => self.parse_expression_statement(),
@@ -1622,6 +1622,7 @@ impl Parser {
                         op,
                         left: Box::new(expr),
                         right: Box::new(right),
+                        line,
                     },
                     line,
                 });

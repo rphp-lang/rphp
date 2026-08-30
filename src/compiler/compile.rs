@@ -155,6 +155,7 @@ fn expression_source_line(expression: &Expr) -> usize {
         | Expr::MagicConstant { line, .. }
         | Expr::YieldFrom { line, .. }
         | Expr::Clone { line, .. } => *line,
+        Expr::BinaryOp { line, .. } if *line != 0 => *line,
         Expr::BinaryOp { left, right, .. }
         | Expr::NullCoalesce { left, right }
         | Expr::Elvis { left, right } => {
@@ -184,8 +185,9 @@ fn expression_source_line(expression: &Expr) -> usize {
         | Expr::FirstClassCallable {
             callable: inner, ..
         }
-        | Expr::Print(inner)
-        | Expr::BitwiseNot(inner) => expression_source_line(inner),
+        | Expr::Print(inner) => expression_source_line(inner),
+        Expr::BitwiseNot { line, .. } if *line != 0 => *line,
+        Expr::BitwiseNot { expr, .. } => expression_source_line(expr),
         Expr::Include { path, .. } => expression_source_line(path),
         _ => 0,
     }
@@ -846,7 +848,9 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
                 output.push('}');
                 (output, 100)
             }
-            Expr::BinaryOp { op, left, right } => {
+            Expr::BinaryOp {
+                op, left, right, ..
+            } => {
                 let (operator, precedence) = match op {
                     BinOp::Or => ("||", 10),
                     BinOp::And => ("&&", 20),
@@ -2565,7 +2569,7 @@ fn constant_expression_references_symbol(expression: &Expr) -> bool {
         Expr::Not(inner)
         | Expr::UnaryPlus(inner)
         | Expr::UnaryMinus(inner)
-        | Expr::BitwiseNot(inner)
+        | Expr::BitwiseNot { expr: inner, .. }
         | Expr::ErrorSuppress(inner)
         | Expr::Cast { expr: inner, .. } => constant_expression_references_symbol(inner),
         Expr::Ternary {
@@ -2609,7 +2613,7 @@ fn constant_expression_contains_runtime_variable(expression: &Expr) -> bool {
         Expr::Not(inner)
         | Expr::UnaryPlus(inner)
         | Expr::UnaryMinus(inner)
-        | Expr::BitwiseNot(inner)
+        | Expr::BitwiseNot { expr: inner, .. }
         | Expr::ErrorSuppress(inner)
         | Expr::Cast { expr: inner, .. } => recurse(inner),
         Expr::Ternary {
@@ -2672,7 +2676,7 @@ fn local_class_constant_reference_line(
         Expr::Not(inner)
         | Expr::UnaryPlus(inner)
         | Expr::UnaryMinus(inner)
-        | Expr::BitwiseNot(inner)
+        | Expr::BitwiseNot { expr: inner, .. }
         | Expr::ErrorSuppress(inner)
         | Expr::Cast { expr: inner, .. } => recurse(inner),
         Expr::Ternary {
@@ -2717,7 +2721,7 @@ fn constant_expression_contains_runtime_callable(expression: &Expr) -> bool {
         Expr::Not(inner)
         | Expr::UnaryPlus(inner)
         | Expr::UnaryMinus(inner)
-        | Expr::BitwiseNot(inner)
+        | Expr::BitwiseNot { expr: inner, .. }
         | Expr::ErrorSuppress(inner)
         | Expr::Cast { expr: inner, .. } => constant_expression_contains_runtime_callable(inner),
         Expr::Ternary {
@@ -2811,7 +2815,7 @@ fn invalid_runtime_callable_constant_expression(
         Expr::Not(inner)
         | Expr::UnaryPlus(inner)
         | Expr::UnaryMinus(inner)
-        | Expr::BitwiseNot(inner)
+        | Expr::BitwiseNot { expr: inner, .. }
         | Expr::ErrorSuppress(inner)
         | Expr::Cast { expr: inner, .. } => recurse(inner),
         Expr::Ternary {
@@ -2883,7 +2887,7 @@ fn deferred_constant_expression_is_supported(expression: &Expr) -> bool {
         Expr::Not(inner)
         | Expr::UnaryPlus(inner)
         | Expr::UnaryMinus(inner)
-        | Expr::BitwiseNot(inner) => deferred_constant_expression_is_supported(inner),
+        | Expr::BitwiseNot { expr: inner, .. } => deferred_constant_expression_is_supported(inner),
         Expr::Ternary {
             condition,
             then_expr,
@@ -2995,7 +2999,7 @@ fn trait_property_default_rebinds_class(expression: &Expr) -> bool {
         Expr::Not(inner)
         | Expr::UnaryPlus(inner)
         | Expr::UnaryMinus(inner)
-        | Expr::BitwiseNot(inner)
+        | Expr::BitwiseNot { expr: inner, .. }
         | Expr::ErrorSuppress(inner)
         | Expr::Cast { expr: inner, .. } => trait_property_default_rebinds_class(inner),
         Expr::Ternary {
@@ -3756,7 +3760,7 @@ impl Compiler {
             | Expr::CompilerHaltOffsetConstant { .. }
             | Expr::MagicConstant { .. }
             | Expr::Print(_)
-            | Expr::BitwiseNot(_)
+            | Expr::BitwiseNot { .. }
             | Expr::Clone { .. } => Some(expression_source_line(expr)),
             Expr::ListAssign { targets, line, .. }
                 if !targets.iter().any(ListTarget::contains_reference) =>
@@ -3837,7 +3841,7 @@ impl Compiler {
             Expr::UnaryPlus(inner)
             | Expr::UnaryMinus(inner)
             | Expr::Not(inner)
-            | Expr::BitwiseNot(inner)
+            | Expr::BitwiseNot { expr: inner, .. }
             | Expr::Cast { expr: inner, .. } => Self::is_compile_time_class_constant_name(inner),
             Expr::ArrayLiteral(elements) => elements.iter().all(|element| {
                 !element.by_reference
@@ -3886,7 +3890,7 @@ impl Compiler {
             Expr::Not(inner)
             | Expr::UnaryPlus(inner)
             | Expr::UnaryMinus(inner)
-            | Expr::BitwiseNot(inner)
+            | Expr::BitwiseNot { expr: inner, .. }
             | Expr::ErrorSuppress(inner)
             | Expr::Cast { expr: inner, .. } => recurse(inner),
             Expr::Ternary {
@@ -5660,6 +5664,7 @@ impl Compiler {
                 op: BinOp::Concat,
                 left,
                 right,
+                ..
             } => {
                 Self::zend_defined_literal_without_scope_separator(left)
                     && Self::zend_defined_literal_without_scope_separator(right)
@@ -7085,7 +7090,7 @@ impl Compiler {
             Expr::UnaryPlus(inner)
             | Expr::UnaryMinus(inner)
             | Expr::Not(inner)
-            | Expr::BitwiseNot(inner)
+            | Expr::BitwiseNot { expr: inner, .. }
             | Expr::Cast { expr: inner, .. } => self.collect_class_name_literals(inner, known),
             Expr::ArrayLiteral(elements) => {
                 for element in elements {
@@ -7283,7 +7288,9 @@ impl Compiler {
                         )
                     })
             }
-            Expr::BinaryOp { op, left, right } => {
+            Expr::BinaryOp {
+                op, left, right, ..
+            } => {
                 let left = Self::eval_const_expr_with_context_and_enum_classes(
                     left,
                     known,
@@ -7930,8 +7937,10 @@ impl Compiler {
                 let cv_idx = func_compiler.resolve_cv(&param.name);
                 func_compiler.definitely_defined_cvs.insert(cv_idx);
                 if let Some(default_expr) = &param.default {
+                    let default_is_compile_time_fixed =
+                        Self::parameter_default_is_compile_time_fixed(default_expr);
                     let mut normalized_default = None;
-                    if Self::parameter_default_is_compile_time_fixed(default_expr)
+                    if default_is_compile_time_fixed
                         && !matches!(
                             type_hints.last(),
                             Some(ParamTypeHint::None | ParamTypeHint::Mixed)
@@ -7963,13 +7972,20 @@ impl Compiler {
                                 .type_hint
                                 .as_ref()
                                 .is_some_and(Self::type_hint_contains_generic_parameter);
+                    let check_default_type = !default_is_compile_time_fixed
+                        && !matches!(
+                            type_hints.last(),
+                            Some(ParamTypeHint::None | ParamTypeHint::Mixed)
+                        );
                     Self::emit_default_param(
                         func_compiler,
                         cv_idx,
                         i as u16,
                         default_expr,
                         normalized_default,
+                        check_default_type,
                         check_generic_default,
+                        param.line,
                     );
                 }
             }
@@ -8028,7 +8044,7 @@ impl Compiler {
             Expr::UnaryPlus(inner)
             | Expr::UnaryMinus(inner)
             | Expr::Not(inner)
-            | Expr::BitwiseNot(inner)
+            | Expr::BitwiseNot { expr: inner, .. }
             | Expr::Cast { expr: inner, .. } => {
                 Self::parameter_default_is_compile_time_fixed(inner)
             }
@@ -8808,7 +8824,9 @@ impl Compiler {
         parameter_index: u16,
         default_expr: &Expr,
         normalized_default: Option<Value>,
+        check_default_type: bool,
         check_generic_default: bool,
+        line: usize,
     ) {
         // BindDefaultParam: if CV is NOT undef, jump to skip_label (op2 = target, patched later)
         let bind_idx = compiler.instructions.len();
@@ -8836,6 +8854,14 @@ impl Compiler {
         // parameter rather than a hidden frame temporary.
         assign._pad |= ASSIGN_CV_MOVE_SOURCE;
         compiler.instructions.push(assign);
+
+        if check_default_type {
+            let mut check = Instruction::new(OpCode::CheckDefaultType);
+            check.op1_type = OpType::Cv;
+            check.op1 = cv_idx;
+            check.extended_value = u32::from(parameter_index);
+            compiler.push_instruction_at_line(check, line);
+        }
 
         if check_generic_default {
             let mut check = Instruction::new(OpCode::CheckGenericDefault);
@@ -9376,6 +9402,7 @@ impl Compiler {
             op: BinOp::Concat,
             left,
             right,
+            ..
         } = first
         {
             reversed.push(right);
@@ -9423,6 +9450,7 @@ impl Compiler {
             op: BinOp::Add,
             left,
             right,
+            ..
         } = first
         {
             reversed.push(right);
@@ -9541,7 +9569,12 @@ impl Compiler {
                 self.push_instruction_at_line(call, *line);
                 (result, OpType::Tmp)
             }
-            Expr::BinaryOp { op, left, right } => {
+            Expr::BinaryOp {
+                op,
+                left,
+                right,
+                line,
+            } => {
                 if matches!(
                     op,
                     BinOp::Equal
@@ -9770,7 +9803,7 @@ impl Compiler {
                 instr.op2_type = r_type;
                 instr.result = tmp;
                 instr.result_type = OpType::Tmp;
-                self.instructions.push(instr);
+                self.push_instruction_at_line(instr, *line);
 
                 (tmp, OpType::Tmp)
             }
@@ -10271,7 +10304,7 @@ impl Compiler {
                 self.instructions.push(instr);
                 (tmp, OpType::Tmp)
             }
-            Expr::BitwiseNot(inner) => {
+            Expr::BitwiseNot { expr: inner, line } => {
                 let (op, op_type) = self.compile_expr(inner);
                 let tmp = self.alloc_tmp();
                 let mut instr = Instruction::new(OpCode::BitwiseNot);
@@ -10279,7 +10312,7 @@ impl Compiler {
                 instr.op1_type = op_type;
                 instr.result = tmp;
                 instr.result_type = OpType::Tmp;
-                self.instructions.push(instr);
+                self.push_instruction_at_line(instr, *line);
                 (tmp, OpType::Tmp)
             }
             Expr::Print(inner) => {

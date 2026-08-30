@@ -139,141 +139,12 @@ fn operand_reference_property_constraints(
     }
 }
 
-/// Apply PHP's property-assignment scalar conversions. Long → Double is
-/// accepted even in strict mode; the remaining conversions are weak-mode
-/// only. Exact union members are tested before this function, preserving an
-/// `int` for `int|float` rather than eagerly widening it.
+/// Apply the common scalar conversion table while the older property helpers
+/// retain their value-only ABI. Observable write opcodes use
+/// `prepare_property_assignment_with_diagnostic()` below so the diagnostic is
+/// published before storage is committed.
 fn coerce_property_value(value: &Value, hint: &ParamTypeHint, weak: bool) -> Option<Value> {
-    match hint {
-        ParamTypeHint::Float => match value.value_type() {
-            ValueType::Long => Some(Value::double(value.as_long()? as f64)),
-            ValueType::String if weak => value
-                .as_str()?
-                .trim()
-                .parse::<f64>()
-                .ok()
-                .map(Value::double),
-            ValueType::True | ValueType::False if weak => {
-                Some(Value::double(f64::from(value.is_truthy())))
-            }
-            _ => None,
-        },
-        ParamTypeHint::Int if weak => match value.value_type() {
-            ValueType::Double => {
-                let number = value.as_double()?;
-                (number.is_finite()
-                    && (-PHP_LONG_UPPER_BOUND..PHP_LONG_UPPER_BOUND).contains(&number))
-                .then(|| Value::long(number as i64))
-            }
-            ValueType::True | ValueType::False => Some(Value::long(i64::from(value.is_truthy()))),
-            ValueType::String => {
-                let numeric = value.as_str()?.trim();
-                numeric
-                    .parse::<i64>()
-                    .ok()
-                    .or_else(|| {
-                        numeric.parse::<f64>().ok().and_then(|number| {
-                            (number.is_finite()
-                                && (-PHP_LONG_UPPER_BOUND..PHP_LONG_UPPER_BOUND)
-                                    .contains(&number))
-                            .then_some(number as i64)
-                        })
-                    })
-                    .map(Value::long)
-            }
-            _ => None,
-        },
-        ParamTypeHint::String if weak => match value.value_type() {
-            ValueType::Long | ValueType::Double | ValueType::True | ValueType::False => {
-                Some(Value::string(value.echo_to_string()))
-            }
-            _ => None,
-        },
-        ParamTypeHint::Bool if weak => match value.value_type() {
-            ValueType::Long | ValueType::Double | ValueType::String => {
-                Some(Value::bool(value.is_truthy()))
-            }
-            _ => None,
-        },
-        ParamTypeHint::Nullable(inner) if value.value_type() != ValueType::Null => {
-            if matches!(inner.as_ref(), ParamTypeHint::None) {
-                None
-            } else {
-                coerce_property_value(value, inner, weak)
-            }
-        }
-        ParamTypeHint::Union(parts) => coerce_union_value(value, parts, weak),
-        _ => None,
-    }
-}
-
-#[cold]
-#[inline(never)]
-fn coerce_union_value(value: &Value, parts: &[ParamTypeHint], weak: bool) -> Option<Value> {
-    let member = |candidate: &ParamTypeHint| parts.iter().any(|part| part == candidate);
-    if !weak {
-        return member(&ParamTypeHint::Float)
-            .then(|| value.as_long().map(|number| Value::double(number as f64)))
-            .flatten();
-    }
-    match value.value_type() {
-        ValueType::String => {
-            let numeric = value.as_str()?.trim();
-            if member(&ParamTypeHint::Int)
-                && let Ok(number) = numeric.parse::<i64>()
-            {
-                return Some(Value::long(number));
-            }
-            if member(&ParamTypeHint::Float)
-                && let Ok(number) = numeric.parse::<f64>()
-            {
-                return Some(Value::double(number));
-            }
-            if member(&ParamTypeHint::Int)
-                && let Ok(number) = numeric.parse::<f64>()
-                && number.is_finite()
-                && (-PHP_LONG_UPPER_BOUND..PHP_LONG_UPPER_BOUND).contains(&number)
-            {
-                return Some(Value::long(number as i64));
-            }
-            member(&ParamTypeHint::Bool).then(|| Value::bool(value.is_truthy()))
-        }
-        ValueType::Double => {
-            let number = value.as_double()?;
-            if member(&ParamTypeHint::Int)
-                && number.is_finite()
-                && (-PHP_LONG_UPPER_BOUND..PHP_LONG_UPPER_BOUND).contains(&number)
-            {
-                return Some(Value::long(number as i64));
-            }
-            if member(&ParamTypeHint::String) {
-                return Some(Value::string(value.echo_to_string()));
-            }
-            member(&ParamTypeHint::Bool).then(|| Value::bool(value.is_truthy()))
-        }
-        ValueType::Long => {
-            if member(&ParamTypeHint::Float) {
-                return Some(Value::double(value.as_long()? as f64));
-            }
-            if member(&ParamTypeHint::String) {
-                return Some(Value::string(value.echo_to_string()));
-            }
-            member(&ParamTypeHint::Bool).then(|| Value::bool(value.is_truthy()))
-        }
-        ValueType::True | ValueType::False => {
-            if member(&ParamTypeHint::Int) {
-                return Some(Value::long(i64::from(value.is_truthy())));
-            }
-            if member(&ParamTypeHint::Float) {
-                return Some(Value::double(f64::from(value.is_truthy())));
-            }
-            if member(&ParamTypeHint::String) {
-                return Some(Value::string(value.echo_to_string()));
-            }
-            None
-        }
-        _ => None,
-    }
+    coerce_scalar_value(value, hint, weak).map(|(value, _)| value)
 }
 
 /// PHP names the concrete runtime class in typed-property diagnostics instead
@@ -437,6 +308,18 @@ pub(crate) fn prepare_property_assignment(
     strict: bool,
     called_class: &str,
 ) -> Result<Value, String> {
+    prepare_property_assignment_with_diagnostic(value, definition, eg, strict, called_class)
+        .map(|(value, _)| value)
+}
+
+#[inline]
+fn prepare_property_assignment_with_diagnostic(
+    value: Value,
+    definition: &crate::compiler::compile::PropertyDefinition,
+    eg: &ExecutorGlobals,
+    strict: bool,
+    called_class: &str,
+) -> Result<(Value, Option<ScalarCoercionDiagnostic>), String> {
     if property_type_matches_exact(
         &value,
         &definition.type_hint,
@@ -444,10 +327,12 @@ pub(crate) fn prepare_property_assignment(
         &definition.type_scope,
         called_class,
     ) {
-        return Ok(value);
+        return Ok((value, None));
     }
-    if let Some(coerced) = coerce_property_value(&value, &definition.type_hint, !strict) {
-        return Ok(coerced);
+    if let Some((coerced, diagnostic)) =
+        coerce_scalar_value(&value, &definition.type_hint, !strict)
+    {
+        return Ok((coerced, diagnostic));
     }
     Err(format!(
         "Cannot assign {} to property {}::${} of type {}",
@@ -605,8 +490,8 @@ fn prepare_property_assignment_with_stringable(
     strict: bool,
     called_class: &str,
     receiver: *const Value,
-) -> Result<Result<Value, String>, VmError> {
-    let prepared = prepare_property_assignment(
+) -> Result<Result<(Value, Option<ScalarCoercionDiagnostic>), String>, VmError> {
+    let prepared = prepare_property_assignment_with_diagnostic(
         value.clone(),
         definition,
         eg,
@@ -626,7 +511,7 @@ fn prepare_property_assignment_with_stringable(
     if rendered.dereferenced().value_type() != ValueType::String {
         return Ok(prepared);
     }
-    let prepared = prepare_property_assignment(
+    let prepared = prepare_property_assignment_with_diagnostic(
         rendered.dereferenced().clone(),
         definition,
         eg,

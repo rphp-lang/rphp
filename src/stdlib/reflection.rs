@@ -971,7 +971,9 @@ fn evaluate_deferred_attribute_expression(
             };
             deferred_class_constant(class, constant, &dynamic_scope, eg)
         }
-        Expr::BinaryOp { op, left, right } => {
+        Expr::BinaryOp {
+            op, left, right, ..
+        } => {
             let left = evaluate_deferred_attribute_expression(left, scope, source_file, eg)?;
             match op {
                 crate::parser::BinOp::And if !left.is_truthy() => {
@@ -1015,7 +1017,7 @@ fn evaluate_deferred_attribute_expression(
                 ))
             }
         }
-        Expr::BitwiseNot(inner) => {
+        Expr::BitwiseNot { expr: inner, .. } => {
             let value = evaluate_deferred_attribute_expression(inner, scope, source_file, eg)?;
             if let Some(value) = value.as_long() {
                 Ok(Value::long(!value))
@@ -1745,7 +1747,9 @@ fn report_deprecated_expression_references(
                 )?;
             }
         }
-        Expr::BinaryOp { op, left, right } => {
+        Expr::BinaryOp {
+            op, left, right, ..
+        } => {
             report_deprecated_expression_references(left, scope, source_file, use_site, eg)?;
             if eg.exception.is_some() {
                 return Ok(());
@@ -1768,7 +1772,7 @@ fn report_deprecated_expression_references(
         Expr::Not(inner)
         | Expr::UnaryPlus(inner)
         | Expr::UnaryMinus(inner)
-        | Expr::BitwiseNot(inner)
+        | Expr::BitwiseNot { expr: inner, .. }
         | Expr::ErrorSuppress(inner)
         | Expr::Cast { expr: inner, .. } => {
             report_deprecated_expression_references(inner, scope, source_file, use_site, eg)?;
@@ -2792,7 +2796,7 @@ fn instantiate_attribute_definition_at_use(
         )?;
         match prepared {
             crate::vm::execute::CallArgumentPreparation::Exact => {}
-            crate::vm::execute::CallArgumentPreparation::Coerced(value) => {
+            crate::vm::execute::CallArgumentPreparation::Coerced(value, _diagnostic) => {
                 normalized[index] = value;
             }
             crate::vm::execute::CallArgumentPreparation::Invalid => {

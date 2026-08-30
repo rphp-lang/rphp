@@ -2854,7 +2854,7 @@ pub(crate) fn initialize_suspended_callback_frame(
         let value = (*frame).cv(cv_index).dereferenced().clone();
         match prepare_call_argument(&value, hint, eg, false, callee_class.as_deref())? {
             CallArgumentPreparation::Exact => {}
-            CallArgumentPreparation::Coerced(prepared) => {
+            CallArgumentPreparation::Coerced(prepared, _diagnostic) => {
                 let slot = (*frame).cv_mut(cv_index) as *mut Value;
                 if (*slot).is_reference() {
                     slot_set((*slot).as_ref_ptr(), prepared);

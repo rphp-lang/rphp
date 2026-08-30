@@ -2373,6 +2373,7 @@ impl Compiler {
                         op: crate::parser::BinOp::Concat,
                         left,
                         right,
+                        ..
                     } if matches!(left.as_ref(), Expr::Variable { name, .. } if name == var)
                         && self.definitely_defined_cvs.contains(&cv_idx) => {
                             Some((right.as_ref(), incdec_target_source_line(left)))
@@ -6791,6 +6792,7 @@ impl Compiler {
                                             line: 0,
                                         }),
                                         right: Box::new(backing_value.clone()),
+                                        line: 0,
                                     },
                                     then_body: vec![Stmt::Return {
                                         expr: Some(Expr::ClassConstant {
@@ -6848,7 +6850,9 @@ impl Compiler {
                                     line: 0,
                                 }),
                                 right: Box::new(Expr::StringLiteral("\"".to_string())),
+                                line: 0,
                             }),
+                            line: 0,
                         }
                     } else {
                         Expr::Variable {
@@ -6862,6 +6866,7 @@ impl Compiler {
                         right: Box::new(Expr::StringLiteral(format!(
                             " is not a valid backing value for enum {resolved_enum}"
                         ))),
+                        line: 0,
                     };
                     enum_methods.push(crate::parser::ClassMethod {
                         line: 0,

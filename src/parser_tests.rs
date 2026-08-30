@@ -1531,6 +1531,7 @@ fn test_parse_add() {
             op: BinOp::Add,
             left: Box::new(Expr::Integer(20)),
             right: Box::new(Expr::Integer(22)),
+            line: 0,
         }])]
     );
 }
@@ -1548,6 +1549,7 @@ fn binary_operators_bind_an_assignment_inside_their_right_operand() {
                 var: "value".into(),
                 expr: Box::new(Expr::Integer(3)),
             }),
+            line: 0,
         }])]
     );
 }
@@ -1572,6 +1574,7 @@ fn test_parse_assignment_on_comparison_rhs() {
                     line: 1,
                 }),
             }),
+            line: 0,
         }])]
     );
 }
@@ -1599,6 +1602,7 @@ fn test_parse_assignment_on_logical_rhs() {
                     line: 1,
                 }),
             }),
+            line: 0,
         }])]
     );
 }
@@ -1636,6 +1640,7 @@ fn test_parse_comma_separated_echo() {
                 op: BinOp::Add,
                 left: Box::new(Expr::Integer(2)),
                 right: Box::new(Expr::Integer(3)),
+                line: 0,
             },
         ])]
     );
@@ -1922,6 +1927,7 @@ fn test_parse_while() {
                     line: 1,
                 }),
                 right: Box::new(Expr::Integer(3)),
+                line: 0,
             },
             body: vec![echo(vec![Expr::Variable {
                 name: "x".into(),

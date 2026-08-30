@@ -1959,7 +1959,7 @@ impl Parser {
             | Expr::Print(inner)
             | Expr::Include { path: inner, .. }
             | Expr::Eval { source: inner, .. }
-            | Expr::BitwiseNot(inner)
+            | Expr::BitwiseNot { expr: inner, .. }
             | Expr::DynamicVariable { name: inner, .. } => {
                 Self::collect_free_vars(inner, bound, out);
             }

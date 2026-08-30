@@ -8,6 +8,58 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`scalar-coercion-diagnostic-boundaries`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.10. Weak scalar conversions now return a
+structured value-plus-diagnostic result shared by calls, returns and typed
+property writes. Lossy integer diagnostics are published at PHP's observable
+source line before the call body or storage commit, and an exception thrown by
+the handler retains priority. Runtime constant defaults use the same typed
+call boundary before the function body; integer operators retain their own
+consumer lines. Reentrant `array_key_exists()` diagnostics re-read only a
+proven direct caller CV, while temporary/COW arguments and string-offset casts
+keep their snapshotted state.
+
+Five original E2E regressions cover call/return/property transactionality,
+operator locations, default validation, reentrant array/string offsets and
+PHP's vertical-tab/form-feed numeric whitespace. Ten of the 12 selected
+unmodified PHPTs pass; `scalar_basic.phpt` and `scalar_strict_basic.phpt` now
+reach their independent missing `data://` stream-resource boundary. The
+focused manifest hashes to
+`934efbfe5ae2d26936c3f3404a5d263414d2428dfd10293ebd5a4d61774f6e45`.
+
+The final 5,599-case Zend/lang run is 4,692 pass, 611 fail, 115 skip and 181
+unsupported. The 1,575-case strings/array projection is byte-identical at
+1,459 pass, 18 fail, 67 skip and 31 unsupported. The combined manifest and
+pass set hash to
+`7a5ee4668908583272623a78a117088727530a42c9293e6e4740b961a8c5847c`
+and `c6cf6deee29112ee2b112e951b07b5e9ffb16d4bcd42ace483018e61d9698a70`:
+6,151 pass, 629 fail, 182 skip and 212 unsupported, with no timeout or crash.
+The exact parent delta is `+11/-0`: the ten selected conversions plus adjacent
+`type_declarations/union_types/multiple_classes.phpt`. Supported debt is 611
+Zend/lang failures, 18 strings failures and zero array failures.
+
+The exact final candidate SHA-256 is
+`bdcebb872a263c61a3be448f56238242eb5a55f0a5565ed2eec45fa323d2cee2`.
+All five Cargo configurations, all-feature/all-target checking, formatting,
+HTML data, PHPT runner and both unsafe-policy checks pass. Production is below
+the ratchet at 1,622 unsafe blocks and 289 unsafe functions, with 393 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.10 warmed-kernel S2 and cold-build S3 pass.
+
+The cumulative fixed-baseline CPU-2 gate uses 32 balanced pairs and exact
+checksums; its raw result hashes to
+`9cabd531915c008044def90a539c465c18db8f3ddeca6997cff962b0464f015a`.
+Candidate/baseline arithmetic-mean ratios are ordinary calls 0.9977, property
+writes 0.9918, array CV assignment 0.9848, coalesce hit 1.0051, throw/catch
+1.0105 and startup 0.9839; the corresponding throw/catch paired median is
+0.9949.
+
+This checkpoint does not claim `data://` or general stream-resource support,
+SPL, Fiber/generator suspension, PHP 8.2, 32-bit behavior or allocation-limit/
+OOM equivalence. The implementation checkpoint is the commit containing this
+status.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `object-release-destructor-boundaries`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.10. Catch entry now retires the displaced or
 uncaptured `Throwable` before the handler body and lets a throwing destructor

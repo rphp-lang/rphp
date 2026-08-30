@@ -126,7 +126,7 @@ impl Parser {
         }
         self.advance();
 
-        if matches!(self.peek(), Token::Greater | Token::ShiftRight) {
+        if matches!(self.peek(), Token::Greater | Token::ShiftRight(_)) {
             return Err("A generic parameter list cannot be empty".to_string());
         }
 
@@ -235,11 +235,11 @@ impl Parser {
             match self.peek() {
                 Token::Comma(_) => {
                     self.advance();
-                    if matches!(self.peek(), Token::Greater | Token::ShiftRight) {
+                    if matches!(self.peek(), Token::Greater | Token::ShiftRight(_)) {
                         return Err("A generic parameter list cannot end with a comma".into());
                     }
                 }
-                Token::Greater | Token::ShiftRight => {
+                Token::Greater | Token::ShiftRight(_) => {
                     self.consume_generic_close()?;
                     break;
                 }
@@ -280,7 +280,7 @@ impl Parser {
 
     fn parse_generic_type_arguments(&mut self) -> Result<Vec<TypeHint>, String> {
         self.expect(&Token::Less)?;
-        if matches!(self.peek(), Token::Greater | Token::ShiftRight) {
+        if matches!(self.peek(), Token::Greater | Token::ShiftRight(_)) {
             return Err("A generic type-argument list cannot be empty".to_string());
         }
 
@@ -296,11 +296,11 @@ impl Parser {
             match self.peek() {
                 Token::Comma(_) => {
                     self.advance();
-                    if matches!(self.peek(), Token::Greater | Token::ShiftRight) {
+                    if matches!(self.peek(), Token::Greater | Token::ShiftRight(_)) {
                         return Err("A generic type-argument list cannot end with a comma".into());
                     }
                 }
-                Token::Greater | Token::ShiftRight => {
+                Token::Greater | Token::ShiftRight(_) => {
                     self.consume_generic_close()?;
                     break;
                 }
@@ -338,7 +338,7 @@ impl Parser {
                 self.advance();
                 Ok(())
             }
-            Token::ShiftRight => {
+            Token::ShiftRight(_) => {
                 self.tokens[self.pos] = Token::Greater;
                 self.tokens.insert(self.pos + 1, Token::Greater);
                 self.advance();

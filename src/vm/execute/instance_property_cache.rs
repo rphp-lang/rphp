@@ -212,14 +212,14 @@ fn try_assign_cached_typed_instance_property<'a>(
     let called_class = eg
         .class_by_id(object_class_id)
         .map_or("?", |class| class.name.as_str());
-    let value = match prepare_property_assignment(
+    let (value, diagnostic) = match prepare_property_assignment_with_diagnostic(
         source.clone(),
         definition,
         eg,
         op_array.strict_types,
         called_class,
     ) {
-        Ok(value) => value,
+        Ok(prepared) => prepared,
         Err(message) => {
             return Ok(Some(object_property_throw(
                 eg,
@@ -229,6 +229,17 @@ fn try_assign_cached_typed_instance_property<'a>(
             )?));
         }
     };
+    if let Some(diagnostic) = diagnostic {
+        report_scalar_coercion_diagnostic(eg, frame, op_array, opline, source, diagnostic)?;
+        if let Some(exception) = eg.exception.take() {
+            return Ok(Some(match throw_in_frame(eg, frame, exception)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            }));
+        }
+    }
     let value = match prepare_cached_instance_reference_write(
         object,
         cache.property_slot(),

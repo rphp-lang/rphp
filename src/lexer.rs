@@ -128,7 +128,7 @@ pub enum Token {
     Minus,                  // -
     Star,                   // *
     Slash,                  // /
-    Percent,                // %
+    Percent(usize),         // % with source line
     Dot,                    // . (concat)
     PlusPlus,               // ++
     MinusMinus,             // --
@@ -165,29 +165,29 @@ pub enum Token {
     At,                     // @ (error-control operator)
     Colon,                  // :
     // Punctuation
-    Semicolon(usize), // ; with source line
-    LParen(usize),    // ( with source line
-    RParen,           // )
-    LBrace(usize),    // { with source line
-    RBrace,           // }
-    Comma(usize),     // , with source line
-    LBracket(usize),  // [ with source line
-    RBracket,         // ]
-    DoubleArrow,      // =>
-    Arrow,            // ->
-    NullSafe,         // ?->
-    DoubleColon,      // ::
-    Fn(usize),        // fn (arrow functions), with source line
-    Use(usize),       // use (imports and closure capture), with source line
-    Pipe,             // | (bitwise or, multi-catch separator)
-    Ampersand,        // & (bitwise and, reference)
-    Caret,            // ^ (bitwise xor)
-    Tilde,            // ~ (bitwise not)
-    StarStar,         // ** (power)
-    Spaceship,        // <=> (spaceship)
-    ShiftLeft,        // <<
-    ShiftRight,       // >>
-    DotDotDot(usize), // ... (variadic / spread) with source line
+    Semicolon(usize),  // ; with source line
+    LParen(usize),     // ( with source line
+    RParen,            // )
+    LBrace(usize),     // { with source line
+    RBrace,            // }
+    Comma(usize),      // , with source line
+    LBracket(usize),   // [ with source line
+    RBracket,          // ]
+    DoubleArrow,       // =>
+    Arrow,             // ->
+    NullSafe,          // ?->
+    DoubleColon,       // ::
+    Fn(usize),         // fn (arrow functions), with source line
+    Use(usize),        // use (imports and closure capture), with source line
+    Pipe,              // | (bitwise or, multi-catch separator)
+    Ampersand,         // & (bitwise and, reference)
+    Caret,             // ^ (bitwise xor)
+    Tilde(usize),      // ~ (bitwise not) with source line
+    StarStar,          // ** (power)
+    Spaceship,         // <=> (spaceship)
+    ShiftLeft(usize),  // << with source line
+    ShiftRight(usize), // >> with source line
+    DotDotDot(usize),  // ... (variadic / spread) with source line
     CompileError(String, usize),
     CompileWarning(String, usize),
     CompileDeprecation(String, usize),
@@ -509,7 +509,7 @@ impl<'a> Lexer<'a> {
                             tokens.push(Token::ShiftLeftAssign);
                             self.pos += 3;
                         } else {
-                            tokens.push(Token::ShiftLeft);
+                            tokens.push(Token::ShiftLeft(self.source_line_at(self.pos)));
                             self.pos += 2;
                         }
                     } else {
@@ -523,7 +523,7 @@ impl<'a> Lexer<'a> {
                             tokens.push(Token::ShiftRightAssign);
                             self.pos += 3;
                         } else {
-                            tokens.push(Token::ShiftRight);
+                            tokens.push(Token::ShiftRight(self.source_line_at(self.pos)));
                             self.pos += 2;
                         }
                     } else if self.peek_next() == Some(b'=') {
@@ -577,7 +577,7 @@ impl<'a> Lexer<'a> {
                         tokens.push(Token::PercentAssign);
                         self.pos += 2;
                     } else {
-                        tokens.push(Token::Percent);
+                        tokens.push(Token::Percent(self.source_line_at(self.pos)));
                         self.pos += 1;
                     }
                 }
@@ -965,7 +965,7 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 b'~' => {
-                    tokens.push(Token::Tilde);
+                    tokens.push(Token::Tilde(self.source_line_at(self.pos)));
                     self.pos += 1;
                 }
                 b'\\' => {
@@ -1965,7 +1965,7 @@ mod tests {
                 Token::Integer(3),
                 Token::LessEqual,
                 Token::Integer(4),
-                Token::ShiftLeft,
+                Token::ShiftLeft(1),
                 Token::Integer(1),
                 Token::Semicolon(1),
                 Token::Eof,

@@ -3994,6 +3994,7 @@ fn op_assign_obj_prop_inner<'a>(
             }
             if definition_ref.is_typed() && definition_ref.generic_declaration.is_none() {
                 let definition = (*definition_ref).clone();
+                let diagnostic_source = assigned.dereferenced().clone();
                 let prepared = prepare_property_assignment_with_stringable(
                     assigned,
                     &definition,
@@ -4005,8 +4006,8 @@ fn op_assign_obj_prop_inner<'a>(
                 if let Some(result) = take_magic_exception(eg, frame)? {
                     return Ok(result);
                 }
-                assigned = match prepared {
-                    Ok(value) => value,
+                let (prepared, diagnostic) = match prepared {
+                    Ok(prepared) => prepared,
                     Err(message) => {
                         return Ok(object_property_throw(
                             eg,
@@ -4016,6 +4017,20 @@ fn op_assign_obj_prop_inner<'a>(
                         )?);
                     }
                 };
+                if let Some(diagnostic) = diagnostic {
+                    report_scalar_coercion_diagnostic(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        &diagnostic_source,
+                        diagnostic,
+                    )?;
+                    if let Some(result) = take_magic_exception(eg, frame)? {
+                        return Ok(result);
+                    }
+                }
+                assigned = prepared;
             }
         }
         assigned = match prepare_reference_assignment_scalar(

@@ -255,6 +255,9 @@ pub enum OpCode {
     /// pair. Keeping this separate from InitDynamicCall makes the static
     /// receiver/magic rule entirely pay-for-use on ordinary dynamic calls.
     InitDynamicStaticCall = 174,
+    /// Validate a non-eager typed parameter default after its constant
+    /// expression has materialized. Explicit arguments jump over this op.
+    CheckDefaultType = 175,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

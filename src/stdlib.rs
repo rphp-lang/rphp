@@ -44,7 +44,7 @@ use crate::vm::execute::{
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
 use crate::vm::function::{Function, FunctionCommon, FunctionType, ParamTypeHint, UserFunction};
-use crate::vm::instruction::InlineCache;
+use crate::vm::instruction::{InlineCache, OpType};
 use crate::vm::opcode::OpCode;
 
 #[cfg(feature = "include-path")]
@@ -217,6 +217,83 @@ pub(super) fn owned_argument(ed: *mut ExecuteData, index: u32) -> Value {
             value.clone()
         }
     }
+}
+
+struct InternalUserCallerSnapshot {
+    file: String,
+    line: usize,
+    argument: Option<Value>,
+}
+
+/// Snapshot source metadata and, when requested, one direct caller CV from the
+/// user frame beneath a synchronous internal handler. Keeping both queries in
+/// one checked boundary avoids exposing frame pointers to otherwise safe
+/// internal-function code.
+fn internal_user_caller_snapshot(
+    ed: *mut ExecuteData,
+    argument_index: Option<u16>,
+) -> Option<InternalUserCallerSnapshot> {
+    // SAFETY: an internal handler runs beneath its live caller, whose opline
+    // is one instruction past DoFcall. The immutable send sequence and caller
+    // frame therefore remain valid until this handler returns.
+    unsafe {
+        let caller = (*ed).prev_execute_data;
+        if caller.is_null() || (*caller).func.is_null() {
+            return None;
+        }
+        let function = Function::from_common_ptr((*caller).func);
+        if function.fn_type() != FunctionType::User {
+            return None;
+        }
+        let op_array = &function.as_user().op_array;
+        let next = (*caller).opline.offset_from(op_array.instructions.as_ptr());
+        let next = usize::try_from(next).ok()?.min(op_array.instructions.len());
+        let line = op_array
+            .source_lines
+            .iter()
+            .rev()
+            .find(|(instruction, _)| *instruction <= next as u32)
+            .map(|(_, line)| *line as usize)
+            .unwrap_or(0);
+        let argument = argument_index.and_then(|index| {
+            for instruction in op_array.instructions[..next].iter().rev() {
+                match instruction.opcode {
+                    OpCode::SendVal | OpCode::SendVarEx
+                        if instruction.op2 == index && instruction.op1_type == OpType::Cv =>
+                    {
+                        return Some((*caller).cv(instruction.op1 as u32).clone());
+                    }
+                    OpCode::InitFcall
+                    | OpCode::InitUserCall
+                    | OpCode::InitDynamicCall
+                    | OpCode::InitMethodCall
+                    | OpCode::InitStaticCall
+                    | OpCode::InitLateStaticCall
+                    | OpCode::InitDynamicStaticCall => return None,
+                    _ => {}
+                }
+            }
+            None
+        });
+        Some(InternalUserCallerSnapshot {
+            file: if op_array.source_file.is_empty() {
+                op_array.name.clone()
+            } else {
+                op_array.source_file.to_string()
+            },
+            line,
+            argument,
+        })
+    }
+}
+
+/// Recover a direct caller CV used for one synchronous internal argument.
+/// Most handlers correctly consume their call-frame snapshot. A small number
+/// of Zend APIs deliberately re-read an input after publishing a diagnostic;
+/// for those boundaries a variable argument remains observable through its
+/// original caller slot while temporaries and constants remain snapshots.
+fn live_internal_cv_argument(ed: *mut ExecuteData, index: u16) -> Option<Value> {
+    internal_user_caller_snapshot(ed, Some(index)).and_then(|snapshot| snapshot.argument)
 }
 
 pub(super) fn write_return_value(rv: *mut Value, value: Value) {
@@ -980,11 +1057,6 @@ fn fn_array_key_exists_named(
         ret!(rv, Value::bool(exists));
     }
 
-    // A diagnostic handler may mutate the caller's array or key. Retain both
-    // by-value call snapshots before entering the slow conversion path.
-    let source = owned_argument(ed, 1);
-    let array = source.dereferenced().as_array().unwrap();
-
     // Array keys are normalized through the same scalar conversion used by
     // ordinary dimensions. The null diagnostic is specific to this API, while
     // float/resource diagnostics and illegal-key errors retain the shared PHP
@@ -1068,6 +1140,18 @@ fn fn_array_key_exists_named(
             ));
             return Ok(());
         }
+    };
+    // A referenced source argument remains an alias while the diagnostic
+    // handler runs. Re-read it afterwards: replacing that caller cell removes
+    // the probed array, while an ordinary by-value/COW argument still retains
+    // its original snapshot. The key itself was already converted above and
+    // therefore remains stable across the handler.
+    let live_source = live_internal_cv_argument(ed, 1);
+    let source = live_source
+        .as_ref()
+        .map_or_else(|| arg!(ed, 1), |source| source);
+    let Some(array) = source.dereferenced().as_array() else {
+        ret!(rv, Value::bool(false));
     };
     let key = array.normalize_utf8_text_key(key, key_value);
     let exists = match key {
@@ -14083,37 +14167,9 @@ pub(crate) fn dispatch_uncaught_exception_handler(
 }
 
 fn internal_call_source(ed: *mut ExecuteData) -> (String, usize) {
-    // SAFETY: an internal handler executes synchronously beneath its live
-    // caller. The caller opline has advanced one instruction past DoFcall.
-    unsafe {
-        let caller = (*ed).prev_execute_data;
-        if caller.is_null() || (*caller).func.is_null() {
-            return (String::new(), 0);
-        }
-        let function = Function::from_common_ptr((*caller).func);
-        if function.fn_type() != FunctionType::User {
-            return (String::new(), 0);
-        }
-        let op_array = &function.as_user().op_array;
-        let file = if op_array.source_file.is_empty() {
-            op_array.name.clone()
-        } else {
-            op_array.source_file.to_string()
-        };
-        let next = (*caller).opline.offset_from(op_array.instructions.as_ptr());
-        let line = usize::try_from(next)
-            .ok()
-            .and_then(|next| {
-                op_array
-                    .source_lines
-                    .iter()
-                    .rev()
-                    .find(|(index, _)| *index <= next as u32)
-                    .map(|(_, line)| *line as usize)
-            })
-            .unwrap_or(0);
-        (file, line)
-    }
+    internal_user_caller_snapshot(ed, None)
+        .map(|snapshot| (snapshot.file, snapshot.line))
+        .unwrap_or_default()
 }
 
 #[inline]
@@ -21450,7 +21506,7 @@ fn source_unpack_argument(
         let callee_class = eg.declaring_class_of(resolved.func_ptr).map(str::to_string);
         match prepare_call_argument(&original, hint, eg, strict_types, callee_class.as_deref())? {
             CallArgumentPreparation::Exact => {}
-            CallArgumentPreparation::Coerced(value) => {
+            CallArgumentPreparation::Coerced(value, _diagnostic) => {
                 if prepared.is_reference() {
                     prepared.assign_dereferenced(value);
                 } else {

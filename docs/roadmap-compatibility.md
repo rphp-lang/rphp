@@ -36,15 +36,18 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `object-release-destructor-boundaries` train retains 6,140
-exact passes across the 7,174-case PHP 8.5 corpus, with 640 supported failures,
+The accepted AMD64 `scalar-coercion-diagnostic-boundaries` train retains 6,151
+exact passes across the 7,174-case PHP 8.5 corpus, with 629 supported failures,
 182 skips, 212 unsupported cases and no timeout or crash. Its pass-set hash is
-`5be956dea0d6e25a39a0cd6d14b5c660bca1c805ad30bb31bb1257f8685e4d06`;
-the exact parent delta is `+10/-0`. Catch entry, displaced Throwable release,
-replaced CV trees, reference-return wrappers and request-shutdown roots now
-share PHP's observable destructor boundary and replacement ordering. The fixed
-baseline 32-pair controls remain within 0.21% on ordinary calls and throw/catch,
-while coalesce hit is 0.9904 times baseline.
+`c6cf6deee29112ee2b112e951b07b5e9ffb16d4bcd42ace483018e61d9698a70`;
+the exact parent delta is `+11/-0`. Calls, returns, typed writes, runtime
+constant defaults, integer operators and selected offset conversions now share
+one structured scalar conversion result while retaining PHP's diagnostic
+location, exception priority and state boundary. Ten of the 12 selected PHPTs
+pass; the two remaining scalar-basic cases stop at the independent missing
+`data://` stream-resource layer. Fixed-baseline 32-pair arithmetic-mean ratios
+remain between 0.9839 and 1.0105 across the established controls; the
+throw/catch paired median is 0.9949.
 Current compatibility work is selected as a 10–30-case train around one shared
 root-cause hypothesis and one cumulative full/performance evidence packet.
 Smaller checkpoints require a crash, security issue, framework blocker or

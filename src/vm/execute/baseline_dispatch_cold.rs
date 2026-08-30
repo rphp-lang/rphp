@@ -2319,6 +2319,97 @@ fn op_check_generic_default(
     }
 }
 
+#[cold]
+#[inline(never)]
+fn op_check_default_type<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    let parameter_index = opline.extended_value as usize;
+    // SAFETY: the compiler emits this opcode only in user frames and records
+    // the parameter CV and public signature index in its operands. The active
+    // frame, its caller and both immutable op arrays remain live until this
+    // cold handler either resumes the frame or transfers exception control.
+    unsafe {
+        let common = &*(*frame).func;
+        let source = (*frame).cv(opline.op1 as u32).dereferenced().clone();
+        let Some(hint) = common.sig.param_type_hints.get(parameter_index) else {
+            return Err(VmError::Fatal(
+                "Typed default check references an invalid parameter".into(),
+            ));
+        };
+        let callee_class = eg
+            .declaring_class_of(common as *const FunctionCommon)
+            .map(str::to_owned);
+        match prepare_call_argument(&source, hint, eg, true, callee_class.as_deref())? {
+            CallArgumentPreparation::Exact => return Ok(ColdResult::Done),
+            CallArgumentPreparation::Coerced(value, _) => {
+                frame_slot_set(frame, (*frame).cv_mut(opline.op1 as u32), value);
+                return Ok(ColdResult::Done);
+            }
+            CallArgumentPreparation::Invalid => {}
+        }
+
+        let caller = (*frame).prev_execute_data;
+        let error = if caller.is_null() || (*caller).func.is_null() {
+            let name = displayed_frame_function_name(eg, frame);
+            let parameter = common
+                .sig
+                .param_names
+                .get(parameter_index)
+                .map(String::as_str)
+                .unwrap_or("unknown");
+            make_error_value(
+                "TypeError",
+                &format!(
+                    "{name}(): Argument #{} (${parameter}) must be of type {}, {} given",
+                    parameter_index + 1,
+                    hint.diagnostic_display_name(),
+                    declared_type_error_value_name(&source),
+                ),
+            )
+        } else {
+            let caller_op_array = (*caller).op_array();
+            let next = (*caller)
+                .opline
+                .offset_from(caller_op_array.instructions.as_ptr());
+            let call_index = usize::try_from(next)
+                .ok()
+                .and_then(|next| next.checked_sub(1))
+                .filter(|index| *index < caller_op_array.instructions.len())
+                .unwrap_or(0);
+            argument_type_error(
+                eg,
+                common as *const FunctionCommon,
+                frame,
+                common,
+                parameter_index,
+                parameter_index,
+                hint,
+                &source,
+                caller_op_array,
+                &caller_op_array.instructions[call_index],
+            )
+        };
+        // Keep the default-expression source position as the Throwable origin;
+        // its message and trace still identify the external call site.
+        let instruction_index = op_array
+            .instructions
+            .iter()
+            .position(|instruction| std::ptr::eq(instruction, opline))
+            .unwrap_or(0);
+        attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+        Ok(match throw_in_frame(eg, frame, error)? {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+        })
+    }
+}
+
 #[inline(never)]
 fn op_check_reified_return(
     eg: &mut ExecutorGlobals,

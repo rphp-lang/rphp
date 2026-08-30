@@ -82,7 +82,7 @@ fn prepare_throwable_argument(
         crate::vm::execute::CallArgumentPreparation::Exact => {
             Ok(PreparedThrowableArgument::Value(argument))
         }
-        crate::vm::execute::CallArgumentPreparation::Coerced(value) => {
+        crate::vm::execute::CallArgumentPreparation::Coerced(value, _diagnostic) => {
             Ok(PreparedThrowableArgument::Value(value))
         }
         crate::vm::execute::CallArgumentPreparation::Invalid => {

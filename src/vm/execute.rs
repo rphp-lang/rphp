@@ -830,20 +830,49 @@ fn check_type_hint_in_scopes(
 
 pub(crate) enum CallArgumentPreparation {
     Exact,
-    Coerced(Value),
+    Coerced(Value, Option<ScalarCoercionDiagnostic>),
     Invalid,
 }
 
 #[derive(Clone, Copy)]
-enum ReturnCoercionDiagnostic {
+pub(crate) enum ScalarCoercionDiagnostic {
     FloatToInt,
     FloatStringToInt,
     NanTo(&'static str),
 }
 
+impl ScalarCoercionDiagnostic {
+    #[cold]
+    fn details(self, source: &Value) -> (i64, &'static str, String) {
+        match self {
+            Self::FloatToInt => (
+                8192,
+                "Deprecated",
+                format!(
+                    "Implicit conversion from float {} to int loses precision",
+                    source.echo_to_string_with_precision(-1)
+                ),
+            ),
+            Self::FloatStringToInt => (
+                8192,
+                "Deprecated",
+                format!(
+                    "Implicit conversion from float-string \"{}\" to int loses precision",
+                    source.as_str().unwrap_or("")
+                ),
+            ),
+            Self::NanTo(target) => (
+                2,
+                "Warning",
+                format!("unexpected NAN value was coerced to {target}"),
+            ),
+        }
+    }
+}
+
 enum ReturnTypePreparation {
     Exact,
-    Coerced(Value, Option<ReturnCoercionDiagnostic>),
+    Coerced(Value, Option<ScalarCoercionDiagnostic>),
     Invalid,
 }
 
@@ -854,11 +883,16 @@ struct PhpNumericString {
     uses_float_syntax: bool,
 }
 
+#[inline]
+fn is_php_numeric_whitespace(character: char) -> bool {
+    matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}')
+}
+
 /// Parse the numeric prefix accepted by PHP arithmetic without accepting
 /// Rust's `NaN`/`inf` spellings. The boolean reports whether only PHP ASCII
 /// whitespace remains after that prefix.
 fn parse_php_numeric_prefix(value: &str) -> Option<(PhpNumericString, bool)> {
-    let value = value.trim_start_matches(|character: char| character.is_ascii_whitespace());
+    let value = value.trim_start_matches(is_php_numeric_whitespace);
     if value.is_empty() {
         return None;
     }
@@ -902,9 +936,7 @@ fn parse_php_numeric_prefix(value: &str) -> Option<(PhpNumericString, bool)> {
     }
     let numeric = &value[..index];
     let number = numeric.parse::<f64>().ok()?;
-    let complete = value[index..]
-        .chars()
-        .all(|character| character.is_ascii_whitespace());
+    let complete = value[index..].chars().all(is_php_numeric_whitespace);
     Some((
         PhpNumericString {
             number,
@@ -1054,7 +1086,7 @@ pub(crate) fn integer_operator_operand(value: &Value) -> Result<IntegerOperatorO
                     0
                 }
             } else if text
-                .trim_start_matches(|character: char| character.is_ascii_whitespace())
+                .trim_start_matches(is_php_numeric_whitespace)
                 .starts_with('-')
             {
                 i64::MIN
@@ -1084,9 +1116,7 @@ pub(crate) fn explicit_long_conversion(value: &Value) -> i64 {
         ValueType::Double => php_float_to_long(value.as_double().unwrap()),
         ValueType::String => {
             let text = value.as_str().unwrap();
-            let integer = text
-                .trim_matches(|character: char| character.is_ascii_whitespace())
-                .parse::<i64>();
+            let integer = text.trim_matches(is_php_numeric_whitespace).parse::<i64>();
             if let Ok(integer) = integer {
                 return integer;
             }
@@ -1106,7 +1136,7 @@ pub(crate) fn explicit_float_conversion(value: &Value) -> f64 {
     match value.value_type() {
         ValueType::String => {
             let text = value.as_str().unwrap();
-            let trimmed = text.trim_matches(|character: char| character.is_ascii_whitespace());
+            let trimmed = text.trim_matches(is_php_numeric_whitespace);
             if trimmed.as_bytes().iter().any(u8::is_ascii_digit)
                 && let Ok(number) = trimmed.parse::<f64>()
             {
@@ -1170,20 +1200,6 @@ fn return_hint_contains(hint: &ParamTypeHint, expected: &ParamTypeHint) -> bool 
 }
 
 #[inline]
-fn weak_nan_call_target(value: &Value, hint: &ParamTypeHint, strict: bool) -> Option<&'static str> {
-    if strict || !value.dereferenced().as_double().is_some_and(f64::is_nan) {
-        return None;
-    }
-    if return_hint_contains(hint, &ParamTypeHint::Float) {
-        return None;
-    }
-    if return_hint_contains(hint, &ParamTypeHint::String) {
-        return Some("string");
-    }
-    return_hint_contains(hint, &ParamTypeHint::Bool).then_some("bool")
-}
-
-#[inline]
 fn weak_return_float_to_int(number: f64) -> Option<(i64, bool)> {
     let upper_exclusive = -(i64::MIN as f64);
     if !number.is_finite() || number < i64::MIN as f64 || number >= upper_exclusive {
@@ -1193,11 +1209,13 @@ fn weak_return_float_to_int(number: f64) -> Option<(i64, bool)> {
     Some((integer, integer as f64 != number))
 }
 
-fn coerce_scalar_return_value(
+#[cold]
+#[inline(never)]
+fn coerce_scalar_value(
     value: &Value,
     hint: &ParamTypeHint,
     weak: bool,
-) -> Option<(Value, Option<ReturnCoercionDiagnostic>)> {
+) -> Option<(Value, Option<ScalarCoercionDiagnostic>)> {
     let value = value.dereferenced();
     match hint {
         ParamTypeHint::Float => match value.value_type() {
@@ -1216,7 +1234,7 @@ fn coerce_scalar_return_value(
                 let (integer, lossy) = weak_return_float_to_int(value.as_double()?)?;
                 Some((
                     Value::long(integer),
-                    lossy.then_some(ReturnCoercionDiagnostic::FloatToInt),
+                    lossy.then_some(ScalarCoercionDiagnostic::FloatToInt),
                 ))
             }
             ValueType::True | ValueType::False => {
@@ -1233,7 +1251,7 @@ fn coerce_scalar_return_value(
                 let (integer, lossy) = weak_return_float_to_int(parsed.number)?;
                 Some((
                     Value::long(integer),
-                    lossy.then_some(ReturnCoercionDiagnostic::FloatStringToInt),
+                    lossy.then_some(ScalarCoercionDiagnostic::FloatStringToInt),
                 ))
             }
             _ => None,
@@ -1244,7 +1262,7 @@ fn coerce_scalar_return_value(
                 value
                     .as_double()
                     .is_some_and(f64::is_nan)
-                    .then_some(ReturnCoercionDiagnostic::NanTo("string")),
+                    .then_some(ScalarCoercionDiagnostic::NanTo("string")),
             )),
             _ => None,
         },
@@ -1254,12 +1272,12 @@ fn coerce_scalar_return_value(
                 value
                     .as_double()
                     .is_some_and(f64::is_nan)
-                    .then_some(ReturnCoercionDiagnostic::NanTo("bool")),
+                    .then_some(ScalarCoercionDiagnostic::NanTo("bool")),
             )),
             _ => None,
         },
         ParamTypeHint::Nullable(inner) if value.value_type() != ValueType::Null => {
-            coerce_scalar_return_value(value, inner, weak)
+            coerce_scalar_value(value, inner, weak)
         }
         ParamTypeHint::Union(parts) => {
             let contains = |candidate: &ParamTypeHint| {
@@ -1293,7 +1311,7 @@ fn coerce_scalar_return_value(
                     {
                         return Some((
                             Value::long(integer),
-                            lossy.then_some(ReturnCoercionDiagnostic::FloatStringToInt),
+                            lossy.then_some(ScalarCoercionDiagnostic::FloatStringToInt),
                         ));
                     }
                     contains(&ParamTypeHint::Bool).then(|| (Value::bool(value.is_truthy()), None))
@@ -1305,7 +1323,7 @@ fn coerce_scalar_return_value(
                     {
                         return Some((
                             Value::long(integer),
-                            lossy.then_some(ReturnCoercionDiagnostic::FloatToInt),
+                            lossy.then_some(ScalarCoercionDiagnostic::FloatToInt),
                         ));
                     }
                     if contains(&ParamTypeHint::String) {
@@ -1314,7 +1332,7 @@ fn coerce_scalar_return_value(
                             value
                                 .as_double()
                                 .is_some_and(f64::is_nan)
-                                .then_some(ReturnCoercionDiagnostic::NanTo("string")),
+                                .then_some(ScalarCoercionDiagnostic::NanTo("string")),
                         ));
                     }
                     contains(&ParamTypeHint::Bool).then(|| {
@@ -1323,7 +1341,7 @@ fn coerce_scalar_return_value(
                             value
                                 .as_double()
                                 .is_some_and(f64::is_nan)
-                                .then_some(ReturnCoercionDiagnostic::NanTo("bool")),
+                                .then_some(ScalarCoercionDiagnostic::NanTo("bool")),
                         )
                     })
                 }
@@ -1367,7 +1385,7 @@ fn prepare_return_type_value(
     if check_return_type_hint(value, hint, eg, true, frame, callee_class) {
         return Ok(ReturnTypePreparation::Exact);
     }
-    if let Some((coerced, diagnostic)) = coerce_scalar_return_value(value, hint, !strict) {
+    if let Some((coerced, diagnostic)) = coerce_scalar_value(value, hint, !strict) {
         return Ok(ReturnTypePreparation::Coerced(coerced, diagnostic));
     }
     if !strict
@@ -1398,17 +1416,17 @@ pub(crate) fn prepare_call_argument(
         return Ok(CallArgumentPreparation::Exact);
     }
     if strict {
-        return Ok(coerce_property_value(value, hint, false).map_or(
-            CallArgumentPreparation::Invalid,
-            CallArgumentPreparation::Coerced,
-        ));
+        return Ok(coerce_scalar_value(value, hint, false)
+            .map_or(CallArgumentPreparation::Invalid, |(value, diagnostic)| {
+                CallArgumentPreparation::Coerced(value, diagnostic)
+            }));
     }
 
     // Calls and typed-property writes share PHP's weak scalar conversion
     // table. Reuse the canonical conversion before the object-only string
     // hook below; exact union members have already won in check_type_hint().
-    if let Some(coerced) = coerce_property_value(value, hint, true) {
-        return Ok(CallArgumentPreparation::Coerced(coerced));
+    if let Some((coerced, diagnostic)) = coerce_scalar_value(value, hint, true) {
+        return Ok(CallArgumentPreparation::Coerced(coerced, diagnostic));
     }
 
     let coerced = match hint {
@@ -1430,8 +1448,8 @@ pub(crate) fn prepare_call_argument(
                     CallArgumentPreparation::Exact => {
                         return Ok(CallArgumentPreparation::Exact);
                     }
-                    CallArgumentPreparation::Coerced(value) => {
-                        return Ok(CallArgumentPreparation::Coerced(value));
+                    CallArgumentPreparation::Coerced(value, diagnostic) => {
+                        return Ok(CallArgumentPreparation::Coerced(value, diagnostic));
                     }
                     CallArgumentPreparation::Invalid => {}
                 }
@@ -1440,10 +1458,9 @@ pub(crate) fn prepare_call_argument(
         }
         _ => None,
     };
-    Ok(coerced.map_or(
-        CallArgumentPreparation::Invalid,
-        CallArgumentPreparation::Coerced,
-    ))
+    Ok(coerced.map_or(CallArgumentPreparation::Invalid, |value| {
+        CallArgumentPreparation::Coerced(value, None)
+    }))
 }
 
 #[inline]
@@ -3520,11 +3537,14 @@ fn execute_full_call<'a>(
         handler_validates_types,
         exact_arity_diagnostics,
         internal_deprecation,
+        user_op_array,
     ) = unsafe {
         let common = &*(*call).func;
         let internal = (common.fn_type == FunctionType::Internal).then(|| {
             &*(common as *const FunctionCommon as *const super::function::InternalFunction)
         });
+        let user_op_array = (common.fn_type == FunctionType::User)
+            .then(|| &(*(common as *const FunctionCommon as *const UserFunction)).op_array);
         let raw_handler = if common.sig.is_variadic && pending_named.is_none() {
             // A single positional variadic value is already a stable call
             // slot. Multiple values normally retain the packed ABI; the
@@ -3544,6 +3564,7 @@ fn execute_full_call<'a>(
             internal.is_some_and(|function| function.handler_validates_types),
             internal.is_some_and(|function| function.exact_arity_diagnostics),
             internal.and_then(|function| function.deprecation),
+            user_op_array,
         )
     };
     if let Some(deprecation) = internal_deprecation {
@@ -3687,18 +3708,26 @@ fn execute_full_call<'a>(
                     callee_class_ref,
                 )? {
                     CallArgumentPreparation::Exact => continue,
-                    CallArgumentPreparation::Coerced(prepared) => {
-                        if let Some(target) =
-                            weak_nan_call_target(&value, hint, op_array.strict_types)
-                        {
-                            report_php_warning(
-                                eg,
-                                frame,
-                                op_array,
-                                opline,
-                                &format!("unexpected NAN value was coerced to {target}"),
-                                false,
-                            )?;
+                    CallArgumentPreparation::Coerced(prepared, diagnostic) => {
+                        if let Some(diagnostic) = diagnostic {
+                            let function = Function::from_common_ptr((*call).func);
+                            if function.fn_type() == FunctionType::User
+                                && let Some(line) = function.as_user().op_array.declaration_line()
+                            {
+                                let callee = &function.as_user().op_array;
+                                let file = if callee.source_file.is_empty() {
+                                    callee.name.as_str()
+                                } else {
+                                    callee.source_file.as_str()
+                                };
+                                report_scalar_coercion_diagnostic_at(
+                                    eg, frame, &value, diagnostic, file, line,
+                                )?;
+                            } else {
+                                report_scalar_coercion_diagnostic(
+                                    eg, frame, op_array, opline, &value, diagnostic,
+                                )?;
+                            }
                             if let Some(exception) = eg.exception.take() {
                                 cleanup_frame_slots(call);
                                 pop_vm_call_frame(eg, call);
@@ -3945,7 +3974,30 @@ fn execute_full_call<'a>(
                             callee_class_ref,
                         )? {
                             CallArgumentPreparation::Exact => {}
-                            CallArgumentPreparation::Coerced(prepared) => {
+                            CallArgumentPreparation::Coerced(prepared, diagnostic) => {
+                                if let Some(diagnostic) = diagnostic {
+                                    if let Some(callee) = user_op_array
+                                        && let Some(line) = callee.declaration_line()
+                                    {
+                                        let file = if callee.source_file.is_empty() {
+                                            callee.name.as_str()
+                                        } else {
+                                            callee.source_file.as_str()
+                                        };
+                                        report_scalar_coercion_diagnostic_at(
+                                            eg, frame, &original, diagnostic, file, line,
+                                        )?;
+                                    } else {
+                                        report_scalar_coercion_diagnostic(
+                                            eg, frame, op_array, opline, &original, diagnostic,
+                                        )?;
+                                    }
+                                    if let Some(exception) = eg.exception.take() {
+                                        return cleanup_named_call_and_throw(
+                                            eg, frame, call, exception,
+                                        );
+                                    }
+                                }
                                 if val.is_reference() {
                                     val.assign_dereferenced(prepared);
                                 } else {
@@ -3962,12 +4014,7 @@ fn execute_full_call<'a>(
                                         original.type_name()
                                     ),
                                 );
-                                unsafe { cleanup_frame_slots(call) };
-                                pop_vm_call_frame(eg, call);
-                                return Ok(match throw_in_frame(eg, frame, type_err)? {
-                                    ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
-                                    ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
-                                });
+                                return cleanup_named_call_and_throw(eg, frame, call, type_err);
                             }
                         }
                     }
@@ -3975,11 +4022,11 @@ fn execute_full_call<'a>(
                 variadic_arr.set_str(&name, val);
             }
         }
-        let variadic_slot = unsafe { (*call).cv_mut(cv_start) };
         // SAFETY: packing consumed every initialized positional tail slot and
         // cleared its heap bit. `variadic_slot` is replaced exactly once with
         // the completed bucket before the callee body starts.
         unsafe {
+            let variadic_slot = (*call).cv_mut(cv_start);
             frame_slot_set(
                 call,
                 variadic_slot as *mut Value,
