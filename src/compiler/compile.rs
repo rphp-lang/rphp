@@ -11286,7 +11286,26 @@ impl Compiler {
                 // $a ?? $b → isset($a) ? $a : $b
                 // Property reads in a coalescing probe are silent: an
                 // uninitialized typed property behaves like an unset value.
+                let left_start = self.instructions.len();
                 let (l_op, l_type) = self.compile_isset_object_base(left);
+                // A coalescing ArrayAccess probe needs the value after a
+                // successful offsetExists(), unlike standalone isset(). Mark
+                // only the terminal dimension: nested bases remain silent
+                // ordinary reads and the VM retains receiver/key snapshots
+                // across the two user callbacks.
+                if matches!(left.as_ref(), Expr::ArrayAccess { .. })
+                    && let Some(fetch) =
+                        self.instructions[left_start..]
+                            .iter_mut()
+                            .rev()
+                            .find(|instruction| {
+                                instruction.opcode == OpCode::FetchDimR
+                                    && instruction.result == l_op
+                                    && instruction.result_type == l_type
+                            })
+                {
+                    fetch._pad |= FETCH_DIM_EMPTY;
+                }
                 let conditional_entry = Box::new(self.definitely_defined_cvs.clone());
                 let tmp = self.alloc_tmp();
 
@@ -12552,16 +12571,28 @@ impl Compiler {
                 generic_args,
                 line,
             } => {
-                if let (
+                let parent_property = match class.as_ref() {
                     Expr::StaticProperty {
                         class_name,
                         property,
                         parenthesized: false,
                         ..
+                    } if class_name.eq_ignore_ascii_case("parent") => Some(property.clone()),
+                    Expr::DynamicNamedStaticProperty {
+                        class_name,
+                        property,
+                        ..
+                    } if class_name.eq_ignore_ascii_case("parent") => match property.as_ref() {
+                        Expr::Integer(value) => Some(value.to_string()),
+                        Expr::StringLiteral(value) | Expr::BinaryStringLiteral(value) => {
+                            Some(value.clone())
+                        }
+                        _ => None,
                     },
-                    Expr::StringLiteral(hook),
-                ) = (class.as_ref(), method.as_ref())
-                    && class_name.eq_ignore_ascii_case("parent")
+                    _ => None,
+                };
+                if let (Some(property), Expr::StringLiteral(hook)) =
+                    (parent_property, method.as_ref())
                     && (hook.eq_ignore_ascii_case("get") || hook.eq_ignore_ascii_case("set"))
                 {
                     if self.lexical_static_class.is_none() {
@@ -12987,6 +13018,30 @@ impl Compiler {
                 static_syntax,
                 line,
             } => {
+                if *static_syntax
+                    && matches!(
+                        owner.as_ref(),
+                        Expr::StaticProperty {
+                            class_name,
+                            parenthesized: false,
+                            ..
+                        } if class_name.eq_ignore_ascii_case("parent")
+                    )
+                    && matches!(
+                        member.as_ref(),
+                        Expr::StringLiteral(hook)
+                            if hook.eq_ignore_ascii_case("get")
+                                || hook.eq_ignore_ascii_case("set")
+                    )
+                {
+                    self.deferred_error =
+                        Some(self.goto_error(
+                            "Cannot create Closure for parent property hook call",
+                            *line,
+                        ));
+                    let null = self.add_literal(Value::null());
+                    return (null, OpType::Const);
+                }
                 let (owner, owner_type) = self.compile_expr(owner);
                 let callable = self.alloc_tmp();
                 let mut init = Instruction::new(OpCode::InitArray);

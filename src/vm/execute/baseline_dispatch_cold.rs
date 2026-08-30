@@ -23,10 +23,25 @@ pub(crate) fn sync_dirty_globals_to_frame(eg: &mut ExecutorGlobals, frame: &mut 
         };
         for (cv, name) in &vars {
             if eg.dirty_globals.contains(name)
-                && let Some(value) = eg.globals.get(name).cloned()
+                && let Some(global) = eg.globals.get(name)
             {
+                // A callback-local `global` reference becomes an ordinary
+                // caller value again when no PHP storage location retained
+                // an alias. If the cell escaped (for example into a hooked
+                // property), the suspended caller must join that same cell.
+                let escaped_reference =
+                    global.is_owned_reference() && global.owned_reference_is_aliased();
+                let value = if escaped_reference {
+                    clone_scope_binding(global)
+                } else {
+                    global.clone()
+                };
                 let slot = frame.cv_mut(*cv) as *mut Value;
-                if (*slot).is_reference() {
+                if escaped_reference {
+                    if (*slot).reference_identity() != value.reference_identity() {
+                        frame_slot_set(frame, slot, value);
+                    }
+                } else if (*slot).is_reference() {
                     slot_set((*slot).as_ref_ptr(), value);
                 } else {
                     frame_slot_set(frame, slot, value);
@@ -5234,17 +5249,20 @@ fn op_bind_global(
     if !op_array.main_scope_vars.is_empty() && !unsafe { (*cv_ptr).is_undef() } {
         return;
     }
-    let value = eg.globals.get(&name).cloned().unwrap_or_else(Value::null);
-    let binding = if value.is_owned_reference() {
-        value.clone_owned_reference_alias()
-    } else {
-        Value::owned_reference(reference_initial_value(value))
+    let binding = match eg.globals.get(&name) {
+        Some(value) if value.is_owned_reference() => value.clone_owned_reference_alias(),
+        Some(value) => Value::owned_reference(reference_initial_value(value.clone())),
+        None => Value::owned_reference(Value::null()),
     };
     globals_set(
         &mut eg.globals,
         &name,
         binding.clone_owned_reference_alias(),
     );
+    // Detached opcode/stdlib callbacks return across an execute boundary.
+    // Publishing the newly-created reference identity lets that boundary
+    // rebind the suspended caller even when no scalar write followed `global`.
+    eg.dirty_globals.insert(name.clone());
     // SAFETY: cv_ptr is the live BindGlobal destination derived above.
     unsafe { frame_slot_set(frame, cv_ptr, binding) };
 }

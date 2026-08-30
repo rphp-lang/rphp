@@ -6855,6 +6855,41 @@ impl ExecutorGlobals {
                         class_name, property.name, interface.name, location
                     ));
                 }
+                if required.has_set_hook
+                    && let Some(required_setter) = interface.methods.iter().find(|method| {
+                        method
+                            .0
+                            .eq_ignore_ascii_case(&format!("${}::set", required.name))
+                    })
+                    && let Some(implementation) =
+                        self.find_effective_method(class_def, &format!("${}::set", property.name))
+                    && let (Some(required_hint), Some(implementation_hint)) = (
+                        required_setter.4.common.sig.param_type_hints.first(),
+                        implementation.function.sig.param_type_hints.first(),
+                    )
+                    && !self.is_param_type_compatible_strict(
+                        implementation_hint,
+                        required_hint,
+                        implementation.owner,
+                        &interface.name,
+                        Some(class_def),
+                    )
+                {
+                    let location = property
+                        .source_file
+                        .as_ref()
+                        .map_or_else(String::new, |file| {
+                            format!(" in {file} on line {}", property.declaration_line())
+                        });
+                    return Err(format!(
+                        "Set type of {}::${} must be supertype of {} (as in interface {}){}",
+                        class_name,
+                        property.name,
+                        required_hint.property_declaration_display_name(),
+                        interface.name,
+                        location,
+                    ));
+                }
                 if required.has_get_hook
                     && let Some(required_getter) = interface.methods.iter().find(|method| {
                         method
@@ -7002,22 +7037,36 @@ impl ExecutorGlobals {
             let property = &class.properties[*slot];
             if property.visibility != Visibility::Private {
                 for (rank, owner) in lineage.iter().enumerate() {
-                    let inherited_bucket = self.find_class(owner).is_some_and(|definition| {
-                        definition.properties.iter().any(|candidate| {
+                    let inherited_bucket = self.find_class(owner).and_then(|definition| {
+                        definition.properties.iter().position(|candidate| {
                             candidate.visibility != Visibility::Private
                                 && candidate.name == property.name
                                 && candidate.declaring_class.eq_ignore_ascii_case(owner)
                         })
                     });
-                    if inherited_bucket {
-                        return rank;
+                    if let Some(position) = inherited_bucket {
+                        return (rank, position);
                     }
                 }
             }
-            lineage
+            let rank = lineage
                 .iter()
                 .position(|owner| owner.eq_ignore_ascii_case(&property.declaring_class))
-                .unwrap_or(lineage.len())
+                .unwrap_or(lineage.len());
+            let position = lineage
+                .get(rank)
+                .and_then(|owner| self.find_class(owner))
+                .and_then(|definition| {
+                    definition.properties.iter().position(|candidate| {
+                        candidate.name == property.name
+                            && candidate.visibility == property.visibility
+                            && candidate
+                                .declaring_class
+                                .eq_ignore_ascii_case(&property.declaring_class)
+                    })
+                })
+                .unwrap_or(*slot);
+            (rank, position)
         });
         slots
     }

@@ -1242,6 +1242,55 @@ class ParentHookOutside {
 }
 
 #[test]
+fn parent_hook_identity_and_interface_set_contracts_fail_during_linking() {
+    let callable = run_php_expect_error(
+        r#"<?php
+class CallableHookBase { public mixed $item; }
+class CallableHookChild extends CallableHookBase {
+    public mixed $item {
+        set {
+            $setter = parent::$item::set(...);
+            $setter($value);
+        }
+    }
+}
+(new CallableHookChild)->item = 1;
+"#,
+    );
+    assert!(
+        format!("{callable:?}").contains("Cannot create Closure for parent property hook call")
+    );
+
+    let numeric_member = run_php_expect_error(
+        r#"<?php
+class NumericHookChild {
+    public $named { get => parent::${7}::get(); }
+}
+"#,
+    );
+    assert!(
+        format!("{numeric_member:?}")
+            .contains("Must not use parent::$7::get() in a different property ($named)")
+    );
+
+    let setter_contract = run_php_expect_error(
+        r#"<?php
+interface WritableText {
+    public string $value { set(int|string $incoming); }
+}
+class NarrowText implements WritableText {
+    public string $value;
+}
+"#,
+    );
+    assert!(
+        format!("{setter_contract:?}").contains(
+            "Set type of NarrowText::$value must be supertype of string|int (as in interface WritableText)"
+        )
+    );
+}
+
+#[test]
 fn parent_hook_calls_without_class_scope_and_writable_call_results_are_rejected() {
     let no_scope = run_php_expect_error("<?php parent::$value::get();");
     assert!(format!("{no_scope:?}").contains("when no class scope is active"));
@@ -1488,5 +1537,31 @@ try {
             "/app",
         ),
         "SensitiveSetter:->:$value::set:SensitiveParameterValue:concealed"
+    );
+}
+
+#[test]
+fn setter_hook_keeps_a_global_reference_across_the_detached_call_boundary() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class SharedHookStorage {
+    public int $value {
+        get => $this->value;
+        set {
+            global $shared;
+            $this->value =& $shared;
+        }
+    }
+}
+
+$shared = 4;
+$object = new SharedHookStorage;
+$object->value = 99;
+$shared++;
+var_dump($object->value, $shared);
+"#,
+        ),
+        "int(5)\nint(5)\n"
     );
 }

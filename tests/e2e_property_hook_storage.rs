@@ -93,6 +93,54 @@ echo serialize($object), "\n";
 }
 
 #[test]
+fn hook_projection_preserves_ancestor_buckets_and_backing_coalesce_bypass() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ProjectionBase {
+    private string $first { get => 'base-first'; }
+    protected string $promoted { get => 'base-promoted'; }
+
+    public function inspect(): void {
+        foreach ($this as $name => $value) {
+            echo "$name=$value\n";
+        }
+    }
+}
+
+class ProjectionChild extends ProjectionBase {
+    public string $promoted { get => 'child-promoted'; }
+    public string $late {
+        get {
+            $this->late ??= 'ready';
+            return $this->late;
+        }
+        set { echo "unexpected-set\n"; $this->late = $value; }
+    }
+    public string $virtual { get => 'computed'; }
+}
+
+$object = new ProjectionChild;
+$object->inspect();
+echo var_export($object, true), "\n";
+"#,
+        ),
+        concat!(
+            "first=base-first\n",
+            "promoted=child-promoted\n",
+            "late=ready\n",
+            "virtual=computed\n",
+            "\\ProjectionChild::__set_state(array(\n",
+            "   'first' => 'base-first',\n",
+            "   'promoted' => 'child-promoted',\n",
+            "   'late' => 'ready',\n",
+            "   'virtual' => 'computed',\n",
+            "))\n",
+        ),
+    );
+}
+
+#[test]
 fn private_and_parent_hooks_keep_their_declaring_scope() {
     assert_eq!(
         run_php(

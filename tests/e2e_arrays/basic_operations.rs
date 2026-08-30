@@ -163,6 +163,40 @@ echo $bag['name'] ?? 'missing';
 }
 
 #[test]
+fn array_access_coalesce_snapshots_operands_but_commits_callback_rebinding() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class SnapshotBag implements ArrayAccess {
+    public function offsetExists($offset): bool {
+        $GLOBALS['selected'] = 99;
+        $GLOBALS['bag'] = 99;
+        return true;
+    }
+    public function offsetGet($offset): mixed {
+        echo "get:$offset\n";
+        return 42;
+    }
+    public function offsetSet($offset, $value): void {}
+    public function offsetUnset($offset): void {}
+}
+
+$selected = str_repeat('key', 2);
+$bag = new SnapshotBag;
+var_dump($bag[$selected] ?? 0);
+var_dump($selected, $bag);
+"#,
+        ),
+        concat!(
+            "get:keykey\n",
+            "int(42)\n",
+            "int(99)\n",
+            "int(99)\n",
+        ),
+    );
+}
+
+#[test]
 fn spl_object_storage_uses_object_identity_and_iterates_objects() {
     assert_eq!(
         run_php(

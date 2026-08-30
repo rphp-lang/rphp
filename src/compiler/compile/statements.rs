@@ -993,6 +993,11 @@ impl Compiler {
         target: &Expr,
         expr: &Expr,
     ) -> Result<(u16, OpType, usize), String> {
+        let target_hook_bypass = matches!(target,
+            Expr::PropertyAccess { object, property, .. }
+                if matches!(object.as_ref(), Expr::Variable { name, .. } if name == "this")
+                    && self.current_hook_matches(property)
+        );
         let (current, current_type, write) = match target {
             Expr::Variable { name: var, .. } => {
                 let cv = self.resolve_cv(var);
@@ -1035,6 +1040,9 @@ impl Compiler {
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
                 fetch._pad |= FETCH_OBJ_SILENT;
+                if target_hook_bypass {
+                    fetch._pad |= crate::vm::instruction::OBJ_PROP_HOOK_BYPASS;
+                }
                 self.push_instruction_at_line(fetch, *line);
                 (
                     current,
@@ -1229,6 +1237,9 @@ impl Compiler {
                 assign.op2_type = property_type;
                 assign.result = value;
                 assign.result_type = value_type;
+                if target_hook_bypass {
+                    assign._pad |= crate::vm::instruction::OBJ_PROP_HOOK_BYPASS;
+                }
                 self.instructions.push(assign);
             }
             CoalesceWrite::StaticProperty {

@@ -1022,7 +1022,11 @@ where
                 &caller_op_array.global_vars
             };
             for (cv, name) in vars {
-                globals_set(&mut eg.globals, name, caller.cv(*cv).clone());
+                globals_set(
+                    &mut eg.globals,
+                    name,
+                    clone_scope_binding(caller.cv(*cv)),
+                );
             }
         }
     }

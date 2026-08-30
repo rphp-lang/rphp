@@ -8,6 +8,66 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`overloaded-property-lvalue-boundaries`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.10. Declared, asymmetric and magic properties now
+share PHP's recursion-guard boundary for reads, writes, unsets and reference
+acquisition. An explicitly unset typed property may expose a coerced reference
+through `__get()` without initializing its declared slot. Parent property-hook
+calls retain their runtime property identity, interface setters are checked
+contravariantly, hook backing `??=` bypasses redispatch, and property projection
+uses declaration order while invoking virtual getters. Terminal ArrayAccess
+coalesce keeps the receiver/key snapshot across `offsetExists()` and
+`offsetGet()`. Detached callbacks preserve a global reference only when its
+cell escaped, retaining ordinary callback-local COW and lifetime behavior.
+
+Seven original E2E regressions cover the asymmetric/magic guard matrix, typed
+reference exposure, recursive silent fallback, parent/interface hook identity,
+hook projection/backing storage, ArrayAccess rebinding and escaped global
+references. A 17-case clean-room oracle hashes to
+`5891d1521197b7b51237845aac73780f9b9de71267f3ad410df5f35f5dba2960`.
+The exact corpus delta is `+14/-0`; the gains cover two asymmetric-visibility,
+six magic/guarded-property, five property-hook and one typed-property case.
+`exception_027.phpt`, `exception_028.phpt` and `property_hooks/gh10251.phpt`
+remain at independent constructor-rollback and dynamic-RHS diagnostic roots.
+
+The final 5,599-case Zend/lang run is 4,706 pass, 597 fail, 115 skip and 181
+unsupported; its manifest hashes to
+`acf4b8d7e194cec57a54ef714d8e18cafebd8c19017bbd16ac571fc81cb1835b`.
+The 1,575-case strings/array projection is byte-identical at 1,459 pass, 18
+fail, 67 skip and 31 unsupported, with manifest hash
+`9f5edf942abcc866a1c0c833bca1a4dbef97b344295e36fd07314f233e29b0ce`.
+The combined classification and pass-set hashes are
+`a75caa1485cc9ac88df199e04afdd691e027ecd89f0a45ef2a08c80d078909b0`
+and `0d3213f139a7ca5277f2faca4718cb2d756463fc4a563bf9ce20184b47301adb`:
+6,165 pass, 615 fail, 182 skip and 212 unsupported, with no timeout or crash.
+Supported debt is 597 Zend/lang failures, 18 strings failures and zero array
+failures.
+
+The exact final candidate SHA-256 is
+`01b1beca8e54c65e5f0205367d05a2deb6593d10320d524c8862dafdcf3165ff`.
+All five Cargo configurations, all-feature/all-target checking, formatting,
+HTML data, PHPT runner and both unsafe-policy checks pass. Production remains
+below the ratchet at 1,622 unsafe blocks and 289 unsafe functions, with 393
+SAFETY annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four
+Symfony S1 gates and PHP 8.5.10 warmed-kernel S2 and cold-build S3 pass.
+
+The fixed scalar-coercion baseline CPU-2 gate uses 32 balanced pairs with exact
+checksums and hashes to
+`019d4b3972c0f8f2955de3a162ff39c2e657004097204a323152bf8ea1fac32f`.
+Every paired median is below the approximately one-percent regression ceiling:
+ordinary calls +0.708%, writes +0.481%, startup +0.245% and throw/catch +0.846%,
+while construction, reads, array assignment, coalesce and hooked projection
+improve. The read arithmetic mean is a noisy +2.534%, but its median is
+-1.316% and p90 is +0.126%. Longer call and throw controls retain matching
+checksums at +0.685% and +0.621% paired medians. Hook projection is isolated as
+a cold, non-inlined pay-for-use path.
+
+This checkpoint does not claim the three retained independent cases, general
+SPL, Fiber/generator suspension, PHP 8.2, 32-bit behavior or allocation-limit/
+OOM equivalence. The implementation checkpoint is the commit containing this
+status.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `scalar-coercion-diagnostic-boundaries`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.10. Weak scalar conversions now return a
 structured value-plus-diagnostic result shared by calls, returns and typed

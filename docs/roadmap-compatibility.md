@@ -36,18 +36,18 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `scalar-coercion-diagnostic-boundaries` train retains 6,151
-exact passes across the 7,174-case PHP 8.5 corpus, with 629 supported failures,
+The accepted AMD64 `overloaded-property-lvalue-boundaries` train retains 6,165
+exact passes across the 7,174-case PHP 8.5 corpus, with 615 supported failures,
 182 skips, 212 unsupported cases and no timeout or crash. Its pass-set hash is
-`c6cf6deee29112ee2b112e951b07b5e9ffb16d4bcd42ace483018e61d9698a70`;
-the exact parent delta is `+11/-0`. Calls, returns, typed writes, runtime
-constant defaults, integer operators and selected offset conversions now share
-one structured scalar conversion result while retaining PHP's diagnostic
-location, exception priority and state boundary. Ten of the 12 selected PHPTs
-pass; the two remaining scalar-basic cases stop at the independent missing
-`data://` stream-resource layer. Fixed-baseline 32-pair arithmetic-mean ratios
-remain between 0.9839 and 1.0105 across the established controls; the
-throw/catch paired median is 0.9949.
+`0d3213f139a7ca5277f2faca4718cb2d756463fc4a563bf9ce20184b47301adb`;
+the exact parent delta is `+14/-0`. Declared/asymmetric/magic property guards,
+parent and interface hook identity, backing writes and projection, ArrayAccess
+coalesce snapshots, and escaped detached global references now share PHP's
+observable lvalue boundaries. The three retained focused failures have separate
+constructor-rollback or dynamic-RHS diagnostic roots. Exact-final CPU-pinned
+32-pair controls retain matching checksums and every paired median is below the
+approximately one-percent regression ceiling; longer call and throw controls
+measure +0.685% and +0.621%.
 Current compatibility work is selected as a 10–30-case train around one shared
 root-cause hypothesis and one cumulative full/performance evidence packet.
 Smaller checkpoints require a crash, security issue, framework blocker or

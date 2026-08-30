@@ -13548,7 +13548,10 @@ fn fn_var_export(
         None => false,
     };
     let mut state = VarExportState::default();
-    let output = var_export_value(&v, eg, &mut state);
+    let output = var_export_value(&v, eg, &mut state)?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     for _ in 0..state.recursive_values {
         report_internal_diagnostic(
             eg,
@@ -17774,12 +17777,12 @@ fn push_var_export_entry(
     output: &mut String,
     key: &str,
     value: &Value,
-    eg: &ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
     level: usize,
     key_padding: usize,
     state: &mut VarExportState,
-) {
-    let exported = var_export_value_at(value, eg, level + 1, state);
+) -> Result<(), VmError> {
+    let exported = var_export_value_at(value, eg, level + 1, state)?;
     push_var_export_indent(output, level);
     for _ in 0..key_padding {
         output.push(' ');
@@ -17794,20 +17797,89 @@ fn push_var_export_entry(
         output.push_str(&exported);
     }
     output.push_str(",\n");
+    Ok(())
 }
 
 fn var_export_object_property_name(key: &str) -> &str {
     key.rsplit_once('\0').map_or(key, |(_, name)| name)
 }
 
+#[cold]
+#[inline(never)]
+fn var_export_object_properties(value: &Value, eg: &mut ExecutorGlobals) -> Result<Value, VmError> {
+    let (class_id, has_hooks) = value
+        .as_object()
+        .map(|object| {
+            let class_id = object.class_id;
+            let has_hooks = eg.class_by_id(class_id).is_some_and(|class| {
+                class
+                    .properties
+                    .iter()
+                    .any(|property| property.has_get_hook || property.has_set_hook)
+            });
+            (class_id, has_hooks)
+        })
+        .expect("object export requires a live object value");
+    if !has_hooks {
+        return Ok(crate::vm::execute::cast_object_to_array(value, eg));
+    }
+
+    let definitions = eg
+        .class_by_id(class_id)
+        .map(|class| class.properties.clone())
+        .unwrap_or_default();
+    let slots = eg.instance_property_slots_in_iteration_order(class_id);
+    let mut properties = PhpArray::new();
+    let mut declared_names = std::collections::HashSet::new();
+    for slot in slots {
+        let definition = &definitions[slot];
+        declared_names.insert(definition.name.clone());
+        let property = if definition.has_get_hook {
+            crate::vm::execute::call_object_property_get_hook(
+                eg,
+                value,
+                &definition.name,
+                &definition.declaring_class,
+            )?
+            .filter(|property| !property.is_undef())
+        } else {
+            value.as_object().and_then(|object| {
+                object
+                    .get_property_slot(slot)
+                    .filter(|property| !property.is_undef())
+                    .cloned()
+            })
+        };
+        let Some(property) = property else {
+            continue;
+        };
+        let key = match definition.visibility {
+            Visibility::Public => definition.name.clone(),
+            Visibility::Protected => format!("\0*\0{}", definition.name),
+            Visibility::Private => {
+                format!("\0{}\0{}", definition.declaring_class, definition.name)
+            }
+        };
+        properties.set_str(&key, property.clone_for_php_storage());
+    }
+    if let Some(object) = value.as_object() {
+        object.for_each_dynamic_property(|name, property| {
+            if !property.is_undef() && !declared_names.contains(name) {
+                properties.set_str(name, property.clone_for_php_storage());
+            }
+        });
+    }
+    Ok(Value::array(properties))
+}
+
 fn var_export_value_at(
     val: &Value,
-    eg: &ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
     level: usize,
     state: &mut VarExportState,
-) -> String {
+) -> Result<String, VmError> {
     let val = val.dereferenced();
-    match val.value_type() {
+    Ok(match val.value_type() {
         ValueType::Null => "NULL".to_string(),
         ValueType::True => "true".to_string(),
         ValueType::False => "false".to_string(),
@@ -17826,7 +17898,7 @@ fn var_export_value_at(
                     .expect("array export requires a live array identity");
                 if state.arrays.contains(&identity) {
                     state.recursive_values += 1;
-                    return "NULL".to_string();
+                    return Ok("NULL".to_string());
                 }
                 state.arrays.push(identity);
                 Some(identity)
@@ -17839,7 +17911,7 @@ fn var_export_value_at(
                     ArrayKey::Int(k) => k.to_string(),
                     ArrayKey::String(k) => var_export_string(k),
                 };
-                push_var_export_entry(&mut out, &key_str, v, eg, level, 2, state);
+                push_var_export_entry(&mut out, &key_str, v, eg, level, 2, state)?;
             }
             push_var_export_indent(&mut out, level);
             out.push(')');
@@ -17851,14 +17923,14 @@ fn var_export_value_at(
         }
         ValueType::Object => {
             if let Some(case) = enum_case_export(val, eg) {
-                return case;
+                return Ok(case);
             }
             let identity = val
                 .object_identity()
                 .expect("object export requires a live object identity");
             if state.objects.contains(&identity) {
                 state.recursive_values += 1;
-                return "NULL".to_string();
+                return Ok("NULL".to_string());
             }
             state.objects.push(identity);
             let object = val
@@ -17866,7 +17938,7 @@ fn var_export_value_at(
                 .expect("object export requires a live object value");
             let class_name = object.class_name.to_string();
             drop(object);
-            let properties = crate::vm::execute::cast_object_to_array(val, eg);
+            let properties = var_export_object_properties(val, eg)?;
             let properties = properties
                 .as_array()
                 .expect("object-to-array projection must return an array");
@@ -17886,7 +17958,7 @@ fn var_export_value_at(
                         var_export_string(var_export_object_property_name(&key))
                     }
                 };
-                push_var_export_entry(&mut out, &key, value, eg, level, 3, state);
+                push_var_export_entry(&mut out, &key, value, eg, level, 3, state)?;
             }
             push_var_export_indent(&mut out, level);
             out.push(')');
@@ -17898,10 +17970,14 @@ fn var_export_value_at(
             out
         }
         _ => "NULL".to_string(),
-    }
+    })
 }
 
-fn var_export_value(val: &Value, eg: &ExecutorGlobals, state: &mut VarExportState) -> String {
+fn var_export_value(
+    val: &Value,
+    eg: &mut ExecutorGlobals,
+    state: &mut VarExportState,
+) -> Result<String, VmError> {
     var_export_value_at(val, eg, 0, state)
 }
 

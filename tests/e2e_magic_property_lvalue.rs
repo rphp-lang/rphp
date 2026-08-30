@@ -3,6 +3,61 @@ mod common;
 use common::run_php;
 
 #[test]
+fn asymmetric_writes_and_recursive_magic_guards_keep_declared_visibility() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class LockedLedger {
+    public private(set) int $count;
+
+    public function initialize(int $value) { $this->count = $value; }
+    public function release() { unset($this->count); }
+    public function __set($name, $value) { echo "magic-set:$name:$value\n"; }
+}
+
+$ledger = new LockedLedger;
+foreach ([1, 2] as $value) {
+    try { $ledger->count = $value; }
+    catch (Error $error) { echo $error->getMessage(), "\n"; }
+    if ($value === 1) { $ledger->initialize(10); }
+}
+$ledger->release();
+$ledger->count = 3;
+
+function guarded_set($object) { $object->payload = 1; }
+function guarded_get($object) { return $object->payload; }
+function guarded_unset($object) { unset($object->payload); }
+
+class GuardedBox {
+    private int $payload;
+    public function __set($name, $value) { guarded_set($this); }
+    public function __get($name) { return guarded_get($this); }
+    public function __unset($name) { guarded_unset($this); }
+}
+
+$box = new GuardedBox;
+foreach ([
+    function () use ($box) { $box->payload = 2; },
+    function () use ($box) { return $box->payload; },
+    function () use ($box) { unset($box->payload); },
+] as $operation) {
+    try { $operation(); }
+    catch (Error $error) { echo $error->getMessage(), "\n"; }
+}
+"#,
+        ),
+        concat!(
+            "Cannot modify private(set) property LockedLedger::$count from global scope\n",
+            "Cannot modify private(set) property LockedLedger::$count from global scope\n",
+            "magic-set:count:3\n",
+            "Cannot access private property GuardedBox::$payload\n",
+            "Cannot access private property GuardedBox::$payload\n",
+            "Cannot access private property GuardedBox::$payload\n",
+        ),
+    );
+}
+
+#[test]
 fn missing_ordinary_property_lvalue_defers_creation_without_read_warning() {
     assert_eq!(
         run_php(
@@ -233,6 +288,75 @@ var_dump($value->count);
             "int(9)\n",
             "get:count\n",
             "int(9)\n",
+        )
+    );
+}
+
+#[test]
+fn explicitly_unset_typed_magic_reference_coerces_the_exposed_alias() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class TypedMagicAlias {
+    public $source = '42';
+    public int $target;
+
+    public function release() { unset($this->target); }
+    public function &__get($name) { return $this->source; }
+}
+
+$object = new TypedMagicAlias;
+$object->release();
+$alias =& $object->target;
+var_dump($alias);
+$object->source = 'later';
+var_dump($alias, isset($object->target));
+"#,
+        ),
+        "int(42)\nstring(5) \"later\"\nbool(false)\n"
+    );
+}
+
+#[test]
+fn recursive_reference_getter_probe_stays_silent_before_parent_fallback() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReferenceStore {
+    public object $storage;
+
+    public function __construct() { $this->storage = new stdClass; }
+    public function &__get($name) {
+        if (isset($this->storage->{$name})) {
+            $result =& $this->storage->{$name};
+            return $result;
+        }
+        static $missing;
+        return $missing;
+    }
+    public function __set($name, $value) { $this->storage->{$name} = $value; }
+    public function __isset($name) { return isset($this->storage->{$name}); }
+}
+
+class LayeredReferenceStore extends ReferenceStore {
+    public function &__get($name) {
+        if (isset($this->settings) && isset($this->settings[$name])) {
+            $result =& $this->settings[$name];
+            return $result;
+        }
+        return parent::__get($name);
+    }
+}
+
+$store = new LayeredReferenceStore;
+$store->settings = ['name' => 'Ada'];
+var_dump($store->name);
+var_dump($store->settings);
+"#,
+        ),
+        concat!(
+            "string(3) \"Ada\"\n",
+            "array(1) {\n  [\"name\"]=>\n  string(3) \"Ada\"\n}\n",
         )
     );
 }

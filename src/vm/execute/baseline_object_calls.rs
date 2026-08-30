@@ -1431,7 +1431,19 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                                 obj.class_name.to_ascii_lowercase()
                             ))
                             .is_some();
-                        if opline._pad & FETCH_OBJ_SILENT == 0 && !has_getter {
+                        // Once __get() has recursively re-entered this member,
+                        // the overload guard no longer turns an inaccessible
+                        // declaration into an undefined property. PHP reports
+                        // the original visibility error at that boundary.
+                        let getter_guarded = property_guard_active(
+                            eg,
+                            obj_val,
+                            &name,
+                            PROPERTY_GUARD_GET,
+                        );
+                        if opline._pad & FETCH_OBJ_SILENT == 0
+                            && (!has_getter || getter_guarded)
+                        {
                             let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
                             let reported_class = if vis == Visibility::Protected {
                                 obj.class_name.as_ref()
@@ -1944,6 +1956,12 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                     }
                 }
                 set_result(result);
+            } else if opline._pad & FETCH_OBJ_SILENT != 0 {
+                // A recursively guarded __get() reached through a successful
+                // __isset() remains a silent miss. The outer magic method can
+                // then select its parent fallback without an intervening
+                // undefined-property warning.
+                set_result(Value::null());
             } else if name.starts_with('\0') {
                 return Ok(object_property_throw(
                     eg,
@@ -2357,7 +2375,8 @@ fn op_unset_obj<'a>(
     }
     if !accessible
         && eg.property_has_asymmetric_set_visibility(&object_ref.class_name, &name)
-        && !explicitly_unset_declared
+        && (!explicitly_unset_declared
+            || property_guard_active(eg, object, &name, PROPERTY_GUARD_UNSET))
     {
         let (visibility, defining_class) = eg
             .find_property_set_visibility(&object_ref.class_name, &name)
@@ -2372,6 +2391,23 @@ fn op_unset_obj<'a>(
             caller_class
                 .as_deref()
                 .map_or_else(|| "global scope".to_string(), |scope| format!("scope {scope}")),
+        );
+        drop(object_ref);
+        return Ok(object_property_throw(eg, frame, "Error", message)?);
+    }
+    if !accessible
+        && !hidden_parent_private
+        && property_guard_active(eg, object, &name, PROPERTY_GUARD_UNSET)
+        && let Some((visibility, defining_class)) =
+            eg.find_property_visibility(&object_ref.class_name, &name)
+    {
+        let visibility = match visibility {
+            Visibility::Private => "private",
+            Visibility::Protected => "protected",
+            Visibility::Public => "public",
+        };
+        let message = format!(
+            "Cannot access {visibility} property {defining_class}::${name}"
         );
         drop(object_ref);
         return Ok(object_property_throw(eg, frame, "Error", message)?);
@@ -2690,6 +2726,15 @@ fn op_bind_obj_prop_ref<'a>(
             (slot, definition, owner)
         };
         let definition = definition.map(|definition| &*definition);
+        let explicitly_unset_declared = declared_slot.is_some_and(|slot| {
+            receiver
+                .as_object()
+                .is_some_and(|object| {
+                    object
+                        .get_property_slot(slot)
+                        .is_some_and(Value::is_explicitly_unset_property)
+                })
+        });
 
         if let Some(definition) = definition
             && definition.has_get_hook
@@ -2780,12 +2825,13 @@ fn op_bind_obj_prop_ref<'a>(
             return Ok(ColdResult::Done);
         }
 
-        let missing_property = declared_slot.is_none()
-            && receiver
-                .as_object()
-                .is_some_and(|object| {
-                    object.get_dynamic_property_with_position(&key).is_none()
-                });
+        let missing_property = explicitly_unset_declared
+            || declared_slot.is_none()
+                && receiver
+                    .as_object()
+                    .is_some_and(|object| {
+                        object.get_dynamic_property_with_position(&key).is_none()
+                    });
         if missing_property && lazy_magic_get_related_guarded {
             let receiver_class = receiver
                 .as_object()
@@ -2824,7 +2870,42 @@ fn op_bind_obj_prop_ref<'a>(
             if let Some(result) = take_magic_exception(eg, frame)? {
                 return Ok(result);
             }
-            if let Some(returned) = returned {
+            if let Some(mut returned) = returned {
+                if explicitly_unset_declared
+                    && let Some(definition) = definition.filter(|definition| definition.is_typed())
+                {
+                    let original = returned.dereferenced().clone();
+                    let original_type = property_assignment_type_name(&original).to_string();
+                    let prepared = match prepare_property_assignment(
+                        original,
+                        definition,
+                        eg,
+                        op_array.strict_types,
+                        &class_name,
+                    ) {
+                        Ok(prepared) => prepared,
+                        Err(_) => {
+                            return Ok(object_property_throw_at(
+                                eg,
+                                frame,
+                                op_array,
+                                instruction_index,
+                                "TypeError",
+                                format!(
+                                    "Value of type {original_type} returned from {class_name}::__get() must be compatible with unset property {}::${} of type {}",
+                                    property_diagnostic_class_name(&definition.declaring_class),
+                                    definition.name,
+                                    definition.type_hint.property_declaration_display_name(),
+                                ),
+                            )?);
+                        }
+                    };
+                    if returned.is_reference() {
+                        returned.assign_dereferenced(prepared);
+                    } else {
+                        returned = prepared;
+                    }
+                }
                 if opline._pad & OBJ_PROP_REFERENCE_BIND != 0 {
                     if !returned.is_reference()
                         && !matches!(
@@ -3566,7 +3647,17 @@ fn op_assign_obj_prop_inner<'a>(
                                 php_obj.class_name.to_ascii_lowercase()
                             ))
                             .is_some();
-                        if has_setter && !setter_guarded {
+                        let asymmetric = eg.property_has_asymmetric_set_visibility(
+                            &php_obj.class_name,
+                            &name,
+                        );
+                        let explicitly_unset_declared = php_obj
+                            .get_property(&storage_key)
+                            .is_some_and(Value::is_explicitly_unset_property);
+                        if has_setter
+                            && !setter_guarded
+                            && (!asymmetric || explicitly_unset_declared)
+                        {
                             prop_is_public = false;
                             property_accessible = false;
                         } else {
@@ -3575,10 +3666,7 @@ fn op_assign_obj_prop_inner<'a>(
                                 Visibility::Private => "private",
                                 _ => "public",
                             };
-                            let message = if eg.property_has_asymmetric_set_visibility(
-                                &php_obj.class_name,
-                                &name,
-                            ) {
+                            let message = if asymmetric {
                                 let action = if opline._pad & ASSIGN_OBJ_MODIFY != 0
                                     && assigned.value_type() == ValueType::Array
                                 {
