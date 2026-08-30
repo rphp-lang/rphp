@@ -634,6 +634,7 @@ impl Parser {
                         class: Box::new(expr),
                         constant: Box::new(constant),
                         dynamic_name,
+                        line: expression_line.unwrap_or(0),
                     };
                 }
                 Token::Arrow | Token::NullSafe => {

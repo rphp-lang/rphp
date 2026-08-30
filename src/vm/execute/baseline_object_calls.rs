@@ -6120,18 +6120,22 @@ fn unresolved_array_callable_message(
     class_name: Option<&str>,
     static_semantics: bool,
 ) -> String {
+    let members = callback_array_members(callable_array);
     if closure_receiver {
-        let method = callable_array
-            .get_value_at(1)
+        let method = members
+            .map(|(_, method)| method)
             .and_then(Value::as_str)
             .unwrap_or("");
         return format!("Call to undefined method Closure::{method}()");
     }
-    let Some(method) = callable_array.get_value_at(1).and_then(Value::as_str) else {
+    let Some(method) = members
+        .map(|(_, method)| method)
+        .and_then(Value::as_str)
+    else {
         return "Array is not callable".to_string();
     };
     let class = class_name.map(str::to_string).or_else(|| {
-        callable_array.get_value_at(0).and_then(|receiver| {
+        members.map(|(receiver, _)| receiver).and_then(|receiver| {
             receiver
                 .as_object()
                 .map(|object| object.class_name.to_string())
@@ -6167,6 +6171,54 @@ fn unresolved_array_callable_message(
     format!("Call to undefined method {class}::{method}()")
 }
 
+#[inline]
+fn callback_array_members(callable: &PhpArray) -> Option<(&Value, &Value)> {
+    if let Some(values) = callable.packed_values() {
+        return values.first().zip(values.get(1));
+    }
+    Some((callable.get_int(0)?, callable.get_int(1)?))
+}
+
+#[cold]
+#[inline(never)]
+fn resolve_nonpacked_array_callback(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    owner: &Value,
+    method: &Value,
+) -> Option<crate::stdlib::ResolvedCallback> {
+    // Callback semantics are keyed by integer indices 0 and 1, not by
+    // insertion order. Normalize the uncommon hash-backed representation so
+    // the shared resolver can keep its packed fast path.
+    let mut callback = PhpArray::with_packed_capacity(2);
+    callback.push(owner.clone());
+    callback.push(method.clone());
+    let callback = Value::array(callback);
+    let caller_class = get_caller_class(frame, eg);
+    let ordinary = crate::stdlib::resolve_callback_with_cache(
+        &callback,
+        eg,
+        caller_class.as_deref(),
+        None,
+    );
+    if ordinary
+        .as_ref()
+        .is_some_and(|resolved| !resolved.is_magic_call)
+    {
+        ordinary
+    } else {
+        resolve_user_call_magic_fallback(
+            eg,
+            frame,
+            op_array,
+            &callback,
+            caller_class.as_deref(),
+            ordinary,
+        )
+    }
+}
+
 #[inline(never)]
 fn op_init_dynamic_static_member_call<'a>(
     eg: &mut ExecutorGlobals,
@@ -6193,10 +6245,16 @@ fn op_init_dynamic_static_member_call<'a>(
             "Array callback must have exactly two elements",
         )?);
     }
-    let Some(owner) = callable_array.get_value_at(0) else {
-        unreachable!("two-element callback has an owner")
+    let Some((owner, method_value)) = callback_array_members(callable_array) else {
+        return Ok(throw_located_call_error(
+            eg,
+            frame,
+            op_array,
+            instruction_index,
+            "Array callback has to contain indices 0 and 1",
+        )?);
     };
-    let Some(method) = callable_array.get_value_at(1).and_then(Value::as_str) else {
+    let Some(method) = method_value.as_str() else {
         return Ok(throw_located_call_error(
             eg,
             frame,
@@ -6390,26 +6448,34 @@ fn op_init_dynamic_call<'a>(
                 ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
             });
         }
-        let closure_receiver = callable_array
-            .get_value_at(0)
-            .is_some_and(|receiver| receiver.value_type() == ValueType::Closure);
+        let Some((callback_owner, callback_method)) = callback_array_members(callable_array) else {
+            let error = make_error_value(
+                "Error",
+                "Array callback has to contain indices 0 and 1",
+            );
+            attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+            return Ok(match throw_in_frame(eg, frame, error)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+            });
+        };
+        let closure_receiver = callback_owner.value_type() == ValueType::Closure;
         if closure_receiver
-            && callable_array
-                .get_value_at(1)
-                .and_then(Value::as_str)
+            && callback_method
+                .as_str()
                 .is_some_and(|method| method.eq_ignore_ascii_case("__invoke"))
         {
-            let closure = callable_array
-                .get_value_at(0)
-                .and_then(Value::as_closure)
+            let closure = callback_owner
+                .as_closure()
                 .expect("Closure-tagged array receiver must retain its payload");
             init_closure_dynamic_call(eg, frame, opline.extended_value, closure);
             return Ok(ColdResult::Done);
         }
         if !closure_receiver
-            && callable_array
-                .get_value_at(0)
-                .is_some_and(|class| class.as_str().is_none() && class.as_object().is_none())
+            && callback_owner.as_str().is_none()
+            && callback_owner.as_object().is_none()
         {
             let error = make_error_value(
                 "Error",
@@ -6423,11 +6489,7 @@ fn op_init_dynamic_call<'a>(
                 ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
             });
         }
-        if callable_array.len() == 2
-            && callable_array
-                .get_value_at(1)
-                .is_some_and(|method| method.as_str().is_none())
-        {
+        if callback_method.as_str().is_none() {
             let error = make_error_value("Error", "Method name must be a string");
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
             return Ok(match throw_in_frame(eg, frame, error)? {
@@ -6437,12 +6499,10 @@ fn op_init_dynamic_call<'a>(
                 ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
             });
         }
-        let class_name = callable.as_array().and_then(|array| {
-            if array.len() != 2 || array.get_value_at(1)?.as_str().is_none() {
-                return None;
-            }
-            array.get_value_at(0)?.as_str().map(str::to_string)
-        });
+        let class_name = callback_method
+            .as_str()
+            .and_then(|_| callback_owner.as_str())
+            .map(str::to_string);
         if let Some(class_name) = class_name.as_deref()
             && matches!(class_name.to_ascii_lowercase().as_str(), "self" | "parent" | "static")
             && get_caller_class(frame, eg).is_none()
@@ -6486,7 +6546,7 @@ fn op_init_dynamic_call<'a>(
             }
         }
         if let Some(class_name) = class_name.as_deref()
-            && let Some(method) = callable_array.get_value_at(1).and_then(Value::as_str)
+            && let Some(method) = callback_method.as_str()
             && class_callback_requires_instance(
                 eg,
                 class_name,
@@ -6503,16 +6563,24 @@ fn op_init_dynamic_call<'a>(
                 method,
             )?);
         }
-        let resolved = resolve_user_call_at_opline(eg, frame, op_array, opline);
+        let resolved = if callable_array.is_packed() {
+            resolve_user_call_at_opline(eg, frame, op_array, opline)
+        } else {
+            resolve_nonpacked_array_callback(
+                eg,
+                frame,
+                op_array,
+                callback_owner,
+                callback_method,
+            )
+        };
         let Some(resolved) = resolved else {
             let message = unresolved_array_callable_message(
                 eg,
                 &callable_array,
                 closure_receiver,
                 class_name.as_deref(),
-                callable_array
-                    .get_value_at(0)
-                    .is_some_and(|receiver| receiver.as_str().is_some()),
+                callback_owner.as_str().is_some(),
             );
             let error = make_error_value("Error", &message);
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);

@@ -398,6 +398,7 @@ pub enum Expr {
         class: Box<Expr>,
         constant: Box<Expr>,
         dynamic_name: bool,
+        line: usize,
     },
     DynamicNamedClassConstant {
         // ClassName::{$constant}

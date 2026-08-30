@@ -3102,9 +3102,17 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
     }
 
     let dynamic_owner = opline._pad & STATIC_PROP_DYNAMIC_OWNER != 0;
-    let dynamic_owner_value = dynamic_owner
-        .then(|| dynamic_static_property_owner(eg, class_name_val))
-        .transpose()?;
+    let dynamic_owner_value = if dynamic_owner {
+        match dynamic_static_property_owner(eg, class_name_val) {
+            Ok(owner) => Some(owner),
+            Err(VmError::Fatal(message)) => {
+                return static_property_throw(eg, frame, "Error", message)
+            }
+            Err(error) => return Err(error),
+        }
+    } else {
+        None
+    };
     let raw_class = dynamic_owner_value
         .as_ref()
         .map_or_else(|| class_name_val.as_str().unwrap_or(""), |(name, _)| name);
@@ -3333,6 +3341,16 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     let constant = constant_value.as_str();
 
     if dynamic_owner && class_value.as_object().is_none() && class_value.as_str().is_none() {
+        if !dynamic_name
+            && constant.is_some_and(|name| name.eq_ignore_ascii_case("class"))
+        {
+            return Ok(static_property_throw(
+                eg,
+                frame,
+                "TypeError",
+                format!("Cannot use \"::class\" on {}", class_value.type_name()),
+            )?);
+        }
         return Ok(static_property_throw(
             eg,
             frame,
@@ -3796,9 +3814,17 @@ fn op_unset_static_prop<'a>(
         )
     };
     let dynamic_owner = opline._pad & STATIC_PROP_DYNAMIC_OWNER != 0;
-    let dynamic_owner_value = dynamic_owner
-        .then(|| dynamic_static_property_owner(eg, class_value))
-        .transpose()?;
+    let dynamic_owner_value = if dynamic_owner {
+        match dynamic_static_property_owner(eg, class_value) {
+            Ok(owner) => Some(owner),
+            Err(VmError::Fatal(message)) => {
+                return static_property_throw(eg, frame, "Error", message)
+            }
+            Err(error) => return Err(error),
+        }
+    } else {
+        None
+    };
     let raw_class = dynamic_owner_value
         .as_ref()
         .map_or_else(|| class_value.as_str().unwrap_or(""), |(name, _)| name);
@@ -4004,9 +4030,17 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
     let class_name =
         unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     let dynamic_owner = opline._pad & STATIC_PROP_DYNAMIC_OWNER != 0;
-    let dynamic_owner_value = dynamic_owner
-        .then(|| dynamic_static_property_owner(eg, class_name))
-        .transpose()?;
+    let dynamic_owner_value = if dynamic_owner {
+        match dynamic_static_property_owner(eg, class_name) {
+            Ok(owner) => Some(owner),
+            Err(VmError::Fatal(message)) => {
+                return static_property_throw(eg, frame, "Error", message)
+            }
+            Err(error) => return Err(error),
+        }
+    } else {
+        None
+    };
     let raw_class = dynamic_owner_value
         .as_ref()
         .map_or_else(|| class_name.as_str().unwrap_or(""), |(name, _)| name);
@@ -4252,9 +4286,17 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
             )?;
         }
     let dynamic_owner = opline._pad & STATIC_PROP_DYNAMIC_OWNER != 0;
-    let dynamic_owner_value = dynamic_owner
-        .then(|| dynamic_static_property_owner(eg, class_name))
-        .transpose()?;
+    let dynamic_owner_value = if dynamic_owner {
+        match dynamic_static_property_owner(eg, class_name) {
+            Ok(owner) => Some(owner),
+            Err(VmError::Fatal(message)) => {
+                return static_property_throw(eg, frame, "Error", message)
+            }
+            Err(error) => return Err(error),
+        }
+    } else {
+        None
+    };
     let raw_class = dynamic_owner_value
         .as_ref()
         .map_or_else(|| class_name.as_str().unwrap_or(""), |(name, _)| name);

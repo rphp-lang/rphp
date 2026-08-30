@@ -7,6 +7,72 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The latest measured AMD64 PHP 8.5 language checkpoint is
+`dynamic-class-operand-boundaries`, pinned to php-src 8.5 commit `fcc29c8`,
+validated against PHP 8.5.10 and integrated above `8cf07dbb`. One canonical
+class-operand boundary now distinguishes compile-time illegal literal and
+constant-expression owners from runtime object, string and invalid scalar
+owners. `expression::class` preserves object/reference identity, evaluation
+order and exact source lines; dynamic class constants and static properties
+raise catchable PHP errors without mutating their operands. Two-element array
+callbacks require the actual integer keys 0 and 1. Their common packed form
+uses one slice lookup, while explicit-key arrays retain exact key validation
+and are normalized by key for invocation, including reverse insertion order.
+
+Four original E2E groups cover valid, invalid and temporary owners, reference
+and state preservation, class constants, static properties, callback shape and
+compile-time staging. The clean-room runtime oracle source and byte-exact output
+hash to `811deb775ac754d79582079e3faf32f6b82f2f8954a875a61a5e510258193c91`
+and `9813e077da551f17dc6aa84e2fcdee7db56e12771b53897b6facb252217ccdb2`;
+stderr is empty. The ten selected PHPTs all pass, as do the four callback
+no-loss sentinels; their manifests hash to
+`1cf5a199735cf470a7dbf98011d1f1b37e1e3a46e5171305fe4efe4506b0db03`
+and `62ed7d171b8cab8e6b3fcec9dd2df4e9379c59b0e7001229fd2b1299175c7fe0`.
+
+The exact final 5,599-case Zend/lang run is 4,772 pass, 531 fail, 115 skip and
+181 unsupported; its manifest hashes to
+`710c73039e189153a851b4636e7f13b139fcfd69e16de13da5f13625ded7ed7d`.
+The 1,575-case strings/array projection remains 1,459 pass, 18 fail, 67 skip
+and 31 unsupported, with manifest hash
+`9f5edf942abcc866a1c0c833bca1a4dbef97b344295e36fd07314f233e29b0ce`.
+The combined classification and pass-set hashes are
+`d1a809dff5420026375a299cb5bf455551e82a44e5d98557bb5e67bd31f2dba4`
+and `a0926c258a8fd10a73717027a6e6e5162f393f4c3c7321be63af9a0ce94f7aaf`:
+6,231 pass, 549 fail, 182 skip and 212 unsupported, with no timeout or crash.
+The exact current-main delta is `+12/-0`; the two adjacent gains are
+`Zend/tests/bug69805.phpt` and `tests/lang/042.phpt`. Supported debt is 531
+Zend/lang failures, 18 strings failures and zero array failures.
+
+The exact final candidate SHA-256 is
+`65bb3167fca8c8677b4808377feaa97b6a6d8ba5e5a87b15dbfe78eca9d7598b`.
+All default, no-default, erased-generics, reified-generics and all-feature Cargo
+test configurations, all-feature/all-target checking, formatting, HTML data,
+PHPT runner and both unsafe-policy checks pass. Production remains at 1,623
+unsafe blocks and 289 unsafe functions, with 395 SAFETY annotations and seven
+`# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates and PHP
+8.5.10 warmed-kernel S2 and cold-build S3 pass.
+
+The current-main parent binary hashes to
+`741d6b8bc929d998f27a66dee471721e283d26f9f7ce0b8f6024c503ace7d1c7`.
+The CPU-2 gate uses two independent 32-pair balanced exact-binary batches with
+matching checksums. Their raw files hash to
+`92d6b78a027506065e138c75fed0ddfd82cf18d2a64fd58877ec4b2b1245dfd3`
+and `1a701bcf5f37736c258c020c958fb76c4ee63dee1520b9f07c9dd79f1966c918`;
+the combined 64-pair file hashes to
+`96892aeed9ad75fc8d115ba85c0688481f81f3ad4022d68f711f130d0461fb61`.
+Combined paired medians are startup -3.696%, ordinary calls -0.466%, direct
+class constants +0.831%, object `::class` -0.081%, dynamic static properties
+-4.565% and array callbacks -1.688%, within the approximately one-percent
+representative-regression ceiling.
+
+This checkpoint does not claim the two retained general invalid-owner/member
+array-callback diagnostic texts, `is_callable()` metadata for reverse-insertion
+hash callbacks, the independent callback-CV writeback failure, Fiber/generator
+suspension, 32-bit behavior or allocation-limit/OOM equivalence. The retained
+texts preserve three existing exact magic/nullsafe/object passes; their broader
+resolver boundary remains separate. The implementation checkpoint is the
+commit containing this status.
+
 The latest measured AMD64 PHP 8.5 builtin checkpoint is
 `filesystem-builtin-call-contracts`, validated byte-for-byte against PHP
 8.5.10. `mkdir()`, `rmdir()`, `unlink()`, `rename()`, `copy()`, `tempnam()` and

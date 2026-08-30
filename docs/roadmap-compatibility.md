@@ -36,19 +36,18 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `qualified-symbol-resolution-boundaries` train retains
-6,219 exact passes across the 7,174-case PHP 8.5 corpus, with 561 supported
+The accepted AMD64 `dynamic-class-operand-boundaries` train retains 6,231 exact
+passes across the 7,174-case PHP 8.5 corpus, with 549 supported
 failures, 182 skips, 212 unsupported cases and no timeout or crash. Its
 pass-set hash is
-`a3036b88c7edaa7a98349150fce73880c2d3bcc1a6f74fba3af70a98408c0941`;
-the exact parent delta is `+14/-0`. One qualified-symbol boundary now aligns
-source aliases, constant-expression lexical keys and dynamic global/class
-constant lookup without weakening terminal constant case or autoload/error
-ordering. Exact-final CPU-pinned 32-pair startup, ordinary/namespaced call and
-global/direct-class constant controls retain matching checksums and stay within
-the approximately one-percent cumulative-regression ceiling; the outlined
-dynamic class-string constant branch records a localized +5.684% pay-for-use
-cost.
+`a0926c258a8fd10a73717027a6e6e5162f393f4c3c7321be63af9a0ce94f7aaf`;
+the exact current-main delta is `+12/-0`. Compile and runtime class operands
+now share one PHP-compatible classification boundary across `::class`, class
+constants, static properties and two-element array callbacks while preserving
+source lines, exceptions, evaluation order and operand state. Exact-final
+CPU-2 64-pair startup, ordinary-call, direct-class, object-class, static-
+property and callback controls retain matching checksums and remain within the
+approximately one-percent representative-regression ceiling.
 Current compatibility work is selected as a 10–30-case train around one shared
 root-cause hypothesis and one cumulative full/performance evidence packet.
 Smaller checkpoints require a crash, security issue, framework blocker or

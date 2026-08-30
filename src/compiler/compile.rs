@@ -149,6 +149,7 @@ fn expression_source_line(expression: &Expr) -> usize {
         | Expr::DynamicNamedStaticProperty { line, .. }
         | Expr::DynamicStaticProperty { line, .. }
         | Expr::ClassConstant { line, .. }
+        | Expr::DynamicClassConstant { line, .. }
         | Expr::Throw { line, .. }
         | Expr::ListAssign { line, .. }
         | Expr::DynamicCall { line, .. }
@@ -8974,6 +8975,17 @@ impl Compiler {
         (resolved, dynamic_static_scope)
     }
 
+    fn is_illegal_literal_class_owner(expression: &Expr) -> bool {
+        matches!(
+            expression,
+            Expr::Integer(_) | Expr::Float(_) | Expr::ArrayLiteral(_)
+        ) || matches!(
+            expression,
+            Expr::UnaryMinus(inner)
+                if matches!(inner.as_ref(), Expr::Integer(_) | Expr::Float(_))
+        )
+    }
+
     /// Lower every static-property owner/name form to the shared two-operand
     /// VM protocol. Runtime names are explicitly cast once, preserving PHP's
     /// integer and `__toString()` member-name conversions and evaluation order.
@@ -9023,6 +9035,9 @@ impl Compiler {
                 property,
                 line,
             } => {
+                if Self::is_illegal_literal_class_owner(class) {
+                    self.deferred_error = Some(self.goto_error("Illegal class name", *line));
+                }
                 let (class, class_type) = self.compile_expr(class);
                 let (property, property_type) = self.compile_expr(property);
                 let property = self.emit_string_cast(property, property_type);
@@ -11081,7 +11096,56 @@ impl Compiler {
                 class,
                 constant,
                 dynamic_name,
+                line,
             } => {
+                let class_keyword = !*dynamic_name
+                    && matches!(constant.as_ref(), Expr::StringLiteral(name) if name.eq_ignore_ascii_case("class"));
+                if self.compiling_constant_expression && class_keyword {
+                    self.deferred_error = Some(self.goto_error(
+                        "(expression)::class cannot be used in constant expressions",
+                        *line,
+                    ));
+                    let null = self.add_literal(Value::null());
+                    return (null, OpType::Const);
+                }
+                let numeric_literal_owner =
+                    matches!(class.as_ref(), Expr::Integer(_) | Expr::Float(_))
+                        || matches!(
+                            class.as_ref(),
+                            Expr::UnaryMinus(inner)
+                                if matches!(inner.as_ref(), Expr::Integer(_) | Expr::Float(_))
+                        );
+                if class_keyword && numeric_literal_owner {
+                    self.deferred_error = Some(self.goto_error("Illegal class name", *line));
+                    let null = self.add_literal(Value::null());
+                    return (null, OpType::Const);
+                }
+                if class_keyword
+                    && let Ok(value) = self.eval_const_expr_in_source(class, &self.known_constants)
+                {
+                    if let Some(class_name) = value.as_str() {
+                        return (self.add_literal(Value::string(class_name)), OpType::Const);
+                    }
+                    if value.as_object().is_none() {
+                        let type_name = match value.value_type() {
+                            ValueType::False => "false",
+                            ValueType::True => "true",
+                            _ => value.type_name(),
+                        };
+                        self.deferred_error =
+                            Some(self.goto_error(
+                                &format!("Cannot use \"::class\" on {type_name}"),
+                                *line,
+                            ));
+                        let null = self.add_literal(Value::null());
+                        return (null, OpType::Const);
+                    }
+                }
+                if !class_keyword && Self::is_illegal_literal_class_owner(class) {
+                    self.deferred_error = Some(self.goto_error("Illegal class name", *line));
+                    let null = self.add_literal(Value::null());
+                    return (null, OpType::Const);
+                }
                 let (class_op, class_type) = self.compile_expr(class);
                 let receiver_patches = self.take_nullsafe_receiver_patches(class_op, class_type);
                 let (constant_op, constant_type) = self.compile_expr(constant);
@@ -11103,7 +11167,7 @@ impl Compiler {
                 fetch.op2_type = constant_type;
                 fetch.result = tmp;
                 fetch.result_type = OpType::Tmp;
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(fetch, *line);
                 self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
                 (tmp, OpType::Tmp)
             }
