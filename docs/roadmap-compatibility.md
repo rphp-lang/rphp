@@ -36,18 +36,19 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `overloaded-property-lvalue-boundaries` train retains 6,165
-exact passes across the 7,174-case PHP 8.5 corpus, with 615 supported failures,
-182 skips, 212 unsupported cases and no timeout or crash. Its pass-set hash is
-`0d3213f139a7ca5277f2faca4718cb2d756463fc4a563bf9ce20184b47301adb`;
-the exact parent delta is `+14/-0`. Declared/asymmetric/magic property guards,
-parent and interface hook identity, backing writes and projection, ArrayAccess
-coalesce snapshots, and escaped detached global references now share PHP's
-observable lvalue boundaries. The three retained focused failures have separate
-constructor-rollback or dynamic-RHS diagnostic roots. Exact-final CPU-pinned
-32-pair controls retain matching checksums and every paired median is below the
-approximately one-percent regression ceiling; longer call and throw controls
-measure +0.685% and +0.621%.
+The accepted AMD64 `closure-object-facade-and-binding-boundaries` train retains
+6,183 exact passes across the 7,174-case PHP 8.5 corpus, with 597 supported
+failures, 182 skips, 212 unsupported cases and no timeout or crash. Its pass-set
+hash is
+`777b32d9569c5d4753e36f1d9c758e88a2bea532a2bb13f6dda8863a3da4e181`;
+the exact parent delta is `+18/-0`. Compact closures now share the ordinary
+object facade and one binding boundary for receiver, dummy lexical scope,
+late-static class, captures, statics and identity without enlarging `Value`.
+Seven selected holdouts have separate destructor, parent-private storage,
+diagnostic, allocation-limit or eval/trace roots. Exact-final CPU-pinned
+32-pair startup, ordinary-call, Closure invoke and binding controls retain
+matching checksums and remain within the approximately one-percent regression
+ceiling.
 Current compatibility work is selected as a 10–30-case train around one shared
 root-cause hypothesis and one cumulative full/performance evidence packet.
 Smaller checkpoints require a crash, security issue, framework blocker or

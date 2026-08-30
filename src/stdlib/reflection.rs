@@ -6968,6 +6968,34 @@ fn class_get_property(
     return_value(rv, reflected_property_value(&property, is_static, eg))
 }
 
+fn class_has_property(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::bool(false));
+    };
+    if eg.find_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        return return_value(rv, Value::bool(false));
+    }
+    let property_name = argument_string(ed, 1);
+    let exists = eg.find_class(&owner).is_some_and(|class| {
+        class.properties.iter().any(|property| {
+            property.name == property_name
+                && (property.visibility != Visibility::Private
+                    || property.declaring_class.eq_ignore_ascii_case(&class.name))
+        }) || class.static_properties.iter().any(|property| {
+            property.name == property_name
+                && (property.visibility != Visibility::Private
+                    || property.declaring_class.eq_ignore_ascii_case(&class.name))
+        })
+    });
+    return_value(rv, Value::bool(exists))
+}
+
 fn class_new_lazy_ghost(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -7808,10 +7836,12 @@ fn object_construct(
     let owner = target
         .as_object()
         .map(|object| object.class_name.to_string())
+        .or_else(|| (target.value_type() == ValueType::Closure).then(|| "Closure".to_string()))
         .ok_or_else(|| VmError::Fatal("ReflectionObject expects an object".into()))?;
-    set_target(ed, "class", owner);
+    set_target(ed, "class", owner.clone());
     with_argument(ed, 0, |value| {
         if let Some(mut object) = value.as_object_mut() {
+            object.set_property("name", Value::string(owner));
             object.set_property("__generic_object", target);
         }
     });

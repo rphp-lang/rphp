@@ -23,9 +23,9 @@ use super::{
     class_get_lazy_initializer, class_get_method, class_get_methods, class_get_name,
     class_get_parent, class_get_properties, class_get_property, class_get_reflection_constant,
     class_get_reflection_constants, class_get_trait_aliases, class_get_trait_names,
-    class_get_traits, class_has_method, class_implements_interface, class_initialize_lazy_object,
-    class_is_abstract, class_is_final, class_is_instantiable, class_is_interface,
-    class_is_internal, class_is_readonly, class_is_subclass_of, class_is_trait,
+    class_get_traits, class_has_method, class_has_property, class_implements_interface,
+    class_initialize_lazy_object, class_is_abstract, class_is_final, class_is_instantiable,
+    class_is_interface, class_is_internal, class_is_readonly, class_is_subclass_of, class_is_trait,
     class_is_uninitialized_lazy_object, class_is_user_defined,
     class_mark_lazy_object_as_initialized, class_new_instance, class_new_instance_args,
     class_new_instance_without_constructor, class_new_lazy_ghost, class_new_lazy_proxy,
@@ -1844,6 +1844,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         "ReflectionClass",
         "getproperty",
         class_get_property,
+        2,
+        1,
+        ["name"]
+    );
+    register_method!(
+        "ReflectionClass",
+        "hasproperty",
+        class_has_property,
         2,
         1,
         ["name"]

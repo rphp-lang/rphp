@@ -577,6 +577,15 @@ fn op_new_obj_resolved<'a>(
             "The \"Generator\" class is reserved for internal use and cannot be manually instantiated",
         )?);
     }
+    if name.eq_ignore_ascii_case("Closure") {
+        return Ok(new_object_validation_error(
+            eg,
+            frame,
+            op_array,
+            ip,
+            "Instantiation of class Closure is not allowed",
+        )?);
+    }
     if let Some(class_def) = class_def {
         if class_def.is_trait {
             return Ok(new_object_validation_error(
@@ -1286,6 +1295,29 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
             .unwrap_or_else(|| prop_name.echo_to_string());
         let write_flags =
             opline._pad & (FETCH_OBJ_MODIFY | FETCH_OBJ_INCDEC | FETCH_OBJ_COMPOUND);
+        if obj_val.value_type() == ValueType::Closure {
+            if write_flags != 0 {
+                return Ok(object_property_throw(
+                    eg,
+                    frame,
+                    "Error",
+                    format!("Cannot create dynamic property Closure::${name}"),
+                )?);
+            }
+            report_php_warning(
+                eg,
+                frame,
+                op_array,
+                opline,
+                &format!("Undefined property: Closure::${name}"),
+                opline._pad & FETCH_OBJ_ERROR_SUPPRESS != 0,
+            )?;
+            if let Some(result) = take_magic_exception(eg, frame)? {
+                return Ok(result);
+            }
+            set_result(Value::null());
+            return Ok(ColdResult::Done);
+        }
         if write_flags != 0 {
             return Ok(scalar_property_write_fetch_throw(
                 eg,
@@ -3537,6 +3569,14 @@ fn op_assign_obj_prop_inner<'a>(
         ConvertedPropertyName::Name(name) => name,
         ConvertedPropertyName::Control(result) => return Ok(result),
     };
+    if obj.value_type() == ValueType::Closure {
+        return Ok(object_property_throw(
+            eg,
+            frame,
+            "Error",
+            format!("Cannot create dynamic property Closure::${name}"),
+        )?);
+    }
     let lazy_receiver_owner = eg.lazy_object_state(obj).map(|_| obj.clone());
     let obj = lazy_receiver_owner.as_ref().unwrap_or(obj);
 
@@ -6267,6 +6307,33 @@ fn dynamic_call_operand<'a>(
     }
 }
 
+#[inline(always)]
+fn init_closure_dynamic_call(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    explicit_args: u32,
+    closure: &PhpClosure,
+) {
+    let func_ptr = closure.func;
+    let mut resolved = crate::stdlib::ResolvedCallback {
+        func_ptr,
+        prepend_args: vec![],
+        use_vars: closure.clone_captures(),
+        called_scope_class_id: closure.called_scope_class_id,
+        bound_this: closure.bound_this.clone(),
+        closure_static_vars: closure.static_vars.clone(),
+        is_magic_call: crate::stdlib::closure_is_magic_call(closure, eg),
+    };
+    let is_method = resolved.is_method();
+    if is_method {
+        resolved.prepend_args = vec![resolved.bound_this.clone().unwrap_or_else(Value::null)];
+    }
+    init_resolved_user_call_mode(eg, frame, explicit_args, resolved, is_method);
+    // SAFETY: the live frame owns the call initialized immediately above.
+    let call = unsafe { (*frame).call };
+    initialize_trait_class_scope(eg, call, func_ptr, closure.trait_scope_class_id);
+}
+
 #[inline(never)]
 fn op_init_dynamic_call<'a>(
     eg: &mut ExecutorGlobals,
@@ -6295,6 +6362,19 @@ fn op_init_dynamic_call<'a>(
         let closure_receiver = callable_array
             .get_value_at(0)
             .is_some_and(|receiver| receiver.value_type() == ValueType::Closure);
+        if closure_receiver
+            && callable_array
+                .get_value_at(1)
+                .and_then(Value::as_str)
+                .is_some_and(|method| method.eq_ignore_ascii_case("__invoke"))
+        {
+            let closure = callable_array
+                .get_value_at(0)
+                .and_then(Value::as_closure)
+                .expect("Closure-tagged array receiver must retain its payload");
+            init_closure_dynamic_call(eg, frame, opline.extended_value, closure);
+            return Ok(ColdResult::Done);
+        }
         if !closure_receiver
             && callable_array
                 .get_value_at(0)
@@ -6420,32 +6500,10 @@ fn op_init_dynamic_call<'a>(
     }
 
     if let Some(closure) = callable.as_closure() {
-        let func_ptr = closure.func;
-        let bound_this = closure.bound_this.clone();
-        // Class-scoped anonymous closures carry visibility and `$this`
-        // metadata, but only reflected/first-class method closures reserve a
-        // hidden receiver CV in their signature.
-        let mut resolved = crate::stdlib::ResolvedCallback {
-            func_ptr,
-            prepend_args: vec![],
-            use_vars: closure.clone_captures(),
-            called_scope_class_id: closure.called_scope_class_id,
-            bound_this,
-            closure_static_vars: closure.static_vars.clone(),
-            is_magic_call: crate::stdlib::closure_is_magic_call(closure, eg),
-        };
-        let is_method = resolved.is_method();
-        if is_method {
-            resolved.prepend_args = vec![resolved.bound_this.clone().unwrap_or_else(Value::null)];
-        }
         // Dynamic sends start at CV 0. A first-class method closure retains
-        // the hidden receiver slot, so defer it until DoFcall shifts the
-        // explicit argument prefix exactly like an array method callback.
-        init_resolved_user_call_mode(eg, frame, opline.extended_value, resolved, is_method);
-        // SAFETY: `frame` is the active VM frame and call initialization above
-        // has populated its call-frame pointer.
-        let call = unsafe { (*frame).call };
-        initialize_trait_class_scope(eg, call, func_ptr, closure.trait_scope_class_id);
+        // the hidden receiver slot, so the shared initializer defers it until
+        // DoFcall shifts the explicit argument prefix.
+        init_closure_dynamic_call(eg, frame, opline.extended_value, closure);
         return Ok(ColdResult::Done);
     } else if let Some(func_name) = callable.as_str() {
         // Simple string function call: $func = "my_func"; $func()

@@ -4916,6 +4916,77 @@ impl PhpClosure {
         std::ptr::eq(self, other)
     }
 
+    /// Loose object comparison treats separately materialized closures for
+    /// the same named callable as equivalent. Anonymous closures remain
+    /// identity-only objects, including explicit PHP clones and bound copies.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn same_loose_identity(&self, other: &Self) -> bool {
+        if self.same_identity(other) {
+            return true;
+        }
+        if !self.supports_callable_signature_comparison()
+            || !other.supports_callable_signature_comparison()
+            || !std::ptr::eq(self.func, other.func)
+            || self.called_scope_class_id != other.called_scope_class_id
+            || self.trait_scope_class_id != other.trait_scope_class_id
+            || self.is_static != other.is_static
+            || self.scope_is_dummy != other.scope_is_dummy
+            || self
+                .bound_this
+                .as_ref()
+                .and_then(Value::weak_object_identity)
+                != other
+                    .bound_this
+                    .as_ref()
+                    .and_then(Value::weak_object_identity)
+            || self.captures.len() != other.captures.len()
+        {
+            return false;
+        }
+        self.captures
+            .iter()
+            .zip(&other.captures)
+            .all(|(left, right)| {
+                let left = left.dereferenced();
+                let right = right.dereferenced();
+                if left.value_type() != right.value_type() {
+                    return false;
+                }
+                match left.value_type() {
+                    ValueType::Undef | ValueType::Null | ValueType::True | ValueType::False => true,
+                    ValueType::Long => left.as_long() == right.as_long(),
+                    ValueType::Double => left.as_double() == right.as_double(),
+                    ValueType::String => left
+                        .as_str()
+                        .zip(right.as_str())
+                        .is_some_and(|(left, right)| left.eq_ignore_ascii_case(right)),
+                    ValueType::Object | ValueType::Closure => {
+                        left.weak_object_identity() == right.weak_object_identity()
+                    }
+                    _ => false,
+                }
+            })
+    }
+
+    #[inline]
+    fn supports_callable_signature_comparison(&self) -> bool {
+        let Some(common) = self.common() else {
+            return false;
+        };
+        if common.fn_type == FunctionType::Internal {
+            return true;
+        }
+        self.user_function().is_some_and(|function| {
+            let name = function.op_array.name.as_str();
+            !name.starts_with("__closure_")
+                && !name
+                    .rsplit_once("::")
+                    .map_or(name, |(_, method)| method)
+                    .starts_with("__closure_")
+        })
+    }
+
     /// Recover the common header retained by every live Closure function.
     #[inline]
     pub(crate) fn common(&self) -> Option<&FunctionCommon> {

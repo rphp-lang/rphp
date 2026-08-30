@@ -40,7 +40,12 @@ fn return_type_error_value(
     hint: &ParamTypeHint,
     outcome: &str,
 ) -> Value {
-    let function_name = displayed_frame_function_name(eg, frame);
+    let mut function_name = displayed_frame_function_name(eg, frame);
+    if function_name.starts_with("{closure:")
+        && let Some(class) = eg.class_by_id(late_static_call_class_id(eg, frame))
+    {
+        function_name = format!("{}::{function_name}", class.name);
+    }
     let error = make_error_value(
         "TypeError",
         &format!(

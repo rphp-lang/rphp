@@ -8,64 +8,64 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
-`overloaded-property-lvalue-boundaries`, pinned to php-src 8.5 commit `fcc29c8`
-and validated against PHP 8.5.10. Declared, asymmetric and magic properties now
-share PHP's recursion-guard boundary for reads, writes, unsets and reference
-acquisition. An explicitly unset typed property may expose a coerced reference
-through `__get()` without initializing its declared slot. Parent property-hook
-calls retain their runtime property identity, interface setters are checked
-contravariantly, hook backing `??=` bypasses redispatch, and property projection
-uses declaration order while invoking virtual getters. Terminal ArrayAccess
-coalesce keeps the receiver/key snapshot across `offsetExists()` and
-`offsetGet()`. Detached callbacks preserve a global reference only when its
-cell escaped, retaining ordinary callback-local COW and lifetime behavior.
+`closure-object-facade-and-binding-boundaries`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.10. Compact `Closure` values now use the
+ordinary object facade for sealed properties, cloning, empty iteration,
+comparison, debug projection and ReflectionObject. `bind()`, `bindTo()` and
+`call()` share receiver/scope validation, canonical warnings, method-binding
+constraints, static cells and capture lifetime. A dummy lexical scope remains
+separate from the bound receiver's late-static class, including through nested
+closures and `static` return validation. `Value` remains 16 bytes.
 
-Seven original E2E regressions cover the asymmetric/magic guard matrix, typed
-reference exposure, recursive silent fallback, parent/interface hook identity,
-hook projection/backing storage, ArrayAccess rebinding and escaped global
-references. A 17-case clean-room oracle hashes to
-`5891d1521197b7b51237845aac73780f9b9de71267f3ad410df5f35f5dba2960`.
-The exact corpus delta is `+14/-0`; the gains cover two asymmetric-visibility,
-six magic/guarded-property, five property-hook and one typed-property case.
-`exception_027.phpt`, `exception_028.phpt` and `property_hooks/gh10251.phpt`
-remain at independent constructor-rollback and dynamic-RHS diagnostic roots.
+Two original E2E programs cover facade errors and reflection, evaluation
+order, references/COW, lifetime, nested receivers, statics, identity and named
+unpack. The clean-room oracle source hashes to
+`42dd13225d72ba699d6d8551cb369c6ab4906f70862606165d45361a7c5e1bc3`
+and its byte-exact output to
+`d156345fa9673d1caa0712dfbbcd28eadc90c27b46003e38ffb790beb0c87305`.
+The final 135-case closures manifest is 117 pass, 14 fail and four skip and
+hashes to
+`65468d41cedc1fa70c14803e0905c8ceddc26c99e04ad6401d8f63e935312423`.
+The exact selected and full-corpus delta is `+18/-0`. The seven retained
+selected cases split across destructor lifetime, parent-private/late-static
+storage, diagnostic rendering, allocation limits and eval/trace behavior.
 
-The final 5,599-case Zend/lang run is 4,706 pass, 597 fail, 115 skip and 181
+The final 5,599-case Zend/lang run is 4,724 pass, 579 fail, 115 skip and 181
 unsupported; its manifest hashes to
-`acf4b8d7e194cec57a54ef714d8e18cafebd8c19017bbd16ac571fc81cb1835b`.
+`b24c8e5e2ef45bd6e357d5b83ff91274442eb0138951a02b174c24bf3d1dba48`.
 The 1,575-case strings/array projection is byte-identical at 1,459 pass, 18
 fail, 67 skip and 31 unsupported, with manifest hash
 `9f5edf942abcc866a1c0c833bca1a4dbef97b344295e36fd07314f233e29b0ce`.
 The combined classification and pass-set hashes are
-`a75caa1485cc9ac88df199e04afdd691e027ecd89f0a45ef2a08c80d078909b0`
-and `0d3213f139a7ca5277f2faca4718cb2d756463fc4a563bf9ce20184b47301adb`:
-6,165 pass, 615 fail, 182 skip and 212 unsupported, with no timeout or crash.
-Supported debt is 597 Zend/lang failures, 18 strings failures and zero array
+`1d1d3c14fd9cab94b93c835b76f7800313e8e59a2fccc2265a83679a29ce9c08`
+and `777b32d9569c5d4753e36f1d9c758e88a2bea532a2bb13f6dda8863a3da4e181`:
+6,183 pass, 597 fail, 182 skip and 212 unsupported, with no timeout or crash.
+Supported debt is 579 Zend/lang failures, 18 strings failures and zero array
 failures.
 
 The exact final candidate SHA-256 is
-`01b1beca8e54c65e5f0205367d05a2deb6593d10320d524c8862dafdcf3165ff`.
+`bf631dbd580d6182825aef1f26e76da427b92af974e3a7c0039402551a7b8118`.
 All five Cargo configurations, all-feature/all-target checking, formatting,
 HTML data, PHPT runner and both unsafe-policy checks pass. Production remains
-below the ratchet at 1,622 unsafe blocks and 289 unsafe functions, with 393
+at the ratchet of 1,623 unsafe blocks and 289 unsafe functions, with 393
 SAFETY annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four
 Symfony S1 gates and PHP 8.5.10 warmed-kernel S2 and cold-build S3 pass.
 
-The fixed scalar-coercion baseline CPU-2 gate uses 32 balanced pairs with exact
+The fixed accepted-baseline CPU-2 gate uses 32 balanced pairs with exact
 checksums and hashes to
-`019d4b3972c0f8f2955de3a162ff39c2e657004097204a323152bf8ea1fac32f`.
-Every paired median is below the approximately one-percent regression ceiling:
-ordinary calls +0.708%, writes +0.481%, startup +0.245% and throw/catch +0.846%,
-while construction, reads, array assignment, coalesce and hooked projection
-improve. The read arithmetic mean is a noisy +2.534%, but its median is
--1.316% and p90 is +0.126%. Longer call and throw controls retain matching
-checksums at +0.685% and +0.621% paired medians. Hook projection is isolated as
-a cold, non-inlined pay-for-use path.
+`f36ff597527859bcb96c084d6c7879f4870c88dfc0b62da288862400047f3fc1`.
+Paired medians are startup -1.312%, ordinary calls -0.696%, explicit Closure
+invoke -2.885%, one-million-call array-form invoke -25.524% and binding
+-0.786%, all within the approximately one-percent representative-regression
+ceiling. The exact `[Closure, "__invoke"]` shape now shares the direct Closure
+initializer after proving its receiver and method, while other array callbacks
+retain the general validation path.
 
-This checkpoint does not claim the three retained independent cases, general
+This checkpoint does not claim the seven retained independent cases, general
 SPL, Fiber/generator suspension, PHP 8.2, 32-bit behavior or allocation-limit/
 OOM equivalence. The implementation checkpoint is the commit containing this
-status.
+status. The immediately preceding accepted checkpoint and fixed performance
+baseline is `overloaded-property-lvalue-boundaries` below.
 
 The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `scalar-coercion-diagnostic-boundaries`, pinned to php-src 8.5 commit `fcc29c8`

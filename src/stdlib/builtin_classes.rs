@@ -563,6 +563,7 @@ fn fn_throwable_to_string(
 }
 
 fn bind_closure_value(
+    ed: *mut ExecuteData,
     source_value: &Value,
     new_this: &Value,
     scope: Option<&Value>,
@@ -579,28 +580,127 @@ fn bind_closure_value(
         ));
         return Ok(());
     };
+    if let Some(scope) = scope
+        && !matches!(
+            scope.value_type(),
+            ValueType::Null | ValueType::String | ValueType::Object | ValueType::Closure
+        )
+    {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "{api}(): Argument #{scope_argument} ($newScope) must be of type object|string|null, {} given",
+                scope.dereferenced().type_name()
+            ),
+        ));
+        return Ok(());
+    }
     let mut rebound = source.clone();
+
+    if new_this.value_type() == ValueType::Null && source.bound_this.is_some() {
+        let uses_this = source.user_function().is_some_and(|function| {
+            function
+                .op_array
+                .all_cvs
+                .iter()
+                .any(|(_, name)| name == "this")
+        });
+        if uses_this {
+            super::report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                "Cannot unbind $this of closure using $this, this will be an error in PHP 9",
+            )?;
+            ret!(rv, Value::null());
+        }
+    }
 
     rebound.bound_this = match new_this.value_type() {
         ValueType::Null => None,
-        ValueType::Object if rebound.is_static => {
-            eg.write_output(
-                format!("Warning: {api}(): Cannot bind an instance to a static closure\n")
-                    .as_bytes(),
-            );
+        ValueType::Object | ValueType::Closure if rebound.is_static => {
+            super::report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                "Cannot bind an instance to a static closure, this will be an error in PHP 9",
+            )?;
             ret!(rv, Value::null());
         }
-        ValueType::Object => Some(new_this.clone()),
+        ValueType::Object | ValueType::Closure => Some(new_this.clone()),
         _ => {
             eg.exception = Some(crate::value::make_error_value(
                 "TypeError",
                 &format!(
-                    "{api}(): Argument #{new_this_argument} ($newThis) must be of type ?object"
+                    "{api}(): Argument #{new_this_argument} ($newThis) must be of type ?object, {} given",
+                    new_this.dereferenced().type_name()
                 ),
             ));
             return Ok(());
         }
     };
+
+    if let Some(function) = source
+        .user_function()
+        .filter(|function| function.common.sig.this_offset == 1)
+        && let Some(declaring_class) = eg.declaring_class_of(source.func).map(str::to_owned)
+    {
+        let method = function
+            .op_array
+            .name
+            .rsplit_once("::")
+            .map_or(function.op_array.name.as_str(), |(_, method)| method)
+            .to_string();
+        if let Some(receiver_class) = rebound.bound_this.as_ref().map(|receiver| {
+            receiver.as_object().map_or_else(
+                || "Closure".to_string(),
+                |object| object.class_name.to_string(),
+            )
+        }) && !eg.class_is_a(&receiver_class, &declaring_class)
+        {
+            super::report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!(
+                    "Cannot bind method {declaring_class}::{method}() to object of class {receiver_class}, this will be an error in PHP 9"
+                ),
+            )?;
+            ret!(rv, Value::null());
+        }
+        if let Some(scope) = scope {
+            let preserves_method_scope = match scope.value_type() {
+                ValueType::String
+                    if scope
+                        .as_str()
+                        .is_some_and(|scope| scope.eq_ignore_ascii_case("static")) =>
+                {
+                    true
+                }
+                ValueType::String => scope
+                    .as_str()
+                    .and_then(|scope| eg.find_class(scope))
+                    .is_some_and(|class| class.name.eq_ignore_ascii_case(&declaring_class)),
+                ValueType::Object => scope
+                    .as_object()
+                    .is_some_and(|object| object.class_name.eq_ignore_ascii_case(&declaring_class)),
+                _ => false,
+            };
+            if !preserves_method_scope {
+                super::report_internal_diagnostic(
+                    eg,
+                    ed,
+                    2,
+                    "Warning",
+                    "Cannot rebind scope of closure created from method, this will be an error in PHP 9",
+                )?;
+                ret!(rv, Value::null());
+            }
+        }
+    }
 
     if let Some(scope) = scope {
         rebound.called_scope_class_id = match scope.value_type() {
@@ -608,44 +708,87 @@ fn bind_closure_value(
                 rebound.scope_is_dummy = rebound.bound_this.is_some();
                 0
             }
-            ValueType::String if scope.as_str() == Some("static") => {
+            ValueType::String
+                if scope
+                    .as_str()
+                    .is_some_and(|scope| scope.eq_ignore_ascii_case("static")) =>
+            {
                 rebound.scope_is_dummy = rebound.bound_this.is_some()
                     && (source.scope_is_dummy || source.called_scope_class_id == 0);
                 source.called_scope_class_id
             }
             ValueType::String => {
                 let name = scope.as_str().unwrap_or_default();
+                if eg.find_class(name).is_none()
+                    && !super::autoload::ensure_symbol_loaded(eg, name)?
+                {
+                    super::report_internal_diagnostic(
+                        eg,
+                        ed,
+                        2,
+                        "Warning",
+                        &format!("Class \"{name}\" not found"),
+                    )?;
+                    ret!(rv, Value::null());
+                }
                 let Some(class) = eg.find_class(name) else {
-                    eg.write_output(
-                        format!("Warning: {api}(): Class \"{name}\" not found\n").as_bytes(),
-                    );
                     ret!(rv, Value::null());
                 };
+                let class_name = class.name.clone();
+                let class_id = class.class_id;
+                if eg.class_is_internal(&class_name) {
+                    super::report_internal_diagnostic(
+                        eg,
+                        ed,
+                        2,
+                        "Warning",
+                        &format!(
+                            "Cannot bind closure to scope of internal class {}, this will be an error in PHP 9",
+                            class_name
+                        ),
+                    )?;
+                    ret!(rv, Value::null());
+                }
                 rebound.scope_is_dummy = false;
-                class.class_id
+                class_id
             }
-            ValueType::Object => {
-                let object = scope.as_object().expect("object value lost its payload");
+            ValueType::Object | ValueType::Closure => {
+                let class_name = scope.as_object().map_or_else(
+                    || "Closure".to_string(),
+                    |object| object.class_name.to_string(),
+                );
+                if eg.class_is_internal(&class_name) {
+                    super::report_internal_diagnostic(
+                        eg,
+                        ed,
+                        2,
+                        "Warning",
+                        &format!(
+                            "Cannot bind closure to scope of internal class {class_name}, this will be an error in PHP 9"
+                        ),
+                    )?;
+                    ret!(rv, Value::null());
+                }
                 rebound.scope_is_dummy = false;
-                eg.find_class(object.class_name.as_ref())
-                    .map_or(0, |class| class.class_id)
+                eg.find_class(&class_name).map_or(0, |class| class.class_id)
             }
             _ => {
                 eg.exception = Some(crate::value::make_error_value(
                     "TypeError",
                     &format!(
-                        "{api}(): Argument #{scope_argument} ($newScope) must be of type object|string|null"
+                        "{api}(): Argument #{scope_argument} ($newScope) must be of type object|string|null, {} given",
+                        scope.dereferenced().type_name()
                     ),
                 ));
                 return Ok(());
             }
         };
-    } else if let Some(object) = rebound.bound_this.as_ref().and_then(Value::as_object) {
-        // With the default scope argument, a previously unscoped closure uses
-        // the newly bound receiver as its late-static class. This is distinct
-        // from an explicit null scope, which deliberately clears the class.
-        rebound.scope_is_dummy = source.scope_is_dummy || source.called_scope_class_id == 0;
-        rebound.called_scope_class_id = object.class_id;
+    } else if rebound.bound_this.is_some() && source.called_scope_class_id == 0 {
+        // An omitted scope preserves an existing lexical scope. An unscoped
+        // closure bound to an object receives Closure's dummy lexical scope
+        // rather than the receiver class's private visibility. The bound
+        // receiver carrier supplies its separate late-static called class.
+        rebound.scope_is_dummy = true;
     }
 
     ret!(rv, Value::closure(rebound));
@@ -657,6 +800,7 @@ fn fn_closure_bind(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     bind_closure_value(
+        ed,
         arg!(ed, 1),
         arg!(ed, 2),
         arg_opt!(ed, 3),
@@ -674,6 +818,7 @@ fn fn_closure_bind_to(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     bind_closure_value(
+        ed,
         arg!(ed, 0),
         arg!(ed, 1),
         arg_opt!(ed, 2),
@@ -805,10 +950,12 @@ fn fn_closure_call(
         ));
         return Ok(());
     };
-    let Some(scope) = eg.find_class(object.class_name.as_ref()) else {
+    let object_class_name = object.class_name.to_string();
+    drop(object);
+    let Some(scope) = eg.find_class(&object_class_name) else {
         eg.exception = Some(crate::value::make_error_value(
             "Error",
-            &format!("Class \"{}\" not found", object.class_name),
+            &format!("Class \"{object_class_name}\" not found"),
         ));
         return Ok(());
     };
@@ -816,7 +963,7 @@ fn fn_closure_call(
         && source
             .user_function()
             .is_some_and(|function| function.common.sig.this_offset == 1)
-        && !eg.class_is_a(object.class_name.as_ref(), declaring_class)
+        && !eg.class_is_a(&object_class_name, declaring_class)
     {
         let method = source
             .user_function()
@@ -837,21 +984,21 @@ fn fn_closure_call(
             2,
             "Warning",
             &format!(
-                "Cannot bind method {declaring_class}::{method}() to object of class {}",
-                object.class_name
+                "Cannot bind method {declaring_class}::{method}() to object of class {}, this will be an error in PHP 9",
+                object_class_name
             ),
         )?;
         ret!(rv, Value::null());
     }
-    if source.user_function().is_some() && eg.class_is_internal(object.class_name.as_ref()) {
+    if source.user_function().is_some() && eg.class_is_internal(&object_class_name) {
         report_internal_diagnostic(
             eg,
             ed,
             2,
             "Warning",
             &format!(
-                "Cannot bind closure to scope of internal class {}",
-                object.class_name
+                "Cannot bind closure to scope of internal class {}, this will be an error in PHP 9",
+                object_class_name
             ),
         )?;
         ret!(rv, Value::null());
@@ -862,7 +1009,7 @@ fn fn_closure_call(
             ed,
             2,
             "Warning",
-            "Cannot bind an instance to a static closure",
+            "Cannot bind an instance to a static closure, this will be an error in PHP 9",
         )?;
         ret!(rv, Value::null());
     }

@@ -16936,6 +16936,112 @@ fn dump_value(val: &Value, indent: usize, eg: &ExecutorGlobals, context: DumpCon
     )
 }
 
+#[cold]
+#[inline(never)]
+fn closure_debug_properties(closure: &PhpClosure, eg: &ExecutorGlobals) -> PhpArray {
+    let common = closure
+        .common()
+        .expect("live Closure must retain a registered function");
+    let user_function = closure.user_function();
+    let anonymous_metadata = user_function.and_then(|function| {
+        let public_name = function
+            .op_array
+            .name
+            .split_once('@')
+            .and_then(|(internal, public)| internal.starts_with("__closure_").then_some(public))?;
+        let declaration_line = function
+            .op_array
+            .source_lines
+            .last()
+            .filter(|(opline, _)| *opline == u32::MAX)
+            .map_or(0, |(_, line)| i64::from(*line));
+        Some((
+            public_name.to_string(),
+            function.op_array.source_file.as_ref().clone(),
+            declaration_line,
+        ))
+    });
+    let function_name = user_function
+        .map(|function| function.op_array.name.as_str())
+        .filter(|name| {
+            !name.starts_with("__closure_")
+                && !name
+                    .rsplit_once("::")
+                    .map_or(*name, |(_, method)| method)
+                    .starts_with("__closure_")
+        })
+        .map(str::to_owned)
+        .or_else(|| {
+            (common.fn_type == FunctionType::Internal).then(|| {
+                eg.function_table
+                    .iter()
+                    .find_map(|(name, pointer)| {
+                        std::ptr::eq(*pointer, closure.func).then_some(name.clone())
+                    })
+                    .unwrap_or_else(|| "internal function".to_string())
+            })
+        });
+
+    let mut static_values = PhpArray::new();
+    if let Some(function) = user_function {
+        let capture_start = common.sig.parameter_cv_count();
+        for (index, capture) in closure.captures.iter().enumerate() {
+            if capture.value_type() == ValueType::Undef {
+                continue;
+            }
+            let cv = capture_start + index as u32;
+            let name = function
+                .op_array
+                .all_cvs
+                .iter()
+                .find_map(|(candidate, name)| (*candidate == cv).then_some(name.as_str()))
+                .unwrap_or("unknown");
+            static_values.set_str(name, capture.clone_closure_capture());
+        }
+        let closure_statics = closure.static_vars.as_ref().map(|storage| storage.borrow());
+        let runtime_statics = eg.static_vars.get(&function.op_array.name);
+        for (_, name, default) in &function.op_array.static_vars {
+            let value = if let Some(values) = closure_statics.as_ref() {
+                values.get(name).cloned()
+            } else {
+                runtime_statics.and_then(|values| values.get(name)).cloned()
+            }
+            .or_else(|| default.clone())
+            .unwrap_or_else(Value::null);
+            static_values.set_str(name, value);
+        }
+    }
+
+    let mut parameters = PhpArray::new();
+    for (index, name) in common.sig.param_names.iter().enumerate() {
+        let state = if index < common.sig.required_num_args as usize {
+            "<required>"
+        } else {
+            "<optional>"
+        };
+        parameters.set_str(&format!("${name}"), Value::string(state));
+    }
+
+    let mut properties = PhpArray::new();
+    if let Some((name, file, line)) = anonymous_metadata {
+        properties.set_str("name", Value::string(name));
+        properties.set_str("file", Value::string(file));
+        properties.set_str("line", Value::long(line));
+    } else if let Some(function_name) = function_name {
+        properties.set_str("function", Value::string(function_name));
+    }
+    if !static_values.is_empty() {
+        properties.set_str("static", Value::array(static_values));
+    }
+    if let Some(bound_this) = closure.bound_this.as_ref() {
+        properties.set_str("this", bound_this.clone());
+    }
+    if !parameters.is_empty() {
+        properties.set_str("parameter", Value::array(parameters));
+    }
+    properties
+}
+
 fn var_dump_value_inner(
     val: &Value,
     indent: usize,
@@ -17372,96 +17478,7 @@ fn var_dump_value_inner(
                 return format!("{}*RECURSION*\n", prefix);
             }
             let closure = val.as_closure().unwrap();
-            let common = closure
-                .common()
-                .expect("live Closure must retain a registered function");
-            let user_function = closure.user_function();
-            let anonymous_metadata = user_function.and_then(|function| {
-                let public_name =
-                    function
-                        .op_array
-                        .name
-                        .split_once('@')
-                        .and_then(|(internal, public)| {
-                            internal.starts_with("__closure_").then_some(public)
-                        })?;
-                let declaration_line = function
-                    .op_array
-                    .source_lines
-                    .last()
-                    .filter(|(opline, _)| *opline == u32::MAX)
-                    .map_or(0, |(_, line)| i64::from(*line));
-                Some((
-                    public_name.to_string(),
-                    function.op_array.source_file.as_ref().clone(),
-                    declaration_line,
-                ))
-            });
-            let function_name = user_function
-                .map(|function| function.op_array.name.as_str())
-                .filter(|name| {
-                    !name.starts_with("__closure_")
-                        && !name
-                            .rsplit_once("::")
-                            .map_or(*name, |(_, method)| method)
-                            .starts_with("__closure_")
-                })
-                .map(str::to_owned)
-                .or_else(|| {
-                    (common.fn_type == FunctionType::Internal).then(|| {
-                        eg.function_table
-                            .iter()
-                            .find_map(|(name, pointer)| {
-                                std::ptr::eq(*pointer, closure.func).then_some(name.clone())
-                            })
-                            .unwrap_or_else(|| "internal function".to_string())
-                    })
-                });
-
-            let mut static_values = PhpArray::new();
-            if let Some(function) = user_function {
-                let capture_start = common.sig.parameter_cv_count();
-                for (index, capture) in closure.captures.iter().enumerate() {
-                    if capture.value_type() == ValueType::Undef {
-                        continue;
-                    }
-                    let cv = capture_start + index as u32;
-                    let name = function
-                        .op_array
-                        .all_cvs
-                        .iter()
-                        .find_map(|(candidate, name)| (*candidate == cv).then_some(name.as_str()))
-                        .unwrap_or("unknown");
-                    static_values.set_str(name, capture.clone_closure_capture());
-                }
-                let closure_statics = closure.static_vars.as_ref().map(|storage| storage.borrow());
-                let runtime_statics = eg.static_vars.get(&function.op_array.name);
-                for (_, name, default) in &function.op_array.static_vars {
-                    let value = if let Some(values) = closure_statics.as_ref() {
-                        values.get(name).cloned()
-                    } else {
-                        runtime_statics.and_then(|values| values.get(name)).cloned()
-                    }
-                    .or_else(|| default.clone())
-                    .unwrap_or_else(Value::null);
-                    static_values.set_str(name, value);
-                }
-            }
-
-            let mut parameters = PhpArray::new();
-            for (index, name) in common.sig.param_names.iter().enumerate() {
-                let state = if index < common.sig.required_num_args as usize {
-                    "<required>"
-                } else {
-                    "<optional>"
-                };
-                parameters.set_str(&format!("${name}"), Value::string(state));
-            }
-            let property_count = anonymous_metadata.as_ref().map_or(0, |_| 3)
-                + usize::from(function_name.is_some())
-                + usize::from(!static_values.is_empty())
-                + usize::from(closure.bound_this.is_some())
-                + usize::from(!parameters.is_empty());
+            let properties = closure_debug_properties(closure, eg);
             let mut out = dump_object_header(
                 context,
                 val,
@@ -17469,7 +17486,7 @@ fn var_dump_value_inner(
                 "",
                 "Closure",
                 closure.object_handle,
-                property_count,
+                properties.len(),
                 eg,
             );
             let mut append_property = |name: &str, value: &Value| {
@@ -17484,21 +17501,11 @@ fn var_dump_value_inner(
                     visited_objects,
                 ));
             };
-            if let Some((name, file, line)) = anonymous_metadata {
-                append_property("name", &Value::string(name));
-                append_property("file", &Value::string(file));
-                append_property("line", &Value::long(line));
-            } else if let Some(function_name) = function_name {
-                append_property("function", &Value::string(function_name));
-            }
-            if !static_values.is_empty() {
-                append_property("static", &Value::array(static_values));
-            }
-            if let Some(bound_this) = closure.bound_this.as_ref() {
-                append_property("this", bound_this);
-            }
-            if !parameters.is_empty() {
-                append_property("parameter", &Value::array(parameters));
+            for (name, value) in properties.iter() {
+                let ArrayKey::String(name) = name else {
+                    continue;
+                };
+                append_property(&name, value);
             }
             out.push_str(&format!("{}}}\n", prefix));
             visited_objects.remove(&identity);
@@ -17591,6 +17598,44 @@ fn print_r_value_inner(
             out.extend_from_slice(prefix.as_bytes());
             out.extend_from_slice(b")\n");
             visited_arrays.remove(&identity);
+            out
+        }
+        ValueType::Closure => {
+            let identity = val
+                .weak_object_identity()
+                .expect("live print_r Closure must retain an identity");
+            if !visited_objects.insert(identity) {
+                return b"Closure Object\n *RECURSION*".to_vec();
+            }
+            let closure = val
+                .as_closure()
+                .expect("Closure tag must retain a closure payload");
+            let properties = closure_debug_properties(closure, eg);
+            let prefix = "    ".repeat(indent * 2);
+            let inner = "    ".repeat(indent * 2 + 1);
+            let mut out = b"Closure Object\n".to_vec();
+            out.extend_from_slice(prefix.as_bytes());
+            out.extend_from_slice(b"(\n");
+            for (key, value) in properties.iter() {
+                let ArrayKey::String(key) = key else {
+                    continue;
+                };
+                out.extend_from_slice(inner.as_bytes());
+                out.push(b'[');
+                out.extend_from_slice(key.as_bytes());
+                out.extend_from_slice(b"] => ");
+                out.extend_from_slice(&print_r_value_inner(
+                    value,
+                    indent + 1,
+                    eg,
+                    visited_arrays,
+                    visited_objects,
+                ));
+                out.push(b'\n');
+            }
+            out.extend_from_slice(prefix.as_bytes());
+            out.extend_from_slice(b")\n");
+            visited_objects.remove(&identity);
             out
         }
         ValueType::Object => {

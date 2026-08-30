@@ -11585,7 +11585,11 @@ impl Compiler {
                 // A direct compact() call can observe a bound receiver even
                 // when the closure body never otherwise spells `$this`.
                 // Reserve its ordinary named CV after body analysis.
-                if !*is_static && func_compiler.needs_compact_receiver {
+                if !*is_static
+                    && (func_compiler.needs_compact_receiver
+                        || cp.return_type_hint.uses_late_static()
+                        || cp.type_hints.iter().any(|hint| hint.uses_late_static()))
+                {
                     func_compiler.resolve_cv("this");
                 }
                 let null_idx = func_compiler.add_literal(Value::null());
@@ -11595,6 +11599,10 @@ impl Compiler {
                 func_compiler.instructions.push(ret);
 
                 let closure_all_cvs = func_compiler.all_cvs();
+                let inherits_bound_this = !*is_static
+                    && closure_all_cvs
+                        .iter()
+                        .any(|(_, name)| name.as_str() == "this");
                 let cache = (0..func_compiler.instructions.len())
                     .map(|_| InlineCache::empty())
                     .collect();
@@ -11677,6 +11685,14 @@ impl Compiler {
                 let has_static_vars = !user_func.op_array.static_vars.is_empty();
                 let binds_trait_class_scope = user_func.common.plan.needs_trait_class_scope();
                 self.functions.push((closure_name.clone(), user_func));
+
+                // A nested non-static closure inherits the current bound
+                // receiver even when this intermediate body never reads
+                // `$this` itself. Reserve the carrier CV recursively so
+                // CreateClosure can snapshot it at each lexical boundary.
+                if inherits_bound_this {
+                    self.resolve_cv("this");
+                }
 
                 // Build closure value with direct function pointer + captured values.
                 // CreateClosure resolves the function pointer at creation time (not call time).

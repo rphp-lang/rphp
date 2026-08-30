@@ -3,6 +3,113 @@ mod common;
 use common::{run_php, run_php_with_source_context};
 
 #[test]
+fn closure_object_facade_is_reflectable_sealed_cloneable_and_empty_iterable() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function report(Closure $operation): void {
+    try { $operation(); }
+    catch (Throwable $throwable) { echo get_class($throwable), ':', $throwable->getMessage(), "\n"; }
+}
+
+$closure = static fn(int $value = 1): int => $value;
+var_dump(is_object($closure), get_class($closure), property_exists($closure, 'missing'));
+var_dump((new ReflectionObject($closure))->getName());
+$iterations = 0;
+foreach ($closure as $key => $value) { ++$iterations; }
+var_dump($iterations);
+$debug = print_r(strlen(...), true);
+var_dump(str_contains($debug, 'Closure Object'), str_contains($debug, '[function] => strlen'));
+report(function () use ($closure): void { $closure->added = 1; });
+$clone = clone $closure;
+var_dump($clone instanceof Closure, $clone === $closure, $clone == $closure);
+report(function (): void { $instance = new Closure; });
+"#,
+        ),
+        concat!(
+            "bool(true)\nstring(7) \"Closure\"\nbool(false)\n",
+            "string(7) \"Closure\"\nint(0)\n",
+            "bool(true)\nbool(true)\n",
+            "Error:Cannot create dynamic property Closure::$added\n",
+            "bool(true)\nbool(false)\nbool(false)\n",
+            "Error:Instantiation of class Closure is not allowed\n",
+        ),
+    );
+}
+
+#[test]
+fn closure_binding_preserves_order_lifetime_references_cow_statics_and_identity() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function mark(string $name, mixed $value): mixed { echo "eval:$name\n"; return $value; }
+function closure_train_named(): void {}
+
+class ClosureBoundaryScope {
+    private int $secret = 7;
+    public int $counter = 1;
+
+    public function make(int &$shared, array $snapshot): Closure {
+        return function &(int $step = 1) use (&$shared, $snapshot): int {
+            $this->counter += $step;
+            $shared += $snapshot['step'];
+            return $this->counter;
+        };
+    }
+    public function reader(): Closure { return function (): int { return $this->secret; }; }
+}
+class ClosureBoundaryChild extends ClosureBoundaryScope {}
+
+$shared = 2;
+$snapshot = ['step' => 10];
+$owner = new ClosureBoundaryScope;
+$bound = $owner->make($shared, $snapshot);
+unset($owner);
+$snapshot['step'] = 100;
+$alias =& $bound(step: 2);
+$alias = 20;
+var_dump($bound(), $shared, $snapshot);
+
+$reader = (new ClosureBoundaryScope)->reader();
+$child = new ClosureBoundaryChild;
+$rebound = Closure::bind(
+    mark('closure', $reader),
+    mark('receiver', $child),
+    mark('scope', ClosureBoundaryScope::class),
+);
+var_dump($reader(), $rebound());
+$nestedFactory = (function (): Closure {
+    return function (): int { return ++$this->counter; };
+})->bindTo($child, ClosureBoundaryScope::class);
+$nested = $nestedFactory();
+var_dump($nested());
+
+$counter = function (): int { static $value = 0; return ++$value; };
+$counterCopy = $counter->bindTo(null, 'static');
+$same = $counter;
+$other = function (): int { static $value = 0; return ++$value; };
+var_dump($counter(), $counterCopy(), $counter(), $counterCopy());
+var_dump($counter === $same, $counter == $same, $counter == $other);
+$namedA = Closure::fromCallable('closure_train_named');
+$namedB = Closure::fromCallable('closure_train_named');
+$anonymousFactory = static fn(): Closure => static fn(): null => null;
+var_dump($namedA == $namedB, $namedA === $namedB, $anonymousFactory() == $anonymousFactory());
+$arguments = ['right' => 4, 'left' => 3];
+$factory = static fn(): Closure => static fn(int $left, int $right): int => $left * 10 + $right;
+var_dump($factory()(...$arguments));
+"#,
+        ),
+        concat!(
+            "int(21)\nint(22)\narray(1) {\n  [\"step\"]=>\n  int(100)\n}\n",
+            "eval:closure\neval:receiver\neval:scope\nint(7)\nint(7)\nint(2)\n",
+            "int(1)\nint(1)\nint(2)\nint(2)\n",
+            "bool(true)\nbool(true)\nbool(false)\n",
+            "bool(true)\nbool(false)\nbool(false)\nint(34)\n",
+        ),
+    );
+}
+
+#[test]
 fn global_closures_resolve_relative_classes_from_the_bound_scope() {
     assert_eq!(
         run_php(
@@ -655,7 +762,7 @@ var_dump(Closure::bind($closure, new stdClass()));
 "#,
         ),
         concat!(
-            "Warning: Closure::bind(): Cannot bind an instance to a static closure\n",
+            "\nWarning: Cannot bind an instance to a static closure, this will be an error in PHP 9 in <main> on line 3\n",
             "NULL\n"
         )
     );

@@ -16,7 +16,9 @@ fn op_nullsafe_check<'a>(
         // the value stored in its cell rather than the reference wrapper.
         let receiver = val.dereferenced();
         let is_null = receiver.value_type() == ValueType::Null;
-        let is_non_object = !is_null && receiver.as_object().is_none();
+        let is_non_object = !is_null
+            && receiver.as_object().is_none()
+            && receiver.value_type() != ValueType::Closure;
 
         if is_null {
             // null ?-> anything  =>  null (short-circuit)
@@ -65,6 +67,13 @@ fn op_clone_obj<'a>(
     // frame; result publication initializes and marks the destination owner.
     unsafe {
         let source = (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)).clone();
+
+        if let Some(closure) = source.as_closure() {
+            let cloned = Value::closure(closure.clone());
+            let result_ptr = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+            frame_result_set(frame, result_ptr, opline.result_type, cloned);
+            return Ok(ColdResult::Done);
+        }
 
         if source.value_type() != ValueType::Object {
             let error = make_error_value(

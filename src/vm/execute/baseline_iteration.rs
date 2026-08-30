@@ -1352,6 +1352,7 @@ fn op_foreach_init<'a>(
         let is_empty = match iterable.dereferenced().as_array() {
             Some(arr) => arr.is_empty(),
             None if iterable.value_type() == ValueType::Object => false,
+            None if iterable.value_type() == ValueType::Closure => true,
             None => {
                 let type_name = match arr_val.value_type() {
                     ValueType::Null => "null",
@@ -1384,7 +1385,11 @@ fn op_foreach_init<'a>(
         };
         if is_empty {
             if matches!(opline.op1_type, OpType::Tmp | OpType::Var)
-                && (resolved_iterable.is_some() || raw_source.value_type() == ValueType::Array)
+                && (resolved_iterable.is_some()
+                    || matches!(
+                        raw_source.value_type(),
+                        ValueType::Array | ValueType::Closure
+                    ))
                 && let Some(control) = release_temporary_foreach_source(eg, frame, opline)?
             {
                 return Ok(control);

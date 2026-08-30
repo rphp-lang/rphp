@@ -1478,13 +1478,30 @@ fn check_return_type_hint(
         return check_type_hint(value, hint, eg, strict, lexical_scope);
     }
     let common = unsafe { &*(*frame).func };
-    let receiver_scope = if common.sig.this_offset == 1 {
-        let receiver = unsafe { &*(*frame).cv(0) };
-        (receiver.value_type() == ValueType::Object)
-            .then(|| unsafe { receiver.object_class_name_unchecked() })
+    let receiver_cv = if common.sig.this_offset == 1 {
+        Some(0)
+    } else if common.fn_type == FunctionType::User {
+        // SAFETY: `frame` is the live callee frame already dereferenced above,
+        // and the checked function tag guarantees its common header belongs to
+        // a request-owned `UserFunction` for the duration of this return check.
+        let function = unsafe { &*((*frame).func as *const UserFunction) };
+        function
+            .op_array
+            .all_cvs
+            .iter()
+            .find(|(_, name)| name == "this")
+            .map(|(index, _)| *index)
     } else {
         None
     };
+    let receiver_scope = receiver_cv.and_then(|index| {
+        let receiver = unsafe { &*(*frame).cv(index) };
+        match receiver.value_type() {
+            ValueType::Object => Some(unsafe { receiver.object_class_name_unchecked() }),
+            ValueType::Closure => Some("Closure"),
+            _ => None,
+        }
+    });
     let called_scope = receiver_scope.or_else(|| {
         eg.class_by_id(late_static_call_class_id(eg, frame))
             .map(|class| class.name.as_str())
@@ -4413,7 +4430,7 @@ pub(crate) fn values_equal_checked_with_precision(
             (ValueType::Closure, ValueType::Closure) => a
                 .as_closure()
                 .zip(b.as_closure())
-                .is_some_and(|(left, right)| left.same_identity(right)),
+                .is_some_and(|(left, right)| left.same_loose_identity(right)),
             _ => false,
         })
     }
@@ -4572,7 +4589,7 @@ pub(crate) fn values_equal_checked_with_precision(
             (ValueType::Closure, ValueType::Closure) => a
                 .as_closure()
                 .zip(b.as_closure())
-                .is_some_and(|(left, right)| left.same_identity(right)),
+                .is_some_and(|(left, right)| left.same_loose_identity(right)),
             _ => false,
         })
     }
@@ -4798,7 +4815,7 @@ pub(crate) fn values_compare_checked_with_precision(
             (ValueType::Closure, ValueType::Closure) => Ok(
                 if a.as_closure()
                     .zip(b.as_closure())
-                    .is_some_and(|(left, right)| left.same_identity(right))
+                    .is_some_and(|(left, right)| left.same_loose_identity(right))
                 {
                     0
                 } else {
