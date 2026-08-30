@@ -7,6 +7,63 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The latest measured AMD64 PHP 8.5 builtin checkpoint is
+`filesystem-builtin-call-contracts`, validated byte-for-byte against PHP
+8.5.10. `mkdir()`, `rmdir()`, `unlink()`, `rename()`, `copy()`, `tempnam()` and
+`glob()` now expose their exact PHP 8.5 parameter names, defaults, arity and
+return types. Their ordinary local-filesystem paths align named arguments,
+weak and strict coercion, null-byte and empty-path errors, deferred invalid
+stream-context errors, Unix modes, recursive creation, diagnostics and
+side-effect ordering. `copy()` protects same-file and hard-link aliases from
+truncation and preserves destination permissions, `tempnam()` uses exclusive
+0600 creation and PHP-compatible prefix/fallback rules, and `glob()` implements
+the available `GLOB_*` constants, brace alternatives, classes, escaping,
+dot-entry rules, directory marking/filtering and slash preservation.
+
+The 34-line clean-room oracle source and byte-exact output hash to
+`2ad57589cc55d3325d2cb3d6826e8877fee3116300af575c110886a465bc3e32`
+and `ba97b380a81e621cdffddb2239f3be19e67309fda568fe27d40d493489354e35`.
+Six original E2E groups pass in default and all-feature builds and the five
+applicable groups pass without default features. Of 14 selected upstream
+filesystem PHPTs, ten pass, three reach independent missing `ini_*`, `stat()`
+or `fileinode()` capability after the exercised filesystem behavior, and one
+is unsupported because of its PHPT `CONFLICTS` section; none crash or time out.
+The final classification manifest hashes to
+`4909df4375b25772c9c671f3bbda50a71e68dd9a62be612c5869f76b722efcf3`.
+
+The committed on-demand reflection audit compares the host PHP callable
+surface with RPHP metadata and can optionally rank mismatches by Composer
+vendor usage. The complete default inventory is 1,201 reference functions:
+462 are present, 739 are missing, 26 of the present functions still have a
+call-shape mismatch, 390 have metadata-only differences and 46 are exact. This
+checkpoint moves all seven targeted rows from shape mismatch to exact, reducing
+shape debt from 33 to 26 and increasing call-compatible rows from 429 to 436.
+Restricted to the extensions required by the Symfony baseline, 461 of 733
+functions are present, 272 are missing and 26 retain a shape mismatch.
+
+All default, no-default, erased-generics, reified-generics and all-feature
+Cargo test configurations, all-feature/all-target checking, formatting, HTML
+data, PHPT-runner and both unsafe-policy checks pass. Production remains at
+1,623 unsafe blocks and 289 unsafe functions, with 395 SAFETY annotations and
+seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates and
+PHP 8.5.10 warmed-kernel S2 and cold-build S3 pass.
+
+The CPU-2 release gate uses 32 balanced randomized A/B pairs, exact output
+checksums, three warmups and no outlier removal. Paired medians versus the
+`d46d3c7d` baseline are startup +0.533%, an unrelated five-million-call holdout
+-0.104%, `glob()` -3.811% and 128 one-MiB `copy()` operations +0.183%. The two
+raw-result files hash to
+`517519cea91d7b7fdc7017ce4a244aee25ab76d01cc241e8bb46a5dd6eef7cd7`
+and `8b6db6202424a8a54dc5ff3a3fe8785caf9c658388668a08fbed0d5fcfd71eac`.
+The release binary grows by 37,104 bytes (0.328%); ten fresh-process samples
+show a noisy 130-KiB lower median RSS, so no memory improvement is claimed.
+
+This checkpoint claims ordinary local-filesystem behavior on the measured
+Linux platform. It does not claim general stream-wrapper compatibility,
+Windows/32-bit behavioral equivalence or closure of the remaining builtin
+inventory debt. The implementation checkpoint is the commit containing this
+status.
+
 The latest measured AMD64 PHP 8.5 contract checkpoint is
 `qualified-symbol-resolution-boundaries`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.10. Qualified source constants now

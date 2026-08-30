@@ -7,6 +7,7 @@
 use std::borrow::Cow;
 #[cfg(not(feature = "file-write"))]
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use crate::runtime::ExecutorGlobals;
 use crate::value::{PhpArray, Value, ValueType};
@@ -14,8 +15,19 @@ use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 
 use super::{
-    php_byte_result, typed_internal_int_argument, typed_internal_string_value_argument_expected,
+    php_byte_result, typed_internal_bool_argument, typed_internal_int_argument,
+    typed_internal_string_value_argument_expected,
 };
+
+pub(crate) const GLOB_ERR: i64 = 0x0004;
+pub(crate) const GLOB_MARK: i64 = 0x0008;
+pub(crate) const GLOB_NOCHECK: i64 = 0x0010;
+pub(crate) const GLOB_NOSORT: i64 = 0x0020;
+pub(crate) const GLOB_BRACE: i64 = 0x0080;
+pub(crate) const GLOB_NOESCAPE: i64 = 0x1000;
+pub(crate) const GLOB_ONLYDIR: i64 = 1 << 30;
+pub(crate) const GLOB_AVAILABLE_FLAGS: i64 =
+    GLOB_ERR | GLOB_MARK | GLOB_NOCHECK | GLOB_NOSORT | GLOB_BRACE | GLOB_NOESCAPE | GLOB_ONLYDIR;
 
 // ============================================================================
 // Filesystem functions
@@ -553,93 +565,551 @@ pub(super) fn fn_file(
     return_default_file_lines(path.as_ref(), rv)
 }
 
-/// mkdir($pathname, $mode = 0777, $recursive = false): bool
+fn filesystem_string_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    index: u32,
+    parameter: &str,
+) -> Result<Option<String>, VmError> {
+    let Some(value) = typed_internal_string_value_argument_expected(
+        ed, eg, function, index, parameter, "string",
+    )?
+    else {
+        return Ok(None);
+    };
+    let path = value.as_str().unwrap_or_default();
+    if path.contains('\0') {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            &format!(
+                "{function}(): Argument #{} (${parameter}) must not contain any null bytes",
+                index + 1
+            ),
+        ));
+        return Ok(None);
+    }
+    Ok(Some(path.to_string()))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OptionalStreamContext {
+    Valid,
+    InvalidResource,
+}
+
+fn classify_optional_stream_context(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    index: u32,
+) -> Option<OptionalStreamContext> {
+    let Some(context) = arg_opt!(ed, index) else {
+        return Some(OptionalStreamContext::Valid);
+    };
+    let context = context.dereferenced();
+    if context.value_type() == ValueType::Null {
+        return Some(OptionalStreamContext::Valid);
+    }
+    let Some(resource) = context.as_resource_id() else {
+        super::typed_internal_argument_error(
+            eg,
+            function,
+            context,
+            index as usize + 1,
+            "context",
+            "resource or null",
+        );
+        return None;
+    };
+
+    #[cfg(feature = "stream-context")]
+    {
+        if super::streams::context::context_snapshot(eg, resource).is_none() {
+            super::streams::context::invalid_context_error(eg, function);
+            return Some(OptionalStreamContext::InvalidResource);
+        }
+        Some(OptionalStreamContext::Valid)
+    }
+    #[cfg(not(feature = "stream-context"))]
+    {
+        let _ = resource;
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!("{function}(): supplied resource is not a valid Stream-Context resource"),
+        ));
+        Some(OptionalStreamContext::InvalidResource)
+    }
+}
+
+fn filesystem_error_reason(error: &std::io::Error) -> String {
+    let rendered = error.to_string();
+    rendered
+        .split_once(" (os error ")
+        .map_or(rendered.as_str(), |(reason, _)| reason)
+        .to_string()
+}
+
+fn report_filesystem_diagnostic(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    level: i64,
+    label: &str,
+    message: &str,
+) -> Result<(), VmError> {
+    super::report_internal_diagnostic(eg, ed, level, label, message)?;
+    Ok(())
+}
+
+/// mkdir($directory, $permissions = 0777, $recursive = false, $context = null): bool
 pub(super) fn fn_mkdir(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let path = arg_str!(ed, 0);
-    let recursive = arg_opt!(ed, 2).map(|v| v.is_truthy()).unwrap_or(false);
-    let result = if recursive {
-        std::fs::create_dir_all(path.as_ref())
-    } else {
-        std::fs::create_dir(path.as_ref())
+    let Some(path) = filesystem_string_argument(ed, eg, "mkdir", 0, "directory")? else {
+        return Ok(());
     };
-    ret!(rv, Value::bool(result.is_ok()));
+    let permissions = if arg_opt!(ed, 1).is_some() {
+        let Some(permissions) = typed_internal_int_argument(ed, eg, "mkdir", 1, "permissions")?
+        else {
+            return Ok(());
+        };
+        permissions
+    } else {
+        0o777
+    };
+    let recursive = if arg_opt!(ed, 2).is_some() {
+        let Some(recursive) = typed_internal_bool_argument(ed, eg, "mkdir", 2, "recursive")? else {
+            return Ok(());
+        };
+        recursive
+    } else {
+        false
+    };
+    let Some(context) = classify_optional_stream_context(ed, eg, "mkdir", 3) else {
+        return Ok(());
+    };
+
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(recursive);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(permissions as u32);
+    }
+    #[cfg(not(unix))]
+    let _ = permissions;
+    let result = if recursive && std::fs::symlink_metadata(&path).is_ok() {
+        // `create_dir_all` treats an existing final directory as success, while
+        // PHP reports EEXIST for the requested final component.
+        std::fs::create_dir(&path)
+    } else {
+        builder.create(&path)
+    };
+    if context == OptionalStreamContext::InvalidResource {
+        return Ok(());
+    }
+    match result {
+        Ok(()) => ret!(rv, Value::bool(true)),
+        Err(error) => {
+            report_filesystem_diagnostic(
+                ed,
+                eg,
+                2,
+                "Warning",
+                &format!("mkdir(): {}", filesystem_error_reason(&error)),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            ret!(rv, Value::bool(false));
+        }
+    }
 }
 
-/// rmdir($dirname): bool
+/// rmdir($directory, $context = null): bool
 pub(super) fn fn_rmdir(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let path = arg_str!(ed, 0);
-    ret!(rv, Value::bool(std::fs::remove_dir(path.as_ref()).is_ok()));
+    let Some(path) = filesystem_string_argument(ed, eg, "rmdir", 0, "directory")? else {
+        return Ok(());
+    };
+    let Some(context) = classify_optional_stream_context(ed, eg, "rmdir", 1) else {
+        return Ok(());
+    };
+    let result = std::fs::remove_dir(&path);
+    if context == OptionalStreamContext::InvalidResource {
+        return Ok(());
+    }
+    match result {
+        Ok(()) => ret!(rv, Value::bool(true)),
+        Err(error) => {
+            report_filesystem_diagnostic(
+                ed,
+                eg,
+                2,
+                "Warning",
+                &format!("rmdir({path}): {}", filesystem_error_reason(&error)),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            ret!(rv, Value::bool(false));
+        }
+    }
 }
 
-/// unlink($filename): bool
+/// unlink($filename, $context = null): bool
 pub(super) fn fn_unlink(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let path = arg_str!(ed, 0);
-    ret!(rv, Value::bool(std::fs::remove_file(path.as_ref()).is_ok()));
+    let Some(path) = filesystem_string_argument(ed, eg, "unlink", 0, "filename")? else {
+        return Ok(());
+    };
+    let Some(context) = classify_optional_stream_context(ed, eg, "unlink", 1) else {
+        return Ok(());
+    };
+    let result = std::fs::remove_file(&path);
+    if context == OptionalStreamContext::InvalidResource {
+        return Ok(());
+    }
+    match result {
+        Ok(()) => ret!(rv, Value::bool(true)),
+        Err(error) => {
+            report_filesystem_diagnostic(
+                ed,
+                eg,
+                2,
+                "Warning",
+                &format!("unlink({path}): {}", filesystem_error_reason(&error)),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            ret!(rv, Value::bool(false));
+        }
+    }
 }
 
-/// rename($old, $new): bool
+/// rename($from, $to, $context = null): bool
 pub(super) fn fn_rename(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let old = arg_str!(ed, 0);
-    let new = arg_str!(ed, 1);
-    ret!(
-        rv,
-        Value::bool(std::fs::rename(old.as_ref(), new.as_ref()).is_ok())
-    );
+    let Some(from) = filesystem_string_argument(ed, eg, "rename", 0, "from")? else {
+        return Ok(());
+    };
+    let Some(to) = filesystem_string_argument(ed, eg, "rename", 1, "to")? else {
+        return Ok(());
+    };
+    let Some(context) = classify_optional_stream_context(ed, eg, "rename", 2) else {
+        return Ok(());
+    };
+    let result = std::fs::rename(&from, &to);
+    if context == OptionalStreamContext::InvalidResource {
+        return Ok(());
+    }
+    match result {
+        Ok(()) => ret!(rv, Value::bool(true)),
+        Err(error) => {
+            report_filesystem_diagnostic(
+                ed,
+                eg,
+                2,
+                "Warning",
+                &format!("rename({from},{to}): {}", filesystem_error_reason(&error)),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            ret!(rv, Value::bool(false));
+        }
+    }
 }
 
-/// copy($source, $dest): bool
+/// copy($from, $to, $context = null): bool
 pub(super) fn fn_copy(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let src = arg_str!(ed, 0);
-    let dst = arg_str!(ed, 1);
-    ret!(
-        rv,
-        Value::bool(std::fs::copy(src.as_ref(), dst.as_ref()).is_ok())
-    );
+    let Some(from) = filesystem_string_argument(ed, eg, "copy", 0, "from")? else {
+        return Ok(());
+    };
+    let Some(to) = filesystem_string_argument(ed, eg, "copy", 1, "to")? else {
+        return Ok(());
+    };
+    if from.is_empty() {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "Path must not be empty",
+        ));
+        return Ok(());
+    }
+    let Some(context) = classify_optional_stream_context(ed, eg, "copy", 2) else {
+        return Ok(());
+    };
+    if Path::new(&from).is_dir() {
+        if context == OptionalStreamContext::InvalidResource {
+            return Ok(());
+        }
+        report_filesystem_diagnostic(
+            ed,
+            eg,
+            2,
+            "Warning",
+            "copy(): The first argument to copy() function cannot be a directory",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        ret!(rv, Value::bool(false));
+    }
+    let source_exists = std::fs::metadata(&from).is_ok();
+    if source_exists && to.is_empty() {
+        if context == OptionalStreamContext::InvalidResource {
+            return Ok(());
+        }
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "Path must not be empty",
+        ));
+        return Ok(());
+    }
+    if source_exists && Path::new(&to).is_dir() {
+        if context == OptionalStreamContext::InvalidResource {
+            return Ok(());
+        }
+        report_filesystem_diagnostic(
+            ed,
+            eg,
+            2,
+            "Warning",
+            "copy(): The second argument to copy() function cannot be a directory",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        ret!(rv, Value::bool(false));
+    }
+    if paths_refer_to_same_file(Path::new(&from), Path::new(&to)) {
+        if context == OptionalStreamContext::InvalidResource {
+            return Ok(());
+        }
+        ret!(rv, Value::bool(false));
+    }
+    let result = copy_file_contents(Path::new(&from), Path::new(&to));
+    if context == OptionalStreamContext::InvalidResource {
+        return Ok(());
+    }
+    match result {
+        Ok(copied) => ret!(rv, Value::bool(copied)),
+        Err(error) => {
+            report_filesystem_diagnostic(
+                ed,
+                eg,
+                2,
+                "Warning",
+                &format!(
+                    "copy({from}): Failed to open stream: {}",
+                    filesystem_error_reason(&error)
+                ),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            ret!(rv, Value::bool(false));
+        }
+    }
 }
 
-/// tempnam($dir, $prefix): string|false
+#[cfg(unix)]
+fn copy_file_contents(from: &Path, to: &Path) -> Result<bool, std::io::Error> {
+    use std::os::unix::fs::MetadataExt;
+
+    let mut source = std::fs::File::open(from)?;
+    let mut destination = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(to)?;
+
+    let source_metadata = source.metadata()?;
+    let destination_metadata = destination.metadata()?;
+    if source_metadata.dev() == destination_metadata.dev()
+        && source_metadata.ino() == destination_metadata.ino()
+    {
+        return Ok(false);
+    }
+
+    destination.set_len(0)?;
+    std::io::copy(&mut source, &mut destination)?;
+    Ok(true)
+}
+
+#[cfg(not(unix))]
+fn copy_file_contents(from: &Path, to: &Path) -> Result<bool, std::io::Error> {
+    use std::io::Write;
+
+    // Stable std has no portable hard-link identity. Buffer before opening an
+    // existing destination so aliases cannot truncate the source.
+    let contents = std::fs::read(from)?;
+    let mut destination = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(to)?;
+    destination.write_all(&contents)?;
+    destination.set_len(contents.len() as u64)?;
+    Ok(true)
+}
+
+fn paths_refer_to_same_file(from: &Path, to: &Path) -> bool {
+    let (Ok(from_metadata), Ok(to_metadata)) = (std::fs::metadata(from), std::fs::metadata(to))
+    else {
+        return false;
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        from_metadata.dev() == to_metadata.dev() && from_metadata.ino() == to_metadata.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (from_metadata, to_metadata);
+        std::fs::canonicalize(from)
+            .ok()
+            .zip(std::fs::canonicalize(to).ok())
+            .is_some_and(|(from, to)| from == to)
+    }
+}
+
+/// tempnam($directory, $prefix): string|false
 pub(super) fn fn_tempnam(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let Some(directory) = filesystem_string_argument(ed, eg, "tempnam", 0, "directory")? else {
+        return Ok(());
+    };
+    let Some(prefix) = filesystem_string_argument(ed, eg, "tempnam", 1, "prefix")? else {
+        return Ok(());
+    };
+    let prefix = tempnam_prefix(&prefix);
+    let system_temp = absolute_directory(&std::env::temp_dir());
+    let (directory, already_fell_back) = if directory.is_empty() {
+        (system_temp.clone(), true)
+    } else if Path::new(&directory).is_dir() {
+        (absolute_directory(Path::new(&directory)), false)
+    } else {
+        report_tempnam_fallback(ed, eg)?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        (system_temp.clone(), true)
+    };
 
-    let dir = arg_str!(ed, 0);
-    let prefix = arg_str!(ed, 1);
-    let dir_path = std::path::Path::new(dir.as_ref());
-    if !dir_path.is_dir() {
-        ret!(rv, Value::bool(false));
-    }
-    // Generate a unique filename: prefix + pid + atomic counter
-    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let name = format!("{}{}{}", prefix, std::process::id(), seq);
-    let path = dir_path.join(&name);
-    match std::fs::File::create(&path) {
-        Ok(_) => ret!(rv, Value::string(path.to_string_lossy().into_owned())),
+    match create_tempnam_file(&directory, &prefix) {
+        Ok(path) => ret!(rv, Value::string(path.to_string_lossy().into_owned())),
+        Err(_) if !already_fell_back && directory != system_temp => {
+            report_tempnam_fallback(ed, eg)?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            match create_tempnam_file(&system_temp, &prefix) {
+                Ok(path) => ret!(rv, Value::string(path.to_string_lossy().into_owned())),
+                Err(_) => ret!(rv, Value::bool(false)),
+            }
+        }
         Err(_) => ret!(rv, Value::bool(false)),
     }
+}
+
+fn report_tempnam_fallback(ed: *mut ExecuteData, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    report_filesystem_diagnostic(
+        ed,
+        eg,
+        8,
+        "Notice",
+        "tempnam(): file created in the system's temporary directory",
+    )
+}
+
+fn absolute_directory(directory: &Path) -> PathBuf {
+    std::fs::canonicalize(directory).unwrap_or_else(|_| {
+        if directory.is_absolute() {
+            directory.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|current| current.join(directory))
+                .unwrap_or_else(|_| directory.to_path_buf())
+        }
+    })
+}
+
+fn tempnam_prefix(prefix: &str) -> String {
+    #[cfg(windows)]
+    let basename = prefix
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default();
+    #[cfg(not(windows))]
+    let basename = prefix
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default();
+
+    let mut end = basename.len().min(63);
+    while !basename.is_char_boundary(end) {
+        end -= 1;
+    }
+    basename[..end].to_string()
+}
+
+fn create_tempnam_file(directory: &Path, prefix: &str) -> Result<PathBuf, std::io::Error> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let mut last_collision = None;
+    for _ in 0..128 {
+        let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let nonce = timestamp ^ ((std::process::id() as u128) << 48) ^ sequence as u128;
+        let name = format!("{prefix}{:019x}", nonce & ((1_u128 << 76) - 1));
+        let path = directory.join(name);
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&path) {
+            Ok(_) => return Ok(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                last_collision = Some(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_collision.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not create a unique temporary file",
+        )
+    }))
 }
 
 /// sys_get_temp_dir(): string
@@ -764,88 +1234,639 @@ pub(super) fn fn_is_writable(
     ret!(rv, Value::bool(writable));
 }
 
-/// glob($pattern): array|false
+/// glob($pattern, $flags = 0): array|false
 pub(super) fn fn_glob(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let pattern = arg_str!(ed, 0);
-    let pat = pattern.as_ref();
-    let mut arr = PhpArray::new();
-
-    // Split pattern into directory and filename parts
-    let (dir, file_pat) = match pat.rfind('/') {
-        Some(pos) => (&pat[..pos], &pat[pos + 1..]),
-        None => (".", pat),
+    let Some(pattern) = filesystem_string_argument(ed, eg, "glob", 0, "pattern")? else {
+        return Ok(());
     };
-    let dir = if dir.is_empty() { "/" } else { dir };
+    let flags = if arg_opt!(ed, 1).is_some() {
+        let Some(flags) = typed_internal_int_argument(ed, eg, "glob", 1, "flags")? else {
+            return Ok(());
+        };
+        flags
+    } else {
+        0
+    };
+    if flags & !GLOB_AVAILABLE_FLAGS != 0 {
+        super::report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            "glob(): At least one of the passed flags is invalid or not supported on this platform",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        ret!(rv, Value::bool(false));
+    }
 
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        let mut results: Vec<String> = Vec::new();
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if glob_match(file_pat, &name) {
-                // Return full path (dir + name) when pattern had directory component
-                if pat.contains('/') {
-                    results.push(format!("{}/{}", dir, name));
-                } else {
-                    results.push(name);
-                }
-            }
+    let options = GlobOptions {
+        mark: flags & GLOB_MARK != 0,
+        no_check: flags & GLOB_NOCHECK != 0,
+        no_sort: flags & GLOB_NOSORT != 0,
+        no_escape: flags & GLOB_NOESCAPE != 0,
+        only_dir: flags & GLOB_ONLYDIR != 0,
+        abort_on_error: flags & GLOB_ERR != 0,
+    };
+    let expanded = if flags & GLOB_BRACE != 0 {
+        expand_glob_braces(&pattern, options.no_escape)
+    } else {
+        vec![pattern.clone()]
+    };
+    let mut results = Vec::new();
+    for expanded_pattern in expanded {
+        let mut pattern_results = Vec::new();
+        if !collect_glob_pattern(&expanded_pattern, options, &mut pattern_results) {
+            ret!(rv, Value::bool(false));
         }
-        results.sort(); // PHP glob returns sorted results
-        for r in results {
-            arr.push(Value::string(r));
+        if options.no_check && !options.only_dir && pattern_results.is_empty() {
+            pattern_results.push(expanded_pattern);
         }
+        if !options.no_sort {
+            pattern_results.sort();
+        }
+        results.extend(pattern_results);
+    }
+
+    let mut arr = PhpArray::new();
+    for result in results {
+        arr.push(Value::string(result));
     }
     ret!(rv, Value::array(arr));
 }
 
-/// Simple glob matcher for *, ? patterns (no full POSIX glob)
-fn glob_match(pattern: &str, text: &str) -> bool {
-    let pi: Vec<char> = pattern.chars().collect();
-    let ti: Vec<char> = text.chars().collect();
-    glob_match_inner(&pi, 0, &ti, 0)
+#[derive(Clone, Copy)]
+struct GlobOptions {
+    mark: bool,
+    no_check: bool,
+    no_sort: bool,
+    no_escape: bool,
+    only_dir: bool,
+    abort_on_error: bool,
 }
 
-fn glob_match_inner(pat: &[char], pi: usize, txt: &[char], ti: usize) -> bool {
-    if pi == pat.len() && ti == txt.len() {
+fn collect_glob_pattern(pattern: &str, options: GlobOptions, results: &mut Vec<String>) -> bool {
+    if pattern.is_empty() {
         return true;
     }
-    if pi == pat.len() {
-        return false;
+    let leading_slashes = pattern
+        .chars()
+        .take_while(|character| *character == '/')
+        .count();
+    let absolute = leading_slashes != 0;
+    let components: Vec<&str> = pattern.split('/').collect();
+    let index = leading_slashes;
+    let filesystem_prefix = if absolute {
+        PathBuf::from("/")
+    } else {
+        PathBuf::from(".")
+    };
+    let display_prefix = if absolute {
+        &pattern[..leading_slashes]
+    } else {
+        ""
+    };
+    collect_glob_components(
+        &filesystem_prefix,
+        display_prefix,
+        &components,
+        index,
+        options,
+        results,
+    )
+}
+
+fn collect_glob_components(
+    filesystem_prefix: &Path,
+    display_prefix: &str,
+    components: &[&str],
+    index: usize,
+    options: GlobOptions,
+    results: &mut Vec<String>,
+) -> bool {
+    if index == components.len() {
+        return push_glob_result(filesystem_prefix, display_prefix, options, results);
     }
-    match pat[pi] {
-        '*' => {
-            // Match zero or more characters
-            for skip in 0..=(txt.len() - ti) {
-                if glob_match_inner(pat, pi + 1, txt, ti + skip) {
-                    return true;
+
+    let component = components[index];
+    if component.is_empty() {
+        if index + 1 == components.len() {
+            let marked = if display_prefix.ends_with('/') {
+                display_prefix.to_string()
+            } else {
+                format!("{display_prefix}/")
+            };
+            return push_glob_result(filesystem_prefix, &marked, options, results);
+        }
+        let repeated_separator = if display_prefix.ends_with('/') {
+            format!("{display_prefix}/")
+        } else {
+            format!("{display_prefix}//")
+        };
+        return collect_glob_components(
+            filesystem_prefix,
+            &repeated_separator,
+            components,
+            index + 1,
+            options,
+            results,
+        );
+    }
+
+    if !component_has_glob_magic(component, options.no_escape) {
+        let literal = unescape_glob_literal(component, options.no_escape);
+        let filesystem_path = filesystem_prefix.join(&literal);
+        let display_path = join_glob_display(display_prefix, &literal);
+        if index + 1 < components.len() && !filesystem_path.is_dir() {
+            return true;
+        }
+        return collect_glob_components(
+            &filesystem_path,
+            &display_path,
+            components,
+            index + 1,
+            options,
+            results,
+        );
+    }
+
+    let entries = match std::fs::read_dir(filesystem_prefix) {
+        Ok(entries) => entries,
+        Err(error) => {
+            return !options.abort_on_error || error.kind() == std::io::ErrorKind::NotFound;
+        }
+    };
+    let tokens = compile_glob_tokens(component, options.no_escape);
+    let final_component = index + 1 == components.len();
+    for name in [".", ".."] {
+        if !glob_tokens_match(&tokens, name) {
+            continue;
+        }
+        let display_path = join_glob_display(display_prefix, name);
+        if final_component {
+            let mut display_path = display_path;
+            if options.mark && !display_path.ends_with('/') {
+                display_path.push('/');
+            }
+            results.push(display_path);
+            continue;
+        }
+        let filesystem_path = filesystem_prefix.join(name);
+        if !collect_glob_components(
+            &filesystem_path,
+            &display_path,
+            components,
+            index + 1,
+            options,
+            results,
+        ) {
+            return false;
+        }
+    }
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) if options.abort_on_error => return false,
+            Err(_) => continue,
+        };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !glob_tokens_match(&tokens, &name) {
+            continue;
+        }
+        let display_path = join_glob_display(display_prefix, &name);
+        if final_component {
+            if options.only_dir || options.mark {
+                let is_directory = entry.path().is_dir();
+                if options.only_dir && !is_directory {
+                    continue;
                 }
-            }
-            false
-        }
-        '?' => {
-            if ti < txt.len() {
-                glob_match_inner(pat, pi + 1, txt, ti + 1)
+                let mut display_path = display_path;
+                if options.mark && is_directory && !display_path.ends_with('/') {
+                    display_path.push('/');
+                }
+                results.push(display_path);
             } else {
-                false
+                results.push(display_path);
             }
+            continue;
         }
-        c => {
-            if ti < txt.len() && txt[ti] == c {
-                glob_match_inner(pat, pi + 1, txt, ti + 1)
+        let filesystem_path = entry.path();
+        if !filesystem_path.is_dir() {
+            continue;
+        }
+        if !collect_glob_components(
+            &filesystem_path,
+            &display_path,
+            components,
+            index + 1,
+            options,
+            results,
+        ) {
+            return false;
+        }
+    }
+    true
+}
+
+fn push_glob_result(
+    filesystem_path: &Path,
+    display_path: &str,
+    options: GlobOptions,
+    results: &mut Vec<String>,
+) -> bool {
+    let link_metadata = match std::fs::symlink_metadata(filesystem_path) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            return !options.abort_on_error || error.kind() == std::io::ErrorKind::NotFound;
+        }
+    };
+    let is_directory = if link_metadata.file_type().is_symlink() {
+        std::fs::metadata(filesystem_path)
+            .map(|metadata| metadata.is_dir())
+            .unwrap_or(false)
+    } else {
+        link_metadata.is_dir()
+    };
+    if options.only_dir && !is_directory {
+        return true;
+    }
+    let mut display_path = display_path.to_string();
+    if options.mark && is_directory && !display_path.ends_with('/') {
+        display_path.push('/');
+    }
+    results.push(display_path);
+    true
+}
+
+fn join_glob_display(prefix: &str, component: &str) -> String {
+    if prefix.is_empty() {
+        component.to_string()
+    } else if prefix.ends_with('/') {
+        format!("{prefix}{component}")
+    } else {
+        format!("{prefix}/{component}")
+    }
+}
+
+fn component_has_glob_magic(pattern: &str, no_escape: bool) -> bool {
+    let mut escaped = false;
+    for character in pattern.chars() {
+        if !no_escape && !escaped && character == '\\' {
+            escaped = true;
+            continue;
+        }
+        if !escaped && matches!(character, '*' | '?' | '[') {
+            return true;
+        }
+        escaped = false;
+    }
+    false
+}
+
+fn unescape_glob_literal(pattern: &str, no_escape: bool) -> String {
+    if no_escape {
+        return pattern.to_string();
+    }
+    let mut literal = String::with_capacity(pattern.len());
+    let mut characters = pattern.chars();
+    while let Some(character) = characters.next() {
+        if character == '\\' {
+            if let Some(escaped) = characters.next() {
+                literal.push(escaped);
             } else {
-                false
+                literal.push(character);
             }
+        } else {
+            literal.push(character);
+        }
+    }
+    literal
+}
+
+fn expand_glob_braces(pattern: &str, no_escape: bool) -> Vec<String> {
+    let mut expanded = Vec::new();
+    expand_glob_braces_inner(pattern, no_escape, &mut expanded);
+    expanded
+}
+
+fn expand_glob_braces_inner(pattern: &str, no_escape: bool, expanded: &mut Vec<String>) {
+    if expanded.len() >= 1024 {
+        return;
+    }
+    let characters: Vec<char> = pattern.chars().collect();
+    let mut escaped = false;
+    let mut opening = None;
+    let mut depth = 0usize;
+    for (index, character) in characters.iter().copied().enumerate() {
+        if !no_escape && !escaped && character == '\\' {
+            escaped = true;
+            continue;
+        }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if character == '{' {
+            if depth == 0 {
+                opening = Some(index);
+            }
+            depth += 1;
+            continue;
+        }
+        if character != '}' || depth == 0 {
+            continue;
+        }
+        depth -= 1;
+        if depth != 0 {
+            continue;
+        }
+        let start = opening.expect("brace depth has an opening delimiter");
+        let alternatives = split_brace_alternatives(&characters[start + 1..index], no_escape);
+        let prefix: String = characters[..start].iter().collect();
+        let suffix: String = characters[index + 1..].iter().collect();
+        for alternative in alternatives {
+            expand_glob_braces_inner(
+                &format!("{prefix}{alternative}{suffix}"),
+                no_escape,
+                expanded,
+            );
+        }
+        return;
+    }
+    expanded.push(pattern.to_string());
+}
+
+fn split_brace_alternatives(characters: &[char], no_escape: bool) -> Vec<String> {
+    let mut alternatives = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    let mut escaped = false;
+    for (index, character) in characters.iter().copied().enumerate() {
+        if !no_escape && !escaped && character == '\\' {
+            escaped = true;
+            continue;
+        }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match character {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                alternatives.push(characters[start..index].iter().collect());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    alternatives.push(characters[start..].iter().collect());
+    alternatives
+}
+
+#[derive(Clone)]
+enum GlobToken {
+    Star,
+    Any,
+    Literal(char),
+    Class {
+        negated: bool,
+        ranges: Vec<(char, char)>,
+        posix: Vec<PosixGlobClass>,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum PosixGlobClass {
+    Alnum,
+    Alpha,
+    Blank,
+    Cntrl,
+    Digit,
+    Graph,
+    Lower,
+    Print,
+    Punct,
+    Space,
+    Upper,
+    Xdigit,
+}
+
+impl PosixGlobClass {
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "alnum" => Self::Alnum,
+            "alpha" => Self::Alpha,
+            "blank" => Self::Blank,
+            "cntrl" => Self::Cntrl,
+            "digit" => Self::Digit,
+            "graph" => Self::Graph,
+            "lower" => Self::Lower,
+            "print" => Self::Print,
+            "punct" => Self::Punct,
+            "space" => Self::Space,
+            "upper" => Self::Upper,
+            "xdigit" => Self::Xdigit,
+            _ => return None,
+        })
+    }
+
+    fn matches(self, character: char) -> bool {
+        match self {
+            Self::Alnum => character.is_ascii_alphanumeric(),
+            Self::Alpha => character.is_ascii_alphabetic(),
+            Self::Blank => matches!(character, ' ' | '\t'),
+            Self::Cntrl => character.is_ascii_control(),
+            Self::Digit => character.is_ascii_digit(),
+            Self::Graph => character.is_ascii_graphic(),
+            Self::Lower => character.is_ascii_lowercase(),
+            Self::Print => character == ' ' || character.is_ascii_graphic(),
+            Self::Punct => character.is_ascii_punctuation(),
+            Self::Space => character.is_ascii_whitespace(),
+            Self::Upper => character.is_ascii_uppercase(),
+            Self::Xdigit => character.is_ascii_hexdigit(),
+        }
+    }
+}
+
+impl GlobToken {
+    fn matches(&self, character: char) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Literal(expected) => *expected == character,
+            Self::Class {
+                negated,
+                ranges,
+                posix,
+            } => {
+                let contains = ranges
+                    .iter()
+                    .any(|(start, end)| *start <= character && character <= *end)
+                    || posix.iter().any(|class| class.matches(character));
+                contains != *negated
+            }
+            Self::Star => false,
         }
     }
 }
 
 #[cfg(test)]
+fn glob_match(pattern: &str, text: &str, no_escape: bool) -> bool {
+    let tokens = compile_glob_tokens(pattern, no_escape);
+    glob_tokens_match(&tokens, text)
+}
+
+fn glob_tokens_match(tokens: &[GlobToken], text: &str) -> bool {
+    if text.starts_with('.')
+        && !matches!(tokens.first(), Some(GlobToken::Literal(character)) if *character == '.')
+    {
+        return false;
+    }
+    let text: Vec<char> = text.chars().collect();
+    let mut pattern_index = 0usize;
+    let mut text_index = 0usize;
+    let mut star = None;
+
+    while text_index < text.len() {
+        if matches!(tokens.get(pattern_index), Some(GlobToken::Star)) {
+            pattern_index += 1;
+            star = Some((pattern_index, text_index));
+        } else if tokens
+            .get(pattern_index)
+            .is_some_and(|token| token.matches(text[text_index]))
+        {
+            pattern_index += 1;
+            text_index += 1;
+        } else if let Some((after_star, matched)) = star {
+            let next = matched + 1;
+            if next > text.len() {
+                return false;
+            }
+            star = Some((after_star, next));
+            pattern_index = after_star;
+            text_index = next;
+        } else {
+            return false;
+        }
+    }
+    while matches!(tokens.get(pattern_index), Some(GlobToken::Star)) {
+        pattern_index += 1;
+    }
+    pattern_index == tokens.len()
+}
+
+fn compile_glob_tokens(pattern: &str, no_escape: bool) -> Vec<GlobToken> {
+    let characters: Vec<char> = pattern.chars().collect();
+    let mut tokens = Vec::new();
+    let mut index = 0usize;
+    while index < characters.len() {
+        match characters[index] {
+            '\\' if !no_escape && index + 1 < characters.len() => {
+                tokens.push(GlobToken::Literal(characters[index + 1]));
+                index += 2;
+            }
+            '*' => {
+                if !matches!(tokens.last(), Some(GlobToken::Star)) {
+                    tokens.push(GlobToken::Star);
+                }
+                index += 1;
+            }
+            '?' => {
+                tokens.push(GlobToken::Any);
+                index += 1;
+            }
+            '[' => {
+                if let Some((class, next)) = compile_glob_class(&characters, index, no_escape) {
+                    tokens.push(class);
+                    index = next;
+                } else {
+                    tokens.push(GlobToken::Literal('['));
+                    index += 1;
+                }
+            }
+            character => {
+                tokens.push(GlobToken::Literal(character));
+                index += 1;
+            }
+        }
+    }
+    tokens
+}
+
+fn compile_glob_class(
+    characters: &[char],
+    opening: usize,
+    no_escape: bool,
+) -> Option<(GlobToken, usize)> {
+    let mut index = opening + 1;
+    let negated = matches!(characters.get(index), Some('!' | '^'));
+    if negated {
+        index += 1;
+    }
+    let mut members = Vec::new();
+    let mut posix = Vec::new();
+    if characters.get(index) == Some(&']') {
+        members.push((']', false));
+        index += 1;
+    }
+    while index < characters.len() && characters[index] != ']' {
+        if characters[index] == '[' && characters.get(index + 1) == Some(&':') {
+            let name_start = index + 2;
+            let mut closing = name_start;
+            while closing + 1 < characters.len()
+                && !(characters[closing] == ':' && characters[closing + 1] == ']')
+            {
+                closing += 1;
+            }
+            if closing + 1 < characters.len() {
+                let name: String = characters[name_start..closing].iter().collect();
+                if let Some(class) = PosixGlobClass::from_name(&name) {
+                    posix.push(class);
+                    index = closing + 2;
+                    continue;
+                }
+            }
+        }
+        let escaped = !no_escape && characters[index] == '\\' && index + 1 < characters.len();
+        if escaped {
+            index += 1;
+        }
+        members.push((characters[index], escaped));
+        index += 1;
+    }
+    if index == characters.len() || (members.is_empty() && posix.is_empty()) {
+        return None;
+    }
+
+    let mut ranges = Vec::new();
+    let mut member = 0usize;
+    while member < members.len() {
+        if member + 2 < members.len() && members[member + 1].0 == '-' && !members[member + 1].1 {
+            ranges.push((members[member].0, members[member + 2].0));
+            member += 3;
+        } else {
+            ranges.push((members[member].0, members[member].0));
+            member += 1;
+        }
+    }
+    Some((
+        GlobToken::Class {
+            negated,
+            ranges,
+            posix,
+        },
+        index + 1,
+    ))
+}
+
+#[cfg(test)]
 mod tests {
-    use super::{bytes_to_php_string, glob_match, php_string_to_bytes};
+    use super::{bytes_to_php_string, expand_glob_braces, glob_match, php_string_to_bytes};
 
     #[test]
     fn byte_string_helpers_round_trip_every_byte() {
@@ -855,10 +1876,20 @@ mod tests {
 
     #[test]
     fn glob_matcher_preserves_supported_wildcard_contract() {
-        assert!(glob_match("*.php", "index.php"));
-        assert!(glob_match("file-?.txt", "file-a.txt"));
-        assert!(glob_match("*", ""));
-        assert!(!glob_match("*.php", "index.phpt"));
-        assert!(!glob_match("file-?.txt", "file-long.txt"));
+        assert!(glob_match("*.php", "index.php", false));
+        assert!(glob_match("file-?.txt", "file-a.txt", false));
+        assert!(glob_match("file-[a-c].txt", "file-b.txt", false));
+        assert!(glob_match("file-[a\\-c].txt", "file--.txt", false));
+        assert!(!glob_match("file-[a\\-c].txt", "file-b.txt", false));
+        assert!(glob_match("literal\\*", "literal*", false));
+        assert!(glob_match("*", "", false));
+        assert!(!glob_match("*", ".hidden", false));
+        assert!(!glob_match("*.php", "index.phpt", false));
+        assert!(!glob_match("file-[!a-c].txt", "file-b.txt", false));
+        assert!(!glob_match("file-?.txt", "file-long.txt", false));
+        assert_eq!(
+            expand_glob_braces("config/{dev,{prod,test}}/*.php", false),
+            ["config/dev/*.php", "config/prod/*.php", "config/test/*.php",]
+        );
     }
 }

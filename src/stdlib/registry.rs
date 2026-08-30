@@ -1739,14 +1739,142 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         vec![None, Some(Value::bool(false))],
         "standard",
     );
-    reg!("mkdir", fn_mkdir, 3, 1, "pathname", "mode", "recursive");
-    reg!("rmdir", fn_rmdir, 1, 1, "dirname");
-    reg!("unlink", fn_unlink, 1, 1, "filename");
-    reg!("rename", fn_rename, 2, 2, "old", "new");
-    reg!("copy", fn_copy, 2, 2, "source", "dest");
-    reg!("tempnam", fn_tempnam, 2, 2, "dir", "prefix");
+    reg_typed!(
+        "mkdir",
+        fn_mkdir,
+        4,
+        1,
+        ["directory", "permissions", "recursive", "context"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::Bool,
+            ParamTypeHint::None,
+        ],
+        ParamTypeHint::Bool
+    );
+    let mkdir = eg
+        .find_function("mkdir")
+        .expect("mkdir was just registered");
+    eg.register_internal_function_reflection_metadata(
+        mkdir,
+        vec![
+            None,
+            Some(Value::long(0o777)),
+            Some(Value::bool(false)),
+            Some(Value::null()),
+        ],
+        "standard",
+    );
+    reg_typed!(
+        "rmdir",
+        fn_rmdir,
+        2,
+        1,
+        ["directory", "context"],
+        [ParamTypeHint::String, ParamTypeHint::None],
+        ParamTypeHint::Bool
+    );
+    let rmdir = eg
+        .find_function("rmdir")
+        .expect("rmdir was just registered");
+    eg.register_internal_function_reflection_metadata(
+        rmdir,
+        vec![None, Some(Value::null())],
+        "standard",
+    );
+    reg_typed!(
+        "unlink",
+        fn_unlink,
+        2,
+        1,
+        ["filename", "context"],
+        [ParamTypeHint::String, ParamTypeHint::None],
+        ParamTypeHint::Bool
+    );
+    let unlink = eg
+        .find_function("unlink")
+        .expect("unlink was just registered");
+    eg.register_internal_function_reflection_metadata(
+        unlink,
+        vec![None, Some(Value::null())],
+        "standard",
+    );
+    reg_typed!(
+        "rename",
+        fn_rename,
+        3,
+        2,
+        ["from", "to", "context"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::None,
+        ],
+        ParamTypeHint::Bool
+    );
+    let rename = eg
+        .find_function("rename")
+        .expect("rename was just registered");
+    eg.register_internal_function_reflection_metadata(
+        rename,
+        vec![None, None, Some(Value::null())],
+        "standard",
+    );
+    reg_typed!(
+        "copy",
+        fn_copy,
+        3,
+        2,
+        ["from", "to", "context"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::None,
+        ],
+        ParamTypeHint::Bool
+    );
+    let copy = eg.find_function("copy").expect("copy was just registered");
+    eg.register_internal_function_reflection_metadata(
+        copy,
+        vec![None, None, Some(Value::null())],
+        "standard",
+    );
+    reg_typed!(
+        "tempnam",
+        fn_tempnam,
+        2,
+        2,
+        ["directory", "prefix"],
+        [ParamTypeHint::String, ParamTypeHint::String],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    let tempnam = eg
+        .find_function("tempnam")
+        .expect("tempnam was just registered");
+    eg.register_internal_function_reflection_metadata(tempnam, vec![None, None], "standard");
     reg!("sys_get_temp_dir", fn_sys_get_temp_dir, 0, 0);
-    reg!("glob", fn_glob, 1, 1, "pattern");
+    reg_typed!(
+        "glob",
+        fn_glob,
+        2,
+        1,
+        ["pattern", "flags"],
+        [ParamTypeHint::String, ParamTypeHint::Int],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    let glob = eg.find_function("glob").expect("glob was just registered");
+    eg.register_internal_function_reflection_metadata(
+        glob,
+        vec![None, Some(Value::long(0))],
+        "standard",
+    );
 
     // --- URL / query ---
     reg!("parse_url", fn_parse_url, 2, 1, "url", "component");
