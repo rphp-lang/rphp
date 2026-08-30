@@ -9,7 +9,7 @@ fn finish_request_shutdown(
 ) -> Result<(), VmError> {
     eg.current_execute_data
         .set(unsafe { (*frame).prev_execute_data });
-    if let Err(error) = run_frame_destructors(eg, frame) {
+    if let Err(error) = run_shutdown_frame_destructors(eg, frame) {
         return Err(error);
     }
     unsafe { cleanup_frame_slots(frame) };
@@ -1436,6 +1436,27 @@ where
         None
     };
     let callback_threw = eg.exception.is_some();
+
+    // A detached user callback has no physical predecessor, so its ordinary
+    // throw search stops at this frame. Retire its final local owners before
+    // popping it just as a linked user frame would; a throwing destructor
+    // replaces and chains the callback's pending exception.
+    if callback_threw
+        && function_type == FunctionType::User
+        && let Some(pending) = eg.exception.take()
+    {
+        // At request shutdown there is no active source frame. PHP lets a
+        // local destructor replace the callback's exception without retaining
+        // that displaced exception as `previous`; ordinary active-frame
+        // unwinds preserve the chain.
+        let effective = run_exception_unwind_destructors(
+            eg,
+            frame,
+            pending,
+            !saved_execute_data.is_null(),
+        )?;
+        eg.exception = Some(effective);
+    }
 
     // Always restore and pop the callback frame, including fatal/error paths.
     unsafe {

@@ -1472,6 +1472,52 @@ fn fetch_dim_after_array_key_diagnostic<'a>(
     Ok(ColdResult::Done)
 }
 
+/// Prepare a final nested-array root before an AssignCv commit replaces it.
+#[cold]
+fn prepare_replaced_array_assignment(
+    eg: &ExecutorGlobals,
+    root_frame: bool,
+    op_array: &crate::compiler::OpArray,
+    destination_cv: u16,
+    destination: &Value,
+) -> (Option<PreparedValueDestructor>, Option<String>) {
+    debug_assert_eq!(destination.dereferenced().value_type(), ValueType::Array);
+    let mirrored_global_name = (!destination.is_reference())
+        .then(|| {
+            let mirrored_variables = if root_frame {
+                &op_array.main_scope_vars
+            } else {
+                &op_array.global_vars
+            };
+            (root_frame || !mirrored_variables.is_empty()).then(|| {
+                mirrored_variables
+                    .iter()
+                    .find(|(cv, _)| *cv == u32::from(destination_cv))
+                    .and_then(|(_, name)| {
+                        let replaced_root = destination.dereferenced();
+                        eg.globals
+                            .get(name)
+                            .filter(|global| {
+                                !global.is_reference()
+                                    && global.value_type() == ValueType::Array
+                                    && global.cycle_node().map(|node| node.0)
+                                        == replaced_root.cycle_node().map(|node| node.0)
+                            })
+                            .map(|_| name.clone())
+                    })
+            })
+            .flatten()
+        })
+        .flatten();
+    let replaced_references = 1 + usize::from(mirrored_global_name.is_some());
+    let destructor = prepare_replaced_value_tree_destructor_with_references(
+        eg,
+        destination,
+        replaced_references,
+    );
+    (destructor, mirrored_global_name)
+}
+
 /// Inner loop for RPHP's authoritative baseline executor.
 fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
     let mut frame = initial_frame;
@@ -2044,13 +2090,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 // A by-value assignment from a reference-
                                 // returning call must read through the cell;
                                 // moving the raw VAR would turn the destination
-                                // into an observable alias.
-                                (&*(*frame).get_op_ptr(
+                                // into an observable alias. The dereferenced
+                                // snapshot is still the sole expression value,
+                                // so retire the consumed reference wrapper.
+                                let value = (&*(*frame).get_op_ptr(
                                     opline.op2 as u32,
                                     opline.op2_type,
                                     op_array,
                                 ))
-                                    .clone()
+                                    .clone();
+                                frame_tmp_set(frame, source, Value::undef());
+                                value
                             } else if matches!(
                                 (&*source).value_type(),
                                 ValueType::Array | ValueType::Object | ValueType::Closure
@@ -2111,7 +2161,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             })
                             .flatten();
                         let replaced_references = 1 + usize::from(mirrored_global_name.is_some());
-                        let destructor = replaced_object
+                        let object_destructor = replaced_object
                             .then(|| {
                                 prepare_replaced_value_destructor_with_references(
                                     eg,
@@ -2120,6 +2170,24 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 )
                             })
                             .flatten();
+                        let nested_array = opline.op1_type == OpType::Cv
+                            && (&*dest).dereferenced().value_type() == ValueType::Array
+                            && (&*dest)
+                                .dereferenced()
+                                .as_array()
+                                .is_some_and(PhpArray::may_require_nested_release);
+                        let (array_destructor, mirrored_array_global_name) = if nested_array {
+                            prepare_replaced_array_assignment(
+                                eg,
+                                (*frame).prev_execute_data.is_null(),
+                                op_array,
+                                opline.op1,
+                                &*dest,
+                            )
+                        } else {
+                            (None, None)
+                        };
+                        let destructor = object_destructor.or(array_destructor);
                         let destructor_ran = destructor.is_some();
                         if destination_is_reference {
                             cloned = prepare_reference_write!(opline.op1 as u32, cloned);
@@ -2157,8 +2225,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         if let Some(global_name) = mirrored_global_name {
                             globals_set(&mut eg.globals, global_name, (&*dest).clone());
                         }
-                        run_prepared_value_destructor(eg, destructor)?;
+                        if let Some(global_name) = mirrored_array_global_name.as_deref() {
+                            globals_set(&mut eg.globals, global_name, (&*dest).clone());
+                        }
                         if destructor_ran {
+                            let instruction_index = op_array
+                                .instructions
+                                .iter()
+                                .position(|candidate| std::ptr::eq(candidate, opline))
+                                .expect("active opcode must belong to its op-array");
+                            run_prepared_value_destructor_from_current_site(
+                                eg,
+                                destructor,
+                                op_array,
+                                op_array.source_line(instruction_index).unwrap_or(0),
+                            )?;
                             resume_pending_exception!();
                         }
                     }
@@ -3926,8 +4007,68 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::JmpNZ => {
                 // op1 = value to test, op2 = absolute jump target
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-                if val.is_truthy() {
+                let (truthy, release_temps, range_owned, range_first, range_end) = unsafe {
+                    let value = &*(*frame).get_op_ptr(
+                        opline.op1 as u32,
+                        opline.op1_type,
+                        op_array,
+                    );
+                    let truthy = value.is_truthy();
+                    let release_temps =
+                        truthy && opline._pad & JMP_NZ_RELEASE_TEMPS != 0;
+                    let (range_owned, range_first, range_end) = if release_temps {
+                        // Packed metadata retains compiler-relative TMP
+                        // offsets; ordinary instruction operands have already
+                        // been resolved to absolute frame slots.
+                        let cv_count = (*frame).num_cvs as usize;
+                        let first = cv_count + (opline.extended_value & 0xffff) as usize;
+                        let end = cv_count + (opline.extended_value >> 16) as usize;
+                        let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
+                        debug_assert!(first < end && end <= total);
+                        let owned = if total <= 64 {
+                            let below_end = if end == 64 {
+                                u64::MAX
+                            } else {
+                                (1u64 << end) - 1
+                            };
+                            let below_first = if first == 0 {
+                                0
+                            } else {
+                                (1u64 << first) - 1
+                            };
+                            (*frame).owned_heap_bitmap() & (below_end & !below_first) != 0
+                        } else if !(*frame).has_heap_slots {
+                            false
+                        } else {
+                            let base = (frame as *const Value).add(CALL_FRAME_SLOTS);
+                            (first..end).any(|index| (*base.add(index)).needs_cleanup())
+                        };
+                        (owned, first, end)
+                    } else {
+                        (false, 0, 0)
+                    };
+                    (
+                        truthy,
+                        release_temps,
+                        range_owned,
+                        range_first,
+                        range_end,
+                    )
+                };
+                if truthy {
+                    if release_temps {
+                        if range_owned {
+                            release_statement_temps(
+                                eg,
+                                frame,
+                                range_first,
+                                range_end,
+                                STATEMENT_TEMPS_ORDINARY,
+                                false,
+                            )?;
+                        }
+                        resume_pending_exception!();
+                    }
                     let target = opline.op2 as usize;
                     unsafe {
                         (*frame).opline = op_array.instructions().as_ptr().add(target);
@@ -7074,7 +7215,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     arr.as_array_mut().unwrap().set(key, cloned_val);
                 } else if let Some(php_arr) = arr.as_array_mut() {
                     key = php_arr.normalize_utf8_text_key(key, idx_val);
-                    if let Some(element) = php_arr.get_key_mut(&key) {
+                    if let Some(element) =
+                        php_arr.get_key_mut_for_replacement(&key, &cloned_val)
+                    {
                         if opline._pad & crate::vm::instruction::ASSIGN_DIM_REFERENCE != 0 {
                             // `=&` rebinds this array dimension itself. Writing
                             // through an existing reference would mutate its
@@ -9566,9 +9709,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // will be detected by the finally_end check
                     eg.exception = None; // no exception, just deferred return
                     let base_ptr = op_array.instructions.as_ptr();
-                    unsafe { (*frame).opline = base_ptr.add(finally_ip as usize) };
-                    // Mark that we need to return after finally completes (per-frame)
-                    unsafe { (*frame).pending_return_after_finally = true; }
+                    // SAFETY: the active try entry supplies an instruction in
+                    // this op-array, and `frame` is its live activation.
+                    unsafe {
+                        (*frame).opline = base_ptr.add(finally_ip as usize);
+                        // Mark that we need to return after finally completes (per-frame).
+                        (*frame).pending_return_after_finally = true;
+                    }
                     continue;
                 }
 
@@ -9901,21 +10048,50 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::ReleaseTemps => {
                 let return_cleanup = opline._pad & RELEASE_TEMPS_ON_RETURN != 0;
                 let nested_objects = opline._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0;
-                if !return_cleanup || op_array.try_entries.is_empty() {
-                    release_statement_temps(
-                        eg,
-                        frame,
-                        opline.op1 as usize,
-                        opline.op2 as usize,
-                        if nested_objects {
-                            STATEMENT_TEMPS_NESTED_OBJECTS
-                        } else if return_cleanup {
-                            STATEMENT_TEMPS_FOREACH_OBJECT
+                // SAFETY: the compiler emits a bounded CV/TMP interval for the
+                // active frame. Compact frames maintain exact ownership bits;
+                // wide frames retain the existing slot-level fallback.
+                let range_owned = unsafe {
+                    let first = opline.op1 as usize;
+                    let end = opline.op2 as usize;
+                    let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
+                    debug_assert!(first <= end && end <= total);
+                    if total <= 64 {
+                        let below_end = if end == 64 {
+                            u64::MAX
                         } else {
-                            STATEMENT_TEMPS_ORDINARY
-                        },
-                        return_cleanup,
-                    )?;
+                            (1u64 << end) - 1
+                        };
+                        let below_first = if first == 0 {
+                            0
+                        } else {
+                            (1u64 << first) - 1
+                        };
+                        (*frame).owned_heap_bitmap() & (below_end & !below_first) != 0
+                    } else if !(*frame).has_heap_slots {
+                        false
+                    } else {
+                        let base = (frame as *const Value).add(CALL_FRAME_SLOTS);
+                        (first..end).any(|index| (*base.add(index)).needs_cleanup())
+                    }
+                };
+                if !return_cleanup || op_array.try_entries.is_empty() {
+                    if range_owned {
+                        release_statement_temps(
+                            eg,
+                            frame,
+                            opline.op1 as usize,
+                            opline.op2 as usize,
+                            if nested_objects {
+                                STATEMENT_TEMPS_NESTED_OBJECTS
+                            } else if return_cleanup {
+                                STATEMENT_TEMPS_FOREACH_OBJECT
+                            } else {
+                                STATEMENT_TEMPS_ORDINARY
+                            },
+                            return_cleanup,
+                        )?;
+                    }
                     resume_pending_exception!();
                 }
             }

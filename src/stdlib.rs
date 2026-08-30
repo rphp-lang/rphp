@@ -14054,9 +14054,14 @@ pub(crate) fn dispatch_uncaught_exception_handler(
         return Ok(false);
     };
     let Some(resolved) = resolve_callback_with_cache(&callback, eg, None, None) else {
+        eg.exception_handler = Some(callback);
         return Ok(false);
     };
-    call_resolved_with_values_from(
+    // The active handler becomes a restorable stack entry while the callback
+    // itself is inactive. Calls to restore_exception_handler() from inside the
+    // callback therefore consume this entry just like ordinary handler state.
+    eg.exception_handler_stack.push(Some(callback.clone()));
+    let result = call_resolved_with_values_from(
         eg,
         &resolved,
         std::slice::from_ref(exception),
@@ -14064,8 +14069,17 @@ pub(crate) fn dispatch_uncaught_exception_handler(
         "Unknown",
         0,
         false,
-    )?;
-    Ok(eg.exception.is_none())
+    );
+    if eg.exception_handler.is_none()
+        && let Some(handler) = eg.exception_handler_stack.pop()
+    {
+        eg.exception_handler = handler;
+    }
+    match result {
+        Ok(_) if eg.exception.is_none() => Ok(true),
+        Ok(_) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 fn internal_call_source(ed: *mut ExecuteData) -> (String, usize) {

@@ -992,7 +992,7 @@ impl Compiler {
         &mut self,
         target: &Expr,
         expr: &Expr,
-    ) -> Result<(u16, OpType), String> {
+    ) -> Result<(u16, OpType, usize), String> {
         let (current, current_type, write) = match target {
             Expr::Variable { name: var, .. } => {
                 let cv = self.resolve_cv(var);
@@ -1293,7 +1293,7 @@ impl Compiler {
             let cv = self.resolve_cv(name);
             self.definitely_defined_cvs.insert(cv);
         }
-        Ok((current, current_type))
+        Ok((current, current_type, skip_write))
     }
 
     pub(super) fn compile_assignment_target_expression(
@@ -2428,7 +2428,26 @@ impl Compiler {
                 self.definitely_defined_cvs.insert(cv_idx);
             }
             Stmt::CoalesceAssign { target, expr } => {
-                self.compile_coalesce_assign_expression(target, expr)?;
+                let first_tmp = self.next_tmp as u16;
+                let (_, _, hit_jump) = self.compile_coalesce_assign_expression(target, expr)?;
+                let end_tmp = self.next_tmp as u16;
+                if end_tmp > first_tmp {
+                    // The target path and conditional RHS share one statement
+                    // lifetime. In particular, object-valued dimension keys
+                    // cease to be roots before the surrounding try advances,
+                    // so their destructor may throw into that handler.
+                    let mut release = Instruction::new(OpCode::ReleaseTemps);
+                    release.op1 = first_tmp;
+                    release.op1_type = OpType::Tmp;
+                    release.op2 = end_tmp;
+                    release.op2_type = OpType::Tmp;
+                    self.push_instruction_at_line(release, expression_source_line(target));
+                    let continuation = self.instructions.len() as u16;
+                    let hit = &mut self.instructions[hit_jump];
+                    hit._pad |= JMP_NZ_RELEASE_TEMPS;
+                    hit.extended_value = u32::from(first_tmp) | (u32::from(end_tmp) << 16);
+                    hit.op2 = continuation;
+                }
             }
             Stmt::CompoundAssign { target, op, expr } => {
                 // Resolve the mutable target once so object/index side effects
@@ -3782,7 +3801,7 @@ impl Compiler {
                             assign.op2_type = OpType::Const;
                             assign.op2 = undef_idx;
                             assign._pad |= ASSIGN_CV_REBIND;
-                            self.instructions.push(assign);
+                            self.push_instruction_at_line(assign, *line);
                         }
                         Expr::DynamicVariable { name, line } => {
                             let (key, key_type) = self.compile_expr(name);
@@ -3981,6 +4000,7 @@ impl Compiler {
                     catch_entries.push(CatchEntry {
                         types: resolved_types,
                         catch_start,
+                        line: catch.line as u32,
                         catch_cv,
                     });
 

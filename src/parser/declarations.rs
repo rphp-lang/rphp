@@ -734,7 +734,12 @@ impl Parser {
                 body.push(self.parse_stmt_in_scope(false)?);
             }
             self.expect(&Token::RBrace)?;
-            catches.push(CatchClause { types, var, body });
+            catches.push(CatchClause {
+                types,
+                var,
+                body,
+                line: catch_line,
+            });
         }
 
         let finally_body = if self.peek() == Token::Finally {

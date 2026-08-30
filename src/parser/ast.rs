@@ -1215,6 +1215,7 @@ pub struct CatchClause {
     pub types: Vec<String>, // Exception class names (multi-catch: ExA | ExB)
     pub var: Option<String>, // Optional exception variable (PHP 8 permits catch (Exception))
     pub body: Vec<Stmt>,
+    pub line: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

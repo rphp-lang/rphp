@@ -724,6 +724,10 @@ pub struct ExecutorGlobals {
     /// Stable boxed ClassDef pointers indexed by class ID. Slot zero is
     /// reserved for dynamic/unknown classes.
     class_by_id: Vec<*const ClassDef>,
+    /// Lazy class-id cache for destructor lookup. Catch-variable replacement
+    /// and other final-root boundaries may query the same Throwable class in
+    /// hot loops; method inheritance resolution is paid only once per class.
+    class_destructor_flags: std::cell::RefCell<Vec<u8>>,
     /// LIFO binding sidecar used only by explicit reified calls.
     #[cfg(feature = "php-generics-reified")]
     pub reified_bindings: Vec<ReifiedBinding>,
@@ -1546,6 +1550,7 @@ impl ExecutorGlobals {
             next_class_id: 1,
             internal_class_id_limit: 0,
             class_by_id: vec![std::ptr::null()],
+            class_destructor_flags: std::cell::RefCell::new(Vec::new()),
             static_property_values: Vec::new(),
             static_property_handles_published: Vec::new(),
             request_static_values_may_retain_objects: false,
@@ -1668,6 +1673,7 @@ impl ExecutorGlobals {
             next_class_id: 1,
             internal_class_id_limit: 0,
             class_by_id: vec![std::ptr::null()],
+            class_destructor_flags: std::cell::RefCell::new(Vec::new()),
             static_property_values: Vec::new(),
             static_property_handles_published: Vec::new(),
             request_static_values_may_retain_objects: false,
@@ -6889,6 +6895,32 @@ impl ExecutorGlobals {
         }
     }
 
+    /// Resolve and cache whether a stable runtime class inherits a live user
+    /// destructor. Dynamic class-id-zero objects retain the general lookup
+    /// because their names do not share one class identity.
+    #[inline]
+    pub(crate) fn class_has_destructor(&self, class_id: u32, class_name: &str) -> bool {
+        if class_id != 0
+            && let Some(flag) = self
+                .class_destructor_flags
+                .borrow()
+                .get(class_id as usize)
+                .copied()
+            && flag != 0
+        {
+            return flag == 2;
+        }
+        let has_destructor = self.find_method_info(class_name, "__destruct").is_some();
+        if class_id != 0 {
+            let mut flags = self.class_destructor_flags.borrow_mut();
+            if flags.len() <= class_id as usize {
+                flags.resize(class_id as usize + 1, 0);
+            }
+            flags[class_id as usize] = if has_destructor { 2 } else { 1 };
+        }
+        has_destructor
+    }
+
     /// Declaration metadata for one object-layout slot. Class definitions are
     /// boxed before publication and their property vectors are immutable
     /// afterwards, so callers may subsequently publish the returned address
@@ -7201,6 +7233,21 @@ impl ExecutorGlobals {
             .collect()
     }
 
+    /// Snapshot request-defined constant roots after main-scope teardown and
+    /// before class/function statics. Runtime object constants are immutable,
+    /// but their canonical table entries stay visible while destructors run.
+    #[cold]
+    pub(crate) fn shutdown_constant_values(&self) -> Vec<Value> {
+        let table = self.constant_table.borrow();
+        self.constant_definition_order
+            .borrow()
+            .iter()
+            .filter_map(|name| table.get(name))
+            .filter(|value| value.needs_cleanup())
+            .cloned()
+            .collect()
+    }
+
     /// Snapshot named-function static roots after class statics while leaving
     /// their canonical cells visible to reentrant destructor code.
     #[cold]
@@ -7336,6 +7383,11 @@ impl ExecutorGlobals {
         self.find_class(class_name).is_some_and(|class| {
             class.class_id != 0 && class.class_id <= self.internal_class_id_limit
         })
+    }
+
+    #[inline(always)]
+    pub(crate) fn class_id_is_internal(&self, class_id: u32) -> bool {
+        class_id != 0 && class_id <= self.internal_class_id_limit
     }
 
     fn declared_class_like_names(
@@ -8330,11 +8382,18 @@ impl ExecutorGlobals {
     }
 
     /// Define a constant. Returns error if already defined.
-    pub fn define_constant(&self, name: &str, value: crate::value::Value) -> Result<(), String> {
-        let mut table = self.constant_table.borrow_mut();
-        if table.contains_key(name) || crate::builtin_constant(name).is_some() {
+    pub fn define_constant(
+        &mut self,
+        name: &str,
+        value: crate::value::Value,
+    ) -> Result<(), String> {
+        if self.constant_table.borrow().contains_key(name)
+            || crate::builtin_constant(name).is_some()
+        {
             return Err(constant_redefinition_message(name));
         }
+        self.note_request_static_value(&value);
+        let mut table = self.constant_table.borrow_mut();
         let name: Rc<str> = Rc::from(name);
         table.insert(name.clone(), value);
         self.constant_definition_order.borrow_mut().push(name);

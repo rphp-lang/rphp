@@ -1672,6 +1672,21 @@ impl PhpObject {
         }
     }
 
+    /// Test property payloads without resolving declared slot names. Release
+    /// planning depends only on values, so it can avoid a layout lookup for
+    /// every declared Throwable property at each catch boundary.
+    #[inline]
+    pub(crate) fn any_property_value(&self, mut predicate: impl FnMut(&Value) -> bool) -> bool {
+        if self.property_values.iter().any(&mut predicate) {
+            return true;
+        }
+        let mut found = false;
+        if let Some(dynamic) = &self.dynamic_properties {
+            dynamic.for_each(|_, value| found |= predicate(value));
+        }
+        found
+    }
+
     pub fn for_each_dynamic_property(&self, visitor: impl FnMut(&str, &Value)) {
         if let Some(dynamic) = &self.dynamic_properties {
             dynamic.for_each(visitor);
@@ -3569,6 +3584,11 @@ impl PhpArray {
     #[inline(always)]
     pub(crate) fn get_int_mut(&mut self, key: i64) -> Option<&mut Value> {
         self.mark_nested_release_candidate();
+        self.get_int_mut_untracked(key)
+    }
+
+    #[inline(always)]
+    fn get_int_mut_untracked(&mut self, key: i64) -> Option<&mut Value> {
         match &mut self.storage {
             ArrayStorage::Packed(values) if key >= 0 => values.get_mut(key as usize),
             ArrayStorage::Packed(_) => None,
@@ -3890,6 +3910,11 @@ impl PhpArray {
     #[inline(always)]
     pub(crate) fn get_str_mut(&mut self, key: &str) -> Option<&mut Value> {
         self.mark_nested_release_candidate();
+        self.get_str_mut_untracked(key)
+    }
+
+    #[inline(always)]
+    fn get_str_mut_untracked(&mut self, key: &str) -> Option<&mut Value> {
         match &mut self.storage {
             ArrayStorage::Packed(_) => None,
             ArrayStorage::SmallHash(small) => {
@@ -3918,6 +3943,23 @@ impl PhpArray {
         match key {
             ArrayKey::Int(key) => self.get_int_mut(*key),
             ArrayKey::String(key) => self.get_str_mut(key),
+        }
+    }
+
+    /// Mutable replacement lookup with exact nested-release tracking for the
+    /// incoming value. Unlike general mutable exposure, a scalar assignment
+    /// cannot turn a scalar array into a destructor root merely by borrowing
+    /// its destination slot.
+    #[inline(always)]
+    pub(crate) fn get_key_mut_for_replacement(
+        &mut self,
+        key: &ArrayKey,
+        replacement: &Value,
+    ) -> Option<&mut Value> {
+        self.track_nested_release_value(replacement);
+        match key {
+            ArrayKey::Int(key) => self.get_int_mut_untracked(*key),
+            ArrayKey::String(key) => self.get_str_mut_untracked(key),
         }
     }
 
@@ -5588,7 +5630,7 @@ impl Value {
         let Some(mut object) = self.as_object_mut() else {
             return;
         };
-        object.lifecycle &= !OBJECT_DESTRUCTOR_RAN;
+        object.lifecycle &= OBJECT_HANDLE_MASK;
     }
 
     /// Begin a fresh lifecycle after Reflection successfully resets an object
@@ -5600,7 +5642,7 @@ impl Value {
         let Some(mut object) = self.as_object_mut() else {
             return;
         };
-        object.lifecycle &= OBJECT_HANDLE_MASK;
+        object.lifecycle &= !OBJECT_DESTRUCTOR_RAN;
     }
 
     /// Number of live PHP Value handles sharing this object identity.

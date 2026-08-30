@@ -126,6 +126,9 @@ pub const FETCH_CONST_ERROR_SUPPRESS: u16 = 1 << 1;
 pub const JMP_FLAG_TARGET_OUTSIDE_TRY: u16 = 1;
 /// The finally-control opcode marks the end of a finally body, not its entry.
 pub const JMP_FLAG_FINALLY_END: u16 = 1 << 1;
+/// A null-coalescing statement hit retires its compiler-owned temporary range
+/// before jumping past the ordinary miss-path ReleaseTemps marker.
+pub const JMP_NZ_RELEASE_TEMPS: u16 = 1 << 2;
 
 /// Throw flag: op1 is the unmatched discriminant and runtime must construct
 /// PHP's value-specific UnhandledMatchError at this source location.

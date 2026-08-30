@@ -1142,10 +1142,27 @@ fn op_throw<'a>(
 ) -> Result<ColdResult<'a>, VmError> {
     // SAFETY: `opline`, its compiler-allocated operand and the predecessor bit
     // all belong to the live active frame for the complete opcode dispatch.
-    let (val, instruction_index) = unsafe {
+    let (val, instruction_index, valid_throwable) = unsafe {
+        let source = (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
+        let valid_throwable = (&*source).as_object().is_some_and(|object| {
+            eg.class_is_a(&object.class_name, "Throwable")
+        });
+        let consume_temporary = opline._pad & THROW_FLAG_UNHANDLED_MATCH == 0
+            && matches!(opline.op1_type, OpType::Tmp | OpType::Var)
+            && valid_throwable;
+        let value = if consume_temporary {
+            // A throw consumes its temporary expression owner. Keeping that
+            // slot alive until frame teardown would postpone a no-variable
+            // catch's last Throwable release until after the catch body.
+            let writable_source = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+            frame_tmp_take!(frame, writable_source)
+        } else {
+            (&*source).clone()
+        };
         (
-            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
+            value,
             (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
+            valid_throwable,
         )
     };
     if opline._pad & THROW_FLAG_UNHANDLED_MATCH != 0 {
@@ -1186,9 +1203,7 @@ fn op_throw<'a>(
     // PHP validates the operand through a normal catchable Error at the throw
     // opcode. Scalar types and class names are intentionally absent from the
     // public PHP 8.2 messages.
-    if val.as_object().is_none_or(|object| {
-        !eg.class_is_a(&object.class_name, "Throwable")
-    }) {
+    if !valid_throwable {
         let message = if val.value_type() == ValueType::Object {
             "Cannot throw objects that do not implement Throwable"
         } else {
@@ -1203,7 +1218,7 @@ fn op_throw<'a>(
             ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
         });
     }
-    let thrown = val.clone();
+    let thrown = val;
     attach_throwable_origin(&thrown, eg, frame, op_array, instruction_index);
 
     match throw_in_frame(eg, frame, thrown)? {

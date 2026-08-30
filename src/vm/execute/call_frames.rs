@@ -74,14 +74,15 @@ fn prepare_catch_variable_assignment(
     catch_start: u32,
     thrown: &Value,
     eg: &ExecutorGlobals,
-) -> Result<Option<Value>, String> {
+) -> Result<(Option<Value>, Option<PreparedValueDestructor>), String> {
     // SAFETY: the catch table names a CV in this live frame. Validation is
     // non-reentrant for Throwable objects, and an error resumes lookup at the
     // catch boundary before any handler body or CV mutation can occur.
     unsafe {
         let catch_variable = (*frame).cv(catch_cv);
+        let replaced_value_destructor = prepare_replaced_catch_value_release(eg, catch_variable);
         if !catch_variable.is_reference() {
-            return Ok(None);
+            return Ok((None, replaced_value_destructor));
         }
         let constraints = catch_variable.reference_property_constraints();
         match prepare_reference_assignment_scalar(
@@ -90,7 +91,7 @@ fn prepare_catch_variable_assignment(
             eg,
             op_array.strict_types,
         ) {
-            Ok(value) => Ok(Some(value)),
+            Ok(value) => Ok((Some(value), replaced_value_destructor)),
             Err(message) => {
                 (*frame).opline = op_array
                     .instructions
@@ -189,20 +190,14 @@ fn value_requires_vm_release(eg: &ExecutorGlobals, value: &Value) -> bool {
             .is_some_and(|identity| eg.has_fiber_context(identity))
         || value.as_object().is_some_and(|object| {
             object.generator.is_some()
-                || eg
-                    .find_method_info(&object.class_name, "__destruct")
-                    .is_some()
+                || eg.class_has_destructor(object.class_id, &object.class_name)
                     && !value.is_object_destructor_retired()
-                || {
-                    let mut nested_object = false;
-                    object.for_each_property(|_, property| {
-                        nested_object |= matches!(
-                            property.dereferenced().value_type(),
-                            ValueType::Object | ValueType::Closure
-                        );
-                    });
-                    nested_object
-                }
+                || object.any_property_value(|property| {
+                    matches!(
+                        property.dereferenced().value_type(),
+                        ValueType::Object | ValueType::Closure
+                    )
+                })
         })
 }
 
@@ -364,6 +359,46 @@ fn value_tree_requires_vm_release(
             )
         })
     })
+}
+
+/// Cheap conservative admission guard for the recursive release planner.
+/// Array storage already tracks whether it ever received a nested release
+/// candidate, so ordinary Throwable trace arrays containing only scalar frames
+/// do not allocate cycle-detection sets at every catch boundary.
+#[inline]
+fn value_may_require_vm_release_tree(eg: &ExecutorGlobals, value: &Value) -> bool {
+    let value = value.dereferenced();
+    match value.value_type() {
+        ValueType::Array => value
+            .as_array()
+            .is_none_or(PhpArray::may_require_nested_release),
+        ValueType::Object => value.as_object().is_none_or(|object| {
+            let Some(identity) = value.object_identity() else {
+                return true;
+            };
+            if eg.has_weak_object_release_work(identity)
+                || eg.lazy_object_state(value).is_some()
+                || eg.has_fiber_context(identity)
+                || object.generator.is_some()
+                || eg.class_has_destructor(object.class_id, &object.class_name)
+                    && !value.is_object_destructor_retired()
+            {
+                return true;
+            }
+            object.any_property_value(|property| {
+                let property = property.dereferenced();
+                match property.value_type() {
+                    ValueType::Array => property
+                        .as_array()
+                        .is_none_or(PhpArray::may_require_nested_release),
+                    ValueType::Object | ValueType::Closure => true,
+                    _ => false,
+                }
+            })
+        }),
+        ValueType::Closure => true,
+        _ => false,
+    }
 }
 
 fn frame_requires_vm_release(
@@ -777,7 +812,7 @@ pub(crate) fn run_value_destructors(
     roots: &[Value],
     logical_caller: *mut ExecuteData,
 ) -> Result<(), VmError> {
-    run_value_destructors_inner(eg, roots, logical_caller, false).map(|_| ())
+    run_value_destructors_inner(eg, roots, logical_caller, false, true, false).map(|_| ())
 }
 
 #[cold]
@@ -786,6 +821,8 @@ fn run_value_destructors_inner(
     roots: &[Value],
     logical_caller: *mut ExecuteData,
     canonical_direct_roots_retained: bool,
+    internal_trace_origin: bool,
+    logical_caller_at_current_site: bool,
 ) -> Result<bool, VmError> {
     let mut candidates = Vec::<(usize, usize, Value)>::new();
     let mut seen_arrays = std::collections::HashSet::new();
@@ -817,7 +854,13 @@ fn run_value_destructors_inner(
         }
     }
 
-    run_collected_value_destructors(eg, candidates, logical_caller, true, false)
+    run_collected_value_destructors(
+        eg,
+        candidates,
+        logical_caller,
+        internal_trace_origin,
+        logical_caller_at_current_site,
+    )
 }
 
 #[cold]
@@ -899,19 +942,44 @@ pub(crate) fn run_request_static_destructors(
         }
     };
     loop {
+        let constant_values = eg.shutdown_constant_values();
         let class_values = eg.shutdown_class_static_values();
         let function_values = eg.shutdown_function_static_values();
-        if class_values.is_empty() && function_values.is_empty() {
+        if constant_values.is_empty() && class_values.is_empty() && function_values.is_empty() {
             return Ok(());
         }
-        let mut progressed =
-            run_value_destructors_inner(eg, &class_values, logical_caller, true)?;
+        let mut progressed = run_value_destructors_inner(
+            eg,
+            &constant_values,
+            logical_caller,
+            true,
+            true,
+            false,
+        )?;
+        drop(constant_values);
+        if eg.exception.is_some() && !dispatch_pending(eg)? {
+            return Ok(());
+        }
+        progressed |= run_value_destructors_inner(
+            eg,
+            &class_values,
+            logical_caller,
+            true,
+            true,
+            false,
+        )?;
         drop(class_values);
         if eg.exception.is_some() && !dispatch_pending(eg)? {
             return Ok(());
         }
-        progressed |=
-            run_value_destructors_inner(eg, &function_values, logical_caller, true)?;
+        progressed |= run_value_destructors_inner(
+            eg,
+            &function_values,
+            logical_caller,
+            true,
+            true,
+            false,
+        )?;
         drop(function_values);
         if eg.exception.is_some() && !dispatch_pending(eg)? {
             return Ok(());
@@ -1061,6 +1129,39 @@ fn run_frame_destructors(
     Ok(())
 }
 
+/// Complete the root-frame destructor pass after independently handled
+/// exceptions. An unhandled destructor exception stops the pass immediately;
+/// PHP does not visit later roots and append them to that fatal chain.
+#[cold]
+pub(crate) fn run_shutdown_frame_destructors(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+) -> Result<(), VmError> {
+    let mut pending = eg.exception.take();
+    loop {
+        run_frame_destructors(eg, frame)?;
+        let Some(replacement) = eg.exception.take() else {
+            eg.exception = pending;
+            return Ok(());
+        };
+        if let Some(displaced) = pending.take() {
+            append_replaced_exception(&replacement, &displaced, eg);
+        }
+        match crate::stdlib::dispatch_uncaught_exception_handler(eg, frame, &replacement) {
+            Ok(true) => {}
+            Ok(false) => {
+                let effective = eg.exception.take().unwrap_or_else(|| replacement.clone());
+                if effective.object_identity() != replacement.object_identity() {
+                    append_replaced_exception(&effective, &replacement, eg);
+                }
+                eg.exception = Some(effective);
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 /// Release every final object owned by a frame that an exception is leaving.
 ///
 /// A throwing destructor replaces the exception that triggered the unwind,
@@ -1072,6 +1173,7 @@ fn run_exception_unwind_destructors(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     mut pending: Value,
+    chain_replacements: bool,
 ) -> Result<Value, VmError> {
     if !frame_requires_vm_release(eg, frame, &pending) {
         return Ok(pending);
@@ -1081,15 +1183,20 @@ fn run_exception_unwind_destructors(
         let Some(replacement) = eg.exception.take() else {
             return Ok(pending);
         };
-        append_replaced_exception(&replacement, &pending, eg);
+        if chain_replacements {
+            append_replaced_exception(&replacement, &pending, eg);
+        }
         pending = replacement;
     }
 }
 
-pub(crate) struct PreparedValueDestructor {
-    owner: Value,
-    replaced_references: usize,
-    fiber_owned_references: usize,
+pub(crate) enum PreparedValueDestructor {
+    Direct {
+        owner: Value,
+        replaced_references: usize,
+        fiber_owned_references: usize,
+    },
+    Tree(Value),
 }
 
 /// Retain an object whose final PHP handle is about to be replaced.
@@ -1115,7 +1222,7 @@ pub(crate) fn prepare_replaced_value_destructor_with_references(
     replaced_references: usize,
 ) -> Option<PreparedValueDestructor> {
     let value = value.dereferenced();
-    if value.weak_object_identity().is_none() {
+    if !value_may_require_vm_release_tree(eg, value) || value.weak_object_identity().is_none() {
         return None;
     }
     let fiber_owned_references = value
@@ -1124,12 +1231,116 @@ pub(crate) fn prepare_replaced_value_destructor_with_references(
     if value.weak_object_strong_count() != Some(replaced_references + fiber_owned_references) {
         return None;
     }
-    let requires_vm_release = value_requires_vm_release(eg, value);
-    requires_vm_release.then(|| PreparedValueDestructor {
+    let requires_vm_release = value_tree_requires_vm_release(
+        eg,
+        value,
+        &mut std::collections::HashSet::new(),
+        &mut std::collections::HashSet::new(),
+        &mut std::collections::HashSet::new(),
+        &mut std::collections::HashSet::new(),
+    );
+    requires_vm_release.then(|| PreparedValueDestructor::Direct {
         owner: value.clone(),
         replaced_references,
         fiber_owned_references,
     })
+}
+
+/// Retain a final array root whose nested objects are about to lose their last
+/// PHP ownership edge. Array values are shared copy-on-write allocations, so
+/// the root count must prove that every runtime mirror named by the caller is
+/// committed together before the nested release planner may run.
+#[cold]
+pub(crate) fn prepare_replaced_value_tree_destructor_with_references(
+    eg: &ExecutorGlobals,
+    value: &Value,
+    replaced_references: usize,
+) -> Option<PreparedValueDestructor> {
+    let value = value.dereferenced();
+    if value.value_type() != ValueType::Array
+        || value.cycle_strong_count() != Some(replaced_references)
+        || value
+            .as_array()
+            .is_none_or(|array| !array.may_require_nested_release())
+        || !value_tree_requires_vm_release(
+            eg,
+            value,
+            &mut std::collections::HashSet::new(),
+            &mut std::collections::HashSet::new(),
+            &mut std::collections::HashSet::new(),
+            &mut std::collections::HashSet::new(),
+        )
+    {
+        return None;
+    }
+    Some(PreparedValueDestructor::Tree(value.clone()))
+}
+
+#[cold]
+fn prepare_replaced_value_release(
+    eg: &ExecutorGlobals,
+    value: &Value,
+) -> Option<PreparedValueDestructor> {
+    match value.dereferenced().value_type() {
+        ValueType::Array => {
+            prepare_replaced_value_tree_destructor_with_references(eg, value, 1)
+        }
+        ValueType::Object | ValueType::Closure => {
+            prepare_replaced_value_destructor(eg, value)
+        }
+        _ => None,
+    }
+}
+
+/// Built-in Throwable layouts are sealed during stdlib registration and keep
+/// their only aggregate-capable slots at trace/previous. A catch variable may
+/// have been reassigned to any user value, so the fast path additionally
+/// proves the internal class ID, canonical slot names, absence of dynamic
+/// properties and release sidecars before avoiding the general tree scan.
+#[inline]
+fn prepare_replaced_catch_value_release(
+    eg: &ExecutorGlobals,
+    value: &Value,
+) -> Option<PreparedValueDestructor> {
+    let value = value.dereferenced();
+    if let Some(object) = value.as_object()
+        && eg.class_id_is_internal(object.class_id)
+        && object.dynamic_properties.is_none()
+        && object.generator.is_none()
+        && matches!(
+            object.property_name_at_slot(5),
+            Some("Exception\0trace" | "Error\0trace")
+        )
+        && matches!(
+            object.property_name_at_slot(6),
+            Some("Exception\0previous" | "Error\0previous")
+        )
+        && let Some(identity) = value.object_identity()
+        && !eg.has_weak_object_release_work(identity)
+        && eg.lazy_object_state(value).is_none()
+        && !eg.has_fiber_context(identity)
+    {
+        let trace_is_plain = object.get_property_slot(5).is_none_or(|trace| {
+            let trace = trace.dereferenced();
+            match trace.value_type() {
+                ValueType::Array => trace
+                    .as_array()
+                    .is_some_and(|array| !array.may_require_nested_release()),
+                ValueType::Null | ValueType::Undef => true,
+                _ => false,
+            }
+        });
+        let previous_is_plain = object.get_property_slot(6).is_none_or(|previous| {
+            matches!(
+                previous.dereferenced().value_type(),
+                ValueType::Null | ValueType::Undef
+            )
+        });
+        if trace_is_plain && previous_is_plain {
+            return None;
+        }
+    }
+    prepare_replaced_value_release(eg, value)
 }
 
 #[cold]
@@ -1137,27 +1348,124 @@ pub(crate) fn run_prepared_value_destructor(
     eg: &mut ExecutorGlobals,
     release: Option<PreparedValueDestructor>,
 ) -> Result<(), VmError> {
+    run_prepared_value_destructor_with_trace_site(eg, release, false, None)
+}
+
+#[cold]
+fn run_prepared_value_destructor_from_current_site(
+    eg: &mut ExecutorGlobals,
+    release: Option<PreparedValueDestructor>,
+    op_array: &crate::compiler::OpArray,
+    source_line: usize,
+) -> Result<(), VmError> {
+    run_prepared_value_destructor_with_trace_site(
+        eg,
+        release,
+        true,
+        Some((op_array, source_line)),
+    )
+}
+
+#[cold]
+fn run_prepared_value_destructor_with_trace_site(
+    eg: &mut ExecutorGlobals,
+    release: Option<PreparedValueDestructor>,
+    logical_caller_at_current_site: bool,
+    trace_site: Option<(&crate::compiler::OpArray, usize)>,
+) -> Result<(), VmError> {
     let Some(release) = release else {
         return Ok(());
     };
-    let Some(references) = release.owner.weak_object_strong_count() else {
-        return Ok(());
-    };
-    if references > release.replaced_references + release.fiber_owned_references + 1 {
-        return Ok(());
-    }
     let logical_caller = eg.current_execute_data.get();
-    let _ = run_final_object_destructor_tree(
-        eg,
-        release.owner,
-        references,
-        None,
-        true,
-        logical_caller,
-        false,
-        false,
-    )?;
+    match release {
+        PreparedValueDestructor::Direct {
+            owner,
+            replaced_references,
+            fiber_owned_references,
+        } => {
+            let Some(references) = owner.weak_object_strong_count() else {
+                return Ok(());
+            };
+            if references > replaced_references + fiber_owned_references + 1 {
+                return Ok(());
+            }
+            let _ = run_final_object_destructor_tree(
+                eg,
+                owner,
+                references,
+                None,
+                true,
+                logical_caller,
+                false,
+                logical_caller_at_current_site,
+            )?;
+            replace_pending_destructor_trace_site(eg, trace_site);
+        }
+        PreparedValueDestructor::Tree(owner) => {
+            let mut pending = None;
+            loop {
+                run_value_destructors_inner(
+                    eg,
+                    std::slice::from_ref(&owner),
+                    logical_caller,
+                    false,
+                    false,
+                    logical_caller_at_current_site,
+                )?;
+                replace_pending_destructor_trace_site(eg, trace_site);
+                let Some(replacement) = eg.exception.take() else {
+                    eg.exception = pending;
+                    break;
+                };
+                if let Some(displaced) = pending.replace(replacement.clone()) {
+                    append_replaced_exception(&replacement, &displaced, eg);
+                }
+            }
+        }
+    }
     Ok(())
+}
+
+#[cold]
+fn replace_pending_destructor_trace_site(
+    eg: &ExecutorGlobals,
+    trace_site: Option<(&crate::compiler::OpArray, usize)>,
+) {
+    let Some((op_array, source_line)) = trace_site else {
+        return;
+    };
+    if let Some(exception) = eg.exception.as_ref()
+        && throwable_first_trace_is_user_destructor(exception, eg)
+        && source_line != 0
+    {
+        replace_throwable_first_trace_site(
+            exception,
+            op_array.source_file.clone(),
+            source_line,
+            eg,
+        );
+    }
+}
+
+fn throwable_first_trace_is_user_destructor(
+    throwable: &Value,
+    eg: &ExecutorGlobals,
+) -> bool {
+    let Some(object) = throwable.as_object() else {
+        return false;
+    };
+    let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
+    let Some(trace_value) = object.get_property(&trace_key) else {
+        return false;
+    };
+    let Some(trace) = trace_value.as_array() else {
+        return false;
+    };
+    trace
+        .get_value_at(0)
+        .and_then(Value::as_array)
+        .and_then(|entry| entry.get_str("function").and_then(Value::as_str))
+        == Some("__destruct")
 }
 
 const STATEMENT_TEMPS_ORDINARY: u8 = 0;
@@ -2643,7 +2951,8 @@ fn throw_through_catch_only_frames<'a>(
                         .find(|catch| exception_matches_catch(&thrown, &catch.types, eg))
                 });
             if let Some(catch) = matched_catch {
-                let prepared_reference_assignment = if let Some(catch_cv) = catch.catch_cv {
+                let (prepared_reference_assignment, replaced_value_destructor) =
+                    if let Some(catch_cv) = catch.catch_cv {
                     match prepare_catch_variable_assignment(
                         frame,
                         op_array,
@@ -2652,7 +2961,7 @@ fn throw_through_catch_only_frames<'a>(
                         &thrown,
                         eg,
                     ) {
-                        Ok(value) => value,
+                        Ok(prepared) => prepared,
                         Err(message) => {
                             let replacement = make_error_value("TypeError", &message);
                             attach_throwable_origin(
@@ -2666,20 +2975,33 @@ fn throw_through_catch_only_frames<'a>(
                             continue 'search;
                         }
                     }
-                } else {
-                    None
-                };
+                    } else {
+                        (None, prepare_replaced_catch_value_release(eg, &thrown))
+                    };
                 cleanup_pending_calls(eg, frame);
                 if let Some(catch_cv) = catch.catch_cv {
-                    assignment_slot_set(
-                        (*frame).cv_mut(catch_cv),
-                        prepared_reference_assignment.unwrap_or_else(|| thrown.clone()),
-                    );
+                    let catch_slot = (*frame).cv_mut(catch_cv) as *mut Value;
+                    let value = prepared_reference_assignment.unwrap_or_else(|| thrown.clone());
+                    if (*catch_slot).is_reference() {
+                        slot_set((*catch_slot).as_ref_ptr(), value);
+                    } else {
+                        frame_slot_set(frame, catch_slot, value);
+                    }
                 }
                 (*frame).opline = op_array
                     .instructions
                     .as_ptr()
                     .add(catch.catch_start as usize);
+                run_prepared_value_destructor_from_current_site(
+                    eg,
+                    replaced_value_destructor,
+                    op_array,
+                    catch.line as usize,
+                )?;
+                if let Some(replacement) = eg.exception.take() {
+                    thrown = replacement;
+                    continue 'search;
+                }
                 return Ok(CatchOnlyThrowResult::Finished(ThrowResult::Handled(
                     frame, op_array,
                 )));
@@ -2691,7 +3013,7 @@ fn throw_through_catch_only_frames<'a>(
                     thrown,
                 )));
             }
-            thrown = run_exception_unwind_destructors(eg, frame, thrown)?;
+            thrown = run_exception_unwind_destructors(eg, frame, thrown, true)?;
             eg.current_execute_data.set(previous);
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             eg.discard_generic_member_call(frame as usize);
@@ -2913,6 +3235,7 @@ fn throw_in_frame<'a>(
 
             if let Some(catch) = matched_catch {
                 let mut prepared_reference_assignment = None;
+                let replaced_value_destructor;
                 if let Some(catch_cv) = catch.catch_cv {
                     match prepare_catch_variable_assignment(
                         search_frame,
@@ -2922,7 +3245,10 @@ fn throw_in_frame<'a>(
                         &thrown,
                         eg,
                     ) {
-                        Ok(value) => prepared_reference_assignment = value,
+                        Ok((value, destructor)) => {
+                            prepared_reference_assignment = value;
+                            replaced_value_destructor = destructor;
+                        }
                         Err(message) => {
                             let replacement = make_error_value("TypeError", &message);
                             attach_throwable_origin(
@@ -2937,6 +3263,8 @@ fn throw_in_frame<'a>(
                             continue 'search;
                         }
                     }
+                } else {
+                    replaced_value_destructor = prepare_replaced_catch_value_release(eg, &thrown);
                 }
                 if let Some((owner, displaced)) = displaced_exception.as_ref() {
                     let catch_stays_in_finally = search_frame == *owner
@@ -2978,16 +3306,29 @@ fn throw_in_frame<'a>(
                 unsafe {
                     cleanup_pending_calls(eg, search_frame);
                     if let Some(catch_cv) = catch.catch_cv {
-                        assignment_slot_set(
-                            (*search_frame).cv_mut(catch_cv),
-                            prepared_reference_assignment
-                                .unwrap_or_else(|| thrown.clone()),
-                        );
+                        let catch_slot = (*search_frame).cv_mut(catch_cv) as *mut Value;
+                        let value = prepared_reference_assignment
+                            .unwrap_or_else(|| thrown.clone());
+                        if (*catch_slot).is_reference() {
+                            slot_set((*catch_slot).as_ref_ptr(), value);
+                        } else {
+                            frame_slot_set(search_frame, catch_slot, value);
+                        }
                     }
                     (*frame).opline = base_ptr.add(catch.catch_start as usize);
-                    let new_op_array = (*frame).op_array();
-                    return Ok(ThrowResult::Handled(frame, new_op_array));
                 }
+                run_prepared_value_destructor_from_current_site(
+                    eg,
+                    replaced_value_destructor,
+                    sf_op_array,
+                    catch.line as usize,
+                )?;
+                if let Some(replacement) = eg.exception.take() {
+                    thrown = replacement;
+                    frame = search_frame;
+                    continue 'search;
+                }
+                return Ok(ThrowResult::Handled(frame, sf_op_array));
             } else if entry.finally_start != 0xFFFFFFFF {
                 while frame != search_frame {
                     let prev = unsafe { (*frame).prev_execute_data };
@@ -3046,7 +3387,7 @@ fn throw_in_frame<'a>(
         // Retire its object lifetimes before considering the caller because a
         // throwing destructor replaces the exception and can therefore select
         // a different catch clause in that caller.
-        thrown = run_exception_unwind_destructors(eg, search_frame, thrown)?;
+        thrown = run_exception_unwind_destructors(eg, search_frame, thrown, true)?;
         eg.current_execute_data.set(prev);
         #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
         eg.discard_generic_member_call(search_frame as usize);
