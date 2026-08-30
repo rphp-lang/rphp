@@ -60,6 +60,55 @@ try { constant('missing runtime name'); } catch (Error $error) { echo $error->ge
 }
 
 #[test]
+fn runtime_qualified_constants_normalize_only_namespace_and_class_segments() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+namespace ConstantContract;
+const SOURCE = 'source';
+
+class ParentSlot {
+    public const KEY = 'parent';
+    public static function probe() {
+        return [defined('static::KEY'), constant('static::KEY')];
+    }
+}
+class ChildSlot extends ParentSlot { public const KEY = 'child'; }
+
+define('ConstantContract\\Mixed\\Terminal', 19);
+echo constant('\\ConstantContract\\SOURCE'), ':';
+echo constant('constantcontract\\mixed\\Terminal'), ':';
+echo (int) defined('CONSTANTCONTRACT\\MIXED\\Terminal'), ':';
+echo (int) defined('ConstantContract\\Mixed\\terminal'), ':';
+echo json_encode(ChildSlot::probe()), ':';
+echo \ArrayObject::STD_PROP_LIST, ':', \ArrayIterator::ARRAY_AS_PROPS, "\n";
+
+foreach (['Owner::VALUE', '::'] as $name) {
+    try { define($name, 1); } catch (\Throwable $error) {
+        echo $error::class, ':', $error->getMessage(), "\n";
+    }
+}
+define('\\LEAD_CONST', 31);
+echo (int) defined('\\LEAD_CONST'), ':';
+try { constant('\\LEAD_CONST'); } catch (\Throwable $error) {
+    echo $error::class, ':', $error->getMessage(), "\n";
+}
+try { constant('::'); } catch (\Throwable $error) {
+    echo $error::class, ':', $error->getMessage();
+}
+"#,
+        ),
+        concat!(
+            "source:19:1:0:[true,\"child\"]:1:2\n",
+            "ValueError:define(): Argument #1 ($constant_name) cannot be a class constant\n",
+            "ValueError:define(): Argument #1 ($constant_name) cannot be a class constant\n",
+            "0:Error:Undefined constant \"LEAD_CONST\"\n",
+            "Error:Class \"\" not found",
+        )
+    );
+}
+
+#[test]
 fn source_constant_redefinition_warns_and_preserves_the_first_value_and_attributes() {
     assert_eq!(
         run_php_with_source_context(

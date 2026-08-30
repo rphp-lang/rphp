@@ -8,6 +8,65 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`qualified-symbol-resolution-boundaries`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.10. Qualified source constants now
+expand ordinary namespace/class aliases without conflating expression-local
+spellings with canonical constant keys. Runtime string APIs share leading
+separator handling, case-insensitive namespace/class segments, a
+case-sensitive terminal constant name, relative `self`/`parent`/`static`
+scope, autoload ordering and canonical missing-symbol errors. `define()`
+rejects class-constant names, `function_exists()` rejects class-method strings,
+and the admitted `ArrayObject`/`ArrayIterator` facades expose their two flag
+constants.
+
+Three original E2E groups cover compile-time aliases and lexical `self::class`,
+runtime global/class constant normalization, malformed names, exact-name fast
+paths, one-leading-separator behavior, autoload count/order and function
+existence. The clean-room oracle source and byte-exact output hash to
+`c0337d1fa26ce3e72bfa3e230febddd45bb423df6ff5c308f082a9ba5900c421`
+and `6f094f35de80c3e9b3a472b0302c41bc073406352386d84542ca3d2e399de043`.
+The final selected manifest is 14 pass and one retained independent
+callback-CV failure and hashes to
+`296bc7495a4f0a337af0bc4d76b89cf8d9b334972bd17a4b0517925a0c656fa5`.
+
+The exact final 5,599-case Zend/lang run is 4,760 pass, 543 fail, 115 skip and
+181 unsupported; its manifest hashes to
+`1ab511f1d4952f9ca65b753c9d37c0d5e839f7b5fcb50d196e8acbf82e8df364`.
+The 1,575-case strings/array projection remains 1,459 pass, 18 fail, 67 skip
+and 31 unsupported, with manifest hash
+`9f5edf942abcc866a1c0c833bca1a4dbef97b344295e36fd07314f233e29b0ce`.
+The combined classification and pass-set hashes are
+`ccc6373677df5fc5fe7d9be0eed1d200cbdf1092613da0e2d4ccc23eaad98b7a`
+and `a3036b88c7edaa7a98349150fce73880c2d3bcc1a6f74fba3af70a98408c0941`:
+6,219 pass, 561 fail, 182 skip and 212 unsupported, with no timeout or crash.
+The exact parent delta is `+14/-0`; supported debt is 543 Zend/lang failures,
+18 strings failures and zero array failures.
+
+The exact final candidate SHA-256 is
+`eeddf0d703e264a2bd21bf039c8fed25c38c809728264e2d0b0b6ef96c82feff`.
+All default, no-default, erased-generics, reified-generics and all-feature Cargo
+test configurations, all-feature/all-target checking, formatting, HTML data,
+PHPT runner and both unsafe-policy checks pass. Production remains at 1,623
+unsafe blocks and 289 unsafe functions, with 395 SAFETY annotations and seven
+`# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates and PHP
+8.5.10 warmed-kernel S2 and cold-build S3 pass.
+
+The fixed accepted-baseline CPU-2 gate uses 32 balanced pairs with exact
+checksums and raw-result hash
+`cbe4f5e84578aefcc1dd64959c11235b79de70114592105f58cf71b223c637ba`.
+Paired medians are startup -4.997%, ordinary calls +0.212%, namespaced calls
++0.990%, runtime global constants -0.362%, exact qualified constants +0.676%
+and direct class constants +0.629%. The changed dynamic
+`constant('Class::CONST')` autoload/deprecation branch is a localized +5.684%
+pay-for-use cost; it is outlined from the ordinary and exact global fast paths.
+
+This checkpoint does not claim the retained indirect-call callback-CV
+writeback failure, general independent autoload work, Fiber/generator
+suspension, 32-bit behavior or allocation-limit/OOM equivalence. The
+implementation checkpoint is the commit containing this status; the fixed
+performance baseline remains `overloaded-property-lvalue-boundaries`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `dimension-container-lvalue-protocol`, pinned to php-src 8.5 commit `fcc29c8`
 and validated against PHP 8.5.10. Dimension operations now share a canonical
 read/modify/commit boundary across arrays, scalar autovivification,

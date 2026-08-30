@@ -36,18 +36,19 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `dimension-container-lvalue-protocol` train retains 6,205
-exact passes across the 7,174-case PHP 8.5 corpus, with 575 supported
-failures, 182 skips, 212 unsupported cases and no timeout or crash. Its pass-set
-hash is
-`2dd5f61e8f0f6c3548230c7919e2f24f6fd9024d50b856a8959118b77e742c07`;
-the exact parent delta is `+22/-0`. One dimension l-value transaction now
-preserves protocol order, references, copy-on-write identity and failure state
-across arrays, scalar autovivification, `ArrayAccess` and the admitted
-`ArrayObject` facade. Exact-final CPU-pinned 32-pair ordinary startup, call,
-array and property controls retain matching checksums and remain within the
-approximately one-percent cumulative-regression ceiling; the directly changed
-`ArrayAccess` read/write path records a localized +2.842% pay-for-use cost.
+The accepted AMD64 `qualified-symbol-resolution-boundaries` train retains
+6,219 exact passes across the 7,174-case PHP 8.5 corpus, with 561 supported
+failures, 182 skips, 212 unsupported cases and no timeout or crash. Its
+pass-set hash is
+`a3036b88c7edaa7a98349150fce73880c2d3bcc1a6f74fba3af70a98408c0941`;
+the exact parent delta is `+14/-0`. One qualified-symbol boundary now aligns
+source aliases, constant-expression lexical keys and dynamic global/class
+constant lookup without weakening terminal constant case or autoload/error
+ordering. Exact-final CPU-pinned 32-pair startup, ordinary/namespaced call and
+global/direct-class constant controls retain matching checksums and stay within
+the approximately one-percent cumulative-regression ceiling; the outlined
+dynamic class-string constant branch records a localized +5.684% pay-for-use
+cost.
 Current compatibility work is selected as a 10–30-case train around one shared
 root-cause hypothesis and one cumulative full/performance evidence packet.
 Smaller checkpoints require a crash, security issue, framework blocker or

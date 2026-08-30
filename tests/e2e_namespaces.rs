@@ -39,6 +39,39 @@ echo $u->name;
     assert_eq!(out, "Alice");
 }
 
+#[test]
+fn qualified_constant_aliases_share_class_and_function_namespace_resolution() {
+    let output = run_php(
+        r#"<?php
+namespace SymbolSource {
+    const FLAG = 'source';
+    class Box {
+        public const ID = 17;
+        public const OWNER = self::class;
+    }
+    function label() { return 'function'; }
+}
+namespace SymbolConsumer {
+    use SymbolSource as Imported;
+    use function SymbolSource\label as imported_label;
+    use const SymbolSource\FLAG as IMPORTED_FLAG;
+    const LOCAL = 'local';
+
+    function defaults($value = Imported\FLAG) { return $value; }
+
+    echo Imported\Box::ID, '|', Imported\Box::OWNER, '|';
+    echo Imported\FLAG, '|', IMPORTED_FLAG, '|', LOCAL, '|';
+    echo imported_label(), '|', defaults();
+}
+"#,
+    );
+
+    assert_eq!(
+        output,
+        "17|SymbolSource\\Box|source|source|local|function|source"
+    );
+}
+
 // ─── Use declaration ──────────────────────────────────────────────
 
 #[test]

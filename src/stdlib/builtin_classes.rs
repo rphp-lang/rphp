@@ -3019,6 +3019,25 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             Visibility::Private,
             name.to_string(),
         ));
+        class.constants = ["STD_PROP_LIST", "ARRAY_AS_PROPS"]
+            .into_iter()
+            .map(|constant| ClassConstantDefinition {
+                attributes: Vec::new(),
+                name: constant.to_string(),
+                value: crate::builtin_class_constant(name, constant)
+                    .expect("declared ArrayObject flag has a builtin value"),
+                source_file: String::new(),
+                evaluation_error: None,
+                source_expression: None,
+                callable_factory: None,
+                evaluation_scope: None,
+                value_is_deferred: false,
+                visibility: Visibility::Public,
+                declaring_class: name.to_string(),
+                type_hint: ParamTypeHint::Int,
+                is_final: false,
+            })
+            .collect();
         eg.register_class(class).unwrap();
         reg_method!(
             name,

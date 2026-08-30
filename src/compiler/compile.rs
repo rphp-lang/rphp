@@ -2605,6 +2605,13 @@ fn constant_expression_references_symbol(expression: &Expr) -> bool {
     }
 }
 
+const RESOLVED_CONSTANT_EXPRESSION_PREFIX: &str = "\0rphp-resolved-symbol\0";
+
+#[inline]
+fn resolved_constant_expression_key(source: &str) -> String {
+    format!("{RESOLVED_CONSTANT_EXPRESSION_PREFIX}{source}")
+}
+
 fn constant_expression_contains_runtime_variable(expression: &Expr) -> bool {
     let recurse = constant_expression_contains_runtime_variable;
     match expression {
@@ -5527,6 +5534,17 @@ impl Compiler {
         {
             return (imported.clone(), None);
         }
+        // A qualified constant name may begin with an ordinary namespace/class
+        // import. PHP expands that first segment exactly as it does for a
+        // qualified function or class name; only an unqualified terminal name
+        // uses the separate, case-sensitive `use const` table.
+        if let Some((first_segment, rest)) = name.split_once('\\')
+            && let Some(imported) = self
+                .class_import_map
+                .get(&first_segment.to_ascii_lowercase())
+        {
+            return (format!("{imported}\\{rest}"), None);
+        }
         if let Some(namespace) = &self.current_namespace {
             return (
                 format!("{namespace}\\{name}"),
@@ -6536,44 +6554,12 @@ impl Compiler {
         known: &HashMap<String, Value>,
         lexical_property: Option<&str>,
     ) -> Result<Value, String> {
-        // Constant expressions can contain class-constant reads at any depth
-        // (for example in an array property default).  The context-free
-        // evaluator below deliberately knows nothing about this source unit's
-        // `use` table, so expose imported class names as additional keys for
-        // the duration of this evaluation rather than only resolving a
-        // top-level ClassConstant node.
+        // The context-free evaluator deliberately knows nothing about this
+        // source unit's namespace and import tables. Keep its canonical
+        // constant table immutable and publish expression-local spellings in
+        // a separate sentinel namespace: a relative spelling such as `A\X`
+        // may also be the canonical name of a different constant.
         let mut imported = known.clone();
-        for (alias, class_name) in &self.use_map {
-            imported.insert(format!("{alias}::class"), Value::string(class_name.clone()));
-            let prefix = format!("{class_name}::");
-            for (name, value) in known {
-                if let Some(constant) = name.strip_prefix(&prefix) {
-                    imported.insert(format!("{alias}::{constant}"), value.clone());
-                }
-            }
-        }
-        for (alias, constant_name) in &self.constant_use_map {
-            if let Some(value) = known.get(constant_name) {
-                imported.insert(alias.clone(), value.clone());
-            }
-        }
-        if let Some(namespace) = &self.current_namespace {
-            let prefix = format!("{namespace}\\");
-            for (name, value) in known {
-                if let Some(local_name) = name.strip_prefix(&prefix)
-                    && !local_name.contains('\\')
-                {
-                    imported.insert(local_name.to_string(), value.clone());
-                    imported.insert(format!("namespace\\{local_name}"), value.clone());
-                }
-            }
-        } else {
-            for (name, value) in known {
-                if !name.contains('\\') && !name.contains("::") {
-                    imported.insert(format!("namespace\\{name}"), value.clone());
-                }
-            }
-        }
         imported.insert(
             "__PROPERTY__".to_string(),
             Value::string(lexical_property.unwrap_or_default()),
@@ -7063,6 +7049,12 @@ impl Compiler {
 
     fn collect_class_name_literals(&self, expr: &Expr, known: &mut HashMap<String, Value>) {
         match expr {
+            Expr::Constant { name, .. } => {
+                let resolved = self.resolve_constant_name(name).0;
+                if let Some(value) = known.get(&resolved).cloned() {
+                    known.insert(resolved_constant_expression_key(name), value);
+                }
+            }
             Expr::ClassConstant {
                 class_name,
                 constant,
@@ -7070,10 +7062,24 @@ impl Compiler {
             } => {
                 let source_key = format!("{class_name}::{constant}");
                 if constant.eq_ignore_ascii_case("class") {
-                    known
-                        .entry(source_key)
-                        .or_insert_with(|| Value::string(self.resolve_name(class_name)));
-                } else if !known.contains_key(&source_key) {
+                    let relative = class_name.to_ascii_lowercase();
+                    let resolved_class = match relative.as_str() {
+                        "self" => self.lexical_static_class.clone(),
+                        "parent" => self.lexical_static_parent.clone(),
+                        // `static::class` is not a fixed compile-time class
+                        // name; its owning validation path reports the
+                        // context-specific PHP diagnostic.
+                        "static" => None,
+                        _ => Some(self.resolve_name(class_name)),
+                    };
+                    if let Some(value) = known
+                        .get(&source_key)
+                        .cloned()
+                        .or_else(|| resolved_class.map(Value::string))
+                    {
+                        known.insert(resolved_constant_expression_key(&source_key), value);
+                    }
+                } else {
                     let resolved_class = self.resolve_name(class_name);
                     let resolved_key = format!("{resolved_class}::{constant}");
                     if let Some(value) = known
@@ -7081,7 +7087,7 @@ impl Compiler {
                         .cloned()
                         .or_else(|| crate::builtin_class_constant(&resolved_class, constant))
                     {
-                        known.insert(source_key, value);
+                        known.insert(resolved_constant_expression_key(&source_key), value);
                     }
                 }
             }
@@ -7163,6 +7169,9 @@ impl Compiler {
             Expr::Bool(b) => Ok(Value::bool(*b)),
             Expr::Null => Ok(Value::null()),
             Expr::Constant { name, .. } | Expr::CompilerHaltOffsetConstant { name, .. } => {
+                if let Some(value) = known.get(&resolved_constant_expression_key(name)) {
+                    return Ok(value.clone());
+                }
                 let name = name.strip_prefix('\\').unwrap_or(name);
                 // Check user-defined constants from the same compilation unit
                 if let Some(val) = known.get(name) {
@@ -7226,15 +7235,19 @@ impl Compiler {
                 class_name,
                 constant,
                 ..
-            } => known
-                .get(&format!("{}::{}", class_name, constant))
-                .cloned()
-                .ok_or_else(|| {
-                    format!(
-                        "class constant {}::{} is not available in this constant expression",
-                        class_name, constant
-                    )
-                }),
+            } => {
+                let source = format!("{class_name}::{constant}");
+                known
+                    .get(&resolved_constant_expression_key(&source))
+                    .or_else(|| known.get(&source))
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!(
+                            "class constant {}::{} is not available in this constant expression",
+                            class_name, constant
+                        )
+                    })
+            }
             Expr::DynamicNamedClassConstant {
                 class_name,
                 constant,

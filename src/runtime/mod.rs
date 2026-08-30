@@ -235,6 +235,35 @@ pub(crate) fn throwable_private_property_key(
 include!("property_definitions.rs");
 include!("class_constants.rs");
 
+/// PHP string-based symbol APIs accept one leading namespace separator. Keep
+/// multiple leading separators invalid so diagnostics retain the supplied
+/// spelling instead of silently repairing a malformed name.
+#[inline]
+pub(crate) fn normalized_dynamic_symbol_name(name: &str) -> &str {
+    match name.as_bytes() {
+        [b'\\', next, ..] if *next != b'\\' => &name[1..],
+        _ => name,
+    }
+}
+
+/// Global constant identifiers are case-sensitive, while namespace segments
+/// use PHP's case-insensitive symbol spelling. The final segment remains the
+/// constant identifier and must therefore match byte-for-byte.
+#[inline]
+fn qualified_constant_name_matches(registered: &str, requested: &str) -> bool {
+    match (registered.rsplit_once('\\'), requested.rsplit_once('\\')) {
+        (
+            Some((registered_namespace, registered_name)),
+            Some((requested_namespace, requested_name)),
+        ) => {
+            registered_name == requested_name
+                && registered_namespace.eq_ignore_ascii_case(requested_namespace)
+        }
+        (None, None) => registered == requested,
+        _ => false,
+    }
+}
+
 /// One callback in the request-local SPL autoload stack. Callback resolution
 /// happens at registration time so visibility and callable identity do not
 /// depend on the later class lookup's lexical scope.
@@ -8436,9 +8465,7 @@ impl ExecutorGlobals {
         name: &str,
         value: crate::value::Value,
     ) -> Result<(), String> {
-        if self.constant_table.borrow().contains_key(name)
-            || crate::builtin_constant(name).is_some()
-        {
+        if self.find_constant(name).is_some() {
             return Err(constant_redefinition_message(name));
         }
         self.note_request_static_value(&value);
@@ -8464,9 +8491,31 @@ impl ExecutorGlobals {
     }
 
     /// Look up a constant by name (case-sensitive).
+    #[inline]
     pub fn find_constant(&self, name: &str) -> Option<crate::value::Value> {
-        if let Some(val) = self.constant_table.borrow().get(name).cloned() {
+        let table = self.constant_table.borrow();
+        if let Some(val) = table.get(name).cloned() {
             return Some(val);
+        }
+        drop(table);
+        self.find_constant_slow(name)
+    }
+
+    /// Keep namespace-case fallback and the builtin inventory out of the
+    /// request-local exact-hit path used by source constants and `constant()`.
+    #[cold]
+    #[inline(never)]
+    fn find_constant_slow(&self, name: &str) -> Option<crate::value::Value> {
+        if name.contains('\\')
+            && let Some(value) =
+                self.constant_table
+                    .borrow()
+                    .iter()
+                    .find_map(|(registered, value)| {
+                        qualified_constant_name_matches(registered, name).then(|| value.clone())
+                    })
+        {
+            return Some(value);
         }
         // Built-in PHP constants (shared source of truth)
         crate::builtin_constant(name)

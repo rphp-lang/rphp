@@ -562,20 +562,29 @@ fn builtin_ini_access_constant(name: &str) -> Option<value::Value> {
 /// registry exists. Constant expressions in declarations (notably attribute
 /// flags) use the same values that stdlib publishes at request startup.
 pub fn builtin_class_constant(class: &str, constant: &str) -> Option<value::Value> {
-    if !class.eq_ignore_ascii_case("Attribute") {
+    let value = if class.eq_ignore_ascii_case("Attribute") {
+        match constant {
+            "TARGET_CLASS" => 1,
+            "TARGET_FUNCTION" => 2,
+            "TARGET_METHOD" => 4,
+            "TARGET_PROPERTY" => 8,
+            "TARGET_CLASS_CONSTANT" => 16,
+            "TARGET_PARAMETER" => 32,
+            "TARGET_CONSTANT" => 64,
+            "TARGET_ALL" => 127,
+            "IS_REPEATABLE" => 128,
+            _ => return None,
+        }
+    } else if class.eq_ignore_ascii_case("ArrayObject")
+        || class.eq_ignore_ascii_case("ArrayIterator")
+    {
+        match constant {
+            "STD_PROP_LIST" => 1,
+            "ARRAY_AS_PROPS" => 2,
+            _ => return None,
+        }
+    } else {
         return None;
-    }
-    let value = match constant {
-        "TARGET_CLASS" => 1,
-        "TARGET_FUNCTION" => 2,
-        "TARGET_METHOD" => 4,
-        "TARGET_PROPERTY" => 8,
-        "TARGET_CLASS_CONSTANT" => 16,
-        "TARGET_PARAMETER" => 32,
-        "TARGET_CONSTANT" => 64,
-        "TARGET_ALL" => 127,
-        "IS_REPEATABLE" => 128,
-        _ => return None,
     };
     Some(value::Value::long(value))
 }

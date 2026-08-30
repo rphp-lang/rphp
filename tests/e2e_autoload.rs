@@ -303,6 +303,28 @@ echo ConstantOwner::VALUE;
 }
 
 #[test]
+fn defined_and_constant_autoload_runtime_class_constant_names_once() {
+    let output = run_php(
+        r#"<?php
+spl_autoload_register(function ($class) {
+    echo "load:$class|";
+    if ($class === 'RuntimeConstantOwner') {
+        eval('class RuntimeConstantOwner { public const VALUE = 23; }');
+    }
+});
+var_dump(defined('\\RuntimeConstantOwner::VALUE'));
+echo constant('runtimeconstantowner::VALUE'), '|';
+var_dump(defined('RuntimeConstantOwner::missing'));
+"#,
+    );
+
+    assert_eq!(
+        output,
+        "load:RuntimeConstantOwner|bool(true)\n23|bool(false)\n"
+    );
+}
+
+#[test]
 fn missing_static_call_class_throws_class_not_found_after_autoload() {
     let output = run_php(
         r#"<?php
@@ -986,11 +1008,13 @@ fn function_exists_is_case_insensitive_and_accepts_a_leading_separator() {
     let output = run_php(
         r#"<?php
 function ProjectFunction() {}
+class FunctionOwner { public static function method() {} }
 var_dump(function_exists('ProjectFunction'));
 var_dump(function_exists('projectfunction'));
 var_dump(function_exists('\\PROJECTFUNCTION'));
 var_dump(function_exists('\\strlen'));
 var_dump(function_exists('MissingFunction'));
+var_dump(function_exists('FunctionOwner::method'));
 "#,
     );
     assert_eq!(
@@ -1000,6 +1024,7 @@ var_dump(function_exists('MissingFunction'));
             "bool(true)\n",
             "bool(true)\n",
             "bool(true)\n",
+            "bool(false)\n",
             "bool(false)\n"
         )
     );

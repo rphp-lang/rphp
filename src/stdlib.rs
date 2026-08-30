@@ -35,8 +35,9 @@ use crate::vm::execute::{
     call_function_owned_iter_readback_arg0_with_context, call_function_owned_iter_with_context,
     call_function_owned_iter_with_context_and_named, call_internal_function_iter_from_current_site,
     call_object_property_get_hook, call_object_property_magic_get,
-    call_object_property_magic_isset, check_type_hint, displayed_function_name,
-    explicit_float_conversion, explicit_long_conversion, explicit_numeric_cast_warning,
+    call_object_property_magic_isset, called_class_name_for_internal_call, check_type_hint,
+    displayed_function_name, explicit_float_conversion, explicit_long_conversion,
+    explicit_numeric_cast_warning, lexical_class_name_for_internal_call,
     php_numeric_string_to_float, prepare_call_argument, prepare_scalar_long_callback,
     prepare_scalar_long_reference_mutation_callback, try_execute_scalar_long_callback,
     value_to_array_key, values_equal_checked_with_precision, values_identical_checked,
@@ -13620,6 +13621,46 @@ fn fn_spl_object_hash(
 // Constant functions
 // ============================================================================
 
+#[cold]
+#[inline(never)]
+fn runtime_constant_class_name(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    raw_class: &str,
+) -> Option<String> {
+    let relative = raw_class.eq_ignore_ascii_case("self")
+        || raw_class.eq_ignore_ascii_case("parent")
+        || raw_class.eq_ignore_ascii_case("static");
+    if !relative {
+        return Some(raw_class.to_string());
+    }
+
+    let lexical = lexical_class_name_for_internal_call(eg, ed);
+    let lexical_scope_exists = lexical.is_some();
+    let resolved = if raw_class.eq_ignore_ascii_case("static") {
+        called_class_name_for_internal_call(eg, ed).map(str::to_string)
+    } else if raw_class.eq_ignore_ascii_case("parent") {
+        lexical.as_deref().and_then(|class| {
+            eg.find_class(class)
+                .and_then(|definition| definition.parent.clone())
+        })
+    } else {
+        lexical
+    };
+    if resolved.is_none() {
+        let scope = raw_class.to_ascii_lowercase();
+        let message = if scope == "parent" && lexical_scope_exists {
+            "Cannot access \"parent\" when current class scope has no parent".to_string()
+        } else {
+            format!("Cannot access \"{scope}\" when no class scope is active")
+        };
+        eg.exception = Some(crate::value::make_error_value("Error", &message));
+    }
+    resolved
+}
+
+#[cold]
+#[inline(never)]
 fn fn_define(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -13651,6 +13692,13 @@ fn fn_define(
     }
     let name = arg_str!(ed, 0);
     let val = arg!(ed, 1).clone();
+    if name.contains("::") {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "define(): Argument #1 ($constant_name) cannot be a class constant",
+        ));
+        ret!(rv, Value::null());
+    }
     if name == "__COMPILER_HALT_OFFSET__" || eg.find_constant(&name).is_some() {
         report_internal_diagnostic(
             eg,
@@ -13665,6 +13713,8 @@ fn fn_define(
     ret!(rv, Value::bool(result.is_ok()));
 }
 
+#[cold]
+#[inline(never)]
 fn fn_defined(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -13677,9 +13727,13 @@ fn fn_defined(
             "defined(): Passing null to parameter #1 ($constant_name) of type string is deprecated",
         )?;
     }
-    let name = arg_str!(ed, 0);
+    let supplied_name = arg_str!(ed, 0);
+    let name = crate::runtime::normalized_dynamic_symbol_name(&supplied_name);
     if let Some((class_name, constant_name)) = name.split_once("::") {
-        let exists = eg.find_class(class_name).is_some_and(|class| {
+        let Some(class_name) = runtime_constant_class_name(ed, eg, class_name) else {
+            ret!(rv, Value::null());
+        };
+        let exists = if let Some(class) = eg.find_class(&class_name) {
             !class.is_trait
                 && (class
                     .constants
@@ -13690,10 +13744,149 @@ fn fn_defined(
                             .static_properties
                             .iter()
                             .any(|case| case.name == constant_name)))
-        });
+        } else if !class_name.is_empty() {
+            let _ = autoload::ensure_symbol_loaded(eg, &class_name)?;
+            if eg.exception.is_some() {
+                ret!(rv, Value::null());
+            }
+            eg.find_class(&class_name).is_some_and(|class| {
+                !class.is_trait
+                    && (class
+                        .constants
+                        .iter()
+                        .any(|definition| definition.name == constant_name)
+                        || (class.is_enum
+                            && class
+                                .static_properties
+                                .iter()
+                                .any(|case| case.name == constant_name)))
+            })
+        } else {
+            false
+        };
         ret!(rv, Value::bool(exists));
     }
     ret!(rv, Value::bool(eg.find_constant(&name).is_some()));
+}
+
+#[inline(never)]
+fn resolve_runtime_class_constant(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    raw_class_name: &str,
+    constant_name: &str,
+) -> Result<(), VmError> {
+    let Some(class_name) = runtime_constant_class_name(ed, eg, raw_class_name) else {
+        ret!(rv, Value::null());
+    };
+    let class_constant = |class: &crate::compiler::compile::ClassDef| {
+        let trait_constant = class.is_trait
+            && class
+                .constants
+                .iter()
+                .any(|definition| definition.name == constant_name);
+        let definition = (!class.is_trait)
+            .then(|| {
+                class
+                    .constants
+                    .iter()
+                    .find(|definition| definition.name == constant_name)
+                    .cloned()
+            })
+            .flatten();
+        let case = (definition.is_none() && class.is_enum)
+            .then(|| {
+                class
+                    .static_properties
+                    .iter()
+                    .enumerate()
+                    .find(|(_, case)| case.name == constant_name)
+                    .map(|(index, case)| (index, case.clone()))
+            })
+            .flatten();
+        (
+            class.name.clone(),
+            class.class_id,
+            trait_constant,
+            definition,
+            case,
+        )
+    };
+    let resolved = if let Some(class) = eg.find_class(&class_name) {
+        Some(class_constant(class))
+    } else if !class_name.is_empty() {
+        let _ = autoload::ensure_symbol_loaded(eg, &class_name)?;
+        if eg.exception.is_some() {
+            ret!(rv, Value::null());
+        }
+        eg.find_class(&class_name).map(class_constant)
+    } else {
+        None
+    };
+    if let Some((display_class, class_id, trait_constant, definition, case)) = resolved {
+        if trait_constant {
+            eg.exception = Some(crate::value::make_error_value(
+                "Error",
+                &format!("Cannot access trait constant {display_class}::{constant_name} directly"),
+            ));
+            ret!(rv, Value::null());
+        }
+        let (file, line) = internal_call_source(ed);
+        let use_site = reflection::DeprecatedUseSite {
+            frame: ed,
+            file,
+            line,
+        };
+        if let Some(definition) = definition {
+            reflection::report_deprecated_class_constant_use(
+                &display_class,
+                &definition,
+                &use_site,
+                eg,
+            )?;
+            if eg.exception.is_some() {
+                ret!(rv, Value::null());
+            }
+            let value = if definition.value_is_deferred {
+                let Some(value) =
+                    reflection::evaluate_deferred_class_constant_value(&definition, eg)?
+                else {
+                    if let Some(exception) = eg.exception.as_ref() {
+                        crate::vm::execute::attach_internal_constant_expression_trace(
+                            exception, ed, eg,
+                        );
+                    }
+                    ret!(rv, Value::null());
+                };
+                value
+            } else {
+                definition.value
+            };
+            ret!(rv, value);
+        }
+        if let Some((case_index, case)) = case {
+            reflection::report_deprecated_enum_case_use(&display_class, &case, &use_site, eg)?;
+            if eg.exception.is_some() {
+                ret!(rv, Value::null());
+            }
+            if let Some(storage_slot) = eg.static_property_storage_slot(class_id, case_index)
+                && let Some(value) = eg.static_property_value(storage_slot).cloned()
+            {
+                ret!(rv, value);
+            }
+        }
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            &format!("Undefined constant {display_class}::{constant_name}"),
+        ));
+        ret!(rv, Value::null());
+    }
+    eg.exception = Some(crate::value::make_error_value(
+        "Error",
+        &format!("Class \"{class_name}\" not found"),
+    ));
+    ret!(rv, Value::null());
 }
 
 fn fn_constant(
@@ -13701,7 +13894,8 @@ fn fn_constant(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let name = arg_str!(ed, 0);
+    let supplied_name = arg_str!(ed, 0);
+    let name = crate::runtime::normalized_dynamic_symbol_name(&supplied_name);
     if name == "__COMPILER_HALT_OFFSET__" {
         let (file, _) = internal_call_source(ed);
         if let Some(offset) = eg.compiler_halt_offset(&file) {
@@ -13722,94 +13916,7 @@ fn fn_constant(
         ret!(rv, value);
     }
     if let Some((class_name, constant_name)) = name.split_once("::") {
-        let resolved = eg.find_class(class_name).map(|class| {
-            let trait_constant = class.is_trait
-                && class
-                    .constants
-                    .iter()
-                    .any(|definition| definition.name == constant_name);
-            let definition = (!class.is_trait)
-                .then(|| {
-                    class
-                        .constants
-                        .iter()
-                        .find(|definition| definition.name == constant_name)
-                        .cloned()
-                })
-                .flatten();
-            let case = (definition.is_none() && class.is_enum)
-                .then(|| {
-                    class
-                        .static_properties
-                        .iter()
-                        .enumerate()
-                        .find(|(_, case)| case.name == constant_name)
-                        .map(|(index, case)| (index, case.clone()))
-                })
-                .flatten();
-            (
-                class.name.clone(),
-                class.class_id,
-                trait_constant,
-                definition,
-                case,
-            )
-        });
-        if let Some((display_class, class_id, trait_constant, definition, case)) = resolved {
-            if trait_constant {
-                eg.exception = Some(crate::value::make_error_value(
-                    "Error",
-                    &format!(
-                        "Cannot access trait constant {display_class}::{constant_name} directly"
-                    ),
-                ));
-                ret!(rv, Value::null());
-            }
-            let (file, line) = internal_call_source(ed);
-            let use_site = reflection::DeprecatedUseSite {
-                frame: ed,
-                file,
-                line,
-            };
-            if let Some(definition) = definition {
-                reflection::report_deprecated_class_constant_use(
-                    &display_class,
-                    &definition,
-                    &use_site,
-                    eg,
-                )?;
-                if eg.exception.is_some() {
-                    ret!(rv, Value::null());
-                }
-                let value = if definition.value_is_deferred {
-                    let Some(value) =
-                        reflection::evaluate_deferred_class_constant_value(&definition, eg)?
-                    else {
-                        if let Some(exception) = eg.exception.as_ref() {
-                            crate::vm::execute::attach_internal_constant_expression_trace(
-                                exception, ed, eg,
-                            );
-                        }
-                        ret!(rv, Value::null());
-                    };
-                    value
-                } else {
-                    definition.value
-                };
-                ret!(rv, value);
-            }
-            if let Some((case_index, case)) = case {
-                reflection::report_deprecated_enum_case_use(&display_class, &case, &use_site, eg)?;
-                if eg.exception.is_some() {
-                    ret!(rv, Value::null());
-                }
-                if let Some(storage_slot) = eg.static_property_storage_slot(class_id, case_index)
-                    && let Some(value) = eg.static_property_value(storage_slot).cloned()
-                {
-                    ret!(rv, value);
-                }
-            }
-        }
+        return resolve_runtime_class_constant(ed, rv, eg, class_name, constant_name);
     }
     eg.exception = Some(crate::value::make_error_value(
         "Error",
@@ -26453,8 +26560,8 @@ fn fn_function_exists(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let name = arg_str!(ed, 0);
-    let name = name.strip_prefix('\\').unwrap_or(&name);
-    let exists = eg.find_function(name).is_some();
+    let name = crate::runtime::normalized_dynamic_symbol_name(&name);
+    let exists = !name.contains("::") && eg.find_function(name).is_some();
     ret!(rv, Value::bool(exists));
 }
 
