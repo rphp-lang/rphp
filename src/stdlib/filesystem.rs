@@ -258,13 +258,83 @@ pub(super) fn fn_file_put_contents(
 pub(super) fn fn_file_exists(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    #[cfg(not(feature = "stream-registry"))]
+    let _ = eg;
     let path = arg_str!(ed, 0);
+    #[cfg(feature = "stream-registry")]
+    if let Some(exists) = super::user_wrapper::url_stat(eg, path.as_ref(), 6)? {
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        ret!(rv, Value::bool(exists));
+    }
     ret!(
         rv,
         Value::bool(std::path::Path::new(path.as_ref()).exists())
     );
+}
+
+/// stat($filename): array|false
+pub(super) fn fn_stat(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    let local = path.strip_prefix("file://").unwrap_or(path.as_ref());
+    let Ok(metadata) = std::fs::metadata(local) else {
+        ret!(rv, Value::bool(false));
+    };
+
+    #[cfg(unix)]
+    let fields = {
+        use std::os::unix::fs::MetadataExt;
+        [
+            metadata.dev() as i64,
+            metadata.ino() as i64,
+            metadata.mode() as i64,
+            metadata.nlink() as i64,
+            metadata.uid() as i64,
+            metadata.gid() as i64,
+            metadata.rdev() as i64,
+            i64::try_from(metadata.size()).unwrap_or(i64::MAX),
+            metadata.atime(),
+            metadata.mtime(),
+            metadata.ctime(),
+            metadata.blksize() as i64,
+            metadata.blocks() as i64,
+        ]
+    };
+    #[cfg(not(unix))]
+    let fields = [
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        i64::try_from(metadata.len()).unwrap_or(i64::MAX),
+        0,
+        0,
+        0,
+        0,
+        0,
+    ];
+    let names = [
+        "dev", "ino", "mode", "nlink", "uid", "gid", "rdev", "size", "atime", "mtime", "ctime",
+        "blksize", "blocks",
+    ];
+    let mut result = PhpArray::with_hash_capacity(fields.len() * 2);
+    for value in fields {
+        result.push(Value::long(value));
+    }
+    for (name, value) in names.into_iter().zip(fields) {
+        result.set_str(name, Value::long(value));
+    }
+    ret!(rv, Value::array(result));
 }
 
 /// filemtime($filename): int|false

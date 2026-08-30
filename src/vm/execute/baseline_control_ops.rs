@@ -940,6 +940,31 @@ pub(crate) fn execute_included_file(
     )
 }
 
+#[cfg(feature = "stream-registry")]
+#[cold]
+fn execute_included_user_source(
+    eg: &mut ExecutorGlobals,
+    source: Vec<u8>,
+    requested_path: &str,
+    canonical: String,
+    is_once: bool,
+    caller: Option<(*mut ExecuteData, &crate::compiler::OpArray)>,
+) -> Result<IncludeFileOutcome, VmError> {
+    if is_once && eg.included_files.contains(&canonical) {
+        return Ok(IncludeFileOutcome::AlreadyIncluded);
+    }
+    execute_source_unit(
+        eg,
+        crate::lexer::decode_php_source(&source),
+        requested_path,
+        canonical,
+        Value::long(1),
+        true,
+        caller,
+        None,
+    )
+}
+
 #[cold]
 fn execute_eval_source(
     eg: &mut ExecutorGlobals,
@@ -1035,18 +1060,276 @@ fn op_eval<'a>(
     }
 }
 
+#[cfg(feature = "stream-registry")]
+/// Return the public PHP spelling for the active include opcode.
+fn include_call_name(is_require: bool, is_once: bool) -> &'static str {
+    match (is_require, is_once) {
+        (false, false) => "include",
+        (false, true) => "include_once",
+        (true, false) => "require",
+        (true, true) => "require_once",
+    }
+}
+
+#[cfg(feature = "stream-registry")]
+fn include_origin_index(
+    op_array: &crate::compiler::OpArray,
+    opline: &crate::vm::instruction::Instruction,
+) -> usize {
+    let ip = op_array
+        .instructions
+        .iter()
+        .position(|instruction| std::ptr::eq(instruction, opline))
+        .expect("active include instruction belongs to its op array");
+    if op_array.source_line(ip).is_some() {
+        ip
+    } else {
+        (0..ip)
+            .rev()
+            .find(|index| op_array.source_line(*index).is_some())
+            .unwrap_or(ip)
+    }
+}
+
+#[cfg(feature = "stream-registry")]
+fn include_source_origin(
+    op_array: &crate::compiler::OpArray,
+    opline: &crate::vm::instruction::Instruction,
+) -> (String, usize) {
+    let file = if op_array.source_file.is_empty() {
+        op_array.name.clone()
+    } else {
+        op_array.source_file.to_string()
+    };
+    let ip = include_origin_index(op_array, opline);
+    (file, op_array.source_line(ip).unwrap_or(0))
+}
+
+#[cfg(feature = "stream-registry")]
+fn report_include_warning(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &crate::vm::instruction::Instruction,
+    function: &str,
+    message: &str,
+) -> Result<(), VmError> {
+    let (file, line) = include_source_origin(op_array, opline);
+    let publish = eg.detached_trace_origin(frame as usize).is_none();
+    if publish {
+        eg.publish_synthetic_trace_frame(
+            frame as usize,
+            file.clone(),
+            line,
+            function.to_string(),
+        );
+    }
+    let handled = crate::stdlib::dispatch_php_error(eg, frame, 2, message, &file, line)?;
+    if publish {
+        eg.discard_detached_trace_origin(frame as usize);
+    }
+    if !handled {
+        eg.record_last_error(2, message, &file, line);
+    }
+    if !handled && eg.error_reporting & 2 != 0 {
+        eg.write_output(format!("\nWarning: {message} in {file} on line {line}\n").as_bytes());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "stream-registry")]
+fn user_wrapper_include_failure<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &crate::vm::instruction::Instruction,
+    path: &str,
+    class: Option<&str>,
+    is_require: bool,
+    is_once: bool,
+) -> Result<ColdResult<'a>, VmError> {
+    let function = include_call_name(is_require, is_once);
+    let reason = class.map_or_else(
+        || "No such file or directory".to_string(),
+        |class| format!("\"{class}::stream_open\" call failed"),
+    );
+    report_include_warning(
+        eg,
+        frame,
+        op_array,
+        opline,
+        function,
+        &format!("{function}({path}): Failed to open stream: {reason}"),
+    )?;
+    if let Some(exception) = eg.exception.take() {
+        return Ok(match throw_in_frame(eg, frame, exception)? {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+        });
+    }
+
+    let include_path = crate::stdlib::include_path::current(eg);
+    let second = if is_require {
+        format!(
+            "Failed opening required '{path}' (include_path='{include_path}')"
+        )
+    } else {
+        format!(
+            "{function}(): Failed opening '{path}' for inclusion (include_path='{include_path}')"
+        )
+    };
+    if !is_require {
+        report_include_warning(eg, frame, op_array, opline, function, &second)?;
+        if let Some(exception) = eg.exception.take() {
+            return Ok(match throw_in_frame(eg, frame, exception)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+        write_include_result(frame, opline, Value::bool(false));
+        // SAFETY: `op_include` supplies the live frame for this exact include
+        // instruction. The dispatcher owns the instruction slice and the
+        // include opcode has a following dispatch position, so advancing once
+        // is the same bounded transition used by the ordinary include miss.
+        unsafe { (*frame).opline = (*frame).opline.add(1) };
+        return Ok(ColdResult::Continue);
+    }
+
+    let exception = make_error_value("Error", &second);
+    attach_throwable_origin(
+        &exception,
+        eg,
+        frame,
+        op_array,
+        include_origin_index(op_array, opline),
+    );
+    Ok(match throw_in_frame(eg, frame, exception)? {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+    })
+}
+
 /// Returns true if the caller should `continue` (skip opline advance).
 #[inline(never)]
 fn op_include<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
     opline: &crate::vm::instruction::Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
     let path_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     let path_str = path_val.echo_to_string();
     let is_require = (opline.extended_value & 1) != 0;
     let is_once = (opline.extended_value & 2) != 0;
+
+    #[cfg(feature = "stream-registry")]
+    let mut wrapper_candidate = crate::stdlib::user_wrapper::definition_for_url(
+        eg,
+        &path_str,
+    )
+    .map(|_| path_str.clone());
+    #[cfg(feature = "stream-registry")]
+    let mut searched_user_include_path = false;
+
+    #[cfg(all(feature = "stream-registry", feature = "include-path"))]
+    if wrapper_candidate.is_none()
+        && !std::path::Path::new(&path_str).is_absolute()
+        && !path_str.starts_with("./")
+        && !path_str.starts_with("../")
+        && !path_str.contains("://")
+    {
+        for candidate in crate::stdlib::include_path::search_candidates(eg, &path_str) {
+            match crate::stdlib::user_wrapper::url_stat(eg, &candidate, 6)? {
+                Some(true) => {
+                    searched_user_include_path = true;
+                    wrapper_candidate = Some(candidate);
+                    break;
+                }
+                Some(false) => {
+                    searched_user_include_path = true;
+                    if let Some(exception) = eg.exception.take() {
+                        return Ok(match throw_in_frame(eg, frame, exception)? {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                ColdResult::NewFrame(new_frame, new_op_array)
+                            }
+                            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                        });
+                    }
+                }
+                None if std::path::Path::new(&candidate).exists() => break,
+                None => {}
+            }
+        }
+    }
+
+    #[cfg(feature = "stream-registry")]
+    if let Some(candidate) = wrapper_candidate {
+        let opened =
+            crate::stdlib::user_wrapper::open_include_source(eg, &candidate)?;
+        if let Some(exception) = eg.exception.take() {
+            return Ok(match throw_in_frame(eg, frame, exception)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+        match opened {
+            crate::stdlib::user_wrapper::IncludeOpenResult::Opened {
+                source,
+                canonical,
+            } => {
+                let outcome = execute_included_user_source(
+                    eg,
+                    source,
+                    &candidate,
+                    canonical,
+                    is_once,
+                    Some((frame, op_array)),
+                )?;
+                return match outcome {
+                    IncludeFileOutcome::Executed(value) => {
+                        write_include_result(frame, opline, value);
+                        Ok(ColdResult::Done)
+                    }
+                    IncludeFileOutcome::AlreadyIncluded => {
+                        write_include_result(frame, opline, Value::bool(true));
+                        Ok(ColdResult::Done)
+                    }
+                    IncludeFileOutcome::Thrown(exception) => {
+                        Ok(match throw_in_frame(eg, frame, exception)? {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                ColdResult::NewFrame(new_frame, new_op_array)
+                            }
+                            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                        })
+                    }
+                    IncludeFileOutcome::Missing(_) => unreachable!(
+                        "user-wrapper source is already materialized before compilation"
+                    ),
+                };
+            }
+            crate::stdlib::user_wrapper::IncludeOpenResult::Declined { class } => {
+                return user_wrapper_include_failure(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
+                    &path_str,
+                    Some(&class),
+                    is_require,
+                    is_once,
+                );
+            }
+            crate::stdlib::user_wrapper::IncludeOpenResult::NotRegistered => {}
+        }
+    }
 
     #[cfg(not(feature = "include-path"))]
     let resolved_path = if std::path::Path::new(&path_str).is_absolute() {
@@ -1075,7 +1358,21 @@ fn op_include<'a>(
         base_dir.join(&path_str).to_string_lossy().into_owned()
     };
 
-    match execute_included_file(eg, &resolved_path, is_once, Some((frame, op_array)))? {
+    let outcome = execute_included_file(eg, &resolved_path, is_once, Some((frame, op_array)))?;
+    #[cfg(feature = "stream-registry")]
+    if searched_user_include_path && matches!(outcome, IncludeFileOutcome::Missing(_)) {
+        return user_wrapper_include_failure(
+            eg,
+            frame,
+            op_array,
+            opline,
+            &path_str,
+            None,
+            is_require,
+            is_once,
+        );
+    }
+    match outcome {
         IncludeFileOutcome::Executed(value) => {
             write_include_result(frame, opline, value);
             Ok(ColdResult::Done)

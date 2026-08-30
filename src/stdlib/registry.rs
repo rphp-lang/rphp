@@ -1665,6 +1665,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "context"
     );
     reg!("file_exists", fn_file_exists, 1, 1, "filename");
+    reg!("stat", fn_stat, 1, 1, "filename");
     reg!("filemtime", fn_filemtime, 1, 1, "filename");
     reg!("is_file", fn_is_file, 1, 1, "filename");
     reg!("is_dir", fn_is_dir, 1, 1, "filename");

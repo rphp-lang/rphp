@@ -77,6 +77,31 @@ pub(super) fn fn_stream_get_contents(
             debug_assert_eq!(read, bytes.len());
             super::return_value(return_pointer, super::super::php_byte_result(bytes, false))
         }
-        _ => super::return_value(return_pointer, Value::bool(false)),
+        _ => {
+            #[cfg(feature = "stream-registry")]
+            if super::user_wrapper::is_user_stream(eg, resource) {
+                if offset.is_some() {
+                    return super::return_value(return_pointer, Value::bool(false));
+                }
+                let limit = length.unwrap_or(usize::MAX);
+                while bytes.len() < limit {
+                    let requested = limit.saturating_sub(bytes.len()).min(8192);
+                    let Some(chunk) = super::user_wrapper::read(eg, resource, requested)? else {
+                        return super::return_value(return_pointer, Value::bool(false));
+                    };
+                    let empty = chunk.is_empty();
+                    bytes.extend_from_slice(&chunk);
+                    let eof = super::user_wrapper::cached_eof(eg, resource).unwrap_or(true);
+                    if empty || eof {
+                        break;
+                    }
+                }
+                return super::return_value(
+                    return_pointer,
+                    super::super::php_byte_result(bytes, false),
+                );
+            }
+            super::return_value(return_pointer, Value::bool(false))
+        }
     }
 }

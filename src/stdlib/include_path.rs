@@ -58,15 +58,13 @@ pub(crate) fn resolve_existing(eg: &ExecutorGlobals, requested: &str) -> Option<
         return None;
     }
 
-    let include_path = current(eg);
-    for entry in include_path.split(path_separator()) {
-        let candidate = if entry.is_empty() {
-            PathBuf::from(requested)
-        } else {
-            Path::new(entry).join(requested)
-        };
+    for candidate in search_candidates(eg, requested) {
+        if candidate.contains("://") {
+            continue;
+        }
+        let candidate = PathBuf::from(candidate);
         if candidate.exists() {
-            if entry.is_empty() {
+            if candidate == Path::new(requested) {
                 return Some(requested.to_string());
             }
             return Some(
@@ -78,6 +76,45 @@ pub(crate) fn resolve_existing(eg: &ExecutorGlobals, requested: &str) -> Option<
         }
     }
     None
+}
+
+/// Produce include-path candidates in exact request order. On Unix a wrapper
+/// scheme's `://` colon is part of the entry rather than the path separator;
+/// splitting it naively would turn `test://foo:test://bar` into four paths.
+#[cold]
+pub(crate) fn search_candidates(eg: &ExecutorGlobals, requested: &str) -> Vec<String> {
+    split_entries(current(eg))
+        .into_iter()
+        .map(|entry| {
+            if entry.is_empty() {
+                requested.to_string()
+            } else if entry.contains("://") {
+                format!("{}/{requested}", entry.trim_end_matches('/'))
+            } else {
+                Path::new(entry)
+                    .join(requested)
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        })
+        .collect()
+}
+
+fn split_entries(path: &str) -> Vec<&str> {
+    if path_separator() != ':' {
+        return path.split(path_separator()).collect();
+    }
+    let bytes = path.as_bytes();
+    let mut entries = Vec::new();
+    let mut start = 0usize;
+    for index in 0..bytes.len() {
+        if bytes[index] == b':' && bytes.get(index + 1..index + 3) != Some(b"//") {
+            entries.push(&path[start..index]);
+            start = index + 1;
+        }
+    }
+    entries.push(&path[start..]);
+    entries
 }
 
 #[cold]
@@ -93,7 +130,7 @@ pub(crate) fn resolve_for_open(
     }
 }
 
-fn current(eg: &ExecutorGlobals) -> &str {
+pub(crate) fn current(eg: &ExecutorGlobals) -> &str {
     eg.static_vars
         .get(INCLUDE_PATH_STATE)
         .and_then(|state| state.get(INCLUDE_PATH_VALUE))

@@ -7,6 +7,67 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The latest measured AMD64 PHP 8.5 language checkpoint is
+`user-stream-wrapper-lifecycle`, based on `bffd110b`, pinned to php-src 8.5
+commit `fcc29c8` and validated against PHP 8.5.10. Request-local user stream
+schemes now expose PHP's exact-case registration, unregister and restore
+rules, reflected function contracts, built-in replacement behavior and
+`STREAM_IS_URL` locality. File and directory wrapper callbacks share the
+ordinary method resolver, including visibility, `__call`, constructor context,
+metadata, opened-path identity, include-once, chunked include reads and
+catchable callback exceptions. Live resources survive self-unregistration and
+close once; request shutdown closes remaining wrapper resources in reverse
+creation order while preserving ordinary built-in stream behavior. The five
+admitted `STREAM_*` constants are available through the core constant table.
+
+Seven original E2E cases cover signatures, positive and negative registration,
+case sensitivity, private construction, context, reentrancy, exception state,
+directory rewind, metadata, large includes, include-once identity and shutdown
+order. Eleven of the selected thirteen upstream cases now pass; the focused
+manifest hashes to
+`3893e891482c9c468f32d8421e4850cf49b1468163122d229e61a600f9e6189a`.
+The two remaining `gh8548` cases require true request-allocation accounting for
+`memory_get_usage()` and are not treated as wrapper failures or hidden passes.
+
+The exact final 5,599-case Zend/lang run is 4,796 pass, 507 fail, 115 skip and
+181 unsupported; its manifest hashes to
+`cfdfaff5c0d7447c07de218bb861b6aad4e4bc8cebea0b408f174d308b3bd56c`.
+The 1,575-case strings/array projection is 1,458 pass, 19 fail, 67 skip and 31
+unsupported and is byte-identical to the `bffd110b` parent, with manifest hash
+`226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`.
+The combined classification and pass-set hashes are
+`b35cbbc9db4119dda64ccec0bff2aff21dcd14f202fbee2d5a0b561a4bbee14a`
+and `d4687432cdf69923a8656e035b7af36e457849d71def94a4773e141aa8384252`:
+6,254 pass, 526 fail, 182 skip and 212 unsupported, with no timeout or crash.
+The exact current-parent delta is `+11/-0`. The parent already contained the
+one `strval_variation2.phpt` loss introduced after the class-link checkpoint;
+this train neither caused nor masks it. Supported debt is 507 Zend/lang
+failures, 19 strings failures and zero array failures.
+
+All default, no-default, erased-generics, reified-generics and all-feature Cargo
+test configurations, all-feature/all-target checking, formatting, HTML data,
+PHPT runner and both unsafe-policy checks pass. Production uses 1,622 unsafe
+blocks against a ceiling of 1,623, 289 unsafe functions, 398 SAFETY annotations
+and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates and
+PHP 8.5.10 warmed-kernel S2 and cold-build S3 pass on the final implementation.
+
+The fixed-parent CPU-2 release gate retains 32 balanced randomized A/B pairs
+per workload, three warmups and exact output checks, with no outlier removal.
+Paired medians are startup -0.535%, ordinary calls -0.597%, local file access
++0.122% and local include -0.034%; the candidate-only user-wrapper workload
+has a 76.830 ms median. The raw observations and summary hash to
+`86c6fd1d9189c70b732ad1492c7e0ef7a8e471c47ecb9e35eff3e8d7a6b86f05`
+and `db43fa67adcc0284efd84934a9178c0dc7fdebea734a08790f725b1ea0c17344`.
+The parent and candidate binaries hash to
+`f0ce5a210cdd11c3d9b074ec60547254e3399a6097005e5eba2a2ab6c4e00dfa`
+and `336708a70190748e755c0a77ed633a4d36aa09a795af405b03d587054ea65d4c`;
+the candidate grows by 132,584 bytes (0.978%).
+
+This checkpoint does not claim request allocator accounting, generic user
+wrapper seek/write support, network wrapper equivalence, all optional callback
+forms, 32-bit behavior or allocation-limit/OOM equivalence. The implementation
+checkpoint is the commit containing this status.
+
 The latest measured AMD64 PHP 8.5 builtin checkpoint is
 `high-reach-call-contracts-and-byte-provenance`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.10. `class_exists()`,
@@ -72,7 +133,7 @@ lifecycle, 32-bit behavior or allocation-limit/OOM equivalence. The exact
 implementation checkpoint is `5a5a8252`; the documentation-only status commit
 does not change its measured binary.
 
-The latest measured AMD64 PHP 8.5 language checkpoint is
+The immediately preceding measured AMD64 PHP 8.5 language checkpoint is
 `class-link-validation-and-publication`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.10. Class-like declarations now cross
 one transactional link/finalize boundary: forward or missing interfaces and

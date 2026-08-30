@@ -241,6 +241,8 @@ fn directory_argument(
     }
     let is_directory =
         super::resource::with_request_payload_mut::<DirectoryStream, _>(eg, id, |_| ()).is_some();
+    #[cfg(feature = "stream-registry")]
+    let is_directory = is_directory || super::streams::user_wrapper::is_user_directory(eg, id);
     if !is_directory {
         let message = if super::resource::type_for_request(eg, id) == "stream" {
             format!("{function}(): Argument #1 ($dir_handle) must be a valid Directory resource")
@@ -300,6 +302,29 @@ pub(super) fn fn_opendir(
     if directory.is_empty() {
         ret!(rv, Value::bool(false));
     }
+    #[cfg(feature = "stream-registry")]
+    match super::streams::user_wrapper::open_directory(eg, &directory, 0)? {
+        super::streams::user_wrapper::OpenResult::Opened(value) => {
+            remember_last_directory(eg, &value);
+            ret!(rv, value);
+        }
+        super::streams::user_wrapper::OpenResult::Declined { class } => {
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            super::report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!(
+                    "opendir({directory}): Failed to open directory: \"{class}::dir_opendir\" call failed"
+                ),
+            )?;
+            ret!(rv, Value::bool(false));
+        }
+        super::streams::user_wrapper::OpenResult::NotRegistered => {}
+    }
     match DirectoryStream::open(Path::new(&directory)) {
         Ok(stream) => {
             let value = insert_directory(eg, stream);
@@ -333,6 +358,13 @@ pub(super) fn fn_readdir(
     let Some(id) = directory_argument(ed, eg, "readdir")? else {
         return Ok(());
     };
+    #[cfg(feature = "stream-registry")]
+    if let Some(entry) = super::streams::user_wrapper::directory_read(eg, id)? {
+        match entry {
+            Some(entry) => ret!(rv, Value::string(entry)),
+            None => ret!(rv, Value::bool(false)),
+        }
+    }
     let result = super::resource::with_request_payload_mut::<DirectoryStream, _>(
         eg,
         id,
@@ -353,6 +385,10 @@ pub(super) fn fn_rewinddir(
     let Some(id) = directory_argument(ed, eg, "rewinddir")? else {
         return Ok(());
     };
+    #[cfg(feature = "stream-registry")]
+    if super::streams::user_wrapper::directory_rewind(eg, id)?.is_some() {
+        ret!(rv, Value::null());
+    }
     let _ = super::resource::with_request_payload_mut::<DirectoryStream, _>(
         eg,
         id,
@@ -369,6 +405,12 @@ pub(super) fn fn_closedir(
     let Some(id) = directory_argument(ed, eg, "closedir")? else {
         return Ok(());
     };
+    #[cfg(feature = "stream-registry")]
+    if super::streams::user_wrapper::is_user_directory(eg, id) {
+        let _ = super::streams::user_wrapper::close(eg, id)?;
+        clear_last_directory_if(eg, id);
+        ret!(rv, Value::null());
+    }
     let closed = super::resource::close_for_request::<DirectoryStream>(eg, id);
     debug_assert!(
         closed,

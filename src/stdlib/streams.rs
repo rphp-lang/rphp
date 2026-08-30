@@ -6,6 +6,8 @@ use crate::runtime::ExecutorGlobals;
 use crate::value::{PhpArray, Value, ValueType};
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
+#[cfg(feature = "stream-registry")]
+use crate::vm::function::ParamTypeHint;
 use crate::vm::function::{FunctionCommon, InternalFunction, InternalFunctionHandler};
 
 use super::stream::PhpStream;
@@ -43,6 +45,8 @@ mod info;
 mod line;
 #[cfg(feature = "stream-truncate")]
 mod truncate;
+#[cfg(feature = "stream-registry")]
+pub(crate) mod user_wrapper;
 
 #[cold]
 pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<InternalFunction>>) {
@@ -254,6 +258,75 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
         eg.register_function(name, pointer).unwrap();
         functions.push(function);
     }
+
+    #[cfg(feature = "stream-registry")]
+    for (name, handler, maximum, required, parameter_names, parameter_types) in [
+        (
+            "stream_wrapper_register",
+            user_wrapper::fn_stream_wrapper_register as InternalFunctionHandler,
+            3,
+            2,
+            &["protocol", "class", "flags"][..],
+            &[
+                ParamTypeHint::String,
+                ParamTypeHint::String,
+                ParamTypeHint::Int,
+            ][..],
+        ),
+        (
+            "stream_register_wrapper",
+            user_wrapper::fn_stream_wrapper_register as InternalFunctionHandler,
+            3,
+            2,
+            &["protocol", "class", "flags"][..],
+            &[
+                ParamTypeHint::String,
+                ParamTypeHint::String,
+                ParamTypeHint::Int,
+            ][..],
+        ),
+        (
+            "stream_wrapper_unregister",
+            user_wrapper::fn_stream_wrapper_unregister as InternalFunctionHandler,
+            1,
+            1,
+            &["protocol"][..],
+            &[ParamTypeHint::String][..],
+        ),
+        (
+            "stream_wrapper_restore",
+            user_wrapper::fn_stream_wrapper_restore as InternalFunctionHandler,
+            1,
+            1,
+            &["protocol"][..],
+            &[ParamTypeHint::String][..],
+        ),
+    ] {
+        let mut function = Box::new(make_internal_function(
+            handler,
+            maximum,
+            required,
+            parameter_names
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect(),
+        ));
+        function.common.sig.param_type_hints = parameter_types.to_vec();
+        function.common.sig.return_type_hint = ParamTypeHint::Bool;
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function(name, pointer).unwrap();
+        eg.register_internal_function_reflection_metadata(
+            pointer,
+            if maximum == 3 {
+                vec![None, None, Some(Value::long(0))]
+            } else {
+                vec![None]
+            },
+            "standard",
+        );
+        functions.push(function);
+    }
 }
 
 #[cold]
@@ -440,6 +513,26 @@ fn fn_fopen(
         None => Cow::Owned(path_argument.echo_to_string()),
     };
     let mode = argument_string(execute_data, 1);
+    #[cfg(feature = "stream-registry")]
+    match user_wrapper::open_file(eg, path.as_ref(), mode.as_ref(), 0)? {
+        user_wrapper::OpenResult::Opened(value) => return return_value(return_pointer, value),
+        user_wrapper::OpenResult::Declined { class } => {
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            super::report_internal_diagnostic(
+                eg,
+                execute_data,
+                2,
+                "Warning",
+                &format!(
+                    "fopen({path}): Failed to open stream: \"{class}::stream_open\" call failed"
+                ),
+            )?;
+            return return_value(return_pointer, Value::bool(false));
+        }
+        user_wrapper::OpenResult::NotRegistered => {}
+    }
     let value = match PhpStream::open(path.as_ref(), mode.as_ref()) {
         #[cfg(feature = "resource-lifetime")]
         Ok(stream) => insert_stream(eg, stream),
@@ -477,7 +570,15 @@ fn fn_fread(
             bytes.truncate(read);
             return_value(return_pointer, super::php_byte_result(bytes, false))
         }
-        _ => return_value(return_pointer, Value::bool(false)),
+        _ => {
+            #[cfg(feature = "stream-registry")]
+            if let Some(resource) = resource
+                && let Some(bytes) = user_wrapper::read(eg, resource, length)?
+            {
+                return return_value(return_pointer, super::php_byte_result(bytes, false));
+            }
+            return_value(return_pointer, Value::bool(false))
+        }
     }
 }
 
@@ -624,10 +725,19 @@ fn fn_fclose(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let closed = argument(execute_data, 0)
-        .as_resource_id()
+    let resource = argument(execute_data, 0).as_resource_id();
+    let closed = resource
         .is_some_and(|resource| super::resource::close_for_request::<PhpStream>(eg, resource));
-    return_value(return_pointer, Value::bool(closed))
+    if closed {
+        return return_value(return_pointer, Value::bool(true));
+    }
+    #[cfg(feature = "stream-registry")]
+    if let Some(resource) = resource
+        && let Some(closed) = user_wrapper::close(eg, resource)?
+    {
+        return return_value(return_pointer, Value::bool(closed));
+    }
+    return_value(return_pointer, Value::bool(false))
 }
 
 #[cold]
@@ -636,10 +746,17 @@ fn fn_fflush(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let flushed = argument(execute_data, 0)
-        .as_resource_id()
+    let resource = argument(execute_data, 0).as_resource_id();
+    let flushed = resource
         .and_then(|resource| with_stream(eg, resource, |stream| stream.flush().is_ok()))
         .unwrap_or(false);
+    #[cfg(feature = "stream-registry")]
+    if !flushed
+        && let Some(resource) = resource
+        && let Some(flushed) = user_wrapper::flush(eg, resource)?
+    {
+        return return_value(return_pointer, Value::bool(flushed));
+    }
     return_value(return_pointer, Value::bool(flushed))
 }
 
@@ -663,11 +780,20 @@ fn fn_feof(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let eof = argument(execute_data, 0)
-        .as_resource_id()
-        .and_then(|resource| with_stream(eg, resource, |stream| stream.is_eof()))
-        .unwrap_or(false);
-    return_value(return_pointer, Value::bool(eof))
+    let resource = argument(execute_data, 0).as_resource_id();
+    if let Some(eof) =
+        resource.and_then(|resource| with_stream(eg, resource, |stream| stream.is_eof()))
+    {
+        return return_value(return_pointer, Value::bool(eof));
+    }
+    #[cfg(feature = "stream-registry")]
+    if let Some(resource) = resource
+        && user_wrapper::is_user_stream(eg, resource)
+    {
+        let eof = user_wrapper::eof(eg, resource)?.unwrap_or(false);
+        return return_value(return_pointer, Value::bool(eof));
+    }
+    return_value(return_pointer, Value::bool(false))
 }
 
 #[cold]
@@ -683,7 +809,15 @@ fn fn_ftell(
         Some(Ok(position)) if position <= i64::MAX as u64 => {
             return_value(return_pointer, Value::long(position as i64))
         }
-        _ => return_value(return_pointer, Value::bool(false)),
+        _ => {
+            #[cfg(feature = "stream-registry")]
+            if let Some(resource) = argument(execute_data, 0).as_resource_id()
+                && let Some(position) = user_wrapper::position(eg, resource)
+            {
+                return return_value(return_pointer, Value::long(position));
+            }
+            return_value(return_pointer, Value::bool(false))
+        }
     }
 }
 
@@ -775,33 +909,40 @@ fn fn_stream_get_meta_data(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let value = argument(execute_data, 0)
-        .as_resource_id()
-        .and_then(|resource| {
-            with_stream(eg, resource, |stream| {
-                let metadata = stream.metadata();
-                let status_fields = usize::from(metadata.timed_out.is_some())
-                    + usize::from(metadata.blocked.is_some())
-                    + usize::from(metadata.eof.is_some());
-                let mut result = PhpArray::with_hash_capacity(6 + status_fields);
-                if let Some(timed_out) = metadata.timed_out {
-                    result.set_str("timed_out", Value::bool(timed_out));
-                }
-                if let Some(blocked) = metadata.blocked {
-                    result.set_str("blocked", Value::bool(blocked));
-                }
-                if let Some(eof) = metadata.eof {
-                    result.set_str("eof", Value::bool(eof));
-                }
-                result.set_str("wrapper_type", Value::string(metadata.wrapper_type));
-                result.set_str("stream_type", Value::string(metadata.stream_type));
-                result.set_str("mode", Value::string(metadata.mode));
-                result.set_str("unread_bytes", Value::long(metadata.unread_bytes as i64));
-                result.set_str("seekable", Value::bool(metadata.seekable));
-                result.set_str("uri", Value::string(metadata.uri));
-                Value::array(result)
-            })
+    let resource = argument(execute_data, 0).as_resource_id();
+    let value = resource.and_then(|resource| {
+        with_stream(eg, resource, |stream| {
+            let metadata = stream.metadata();
+            let status_fields = usize::from(metadata.timed_out.is_some())
+                + usize::from(metadata.blocked.is_some())
+                + usize::from(metadata.eof.is_some());
+            let mut result = PhpArray::with_hash_capacity(6 + status_fields);
+            if let Some(timed_out) = metadata.timed_out {
+                result.set_str("timed_out", Value::bool(timed_out));
+            }
+            if let Some(blocked) = metadata.blocked {
+                result.set_str("blocked", Value::bool(blocked));
+            }
+            if let Some(eof) = metadata.eof {
+                result.set_str("eof", Value::bool(eof));
+            }
+            result.set_str("wrapper_type", Value::string(metadata.wrapper_type));
+            result.set_str("stream_type", Value::string(metadata.stream_type));
+            result.set_str("mode", Value::string(metadata.mode));
+            result.set_str("unread_bytes", Value::long(metadata.unread_bytes as i64));
+            result.set_str("seekable", Value::bool(metadata.seekable));
+            result.set_str("uri", Value::string(metadata.uri));
+            Value::array(result)
         })
-        .unwrap_or_else(|| Value::bool(false));
+    });
+    #[cfg(feature = "stream-registry")]
+    let value = if value.is_some() {
+        value
+    } else if let Some(resource) = resource {
+        user_wrapper::metadata(eg, resource)?
+    } else {
+        None
+    };
+    let value = value.unwrap_or_else(|| Value::bool(false));
     return_value(return_pointer, value)
 }

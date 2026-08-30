@@ -8,15 +8,18 @@ use crate::vm::frame::ExecuteData;
 use super::checked_args::{argument_error, given_type_name};
 use super::{argument, return_value, with_stream};
 
-const WRAPPERS: &[&str] = &["php", "file"];
-
 #[cold]
 pub(super) fn fn_stream_get_wrappers(
     _execute_data: *mut ExecuteData,
     return_pointer: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    return_value(return_pointer, string_registry(WRAPPERS))
+    let wrappers = super::user_wrapper::wrappers(eg);
+    let mut registry = PhpArray::with_packed_capacity(wrappers.len());
+    for wrapper in wrappers {
+        registry.push(Value::string(wrapper));
+    }
+    return_value(return_pointer, Value::array(registry))
 }
 
 #[cold]
@@ -49,6 +52,9 @@ pub(super) fn fn_stream_is_local(
         if with_stream(eg, resource, |_| ()).is_some() {
             return return_value(return_pointer, Value::bool(true));
         }
+        if let Some(is_local) = super::user_wrapper::is_local_stream(eg, resource) {
+            return return_value(return_pointer, Value::bool(is_local));
+        }
         argument_error(
             eg,
             "TypeError",
@@ -71,15 +77,10 @@ pub(super) fn fn_stream_is_local(
         }
         _ => value.echo_to_string(),
     };
-    return_value(return_pointer, Value::bool(is_local_url(&url)))
-}
-
-fn string_registry(values: &[&str]) -> Value {
-    let mut registry = PhpArray::with_packed_capacity(values.len());
-    for value in values {
-        registry.push(Value::string(*value));
+    if let Some(is_local) = super::user_wrapper::is_local_url(eg, &url) {
+        return return_value(return_pointer, Value::bool(is_local));
     }
-    Value::array(registry)
+    return_value(return_pointer, Value::bool(is_local_url(&url)))
 }
 
 fn is_local_url(url: &str) -> bool {

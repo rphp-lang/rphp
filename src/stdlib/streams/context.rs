@@ -153,6 +153,28 @@ pub(super) fn fn_fopen(
     let open_path = resolved_path.as_str();
     #[cfg(not(feature = "include-path"))]
     let open_path = path.as_ref();
+    #[cfg(feature = "stream-registry")]
+    match super::user_wrapper::open_file(eg, open_path, mode.as_ref(), 0)? {
+        super::user_wrapper::OpenResult::Opened(value) => {
+            return return_value(return_pointer, value);
+        }
+        super::user_wrapper::OpenResult::Declined { class } => {
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            super::super::report_internal_diagnostic(
+                eg,
+                execute_data,
+                2,
+                "Warning",
+                &format!(
+                    "fopen({open_path}): Failed to open stream: \"{class}::stream_open\" call failed"
+                ),
+            )?;
+            return return_value(return_pointer, Value::bool(false));
+        }
+        super::user_wrapper::OpenResult::NotRegistered => {}
+    }
     let value = match PhpStream::open(open_path, mode.as_ref()) {
         Ok(stream) => {
             #[cfg(feature = "resource-lifetime")]

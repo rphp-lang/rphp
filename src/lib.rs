@@ -287,6 +287,16 @@ pub(crate) const BUILTIN_CONSTANT_NAMES: &[&str] = &[
     "SEEK_SET",
     "SEEK_CUR",
     "SEEK_END",
+    #[cfg(feature = "stream-registry")]
+    "STREAM_REPORT_ERRORS",
+    #[cfg(feature = "stream-registry")]
+    "STREAM_MUST_SEEK",
+    #[cfg(feature = "stream-registry")]
+    "STREAM_URL_STAT_LINK",
+    #[cfg(feature = "stream-registry")]
+    "STREAM_URL_STAT_QUIET",
+    #[cfg(feature = "stream-registry")]
+    "STREAM_IS_URL",
     "FILE_USE_INCLUDE_PATH",
     "FILE_APPEND",
     "FILE_IGNORE_NEW_LINES",
@@ -554,6 +564,16 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "SEEK_SET" => Some(value::Value::long(0)),
         "SEEK_CUR" => Some(value::Value::long(1)),
         "SEEK_END" => Some(value::Value::long(2)),
+        #[cfg(feature = "stream-registry")]
+        "STREAM_REPORT_ERRORS" => Some(value::Value::long(8)),
+        #[cfg(feature = "stream-registry")]
+        "STREAM_MUST_SEEK" => Some(value::Value::long(16)),
+        #[cfg(feature = "stream-registry")]
+        "STREAM_URL_STAT_LINK" => Some(value::Value::long(1)),
+        #[cfg(feature = "stream-registry")]
+        "STREAM_URL_STAT_QUIET" => Some(value::Value::long(2)),
+        #[cfg(feature = "stream-registry")]
+        "STREAM_IS_URL" => Some(value::Value::long(1)),
         #[cfg(any(feature = "file-write", feature = "file-lines"))]
         "FILE_USE_INCLUDE_PATH" => Some(value::Value::long(1)),
         "FILE_APPEND" => Some(value::Value::long(8)),

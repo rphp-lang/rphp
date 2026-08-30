@@ -14724,6 +14724,8 @@ pub fn run_shutdown_functions(
         let Some(next) = next else {
             eg.shutdown_functions = None;
             crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
+            #[cfg(feature = "stream-registry")]
+            streams::user_wrapper::shutdown_open_streams(eg)?;
             return Ok(());
         };
         let result = call_resolved_with_values_from(
@@ -14739,6 +14741,8 @@ pub fn run_shutdown_functions(
         if let Err(error) = result {
             drain_pending_roots(eg, &mut release_roots);
             crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
+            #[cfg(feature = "stream-registry")]
+            let _ = streams::user_wrapper::shutdown_open_streams(eg);
             return Err(error);
         }
         if let Some(exception) = eg.exception.take() {
@@ -14752,6 +14756,8 @@ pub fn run_shutdown_functions(
                 Err(error) => {
                     drain_pending_roots(eg, &mut release_roots);
                     crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
+                    #[cfg(feature = "stream-registry")]
+                    let _ = streams::user_wrapper::shutdown_open_streams(eg);
                     return Err(error);
                 }
             }
@@ -14761,6 +14767,8 @@ pub fn run_shutdown_functions(
                 .expect("unhandled shutdown exception must remain pending");
             drain_pending_roots(eg, &mut release_roots);
             crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
+            #[cfg(feature = "stream-registry")]
+            let _ = streams::user_wrapper::shutdown_open_streams(eg);
             return Err(VmError::Fatal(
                 crate::vm::execute::format_uncaught_throwable(eg, &exception),
             ));
@@ -28018,3 +28026,5 @@ pub(crate) mod resource;
 #[path = "stream.rs"]
 mod stream;
 mod streams;
+#[cfg(feature = "stream-registry")]
+pub(crate) use streams::user_wrapper;
