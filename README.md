@@ -61,6 +61,27 @@ printf '<?php echo 6 * 7;' | ./target/max-perf/rphp
 ./target/max-perf/rphp --version
 ```
 
+## Builtin compatibility audit
+
+After a debug build, the on-demand audit compares every builtin exposed by the
+selected reference PHP with RPHP, including argument names, arity,
+required/optional and variadic parameters, by-reference mode, defaults and
+Reflection type metadata:
+
+```sh
+cargo build
+python3 scripts/audit-php-builtins.py
+```
+
+Add one or more `--vendor /path/to/vendor` arguments to prioritize builtin
+function calls found statically in Composer packages. Results are written to
+`target/builtin-audit/`: `report.md` summarizes the gaps, while `functions.csv`,
+`types.csv`, `methods.csv` and `vendor-functions.csv` contain the complete
+machine-readable mappings. `--reference-php`, `--rphp`, `--output-dir` and
+`--fail-on` make the same audit reusable with another PHP build or in CI. The
+inventory proves name and Reflection-visible contract coverage, not complete
+runtime semantics.
+
 ## Experimental build modes
 
 Features are selected at compile time. The resulting binary automatically uses
