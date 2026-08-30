@@ -1446,9 +1446,8 @@ pub(super) fn fn_preg_quote(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let source_argument = arg!(ed, 0);
-    let converted_source;
-    let source = if source_argument.value_type() == ValueType::String {
-        source_argument
+    let mut source = if source_argument.value_type() == ValueType::String {
+        Cow::Borrowed(source_argument)
     } else {
         let Some(converted) = typed_internal_string_value_argument_expected(
             ed,
@@ -1461,8 +1460,7 @@ pub(super) fn fn_preg_quote(
         else {
             return Ok(());
         };
-        converted_source = converted;
-        &converted_source
+        Cow::Owned(converted)
     };
     let delimiter = match arg_opt!(ed, 1) {
         None => None,
@@ -1473,6 +1471,10 @@ pub(super) fn fn_preg_quote(
                     .php_string_bytes()
                     .and_then(|bytes| bytes.first().copied())
             } else {
+                // Weak delimiter conversion may call __toString() or a user
+                // error handler. Snapshot an exact borrowed source before
+                // crossing that reentrant boundary.
+                source.to_mut();
                 let Some(delimiter) = typed_internal_string_value_argument_expected(
                     ed,
                     eg,
@@ -1491,9 +1493,16 @@ pub(super) fn fn_preg_quote(
         }
     };
     let binary = source.is_binary_string();
-    let source = source.php_string_bytes().unwrap_or_default();
-    let mut quoted = Vec::with_capacity(source.len());
-    for byte in source.iter().copied() {
+    let source_bytes = source.php_string_bytes().unwrap_or_default();
+    let extra = source_bytes.iter().copied().fold(0usize, |extra, byte| {
+        extra.saturating_add(preg_quote_extra_bytes(byte, delimiter))
+    });
+    if extra == 0 {
+        drop(source_bytes);
+        ret!(rv, source.into_owned());
+    }
+    let mut quoted = Vec::with_capacity(source_bytes.len().saturating_add(extra));
+    for byte in source_bytes.iter().copied() {
         if byte == 0 {
             quoted.extend_from_slice(b"\\000");
             continue;
@@ -1535,6 +1544,38 @@ pub(super) fn fn_preg_quote(
         }
     };
     ret!(rv, result);
+}
+
+#[inline(always)]
+fn preg_quote_extra_bytes(byte: u8, delimiter: Option<u8>) -> usize {
+    if byte == 0 {
+        return 3;
+    }
+    usize::from(
+        matches!(
+            byte,
+            b'.' | b'\\'
+                | b'+'
+                | b'*'
+                | b'?'
+                | b'['
+                | b'^'
+                | b']'
+                | b'$'
+                | b'('
+                | b')'
+                | b'{'
+                | b'}'
+                | b'='
+                | b'!'
+                | b'<'
+                | b'>'
+                | b'|'
+                | b':'
+                | b'-'
+                | b'#'
+        ) || delimiter == Some(byte),
+    )
 }
 
 /// htmlentities() shares htmlspecialchars()'s ASCII/UTF-8 special-character

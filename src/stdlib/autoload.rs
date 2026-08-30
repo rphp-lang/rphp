@@ -458,11 +458,16 @@ fn exists_with_autoload(
         return Ok(false);
     }
 
-    invoke_autoload_stack(eg, name, binary_name)?;
+    // The callback may re-enter userland and replace an aliased source CV.
+    // Loaded/no-autoload probes above stay allocation-free; only the actual
+    // autoload boundary snapshots the requested name.
+    let stable_name = name.to_string();
+    invoke_autoload_stack(eg, &stable_name, binary_name)?;
     Ok(eg.exception.is_none()
-        && lookup_name
+        && symbol_lookup_name(&stable_name, binary_name)
             .as_deref()
-            .is_some_and(|name| symbol_exists(eg, name, kind)))
+            .and_then(|name| loaded_symbol_matches(eg, name, kind))
+            .unwrap_or(false))
 }
 
 fn symbol_exists_handler(

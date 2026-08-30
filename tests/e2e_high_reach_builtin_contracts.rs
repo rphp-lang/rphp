@@ -150,6 +150,15 @@ echo bin2hex(preg_quote('äé', 'é')), "\n";
 echo strlen(preg_quote("\xff")), ':', bin2hex(preg_quote("\xff")), "\n";
 echo base64_encode('é€'), "\n";
 echo base64_encode("\0\x7f\x80\xff"), "\n";
+
+$source = 'a.b';
+final class MutatingDelimiter {
+    public function __toString(): string {
+        $GLOBALS['source'] = 'mutated';
+        return '/';
+    }
+}
+echo 'reentrant-preg|', preg_quote($source, new MutatingDelimiter()), '|', $source, "\n";
 restore_error_handler();
 "#,
         ),
@@ -173,6 +182,7 @@ restore_error_handler();
             "1:ff\n",
             "w6nigqw=\n",
             "AH+A/w==\n",
+            "reentrant-preg|a\\.b|mutated\n",
         )
     );
 }
@@ -419,9 +429,10 @@ var_dump(class_exists('Alias Space', false));
 $anonymous = new class {};
 var_dump(class_exists(get_class($anonymous), false));
 
-spl_autoload_register(static function (string $name): void {
+$filter = static function (string $name): void {
     echo 'autoload|', strlen($name), '|', bin2hex($name), "\n";
-});
+};
+spl_autoload_register($filter);
 foreach ([
     '' => '',
     'space' => 'Bad Name',
@@ -436,6 +447,15 @@ foreach ([
     echo $label, '|';
     var_dump(class_exists($name));
 }
+spl_autoload_unregister($filter);
+
+$requested = 'ReentrantLoaded';
+spl_autoload_register(static function (string $name) use (&$requested): void {
+    echo 'reentrant-autoload|', $name, "\n";
+    $requested = 'changed';
+    eval('class ReentrantLoaded {}');
+});
+var_dump(class_exists($requested), $requested);
 "#,
         ),
         concat!(
@@ -457,6 +477,9 @@ foreach ([
             "bool(false)\n",
             "binary|autoload|1|ff\n",
             "bool(false)\n",
+            "reentrant-autoload|ReentrantLoaded\n",
+            "bool(true)\n",
+            "string(7) \"changed\"\n",
         )
     );
 }
