@@ -70,6 +70,26 @@ fn runtime_class_dependency_exception<'a>(
     })
 }
 
+fn runtime_variance_dependency_exception(
+    eg: &ExecutorGlobals,
+    class_name: &str,
+    source_file: Option<&str>,
+    declaration_line: usize,
+    dependency: &str,
+    exception: &Value,
+) -> VmError {
+    let mut exception = format_uncaught_throwable(eg, exception);
+    if let Some(thrown_suffix) = exception.rfind("\n  thrown in ") {
+        exception.truncate(thrown_suffix);
+    }
+    let inheritance_location = source_file.map_or_else(String::new, |file| {
+        format!(" in {file} on line {declaration_line}")
+    });
+    VmError::Fatal(format!(
+        "During inheritance of {class_name}, while autoloading {dependency}: {exception}{inheritance_location}"
+    ))
+}
+
 #[cold]
 #[inline(never)]
 fn op_declare_class<'a>(
@@ -168,6 +188,8 @@ fn op_declare_class<'a>(
         return Err(VmError::CompileFatal(error));
     }
     let class_name = class_def.name.clone();
+    let class_source_file = class_def.source_file.clone();
+    let class_declaration_line = class_def.declaration_line;
     let class_is_enum = class_def.is_enum;
     let class_parent_is_enum = class_def
         .parent
@@ -186,7 +208,14 @@ fn op_declare_class<'a>(
             let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
             if let Some(exception) = eg.exception.take() {
                 eg.abort_runtime_class_link(&class_name);
-                return Err(VmError::Fatal(format_uncaught_throwable(eg, &exception)));
+                return Err(runtime_variance_dependency_exception(
+                    eg,
+                    &class_name,
+                    class_source_file.as_deref(),
+                    class_declaration_line,
+                    &dependency,
+                    &exception,
+                ));
             }
             if !loaded
                 && let Some(error) = eg
@@ -235,7 +264,14 @@ fn op_declare_class<'a>(
             let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
             if let Some(exception) = eg.exception.take() {
                 eg.abort_runtime_class_link(&class_name);
-                return Err(VmError::Fatal(format_uncaught_throwable(eg, &exception)));
+                return Err(runtime_variance_dependency_exception(
+                    eg,
+                    &class_name,
+                    class_source_file.as_deref(),
+                    class_declaration_line,
+                    &dependency,
+                    &exception,
+                ));
             }
             if !loaded
                 && let Some(error) = eg
@@ -268,13 +304,15 @@ fn op_declare_class<'a>(
             }
             let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
             if let Some(exception) = eg.exception.take() {
-                eg.restore_runtime_class_declaration(declaration_key, class_def);
-                return Ok(match throw_in_frame(eg, frame, exception)? {
-                    ThrowResult::Handled(new_frame, new_op_array) => {
-                        ColdResult::NewFrame(new_frame, new_op_array)
-                    }
-                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-                });
+                eg.abort_runtime_class_link(&class_name);
+                return Err(runtime_variance_dependency_exception(
+                    eg,
+                    &class_name,
+                    class_source_file.as_deref(),
+                    class_declaration_line,
+                    &dependency,
+                    &exception,
+                ));
             }
             if !loaded {
                 unavailable_dependencies.push(dependency);
@@ -300,13 +338,15 @@ fn op_declare_class<'a>(
         }
         let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
         if let Some(exception) = eg.exception.take() {
-            eg.restore_runtime_class_declaration(declaration_key, class_def);
-            return Ok(match throw_in_frame(eg, frame, exception)? {
-                ThrowResult::Handled(new_frame, new_op_array) => {
-                    ColdResult::NewFrame(new_frame, new_op_array)
-                }
-                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-            });
+            eg.abort_runtime_class_link(&class_name);
+            return Err(runtime_variance_dependency_exception(
+                eg,
+                &class_name,
+                class_source_file.as_deref(),
+                class_declaration_line,
+                &dependency,
+                &exception,
+            ));
         }
     }
 

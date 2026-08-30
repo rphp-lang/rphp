@@ -8,6 +8,75 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 language checkpoint is
+`class-link-validation-and-publication`, pinned to php-src 8.5 commit
+`fcc29c8` and validated against PHP 8.5.10. Class-like declarations now cross
+one transactional link/finalize boundary: forward or missing interfaces and
+variance operands stay unpublished while autoload runs, failures roll back the
+provisional declaration, and exceptions raised during variance autoload use
+PHP's inheritance envelope and declaration source. Concrete classes accumulate
+inherited abstract/interface method and property-hook obligations before
+publication, render declaring prototypes and defaults canonically, and reject
+the invalid `Iterator`/`IteratorAggregate` and direct-`Traversable`
+combinations. Explicitly final or abstract interface methods fail at their
+declaration boundary. The admitted internal interface registry also exposes
+`SplObserver` and `SplSubject`.
+
+Six original E2E groups cover successful and rejected publication, recursive
+autoload visibility, rollback, variance exceptions, obligation aggregation,
+property-hook precedence and the two admitted SPL interfaces. The exact
+12-case target manifest is 12 pass and hashes to
+`47b9294cfecadae7daabd6065ab6b1435394d6d87267a7a43d0b1b14146c8854`.
+The adjacent 228-case class-link/abstract/autoload projection remains 185 pass,
+38 fail, three skip and two unsupported, while five previously exposed no-loss
+sentinels pass exactly; those manifests hash to
+`5e4eee46449bdce06ae22d377119f530cf8c9531858115985cb1f2751605d3a7`
+and `4119323cc8cb68819d3e0440401fe7ca8e1c611bb962bb46ac3b5ff65d3c6dd1`.
+
+The exact final 5,599-case Zend/lang run is 4,785 pass, 518 fail, 115 skip and
+181 unsupported; its manifest hashes to
+`7adeb4637b05046e2bc788007149707f37bd27c2b62e3fda5efcae76c43e8eb8`.
+The 1,575-case strings/array projection remains 1,459 pass, 18 fail, 67 skip
+and 31 unsupported, with manifest hash
+`9f5edf942abcc866a1c0c833bca1a4dbef97b344295e36fd07314f233e29b0ce`.
+The combined classification and pass-set hashes are
+`08e017fcb09547dadc3499d1d12655ee7f4a3c3131271061d3602baf7e3e77b8`
+and `7c60f99a7f2189cb0d9854c3b8a987ecbc7e2ef644cb6bde4b83ab6df4124457`:
+6,244 pass, 536 fail, 182 skip and 212 unsupported, with no timeout or crash.
+The exact parent delta is `+13/-0`: the twelve selected cases plus adjacent
+`Zend/tests/autoload/bug49908.phpt`. Supported debt is 518 Zend/lang failures,
+18 strings failures and zero array failures.
+
+The exact parent and final candidate SHA-256 values are
+`65bb3167fca8c8677b4808377feaa97b6a6d8ba5e5a87b15dbfe78eca9d7598b`
+and `bd997afe0d56082004afa90c910b358c421e463514e6055c1c50463a377a8100`.
+All default, no-default, erased-generics, reified-generics and all-feature Cargo
+test configurations, all-feature/all-target checking, formatting, HTML data,
+PHPT runner and both unsafe-policy checks pass. Production remains at 1,623
+unsafe blocks and 289 unsafe functions, with 395 SAFETY annotations and seven
+`# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates and PHP
+8.5.10 warmed-kernel S2 and cold-build S3 pass.
+
+The fixed-parent CPU-2 gate retains every observation and exact checksum. The
+96-pair canonical `bench_calls.php` control measures +0.746% externally and
++0.745% by its internal timer; candidate-first and baseline-first medians stay
+below +0.84%. Startup, valid runtime linking, interface-obligation linking and
+variance autoload measure -2.544%, -2.447%, -1.790% and -1.855%. The raw
+canonical report hashes to
+`cea576aaf1bd71c5bad4ffd987c0edea02654a0abf388813830a9b0a4e81fe03`.
+Narrow one-function scalar and typed-call probes expose +5.086% and +4.846%
+address-sensitive movement even though the changed declaration code is absent
+from those workloads. A 100,000-call Callgrind comparison records 103,186,432
+versus 103,207,947 total instructions and only a ten-instruction difference in
+the executor, localizing this as explicit ordinary-release binary-layout debt
+for the execution/performance workstream rather than a changed hot semantic
+path.
+
+This checkpoint does not claim general SPL implementations, the remaining
+property-hook/dump/iteration cases, Fiber/generator suspension, 32-bit behavior
+or allocation-limit/OOM equivalence. The implementation checkpoint is the
+commit containing this status.
+
+The immediately preceding measured AMD64 PHP 8.5 language checkpoint is
 `dynamic-class-operand-boundaries`, pinned to php-src 8.5 commit `fcc29c8`,
 validated against PHP 8.5.10 and integrated above `8cf07dbb`. One canonical
 class-operand boundary now distinguishes compile-time illegal literal and

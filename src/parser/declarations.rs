@@ -1308,6 +1308,18 @@ impl Parser {
                 let method_generic_params = self.parse_generic_parameters()?;
                 self.push_generic_scope(&method_generic_params);
                 // Interface methods must be public (PHP rule)
+                if modifiers.is_final {
+                    let _ = self.compile_error(
+                        format!("Interface method {name}::{method_name}() must not be final"),
+                        line,
+                    );
+                }
+                if modifiers.is_abstract {
+                    let _ = self.compile_error(
+                        format!("Interface method {name}::{method_name}() must not be abstract"),
+                        line,
+                    );
+                }
                 if modifiers.visibility != Visibility::Public {
                     let vis_str = match modifiers.visibility {
                         Visibility::Protected => "protected",

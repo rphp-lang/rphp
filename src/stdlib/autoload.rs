@@ -42,6 +42,13 @@ fn symbol_exists(eg: &ExecutorGlobals, name: &str, kind: SymbolKind) -> bool {
 }
 
 pub(crate) fn ensure_symbol_loaded(eg: &mut ExecutorGlobals, name: &str) -> Result<bool, VmError> {
+    // A class-like declaration remains intentionally invisible while its
+    // inheritance transaction is active. Recursive probes must observe that
+    // absence without starting a second autoload transaction for the same
+    // symbol.
+    if eg.runtime_class_link_is_active(name) {
+        return Ok(false);
+    }
     exists_with_autoload(eg, name, SymbolKind::Any, true)
 }
 
@@ -134,23 +141,79 @@ fn resolve_autoload_candidate(
     })
 }
 
-fn callsite_source_directory(execute_data: *mut ExecuteData) -> Option<String> {
-    // SAFETY: the active internal-function frame and every predecessor remain
-    // linked and alive for the duration of this synchronous callback.
+#[derive(Clone, Copy)]
+enum UserFrameLookup {
+    Current,
+    Predecessor,
+}
+
+struct UserFrameSource {
+    file: String,
+    source_name: String,
+    line: usize,
+}
+
+fn user_frame_source(
+    execute_data: *mut ExecuteData,
+    lookup: UserFrameLookup,
+) -> Option<UserFrameSource> {
+    // SAFETY: current_execute_data, an active internal-function frame and each
+    // inspected predecessor remain linked and alive for this synchronous
+    // snapshot. The opline is checked against the immutable user op-array
+    // before source metadata is read.
     unsafe {
-        let mut caller = (*execute_data).prev_execute_data;
+        if execute_data.is_null() {
+            return None;
+        }
+        let mut caller = match lookup {
+            UserFrameLookup::Current => execute_data,
+            UserFrameLookup::Predecessor => (*execute_data).prev_execute_data,
+        };
         while !caller.is_null() {
+            if (*caller).func.is_null() {
+                return None;
+            }
             let function = &*(*caller).func;
             if function.fn_type == crate::vm::function::FunctionType::User {
-                let source = (*caller).op_array().name.as_str();
-                return std::path::Path::new(source)
-                    .parent()
-                    .map(|path| path.to_string_lossy().into_owned());
+                let op_array = (*caller).op_array();
+                let base = op_array.instructions.as_ptr();
+                let byte_offset = ((*caller).opline as usize).checked_sub(base as usize)?;
+                if byte_offset % std::mem::size_of::<crate::vm::instruction::Instruction>() != 0 {
+                    return None;
+                }
+                let ip = byte_offset / std::mem::size_of::<crate::vm::instruction::Instruction>();
+                if ip > op_array.instructions.len()
+                    || (ip == op_array.instructions.len()
+                        && matches!(lookup, UserFrameLookup::Current))
+                {
+                    return None;
+                }
+                let source_ip = ip.min(op_array.instructions.len().checked_sub(1)?);
+                return Some(UserFrameSource {
+                    file: if op_array.source_file.is_empty() {
+                        op_array.name.clone()
+                    } else {
+                        op_array.source_file.as_ref().clone()
+                    },
+                    source_name: op_array.name.clone(),
+                    line: op_array.source_line(source_ip).unwrap_or(0),
+                });
+            }
+            if matches!(lookup, UserFrameLookup::Current) {
+                return None;
             }
             caller = (*caller).prev_execute_data;
         }
     }
     None
+}
+
+fn callsite_source_directory(execute_data: *mut ExecuteData) -> Option<String> {
+    user_frame_source(execute_data, UserFrameLookup::Predecessor).and_then(|source| {
+        std::path::Path::new(&source.source_name)
+            .parent()
+            .map(|path| path.to_string_lossy().into_owned())
+    })
 }
 
 pub(crate) fn fn_spl_autoload(
@@ -261,7 +324,22 @@ fn invoke_entry(
         closure_static_vars: entry.closure_static_vars.clone(),
         is_magic_call: entry.is_magic_call,
     };
-    let _ = call_resolved_with_values(eg, &resolved, std::slice::from_ref(class_name))?;
+    let caller = eg.current_execute_data.get();
+    let source_origin =
+        user_frame_source(caller, UserFrameLookup::Current).filter(|source| source.line != 0);
+    let _ = if let Some(source) = source_origin {
+        super::call_resolved_with_values_from(
+            eg,
+            &resolved,
+            std::slice::from_ref(class_name),
+            caller,
+            &source.file,
+            source.line,
+            false,
+        )?
+    } else {
+        call_resolved_with_values(eg, &resolved, std::slice::from_ref(class_name))?
+    };
     Ok(())
 }
 

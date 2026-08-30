@@ -4117,11 +4117,19 @@ impl ExecutorGlobals {
             }
             let Some(implementation) = self.find_effective_method(class_def, requirement.name)
             else {
-                // Ordinary classes still rely on their established
-                // post-composition validation below. Enums have no parent
-                // implementation to acquire during composition, so retain a
-                // missing interface method before the enum can be published.
-                if class_def.is_enum && seen_missing.insert(requirement.name.to_ascii_lowercase()) {
+                if self
+                    .find_class(requirement.owner)
+                    .is_some_and(|owner| owner.is_interface)
+                    && Self::class_declares_property_hook_target(class_def, requirement.name)
+                {
+                    continue;
+                }
+                // Link validation is transactional: every concrete class-like
+                // declaration must retain missing interface obligations before
+                // it acquires an ID or enters the public class table.
+                if !class_def.is_abstract
+                    && seen_missing.insert(requirement.name.to_ascii_lowercase())
+                {
                     missing.push(format!("{}::{}", requirement.owner, requirement.name));
                 }
                 continue;
@@ -4135,6 +4143,13 @@ impl ExecutorGlobals {
                 && (!class_def.is_abstract || unforwarded_private_trait_requirement)
             {
                 if self.concrete_property_implements_hook(class_def, requirement.name) {
+                    continue;
+                }
+                if self
+                    .find_class(requirement.owner)
+                    .is_some_and(|owner| owner.is_interface)
+                    && Self::class_declares_property_hook_target(class_def, requirement.name)
+                {
                     continue;
                 }
                 if seen_missing.insert(requirement.name.to_ascii_lowercase()) {
@@ -4202,7 +4217,9 @@ impl ExecutorGlobals {
             let location = class_def
                 .source_file
                 .as_ref()
-                .map_or_else(String::new, |file| format!(" in {file} on line 0"));
+                .map_or_else(String::new, |file| {
+                    format!(" in {file} on line {}", class_def.declaration_line)
+                });
             return Err(format!(
                 "Class {} contains {} abstract {} and must therefore be declared abstract or implement the remaining {} ({}){}",
                 class_def.name,
@@ -4261,6 +4278,30 @@ impl ExecutorGlobals {
 
     #[cold]
     #[inline(never)]
+    fn class_declares_property_hook_target(class_def: &ClassDef, method_name: &str) -> bool {
+        let Some((property_name, hook)) = method_name
+            .strip_prefix('$')
+            .and_then(|name| name.split_once("::"))
+        else {
+            return false;
+        };
+        class_def
+            .properties
+            .iter()
+            .find(|property| property.name.eq_ignore_ascii_case(property_name))
+            .is_some_and(|property| {
+                if hook.eq_ignore_ascii_case("get") {
+                    !property.abstract_get_hook()
+                } else if hook.eq_ignore_ascii_case("set") {
+                    !property.abstract_set_hook()
+                } else {
+                    false
+                }
+            })
+    }
+
+    #[cold]
+    #[inline(never)]
     fn concrete_property_implements_hook(&self, class_def: &ClassDef, method_name: &str) -> bool {
         let Some((property_name, hook)) = method_name
             .strip_prefix('$')
@@ -4268,10 +4309,7 @@ impl ExecutorGlobals {
         else {
             return false;
         };
-        let Some(property) = class_def
-            .properties
-            .iter()
-            .find(|property| property.name.eq_ignore_ascii_case(property_name))
+        let Some(property) = self.find_effective_property_definition(class_def, property_name)
         else {
             return false;
         };
@@ -4284,6 +4322,38 @@ impl ExecutorGlobals {
         } else {
             false
         }
+    }
+
+    /// Resolve the property declaration that composition will expose without
+    /// mutating the class under validation. Abstract/interface obligations are
+    /// checked before parent and trait properties are copied into the class,
+    /// so the validator must follow the same class > trait > parent precedence
+    /// as the later merge step.
+    fn find_effective_property_definition<'a>(
+        &'a self,
+        class_def: &'a ClassDef,
+        property_name: &str,
+    ) -> Option<&'a PropertyDefinition> {
+        if let Some(property) = class_def
+            .properties
+            .iter()
+            .find(|property| property.name.eq_ignore_ascii_case(property_name))
+        {
+            return Some(property);
+        }
+        for trait_name in &class_def.uses {
+            if let Some(trait_def) = self.find_class(trait_name)
+                && let Some(property) =
+                    self.find_effective_property_definition(trait_def, property_name)
+            {
+                return Some(property);
+            }
+        }
+        class_def
+            .parent
+            .as_deref()
+            .and_then(|parent| self.find_class(parent))
+            .and_then(|parent| self.find_effective_property_definition(parent, property_name))
     }
 
     fn compose_trait_method_pointer(
@@ -4759,6 +4829,19 @@ impl ExecutorGlobals {
         }
         let closure = self.interface_closure_for_roots(&roots);
 
+        let implements_iterator = closure
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case("Iterator"));
+        let implements_iterator_aggregate = closure
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case("IteratorAggregate"));
+        if implements_iterator && implements_iterator_aggregate {
+            return Err(format!(
+                "Class {} cannot implement both Iterator and IteratorAggregate at the same time{location}",
+                class_def.name
+            ));
+        }
+
         if !class_def.is_enum {
             for root in &roots {
                 let inherited = self.interface_closure_for_roots(std::slice::from_ref(root));
@@ -4802,6 +4885,19 @@ impl ExecutorGlobals {
         {
             return Err(format!(
                 "Enum {} must implement interface Traversable as part of either Iterator or IteratorAggregate in Unknown on line 0",
+                class_def.name
+            ));
+        }
+        if !class_def.is_enum
+            && !class_def.is_abstract
+            && closure
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("Traversable"))
+            && !implements_iterator
+            && !implements_iterator_aggregate
+        {
+            return Err(format!(
+                "Class {} must implement interface Traversable as part of either Iterator or IteratorAggregate in Unknown on line 0",
                 class_def.name
             ));
         }

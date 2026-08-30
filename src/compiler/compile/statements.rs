@@ -5201,7 +5201,10 @@ impl Compiler {
                         method.is_static,
                     );
                     user_func.parameter_default_diagnostics =
-                        self.method_parameter_default_diagnostics(&method.params);
+                        self.method_parameter_default_diagnostics(
+                            &method.params,
+                            Some(&resolved_class),
+                        );
                     user_func.set_attributes(self.compile_attributes_in_scope_with_property(
                         &method.attributes,
                         attribute_method_target(&method.name),
@@ -5931,7 +5934,10 @@ impl Compiler {
                         method.returns_by_ref,
                     );
                     user_func.parameter_default_diagnostics =
-                        self.method_parameter_default_diagnostics(&method.params);
+                        self.method_parameter_default_diagnostics(
+                            &method.params,
+                            Some(&resolved_iface),
+                        );
                     user_func.set_attributes(self.compile_attributes_in_scope_with_property(
                         &method.attributes,
                         attribute_method_target(&method.name),
@@ -6278,7 +6284,7 @@ impl Compiler {
                         method.is_static,
                     );
                     user_func.parameter_default_diagnostics =
-                        self.method_parameter_default_diagnostics(&method.params);
+                        self.method_parameter_default_diagnostics(&method.params, None);
                     user_func.set_attributes(self.compile_attributes_in_scope_mode_with_property(
                         &method.attributes,
                         attribute_method_target(&method.name),
@@ -7185,7 +7191,10 @@ impl Compiler {
                         method.is_static,
                     );
                     user_func.parameter_default_diagnostics =
-                        self.method_parameter_default_diagnostics(&method.params);
+                        self.method_parameter_default_diagnostics(
+                            &method.params,
+                            Some(&resolved_enum),
+                        );
                     user_func.set_attributes(self.compile_attributes(
                         &method.attributes,
                         attribute_method_target(&method.name),

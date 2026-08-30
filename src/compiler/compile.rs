@@ -1385,12 +1385,121 @@ fn declared_method_facts(
     result
 }
 
-/// PHP cannot early-link a class that consumes a trait, or an enum whose user
-/// interface has a method contract to check. Their declarations may emit link
-/// errors after earlier top-level statements have already run. Descendants
-/// share a trait consumer's runtime dependency even when they do not use a
-/// trait directly.
-fn runtime_class_declaration_names(class_defs: &[ClassDef]) -> HashSet<String> {
+fn variance_hint_needs_runtime_link(
+    hint: &ParamTypeHint,
+    eager_class_names: &HashSet<String>,
+) -> bool {
+    match hint {
+        ParamTypeHint::ClassName(name) => {
+            ![
+                "self", "parent", "static", "object", "iterable", "false", "true", "null",
+            ]
+            .iter()
+            .any(|builtin| name.eq_ignore_ascii_case(builtin))
+                && !eager_class_names.contains(&name.to_ascii_lowercase())
+        }
+        ParamTypeHint::Nullable(inner) => {
+            variance_hint_needs_runtime_link(inner, eager_class_names)
+        }
+        ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => parts
+            .iter()
+            .any(|part| variance_hint_needs_runtime_link(part, eager_class_names)),
+        _ => false,
+    }
+}
+
+fn class_has_runtime_variance_boundary(
+    class: &ClassDef,
+    class_defs: &[ClassDef],
+    eager_class_names: &HashSet<String>,
+) -> bool {
+    let Some(parent_name) = class.parent.as_deref() else {
+        return false;
+    };
+    let parent = class_defs
+        .iter()
+        .find(|candidate| candidate.name.eq_ignore_ascii_case(parent_name));
+    class.methods.iter().any(|method| {
+        let parent_method = parent.and_then(|parent| {
+            parent
+                .methods
+                .iter()
+                .find(|candidate| candidate.0.eq_ignore_ascii_case(&method.0))
+        });
+        parent_method.is_some_and(|parent_method| {
+            [method, parent_method].into_iter().any(|method| {
+                method
+                    .4
+                    .common
+                    .sig
+                    .param_type_hints
+                    .iter()
+                    .any(|hint| variance_hint_needs_runtime_link(hint, eager_class_names))
+                    || variance_hint_needs_runtime_link(
+                        &method.4.common.sig.return_type_hint,
+                        eager_class_names,
+                    )
+            })
+        })
+    })
+}
+
+fn class_has_runtime_interface_boundary(class: &ClassDef, class_defs: &[ClassDef]) -> bool {
+    let class_index = class_defs
+        .iter()
+        .position(|candidate| std::ptr::eq(candidate, class))
+        .expect("class belongs to the declaration slice");
+    class.implements.iter().any(|interface| {
+        if class.is_enum
+            && (interface.eq_ignore_ascii_case("UnitEnum")
+                || interface.eq_ignore_ascii_case("BackedEnum"))
+        {
+            return false;
+        }
+        class_defs
+            .iter()
+            .position(|candidate| candidate.name.eq_ignore_ascii_case(interface))
+            .is_none_or(|interface_index| interface_index > class_index)
+    })
+}
+
+fn class_constant_hint_references_runtime(
+    hint: &ParamTypeHint,
+    runtime_class_names: &HashSet<String>,
+) -> bool {
+    match hint {
+        ParamTypeHint::ClassName(name) => runtime_class_names.contains(&name.to_ascii_lowercase()),
+        ParamTypeHint::Nullable(inner) => {
+            class_constant_hint_references_runtime(inner, runtime_class_names)
+        }
+        ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => parts
+            .iter()
+            .any(|part| class_constant_hint_references_runtime(part, runtime_class_names)),
+        _ => false,
+    }
+}
+
+/// PHP cannot early-link a class that consumes a trait, implements an
+/// interface, or must autoload a class-like method-variance operand. Their
+/// declarations may emit link errors after earlier top-level statements have
+/// already run. Descendants share a runtime-linked parent's dependency even
+/// when they do not introduce another relation directly.
+fn runtime_class_declaration_names(
+    class_defs: &[ClassDef],
+    class_declaration_keys: &[Option<(String, bool)>],
+) -> HashSet<String> {
+    debug_assert_eq!(class_defs.len(), class_declaration_keys.len());
+    let eager_class_names = class_defs
+        .iter()
+        .zip(class_declaration_keys)
+        .filter(|(_, declaration)| {
+            declaration
+                .as_ref()
+                .is_some_and(|(_, child_runtime)| !child_runtime)
+        })
+        .map(|(class, _)| class.name.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+
     // Keep constant-only source interfaces on their established eager path.
     // Unknown interfaces are deliberately absent from this set so their enum
     // consumer reaches the declaration opcode and the dependency Error path.
@@ -1419,6 +1528,8 @@ fn runtime_class_declaration_names(class_defs: &[ClassDef]) -> HashSet<String> {
                 && !class.is_interface
                 && !class.is_trait
                 && (!class.uses.is_empty()
+                    || class_has_runtime_interface_boundary(class, class_defs)
+                    || class_has_runtime_variance_boundary(class, class_defs, &eager_class_names)
                     || (class.is_enum
                         && class.implements.iter().any(|interface| {
                             !interface.eq_ignore_ascii_case("UnitEnum")
@@ -1439,6 +1550,9 @@ fn runtime_class_declaration_names(class_defs: &[ClassDef]) -> HashSet<String> {
                 .parent
                 .as_ref()
                 .is_some_and(|parent| runtime.contains(&parent.to_ascii_lowercase()))
+                || class.constants.iter().any(|constant| {
+                    class_constant_hint_references_runtime(&constant.type_hint, &runtime)
+                })
             {
                 changed |= runtime.insert(class.name.to_ascii_lowercase());
             }
@@ -6069,7 +6183,8 @@ impl Compiler {
         }
 
         let source_lines = self.materialize_source_lines();
-        let runtime_class_names = runtime_class_declaration_names(&self.class_defs);
+        let runtime_class_names =
+            runtime_class_declaration_names(&self.class_defs, &self.class_declaration_keys);
         debug_assert_eq!(self.class_defs.len(), self.class_declaration_keys.len());
         let mut class_defs = Vec::with_capacity(self.class_defs.len());
         let mut runtime_class_defs = Vec::new();
@@ -6269,6 +6384,7 @@ impl Compiler {
     fn method_parameter_default_diagnostics(
         &self,
         parameters: &[Param],
+        class_scope: Option<&str>,
     ) -> Option<Box<[Option<Box<str>>]>> {
         let required_num_args = parameters
             .iter()
@@ -6290,7 +6406,7 @@ impl Compiler {
                         return None;
                     }
                     parameter.default.as_ref().map(|default| {
-                        self.method_parameter_default_diagnostic(default)
+                        self.method_parameter_default_diagnostic(default, class_scope)
                             .into_boxed_str()
                     })
                 })
@@ -6299,16 +6415,23 @@ impl Compiler {
         )
     }
 
-    fn method_parameter_default_diagnostic(&self, default: &Expr) -> String {
+    fn method_parameter_default_diagnostic(
+        &self,
+        default: &Expr,
+        class_scope: Option<&str>,
+    ) -> String {
+        let diagnostic_string = |value: &str| {
+            let mut characters = value.chars();
+            let prefix = characters.by_ref().take(10).collect::<String>();
+            let truncated = characters.next().is_some();
+            let escaped = prefix.replace('\\', "\\\\").replace('\'', "\\'");
+            format!("'{escaped}{}'", if truncated { "..." } else { "" })
+        };
         match default {
             Expr::Integer(value) => value.to_string(),
             Expr::Float(value) => Value::double(*value).echo_to_string_with_precision(14),
             Expr::StringLiteral(value) | Expr::BinaryStringLiteral(value) => {
-                let mut characters = value.chars();
-                let prefix = characters.by_ref().take(10).collect::<String>();
-                let truncated = characters.next().is_some();
-                let escaped = prefix.replace('\\', "\\\\").replace('\'', "\\'");
-                format!("'{escaped}{}'", if truncated { "..." } else { "" })
+                diagnostic_string(value)
             }
             Expr::Null => "null".to_string(),
             Expr::Bool(value) => value.to_string(),
@@ -6326,6 +6449,12 @@ impl Compiler {
                 constant,
                 ..
             } => {
+                if constant.eq_ignore_ascii_case("class")
+                    && class_name.eq_ignore_ascii_case("self")
+                    && let Some(class_scope) = class_scope
+                {
+                    return diagnostic_string(class_scope);
+                }
                 let owner = if ["self", "parent", "static"]
                     .iter()
                     .any(|pseudo| class_name.eq_ignore_ascii_case(pseudo))
@@ -6338,13 +6467,19 @@ impl Compiler {
             }
             Expr::UnaryPlus(inner) => match inner.as_ref() {
                 Expr::Integer(_) | Expr::Float(_) => {
-                    format!("+{}", self.method_parameter_default_diagnostic(inner))
+                    format!(
+                        "+{}",
+                        self.method_parameter_default_diagnostic(inner, class_scope)
+                    )
                 }
                 _ => "<expression>".to_string(),
             },
             Expr::UnaryMinus(inner) => match inner.as_ref() {
                 Expr::Integer(_) | Expr::Float(_) => {
-                    format!("-{}", self.method_parameter_default_diagnostic(inner))
+                    format!(
+                        "-{}",
+                        self.method_parameter_default_diagnostic(inner, class_scope)
+                    )
                 }
                 _ => "<expression>".to_string(),
             },

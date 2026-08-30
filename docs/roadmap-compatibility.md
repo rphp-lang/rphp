@@ -36,18 +36,17 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `dynamic-class-operand-boundaries` train retains 6,231 exact
-passes across the 7,174-case PHP 8.5 corpus, with 549 supported
-failures, 182 skips, 212 unsupported cases and no timeout or crash. Its
-pass-set hash is
-`a0926c258a8fd10a73717027a6e6e5162f393f4c3c7321be63af9a0ce94f7aaf`;
-the exact current-main delta is `+12/-0`. Compile and runtime class operands
-now share one PHP-compatible classification boundary across `::class`, class
-constants, static properties and two-element array callbacks while preserving
-source lines, exceptions, evaluation order and operand state. Exact-final
-CPU-2 64-pair startup, ordinary-call, direct-class, object-class, static-
-property and callback controls retain matching checksums and remain within the
-approximately one-percent representative-regression ceiling.
+The accepted AMD64 `class-link-validation-and-publication` train retains 6,244
+exact passes across the 7,174-case PHP 8.5 corpus, with 536 supported failures,
+182 skips, 212 unsupported cases and no timeout or crash. Its pass-set hash is
+`7c60f99a7f2189cb0d9854c3b8a987ecbc7e2ef644cb6bde4b83ab6df4124457`;
+the exact current-main delta is `+13/-0`. Class declarations now share one
+transactional link/finalize boundary for forward interface and variance
+autoload dependencies, provisional visibility, rollback, inherited abstract
+method/property-hook obligations and invalid core-interface combinations. The
+96-pair CPU-2 canonical ordinary-call control is +0.746% with matching output;
+the address-sensitive scalar/typed microcontrols remain explicit ordinary-
+release binary-layout debt for the execution/performance workstream.
 Current compatibility work is selected as a 10–30-case train around one shared
 root-cause hypothesis and one cumulative full/performance evidence packet.
 Smaller checkpoints require a crash, security issue, framework blocker or
