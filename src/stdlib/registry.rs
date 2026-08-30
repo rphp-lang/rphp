@@ -1402,10 +1402,79 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("constant", fn_constant, 1, 1, "name");
 
     // --- JSON ---
-    reg!("json_encode", fn_json_encode, 2, 1, "value", "flags");
-    reg!("json_last_error", fn_json_last_error, 0, 0);
-    reg!("json_last_error_msg", fn_json_last_error_msg, 0, 0);
-    reg!("json_decode", fn_json_decode, 2, 1, "json", "associative");
+    reg_typed!(
+        "json_encode",
+        fn_json_encode,
+        3,
+        1,
+        ["value", "flags", "depth"],
+        [ParamTypeHint::Mixed, ParamTypeHint::Int, ParamTypeHint::Int],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    let json_encode = eg
+        .find_function("json_encode")
+        .expect("json_encode was just registered");
+    eg.register_internal_function_reflection_metadata(
+        json_encode,
+        vec![None, Some(Value::long(0)), Some(Value::long(512))],
+        "json",
+    );
+    reg_typed!(
+        "json_last_error",
+        fn_json_last_error,
+        0,
+        0,
+        [],
+        [],
+        ParamTypeHint::Int
+    );
+    let json_last_error = eg
+        .find_function("json_last_error")
+        .expect("json_last_error was just registered");
+    eg.register_internal_function_reflection_metadata(json_last_error, vec![], "json");
+    reg_typed!(
+        "json_last_error_msg",
+        fn_json_last_error_msg,
+        0,
+        0,
+        [],
+        [],
+        ParamTypeHint::String
+    );
+    let json_last_error_msg = eg
+        .find_function("json_last_error_msg")
+        .expect("json_last_error_msg was just registered");
+    eg.register_internal_function_reflection_metadata(json_last_error_msg, vec![], "json");
+    reg_typed!(
+        "json_decode",
+        fn_json_decode,
+        4,
+        1,
+        ["json", "associative", "depth", "flags"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Bool)),
+            ParamTypeHint::Int,
+            ParamTypeHint::Int,
+        ],
+        ParamTypeHint::Mixed
+    );
+    let json_decode = eg
+        .find_function("json_decode")
+        .expect("json_decode was just registered");
+    eg.register_internal_function_reflection_metadata(
+        json_decode,
+        vec![
+            None,
+            Some(Value::null()),
+            Some(Value::long(512)),
+            Some(Value::long(0)),
+        ],
+        "json",
+    );
 
     // --- Misc ---
     reg!("isset_func", fn_isset_func, 1, 1, "value");

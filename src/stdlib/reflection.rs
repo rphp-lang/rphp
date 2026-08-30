@@ -135,7 +135,10 @@ fn reflected_signature_type(hint: &ParamTypeHint) -> Value {
                 ("__generic_name", Value::string(hint.display_name())),
                 ("__generic_arguments", Value::array(PhpArray::new())),
                 ("__generic_string", Value::string(hint.display_name())),
-                ("__reflection_allows_null", Value::bool(false)),
+                (
+                    "__reflection_allows_null",
+                    Value::bool(matches!(hint, ParamTypeHint::Mixed)),
+                ),
             ],
         ),
     }
@@ -2956,6 +2959,7 @@ fn function_invoke_args(
 fn hint_metadata(hint: &ParamTypeHint) -> (&'static str, String, bool) {
     match hint {
         ParamTypeHint::None => ("named", String::new(), true),
+        ParamTypeHint::Mixed => ("named", hint.display_name(), true),
         ParamTypeHint::Nullable(inner) => ("named", inner.display_name(), true),
         ParamTypeHint::Union(parts) => (
             "union",

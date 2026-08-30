@@ -164,7 +164,7 @@ impl Generator {
     /// object plus otherwise acyclic argument values. Exposing the complete
     /// saved-value set lets the collector subtract those internal owners and
     /// release the activation when its last userland root disappears.
-    pub(crate) fn for_each_cycle_child(&self, mut visitor: impl FnMut(&Value)) {
+    pub(crate) fn try_for_each_cycle_child(&self, mut visitor: impl FnMut(&Value)) -> bool {
         // Zend retires operands already transferred to an interrupted call
         // before the generator's local CVs. Preserve that observable order
         // when those values own user destructors.
@@ -179,7 +179,10 @@ impl Generator {
         visitor(&self.trace_num_args);
         visitor(&self.return_value);
         if let Some(static_vars) = &self.closure_static_vars {
-            for value in static_vars.as_ref().borrow().values() {
+            let Ok(static_vars) = static_vars.as_ref().try_borrow() else {
+                return false;
+            };
+            for value in static_vars.values() {
                 visitor(value);
             }
         }
@@ -191,6 +194,16 @@ impl Generator {
         if let Some(YieldFromDelegate::Iterator(iterator)) = &self.delegate {
             visitor(iterator);
         }
+        true
+    }
+
+    /// Strict collector traversal. Drop-time marker discovery uses the
+    /// fallible variant above because it may run inside an active VM borrow.
+    pub(crate) fn for_each_cycle_child(&self, visitor: impl FnMut(&Value)) {
+        assert!(
+            self.try_for_each_cycle_child(visitor),
+            "generator child traversal requires unborrowed closure statics"
+        );
     }
 }
 

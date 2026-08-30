@@ -170,6 +170,12 @@ pub(crate) unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
 
 #[inline]
 fn destructor_identity(eg: &ExecutorGlobals, value: &Value) -> Option<usize> {
+    // Direct objects remain O(1) candidate boundaries. A plain Closure has no
+    // PHP release callback of its own and must retain ordinary frame lifetime;
+    // admitting every Closure here can close a Fiber captured by a suspension
+    // frame too early (GH-10496). Weakly observed closures still need the VM
+    // release planner, while their structural deep-drop safety lives in
+    // Value::drop after final Rc ownership is proved.
     value.object_identity().or_else(|| {
         value
             .weak_object_identity()
@@ -192,12 +198,6 @@ fn value_requires_vm_release(eg: &ExecutorGlobals, value: &Value) -> bool {
             object.generator.is_some()
                 || eg.class_has_destructor(object.class_id, &object.class_name)
                     && !value.is_object_destructor_retired()
-                || object.any_property_value(|property| {
-                    matches!(
-                        property.dereferenced().value_type(),
-                        ValueType::Object | ValueType::Closure
-                    )
-                })
         })
 }
 
@@ -265,100 +265,123 @@ fn value_tree_requires_vm_release(
     seen_references: &mut std::collections::HashSet<usize>,
     seen_closures: &mut std::collections::HashSet<usize>,
 ) -> bool {
-    if let Some(identity) = value.reference_identity()
-        && !seen_references.insert(identity)
-    {
-        return false;
-    }
-    let value = value.dereferenced();
-    if value_requires_vm_release(eg, value) {
-        return true;
-    }
-    if let Some(identity) = value.object_identity() {
-        if !seen_objects.insert(identity) {
-            return false;
+    #[inline]
+    fn queue_cycle_child(value: &Value, depth: u32, pending: &mut Vec<(Value, u32)>) {
+        if let Some(value) = value
+            .clone_cycle_handle()
+            .or_else(|| value.dereferenced().clone_cycle_handle())
+        {
+            pending.push((value, depth.saturating_add(1)));
         }
-        let Some(object) = value.as_object() else {
-            return false;
-        };
-        let mut found = false;
-        object.for_each_property(|_, property| {
-            found |= value_tree_requires_vm_release(
-                eg,
-                property,
-                seen_objects,
-                seen_arrays,
-                seen_references,
-                seen_closures,
-            );
-        });
-        return found;
     }
-    if value.value_type() == ValueType::Closure {
-        let Some(identity) = value.weak_object_identity() else {
-            return false;
-        };
-        if !seen_closures.insert(identity) {
-            return false;
+
+    #[inline]
+    fn mark_deep_container(value: &Value, depth: u32) {
+        let value = value.dereferenced();
+        if depth >= 256
+            && (depth - 256).is_multiple_of(64)
+            && matches!(value.value_type(), ValueType::Array | ValueType::Object)
+        {
+            value.mark_deep_drop_stack_checkpoint();
         }
-        let Some(closure) = value.as_closure() else {
-            return false;
-        };
-        if closure.bound_this.as_ref().is_some_and(|bound_this| {
-            value_tree_requires_vm_release(
-                eg,
-                bound_this,
-                seen_objects,
-                seen_arrays,
-                seen_references,
-                seen_closures,
-            )
-        }) {
-            return true;
-        }
-        if closure.captures.iter().any(|capture| {
-            value_tree_requires_vm_release(
-                eg,
-                capture,
-                seen_objects,
-                seen_arrays,
-                seen_references,
-                seen_closures,
-            )
-        }) {
-            return true;
-        }
-        return closure.static_vars.as_ref().is_some_and(|static_vars| {
-            static_vars.as_ref().borrow().values().any(|value| {
-                value_tree_requires_vm_release(
-                    eg,
-                    value,
-                    seen_objects,
-                    seen_arrays,
-                    seen_references,
-                    seen_closures,
-                )
-            })
-        });
     }
-    let Some(identity) = value.array_identity() else {
-        return false;
-    };
-    if !seen_arrays.insert(identity) {
-        return false;
+
+    #[inline]
+    fn mark_deep_root(value: &Value, maximum_depth: u32) {
+        let value = value.dereferenced();
+        if maximum_depth >= 256
+            && matches!(value.value_type(), ValueType::Array | ValueType::Object)
+        {
+            value.mark_deep_drop_stack_checkpoint();
+        }
     }
-    value.as_array().is_some_and(|array| {
-        array.values().any(|value| {
-            value_tree_requires_vm_release(
-                eg,
-                value,
-                seen_objects,
-                seen_arrays,
-                seen_references,
-                seen_closures,
-            )
-        })
-    })
+
+    // Temporary Rc snapshots are read-only graph handles. Suppress ordinary
+    // possible-root registration until every snapshot has dropped; otherwise
+    // this predicate would itself perturb `gc_status()['roots']`.
+    let _cycle_snapshot_guard = crate::value::begin_cycle_collection();
+    let root = value;
+    let mut pending = Vec::new();
+    let mut current = None;
+    let mut maximum_depth = 0u32;
+    let mut requires_release = false;
+    loop {
+        let (value, depth) = current
+            .as_ref()
+            .map_or((value, 0), |(value, depth)| (value, *depth));
+        maximum_depth = maximum_depth.max(depth);
+        if let Some(identity) = value.reference_identity()
+            && !seen_references.insert(identity)
+        {
+            // Already inspected this alias edge.
+        } else {
+            let value = value.dereferenced();
+            let is_new_node = if let Some(identity) = value.object_identity() {
+                seen_objects.insert(identity)
+            } else if value.value_type() == ValueType::Closure {
+                value
+                    .weak_object_identity()
+                    .is_none_or(|identity| seen_closures.insert(identity))
+            } else if let Some(identity) = value.array_identity() {
+                seen_arrays.insert(identity)
+            } else {
+                true
+            };
+            if is_new_node {
+                // Deduplicate identity before mutating its persistent marker:
+                // a deep back-edge can point at an object currently borrowed
+                // by the release planner.
+                mark_deep_container(value, depth);
+                if value_requires_vm_release(eg, value) {
+                    // Keep walking after finding the VM callback boundary. A
+                    // destructor or suspended Generator can own a much deeper
+                    // container graph whose later structural Rust drop still
+                    // needs sparse stack checkpoints.
+                    requires_release = true;
+                }
+                if value.object_identity().is_some()
+                    && let Some(object) = value.as_object()
+                {
+                    object.for_each_property(|_, property| {
+                        queue_cycle_child(property, depth, &mut pending)
+                    });
+                    if let Some(generator) = &object.generator {
+                        generator
+                            .as_ref()
+                            .borrow()
+                            .for_each_cycle_child(|child| {
+                                queue_cycle_child(child, depth, &mut pending)
+                            });
+                    }
+                } else if value.value_type() == ValueType::Closure {
+                    if let Some(closure) = value.as_closure() {
+                        if let Some(bound_this) = &closure.bound_this {
+                            queue_cycle_child(bound_this, depth, &mut pending);
+                        }
+                        for capture in &closure.captures {
+                            queue_cycle_child(capture, depth, &mut pending);
+                        }
+                        if let Some(static_vars) = &closure.static_vars {
+                            for value in static_vars.as_ref().borrow().values() {
+                                queue_cycle_child(value, depth, &mut pending);
+                            }
+                        }
+                    }
+                } else if value.array_identity().is_some()
+                    && let Some(array) = value.as_array()
+                {
+                    for value in array.values() {
+                        queue_cycle_child(value, depth, &mut pending);
+                    }
+                }
+            }
+        }
+        current = pending.pop();
+        if current.is_none() {
+            mark_deep_root(root, maximum_depth);
+            return requires_release;
+        }
+    }
 }
 
 /// Cheap conservative admission guard for the recursive release planner.
@@ -419,7 +442,7 @@ fn frame_requires_vm_release(
         let mut seen_arrays = std::collections::HashSet::new();
         let mut seen_references = std::collections::HashSet::new();
         let mut seen_closures = std::collections::HashSet::new();
-        let mut requires_release = |value: &Value| {
+        let mut inspect_release = |value: &Value| {
             !pending_identity.is_some_and(|identity| {
                 value.dereferenced().object_identity() == Some(identity)
             })
@@ -432,12 +455,17 @@ fn frame_requires_vm_release(
                     &mut seen_closures,
                 )
         };
+        let mut requires_release = false;
         if total <= 64 {
-            HeapSlotIter::new((*frame).owned_heap_bitmap())
-                .any(|index| requires_release(&*base.add(index as usize)))
+            for index in HeapSlotIter::new((*frame).owned_heap_bitmap()) {
+                requires_release |= inspect_release(&*base.add(index as usize));
+            }
         } else {
-            (0..total).any(|index| requires_release(&*base.add(index)))
+            for index in 0..total {
+                requires_release |= inspect_release(&*base.add(index));
+            }
         }
+        requires_release
     }
 }
 
@@ -472,6 +500,28 @@ fn plain_generator_children(
 }
 
 fn collect_destructor_children(
+    eg: &ExecutorGlobals,
+    value: &Value,
+    children: &mut Vec<(usize, usize, Value)>,
+    seen_arrays: &mut std::collections::HashSet<usize>,
+    seen_references: &mut std::collections::HashSet<usize>,
+    seen_closures: &mut std::collections::HashSet<usize>,
+    seen_generators: &mut std::collections::HashSet<usize>,
+) {
+    stacker::maybe_grow(1024 * 1024, 8 * 1024 * 1024, || {
+        collect_destructor_children_inner(
+            eg,
+            value,
+            children,
+            seen_arrays,
+            seen_references,
+            seen_closures,
+            seen_generators,
+        )
+    });
+}
+
+fn collect_destructor_children_inner(
     eg: &ExecutorGlobals,
     value: &Value,
     children: &mut Vec<(usize, usize, Value)>,
@@ -603,6 +653,30 @@ fn collect_destructor_children(
 fn run_final_object_destructor_tree(
     eg: &mut ExecutorGlobals,
     owner: Value,
+    expected_references: usize,
+    release_references: Option<&HashMap<usize, usize>>,
+    detach_lazy_state: bool,
+    logical_caller: *mut ExecuteData,
+    internal_trace_origin: bool,
+    logical_caller_at_current_site: bool,
+) -> Result<bool, VmError> {
+    stacker::maybe_grow(1024 * 1024, 8 * 1024 * 1024, || {
+        run_final_object_destructor_tree_inner(
+            eg,
+            owner,
+            expected_references,
+            release_references,
+            detach_lazy_state,
+            logical_caller,
+            internal_trace_origin,
+            logical_caller_at_current_site,
+        )
+    })
+}
+
+fn run_final_object_destructor_tree_inner(
+    eg: &mut ExecutorGlobals,
+    owner: Value,
     mut expected_references: usize,
     release_references: Option<&HashMap<usize, usize>>,
     detach_lazy_state: bool,
@@ -613,6 +687,13 @@ fn run_final_object_destructor_tree(
     if owner.weak_object_strong_count() != Some(expected_references) {
         return Ok(false);
     }
+
+    // Once final ownership is proved, install monotonic stack checkpoints on
+    // the complete retained graph before user callbacks or structural Rust
+    // drop can expose a deep alias as a new root. Keeping this work behind the
+    // reference-count proof avoids rescanning non-final cyclic objects on each
+    // statement-temp release.
+    owner.mark_final_drop_tree_checkpoints(&mut std::collections::HashSet::new());
 
     // An initialized lazy proxy owns its real instance through the sparse
     // sidecar. Retain a temporary view of that edge while deciding whether the
@@ -767,6 +848,46 @@ fn run_final_object_destructor_tree(
                         &mut seen_generators,
                     );
                 });
+        }
+    } else if let Some(closure) = owner.as_closure() {
+        // WeakReference makes a Closure itself a final release candidate.
+        // Once its weak sidecar is detached, its lexical environment still
+        // owns bound/captured objects whose PHP destructors must run before
+        // ordinary Rc destruction retires the Closure payload.
+        if let Some(bound_this) = &closure.bound_this {
+            collect_destructor_children(
+                eg,
+                bound_this,
+                &mut children,
+                &mut seen_arrays,
+                &mut seen_references,
+                &mut seen_closures,
+                &mut seen_generators,
+            );
+        }
+        for capture in &closure.captures {
+            collect_destructor_children(
+                eg,
+                capture,
+                &mut children,
+                &mut seen_arrays,
+                &mut seen_references,
+                &mut seen_closures,
+                &mut seen_generators,
+            );
+        }
+        if let Some(static_vars) = &closure.static_vars {
+            for value in static_vars.as_ref().borrow().values() {
+                collect_destructor_children(
+                    eg,
+                    value,
+                    &mut children,
+                    &mut seen_arrays,
+                    &mut seen_references,
+                    &mut seen_closures,
+                    &mut seen_generators,
+                );
+            }
         }
     }
 
@@ -1615,7 +1736,7 @@ fn release_statement_temps(
         // that path allocation-free; nested property/fiber/lazy work still
         // selects the full destructor planner through value_requires_vm_release.
         if !(first..end).any(|index| {
-            is_owned(index) && value_requires_vm_release(eg, &*base.add(index))
+            is_owned(index) && value_may_require_vm_release_tree(eg, &*base.add(index))
         }) {
             for index in first..end {
                 if !is_owned(index) {

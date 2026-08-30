@@ -7,6 +7,81 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The latest measured AMD64 PHP 8.5 standard-library checkpoint is
+`json-depth-flags-and-error-contracts`, based on `b5feac5e`, pinned to php-src
+8.5 commit `fcc29c8` and validated against PHP 8.5.10. `json_encode()`,
+`json_decode()`, `json_last_error()` and `json_last_error_msg()` now expose
+their exact reflected PHP 8.5 signatures, defaults, return types and named-
+argument contracts through direct, dynamic, first-class callback and unpacked
+calls. Weak and strict scalar conversion, validation order, depth counting,
+throw/partial modes, UTF-8 repair, associative materialization, bigint strings,
+numeric overflow, resources, closures and `JsonSerializable` traversal share
+the same error-state rules as the reference oracle.
+
+Deep JSON parsing, projection, encoding and abort paths grow their native stack
+only at the recursive boundary. Values whose nested VM-owned payload cannot be
+released recursively carry a conservative internal marker and use iterative
+release through call frames, closures and generators. Twenty-four original E2E
+cases cover the public call contract, parser and encoder boundaries, error
+priority and persistence, deep shared subtrees, copy-on-write and destructor
+ordering. The exact 88-case `ext/json` projection is 52 pass, 33 fail, two skip
+and one unsupported: sixteen cases become exact with no lost pass. Its final
+manifest hashes to
+`8546d1c050ece330eb9ae96d3b53c4f4c7d36f7b04f81beab3a6a0655ba1cd58`.
+
+The exact final 5,599-case Zend/lang run remains 4,796 pass, 507 fail, 115
+skip and 181 unsupported, with no timeout or crash and exact delta `+0/-0`;
+its manifest hashes to
+`cfdfaff5c0d7447c07de218bb861b6aad4e4bc8cebea0b408f174d308b3bd56c`.
+The adjacent 1,575-case strings/array projection retains the identical pass set:
+1,458 pass, 19 fail, 67 skip and 31 unsupported. Consequently the combined
+7,174-case status remains 6,254 pass, 526 fail, 182 skip and 212 unsupported,
+without a crash or timeout.
+
+The repository's on-demand Reflection audit reports 1,201 reference global
+functions: 467 names are present, 734 are missing, 21 present functions retain
+a call-shape mismatch, 385 retain a metadata mismatch and 61 are exact. The
+four present JSON functions are exact and `json_validate()` is missing. Against
+the `b5feac5e` parent, `json_encode()` and `json_decode()` move from call-shape
+mismatch to exact, `json_last_error()` and `json_last_error_msg()` move from
+metadata mismatch to exact, and the shared nullable-`mixed` Reflection fix also
+makes `pack()` exact. The generated report and machine summary hash to
+`eb9c5538af320d422cd68c56cc0a6ea38ad5de49e3a0c2f62489caaca8626f4b`
+and
+`ae7cf4b42ffafab25efd691a163e2be26e1dc938926450a084824c84c63186b3`.
+This inventory proves name and reflected-callable coverage, not behavior for
+the remaining present functions.
+
+All default, no-default, erased-generics, reified-generics and all-feature Cargo
+test configurations, all-feature/all-target checking, formatting, HTML data,
+PHPT runner and both unsafe-policy checks pass. Production uses 1,621 unsafe
+blocks against a ceiling of 1,623, 289 unsafe functions, 398 SAFETY annotations
+and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates and
+PHP 8.5.10 warmed-kernel S2 and cold-build S3 pass on the final implementation.
+
+The fixed-parent CPU-2 release gate retains 32 balanced randomized A/B pairs
+per workload, three warmups and exact output checks, with no outlier removal.
+Paired medians are startup -5.420%, ordinary user calls -0.382%, shallow encode
++2.038%, nested encode -4.405%, direct associative decode -2.552%, dynamic
+associative decode +3.093%, shared-closure release +3.319% and broad early-error
+decode -64.452%. The raw observations and summary hash to
+`b49014e45df37e69d6fc4fe4639236811b99043b3d4edb76f111f90fdaa51420`
+and
+`3376fe533edc34f305adfeb963cdf0e13289be1ed4722af93d69356736ffcbcf`.
+The parent and candidate binaries hash to
+`336708a70190748e755c0a77ed633a4d36aa09a795af405b03d587054ea65d4c`
+and
+`06d73ccd384c48a87896d092517696a5037f38c6ca95cb2479abeb156ef5ae43`;
+the candidate grows by 225,680 bytes (1.649%).
+
+This checkpoint does not claim `json_validate()`, the remaining 33 ordinary
+`ext/json` failures, the unimplemented legacy escaping/`JSON_NUMERIC_CHECK`
+flag families, inputs beyond the current guarded parser/encoder depth ceilings,
+every allocation-limit/OOM or platform-specific numeric boundary, 32-bit
+equivalence, a complete PHP builtin surface, full Symfony support or an HTTP-
+facing repeated-request S4 adapter. The implementation checkpoint is the
+commit containing this status.
+
 The latest measured AMD64 PHP 8.5 language checkpoint is
 `user-stream-wrapper-lifecycle`, based on `bffd110b`, pinned to php-src 8.5
 commit `fcc29c8` and validated against PHP 8.5.10. Request-local user stream

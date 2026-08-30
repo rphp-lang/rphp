@@ -36,21 +36,23 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `user-stream-wrapper-lifecycle` train retains 6,254 exact
-passes across the 7,174-case PHP 8.5 corpus, with 526 supported failures, 182
-skips, 212 unsupported cases and no timeout or crash. Its pass-set hash is
-`d4687432cdf69923a8656e035b7af36e457849d71def94a4773e141aa8384252`;
-the exact `bffd110b` parent delta is `+11/-0`. Request-local user wrapper
-registration, restoration, callbacks, metadata, directory operations, include
-identity and reverse-order shutdown now share one lifecycle implementation.
-Two selected allocation-accounting cases remain outside the slice. The
-fixed-parent CPU-2 controls measure startup -0.535%, ordinary calls -0.597%,
-local file access +0.122% and local include -0.034%, with matching output.
-Current compatibility work is selected as a 10–30-case train around one shared
-root-cause hypothesis and one cumulative full/performance evidence packet.
-Smaller checkpoints require a crash, security issue, framework blocker or
-similarly explicit reason; Fiber/generator suspension additionally requires a
-pay-for-use performance design.
+The accepted AMD64 `json-depth-flags-and-error-contracts` train retains 6,254
+exact passes across the 7,174-case PHP 8.5 Zend/lang plus strings/array corpus,
+with 526 supported failures, 182 skips, 212 unsupported cases and no timeout
+or crash. Its pass-set remains unchanged from `user-stream-wrapper-lifecycle`.
+The separate 88-case `ext/json` projection advances from 36 to 52 exact passes
+with no loss. Four of five PHP JSON functions now have exact reflected
+signatures; `json_validate()` remains missing. Encode/decode depth, flags,
+error state, deep traversal and VM release share one tested contract. The
+on-demand builtin audit reports 467 of 1,201 reference functions present, 734
+missing, 21 call-shape mismatches, 385 metadata mismatches and 61 exact
+signatures. Fixed-parent CPU-2 medians keep all eight controls below the +5%
+gate, ranging from -64.452% for broad early-error decode to +3.319% for shared-
+closure release. Current compatibility work is selected as a 10–30-case
+train around one shared root-cause hypothesis and one cumulative full/
+performance evidence packet. Smaller checkpoints require a crash, security
+issue, framework blocker or similarly explicit reason; Fiber/generator
+suspension additionally requires a pay-for-use performance design.
 
 ## Starting evidence
 

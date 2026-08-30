@@ -26,7 +26,7 @@ use crate::compiler::{
 use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
 use crate::value::{
-    ArrayKey, ClosureStaticVars, PhpArray, PhpClosure, PhpObject, Value, ValueType,
+    ArrayKey, ClosureStaticVars, CycleNodeKind, PhpArray, PhpClosure, PhpObject, Value, ValueType,
 };
 use crate::vm::execute::{
     ArrayKeyError, CallArgumentPreparation, ExplicitNumericCastTarget,
@@ -451,55 +451,84 @@ fn php_bytes_after_weak_string_coercion(value: &Value) -> (Cow<'_, [u8]>, bool) 
 }
 
 #[inline(always)]
+fn json_decode_exact_value(
+    input: &Value,
+    associative: bool,
+    maximum_depth: u32,
+    flags: i64,
+    eg: &mut ExecutorGlobals,
+) -> Value {
+    let input = input.dereferenced();
+    debug_assert_eq!(input.value_type(), ValueType::String);
+    let result = if input.is_binary_string() {
+        let bytes = input.php_string_bytes().unwrap_or_default();
+        json_decode::decode_php_api(&bytes, associative, maximum_depth, flags)
+    } else {
+        json_decode::decode_php_str_api(
+            input.as_str().unwrap_or_default(),
+            associative,
+            maximum_depth,
+            flags,
+        )
+    };
+    match result {
+        Ok(value) => {
+            if flags & JSON_THROW_ON_ERROR_FLAG == 0 {
+                eg.set_json_last_error(JSON_ERROR_NONE);
+            }
+            value
+        }
+        Err(error) => {
+            if flags & JSON_THROW_ON_ERROR_FLAG != 0 {
+                eg.exception = Some(make_json_exception(error.code()));
+            } else {
+                eg.set_json_last_error(error.code());
+            }
+            Value::null()
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn json_decode_values_fallback(
+    input: &Value,
+    associative: Option<&Value>,
+    eg: &mut ExecutorGlobals,
+) -> Result<Value, VmError> {
+    let function = eg
+        .find_function("json_decode")
+        .ok_or_else(|| VmError::Fatal("Unknown function json_decode".into()))?;
+    let arguments = [
+        input.clone(),
+        associative.cloned().unwrap_or_else(Value::null),
+    ];
+    let count = usize::from(associative.is_some()) + 1;
+    call_internal_function_iter_from_current_site(eg, function, count, arguments[..count].iter())
+}
+
+/// Keep exact string/nullable-bool calls on the established frame-free ABI.
+/// Values requiring weak/strict coercion resume through the canonical internal
+/// frame so diagnostic order and source attribution remain observable.
+#[inline(always)]
 fn json_decode_values(
     input: &Value,
     associative: Option<&Value>,
     eg: &mut ExecutorGlobals,
-) -> Value {
-    let input = if input.is_reference() {
-        unsafe { &*input.as_ref_ptr() }
-    } else {
-        input
-    };
-    let associative = associative.map(|value| {
-        if value.is_reference() {
-            unsafe { &*value.as_ref_ptr() }
-        } else {
-            value
-        }
-    });
-    let associative = associative.is_some_and(Value::is_truthy);
-    let result = if input.value_type() == ValueType::String {
-        if input.is_binary_string() {
-            let Some(bytes) = input.php_string_bytes() else {
-                eg.set_json_last_error(JSON_ERROR_UTF8);
-                return Value::null();
-            };
-            match std::str::from_utf8(bytes.as_ref()) {
-                Ok(json) => json_decode::decode_php_value(json, associative),
-                Err(_) => {
-                    eg.set_json_last_error(JSON_ERROR_UTF8);
-                    return Value::null();
-                }
-            }
-        } else {
-            // Ordinary runtime strings are already valid Rust UTF-8. Keep the
-            // validation scan on the explicit byte-buffer path only.
-            json_decode::decode_php_value(input.as_str().unwrap_or_default(), associative)
-        }
-    } else {
-        json_decode::decode_php_value(&input.echo_to_string(), associative)
-    };
-    match result {
-        Ok(value) => {
-            eg.set_json_last_error(JSON_ERROR_NONE);
-            value
-        }
-        Err(_) => {
-            eg.set_json_last_error(4);
-            Value::null()
-        }
+) -> Result<Value, VmError> {
+    let input = input.dereferenced();
+    if input.value_type() != ValueType::String {
+        return json_decode_values_fallback(input, associative, eg);
     }
+    let associative = match associative.map(Value::dereferenced) {
+        None => false,
+        Some(value) => match value.value_type() {
+            ValueType::Null | ValueType::False => false,
+            ValueType::True => true,
+            _ => return json_decode_values_fallback(input, associative, eg),
+        },
+    };
+    Ok(json_decode_exact_value(input, associative, 512, 0, eg))
 }
 
 /// Attempt the exact-string unary `chunk_split` fast path. Callers must resume
@@ -558,13 +587,23 @@ pub(crate) fn invoke_direct_internal2(
 
     match kind {
         DirectInternalKind::Intdiv => direct_intdiv_values(first, second),
-        DirectInternalKind::JsonDecode => Ok(json_decode_values(first, Some(second), eg)),
+        DirectInternalKind::JsonDecode => invoke_direct_json_decode2(first, second, eg),
         DirectInternalKind::Min2 => direct_extrema2::<false>(first, second, eg),
         DirectInternalKind::Max2 => direct_extrema2::<true>(first, second, eg),
         _ => Err(VmError::Fatal(
             "Invalid binary direct internal handler ID".into(),
         )),
     }
+}
+
+#[cold]
+#[inline(never)]
+fn invoke_direct_json_decode2(
+    input: &Value,
+    associative: &Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<Value, VmError> {
+    json_decode_values(input, Some(associative), eg)
 }
 
 fn fn_assert(
@@ -14151,9 +14190,11 @@ const JSON_INVALID_UTF8_SUBSTITUTE_FLAG: i64 = 2_097_152;
 const JSON_THROW_ON_ERROR_FLAG: i64 = 4_194_304;
 
 const JSON_ERROR_NONE: i64 = 0;
+const JSON_ERROR_DEPTH: i64 = 1;
 const JSON_ERROR_UTF8: i64 = 5;
 const JSON_ERROR_RECURSION: i64 = 6;
 const JSON_ERROR_INF_OR_NAN: i64 = 7;
+const JSON_ERROR_UNSUPPORTED_TYPE: i64 = 8;
 const JSON_ERROR_NON_BACKED_ENUM: i64 = 11;
 
 fn json_error_message(code: i64) -> &'static str {
@@ -14187,7 +14228,22 @@ fn fn_json_encode(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
+    let flags = if arg_opt!(ed, 1).is_some() {
+        let Some(flags) = typed_internal_int_argument(ed, eg, "json_encode", 1, "flags")? else {
+            return Ok(());
+        };
+        flags
+    } else {
+        0
+    };
+    let maximum_depth = if arg_opt!(ed, 2).is_some() {
+        let Some(depth) = typed_internal_int_argument(ed, eg, "json_encode", 2, "depth")? else {
+            return Ok(());
+        };
+        depth
+    } else {
+        512
+    };
     let value = initialize_lazy_output_value(eg, arg!(ed, 0).clone())?;
     if eg.exception.is_some() {
         if flags & JSON_THROW_ON_ERROR_FLAG == 0 || flags & JSON_PARTIAL_OUTPUT_ON_ERROR_FLAG != 0 {
@@ -14195,7 +14251,9 @@ fn fn_json_encode(
         }
         ret!(rv, Value::bool(false));
     }
-    let encoded = json_encode_value(&value, flags, eg)?;
+    // ext/json stores zend_long depth in a C `int`; retain the observable
+    // two's-complement truncation for values above INT_MAX.
+    let encoded = json_encode_value(&value, flags, i64::from(maximum_depth as i32), eg)?;
     if eg.exception.is_some() {
         if flags & JSON_THROW_ON_ERROR_FLAG == 0 || flags & JSON_PARTIAL_OUTPUT_ON_ERROR_FLAG != 0 {
             eg.set_json_last_error(encoded.error_code);
@@ -14240,7 +14298,119 @@ fn fn_json_decode(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, json_decode_values(arg!(ed, 0), arg_opt!(ed, 1), eg));
+    // Preserve the established borrowed frame path for the exact default
+    // signature. Dynamic/first-class calls reach this handler rather than the
+    // compiler's direct opcode, and must not clone both arguments merely to
+    // prove types that are already exact.
+    if arg_opt!(ed, 2).is_none() && arg_opt!(ed, 3).is_none() {
+        let input = arg!(ed, 0).dereferenced();
+        let associative = match arg_opt!(ed, 1).map(Value::dereferenced) {
+            None => Some(false),
+            Some(value) => match value.value_type() {
+                ValueType::Null | ValueType::False => Some(false),
+                ValueType::True => Some(true),
+                _ => None,
+            },
+        };
+        if input.value_type() == ValueType::String
+            && let Some(associative) = associative
+        {
+            ret!(rv, json_decode_exact_value(input, associative, 512, 0, eg));
+        }
+    }
+    let Some(input) =
+        typed_internal_string_value_argument_expected(ed, eg, "json_decode", 0, "json", "string")?
+    else {
+        return Ok(());
+    };
+    let associative = if arg_opt!(ed, 1).is_none()
+        || arg!(ed, 1).dereferenced().value_type() == ValueType::Null
+    {
+        None
+    } else {
+        let argument = owned_argument(ed, 1);
+        let argument = argument.dereferenced();
+        let strict = internal_call_is_strict(ed);
+        let converted = match argument.value_type() {
+            ValueType::True => Some(true),
+            ValueType::False => Some(false),
+            ValueType::Long | ValueType::Double | ValueType::String if !strict => {
+                if argument.as_double().is_some_and(f64::is_nan) {
+                    report_internal_diagnostic(
+                        eg,
+                        ed,
+                        2,
+                        "Warning",
+                        "unexpected NAN value was coerced to bool",
+                    )?;
+                    if eg.exception.is_some() {
+                        return Ok(());
+                    }
+                }
+                Some(argument.is_truthy())
+            }
+            _ => None,
+        };
+        let Some(converted) = converted else {
+            typed_internal_argument_error(eg, "json_decode", argument, 2, "associative", "?bool");
+            return Ok(());
+        };
+        Some(converted)
+    };
+    let maximum_depth = if arg_opt!(ed, 2).is_some() {
+        let Some(depth) = typed_internal_int_argument(ed, eg, "json_decode", 2, "depth")? else {
+            return Ok(());
+        };
+        depth
+    } else {
+        512
+    };
+    let flags = if arg_opt!(ed, 3).is_some() {
+        let Some(flags) = typed_internal_int_argument(ed, eg, "json_decode", 3, "flags")? else {
+            return Ok(());
+        };
+        flags
+    } else {
+        0
+    };
+    // Successful ZPP resets the non-throwing error channel before semantic
+    // depth validation. JSON_THROW_ON_ERROR deliberately leaves the prior
+    // request-local error untouched, including when validation throws.
+    if flags & JSON_THROW_ON_ERROR_FLAG == 0 {
+        eg.set_json_last_error(JSON_ERROR_NONE);
+    }
+    // Zend reports an empty document as JSON_ERROR_SYNTAX before applying
+    // the depth value constraint. Parameter coercions above still run first.
+    if input
+        .php_string_bytes()
+        .is_some_and(|bytes| bytes.is_empty())
+    {
+        let associative =
+            associative.unwrap_or(flags & json_decode::JSON_OBJECT_AS_ARRAY_FLAG != 0);
+        ret!(
+            rv,
+            json_decode_exact_value(&input, associative, 1, flags, eg)
+        );
+    }
+    if maximum_depth <= 0 {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "json_decode(): Argument #3 ($depth) must be greater than 0",
+        ));
+        return Ok(());
+    }
+    if maximum_depth > i64::from(i32::MAX) {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "json_decode(): Argument #3 ($depth) must be less than 2147483647",
+        ));
+        return Ok(());
+    }
+    let associative = associative.unwrap_or(flags & json_decode::JSON_OBJECT_AS_ARRAY_FLAG != 0);
+    ret!(
+        rv,
+        json_decode_exact_value(&input, associative, maximum_depth as u32, flags, eg,)
+    );
 }
 
 // ============================================================================
@@ -18500,10 +18670,24 @@ enum PhpJsonValue {
     Number(serde_json::Number),
     String(String),
     Array(Vec<PhpJsonValue>),
+    DeepArray(Vec<PhpJsonValue>),
     Object(Vec<(String, PhpJsonValue)>),
+    DeepObject(Vec<(String, PhpJsonValue)>),
 }
 
-impl serde::Serialize for PhpJsonValue {
+/// Compact projection used only by the exact default array/scalar fast path.
+/// Keeping the original six-way representation avoids charging every shallow
+/// serialized leaf for the deep-release variants required by the full path.
+enum PhpJsonDefaultValue {
+    Null,
+    Bool(bool),
+    Number(serde_json::Number),
+    String(String),
+    Array(Vec<PhpJsonDefaultValue>),
+    Object(Vec<(String, PhpJsonDefaultValue)>),
+}
+
+impl serde::Serialize for PhpJsonDefaultValue {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -18527,27 +18711,322 @@ impl serde::Serialize for PhpJsonValue {
     }
 }
 
+#[inline]
+fn drain_php_json_children(value: &mut PhpJsonValue, pending: &mut Vec<PhpJsonValue>) {
+    match value {
+        PhpJsonValue::Array(values) | PhpJsonValue::DeepArray(values) => {
+            pending.append(values);
+        }
+        PhpJsonValue::Object(entries) | PhpJsonValue::DeepObject(entries) => {
+            let entries = std::mem::take(entries);
+            pending.reserve(entries.len());
+            for (_, value) in entries {
+                pending.push(value);
+            }
+        }
+        PhpJsonValue::Null
+        | PhpJsonValue::Bool(_)
+        | PhpJsonValue::Number(_)
+        | PhpJsonValue::String(_) => {}
+    }
+}
+
+#[inline]
+fn php_json_value_requires_iterative_drop(value: &PhpJsonValue) -> bool {
+    match value {
+        PhpJsonValue::DeepArray(_) | PhpJsonValue::DeepObject(_) => true,
+        _ => false,
+    }
+}
+
+struct PhpJsonArrayBuilder {
+    values: Vec<PhpJsonValue>,
+    iterative_drop: bool,
+}
+
+impl PhpJsonArrayBuilder {
+    #[inline]
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            values: Vec::with_capacity(capacity),
+            iterative_drop: false,
+        }
+    }
+
+    #[inline(always)]
+    fn push(&mut self, value: PhpJsonValue) {
+        self.iterative_drop |= php_json_value_requires_iterative_drop(&value);
+        self.values.push(value);
+    }
+
+    #[inline]
+    fn finish(mut self, depth: i64) -> PhpJsonValue {
+        let iterative_drop = depth >= 256 || self.iterative_drop;
+        let values = std::mem::take(&mut self.values);
+        self.iterative_drop = false;
+        if iterative_drop {
+            PhpJsonValue::DeepArray(values)
+        } else {
+            PhpJsonValue::Array(values)
+        }
+    }
+}
+
+impl Drop for PhpJsonArrayBuilder {
+    fn drop(&mut self) {
+        if !self.iterative_drop {
+            return;
+        }
+        let mut pending = std::mem::take(&mut self.values);
+        while let Some(mut value) = pending.pop() {
+            drain_php_json_children(&mut value, &mut pending);
+        }
+    }
+}
+
+struct PhpJsonObjectBuilder {
+    entries: Vec<(String, PhpJsonValue)>,
+    iterative_drop: bool,
+}
+
+impl PhpJsonObjectBuilder {
+    #[inline]
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            entries: Vec::with_capacity(capacity),
+            iterative_drop: false,
+        }
+    }
+
+    #[inline(always)]
+    fn push(&mut self, entry: (String, PhpJsonValue)) {
+        self.iterative_drop |= php_json_value_requires_iterative_drop(&entry.1);
+        self.entries.push(entry);
+    }
+
+    #[inline]
+    fn reserve(&mut self, additional: usize) {
+        self.entries.reserve(additional);
+    }
+
+    #[inline]
+    fn sort_by(
+        &mut self,
+        compare: impl FnMut(&(String, PhpJsonValue), &(String, PhpJsonValue)) -> std::cmp::Ordering,
+    ) {
+        self.entries.sort_by(compare);
+    }
+
+    #[inline]
+    fn finish(mut self, depth: i64) -> PhpJsonValue {
+        let iterative_drop = depth >= 256 || self.iterative_drop;
+        let entries = std::mem::take(&mut self.entries);
+        self.iterative_drop = false;
+        if iterative_drop {
+            PhpJsonValue::DeepObject(entries)
+        } else {
+            PhpJsonValue::Object(entries)
+        }
+    }
+}
+
+impl Drop for PhpJsonObjectBuilder {
+    fn drop(&mut self) {
+        if !self.iterative_drop {
+            return;
+        }
+        let entries = std::mem::take(&mut self.entries);
+        let mut pending = Vec::with_capacity(entries.len());
+        pending.extend(entries.into_iter().map(|(_, value)| value));
+        while let Some(mut value) = pending.pop() {
+            drain_php_json_children(&mut value, &mut pending);
+        }
+    }
+}
+
+impl serde::Serialize for PhpJsonValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Null => serializer.serialize_none(),
+            Self::Bool(value) => serializer.serialize_bool(*value),
+            Self::Number(value) => value.serialize(serializer),
+            Self::String(value) => serializer.serialize_str(value),
+            Self::Array(values) | Self::DeepArray(values) => values.serialize(serializer),
+            Self::Object(entries) | Self::DeepObject(entries) => {
+                use serde::ser::SerializeMap as _;
+
+                let mut map = serializer.serialize_map(Some(entries.len()))?;
+                for (key, value) in entries {
+                    map.serialize_entry(key, value)?;
+                }
+                map.end()
+            }
+        }
+    }
+}
+
 struct PhpJsonEncodeState {
     error_code: i64,
     flags: i64,
+    maximum_depth: i64,
+    deepest_depth: i64,
+    aborted: bool,
+    deep_active: Option<std::rc::Rc<std::cell::RefCell<(std::collections::HashSet<usize>, bool)>>>,
+    deep_release_seen: std::collections::HashSet<(usize, CycleNodeKind)>,
 }
 
 struct PhpJsonContainer<'a> {
     key: usize,
+    depth: i64,
     parent: Option<&'a PhpJsonContainer<'a>>,
 }
 
+struct PhpJsonDeepContainerGuard {
+    active: std::rc::Rc<std::cell::RefCell<(std::collections::HashSet<usize>, bool)>>,
+    key: usize,
+    owns_seed: bool,
+}
+
+impl Drop for PhpJsonDeepContainerGuard {
+    fn drop(&mut self) {
+        let mut active = self.active.borrow_mut();
+        if self.owns_seed {
+            active.0.clear();
+            active.1 = false;
+        } else {
+            active.0.remove(&self.key);
+        }
+    }
+}
+
+#[inline(always)]
+const fn is_json_deep_drop_checkpoint(depth: i64) -> bool {
+    depth >= 256 && (depth - 256) % 64 == 0
+}
+
 impl PhpJsonEncodeState {
-    fn new(flags: i64) -> Self {
+    fn new(flags: i64, maximum_depth: i64) -> Self {
         Self {
             error_code: JSON_ERROR_NONE,
             flags,
+            maximum_depth,
+            deepest_depth: 0,
+            aborted: false,
+            deep_active: None,
+            deep_release_seen: std::collections::HashSet::new(),
         }
     }
 
     fn record_error(&mut self, code: i64) {
+        if self.aborted {
+            return;
+        }
         self.error_code = code;
+        // INF/NAN uses 0 as a projection and remains traversable even without
+        // PARTIAL. Every other encoder error is an immediate Zend abort unless
+        // partial output was requested. This also prevents later callbacks or
+        // property hooks from running after a fatal projection error.
+        if self.flags & JSON_PARTIAL_OUTPUT_ON_ERROR_FLAG == 0 && code != JSON_ERROR_INF_OR_NAN {
+            self.aborted = true;
+        }
     }
+
+    #[inline(always)]
+    const fn should_abort(&self) -> bool {
+        self.aborted
+    }
+
+    #[inline]
+    fn enter_container(&mut self, parent: Option<&PhpJsonContainer<'_>>) -> Option<i64> {
+        let depth = parent.map_or(1, |container| container.depth.saturating_add(1));
+        self.deepest_depth = self.deepest_depth.max(depth);
+        // PHP's encoder also rejects before exhausting the native C stack.
+        // The observed PHP 8.5 CLI boundary accepts 20k nested containers and
+        // rejects 25k; this deterministic ceiling preserves both sides while
+        // stacker protects Rust's substantially smaller default thread stack.
+        const PHP_JSON_STACK_DEPTH_LIMIT: i64 = 24_000;
+        if depth > PHP_JSON_STACK_DEPTH_LIMIT {
+            self.record_error(JSON_ERROR_DEPTH);
+            return None;
+        }
+        Some(depth)
+    }
+
+    /// Zend checks the public `depth` argument after visiting one complete
+    /// array/object. This lets an earlier child error or callback exception win
+    /// without PARTIAL, while PARTIAL retains the projection and makes the
+    /// enclosing depth error the final diagnostic.
+    #[inline]
+    fn finish_container(&mut self, depth: i64) {
+        if !(1..=i64::from(i32::MAX)).contains(&self.maximum_depth) || depth > self.maximum_depth {
+            self.record_error(JSON_ERROR_DEPTH);
+        }
+    }
+
+    /// Keep ordinary shallow JSON allocation-free while avoiding an O(n²)
+    /// ancestor walk for pathological but PHP-valid deep containers.
+    fn enter_container_identity(
+        &mut self,
+        parent: Option<&PhpJsonContainer<'_>>,
+        key: usize,
+    ) -> Option<Option<PhpJsonDeepContainerGuard>> {
+        let depth = parent.map_or(1, |container| container.depth.saturating_add(1));
+        if depth <= 64 {
+            return (!json_container_is_recursive(parent, key)).then_some(None);
+        }
+
+        let tracker = self
+            .deep_active
+            .get_or_insert_with(|| {
+                std::rc::Rc::new(std::cell::RefCell::new((
+                    std::collections::HashSet::new(),
+                    false,
+                )))
+            })
+            .clone();
+        let mut active = tracker.borrow_mut();
+        let owns_seed = !active.1;
+        if owns_seed {
+            let mut ancestor = parent;
+            while let Some(container) = ancestor {
+                active.0.insert(container.key);
+                ancestor = container.parent;
+            }
+            active.1 = true;
+        }
+        if !active.0.insert(key) {
+            if owns_seed {
+                active.0.clear();
+                active.1 = false;
+            }
+            return None;
+        }
+        drop(active);
+        Some(Some(PhpJsonDeepContainerGuard {
+            active: tracker,
+            key,
+            owns_seed,
+        }))
+    }
+}
+
+#[inline(always)]
+fn json_stopped_container(
+    value: &Value,
+    state: &mut PhpJsonEncodeState,
+    eg: &ExecutorGlobals,
+) -> bool {
+    if !state.should_abort() && eg.exception.is_none() {
+        return false;
+    }
+    let value = value.dereferenced();
+    if matches!(value.value_type(), ValueType::Array | ValueType::Object) {
+        value.mark_deep_drop_tree_checkpoints(&mut state.deep_release_seen);
+    }
+    true
 }
 
 fn repair_json_utf8(bytes: &[u8], substitute: bool) -> String {
@@ -18624,19 +19103,30 @@ fn project_ordinary_json_object(
     state: &mut PhpJsonEncodeState,
     parent: Option<&PhpJsonContainer<'_>>,
 ) -> Result<PhpJsonValue, VmError> {
+    let Some(depth) = state.enter_container(parent) else {
+        val.mark_deep_drop_stack_checkpoint();
+        return Ok(PhpJsonValue::Null);
+    };
     let identity = val
         .object_identity()
         .expect("object JSON projection lost its identity");
     debug_assert_eq!(identity & 1, 0);
     let key = identity | 1;
-    if json_container_is_recursive(parent, key) {
+    let Some(_deep_guard) = state.enter_container_identity(parent, key) else {
         state.record_error(JSON_ERROR_RECURSION);
+        json_stopped_container(val, state, eg);
+        return Ok(PhpJsonValue::Null);
+    };
+    let container = PhpJsonContainer { key, depth, parent };
+    if is_json_deep_drop_checkpoint(container.depth) {
+        val.mark_deep_drop_stack_checkpoint();
+    }
+    if json_stopped_container(val, state, eg) {
         return Ok(PhpJsonValue::Null);
     }
-    let container = PhpJsonContainer { key, parent };
 
     let slots = eg.visible_instance_property_slots(class_id, None);
-    let mut properties = Vec::with_capacity(slots.len());
+    let mut entries = PhpJsonObjectBuilder::with_capacity(slots.len());
     let mut declared_names = std::collections::HashSet::new();
     for slot in slots {
         let definition = eg
@@ -18661,31 +19151,44 @@ fn project_ordinary_json_object(
             })
         };
         if eg.exception.is_some() {
+            val.mark_deep_drop_stack_checkpoint();
             return Ok(PhpJsonValue::Null);
         }
         if let Some(property) = property {
-            properties.push((definition.name, property));
-        }
-    }
-    if let Some(object) = val.as_object() {
-        object.for_each_dynamic_property(|name, property| {
-            if !property.is_undef() && !declared_names.contains(name) {
-                properties.push((name.to_string(), property.clone()));
-            }
-        });
-    }
-    let mut entries = Vec::with_capacity(properties.len());
-    for (key, value) in properties {
-        entries.push((
-            key,
-            value_to_json(
-                &value,
+            let encoded = value_to_json(
+                &property,
                 eg,
                 compact_formatter_compatible,
                 state,
                 Some(&container),
-            )?,
-        ));
+            )?;
+            if json_stopped_container(val, state, eg) {
+                return Ok(PhpJsonValue::Null);
+            }
+            entries.push((definition.name, encoded));
+        }
+    }
+    let mut dynamic = Vec::new();
+    if let Some(object) = val.as_object() {
+        object.for_each_dynamic_property(|name, property| {
+            if !property.is_undef() && !declared_names.contains(name) {
+                dynamic.push((name.to_string(), property.clone()));
+            }
+        });
+    }
+    entries.reserve(dynamic.len());
+    for (key, value) in dynamic {
+        let encoded = value_to_json(
+            &value,
+            eg,
+            compact_formatter_compatible,
+            state,
+            Some(&container),
+        )?;
+        if json_stopped_container(val, state, eg) {
+            return Ok(PhpJsonValue::Null);
+        }
+        entries.push((key, encoded));
     }
     // ReflectionProperty's two engine-declared public slots have a canonical
     // PHP order (`name`, then `class`). Other objects retain the established
@@ -18697,7 +19200,11 @@ fn project_ordinary_json_object(
     {
         entries.sort_by(|left, right| left.0.cmp(&right.0));
     }
-    Ok(PhpJsonValue::Object(entries))
+    state.finish_container(container.depth);
+    if state.should_abort() {
+        val.mark_deep_drop_stack_checkpoint();
+    }
+    Ok(entries.finish(container.depth))
 }
 
 /// `JsonSerializable::jsonSerialize()` returning the receiver bypasses the
@@ -18709,16 +19216,27 @@ fn project_ordinary_json_enum(
     state: &mut PhpJsonEncodeState,
     parent: Option<&PhpJsonContainer<'_>>,
 ) -> Result<PhpJsonValue, VmError> {
+    let Some(depth) = state.enter_container(parent) else {
+        val.mark_deep_drop_stack_checkpoint();
+        return Ok(PhpJsonValue::Null);
+    };
     let identity = val
         .object_identity()
         .expect("enum JSON projection lost its identity");
     debug_assert_eq!(identity & 1, 0);
     let key = identity | 1;
-    if json_container_is_recursive(parent, key) {
+    let Some(_deep_guard) = state.enter_container_identity(parent, key) else {
         state.record_error(JSON_ERROR_RECURSION);
+        json_stopped_container(val, state, eg);
+        return Ok(PhpJsonValue::Null);
+    };
+    let container = PhpJsonContainer { key, depth, parent };
+    if is_json_deep_drop_checkpoint(container.depth) {
+        val.mark_deep_drop_stack_checkpoint();
+    }
+    if json_stopped_container(val, state, eg) {
         return Ok(PhpJsonValue::Null);
     }
-    let container = PhpJsonContainer { key, parent };
     let Some(object) = val.as_object() else {
         return Ok(PhpJsonValue::Null);
     };
@@ -18729,46 +19247,143 @@ fn project_ordinary_json_enum(
         }
     }
     drop(object);
-    let mut entries = Vec::with_capacity(properties.len());
+    let mut entries = PhpJsonObjectBuilder::with_capacity(properties.len());
     for (key, value) in properties {
-        entries.push((
-            key,
-            value_to_json(
-                &value,
-                eg,
-                compact_formatter_compatible,
-                state,
-                Some(&container),
-            )?,
-        ));
+        let encoded = value_to_json(
+            &value,
+            eg,
+            compact_formatter_compatible,
+            state,
+            Some(&container),
+        )?;
+        if json_stopped_container(val, state, eg) {
+            return Ok(PhpJsonValue::Null);
+        }
+        entries.push((key, encoded));
     }
-    Ok(PhpJsonValue::Object(entries))
+    state.finish_container(container.depth);
+    if state.should_abort() {
+        val.mark_deep_drop_stack_checkpoint();
+    }
+    Ok(entries.finish(container.depth))
+}
+
+/// Allocation-equivalent common path for the overwhelmingly frequent
+/// `json_encode($array)` shape. It accepts only valid-UTF-8 scalar/array trees
+/// under the default public depth; anything requiring diagnostics, callbacks,
+/// object visibility or deep-stack handling resumes through the exact path
+/// without mutating ext/json state.
+fn try_project_default_json_array_tree(
+    val: &Value,
+    compact_formatter_compatible: &mut bool,
+    parent: Option<&PhpJsonContainer<'_>>,
+) -> Option<PhpJsonDefaultValue> {
+    let val = val.dereferenced();
+    Some(match val.value_type() {
+        ValueType::Null | ValueType::Undef => PhpJsonDefaultValue::Null,
+        ValueType::True => PhpJsonDefaultValue::Bool(true),
+        ValueType::False => PhpJsonDefaultValue::Bool(false),
+        ValueType::Long => PhpJsonDefaultValue::Number(serde_json::Number::from(val.as_long()?)),
+        ValueType::Double => {
+            let value = val.as_double()?;
+            if !value.is_finite() {
+                return None;
+            }
+            if *compact_formatter_compatible {
+                let magnitude = value.abs();
+                *compact_formatter_compatible =
+                    value.fract() != 0.0 && (1e-4..1e17).contains(&magnitude);
+            }
+            PhpJsonDefaultValue::Number(serde_json::Number::from_f64(value)?)
+        }
+        ValueType::String => {
+            let bytes = val.php_string_bytes()?;
+            PhpJsonDefaultValue::String(std::str::from_utf8(&bytes).ok()?.to_owned())
+        }
+        ValueType::Array => {
+            let depth = parent.map_or(1, |container| container.depth.saturating_add(1));
+            // The exact path owns segmented-stack traversal and diagnostics.
+            // Keeping this fast path below the first sparse checkpoint also
+            // makes every speculative partial projection natively drop-safe.
+            if depth > 255 {
+                return None;
+            }
+            let identity = val.array_identity()?;
+            if json_container_is_recursive(parent, identity) {
+                return None;
+            }
+            let container = PhpJsonContainer {
+                key: identity,
+                depth,
+                parent,
+            };
+            let array = val.as_array()?;
+            let is_list = array.iter().enumerate().all(
+                |(index, (key, _))| matches!(key, ArrayKey::Int(number) if number == index as i64),
+            );
+            if is_list {
+                let mut values = Vec::with_capacity(array.len());
+                for value in array.values() {
+                    values.push(try_project_default_json_array_tree(
+                        value,
+                        compact_formatter_compatible,
+                        Some(&container),
+                    )?);
+                }
+                PhpJsonDefaultValue::Array(values)
+            } else {
+                let mut entries = Vec::with_capacity(array.len());
+                let external_byte_keys = array.has_external_byte_keys();
+                for (key, value) in array.iter() {
+                    let key = match key {
+                        ArrayKey::Int(number) => number.to_string(),
+                        ArrayKey::String(key) if external_byte_keys => {
+                            std::str::from_utf8(&php_string_to_bytes(&key))
+                                .ok()?
+                                .to_owned()
+                        }
+                        ArrayKey::String(key) => key,
+                    };
+                    entries.push((
+                        key,
+                        try_project_default_json_array_tree(
+                            value,
+                            compact_formatter_compatible,
+                            Some(&container),
+                        )?,
+                    ));
+                }
+                PhpJsonDefaultValue::Object(entries)
+            }
+        }
+        ValueType::Object | ValueType::Resource | ValueType::Reference | ValueType::Closure => {
+            return None;
+        }
+    })
 }
 
 /// Convert a PHP value to the order-preserving JSON projection used above.
-fn value_to_json(
+#[inline(always)]
+fn project_json_scalar(
     val: &Value,
-    eg: &mut ExecutorGlobals,
     compact_formatter_compatible: &mut bool,
     state: &mut PhpJsonEncodeState,
-    parent: Option<&PhpJsonContainer<'_>>,
-) -> Result<PhpJsonValue, VmError> {
-    let referenced_container = val.is_reference();
+) -> Option<PhpJsonValue> {
     let val = val.dereferenced();
-    Ok(match val.value_type() {
+    Some(match val.value_type() {
         ValueType::Null | ValueType::Undef => PhpJsonValue::Null,
         ValueType::True => PhpJsonValue::Bool(true),
         ValueType::False => PhpJsonValue::Bool(false),
         ValueType::Long => PhpJsonValue::Number(serde_json::Number::from(val.as_long().unwrap())),
         ValueType::Double => {
-            let d = val.as_double().unwrap();
-            if d.is_finite() {
+            let value = val.as_double().unwrap();
+            if value.is_finite() {
                 if *compact_formatter_compatible {
-                    let magnitude = d.abs();
+                    let magnitude = value.abs();
                     *compact_formatter_compatible =
-                        d.fract() != 0.0 && (1e-4..1e17).contains(&magnitude);
+                        value.fract() != 0.0 && (1e-4..1e17).contains(&magnitude);
                 }
-                serde_json::Number::from_f64(d)
+                serde_json::Number::from_f64(value)
                     .map(PhpJsonValue::Number)
                     .unwrap_or(PhpJsonValue::Null)
             } else {
@@ -18779,6 +19394,69 @@ fn value_to_json(
         ValueType::String => json_php_string(val, state)
             .map(PhpJsonValue::String)
             .unwrap_or(PhpJsonValue::Null),
+        ValueType::Array
+        | ValueType::Object
+        | ValueType::Resource
+        | ValueType::Reference
+        | ValueType::Closure => return None,
+    })
+}
+
+fn value_to_json(
+    val: &Value,
+    eg: &mut ExecutorGlobals,
+    compact_formatter_compatible: &mut bool,
+    state: &mut PhpJsonEncodeState,
+    parent: Option<&PhpJsonContainer<'_>>,
+) -> Result<PhpJsonValue, VmError> {
+    if !state.should_abort()
+        && eg.exception.is_none()
+        && let Some(value) = project_json_scalar(val, compact_formatter_compatible, state)
+    {
+        return Ok(value);
+    }
+    // Check only once per block of recursive calls. Ordinary JSON stays on
+    // the native stack with no allocator work; pathological but PHP-valid
+    // nesting grows onto bounded heap-backed stack segments.
+    let result = if parent
+        .is_some_and(|container| container.depth >= 64 && (container.depth - 64) % 64 == 0)
+    {
+        stacker::maybe_grow(2 * 1024 * 1024, 16 * 1024 * 1024, || {
+            value_to_json_inner(val, eg, compact_formatter_compatible, state, parent)
+        })
+    } else {
+        value_to_json_inner(val, eg, compact_formatter_compatible, state, parent)
+    };
+    // A VM-level fatal/exit unwinds before ordinary parent checks and may own
+    // a temporary JsonSerializable/property-hook result that is absent from
+    // the original argument graph. Mark that local graph before it drops.
+    if result.is_err() {
+        val.dereferenced()
+            .mark_deep_drop_tree_checkpoints(&mut state.deep_release_seen);
+    }
+    result
+}
+
+fn value_to_json_inner(
+    val: &Value,
+    eg: &mut ExecutorGlobals,
+    compact_formatter_compatible: &mut bool,
+    state: &mut PhpJsonEncodeState,
+    parent: Option<&PhpJsonContainer<'_>>,
+) -> Result<PhpJsonValue, VmError> {
+    if json_stopped_container(val, state, eg) {
+        return Ok(PhpJsonValue::Null);
+    }
+    let referenced_container = val.is_reference();
+    let val = val.dereferenced();
+    Ok(match val.value_type() {
+        ValueType::Null
+        | ValueType::Undef
+        | ValueType::True
+        | ValueType::False
+        | ValueType::Long
+        | ValueType::Double
+        | ValueType::String => unreachable!("active JSON scalars use the leaf fast path"),
         ValueType::Array => {
             // A JsonSerializable callback reached through a referenced array
             // may mutate or unset that array. Retain its current COW storage
@@ -18786,37 +19464,53 @@ fn value_to_json(
             // snapshot and never keeps dangling element borrows.
             let retained = referenced_container.then(|| val.clone());
             let val = retained.as_ref().unwrap_or(val);
+            let Some(depth) = state.enter_container(parent) else {
+                val.mark_deep_drop_stack_checkpoint();
+                return Ok(PhpJsonValue::Null);
+            };
             let identity = val
                 .array_identity()
                 .expect("array JSON projection lost its identity");
             debug_assert_eq!(identity & 1, 0);
-            if json_container_is_recursive(parent, identity) {
+            let Some(_deep_guard) = state.enter_container_identity(parent, identity) else {
                 state.record_error(JSON_ERROR_RECURSION);
+                json_stopped_container(val, state, eg);
                 return Ok(PhpJsonValue::Null);
-            }
+            };
             let container = PhpJsonContainer {
                 key: identity,
+                depth,
                 parent,
             };
+            if is_json_deep_drop_checkpoint(container.depth) {
+                val.mark_deep_drop_stack_checkpoint();
+            }
+            if json_stopped_container(val, state, eg) {
+                return Ok(PhpJsonValue::Null);
+            }
             let arr = val.as_array().unwrap();
             let is_list = arr
                 .iter()
                 .enumerate()
                 .all(|(i, (k, _))| matches!(k, ArrayKey::Int(n) if n == i as i64));
-            if is_list {
-                let mut values = Vec::with_capacity(arr.len());
+            let projection = if is_list {
+                let mut values = PhpJsonArrayBuilder::with_capacity(arr.len());
                 for value in arr.values() {
-                    values.push(value_to_json(
+                    let encoded = value_to_json(
                         value,
                         eg,
                         compact_formatter_compatible,
                         state,
                         Some(&container),
-                    )?);
+                    )?;
+                    if json_stopped_container(val, state, eg) {
+                        return Ok(PhpJsonValue::Null);
+                    }
+                    values.push(encoded);
                 }
-                PhpJsonValue::Array(values)
+                values.finish(container.depth)
             } else {
-                let mut entries = Vec::with_capacity(arr.len());
+                let mut entries = PhpJsonObjectBuilder::with_capacity(arr.len());
                 let external_byte_keys = arr.has_external_byte_keys();
                 for (key, value) in arr.iter() {
                     let key = match key {
@@ -18825,19 +19519,28 @@ fn value_to_json(
                             json_php_array_key(string, external_byte_keys, state)
                         }
                     };
-                    entries.push((
-                        key,
-                        value_to_json(
-                            value,
-                            eg,
-                            compact_formatter_compatible,
-                            state,
-                            Some(&container),
-                        )?,
-                    ));
+                    if json_stopped_container(val, state, eg) {
+                        return Ok(PhpJsonValue::Null);
+                    }
+                    let encoded = value_to_json(
+                        value,
+                        eg,
+                        compact_formatter_compatible,
+                        state,
+                        Some(&container),
+                    )?;
+                    if json_stopped_container(val, state, eg) {
+                        return Ok(PhpJsonValue::Null);
+                    }
+                    entries.push((key, encoded));
                 }
-                PhpJsonValue::Object(entries)
+                entries.finish(container.depth)
+            };
+            state.finish_container(container.depth);
+            if state.should_abort() {
+                val.mark_deep_drop_stack_checkpoint();
             }
+            projection
         }
         ValueType::Object => {
             let projection_owner = if eg.lazy_object_state(val).is_some() {
@@ -18846,6 +19549,7 @@ fn value_to_json(
                 None
             };
             if eg.exception.is_some() {
+                val.mark_deep_drop_stack_checkpoint();
                 return Ok(PhpJsonValue::Null);
             }
             let val = projection_owner.as_ref().unwrap_or(val);
@@ -18883,6 +19587,7 @@ fn value_to_json(
             if is_json_serializable {
                 if !eg.enter_json_serializable_object(identity) {
                     state.record_error(JSON_ERROR_RECURSION);
+                    json_stopped_container(val, state, eg);
                     return Ok(PhpJsonValue::Null);
                 }
                 let result = (|| {
@@ -18899,6 +19604,7 @@ fn value_to_json(
                         );
                     };
                     if eg.exception.is_some() {
+                        val.mark_deep_drop_stack_checkpoint();
                         return Ok(PhpJsonValue::Null);
                     }
                     if serialized.dereferenced().object_identity() == Some(identity) {
@@ -18925,12 +19631,16 @@ fn value_to_json(
                     }
                 })();
                 eg.leave_json_serializable_object(identity);
+                if state.should_abort() || eg.exception.is_some() {
+                    val.mark_deep_drop_stack_checkpoint();
+                }
                 return result;
             }
 
             if is_enum {
                 if !is_backed_enum {
                     state.record_error(JSON_ERROR_NON_BACKED_ENUM);
+                    json_stopped_container(val, state, eg);
                     return Ok(PhpJsonValue::Number(serde_json::Number::from(0)));
                 }
                 let backing_value = val
@@ -18955,7 +19665,18 @@ fn value_to_json(
                 parent,
             )?
         }
-        _ => PhpJsonValue::Null,
+        ValueType::Resource => {
+            state.record_error(JSON_ERROR_UNSUPPORTED_TYPE);
+            PhpJsonValue::Null
+        }
+        ValueType::Closure => {
+            let Some(depth) = state.enter_container(parent) else {
+                return Ok(PhpJsonValue::Null);
+            };
+            state.finish_container(depth);
+            PhpJsonValue::Object(Vec::new())
+        }
+        ValueType::Reference => unreachable!("JSON projection must dereference references"),
     })
 }
 
@@ -19003,22 +19724,20 @@ struct PhpJsonEncodeResult {
     error_code: i64,
 }
 
-fn json_encode_value(
-    val: &Value,
-    flags: i64,
-    eg: &mut ExecutorGlobals,
-) -> Result<PhpJsonEncodeResult, VmError> {
-    let preserve_zero_fraction = flags & JSON_PRESERVE_ZERO_FRACTION_FLAG != 0;
-    let mut compact_formatter_compatible = eg.serialize_precision == -1 && !preserve_zero_fraction;
-    let mut state = PhpJsonEncodeState::new(flags);
-    let value = value_to_json(val, eg, &mut compact_formatter_compatible, &mut state, None)?;
+fn serialize_json_projection<T: serde::Serialize>(
+    value: T,
+    compact_formatter_compatible: bool,
+    serialize_precision: i32,
+    preserve_zero_fraction: bool,
+    error_code: i64,
+) -> PhpJsonEncodeResult {
     let output = if compact_formatter_compatible {
         serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string())
     } else {
         let mut output = Vec::new();
         let result = {
             let formatter = PhpJsonFormatter {
-                serialize_precision: eg.serialize_precision,
+                serialize_precision,
                 preserve_zero_fraction,
             };
             let mut serializer = serde_json::Serializer::with_formatter(&mut output, formatter);
@@ -19030,9 +19749,63 @@ fn json_encode_value(
             String::from_utf8(output).unwrap_or_else(|_| "null".to_string())
         }
     };
-    Ok(PhpJsonEncodeResult {
-        output,
-        error_code: state.error_code,
+    PhpJsonEncodeResult { output, error_code }
+}
+
+fn json_encode_value(
+    val: &Value,
+    flags: i64,
+    maximum_depth: i64,
+    eg: &mut ExecutorGlobals,
+) -> Result<PhpJsonEncodeResult, VmError> {
+    let preserve_zero_fraction = flags & JSON_PRESERVE_ZERO_FRACTION_FLAG != 0;
+    let mut compact_formatter_compatible = eg.serialize_precision == -1 && !preserve_zero_fraction;
+    if flags == 0
+        && maximum_depth == 512
+        && let Some(value) =
+            try_project_default_json_array_tree(val, &mut compact_formatter_compatible, None)
+    {
+        return Ok(serialize_json_projection(
+            value,
+            compact_formatter_compatible,
+            eg.serialize_precision,
+            false,
+            JSON_ERROR_NONE,
+        ));
+    }
+    let mut state = PhpJsonEncodeState::new(flags, maximum_depth);
+    let projection = value_to_json(val, eg, &mut compact_formatter_compatible, &mut state, None);
+    if projection.is_err() || state.should_abort() || eg.exception.is_some() {
+        val.dereferenced()
+            .mark_deep_drop_tree_checkpoints(&mut state.deep_release_seen);
+    }
+    let value = projection?;
+    if state.deepest_depth > 256
+        && matches!(
+            val.dereferenced().value_type(),
+            ValueType::Array | ValueType::Object
+        )
+    {
+        val.dereferenced().mark_deep_drop_stack_checkpoint();
+    }
+    let error_code = state.error_code;
+    let serialize_precision = eg.serialize_precision;
+    let finish = move || {
+        serialize_json_projection(
+            value,
+            compact_formatter_compatible,
+            serialize_precision,
+            preserve_zero_fraction,
+            error_code,
+        )
+    };
+    // Serialization and destruction recurse through the completed projection
+    // after traversal has unwound. Keep those phases on a grown stack too,
+    // but only for inputs deep enough to need it.
+    Ok(if state.deepest_depth > 256 {
+        stacker::grow(64 * 1024 * 1024, finish)
+    } else {
+        finish()
     })
 }
 
@@ -25356,6 +26129,12 @@ fn typed_internal_int_argument_expected(
         }
         ValueType::String if !strict => {
             let source = argument.as_str().unwrap_or("");
+            let trimmed = source.trim_matches(|character| {
+                matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}')
+            });
+            if let Ok(integer) = trimmed.parse::<i64>() {
+                return Ok(Some(integer));
+            }
             let Some(number) = php_numeric_string_to_float(source) else {
                 typed_internal_argument_error(
                     eg,

@@ -50,7 +50,9 @@ formatted-io = []
 [dependencies]
 memchr = "2.8.0"
 serde = "1.0.228"
-serde_json = "1.0.149"
+serde_json = { version = "1.0.149", features = ["unbounded_depth"] }
+serde_stacker = "0.1.14"
+stacker = "0.1.25"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [dev-dependencies]

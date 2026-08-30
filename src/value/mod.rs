@@ -994,9 +994,9 @@ pub struct PhpObject {
     pub class_name: Rc<str>,
     /// Stable numeric class ID — matches ClassDef.class_id. Used for inline cache keying.
     pub class_id: u32,
-    /// Low bits hold the request-local Zend object-store handle; the high bit
-    /// records that this allocation has entered its destructor. Packing both
-    /// lifecycle values here preserves the 72-byte PhpObject layout.
+    /// Low bits hold the request-local Zend object-store handle; the high bits
+    /// retain destructor and sparse deep-release state. Packing the lifecycle
+    /// values here preserves the 72-byte PhpObject layout.
     pub(crate) lifecycle: u32,
     /// Shared name → slot mapping owned by the class definition.
     pub property_layout: Rc<ObjectLayout>,
@@ -1308,7 +1308,9 @@ impl ObjectHandleState {
 }
 
 const OBJECT_DESTRUCTOR_RAN: u32 = 1 << 31;
-const OBJECT_HANDLE_MASK: u32 = !OBJECT_DESTRUCTOR_RAN;
+const OBJECT_DEEP_DROP_STACK_CHECKPOINT: u32 = 1 << 30;
+const OBJECT_STATE_MASK: u32 = OBJECT_DESTRUCTOR_RAN | OBJECT_DEEP_DROP_STACK_CHECKPOINT;
+const OBJECT_HANDLE_MASK: u32 = !OBJECT_STATE_MASK;
 
 fn with_object_handles<T>(callback: impl FnOnce(&mut ObjectHandleState) -> T) -> T {
     OBJECT_HANDLES.with(|state| {
@@ -1712,7 +1714,11 @@ impl PhpObject {
         Self {
             class_name: self.class_name.clone(),
             class_id: self.class_id,
-            lifecycle: 0,
+            // A prior exceptional traversal may have proved that this shallow
+            // clone can reach a pathologically deep payload. The clone gets a
+            // fresh handle/destructor lifecycle but retains the stack-safety
+            // state needed when its shared properties are eventually final.
+            lifecycle: self.lifecycle & OBJECT_DEEP_DROP_STACK_CHECKPOINT,
             property_layout: self.property_layout.clone(),
             property_values: self
                 .property_values
@@ -1939,12 +1945,14 @@ const ARRAY_DEFERRED_OBJECT_HANDLES_PUBLISHED: usize = 1usize << (usize::BITS - 
 // bit keeps the common scalar-array test O(1) without enlarging PhpArray; any
 // API exposing a mutable element conservatively sets the marker first.
 const ARRAY_NESTED_RELEASE_CANDIDATE: usize = 1usize << (usize::BITS - 6);
+const ARRAY_DEEP_DROP_STACK_CHECKPOINT: usize = 1usize << (usize::BITS - 7);
 const ARRAY_CURSOR_METADATA: usize = ARRAY_CURSOR_PRISTINE
     | ARRAY_INT_KEY_INITIALIZED
     | ARRAY_EXTERNAL_BYTE_KEYS
     | ARRAY_UTF8_TEXT_KEYS
     | ARRAY_DEFERRED_OBJECT_HANDLES_PUBLISHED
-    | ARRAY_NESTED_RELEASE_CANDIDATE;
+    | ARRAY_NESTED_RELEASE_CANDIDATE
+    | ARRAY_DEEP_DROP_STACK_CHECKPOINT;
 
 /// Fast deterministic hashing for integer-only PHP array keys.
 ///
@@ -2827,6 +2835,17 @@ impl PhpArray {
     #[inline]
     pub(crate) fn may_require_nested_release(&self) -> bool {
         self.cursor.get() & ARRAY_NESTED_RELEASE_CANDIDATE != 0
+    }
+
+    #[inline(always)]
+    fn mark_deep_drop_stack_checkpoint(&self) {
+        self.cursor
+            .set(self.cursor.get() | ARRAY_DEEP_DROP_STACK_CHECKPOINT);
+    }
+
+    #[inline(always)]
+    fn has_deep_drop_stack_checkpoint(&self) -> bool {
+        self.cursor.get() & ARRAY_DEEP_DROP_STACK_CHECKPOINT != 0
     }
 
     /// Normalize a string dimension to the storage convention selected by an
@@ -4195,7 +4214,7 @@ impl PhpArray {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn len(&self) -> usize {
         match &self.storage {
             ArrayStorage::Packed(values) => values.len(),
@@ -4350,6 +4369,7 @@ impl PhpArray {
     /// Hash arrays keep string keys in a compact shared representation. The
     /// general `iter()` API converts those keys to owned `ArrayKey` values;
     /// value-only operations should use this iterator to avoid that allocation.
+    #[inline(always)]
     pub fn values(&self) -> PhpArrayValues<'_> {
         let inner = match &self.storage {
             ArrayStorage::Packed(values) => PhpArrayValuesInner::Packed(values.iter()),
@@ -4696,7 +4716,9 @@ impl PhpArray {
             next_int_key: values.len() as i64,
             storage: ArrayStorage::Packed(values),
             cursor: Cell::new(
-                ARRAY_CURSOR_PRISTINE | (self.cursor.get() & ARRAY_NESTED_RELEASE_CANDIDATE),
+                ARRAY_CURSOR_PRISTINE
+                    | (self.cursor.get()
+                        & (ARRAY_NESTED_RELEASE_CANDIDATE | ARRAY_DEEP_DROP_STACK_CHECKPOINT)),
             ),
         }
     }
@@ -5208,6 +5230,76 @@ impl PhpClosure {
         (common.fn_type == FunctionType::User)
             .then(|| unsafe { &*(self.func as *const UserFunction) })
     }
+
+    /// Whether destroying this final Closure can also destroy one of its
+    /// direct cycle-capable children. Duplicate edges count independently,
+    /// because they can collectively be the child's only remaining owners.
+    fn final_drop_may_release_cycle_child(&self) -> bool {
+        if self.captures.is_empty() && self.static_vars.is_none() {
+            return self.bound_this.as_ref().is_some_and(|value| {
+                value.cycle_node().is_some()
+                    && value
+                        .cycle_strong_count()
+                        .is_some_and(|strong_count| strong_count == 1)
+            });
+        }
+        let mut children = Vec::<((usize, CycleNodeKind), usize, usize)>::new();
+        let mut record = |value: &Value| {
+            let Some(node) = value.cycle_node() else {
+                return;
+            };
+            if let Some((_, direct_edges, _)) = children
+                .iter_mut()
+                .find(|(candidate, _, _)| *candidate == node)
+            {
+                *direct_edges += 1;
+                return;
+            }
+            let strong_count = value
+                .cycle_strong_count()
+                .expect("cycle node must retain an Rc owner");
+            children.push((node, 1, strong_count));
+        };
+        if let Some(bound_this) = &self.bound_this {
+            record(bound_this);
+        }
+        for capture in &self.captures {
+            record(capture);
+        }
+        if let Some(static_vars) = &self.static_vars {
+            let Ok(static_vars) = static_vars.as_ref().try_borrow() else {
+                return true;
+            };
+            for value in static_vars.values() {
+                record(value);
+            }
+        }
+        children
+            .into_iter()
+            .any(|(_, direct_edges, strong_count)| strong_count <= direct_edges)
+    }
+}
+
+impl Drop for PhpClosure {
+    fn drop(&mut self) {
+        if !self.final_drop_may_release_cycle_child() {
+            return;
+        }
+        let mut seen = std::collections::HashSet::new();
+        if let Some(bound_this) = &self.bound_this {
+            bound_this.mark_final_drop_tree_checkpoints(&mut seen);
+        }
+        for capture in &self.captures {
+            capture.mark_final_drop_tree_checkpoints(&mut seen);
+        }
+        if let Some(static_vars) = &self.static_vars
+            && let Ok(static_vars) = static_vars.as_ref().try_borrow()
+        {
+            for value in static_vars.values() {
+                value.mark_final_drop_tree_checkpoints(&mut seen);
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for PhpClosure {
@@ -5278,7 +5370,7 @@ pub enum ValueType {
     Closure = 11,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum CycleNodeKind {
     Array,
     Object,
@@ -5436,6 +5528,124 @@ impl Value {
         Self::shared_string(rc)
     }
 
+    #[inline(always)]
+    pub(crate) fn mark_deep_drop_stack_checkpoint(&self) {
+        match self.value_type() {
+            ValueType::Array => {
+                if let Some(array) = self.as_array() {
+                    array.mark_deep_drop_stack_checkpoint();
+                }
+            }
+            ValueType::Object => {
+                // Release discovery can revisit an ancestor while its
+                // properties are under a shared RefCell borrow. Such a cycle
+                // cannot be a unique recursive-drop chain; skip that ancestor
+                // instead of panicking, while all unborrowed descendants and
+                // the eventual final root retain their checkpoints.
+                let object = self
+                    .as_object_rc()
+                    .expect("object checkpoint requires an object owner");
+                if let Ok(mut object) = object.try_borrow_mut() {
+                    object.lifecycle |= OBJECT_DEEP_DROP_STACK_CHECKPOINT;
+                }
+            }
+            _ => debug_assert!(false, "deep-drop checkpoint requires a container"),
+        }
+    }
+
+    /// Mark sparse reachable array/object checkpoints after an exceptional or
+    /// final-owner traversal so a later last alias cannot recurse through an
+    /// unbounded native Drop chain. Shallow graphs retain their ordinary fast
+    /// release path. One traversal-scoped identity set keeps cyclic graphs
+    /// linear, and temporary handles are suppressed from GC root statistics.
+    #[cold]
+    pub(crate) fn mark_deep_drop_tree_checkpoints(
+        &self,
+        seen: &mut std::collections::HashSet<(usize, CycleNodeKind)>,
+    ) {
+        self.mark_deep_drop_tree_checkpoints_with_root_policy(seen, true);
+    }
+
+    /// Final-owner release needs checkpoints only when the graph is already
+    /// deep. Unlike an exceptional JSON root, it cannot later be cloned and
+    /// mutated after this proof, so shallow objects keep their ordinary Drop.
+    #[cold]
+    pub(crate) fn mark_final_drop_tree_checkpoints(
+        &self,
+        seen: &mut std::collections::HashSet<(usize, CycleNodeKind)>,
+    ) {
+        self.mark_deep_drop_tree_checkpoints_with_root_policy(seen, false);
+    }
+
+    fn mark_deep_drop_tree_checkpoints_with_root_policy(
+        &self,
+        seen: &mut std::collections::HashSet<(usize, CycleNodeKind)>,
+        mark_root_unconditionally: bool,
+    ) {
+        let root_value = self.dereferenced();
+        if mark_root_unconditionally
+            && matches!(
+                root_value.value_type(),
+                ValueType::Array | ValueType::Object
+            )
+        {
+            root_value.mark_deep_drop_stack_checkpoint();
+        }
+        if !self.try_has_cycle_children().unwrap_or(false) {
+            return;
+        }
+        let _cycle_snapshot_guard = begin_cycle_collection();
+        let Some(root) = self
+            .clone_cycle_handle()
+            .or_else(|| self.dereferenced().clone_cycle_handle())
+        else {
+            return;
+        };
+        let root_marker = root.clone_cycle_handle();
+        let mut pending = vec![(root, 0u32)];
+        let mut maximum_depth = 0u32;
+        while let Some((value, depth)) = pending.pop() {
+            let Some(node) = value.cycle_node() else {
+                continue;
+            };
+            if !seen.insert(node) {
+                continue;
+            }
+            maximum_depth = maximum_depth.max(depth);
+            if depth >= 256
+                && (depth - 256).is_multiple_of(64)
+                && matches!(node.1, CycleNodeKind::Array | CycleNodeKind::Object)
+            {
+                value.mark_deep_drop_stack_checkpoint();
+            }
+            value.try_for_each_cycle_child_handle(|child| {
+                pending.push((child, depth.saturating_add(1)))
+            });
+        }
+        if let Some(root) = root_marker {
+            let root_value = root.dereferenced();
+            if (mark_root_unconditionally || maximum_depth >= 256)
+                && matches!(
+                    root_value.value_type(),
+                    ValueType::Array | ValueType::Object
+                )
+            {
+                root_value.mark_deep_drop_stack_checkpoint();
+            } else if maximum_depth >= 256 && root_value.value_type() == ValueType::Closure {
+                // Closure has no spare lifecycle bit of its own. Mark every
+                // direct captured container (or a reference's target) so its
+                // first structural Drop frame enters the iterative release
+                // path instead of recursing 256 levels before a checkpoint.
+                root_value.try_for_each_cycle_child_handle(|child| {
+                    let child = child.dereferenced();
+                    if matches!(child.value_type(), ValueType::Array | ValueType::Object) {
+                        child.mark_deep_drop_stack_checkpoint();
+                    }
+                });
+            }
+        }
+    }
+
     /// Create a PHP byte string through the runtime's lossless Latin-1 bridge.
     #[inline]
     pub(crate) fn binary_string(bytes: &[u8]) -> Self {
@@ -5523,7 +5733,10 @@ impl Value {
     pub fn object(mut obj: PhpObject) -> Self {
         let is_declared = obj.class_id != 0;
         let (handle, in_request) = allocate_object_handle();
-        obj.lifecycle = handle;
+        // A PHP clone receives a fresh handle and destructor lifecycle, but a
+        // monotonic deep-drop checkpoint proved on the source remains valid
+        // for the clone's initially shared property graph.
+        obj.lifecycle = (obj.lifecycle & OBJECT_DEEP_DROP_STACK_CHECKPOINT) | handle;
         let rc = Rc::new(RefCell::new(obj));
         if is_declared {
             stats::inc_declared_object_owner_allocation();
@@ -5787,7 +6000,7 @@ impl Value {
             .as_object_mut()
             .expect("deferred object publication requires an unborrowed payload");
         let (handle, in_request) = allocate_object_handle();
-        object.lifecycle = (object.lifecycle & OBJECT_DESTRUCTOR_RAN) | handle;
+        object.lifecycle = (object.lifecycle & OBJECT_STATE_MASK) | handle;
         drop(object);
         if !in_request {
             register_object_identity(
@@ -5902,7 +6115,7 @@ impl Value {
         let Some(mut object) = self.as_object_mut() else {
             return;
         };
-        object.lifecycle &= OBJECT_HANDLE_MASK;
+        object.lifecycle &= !OBJECT_DESTRUCTOR_RAN;
     }
 
     /// Begin a fresh lifecycle after Reflection successfully resets an object
@@ -5988,13 +6201,15 @@ impl Value {
         }
     }
 
-    /// Clone direct cycle-capable children in PHP storage order. The caller
-    /// owns the returned handles and may deduplicate them by `cycle_node()`.
-    pub(crate) fn cycle_child_handles(&self) -> Vec<Value> {
-        let mut children = Vec::new();
+    /// Visit cloned direct cycle-capable children in PHP storage order. A
+    /// false result means an active RefCell borrow made the current snapshot
+    /// unavailable. Drop-time deep-marker discovery treats such a node as an
+    /// externally live boundary: the active borrower keeps it alive, and a
+    /// later final-owner release can mark the graph after that borrow ends.
+    fn try_for_each_cycle_child_handle(&self, mut visitor: impl FnMut(Value)) -> bool {
         let mut push = |value: &Value| {
             if let Some(value) = value.clone_cycle_handle() {
-                children.push(value);
+                visitor(value);
             }
         };
         match self.cycle_node().map(|node| node.1) {
@@ -6006,10 +6221,19 @@ impl Value {
                 }
             }
             Some(CycleNodeKind::Object) => {
-                if let Some(object) = self.as_object() {
-                    object.for_each_property(|_, value| push(value));
-                    if let Some(generator) = &object.generator {
-                        generator.as_ref().borrow().for_each_cycle_child(&mut push);
+                let object_owner = self
+                    .as_object_rc()
+                    .expect("object cycle node requires an object owner");
+                let Ok(object) = object_owner.try_borrow() else {
+                    return false;
+                };
+                object.for_each_property(|_, value| push(value));
+                if let Some(generator) = &object.generator {
+                    let Ok(generator) = generator.as_ref().try_borrow() else {
+                        return false;
+                    };
+                    if !generator.try_for_each_cycle_child(&mut push) {
+                        return false;
                     }
                 }
             }
@@ -6025,7 +6249,10 @@ impl Value {
                         push(value);
                     }
                     if let Some(static_vars) = &closure.static_vars {
-                        for value in static_vars.as_ref().borrow().values() {
+                        let Ok(static_vars) = static_vars.as_ref().try_borrow() else {
+                            return false;
+                        };
+                        for value in static_vars.values() {
                             push(value);
                         }
                     }
@@ -6033,6 +6260,84 @@ impl Value {
             }
             None => {}
         }
+        true
+    }
+
+    /// Strict collector traversal. Cycle collection runs outside mutable VM
+    /// storage borrows, so an unavailable snapshot remains a logic error there.
+    pub(crate) fn for_each_cycle_child_handle(&self, visitor: impl FnMut(Value)) {
+        assert!(
+            self.try_for_each_cycle_child_handle(visitor),
+            "cycle child traversal requires unborrowed storage"
+        );
+    }
+
+    /// Whether this node directly owns any cycle-capable child. This cheap
+    /// preflight keeps shallow final objects out of the deep-marker worklist.
+    fn try_has_cycle_children(&self) -> Option<bool> {
+        match self.cycle_node().map(|node| node.1) {
+            Some(CycleNodeKind::Array) => Some(
+                self.as_array()
+                    .is_some_and(|array| array.values().any(|value| value.cycle_node().is_some())),
+            ),
+            Some(CycleNodeKind::Object) => {
+                let object_owner = self
+                    .as_object_rc()
+                    .expect("object cycle node requires an object owner");
+                let object = object_owner.try_borrow().ok()?;
+                if object.any_property_value(|value| value.cycle_node().is_some()) {
+                    return Some(true);
+                }
+                let mut found = false;
+                if let Some(generator) = &object.generator {
+                    if !generator
+                        .as_ref()
+                        .try_borrow()
+                        .ok()?
+                        .try_for_each_cycle_child(|value| found |= value.cycle_node().is_some())
+                    {
+                        return None;
+                    }
+                }
+                Some(found)
+            }
+            Some(CycleNodeKind::Reference) => Some(self.dereferenced().cycle_node().is_some()),
+            Some(CycleNodeKind::Closure) => {
+                let Some(closure) = self.as_closure() else {
+                    return Some(false);
+                };
+                if closure
+                    .bound_this
+                    .as_ref()
+                    .is_some_and(|value| value.cycle_node().is_some())
+                    || closure
+                        .captures
+                        .iter()
+                        .any(|value| value.cycle_node().is_some())
+                {
+                    return Some(true);
+                }
+                let Some(static_vars) = &closure.static_vars else {
+                    return Some(false);
+                };
+                Some(
+                    static_vars
+                        .as_ref()
+                        .try_borrow()
+                        .ok()?
+                        .values()
+                        .any(|value| value.cycle_node().is_some()),
+                )
+            }
+            None => Some(false),
+        }
+    }
+
+    /// Clone direct cycle-capable children in PHP storage order. The caller
+    /// owns the returned handles and may deduplicate them by `cycle_node()`.
+    pub(crate) fn cycle_child_handles(&self) -> Vec<Value> {
+        let mut children = Vec::new();
+        self.for_each_cycle_child_handle(|value| children.push(value));
         children
     }
 
@@ -7241,6 +7546,137 @@ impl Clone for Value {
     }
 }
 
+fn append_php_array_values(mut array: PhpArray, pending: &mut Vec<Value>) {
+    let storage = std::mem::replace(&mut array.storage, ArrayStorage::Packed(Vec::new()));
+    match storage {
+        ArrayStorage::Packed(values) => pending.extend(values.into_iter().rev()),
+        ArrayStorage::SmallHash(small) => {
+            pending.extend(
+                small
+                    .entries
+                    .into_iter()
+                    .rev()
+                    .flatten()
+                    .map(|(_, value)| value),
+            );
+        }
+        ArrayStorage::LinearHash(linear) => {
+            pending.extend(linear.entries.into_iter().rev().map(|(_, value)| value));
+        }
+        ArrayStorage::Hash { entries, .. } => {
+            pending.extend(entries.into_iter().rev().map(|(_, value)| value));
+        }
+    }
+}
+
+fn append_dynamic_property_values_reversed(
+    properties: DynamicPropertyMap,
+    pending: &mut Vec<Value>,
+) {
+    match properties.storage {
+        DynamicPropertyStorage::Small(small) => {
+            pending.extend(
+                small
+                    .entries
+                    .into_iter()
+                    .rev()
+                    .flatten()
+                    .map(|(_, value)| value),
+            );
+        }
+        DynamicPropertyStorage::Linear(linear) => {
+            pending.extend(linear.entries.into_iter().rev().map(|(_, value)| value));
+        }
+        DynamicPropertyStorage::Indexed(indexed) => {
+            pending.extend(indexed.entries.into_iter().rev().map(|(_, value)| value));
+        }
+    }
+}
+
+fn append_php_object_values(mut object: PhpObject, pending: &mut Vec<Value>) {
+    let handle = object.lifecycle & OBJECT_HANDLE_MASK;
+    if handle != 0 {
+        for (slot, value) in object.property_values.iter().enumerate() {
+            value.remove_reference_property_constraint(instance_property_reference_owner(
+                handle, slot,
+            ));
+        }
+    }
+    if let Some(properties) = object.dynamic_properties.take() {
+        append_dynamic_property_values_reversed(*properties, pending);
+    }
+    pending.extend(object.property_values.drain(..).rev());
+}
+
+/// Release a proven-unique acyclic container component without recursive Rust
+/// destruction. Sparse JSON checkpoints enter here only after the outer Rc
+/// count reaches one; shared descendants retain normal cycle-candidate logic.
+fn release_deep_container_iteratively(root_type: ValueType, root_pointer: *mut u8) {
+    // SAFETY: callers pass the raw owner encoded by an Array/Object Value only
+    // after proving its Rc count is one. This block consumes that one owner;
+    // every nested raw owner is reconstructed from a still-live Value with the
+    // same tag and is unwrapped only after its own count is proven unique.
+    unsafe {
+        let mut pending = Vec::new();
+        match root_type {
+            ValueType::Array => {
+                let owner = Rc::from_raw(root_pointer as *const PhpArray);
+                let array = Rc::try_unwrap(owner)
+                    .unwrap_or_else(|_| unreachable!("unique deep array changed owner count"));
+                append_php_array_values(array, &mut pending);
+            }
+            ValueType::Object => {
+                let pointer = root_pointer as *const RefCell<PhpObject>;
+                let owner = Rc::from_raw(pointer);
+                let object = Rc::try_unwrap(owner)
+                    .unwrap_or_else(|_| unreachable!("unique deep object changed owner count"))
+                    .into_inner();
+                release_object_handle(pointer as usize, object.lifecycle & OBJECT_HANDLE_MASK);
+                append_php_object_values(object, &mut pending);
+            }
+            _ => unreachable!("deep release root must be a container"),
+        }
+
+        while let Some(value) = pending.pop() {
+            let value = std::mem::ManuallyDrop::new(value);
+            match value.value_type() {
+                ValueType::Array => {
+                    let pointer = value.data.ptr as *const PhpArray;
+                    let owner = std::mem::ManuallyDrop::new(Rc::from_raw(pointer));
+                    if Rc::strong_count(&owner) != 1 {
+                        drop(std::mem::ManuallyDrop::into_inner(value));
+                        continue;
+                    }
+                    stats::inc_value_drop(ValueType::Array as usize);
+                    let owner = std::mem::ManuallyDrop::into_inner(owner);
+                    let array = Rc::try_unwrap(owner).unwrap_or_else(|_| {
+                        unreachable!("unique nested array changed owner count")
+                    });
+                    append_php_array_values(array, &mut pending);
+                }
+                ValueType::Object => {
+                    let pointer = value.data.ptr as *const RefCell<PhpObject>;
+                    let owner = std::mem::ManuallyDrop::new(Rc::from_raw(pointer));
+                    if Rc::strong_count(&owner) != 1 {
+                        drop(std::mem::ManuallyDrop::into_inner(value));
+                        continue;
+                    }
+                    stats::inc_value_drop(ValueType::Object as usize);
+                    let owner = std::mem::ManuallyDrop::into_inner(owner);
+                    let object = Rc::try_unwrap(owner)
+                        .unwrap_or_else(|_| {
+                            unreachable!("unique nested object changed owner count")
+                        })
+                        .into_inner();
+                    release_object_handle(pointer as usize, object.lifecycle & OBJECT_HANDLE_MASK);
+                    append_php_object_values(object, &mut pending);
+                }
+                _ => drop(std::mem::ManuallyDrop::into_inner(value)),
+            }
+        }
+    }
+}
+
 impl Drop for Value {
     #[inline(always)]
     fn drop(&mut self) {
@@ -7251,34 +7687,47 @@ impl Drop for Value {
                 unsafe { Rc::decrement_strong_count(self.data.ptr as *const String) };
             }
             ValueType::Array => {
-                // Drop = Rc decrement. A still-shared cycle-capable owner is a
-                // possible root for the next explicit collector pass.
-                // SAFETY: the Array tag proves this pointer came from
-                // `Rc<PhpArray>::into_raw`; ManuallyDrop retains that owner
-                // while the weak root and matching decrement are created.
+                // Keep the established inlined Rc decrement path. Only roots
+                // explicitly marked by a prior deep traversal enter the cold
+                // iterative teardown helper.
                 unsafe {
                     let pointer = self.data.ptr as *const PhpArray;
                     let owner = std::mem::ManuallyDrop::new(Rc::from_raw(pointer));
-                    if Rc::strong_count(&owner) > 1 {
-                        register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&owner)));
+                    let strong_count = Rc::strong_count(&owner);
+                    if strong_count == 1 && (*pointer).has_deep_drop_stack_checkpoint() {
+                        release_deep_container_iteratively(
+                            ValueType::Array,
+                            pointer.cast_mut().cast(),
+                        );
+                    } else {
+                        if strong_count > 1 {
+                            register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&owner)));
+                        }
+                        Rc::decrement_strong_count(pointer);
                     }
-                    Rc::decrement_strong_count(pointer);
-                };
+                }
             }
-            ValueType::Object => {
-                // Drop = Rc decrement. Frees PhpObject when refcount reaches 0.
-                unsafe {
-                    let pointer = self.data.ptr as *const RefCell<PhpObject>;
-                    let owner = std::mem::ManuallyDrop::new(Rc::from_raw(pointer));
-                    if Rc::strong_count(&owner) == 1 {
+            ValueType::Object => unsafe {
+                let pointer = self.data.ptr as *const RefCell<PhpObject>;
+                let owner = std::mem::ManuallyDrop::new(Rc::from_raw(pointer));
+                let strong_count = Rc::strong_count(&owner);
+                let checkpoint = strong_count == 1
+                    && (*(*pointer).as_ptr()).lifecycle & OBJECT_DEEP_DROP_STACK_CHECKPOINT != 0;
+                if checkpoint {
+                    release_deep_container_iteratively(
+                        ValueType::Object,
+                        pointer.cast_mut().cast(),
+                    );
+                } else {
+                    if strong_count == 1 {
                         let handle = (*(*pointer).as_ptr()).lifecycle & OBJECT_HANDLE_MASK;
                         release_object_handle(pointer as usize, handle);
                     } else {
                         register_cycle_candidate(CycleCandidate::Object(Rc::downgrade(&owner)));
                     }
                     Rc::decrement_strong_count(pointer);
-                };
-            }
+                }
+            },
             #[cfg(feature = "resource-lifetime")]
             ValueType::Resource => {
                 unsafe { Rc::decrement_strong_count(self.data.ptr as *const ResourceHandle) };
