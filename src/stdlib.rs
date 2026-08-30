@@ -469,16 +469,22 @@ fn json_decode_values(
     });
     let associative = associative.is_some_and(Value::is_truthy);
     let result = if input.value_type() == ValueType::String {
-        let Some(bytes) = input.php_string_bytes() else {
-            eg.set_json_last_error(JSON_ERROR_UTF8);
-            return Value::null();
-        };
-        match std::str::from_utf8(bytes.as_ref()) {
-            Ok(json) => json_decode::decode_php_value(json, associative),
-            Err(_) => {
+        if input.is_binary_string() {
+            let Some(bytes) = input.php_string_bytes() else {
                 eg.set_json_last_error(JSON_ERROR_UTF8);
                 return Value::null();
+            };
+            match std::str::from_utf8(bytes.as_ref()) {
+                Ok(json) => json_decode::decode_php_value(json, associative),
+                Err(_) => {
+                    eg.set_json_last_error(JSON_ERROR_UTF8);
+                    return Value::null();
+                }
             }
+        } else {
+            // Ordinary runtime strings are already valid Rust UTF-8. Keep the
+            // validation scan on the explicit byte-buffer path only.
+            json_decode::decode_php_value(input.as_str().unwrap_or_default(), associative)
         }
     } else {
         json_decode::decode_php_value(&input.echo_to_string(), associative)
@@ -1074,7 +1080,7 @@ fn fn_array_key_exists_named(
         ret!(rv, Value::bool(array.get_int(key).is_some()));
     }
     if let Some(key) = key.as_str() {
-        if (arg!(ed, 0).is_binary_string() && !key.is_ascii())
+        if (arg!(ed, 0).is_binary_string() && !array.has_external_byte_keys() && !key.is_ascii())
             || (array.has_external_byte_keys()
                 && !arg!(ed, 0).is_binary_string()
                 && !key.is_ascii())

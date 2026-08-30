@@ -1445,29 +1445,49 @@ pub(super) fn fn_preg_quote(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(source) =
-        typed_internal_string_value_argument_expected(ed, eg, "preg_quote", 0, "str", "string")?
-    else {
-        return Ok(());
+    let source_argument = arg!(ed, 0);
+    let converted_source;
+    let source = if source_argument.value_type() == ValueType::String {
+        source_argument
+    } else {
+        let Some(converted) = typed_internal_string_value_argument_expected(
+            ed,
+            eg,
+            "preg_quote",
+            0,
+            "str",
+            "string",
+        )?
+        else {
+            return Ok(());
+        };
+        converted_source = converted;
+        &converted_source
     };
     let delimiter = match arg_opt!(ed, 1) {
         None => None,
         Some(value) if value.dereferenced().value_type() == ValueType::Null => None,
-        Some(_) => {
-            let Some(delimiter) = typed_internal_string_value_argument_expected(
-                ed,
-                eg,
-                "preg_quote",
-                1,
-                "delimiter",
-                "?string",
-            )?
-            else {
-                return Ok(());
-            };
-            delimiter
-                .php_string_bytes()
-                .and_then(|bytes| bytes.first().copied())
+        Some(value) => {
+            if value.value_type() == ValueType::String {
+                value
+                    .php_string_bytes()
+                    .and_then(|bytes| bytes.first().copied())
+            } else {
+                let Some(delimiter) = typed_internal_string_value_argument_expected(
+                    ed,
+                    eg,
+                    "preg_quote",
+                    1,
+                    "delimiter",
+                    "?string",
+                )?
+                else {
+                    return Ok(());
+                };
+                delimiter
+                    .php_string_bytes()
+                    .and_then(|bytes| bytes.first().copied())
+            }
         }
     };
     let binary = source.is_binary_string();
@@ -1506,7 +1526,15 @@ pub(super) fn fn_preg_quote(
         }
         quoted.push(byte);
     }
-    ret!(rv, php_byte_result(quoted, binary));
+    let result = if binary {
+        Value::binary_string(&quoted)
+    } else {
+        match String::from_utf8(quoted) {
+            Ok(quoted) => Value::string(quoted),
+            Err(error) => Value::binary_string(&error.into_bytes()),
+        }
+    };
+    ret!(rv, result);
 }
 
 /// htmlentities() shares htmlspecialchars()'s ASCII/UTF-8 special-character

@@ -6312,6 +6312,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         );
                     } else {
                         let normalized_string_key = ((idx_val.is_binary_string()
+                            && !arr.has_external_byte_keys()
                             && idx_val.as_str().is_some_and(|key| !key.is_ascii()))
                             || (arr.has_external_byte_keys()
                                 && !idx_val.is_binary_string()

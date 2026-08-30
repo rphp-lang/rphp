@@ -34,9 +34,14 @@ fn normalized_symbol_name(name: &str) -> &str {
 
 #[inline]
 fn symbol_exists(eg: &ExecutorGlobals, name: &str, kind: SymbolKind) -> bool {
+    loaded_symbol_matches(eg, name, kind).unwrap_or(false)
+}
+
+#[inline]
+fn loaded_symbol_matches(eg: &ExecutorGlobals, name: &str, kind: SymbolKind) -> Option<bool> {
     let name = normalized_symbol_name(name);
-    let definition = eg.find_public_class(name);
-    definition.is_some_and(|definition| match kind {
+    let definition = eg.find_public_class(name)?;
+    Some(match kind {
         SymbolKind::Any => true,
         SymbolKind::Class => !definition.is_interface && !definition.is_trait,
         SymbolKind::Interface => definition.is_interface,
@@ -430,13 +435,11 @@ fn exists_with_autoload(
     // A symbol of another class-like kind still owns this name. PHP returns
     // false for e.g. class_exists(LoadedInterface::class) without invoking
     // autoload again and redeclaring the already loaded interface.
-    if lookup_name
+    if let Some(matches) = lookup_name
         .as_deref()
-        .is_some_and(|name| symbol_exists(eg, name, SymbolKind::Any))
+        .and_then(|name| loaded_symbol_matches(eg, name, kind))
     {
-        return Ok(lookup_name
-            .as_deref()
-            .is_some_and(|name| symbol_exists(eg, name, kind)));
+        return Ok(matches);
     }
     if !autoload
         || eg
@@ -470,20 +473,33 @@ fn symbol_exists_handler(
     function: &str,
     parameter: &str,
 ) -> Result<(), VmError> {
-    let Some(name_value) =
-        typed_internal_string_value_argument_expected(ed, eg, function, 0, parameter, "string")?
-    else {
-        return Ok(());
+    let argument = arg!(ed, 0);
+    let converted_name;
+    let name_value = if argument.value_type() == ValueType::String {
+        argument
+    } else {
+        let Some(converted) = typed_internal_string_value_argument_expected(
+            ed, eg, function, 0, parameter, "string",
+        )?
+        else {
+            return Ok(());
+        };
+        converted_name = converted;
+        &converted_name
     };
     let binary_name = name_value.is_binary_string();
     let name = name_value.as_str().unwrap_or("");
-    let autoload = if arg_opt!(ed, 1).is_some() {
-        let Some(autoload) = typed_internal_bool_argument(ed, eg, function, 1, "autoload")? else {
-            return Ok(());
-        };
-        autoload
-    } else {
-        true
+    let autoload = match arg_opt!(ed, 1) {
+        None => true,
+        Some(value) if value.value_type() == ValueType::True => true,
+        Some(value) if value.value_type() == ValueType::False => false,
+        Some(_) => {
+            let Some(autoload) = typed_internal_bool_argument(ed, eg, function, 1, "autoload")?
+            else {
+                return Ok(());
+            };
+            autoload
+        }
     };
     let exists = exists_with_autoload(eg, name, kind, autoload, binary_name)?;
     if eg.exception.is_none() {
