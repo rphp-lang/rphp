@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 #[cfg(feature = "vm-stats")]
 use std::sync::OnceLock;
@@ -4333,6 +4334,40 @@ fn value_to_array_key_ref(val: &Value) -> Result<ArrayKeyRef<'_>, ArrayKeyError>
         ValueType::Resource => Err(ArrayKeyError::Resource(val.as_resource_id().unwrap())),
         _ => Err(ArrayKeyError::Illegal),
     }
+}
+
+/// Borrow an array-read string key when source and array already share a
+/// storage convention. Only provenance mismatches allocate; invalid raw bytes
+/// probing ordinary UTF-8 storage are a definite miss rather than a bridge-
+/// representation alias.
+#[inline(always)]
+pub(crate) fn array_string_key_for_lookup<'a>(
+    array: &PhpArray,
+    source: &'a Value,
+) -> Option<Cow<'a, str>> {
+    let key = source.as_str()?;
+    if key.is_ascii() || source.is_binary_string() == array.has_external_byte_keys() {
+        return Some(Cow::Borrowed(key));
+    }
+    normalize_mismatched_array_string_key(array, source)
+}
+
+#[cold]
+#[inline(never)]
+fn normalize_mismatched_array_string_key<'a>(
+    array: &PhpArray,
+    source: &'a Value,
+) -> Option<Cow<'a, str>> {
+    let key = source.as_str()?;
+    if array.has_external_byte_keys() {
+        return Some(Cow::Owned(php_byte_string_from_bytes(
+            key.as_bytes().iter().copied(),
+        )));
+    }
+    let bytes = source.php_string_bytes()?;
+    std::str::from_utf8(bytes.as_ref())
+        .ok()
+        .map(|key| Cow::Owned(key.to_string()))
 }
 
 #[cfg(test)]

@@ -1051,6 +1051,16 @@ fn arbitrary_byte_names_keys_and_sorting_do_not_alias_unicode_text() {
         run_php(
             r#"<?php
 $raw = hex2bin('ff');
+$utf8Bytes = hex2bin('c3bf');
+$textOnly = ['ÿ' => 'text'];
+var_dump(
+    $textOnly[$raw] ?? 'miss',
+    array_key_exists($raw, $textOnly),
+    isset($textOnly[$raw]),
+    $textOnly[$utf8Bytes],
+    array_key_exists($utf8Bytes, $textOnly),
+    isset($textOnly[$utf8Bytes])
+);
 function collision($ÿ = 'default', ...$rest): void {
     echo 'named=', $ÿ, ':';
     foreach (array_keys($rest) as $key) { echo bin2hex($key), ','; }
@@ -1090,6 +1100,12 @@ echo "\n";
 "#,
         ),
         concat!(
+            "string(4) \"miss\"\n",
+            "bool(false)\n",
+            "bool(false)\n",
+            "string(4) \"text\"\n",
+            "bool(true)\n",
+            "bool(true)\n",
             "named=default:ff,\n",
             "bool(false)\n",
             "fill=ff,c3a9,\n",

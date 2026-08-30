@@ -6311,28 +6311,22 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             })),
                         );
                     } else {
-                        let normalized_string_key = ((idx_val.is_binary_string()
-                            && !arr.has_external_byte_keys()
-                            && idx_val.as_str().is_some_and(|key| !key.is_ascii()))
-                            || (arr.has_external_byte_keys()
-                                && !idx_val.is_binary_string()
-                                && idx_val.as_str().is_some_and(|key| !key.is_ascii())))
-                        .then(|| value_to_array_key(idx_val).ok())
-                        .flatten()
-                        .map(|key| arr.normalize_string_key(key, idx_val));
-                        let array_key = normalized_string_key.as_ref().map_or_else(
-                            || value_to_array_key_ref(idx_val),
-                            |key| {
-                                Ok(match key {
-                                    ArrayKey::Int(key) => ArrayKeyRef::Int(*key),
-                                    ArrayKey::String(key) => ArrayKeyRef::String(key),
-                                })
-                            },
-                        );
+                        let normalized_string_key = (idx_val.value_type() == ValueType::String)
+                            .then(|| array_string_key_for_lookup(arr, idx_val))
+                            .flatten();
+                        let definite_string_miss = idx_val.value_type() == ValueType::String
+                            && normalized_string_key.is_none();
+                        let array_key = match value_to_array_key_ref(idx_val) {
+                            Ok(ArrayKeyRef::String(key)) => Ok(ArrayKeyRef::String(
+                                normalized_string_key.as_deref().unwrap_or(key),
+                            )),
+                            other => other,
+                        };
                         match array_key {
                             Ok(array_key) => {
                                 let fetched = match &array_key {
                                     ArrayKeyRef::Int(key) => arr.get_int(*key),
+                                    ArrayKeyRef::String(_) if definite_string_miss => None,
                                     ArrayKeyRef::String(key) => {
                                         let cache_ip = unsafe {
                                             (opline as *const Instruction)

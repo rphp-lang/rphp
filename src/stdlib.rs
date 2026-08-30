@@ -31,7 +31,8 @@ use crate::value::{
 use crate::vm::execute::{
     ArrayKeyError, CallArgumentPreparation, ExplicitNumericCastTarget,
     ScalarLongReferenceMutationCallback, ScalarLongSortOrder, VmError, arithmetic_operator_operand,
-    call_function, call_function_iter, call_function_iter_with_context, call_function_owned_iter,
+    array_string_key_for_lookup, call_function, call_function_iter,
+    call_function_iter_with_context, call_function_owned_iter,
     call_function_owned_iter_readback_arg0_with_context, call_function_owned_iter_with_context,
     call_function_owned_iter_with_context_and_named, call_internal_function_iter_from_current_site,
     call_object_property_get_hook, call_object_property_magic_get,
@@ -1080,20 +1081,18 @@ fn fn_array_key_exists_named(
         ret!(rv, Value::bool(array.get_int(key).is_some()));
     }
     if let Some(key) = key.as_str() {
-        if (arg!(ed, 0).is_binary_string() && !array.has_external_byte_keys() && !key.is_ascii())
-            || (array.has_external_byte_keys()
-                && !arg!(ed, 0).is_binary_string()
-                && !key.is_ascii())
+        let key = if !key.is_ascii()
+            && arg!(ed, 0).is_binary_string() != array.has_external_byte_keys()
         {
-            let key = array.normalize_string_key(ArrayKey::String(key.to_string()), arg!(ed, 0));
-            let exists = match key {
-                ArrayKey::Int(key) => array.get_int(key).is_some(),
-                ArrayKey::String(key) => array.get_str(&key).is_some(),
+            let Some(key) = array_string_key_for_lookup(array, arg!(ed, 0)) else {
+                ret!(rv, Value::bool(false));
             };
-            ret!(rv, Value::bool(exists));
-        }
-        let exists = crate::value::canonical_decimal_array_key(key).map_or_else(
-            || array.get_str(key).is_some(),
+            key
+        } else {
+            Cow::Borrowed(key)
+        };
+        let exists = crate::value::canonical_decimal_array_key(key.as_ref()).map_or_else(
+            || array.get_str(key.as_ref()).is_some(),
             |key| array.get_int(key).is_some(),
         );
         ret!(rv, Value::bool(exists));
