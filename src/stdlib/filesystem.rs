@@ -45,7 +45,7 @@ pub(super) fn fn_file_get_contents(
     let path = arg_str!(ed, 0);
     if let Some(data) = decode_data_uri(path.as_ref()) {
         match data {
-            Ok(bytes) => ret!(rv, Value::string(bytes_to_php_string(&bytes))),
+            Ok(bytes) => ret!(rv, php_byte_result(bytes, false)),
             Err(error) => {
                 report_data_uri_error(ed, eg, path.as_ref(), error)?;
                 if eg.exception.is_some() {
@@ -56,7 +56,7 @@ pub(super) fn fn_file_get_contents(
         }
     }
     match std::fs::read(path.as_ref()) {
-        Ok(bytes) => ret!(rv, Value::string(bytes_to_php_string(&bytes))),
+        Ok(bytes) => ret!(rv, php_byte_result(bytes, false)),
         Err(_) => ret!(rv, Value::bool(false)),
     }
 }
@@ -534,17 +534,17 @@ pub(in crate::stdlib) fn return_default_file_lines(
 ) -> Result<(), VmError> {
     match std::fs::read(path) {
         Ok(bytes) => {
-            let contents = bytes_to_php_string(&bytes);
             let mut arr = PhpArray::new();
             let mut start = 0;
-            while start < contents.len() {
-                match contents[start..].find('\n') {
+            while start < bytes.len() {
+                match bytes[start..].iter().position(|byte| *byte == b'\n') {
                     Some(pos) => {
-                        arr.push(Value::string(contents[start..start + pos + 1].to_string()));
-                        start += pos + 1;
+                        let end = start + pos + 1;
+                        arr.push(php_byte_result(bytes[start..end].to_vec(), false));
+                        start = end;
                     }
                     None => {
-                        arr.push(Value::string(contents[start..].to_string()));
+                        arr.push(php_byte_result(bytes[start..].to_vec(), false));
                         break;
                     }
                 }

@@ -76,7 +76,7 @@ pub(super) fn coroutine_udp_recv_from(
             || Value::bool(false),
             |(bytes, peer)| {
                 let mut result = crate::value::PhpArray::with_packed_capacity(2);
-                result.push(Value::string(bytes_to_php_string(&bytes)));
+                result.push(php_byte_value(bytes));
                 result.push(Value::string(peer.to_string()));
                 Value::array(result)
             },
@@ -98,14 +98,18 @@ fn parse_address(
         .map_err(|_| VmError::Fatal(format!("{function} expects a numeric IP address and port")))
 }
 
-fn bytes_to_php_string(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| *byte as char).collect()
-}
-
 fn php_string_to_bytes(value: &str) -> Cow<'_, [u8]> {
     if value.is_ascii() {
         Cow::Borrowed(value.as_bytes())
     } else {
         Cow::Owned(value.chars().map(|character| character as u8).collect())
+    }
+}
+
+fn php_byte_value(bytes: Vec<u8>) -> Value {
+    if bytes.is_ascii() {
+        Value::string(String::from_utf8(bytes).expect("ASCII datagram bytes are valid UTF-8"))
+    } else {
+        Value::binary_string(&bytes)
     }
 }

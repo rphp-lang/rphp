@@ -1194,38 +1194,57 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("get_declared_classes", fn_get_declared_classes, 0, 0);
     reg!("get_declared_interfaces", fn_get_declared_interfaces, 0, 0);
     reg!("get_declared_traits", fn_get_declared_traits, 0, 0);
-    reg!(
+    reg_typed!(
         "class_exists",
         autoload::fn_class_exists,
         2,
         1,
-        "class_name",
-        "autoload"
+        ["class", "autoload"],
+        [ParamTypeHint::String, ParamTypeHint::Bool],
+        ParamTypeHint::Bool
     );
-    reg!(
+    reg_typed!(
         "interface_exists",
         autoload::fn_interface_exists,
         2,
         1,
-        "interface",
-        "autoload"
+        ["interface", "autoload"],
+        [ParamTypeHint::String, ParamTypeHint::Bool],
+        ParamTypeHint::Bool
     );
-    reg!(
+    reg_typed!(
         "trait_exists",
         autoload::fn_trait_exists,
         2,
         1,
-        "trait",
-        "autoload"
+        ["trait", "autoload"],
+        [ParamTypeHint::String, ParamTypeHint::Bool],
+        ParamTypeHint::Bool
     );
-    reg!(
+    reg_typed!(
         "enum_exists",
         autoload::fn_enum_exists,
         2,
         1,
-        "enum",
-        "autoload"
+        ["enum", "autoload"],
+        [ParamTypeHint::String, ParamTypeHint::Bool],
+        ParamTypeHint::Bool
     );
+    for name in [
+        "class_exists",
+        "interface_exists",
+        "trait_exists",
+        "enum_exists",
+    ] {
+        let function = eg
+            .find_function(name)
+            .expect("class-like existence predicate was just registered");
+        eg.register_internal_function_reflection_metadata(
+            function,
+            vec![None, Some(Value::bool(true))],
+            "Core",
+        );
+    }
     reg!(
         "class_alias",
         autoload::fn_class_alias,
@@ -1386,15 +1405,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("json_encode", fn_json_encode, 2, 1, "value", "flags");
     reg!("json_last_error", fn_json_last_error, 0, 0);
     reg!("json_last_error_msg", fn_json_last_error_msg, 0, 0);
-    reg_direct!(
-        "json_decode",
-        fn_json_decode,
-        direct_json_decode,
-        2,
-        1,
-        "json",
-        "associative"
-    );
+    reg!("json_decode", fn_json_decode, 2, 1, "json", "associative");
 
     // --- Misc ---
     reg!("isset_func", fn_isset_func, 1, 1, "value");
@@ -1938,7 +1949,26 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "count",
         "flags"
     );
-    reg!("preg_quote", fn_preg_quote, 2, 1, "string", "delimiter");
+    reg_typed!(
+        "preg_quote",
+        fn_preg_quote,
+        2,
+        1,
+        ["str", "delimiter"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+        ],
+        ParamTypeHint::String
+    );
+    let preg_quote = eg
+        .find_function("preg_quote")
+        .expect("preg_quote was just registered");
+    eg.register_internal_function_reflection_metadata(
+        preg_quote,
+        vec![None, Some(Value::null())],
+        "pcre",
+    );
 
     // --- String encoding ---
     reg_typed!(
@@ -2151,7 +2181,19 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("urldecode", fn_urldecode, 1, 1, "string");
     reg!("rawurlencode", fn_rawurlencode, 1, 1, "string");
     reg!("rawurldecode", fn_rawurldecode, 1, 1, "string");
-    reg!("base64_encode", fn_base64_encode, 1, 1, "data");
+    reg_typed!(
+        "base64_encode",
+        fn_base64_encode,
+        1,
+        1,
+        ["string"],
+        [ParamTypeHint::String],
+        ParamTypeHint::String
+    );
+    let base64_encode = eg
+        .find_function("base64_encode")
+        .expect("base64_encode was just registered");
+    eg.register_internal_function_reflection_metadata(base64_encode, vec![None], "standard");
     reg_typed!(
         "base64_decode",
         fn_base64_decode,

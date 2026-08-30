@@ -14,7 +14,7 @@ pub enum YieldFromDelegate {
     /// return-value semantics.
     Generator(GeneratorRef, YieldFromGeneratorMode),
     /// Delegating to an array (entries + current position)
-    Array(Vec<(ArrayKey, Value)>, usize),
+    Array(Vec<(ArrayKey, Value)>, usize, bool),
     /// Delegating lazily to a userland Iterator object.
     Iterator(Value),
 }
@@ -183,7 +183,7 @@ impl Generator {
                 visitor(value);
             }
         }
-        if let Some(YieldFromDelegate::Array(entries, _)) = &self.delegate {
+        if let Some(YieldFromDelegate::Array(entries, _, _)) = &self.delegate {
             for (_, value) in entries {
                 visitor(value);
             }
@@ -198,9 +198,9 @@ impl Drop for Generator {
     fn drop(&mut self) {
         let mut next = match self.delegate.take() {
             Some(YieldFromDelegate::Generator(delegate, _)) => Some(delegate),
-            Some(YieldFromDelegate::Array(_, _)) | Some(YieldFromDelegate::Iterator(_)) | None => {
-                None
-            }
+            Some(YieldFromDelegate::Array(_, _, _))
+            | Some(YieldFromDelegate::Iterator(_))
+            | None => None,
         };
 
         // A suspended `yield from` frame retains its delegate both explicitly
@@ -219,7 +219,7 @@ impl Drop for Generator {
             let mut generator_data = generator.borrow_mut();
             next = match generator_data.delegate.take() {
                 Some(YieldFromDelegate::Generator(delegate, _)) => Some(delegate),
-                Some(YieldFromDelegate::Array(_, _))
+                Some(YieldFromDelegate::Array(_, _, _))
                 | Some(YieldFromDelegate::Iterator(_))
                 | None => None,
             };

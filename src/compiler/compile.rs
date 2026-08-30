@@ -7698,6 +7698,7 @@ impl Compiler {
                         let source = val.as_array().ok_or_else(|| {
                             "Only arrays and Traversables can be unpacked".to_string()
                         })?;
+                        arr.absorb_key_provenance_from(source);
                         for (key, value) in source.iter() {
                             match key {
                                 crate::value::ArrayKey::Int(_) => {
@@ -7709,7 +7710,11 @@ impl Compiler {
                                     }
                                 }
                                 crate::value::ArrayKey::String(key) => {
-                                    arr.set_str(&key, value.dereferenced().clone());
+                                    let key = arr.normalize_key_from_array(
+                                        crate::value::ArrayKey::String(key),
+                                        source,
+                                    );
+                                    arr.set(key, value.dereferenced().clone());
                                 }
                             }
                         }
@@ -7723,15 +7728,19 @@ impl Compiler {
                             precision,
                             known_enum_classes,
                         )?;
-                        if let Some(n) = key.as_long() {
-                            arr.set_int(n, val);
-                        } else if let Some(s) = key.as_str() {
-                            arr.set_str(s, val);
-                        } else {
+                        if !matches!(key.value_type(), ValueType::Long | ValueType::String) {
                             return Err(
                                 "unsupported array key type in constant expression".to_string()
                             );
                         }
+                        let mut array_key =
+                            crate::vm::execute::value_to_array_key(&key).map_err(|_| {
+                                "unsupported array key type in constant expression".to_string()
+                            })?;
+                        if matches!(array_key, crate::value::ArrayKey::String(_)) {
+                            array_key = arr.prepare_string_key_for_write(array_key, &key);
+                        }
+                        arr.set(array_key, val);
                     } else {
                         arr.push(val);
                     }
@@ -7759,10 +7768,14 @@ impl Compiler {
                 let array = array
                     .as_array()
                     .ok_or_else(|| "constant expression cannot index a non-array".to_string())?;
-                let value = if let Some(index) = index.as_long() {
-                    array.get_int(index)
-                } else if let Some(index) = index.as_str() {
-                    array.get_str(index)
+                let value = if matches!(index.value_type(), ValueType::Long | ValueType::String) {
+                    crate::vm::execute::value_to_array_key(&index)
+                        .ok()
+                        .map(|key| array.normalize_string_key(key, &index))
+                        .and_then(|key| match key {
+                            crate::value::ArrayKey::Int(key) => array.get_int(key),
+                            crate::value::ArrayKey::String(key) => array.get_str(&key),
+                        })
                 } else {
                     None
                 };
@@ -7872,11 +7885,27 @@ impl Compiler {
             {
                 Err(unsupported())
             }
-            BinOp::Concat => Ok(Value::string(format!(
-                "{}{}",
-                left.echo_to_string(),
-                right.echo_to_string()
-            ))),
+            BinOp::Concat => {
+                if !left.is_binary_string() && !right.is_binary_string() {
+                    return Ok(Value::string(format!(
+                        "{}{}",
+                        left.echo_to_string(),
+                        right.echo_to_string()
+                    )));
+                }
+                let left = left.php_string_bytes().map_or_else(
+                    || left.echo_to_string().into_bytes(),
+                    |bytes| bytes.into_owned(),
+                );
+                let right = right.php_string_bytes().map_or_else(
+                    || right.echo_to_string().into_bytes(),
+                    |bytes| bytes.into_owned(),
+                );
+                let mut result = Vec::with_capacity(left.len() + right.len());
+                result.extend_from_slice(&left);
+                result.extend_from_slice(&right);
+                Ok(Value::binary_string(&result))
+            }
             BinOp::And => Ok(Value::bool(left.is_truthy() && right.is_truthy())),
             BinOp::Or => Ok(Value::bool(left.is_truthy() || right.is_truthy())),
             BinOp::LogicalXor => Ok(Value::bool(left.is_truthy() ^ right.is_truthy())),
@@ -7929,19 +7958,22 @@ impl Compiler {
                 Ok(Value::double(base.powf(exponent)))
             }
             BinOp::BitwiseAnd | BinOp::BitwiseOr | BinOp::BitwiseXor => {
-                if let (Some(left), Some(right)) = (left.as_str(), right.as_str()) {
+                if let (Some(left), Some(right)) =
+                    (left.php_string_bytes(), right.php_string_bytes())
+                {
                     let (operation, preserve_longer_tail): (fn(u8, u8) -> u8, bool) = match op {
                         BinOp::BitwiseAnd => (|left, right| left & right, false),
                         BinOp::BitwiseOr => (|left, right| left | right, true),
                         BinOp::BitwiseXor => (|left, right| left ^ right, false),
                         _ => unreachable!(),
                     };
-                    return Ok(Value::string(crate::value::php_byte_string_binary(
-                        left,
-                        right,
+                    let result = crate::value::php_byte_binary(
+                        left.as_ref(),
+                        right.as_ref(),
                         operation,
                         preserve_longer_tail,
-                    )));
+                    );
+                    return Ok(Value::binary_string(&result));
                 }
                 let (left, right) = integer_operator_pair().ok_or_else(unsupported)?;
                 Ok(Value::long(match op {

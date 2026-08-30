@@ -6,11 +6,15 @@
 //! loaders while the VM is re-entered.
 
 use crate::runtime::{AutoloadEntry, AutoloadState, ExecutorGlobals};
-use crate::value::{PhpArray, Value, ValueType, make_error_value};
+use crate::value::{PhpArray, Value, ValueType, make_error_value, php_byte_string_bytes};
 use crate::vm::execute::{IncludeFileOutcome, VmError, execute_included_file};
 use crate::vm::frame::ExecuteData;
+use std::borrow::Cow;
 
-use super::{ResolvedCallback, call_resolved_with_values, resolve_callback_at_callsite};
+use super::{
+    ResolvedCallback, call_resolved_with_values, resolve_callback_at_callsite,
+    typed_internal_bool_argument, typed_internal_string_value_argument_expected,
+};
 
 #[derive(Clone, Copy)]
 enum SymbolKind {
@@ -41,6 +45,16 @@ fn symbol_exists(eg: &ExecutorGlobals, name: &str, kind: SymbolKind) -> bool {
     })
 }
 
+fn symbol_lookup_name(name: &str, binary_name: bool) -> Option<Cow<'_, str>> {
+    if !binary_name {
+        return Some(Cow::Borrowed(name));
+    }
+    let bytes = php_byte_string_bytes(name);
+    std::str::from_utf8(&bytes)
+        .map(|name| Cow::Owned(name.to_string()))
+        .ok()
+}
+
 pub(crate) fn ensure_symbol_loaded(eg: &mut ExecutorGlobals, name: &str) -> Result<bool, VmError> {
     // A class-like declaration remains intentionally invisible while its
     // inheritance transaction is active. Recursive probes must observe that
@@ -49,7 +63,7 @@ pub(crate) fn ensure_symbol_loaded(eg: &mut ExecutorGlobals, name: &str) -> Resu
     if eg.runtime_class_link_is_active(name) {
         return Ok(false);
     }
-    exists_with_autoload(eg, name, SymbolKind::Any, true)
+    exists_with_autoload(eg, name, SymbolKind::Any, true, false)
 }
 
 fn callback_equal(left: &Value, right: &Value) -> bool {
@@ -346,7 +360,7 @@ fn invoke_entry(
 fn invoke_autoload_stack(
     eg: &mut ExecutorGlobals,
     name: &str,
-    stop_kind: SymbolKind,
+    binary_name: bool,
 ) -> Result<(), VmError> {
     if eg
         .autoload
@@ -357,7 +371,11 @@ fn invoke_autoload_stack(
     }
 
     let normalized = normalized_symbol_name(name);
-    let guard_key = normalized.to_ascii_lowercase();
+    let lookup_name = symbol_lookup_name(normalized, binary_name);
+    let guard_key = lookup_name.as_ref().map_or_else(
+        || format!("\0binary-symbol:{:x?}", php_byte_string_bytes(normalized)),
+        |name| name.to_ascii_lowercase(),
+    );
     let already_active = eg
         .autoload
         .as_ref()
@@ -377,13 +395,19 @@ fn invoke_autoload_stack(
         .active_classes
         .insert(guard_key.clone());
 
-    let class_name = Value::string(normalized);
+    let class_name = if binary_name {
+        Value::binary_string_from_storage(normalized.to_string())
+    } else {
+        Value::string(normalized)
+    };
     let mut invocation_result = Ok(());
     for entry in entries.iter() {
         invocation_result = invoke_entry(eg, entry, &class_name);
         if invocation_result.is_err()
             || eg.exception.is_some()
-            || symbol_exists(eg, normalized, stop_kind)
+            || lookup_name
+                .as_deref()
+                .is_some_and(|name| symbol_exists(eg, name, SymbolKind::Any))
         {
             break;
         }
@@ -400,12 +424,19 @@ fn exists_with_autoload(
     name: &str,
     kind: SymbolKind,
     autoload: bool,
+    binary_name: bool,
 ) -> Result<bool, VmError> {
+    let lookup_name = symbol_lookup_name(name, binary_name);
     // A symbol of another class-like kind still owns this name. PHP returns
     // false for e.g. class_exists(LoadedInterface::class) without invoking
     // autoload again and redeclaring the already loaded interface.
-    if symbol_exists(eg, name, SymbolKind::Any) {
-        return Ok(symbol_exists(eg, name, kind));
+    if lookup_name
+        .as_deref()
+        .is_some_and(|name| symbol_exists(eg, name, SymbolKind::Any))
+    {
+        return Ok(lookup_name
+            .as_deref()
+            .is_some_and(|name| symbol_exists(eg, name, kind)));
     }
     if !autoload
         || eg
@@ -415,9 +446,20 @@ fn exists_with_autoload(
     {
         return Ok(false);
     }
+    let autoload_name = normalized_symbol_name(name);
+    if name.is_empty()
+        || !autoload_name.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'\\' || byte >= 0x80
+        })
+    {
+        return Ok(false);
+    }
 
-    invoke_autoload_stack(eg, name, kind)?;
-    Ok(eg.exception.is_none() && symbol_exists(eg, name, kind))
+    invoke_autoload_stack(eg, name, binary_name)?;
+    Ok(eg.exception.is_none()
+        && lookup_name
+            .as_deref()
+            .is_some_and(|name| symbol_exists(eg, name, kind)))
 }
 
 fn symbol_exists_handler(
@@ -425,10 +467,25 @@ fn symbol_exists_handler(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
     kind: SymbolKind,
+    function: &str,
+    parameter: &str,
 ) -> Result<(), VmError> {
-    let name = arg!(ed, 0).echo_to_string();
-    let autoload = arg_opt!(ed, 1).is_none_or(Value::is_truthy);
-    let exists = exists_with_autoload(eg, &name, kind, autoload)?;
+    let Some(name_value) =
+        typed_internal_string_value_argument_expected(ed, eg, function, 0, parameter, "string")?
+    else {
+        return Ok(());
+    };
+    let binary_name = name_value.is_binary_string();
+    let name = name_value.as_str().unwrap_or("");
+    let autoload = if arg_opt!(ed, 1).is_some() {
+        let Some(autoload) = typed_internal_bool_argument(ed, eg, function, 1, "autoload")? else {
+            return Ok(());
+        };
+        autoload
+    } else {
+        true
+    };
+    let exists = exists_with_autoload(eg, name, kind, autoload, binary_name)?;
     if eg.exception.is_none() {
         ret!(rv, Value::bool(exists));
     }
@@ -440,7 +497,7 @@ pub(crate) fn fn_class_exists(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    symbol_exists_handler(ed, rv, eg, SymbolKind::Class)
+    symbol_exists_handler(ed, rv, eg, SymbolKind::Class, "class_exists", "class")
 }
 
 pub(crate) fn fn_interface_exists(
@@ -448,7 +505,14 @@ pub(crate) fn fn_interface_exists(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    symbol_exists_handler(ed, rv, eg, SymbolKind::Interface)
+    symbol_exists_handler(
+        ed,
+        rv,
+        eg,
+        SymbolKind::Interface,
+        "interface_exists",
+        "interface",
+    )
 }
 
 pub(crate) fn fn_trait_exists(
@@ -456,7 +520,7 @@ pub(crate) fn fn_trait_exists(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    symbol_exists_handler(ed, rv, eg, SymbolKind::Trait)
+    symbol_exists_handler(ed, rv, eg, SymbolKind::Trait, "trait_exists", "trait")
 }
 
 pub(crate) fn fn_enum_exists(
@@ -464,7 +528,7 @@ pub(crate) fn fn_enum_exists(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    symbol_exists_handler(ed, rv, eg, SymbolKind::Enum)
+    symbol_exists_handler(ed, rv, eg, SymbolKind::Enum, "enum_exists", "enum")
 }
 
 fn report_class_alias_warning(
@@ -485,7 +549,7 @@ pub(crate) fn fn_class_alias(
     let autoload = arg_opt!(ed, 2).is_none_or(Value::is_truthy);
 
     if !symbol_exists(eg, &original, SymbolKind::Any) {
-        if !autoload || !exists_with_autoload(eg, &original, SymbolKind::Any, true)? {
+        if !autoload || !exists_with_autoload(eg, &original, SymbolKind::Any, true, false)? {
             if eg.exception.is_some() {
                 return Ok(());
             }
@@ -612,7 +676,7 @@ pub(crate) fn fn_spl_autoload_call(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let class_name = arg!(ed, 0).echo_to_string();
-    invoke_autoload_stack(eg, &class_name, SymbolKind::Any)?;
+    invoke_autoload_stack(eg, &class_name, false)?;
     if eg.exception.is_none() {
         ret!(rv, Value::null());
     }

@@ -16,11 +16,10 @@ use super::{
     html_entities::{HTML4_ENTITIES, HTML5_ENTITIES, html5_characters_for_entity},
     internal_call_source,
     legacy_encoding::LegacyEncoding,
-    owned_argument, percent_decode_bytes, php_byte_result, php_string_to_bytes,
-    push_percent_escape, report_internal_deprecation, report_internal_diagnostic,
-    string_position_builtin, typed_internal_bool_argument, typed_internal_int_argument,
-    typed_internal_string_argument, typed_internal_string_argument_expected,
-    typed_internal_string_value_argument_expected,
+    owned_argument, percent_decode_php_bytes, php_byte_result, push_percent_escape,
+    report_internal_deprecation, report_internal_diagnostic, string_position_builtin,
+    typed_internal_bool_argument, typed_internal_int_argument, typed_internal_string_argument,
+    typed_internal_string_argument_expected, typed_internal_string_value_argument_expected,
 };
 
 // ============================================================================
@@ -1444,43 +1443,70 @@ pub(super) fn fn_filter_var(
 pub(super) fn fn_preg_quote(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let source = arg_str!(ed, 0);
-    let delimiter = arg_opt!(ed, 1)
-        .and_then(Value::as_str)
-        .and_then(|value| value.chars().next());
-    let mut quoted = String::with_capacity(source.len());
-    for character in source.chars() {
-        if matches!(
-            character,
-            '.' | '\\'
-                | '+'
-                | '*'
-                | '?'
-                | '['
-                | '^'
-                | ']'
-                | '$'
-                | '('
-                | ')'
-                | '{'
-                | '}'
-                | '='
-                | '!'
-                | '<'
-                | '>'
-                | '|'
-                | ':'
-                | '-'
-                | '#'
-        ) || delimiter == Some(character)
-        {
-            quoted.push('\\');
+    let Some(source) =
+        typed_internal_string_value_argument_expected(ed, eg, "preg_quote", 0, "str", "string")?
+    else {
+        return Ok(());
+    };
+    let delimiter = match arg_opt!(ed, 1) {
+        None => None,
+        Some(value) if value.dereferenced().value_type() == ValueType::Null => None,
+        Some(_) => {
+            let Some(delimiter) = typed_internal_string_value_argument_expected(
+                ed,
+                eg,
+                "preg_quote",
+                1,
+                "delimiter",
+                "?string",
+            )?
+            else {
+                return Ok(());
+            };
+            delimiter
+                .php_string_bytes()
+                .and_then(|bytes| bytes.first().copied())
         }
-        quoted.push(character);
+    };
+    let binary = source.is_binary_string();
+    let source = source.php_string_bytes().unwrap_or_default();
+    let mut quoted = Vec::with_capacity(source.len());
+    for byte in source.iter().copied() {
+        if byte == 0 {
+            quoted.extend_from_slice(b"\\000");
+            continue;
+        }
+        if matches!(
+            byte,
+            b'.' | b'\\'
+                | b'+'
+                | b'*'
+                | b'?'
+                | b'['
+                | b'^'
+                | b']'
+                | b'$'
+                | b'('
+                | b')'
+                | b'{'
+                | b'}'
+                | b'='
+                | b'!'
+                | b'<'
+                | b'>'
+                | b'|'
+                | b':'
+                | b'-'
+                | b'#'
+        ) || delimiter == Some(byte)
+        {
+            quoted.push(b'\\');
+        }
+        quoted.push(byte);
     }
-    ret!(rv, Value::string(quoted));
+    ret!(rv, php_byte_result(quoted, binary));
 }
 
 /// htmlentities() shares htmlspecialchars()'s ASCII/UTF-8 special-character
@@ -1606,8 +1632,13 @@ pub(super) fn fn_urldecode(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    ret!(rv, Value::string(percent_decode_bytes(&s, true)));
+    let input = arg!(ed, 0)
+        .php_string_bytes()
+        .unwrap_or_else(|| Cow::Owned(arg_str!(ed, 0).into_owned().into_bytes()));
+    ret!(
+        rv,
+        php_byte_result(percent_decode_php_bytes(&input, true), false)
+    );
 }
 
 /// rawurlencode($string): string — like urlencode but space → %20
@@ -1628,21 +1659,36 @@ pub(super) fn fn_rawurldecode(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    ret!(rv, Value::string(percent_decode_bytes(&s, false)));
+    let input = arg!(ed, 0)
+        .php_string_bytes()
+        .unwrap_or_else(|| Cow::Owned(arg_str!(ed, 0).into_owned().into_bytes()));
+    ret!(
+        rv,
+        php_byte_result(percent_decode_php_bytes(&input, false), false)
+    );
 }
 
-/// base64_encode($data): string
+/// base64_encode($string): string
 /// Uses Latin-1 byte mapping to handle binary PHP strings correctly.
 pub(super) fn fn_base64_encode(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
+    let Some(input) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "base64_encode",
+        0,
+        "string",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
     use crate::base64;
-    let raw = php_string_to_bytes(s.as_ref());
-    ret!(rv, Value::string(base64::encode(&raw)));
+    let bytes = input.php_string_bytes().unwrap_or_default();
+    ret!(rv, Value::string(base64::encode(&bytes)));
 }
 
 /// base64_decode($data): string|false

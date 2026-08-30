@@ -201,7 +201,7 @@ pub(super) fn fn_file_get_contents(
             .min(bytes.len());
         return return_value(
             return_pointer,
-            Value::string(super::bytes_to_php_string(&bytes[start..end])),
+            super::php_byte_result(bytes[start..end].to_vec(), false),
         );
     }
 
@@ -224,10 +224,7 @@ pub(super) fn fn_file_get_contents(
     match stream.read_contents(&mut bytes, length, None) {
         Ok(read) => {
             debug_assert_eq!(read, bytes.len());
-            return_value(
-                return_pointer,
-                Value::string(super::bytes_to_php_string(&bytes)),
-            )
+            return_value(return_pointer, super::php_byte_result(bytes, false))
         }
         Err(_) => return_value(return_pointer, Value::bool(false)),
     }

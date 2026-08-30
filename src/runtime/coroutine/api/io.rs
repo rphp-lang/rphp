@@ -221,10 +221,7 @@ pub(super) fn coroutine_stream_read(
     let result = unsafe { (&mut *scheduler).read_stream(stream, length)? };
     write_result(
         return_value,
-        result.map_or_else(
-            || Value::bool(false),
-            |bytes| Value::string(bytes_to_php_string(&bytes)),
-        ),
+        result.map_or_else(|| Value::bool(false), php_byte_value),
     );
     Ok(())
 }
@@ -252,14 +249,18 @@ pub(super) fn coroutine_stream_write(
     Ok(())
 }
 
-fn bytes_to_php_string(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| *byte as char).collect()
-}
-
 fn php_string_to_bytes(value: &str) -> Cow<'_, [u8]> {
     if value.is_ascii() {
         Cow::Borrowed(value.as_bytes())
     } else {
         Cow::Owned(value.chars().map(|character| character as u8).collect())
+    }
+}
+
+fn php_byte_value(bytes: Vec<u8>) -> Value {
+    if bytes.is_ascii() {
+        Value::string(String::from_utf8(bytes).expect("ASCII stream bytes are valid UTF-8"))
+    } else {
+        Value::binary_string(&bytes)
     }
 }

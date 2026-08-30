@@ -20,6 +20,34 @@ struct SerializeState {
     references: HashMap<usize, usize>,
 }
 
+/// Serialized PHP values are byte streams, not UTF-8 text. Keep the builder
+/// byte-oriented so strings and array keys never pass through the runtime's
+/// lossless Latin-1 storage bridge a second time.
+struct SerializeOutput(Vec<u8>);
+
+impl SerializeOutput {
+    fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    fn push_str(&mut self, text: &str) {
+        self.0.extend_from_slice(text.as_bytes());
+    }
+
+    fn push(&mut self, character: char) {
+        debug_assert!(character.is_ascii());
+        self.0.push(character as u8);
+    }
+
+    fn push_bytes(&mut self, bytes: &[u8]) {
+        self.0.extend_from_slice(bytes);
+    }
+
+    fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+
 impl SerializeState {
     fn new() -> Self {
         Self {
@@ -134,7 +162,7 @@ fn enum_case_names(value: &Value, eg: &ExecutorGlobals) -> Option<(String, Strin
 
 fn serialize_value(
     value: &Value,
-    output: &mut String,
+    output: &mut SerializeOutput,
     eg: &mut ExecutorGlobals,
     state: &mut SerializeState,
 ) -> Result<(), VmError> {
@@ -172,11 +200,11 @@ fn serialize_value(
             output.push(';');
         }
         ValueType::String => {
-            let string = value.as_str().unwrap();
+            let string = value.php_string_bytes().unwrap_or_default();
             output.push_str("s:");
             output.push_str(&string.len().to_string());
             output.push_str(":\"");
-            output.push_str(string);
+            output.push_bytes(&string);
             output.push_str("\";");
         }
         ValueType::Array => {
@@ -192,10 +220,15 @@ fn serialize_value(
                         output.push(';');
                     }
                     ArrayKey::String(key) => {
+                        let key = if array.has_external_byte_keys() {
+                            crate::value::php_byte_string_bytes(&key)
+                        } else {
+                            key.as_bytes().to_vec()
+                        };
                         output.push_str("s:");
                         output.push_str(&key.len().to_string());
                         output.push_str(":\"");
-                        output.push_str(&key);
+                        output.push_bytes(&key);
                         output.push_str("\";");
                     }
                 }
@@ -326,7 +359,7 @@ fn serialize_value(
                     output.push_str("N;");
                     return Ok(());
                 }
-                let Some(payload) = payload.as_str() else {
+                let Some(payload) = payload.php_string_bytes() else {
                     eg.exception = Some(crate::value::make_error_value(
                         "Exception",
                         &format!("{class_name}::serialize() must return a string or NULL"),
@@ -340,7 +373,7 @@ fn serialize_value(
                 output.push_str("\":");
                 output.push_str(&payload.len().to_string());
                 output.push_str(":{");
-                output.push_str(payload);
+                output.push_bytes(&payload);
                 output.push('}');
                 return Ok(());
             }
@@ -401,10 +434,15 @@ fn serialize_value(
                         output.push(';');
                     }
                     ArrayKey::String(key) => {
+                        let key = if properties.has_external_byte_keys() {
+                            crate::value::php_byte_string_bytes(&key)
+                        } else {
+                            key.as_bytes().to_vec()
+                        };
                         output.push_str("s:");
                         output.push_str(&key.len().to_string());
                         output.push_str(":\"");
-                        output.push_str(&key);
+                        output.push_bytes(&key);
                         output.push_str("\";");
                     }
                 }
@@ -767,7 +805,7 @@ impl<'a> Parser<'a> {
     }
 
     #[inline]
-    fn counted_key(&mut self) -> Result<ArrayKey, ()> {
+    fn counted_key(&mut self) -> Result<(ArrayKey, bool), ()> {
         let position = self.position;
         match self.key() {
             Ok(key) => Ok(key),
@@ -807,11 +845,14 @@ impl<'a> Parser<'a> {
             .map_err(|_| ())
     }
 
-    fn key(&mut self) -> Result<ArrayKey, ()> {
+    /// Parse a serialized key and report whether its string storage needs the
+    /// lossless external-byte bridge. Valid UTF-8 remains in the ordinary key
+    /// representation; arbitrary bytes select the bridge without rejection.
+    fn key(&mut self) -> Result<(ArrayKey, bool), ()> {
         match self.byte()? {
             b'i' => {
                 self.expect(b':')?;
-                Ok(ArrayKey::Int(self.integer(b';')?))
+                Ok((ArrayKey::Int(self.integer(b';')?), false))
             }
             b's' => {
                 self.expect(b':')?;
@@ -822,9 +863,15 @@ impl<'a> Parser<'a> {
                 self.position = end;
                 self.expect(b'"')?;
                 self.expect(b';')?;
-                Ok(ArrayKey::String(
-                    std::str::from_utf8(bytes).map_err(|_| ())?.to_string(),
-                ))
+                Ok(match std::str::from_utf8(bytes) {
+                    Ok(text) => (ArrayKey::String(text.to_string()), false),
+                    Err(_) => (
+                        ArrayKey::String(crate::value::php_byte_string_from_bytes(
+                            bytes.iter().copied(),
+                        )),
+                        true,
+                    ),
+                })
             }
             _ => Err(()),
         }
@@ -1058,8 +1105,7 @@ impl<'a> Parser<'a> {
                 self.position = end;
                 self.expect(b'"')?;
                 self.expect(b';')?;
-                let string = std::str::from_utf8(bytes).map_err(|_| ())?;
-                Ok(Value::string(string))
+                Ok(super::php_byte_result(bytes.to_vec(), false))
             }
             b'a' => {
                 self.expect(b':')?;
@@ -1068,12 +1114,13 @@ impl<'a> Parser<'a> {
                 self.expect(b'{')?;
                 let mut array = PhpArray::with_hash_capacity(length);
                 for _ in 0..length {
-                    let key = self.counted_key()?;
+                    let (key, source_external_byte_keys) = self.counted_key()?;
                     let member = self.value_mode::<UPPERCASE_REFERENCES>(eg, allowed_classes)?;
-                    match key {
-                        ArrayKey::Int(key) => array.set_int(key, member),
-                        ArrayKey::String(key) => array.set_str(&key, member),
-                    }
+                    let source_utf8_text_keys = !source_external_byte_keys
+                        && matches!(&key, ArrayKey::String(key) if !key.is_ascii());
+                    array.absorb_key_provenance(source_external_byte_keys, source_utf8_text_keys);
+                    let key = array.normalize_key_from_provenance(key, source_external_byte_keys);
+                    array.set(key, member);
                 }
                 self.expect(b'}')?;
                 Ok(Value::array(array))
@@ -1126,9 +1173,33 @@ impl<'a> Parser<'a> {
                 let mut properties = PhpArray::with_hash_capacity(property_count);
                 let mut property_value_offsets = Vec::with_capacity(property_count);
                 for _ in 0..property_count {
-                    let key = self.counted_key()?;
+                    let (mut key, source_external_byte_keys) = self.counted_key()?;
                     let value_offset = self.position;
                     let member = self.value_mode::<UPPERCASE_REFERENCES>(eg, allowed_classes)?;
+                    // Object metadata is currently keyed by UTF-8 class and
+                    // property names. Decode valid serialized names back into
+                    // that representation; keep arbitrary bytes losslessly in
+                    // the external-key convention for dynamic properties.
+                    let source_external_byte_keys = if source_external_byte_keys {
+                        match &mut key {
+                            ArrayKey::String(storage) => {
+                                let bytes = crate::value::php_byte_string_bytes(storage);
+                                match std::str::from_utf8(&bytes) {
+                                    Ok(text) => {
+                                        *storage = text.to_string();
+                                        false
+                                    }
+                                    Err(_) => true,
+                                }
+                            }
+                            ArrayKey::Int(_) => false,
+                        }
+                    } else {
+                        false
+                    };
+                    properties.absorb_key_provenance(source_external_byte_keys, false);
+                    let key =
+                        properties.normalize_key_from_provenance(key, source_external_byte_keys);
                     match key {
                         ArrayKey::Int(key) => properties.set_int(key, member),
                         ArrayKey::String(key) => {
@@ -1300,13 +1371,13 @@ pub(super) fn serialize(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let mut output = String::new();
+    let mut output = SerializeOutput::new();
     let mut state = SerializeState::new();
     serialize_value(&argument(ed, 0), &mut output, eg, &mut state)?;
     if eg.exception.is_some() {
         return return_value(rv, Value::null());
     }
-    return_value(rv, Value::string(output))
+    return_value(rv, super::php_byte_result(output.into_bytes(), false))
 }
 
 /// Discover the reference-table slots that may need stable PHP cells before
@@ -1372,7 +1443,7 @@ pub(super) fn unserialize(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let input = argument(ed, 0);
-    let Some(input) = input.as_str() else {
+    let Some(input_bytes) = input.php_string_bytes() else {
         return return_value(rv, Value::bool(false));
     };
     let options = argument(ed, 1);
@@ -1393,12 +1464,12 @@ pub(super) fn unserialize(
             _ => AllowedClasses::All,
         });
     let mut parser = Parser {
-        input: input.as_bytes(),
+        input: input_bytes.as_ref(),
         position: 0,
         last_value_start: 0,
         next_reference: 1,
         references: HashMap::new(),
-        uppercase_reference_targets: uppercase_reference_targets(input.as_bytes()),
+        uppercase_reference_targets: uppercase_reference_targets(input_bytes.as_ref()),
         diagnostic: None,
     };
     match parser.value(eg, &allowed_classes) {

@@ -22,14 +22,14 @@ fn publish_concat_conversion_error(
 /// Convert one concatenation operand in PHP source order. `None` means either
 /// a diagnostic handler or object conversion installed the pending exception.
 #[cold]
-fn prepare_concat_operand_string(
+fn prepare_concat_operand_value(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
     value: &Value,
     report_array_diagnostic: bool,
-) -> Result<Option<String>, VmError> {
+) -> Result<Option<Value>, VmError> {
     let value = value.dereferenced();
     if value.value_type() == ValueType::Array {
         if report_array_diagnostic {
@@ -45,7 +45,7 @@ fn prepare_concat_operand_string(
                 return Ok(None);
             }
         }
-        return Ok(Some("Array".to_string()));
+        return Ok(Some(Value::string("Array")));
     }
 
     if matches!(value.value_type(), ValueType::Object | ValueType::Closure) {
@@ -77,8 +77,8 @@ fn prepare_concat_operand_string(
             return Ok(None);
         };
         let conversion = conversion.dereferenced();
-        if let Some(rendered) = conversion.as_str() {
-            return Ok(Some(rendered.to_string()));
+        if conversion.value_type() == ValueType::String {
+            return Ok(Some(conversion.clone()));
         }
 
         // `__toString()` has an implicit string return contract even when the
@@ -97,9 +97,9 @@ fn prepare_concat_operand_string(
                 ValueType::Long | ValueType::Double | ValueType::True | ValueType::False
             )
         {
-            return Ok(Some(
+            return Ok(Some(Value::string(
                 conversion.echo_to_string_with_precision(eg.precision),
-            ));
+            )));
         }
 
         {
@@ -123,7 +123,11 @@ fn prepare_concat_operand_string(
         }
     }
 
-    Ok(Some(value.echo_to_string_with_precision(eg.precision)))
+    Ok(Some(if value.value_type() == ValueType::String {
+        value.clone()
+    } else {
+        Value::string(value.echo_to_string_with_precision(eg.precision))
+    }))
 }
 
 #[inline]
@@ -149,6 +153,16 @@ fn concatenate_string_values(left: &Value, right: &Value) -> Value {
     concatenated.extend_from_slice(left.as_ref());
     concatenated.extend_from_slice(right.as_ref());
     Value::binary_string(&concatenated)
+}
+
+#[inline]
+fn scalar_concat_operand_value(value: &Value, precision: i32) -> Value {
+    let value = value.dereferenced();
+    if value.value_type() == ValueType::String {
+        value.clone()
+    } else {
+        Value::string(value.echo_to_string_with_precision(precision))
+    }
 }
 
 #[inline(never)]
@@ -184,6 +198,20 @@ fn op_concat(
 
     // Fast path: string . int — avoids echo_to_string heap alloc for the int.
     if op1.value_type() == ValueType::String && op2.value_type() == ValueType::Long {
+        if op1.is_binary_string() {
+            let mut concatenated = op1.php_string_bytes().unwrap_or_default().into_owned();
+            concatenated.extend_from_slice(
+                op2.as_long()
+                    .expect("checked Long operand")
+                    .to_string()
+                    .as_bytes(),
+            );
+            // SAFETY: result_ptr is this instruction's live TMP result slot.
+            unsafe {
+                frame_tmp_set(frame, result_ptr, Value::binary_string(&concatenated))
+            };
+            return Ok(());
+        }
         let s1 = op1.as_str().unwrap();
         use std::fmt::Write;
         let mut concatenated = String::with_capacity(s1.len() + 20);
@@ -196,6 +224,21 @@ fn op_concat(
 
     // Fast path: int . string
     if op1.value_type() == ValueType::Long && op2.value_type() == ValueType::String {
+        if op2.is_binary_string() {
+            let prefix = op1
+                .as_long()
+                .expect("checked Long operand")
+                .to_string();
+            let right = op2.php_string_bytes().unwrap_or_default();
+            let mut concatenated = Vec::with_capacity(prefix.len() + right.len());
+            concatenated.extend_from_slice(prefix.as_bytes());
+            concatenated.extend_from_slice(right.as_ref());
+            // SAFETY: result_ptr is this instruction's live TMP result slot.
+            unsafe {
+                frame_tmp_set(frame, result_ptr, Value::binary_string(&concatenated))
+            };
+            return Ok(());
+        }
         let s2 = op2.as_str().unwrap();
         use std::fmt::Write;
         let mut concatenated = String::with_capacity(20 + s2.len());
@@ -242,7 +285,7 @@ fn op_concat(
     let op1 = unsafe {
         (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)).clone()
     };
-    let Some(s1) = prepare_concat_operand_string(
+    let Some(s1) = prepare_concat_operand_value(
         eg,
         frame,
         op_array,
@@ -258,7 +301,7 @@ fn op_concat(
     let op2 = unsafe {
         (&*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)).clone()
     };
-    let Some(s2) = prepare_concat_operand_string(
+    let Some(s2) = prepare_concat_operand_value(
         eg,
         frame,
         op_array,
@@ -269,11 +312,14 @@ fn op_concat(
     else {
         return Ok(());
     };
-    let mut concatenated = String::with_capacity(s1.len() + s2.len());
-    concatenated.push_str(&s1);
-    concatenated.push_str(&s2);
     // SAFETY: result_ptr is this instruction's live TMP result slot and no
-    // operand borrow remains when the detached string is committed.
-    unsafe { frame_tmp_set(frame, result_ptr, Value::string(concatenated)) };
+    // operand borrow remains when the detached value is committed.
+    unsafe {
+        frame_tmp_set(
+            frame,
+            result_ptr,
+            concatenate_string_values(&s1, &s2),
+        )
+    };
     Ok(())
 }

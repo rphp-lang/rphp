@@ -44,6 +44,14 @@ pub fn run_php_bytes(source: &str) -> Vec<u8> {
     run_php_with_compiler_bytes(source, Compiler::new(), |_| {})
 }
 
+/// Compile and execute PHP source while treating an explicit `exit` as the
+/// script's normal terminal condition, then return the bytes emitted before
+/// that terminal signal reached the embedding boundary.
+#[allow(dead_code)]
+pub fn run_php_bytes_until_exit(source: &str) -> Vec<u8> {
+    run_php_with_compiler_bytes_mode(source, Compiler::new(), |_| {}, true)
+}
+
 #[allow(dead_code)]
 pub fn run_php_with_functions(source: &str, register: impl FnOnce(&mut ExecutorGlobals)) -> String {
     run_php_with_compiler(source, Compiler::new(), register)
@@ -70,6 +78,15 @@ fn run_php_with_compiler_bytes(
     source: &str,
     compiler: Compiler,
     register: impl FnOnce(&mut ExecutorGlobals),
+) -> Vec<u8> {
+    run_php_with_compiler_bytes_mode(source, compiler, register, false)
+}
+
+fn run_php_with_compiler_bytes_mode(
+    source: &str,
+    compiler: Compiler,
+    register: impl FnOnce(&mut ExecutorGlobals),
+    allow_exit: bool,
 ) -> Vec<u8> {
     let tokens = Lexer::new(source).tokenize().unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();
@@ -100,7 +117,11 @@ fn run_php_with_compiler_bytes(
         eg.register_compiled_class(class_def).unwrap();
     }
     register(&mut eg);
-    execute::execute(&mut eg, &main_func).unwrap();
+    match execute::execute(&mut eg, &main_func) {
+        Ok(_) => {}
+        Err(execute::VmError::Exit(_)) if allow_exit => {}
+        Err(error) => panic!("PHP execution failed: {error}"),
+    }
     buf.lock().unwrap().clone()
 }
 

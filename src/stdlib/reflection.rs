@@ -2845,6 +2845,7 @@ fn instantiate_attribute_definition_at_use(
         0,
         None,
         named_variadic,
+        false,
         (source_file, source_line),
         None,
         false,

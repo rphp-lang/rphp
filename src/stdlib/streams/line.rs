@@ -67,10 +67,7 @@ pub(super) fn fn_stream_get_line(
     match result {
         Some(Ok(Some(read))) => {
             debug_assert_eq!(read, bytes.len());
-            return_value(
-                return_pointer,
-                Value::string(super::super::bytes_to_php_string(&bytes)),
-            )
+            return_value(return_pointer, super::super::php_byte_result(bytes, false))
         }
         _ => return_value(return_pointer, Value::bool(false)),
     }

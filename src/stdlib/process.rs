@@ -13,7 +13,7 @@ use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 
 use super::{
-    bytes_to_php_string, php_string_to_bytes, report_internal_diagnostic,
+    bytes_to_php_string, php_byte_result, php_string_to_bytes, report_internal_diagnostic,
     typed_internal_string_argument,
 };
 
@@ -167,7 +167,7 @@ pub(super) fn fn_escapeshellarg(
         );
         return Ok(());
     };
-    ret!(rv, Value::string(bytes_to_php_string(&output)));
+    ret!(rv, php_byte_result(output, false));
 }
 
 pub(super) fn fn_escapeshellcmd(
@@ -192,7 +192,7 @@ pub(super) fn fn_escapeshellcmd(
         );
         return Ok(());
     };
-    ret!(rv, Value::string(bytes_to_php_string(&output)));
+    ret!(rv, php_byte_result(output, false));
 }
 
 fn validate_command(
@@ -361,7 +361,7 @@ pub(super) fn fn_exec(
             .as_array_mut()
             .expect("exec output was normalized to an array");
         for line in &lines {
-            output_array.push(Value::string(bytes_to_php_string(line)));
+            output_array.push(php_byte_result(line.clone(), false));
         }
     }
     if arg_opt!(ed, 2).is_some() {
@@ -369,7 +369,7 @@ pub(super) fn fn_exec(
     }
 
     let last_line = lines.last().map_or(&[][..], Vec::as_slice);
-    ret!(rv, Value::string(bytes_to_php_string(last_line)));
+    ret!(rv, php_byte_result(last_line.to_vec(), false));
 }
 
 pub(super) fn fn_shell_exec(
@@ -390,10 +390,7 @@ pub(super) fn fn_shell_exec(
     if output.stdout.is_empty() {
         ret!(rv, Value::null());
     }
-    ret!(
-        rv,
-        Value::string(bytes_to_php_string(output.stdout.as_slice()))
-    );
+    ret!(rv, php_byte_result(output.stdout, false));
 }
 
 #[cfg(test)]

@@ -141,7 +141,7 @@ pub(in crate::stdlib) fn fn_file(
         if skip_empty_lines && line.is_empty() {
             continue;
         }
-        result.push(Value::string(super::super::bytes_to_php_string(&line)));
+        result.push(super::super::php_byte_result(line.clone(), false));
     }
     return_value(return_pointer, Value::array(result))
 }

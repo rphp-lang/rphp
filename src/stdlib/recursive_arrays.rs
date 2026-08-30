@@ -7,7 +7,9 @@
 use std::collections::HashSet;
 
 use crate::runtime::ExecutorGlobals;
-use crate::value::{ArrayKey, PhpArray, Value, ValueType};
+use crate::value::{
+    ArrayKey, PhpArray, Value, ValueType, normalize_array_key_for_external_storage,
+};
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 
@@ -34,6 +36,39 @@ fn set_array_value(array: &mut PhpArray, key: ArrayKey, value: Value) {
     match key {
         ArrayKey::Int(key) => array.set_int(key, value),
         ArrayKey::String(key) => array.set_str(&key, value),
+    }
+}
+
+fn copy_array_key_provenance(source: &PhpArray, result: &PhpArray) {
+    if source.has_external_byte_keys() {
+        result.mark_external_byte_keys();
+    } else if source.has_utf8_text_keys() {
+        result.mark_utf8_text_keys();
+    }
+}
+
+fn absorb_array_key_provenance(
+    destination: &mut PhpArray,
+    source_external_byte_keys: bool,
+    source_utf8_text_keys: bool,
+) {
+    if source_external_byte_keys {
+        destination.promote_keys_to_external_storage();
+    } else if source_utf8_text_keys && !destination.has_external_byte_keys() {
+        destination.mark_utf8_text_keys();
+    }
+}
+
+fn normalize_combined_key(
+    destination: &PhpArray,
+    key: ArrayKey,
+    source_external_byte_keys: bool,
+) -> ArrayKey {
+    if destination.has_external_byte_keys() {
+        normalize_array_key_for_external_storage(key, source_external_byte_keys)
+    } else {
+        debug_assert!(!source_external_byte_keys);
+        key
     }
 }
 
@@ -64,6 +99,7 @@ fn snapshot_value(value: &Value) -> Value {
     for (key, value) in array.iter() {
         set_array_value(&mut result, key, snapshot_value(value));
     }
+    copy_array_key_provenance(array, &result);
     Value::array(result)
 }
 
@@ -72,6 +108,7 @@ fn shallow_array_copy(array: &PhpArray) -> Value {
     for (key, value) in array.iter() {
         set_array_value(&mut result, key, clone_entry_value(value));
     }
+    copy_array_key_provenance(array, &result);
     Value::array(result)
 }
 
@@ -140,17 +177,26 @@ fn merge_array_into(
     eg: &ExecutorGlobals,
     active: &mut ActiveBranches,
 ) -> Result<(), CombineError> {
-    let source_entries: Vec<(ArrayKey, Value)> = source
+    let source_array = source
         .as_array()
-        .expect("merge projection is always an array")
+        .expect("merge projection is always an array");
+    let source_external_byte_keys = source_array.has_external_byte_keys();
+    let source_utf8_text_keys = source_array.has_utf8_text_keys();
+    let source_entries: Vec<(ArrayKey, Value)> = source_array
         .iter()
         .map(|(key, value)| (key, clone_entry_value(value)))
         .collect();
     let destination = destination
         .as_array_mut()
         .expect("merge destination is always an array");
+    absorb_array_key_provenance(
+        destination,
+        source_external_byte_keys,
+        source_utf8_text_keys,
+    );
 
     for (key, incoming) in source_entries {
+        let key = normalize_combined_key(destination, key, source_external_byte_keys);
         match key {
             ArrayKey::Int(_) => {
                 if !destination.try_push(incoming) {
@@ -177,18 +223,27 @@ fn replace_array_into(
     recursive: bool,
     active: &mut ActiveBranches,
 ) -> Result<(), CombineError> {
-    let source_entries: Vec<(ArrayKey, Value)> = source
+    let source_array = source
         .dereferenced()
         .as_array()
-        .expect("validated replacement is an array")
+        .expect("validated replacement is an array");
+    let source_external_byte_keys = source_array.has_external_byte_keys();
+    let source_utf8_text_keys = source_array.has_utf8_text_keys();
+    let source_entries: Vec<(ArrayKey, Value)> = source_array
         .iter()
         .map(|(key, value)| (key, clone_entry_value(value)))
         .collect();
     let destination_array = destination
         .as_array_mut()
         .expect("validated destination is an array");
+    absorb_array_key_provenance(
+        destination_array,
+        source_external_byte_keys,
+        source_utf8_text_keys,
+    );
 
     for (key, incoming) in source_entries {
+        let key = normalize_combined_key(destination_array, key, source_external_byte_keys);
         let existing = recursive
             .then(|| array_value(destination_array, &key))
             .flatten()

@@ -332,11 +332,13 @@ fn runtime_values_checked(
             let mut result = ordering(left_array.len().cmp(&right_array.len()));
             let mut comparison_error = false;
             if result == 0 {
+                let left_external_byte_keys = left_array.has_external_byte_keys();
                 for (key, value) in left_array.iter() {
-                    let Some(other) = (match key {
-                        ArrayKey::Int(key) => right_array.get_int(key),
-                        ArrayKey::String(key) => right_array.get_str(&key),
-                    }) else {
+                    let Some(other) = php_array_get_with_key_provenance(
+                        right_array,
+                        &key,
+                        left_external_byte_keys,
+                    ) else {
                         result = 1;
                         break;
                     };
@@ -2382,14 +2384,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // Object conversion may re-enter user code and mutate a
                     // source CV. Snapshot both already-evaluated operands before
                     // invoking it, then commit only after both conversions pass.
-                    let left = prepare_concat_operand_string(
+                    let left = prepare_concat_operand_value(
                         eg, frame, op_array, opline, &left, true,
                     )?;
                     resume_pending_exception!();
                     let Some(left) = left else {
                         unreachable!("failed concat conversion installs an exception")
                     };
-                    let right = prepare_concat_operand_string(
+                    let right = prepare_concat_operand_value(
                         eg, frame, op_array, opline, &right, true,
                     )?;
                     resume_pending_exception!();
@@ -2402,7 +2404,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe {
                         let prepared = prepare_reference_write!(
                             opline.op1 as u32,
-                            Value::string(left + &right)
+                            concatenate_string_values(&left, &right)
                         );
                         let destination =
                             (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
@@ -2422,17 +2424,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             .is_empty()
                     }
                 {
-                    let lhs = (&*(*frame).get_op_ptr(opline.op1 as u32, OpType::Cv, op_array))
-                    .echo_to_string_with_precision(eg.precision);
-                    let rhs = (&*(*frame).get_op_ptr(
+                    let lhs = scalar_concat_operand_value(
+                        &*(*frame).get_op_ptr(opline.op1 as u32, OpType::Cv, op_array),
+                        eg.precision,
+                    );
+                    let rhs = scalar_concat_operand_value(
+                        &*(*frame).get_op_ptr(
                             opline.op2 as u32,
                             opline.op2_type,
                             op_array,
-                        ))
-                    .echo_to_string_with_precision(eg.precision);
+                        ),
+                        eg.precision,
+                    );
                     let prepared = prepare_reference_write!(
                         opline.op1 as u32,
-                        Value::string(lhs + &rhs)
+                        concatenate_string_values(&lhs, &rhs)
                     );
                     let destination = (*frame).get_op_mut(opline.op1 as u32, OpType::Cv);
                     slot_set(destination, prepared);
@@ -2944,8 +2950,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     left < right
                 } else if let Some((left, right)) = comparison_numeric_pair(op1, op2) {
                     left < right
-                } else if let (Some(left), Some(right)) = (op1.as_str(), op2.as_str()) {
-                    left < right
+                } else if op1.as_str().is_some() && op2.as_str().is_some() {
+                    php_string_values_cmp(op1, op2) == std::cmp::Ordering::Less
                 } else {
                     let result = prepared_comparison_result(
                         eg,
@@ -3008,8 +3014,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     left <= right
                 } else if let Some((left, right)) = comparison_numeric_pair(op1, op2) {
                     left <= right
-                } else if let (Some(left), Some(right)) = (op1.as_str(), op2.as_str()) {
-                    left <= right
+                } else if op1.as_str().is_some() && op2.as_str().is_some() {
+                    php_string_values_cmp(op1, op2) != std::cmp::Ordering::Greater
                 } else {
                     let result = prepared_comparison_result(
                         eg,
@@ -3068,8 +3074,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     left == right
                 } else if let Some((left, right)) = comparison_numeric_pair(op1, op2) {
                     left == right
-                } else if let (Some(left), Some(right)) = (op1.as_str(), op2.as_str()) {
-                    left == right
+                } else if op1.as_str().is_some() && op2.as_str().is_some() {
+                    php_string_values_equal(op1, op2)
                 } else {
                     let result = prepared_comparison_result(
                         eg,
@@ -3402,10 +3408,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         d1.partial_cmp(&d2)
                             .map_or(PHP_COMPARISON_UNORDERED, ordering),
                     )
+                } else if op1.as_str().is_some() && op2.as_str().is_some() {
+                    Some(ordering(php_string_values_cmp(op1, op2)))
                 } else {
-                    op1.as_str()
-                        .zip(op2.as_str())
-                        .map(|(left, right)| ordering(left.cmp(right)))
+                    None
                 };
                 let val = if let Some(cmp) = scalar_cmp {
                     cmp.signum() as i64
@@ -3707,12 +3713,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         OpCode::IsSmallerOrEqual => d1 <= d2,
                         _ => unreachable!(),
                     }
-                } else if let (Some(s1), Some(s2)) = (op1.as_str(), op2.as_str()) {
+                } else if op1.as_str().is_some() && op2.as_str().is_some() {
+                    let ordering = php_string_values_cmp(op1, op2);
                     match opline.opcode {
-                        OpCode::IsEqual => s1 == s2,
-                        OpCode::IsNotEqual => s1 != s2,
-                        OpCode::IsSmaller => s1 < s2,
-                        OpCode::IsSmallerOrEqual => s1 <= s2,
+                        OpCode::IsEqual => ordering == std::cmp::Ordering::Equal,
+                        OpCode::IsNotEqual => ordering != std::cmp::Ordering::Equal,
+                        OpCode::IsSmaller => ordering == std::cmp::Ordering::Less,
+                        OpCode::IsSmallerOrEqual => ordering != std::cmp::Ordering::Greater,
                         _ => unreachable!(),
                     }
                 } else {
@@ -6304,12 +6311,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             })),
                         );
                     } else {
-                        let normalized_utf8_key = (arr.has_utf8_text_keys()
-                            && idx_val.is_binary_string())
+                        let normalized_string_key = ((idx_val.is_binary_string()
+                            && idx_val.as_str().is_some_and(|key| !key.is_ascii()))
+                            || (arr.has_external_byte_keys()
+                                && !idx_val.is_binary_string()
+                                && idx_val.as_str().is_some_and(|key| !key.is_ascii())))
                         .then(|| value_to_array_key(idx_val).ok())
                         .flatten()
-                        .map(|key| arr.normalize_utf8_text_key(key, idx_val));
-                        let array_key = normalized_utf8_key.as_ref().map_or_else(
+                        .map(|key| arr.normalize_string_key(key, idx_val));
+                        let array_key = normalized_string_key.as_ref().map_or_else(
                             || value_to_array_key_ref(idx_val),
                             |key| {
                                 Ok(match key {
@@ -7332,9 +7342,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     unsafe { slot_set(arr_ptr, Value::array(PhpArray::new())) };
                     let arr = unsafe { &mut *arr_ptr };
-                    arr.as_array_mut().unwrap().set(key, cloned_val);
+                    let php_arr = arr.as_array_mut().unwrap();
+                    key = php_arr.prepare_string_key_for_write(key, idx_val);
+                    php_arr.set(key, cloned_val);
                 } else if let Some(php_arr) = arr.as_array_mut() {
-                    key = php_arr.normalize_utf8_text_key(key, idx_val);
+                    key = php_arr.prepare_string_key_for_write(key, idx_val);
                     if let Some(element) =
                         php_arr.get_key_mut_for_replacement(&key, &cloned_val)
                     {
@@ -7981,7 +7993,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 match arr.value_type() {
                     ValueType::Array => {
                         let array = arr.as_array_mut().unwrap();
-                        key = array.normalize_utf8_text_key(key, idx_val);
+                        key = array.normalize_string_key(key, idx_val);
                         if let Some(position) = array.remove_with_position(&key) {
                             adjust_live_foreach_reference_positions_for_direct_splice(
                                 frame,
@@ -8590,6 +8602,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if let Some(arr_val) = php_obj.get_property_mut(&storage_key) {
                         // Property exists — mutate the array in place
                         if let Some(arr) = arr_val.as_array_mut() {
+                            let arr_key = arr.prepare_string_key_for_write(arr_key, &key);
                             arr.set(arr_key, new_val);
                         } else if matches!(arr_val.value_type(), ValueType::Undef | ValueType::Null) {
                             // PHP materializes an array when a dimension is
@@ -8598,6 +8611,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             // property). Validate the synthesized value
                             // against the declared contract before publishing.
                             let mut array = crate::value::PhpArray::new();
+                            let arr_key = array.prepare_string_key_for_write(arr_key, &key);
                             array.set(arr_key, new_val);
                             let mut initialized = Value::array(array);
                             if let Some(definition) = property_definition
@@ -8621,6 +8635,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                         // Property doesn't exist — create new array
                         let mut new_arr = crate::value::PhpArray::new();
+                        let arr_key = new_arr.prepare_string_key_for_write(arr_key, &key);
                         new_arr.set(arr_key, new_val);
                         php_obj.set_property(&storage_key, Value::array(new_arr));
                     }
@@ -10361,8 +10376,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 #[cold]
 #[inline(never)]
 fn bitwise_binary_value(left: &Value, right: &Value, opcode: OpCode) -> Value {
-    if let (Some(left), Some(right)) =
-        (left.dereferenced().as_str(), right.dereferenced().as_str())
+    if let (Some(left), Some(right)) = (
+        left.dereferenced().php_string_bytes(),
+        right.dereferenced().php_string_bytes(),
+    )
     {
         let (operation, preserve_longer_tail): (fn(u8, u8) -> u8, bool) = match opcode {
             OpCode::BitwiseAnd => (|left, right| left & right, false),
@@ -10370,9 +10387,9 @@ fn bitwise_binary_value(left: &Value, right: &Value, opcode: OpCode) -> Value {
             OpCode::BitwiseXor => (|left, right| left ^ right, false),
             _ => unreachable!("non-bitwise opcode in bitwise fallback"),
         };
-        return Value::string(crate::value::php_byte_string_binary(
-            left,
-            right,
+        return Value::binary_string(&crate::value::php_byte_binary(
+            left.as_ref(),
+            right.as_ref(),
             operation,
             preserve_longer_tail,
         ));
@@ -10390,11 +10407,9 @@ fn bitwise_binary_value(left: &Value, right: &Value, opcode: OpCode) -> Value {
 #[cold]
 #[inline(never)]
 fn bitwise_not_value(value: &Value) -> Value {
-    if let Some(string) = value.dereferenced().as_str() {
-        let bytes = crate::value::php_byte_string_bytes(string);
-        return Value::string(crate::value::php_byte_string_from_bytes(
-            bytes.into_iter().map(|byte| !byte),
-        ));
+    if let Some(bytes) = value.dereferenced().php_string_bytes() {
+        let bytes = bytes.iter().map(|byte| !byte).collect::<Vec<_>>();
+        return Value::binary_string(&bytes);
     }
     Value::long(!value.to_long_val())
 }

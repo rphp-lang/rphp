@@ -794,6 +794,7 @@ pub(crate) fn call_function_owned_iter_with_context_and_named<I>(
     capture_count: usize,
     closure_static_vars: Option<crate::value::ClosureStaticVars>,
     named_variadic: Vec<(String, Value)>,
+    named_variadic_external_byte_keys: bool,
 ) -> Result<Value, VmError>
 where
     I: Iterator<Item = Value>,
@@ -807,7 +808,7 @@ where
         bound_this,
         capture_count,
         closure_static_vars,
-        Some(named_variadic),
+        Some((named_variadic, named_variadic_external_byte_keys)),
         std::ptr::null_mut(),
         false,
         false,
@@ -827,6 +828,7 @@ pub(crate) fn call_function_owned_iter_with_context_and_named_from<I>(
     capture_count: usize,
     closure_static_vars: Option<crate::value::ClosureStaticVars>,
     named_variadic: Vec<(String, Value)>,
+    named_variadic_external_byte_keys: bool,
     trace_origin: (String, usize),
     pending_preentry_error: Option<&Value>,
     capture_generated_preentry_error: bool,
@@ -843,7 +845,7 @@ where
         bound_this,
         capture_count,
         closure_static_vars,
-        Some(named_variadic),
+        Some((named_variadic, named_variadic_external_byte_keys)),
         logical_caller,
         true,
         false,
@@ -932,7 +934,7 @@ fn call_function_value_iter<I, const READBACK_ARG0: bool>(
     bound_this: Option<Value>,
     capture_count: usize,
     closure_static_vars: Option<crate::value::ClosureStaticVars>,
-    named_variadic: Option<Vec<(String, Value)>>,
+    named_variadic: Option<(Vec<(String, Value)>, bool)>,
     logical_caller: *mut ExecuteData,
     publish_live_trace_caller: bool,
     trace_caller_at_current_site: bool,
@@ -1033,10 +1035,12 @@ where
     let this_offset = signature.this_offset as usize;
     let positional_public_num_args = num_args.saturating_sub(this_offset + capture_count);
     let public_num_args = positional_public_num_args
-        .saturating_add(named_variadic.as_ref().map_or(0, Vec::len));
+        .saturating_add(named_variadic.as_ref().map_or(0, |(named, _)| named.len()));
     let rejects_internal_named_variadic = function_type == FunctionType::Internal
         && signature.is_variadic
-        && named_variadic.as_ref().is_some_and(|named| !named.is_empty())
+        && named_variadic
+            .as_ref()
+            .is_some_and(|(named, _)| !named.is_empty())
         && !crate::stdlib::internal_variadic_forwards_named_arguments(
             &displayed_function_name(eg, func_ptr),
         );
@@ -1250,9 +1254,16 @@ where
                 };
                 variadic.push(value);
             }
-            if let Some(named) = named_variadic {
+            if let Some((named, external_byte_keys)) = named_variadic {
+                if external_byte_keys {
+                    variadic.promote_keys_to_external_storage();
+                }
                 for (name, value) in named {
-                    variadic.set_str(&name, value);
+                    if external_byte_keys {
+                        variadic.set(ArrayKey::String(name), value);
+                    } else {
+                        variadic.set_str(&name, value);
+                    }
                 }
             }
             let destination = (*frame).cv_mut(sig.variadic_cv_index) as *mut Value;
@@ -1881,7 +1892,7 @@ fn resume_generator_delegation(
                             Some(YieldFromDelegate::Generator(delegate, _)) => {
                                 Some(delegate.clone())
                             }
-                            Some(YieldFromDelegate::Array(_, _))
+                            Some(YieldFromDelegate::Array(_, _, _))
                             | Some(YieldFromDelegate::Iterator(_))
                             | None => None,
                         }
@@ -1977,7 +1988,7 @@ fn resume_generator_delegation(
                 Some(YieldFromDelegate::Generator(delegate, mode)) => {
                     Some((delegate.clone(), *mode))
                 }
-                Some(YieldFromDelegate::Array(_, _))
+                Some(YieldFromDelegate::Array(_, _, _))
                 | Some(YieldFromDelegate::Iterator(_))
                 | None => None,
             }
@@ -2032,7 +2043,7 @@ fn resume_generator_delegation(
 
         let array_delegate = matches!(
             current.borrow().delegate,
-            Some(YieldFromDelegate::Array(_, _))
+            Some(YieldFromDelegate::Array(_, _, _))
         );
         if array_delegate {
             let delegate = current
@@ -2040,7 +2051,7 @@ fn resume_generator_delegation(
                 .delegate
                 .take()
                 .expect("array delegation disappeared");
-            let YieldFromDelegate::Array(entries, position) = delegate else {
+            let YieldFromDelegate::Array(entries, position, external_byte_keys) = delegate else {
                 unreachable!();
             };
             match std::mem::replace(
@@ -2082,6 +2093,9 @@ fn resume_generator_delegation(
                             let (key, value) = &entries[position];
                             let key = match key {
                                 crate::value::ArrayKey::Int(key) => Value::long(*key),
+                                crate::value::ArrayKey::String(key) if external_byte_keys => {
+                                    Value::binary_string_from_storage(key.clone())
+                                }
                                 crate::value::ArrayKey::String(key) => Value::string(key),
                             };
                             (value.clone(), key)
@@ -2093,6 +2107,7 @@ fn resume_generator_delegation(
                             current_data.delegate = Some(YieldFromDelegate::Array(
                                 entries,
                                 position + 1,
+                                external_byte_keys,
                             ));
                             current_data.state = GeneratorState::Suspended;
                         }

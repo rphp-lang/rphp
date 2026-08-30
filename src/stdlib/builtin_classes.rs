@@ -1379,6 +1379,11 @@ fn fn_array_object_offset_get(
     else {
         ret!(rv, Value::null());
     };
+    let key = if context == ArrayObjectOffsetGetContext::Mutable {
+        array.prepare_string_key_for_write(key, arg!(ed, 1).dereferenced())
+    } else {
+        array.normalize_string_key(key, arg!(ed, 1).dereferenced())
+    };
     if array_object_value(array, &key).is_none() && context == ArrayObjectOffsetGetContext::Mutable
     {
         array.set(key.clone(), Value::null());
@@ -1443,6 +1448,7 @@ fn fn_array_object_offset_set(
         return Ok(());
     };
     if let Some(key) = key {
+        let key = array.prepare_string_key_for_write(key, arg!(ed, 1).dereferenced());
         array.set(key, value);
     } else if !array.try_push(value) {
         eg.exception = Some(make_error_value(
@@ -1468,7 +1474,10 @@ fn fn_array_object_offset_exists(
         object
             .get_property(storage)
             .and_then(Value::as_array)
-            .and_then(|array| array_object_value(array, &key))
+            .and_then(|array| {
+                let key = array.normalize_string_key(key, arg!(ed, 1).dereferenced());
+                array_object_value(array, &key)
+            })
             .is_some_and(|value| value.dereferenced().value_type() != ValueType::Null)
     });
     ret!(rv, Value::bool(exists));
@@ -1490,6 +1499,7 @@ fn fn_array_object_offset_unset(
             .get_property_mut(storage)
             .and_then(Value::as_array_mut)
     {
+        let key = array.normalize_string_key(key, arg!(ed, 1).dereferenced());
         array.remove(&key);
     }
     Ok(())

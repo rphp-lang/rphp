@@ -6,9 +6,12 @@
 //! normally.
 
 use crate::runtime::ExecutorGlobals;
-use crate::value::{ArrayKey, PhpArray, Value, ValueType};
+use crate::value::{
+    ArrayKey, PhpArray, Value, ValueType, php_byte_string_bytes, php_byte_string_from_bytes,
+};
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 
 #[derive(Clone, Copy)]
@@ -28,6 +31,8 @@ struct Entry {
     ordinal: usize,
     key: ArrayKey,
     value: Value,
+    external_byte_key: bool,
+    utf8_text_key: bool,
 }
 
 /// Retain a live reference cell while keeping the implementation-only snapshot
@@ -61,6 +66,8 @@ fn variadic_values(value: &Value) -> Vec<Value> {
 }
 
 fn snapshot(array: &PhpArray) -> Vec<Entry> {
+    let external_byte_key = array.has_external_byte_keys();
+    let utf8_text_key = array.has_utf8_text_keys();
     array
         .iter()
         .enumerate()
@@ -68,6 +75,8 @@ fn snapshot(array: &PhpArray) -> Vec<Entry> {
             ordinal,
             key,
             value: snapshot_entry_value(value),
+            external_byte_key,
+            utf8_text_key,
         })
         .collect()
 }
@@ -111,10 +120,53 @@ fn validated_snapshots(
     Some((source, comparisons))
 }
 
-fn key_value(key: &ArrayKey) -> Value {
-    match key {
+fn key_value(entry: &Entry) -> Value {
+    match &entry.key {
         ArrayKey::Int(value) => Value::long(*value),
+        ArrayKey::String(value) if entry.external_byte_key => {
+            Value::binary_string_from_storage(value.clone())
+        }
         ArrayKey::String(value) => Value::string(value.clone()),
+    }
+}
+
+fn string_key_bytes(value: &str, external_byte_key: bool) -> Cow<'_, [u8]> {
+    if external_byte_key {
+        Cow::Owned(php_byte_string_bytes(value))
+    } else {
+        Cow::Borrowed(value.as_bytes())
+    }
+}
+
+fn entry_keys_equal(left: &Entry, right: &Entry) -> bool {
+    let left_external_byte_key = left.external_byte_key;
+    let right_external_byte_key = right.external_byte_key;
+    match (&left.key, &right.key) {
+        (ArrayKey::Int(left), ArrayKey::Int(right)) => left == right,
+        (ArrayKey::String(left), ArrayKey::String(right)) => {
+            string_key_bytes(left, left_external_byte_key)
+                == string_key_bytes(right, right_external_byte_key)
+        }
+        _ => false,
+    }
+}
+
+fn array_contains_key(array: &PhpArray, key: &ArrayKey, source_external_byte_key: bool) -> bool {
+    match key {
+        ArrayKey::Int(index) => array.get_int(*index).is_some(),
+        ArrayKey::String(name) if array.has_external_byte_keys() == source_external_byte_key => {
+            array.get_str(name).is_some()
+        }
+        ArrayKey::String(name) if array.has_external_byte_keys() => {
+            let storage = php_byte_string_from_bytes(name.as_bytes().iter().copied());
+            array.get_str(&storage).is_some()
+        }
+        ArrayKey::String(name) => {
+            let bytes = php_byte_string_bytes(name);
+            std::str::from_utf8(&bytes)
+                .ok()
+                .is_some_and(|text| array.get_str(text).is_some())
+        }
     }
 }
 
@@ -153,19 +205,19 @@ fn value_order(
             right.clone(),
         ),
         ValueMode::CompareAsString => {
-            let Some(left) = super::internal_value_to_string(execute_data, eg, left)? else {
+            let Some(left) = internal_value_to_php_bytes(execute_data, eg, left)? else {
                 return Ok(None);
             };
             if eg.exception.is_some() {
                 return Ok(None);
             }
-            let Some(right) = super::internal_value_to_string(execute_data, eg, right)? else {
+            let Some(right) = internal_value_to_php_bytes(execute_data, eg, right)? else {
                 return Ok(None);
             };
             if eg.exception.is_some() {
                 return Ok(None);
             }
-            Ok(Some(left.as_bytes().cmp(right.as_bytes())))
+            Ok(Some(left.cmp(&right)))
         }
     }
 }
@@ -198,12 +250,31 @@ fn write_entry_result(
     keep: Option<&[bool]>,
 ) {
     let mut result = PhpArray::new();
+    let mut external_byte_keys = false;
+    let mut utf8_text_keys = false;
     for entry in entries {
         if keep.is_none_or(|keep| keep[entry.ordinal]) {
+            external_byte_keys |= entry.external_byte_key;
+            utf8_text_keys |= entry.utf8_text_key;
             result.set(entry.key, result_entry_value(&entry.value));
         }
     }
+    if external_byte_keys {
+        result.mark_external_byte_keys();
+    }
+    if utf8_text_keys {
+        result.mark_utf8_text_keys();
+    }
     super::write_return_value(return_pointer, Value::array(result));
+}
+
+fn copy_key_provenance(source: &PhpArray, result: &PhpArray) {
+    if source.has_external_byte_keys() {
+        result.mark_external_byte_keys();
+    }
+    if source.has_utf8_text_keys() {
+        result.mark_utf8_text_keys();
+    }
 }
 
 fn ordinary_array_diff(
@@ -233,8 +304,7 @@ fn ordinary_array_diff(
     // PHP 8.5 converts the sole source value before it validates later array
     // arguments and stops converting candidates after the first match.
     if source.len() == 1 {
-        let Some(search) = super::internal_value_to_string(execute_data, eg, &source[0].value)?
-        else {
+        let Some(search) = internal_value_to_php_bytes(execute_data, eg, &source[0].value)? else {
             return Ok(());
         };
         let mut found = false;
@@ -247,7 +317,7 @@ fn ordinary_array_diff(
                 continue;
             }
             for candidate in array.values() {
-                let Some(rendered) = super::internal_value_to_string(execute_data, eg, candidate)?
+                let Some(rendered) = internal_value_to_php_bytes(execute_data, eg, candidate)?
                 else {
                     return Ok(());
                 };
@@ -284,8 +354,7 @@ fn ordinary_array_diff(
     let mut excluded = Vec::with_capacity(comparison_count);
     for candidates in &comparisons {
         for candidate in candidates {
-            let Some(rendered) =
-                super::internal_value_to_string(execute_data, eg, &candidate.value)?
+            let Some(rendered) = internal_value_to_php_bytes(execute_data, eg, &candidate.value)?
             else {
                 return Ok(());
             };
@@ -295,8 +364,7 @@ fn ordinary_array_diff(
 
     let mut keep = vec![true; source.len()];
     for entry in &source {
-        let Some(rendered) = super::internal_value_to_string(execute_data, eg, &entry.value)?
-        else {
+        let Some(rendered) = internal_value_to_php_bytes(execute_data, eg, &entry.value)? else {
             return Ok(());
         };
         if excluded.iter().any(|candidate| candidate == &rendered) {
@@ -327,22 +395,14 @@ fn scalar_array_intersection(
         .map(|entries| {
             entries
                 .iter()
-                .map(|entry| {
-                    entry
-                        .value
-                        .dereferenced()
-                        .echo_to_string_with_precision(eg.precision)
-                })
+                .map(|entry| scalar_string(&entry.value, eg.precision).unwrap_or_default())
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
 
     let mut keep = vec![true; source.len()];
     for entry in &source {
-        let rendered = entry
-            .value
-            .dereferenced()
-            .echo_to_string_with_precision(eg.precision);
+        let rendered = scalar_string(&entry.value, eg.precision).unwrap_or_default();
         keep[entry.ordinal] = rendered_comparisons
             .iter()
             .all(|candidates| candidates.iter().any(|candidate| candidate == &rendered));
@@ -469,8 +529,20 @@ fn ordinary_array_intersect(
     }
 }
 
+fn internal_value_to_php_bytes(
+    execute_data: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    value: &Value,
+) -> Result<Option<Vec<u8>>, VmError> {
+    let value = value.dereferenced();
+    if value.value_type() == ValueType::String {
+        return Ok(value.php_string_bytes().map(Cow::into_owned));
+    }
+    Ok(super::internal_value_to_string(execute_data, eg, value)?.map(String::into_bytes))
+}
+
 #[inline(always)]
-fn scalar_string(value: &Value, precision: i32) -> Option<String> {
+fn scalar_string(value: &Value, precision: i32) -> Option<Vec<u8>> {
     let value = if value.value_type() == ValueType::Reference {
         value.dereferenced()
     } else {
@@ -481,10 +553,12 @@ fn scalar_string(value: &Value, precision: i32) -> Option<String> {
         ValueType::Array | ValueType::Object | ValueType::Closure
     ) {
         None
+    } else if value.value_type() == ValueType::String {
+        value.php_string_bytes().map(Cow::into_owned)
     } else if precision == 14 {
-        Some(value.echo_to_string())
+        Some(value.echo_to_string().into_bytes())
     } else {
-        Some(value.echo_to_string_with_precision(precision))
+        Some(value.echo_to_string_with_precision(precision).into_bytes())
     }
 }
 
@@ -530,6 +604,7 @@ fn try_scalar_array_diff(
             result.set(key, result_entry_value(value));
         }
     }
+    copy_key_provenance(source, &result);
     super::write_return_value(return_pointer, Value::array(result));
     Ok(true)
 }
@@ -576,6 +651,7 @@ fn try_scalar_array_intersect(
             result.set(key, result_entry_value(value));
         }
     }
+    copy_key_provenance(source, &result);
     super::write_return_value(return_pointer, Value::array(result));
     Ok(true)
 }
@@ -623,6 +699,7 @@ fn try_scalar_array_diff_raw(
             result.set(key, result_entry_value(value));
         }
     }
+    copy_key_provenance(source, &result);
     super::write_return_value(return_pointer, Value::array(result));
     Ok(true)
 }
@@ -670,6 +747,7 @@ fn try_scalar_array_intersect_raw(
             result.set(key, result_entry_value(value));
         }
     }
+    copy_key_provenance(source, &result);
     super::write_return_value(return_pointer, Value::array(result));
     Ok(true)
 }
@@ -756,7 +834,7 @@ fn entry_matches(
     value_mode: ValueMode,
 ) -> Result<bool, VmError> {
     for candidate in candidates {
-        if exact_keys && entry.key != candidate.key {
+        if exact_keys && !entry_keys_equal(entry, candidate) {
             continue;
         }
         let Some(ordering) = value_order(
@@ -787,8 +865,7 @@ fn user_entry_order(
     value_mode: ValueMode,
 ) -> Result<Option<Ordering>, VmError> {
     if let Some(callback) = key_callback {
-        let Some(ordering) = user_order(eg, callback, key_value(&left.key), key_value(&right.key))?
-        else {
+        let Some(ordering) = user_order(eg, callback, key_value(left), key_value(right))? else {
             return Ok(None);
         };
         if ordering != Ordering::Equal {
@@ -1341,17 +1418,13 @@ fn execute_set_operation(
             return Ok(());
         };
         source.sort_by_key(|entry| entry.ordinal);
-        let mut result = PhpArray::new();
-        for entry in source {
-            if keep[entry.ordinal] {
-                result.set(entry.key, result_entry_value(&entry.value));
-            }
-        }
-        super::write_return_value(return_pointer, Value::array(result));
+        write_entry_result(return_pointer, source, Some(&keep));
         return Ok(());
     }
 
     let mut result = PhpArray::new();
+    let mut external_byte_keys = false;
+    let mut utf8_text_keys = false;
     for entry in source {
         let keep = match kind {
             SetKind::Difference => {
@@ -1401,8 +1474,16 @@ fn execute_set_operation(
             return Ok(());
         }
         if keep {
+            external_byte_keys |= entry.external_byte_key;
+            utf8_text_keys |= entry.utf8_text_key;
             result.set(entry.key, result_entry_value(&entry.value));
         }
+    }
+    if external_byte_keys {
+        result.mark_external_byte_keys();
+    }
+    if utf8_text_keys {
+        result.mark_utf8_text_keys();
     }
     super::write_return_value(return_pointer, Value::array(result));
     Ok(())
@@ -1461,20 +1542,22 @@ fn ordinary_key_operation(
         comparisons.push(array);
     }
 
-    let contains = |array: &PhpArray, key: &ArrayKey| match key {
-        ArrayKey::Int(index) => array.get_int(*index).is_some(),
-        ArrayKey::String(name) => array.get_str(name).is_some(),
-    };
+    let source_external_byte_keys = first_array.has_external_byte_keys();
     let mut result = PhpArray::new();
     for (key, value) in first_array.iter() {
         let keep = match kind {
-            SetKind::Difference => !comparisons.iter().any(|array| contains(array, &key)),
-            SetKind::Intersection => comparisons.iter().all(|array| contains(array, &key)),
+            SetKind::Difference => !comparisons
+                .iter()
+                .any(|array| array_contains_key(array, &key, source_external_byte_keys)),
+            SetKind::Intersection => comparisons
+                .iter()
+                .all(|array| array_contains_key(array, &key, source_external_byte_keys)),
         };
         if keep {
             result.set(key, result_entry_value(value));
         }
     }
+    copy_key_provenance(first_array, &result);
     super::write_return_value(return_pointer, Value::array(result));
     Ok(())
 }

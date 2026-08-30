@@ -3494,6 +3494,7 @@ fn op_bind_array_dim_ref<'a>(
                 ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
             });
         };
+        let key = array.prepare_string_key_for_write(key, index);
         if array.get_key_mut(&key).is_none() {
             array.set(key.clone(), Value::null());
         }

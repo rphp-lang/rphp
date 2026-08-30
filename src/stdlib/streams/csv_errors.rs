@@ -84,7 +84,7 @@ pub(super) fn fn_fgetcsv(
             let mut record = PhpArray::with_packed_capacity(fields.len());
             for field in fields {
                 record.push(match field {
-                    Some(bytes) => Value::string(super::super::bytes_to_php_string(&bytes)),
+                    Some(bytes) => super::super::php_byte_result(bytes, false),
                     None => Value::null(),
                 });
             }
@@ -122,7 +122,7 @@ fn try_fast_fgetcsv(
             let mut record = PhpArray::with_packed_capacity(fields.len());
             for field in fields {
                 record.push(match field {
-                    Some(bytes) => Value::string(super::super::bytes_to_php_string(&bytes)),
+                    Some(bytes) => super::super::php_byte_result(bytes, false),
                     None => Value::null(),
                 });
             }

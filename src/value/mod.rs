@@ -212,14 +212,12 @@ fn finite_precision_special(value: &str, precision: i32) -> String {
 
 #[cold]
 #[inline(never)]
-pub(crate) fn php_byte_string_binary(
-    left: &str,
-    right: &str,
+pub(crate) fn php_byte_binary(
+    left: &[u8],
+    right: &[u8],
     operation: fn(u8, u8) -> u8,
     preserve_longer_tail: bool,
-) -> String {
-    let left = php_byte_string_bytes(left);
-    let right = php_byte_string_bytes(right);
+) -> Vec<u8> {
     let common = left.len().min(right.len());
     let capacity = if preserve_longer_tail {
         left.len().max(right.len())
@@ -240,7 +238,7 @@ pub(crate) fn php_byte_string_binary(
             result.extend_from_slice(&right[common..]);
         }
     }
-    php_byte_string_from_bytes(result)
+    result
 }
 
 #[cfg(feature = "resource-lifetime")]
@@ -2636,6 +2634,18 @@ pub enum ArrayKey {
     String(String),
 }
 
+pub(crate) fn normalize_array_key_for_external_storage(
+    key: ArrayKey,
+    source_external_byte_keys: bool,
+) -> ArrayKey {
+    match key {
+        ArrayKey::String(value) if !source_external_byte_keys => {
+            ArrayKey::String(php_byte_string_from_bytes(value.as_bytes().iter().copied()))
+        }
+        key => key,
+    }
+}
+
 impl PhpArray {
     pub fn new() -> Self {
         Self {
@@ -2673,6 +2683,107 @@ impl PhpArray {
 
     pub(crate) fn has_utf8_text_keys(&self) -> bool {
         self.cursor.get() & ARRAY_UTF8_TEXT_KEYS != 0
+    }
+
+    /// Switch an existing array to the lossless byte-key storage convention.
+    /// Multi-source operations use this before admitting an externally
+    /// produced key so byte-equal ordinary UTF-8 and raw keys collide exactly
+    /// as they do in Zend arrays.
+    pub(crate) fn promote_keys_to_external_storage(&mut self) {
+        if self.has_external_byte_keys() {
+            return;
+        }
+        let original_next_int_key = self.next_int_key;
+        let original_cursor = self.cursor.get();
+        let had_string_keys = self.has_string_keys();
+        // This is a representation-only transition of the same PHP array.
+        // Move its Values instead of applying array-COW clone semantics: even
+        // an otherwise singleton reference cell must retain its identity.
+        let storage = std::mem::replace(&mut self.storage, ArrayStorage::Packed(Vec::new()));
+        let entries = match storage {
+            ArrayStorage::Packed(values) => values
+                .into_iter()
+                .enumerate()
+                .map(|(key, value)| (ArrayKey::Int(key as i64), value))
+                .collect::<Vec<_>>(),
+            ArrayStorage::SmallHash(small) => small
+                .entries
+                .into_iter()
+                .flatten()
+                .map(|(key, value)| (key.to_public(), value))
+                .collect(),
+            ArrayStorage::LinearHash(linear) => linear
+                .entries
+                .into_iter()
+                .map(|(key, value)| (key.to_public(), value))
+                .collect(),
+            ArrayStorage::Hash { entries, .. } => entries
+                .into_iter()
+                .map(|(key, value)| (key.to_public(), value))
+                .collect(),
+        };
+        let mut rebuilt = if had_string_keys {
+            Self::with_deferred_hash_capacity(entries.len())
+        } else {
+            Self::with_packed_capacity(entries.len())
+        };
+        for (key, value) in entries {
+            rebuilt.set(normalize_array_key_for_external_storage(key, false), value);
+        }
+        // Rebuilding the physical storage must not make a previously used
+        // integer slot reusable, nor reset PHP's observable internal pointer.
+        // Preserve every monotonic metadata bit except the superseded UTF-8
+        // key convention; `set()` above may additionally discover nested
+        // release candidates while cloning the values.
+        rebuilt.next_int_key = original_next_int_key;
+        let preserved_metadata = original_cursor
+            & (ARRAY_CURSOR_METADATA & !(ARRAY_EXTERNAL_BYTE_KEYS | ARRAY_UTF8_TEXT_KEYS));
+        let rebuilt_metadata = rebuilt.cursor.get() & ARRAY_CURSOR_METADATA;
+        let cursor_position = original_cursor & !ARRAY_CURSOR_METADATA;
+        rebuilt.cursor.set(
+            cursor_position | preserved_metadata | rebuilt_metadata | ARRAY_EXTERNAL_BYTE_KEYS,
+        );
+        *self = rebuilt;
+    }
+
+    /// Select the key-storage convention required when entries from `source`
+    /// are copied into this array. Raw-byte storage wins because ordinary
+    /// UTF-8 keys can be encoded into its Latin-1 bridge without loss, while
+    /// the reverse conversion is not defined for arbitrary PHP byte strings.
+    pub(crate) fn absorb_key_provenance_from(&mut self, source: &Self) {
+        self.absorb_key_provenance(source.has_external_byte_keys(), source.has_utf8_text_keys());
+    }
+
+    pub(crate) fn absorb_key_provenance(
+        &mut self,
+        source_external_byte_keys: bool,
+        source_utf8_text_keys: bool,
+    ) {
+        if source_external_byte_keys {
+            self.promote_keys_to_external_storage();
+        } else if source_utf8_text_keys && !self.has_external_byte_keys() {
+            self.mark_utf8_text_keys();
+        }
+    }
+
+    /// Convert one key copied from `source` to this array's selected storage
+    /// convention. Call `absorb_key_provenance_from()` first when combining
+    /// arrays from more than one producer.
+    pub(crate) fn normalize_key_from_array(&self, key: ArrayKey, source: &Self) -> ArrayKey {
+        self.normalize_key_from_provenance(key, source.has_external_byte_keys())
+    }
+
+    pub(crate) fn normalize_key_from_provenance(
+        &self,
+        key: ArrayKey,
+        source_external_byte_keys: bool,
+    ) -> ArrayKey {
+        if self.has_external_byte_keys() {
+            normalize_array_key_for_external_storage(key, source_external_byte_keys)
+        } else {
+            debug_assert!(!source_external_byte_keys);
+            key
+        }
     }
 
     #[inline]
@@ -2718,21 +2829,82 @@ impl PhpArray {
         self.cursor.get() & ARRAY_NESTED_RELEASE_CANDIDATE != 0
     }
 
-    pub(crate) fn normalize_utf8_text_key(&self, key: ArrayKey, source: &Value) -> ArrayKey {
-        if !self.has_utf8_text_keys() || !source.is_binary_string() {
-            return key;
-        }
+    /// Normalize a string dimension to the storage convention selected by an
+    /// internal array producer. PHP compares array keys as byte strings, while
+    /// the runtime keeps ordinary UTF-8 text and raw byte strings in distinct
+    /// lossless representations. Producer markers let later userland reads and
+    /// writes retain byte equality without adding provenance to every key.
+    pub(crate) fn normalize_string_key(&self, key: ArrayKey, source: &Value) -> ArrayKey {
         let ArrayKey::String(_) = key else {
             return key;
         };
+
+        // parse_str() and legacy translation tables store every string key in
+        // the Latin-1 byte bridge. Ordinary UTF-8 source keys must enter that
+        // same convention so `$query["é"]` addresses `%C3%A9`, and so a later
+        // insertion does not create a mixed-provenance array.
+        if self.has_external_byte_keys() {
+            if source.is_binary_string() {
+                return key;
+            }
+            let Some(bytes) = source.php_string_bytes() else {
+                return key;
+            };
+            if bytes.is_ascii() {
+                return key;
+            }
+            let storage = php_byte_string_from_bytes(bytes.iter().copied());
+            return canonical_decimal_array_key(&storage)
+                .map_or_else(|| ArrayKey::String(storage), ArrayKey::Int);
+        }
+
+        if !source.is_binary_string() {
+            return key;
+        }
         let Some(bytes) = source.php_string_bytes() else {
             return key;
         };
+        if bytes.is_ascii() {
+            return key;
+        }
         let Ok(text) = std::str::from_utf8(bytes.as_ref()) else {
             return key;
         };
         canonical_decimal_array_key(text)
             .map_or_else(|| ArrayKey::String(text.to_string()), ArrayKey::Int)
+    }
+
+    /// Normalize a key for insertion and select a uniform storage convention
+    /// when a general userland array first receives a binary string key.
+    pub(crate) fn prepare_string_key_for_write(
+        &mut self,
+        key: ArrayKey,
+        source: &Value,
+    ) -> ArrayKey {
+        let ArrayKey::String(_) = key else {
+            return key;
+        };
+        if !source.is_binary_string() {
+            return self.normalize_string_key(key, source);
+        }
+        if self.has_external_byte_keys() {
+            return key;
+        }
+
+        let Some(bytes) = source.php_string_bytes() else {
+            return key;
+        };
+        if let Ok(text) = std::str::from_utf8(bytes.as_ref()) {
+            self.mark_utf8_text_keys();
+            return canonical_decimal_array_key(text)
+                .map_or_else(|| ArrayKey::String(text.to_string()), ArrayKey::Int);
+        }
+
+        // An arbitrary byte key cannot coexist in UTF-8 storage. Convert any
+        // existing ordinary/decoded keys to the Latin-1 bridge before adding
+        // it, so later byte-equal reads, overwrites and removals stay unique.
+        self.promote_keys_to_external_storage();
+        key
     }
 
     /// Preserve Zend's literal-source ownership on the direct refcounted
@@ -2832,7 +3004,9 @@ impl PhpArray {
     /// the left array's insertion order remains authoritative.
     pub fn union(&self, right: &Self) -> Self {
         let mut result = self.clone();
+        result.absorb_key_provenance_from(right);
         for (key, value) in right.iter() {
+            let key = result.normalize_key_from_array(key, right);
             let exists = match &key {
                 ArrayKey::Int(key) => result.get_int(*key).is_some(),
                 ArrayKey::String(key) => result.get_str(key).is_some(),
@@ -3447,8 +3621,32 @@ impl PhpArray {
     /// the source Value. This avoids materializing an intermediate ArrayKey and
     /// allocating a second copy of the same immutable key bytes.
     pub fn set_str_value(&mut self, key: &Value, val: Value) {
-        self.track_nested_release_value(&val);
         let key_text = key.as_str().expect("set_str_value requires a string Value");
+        // Ordinary userland keys stay on the allocation-sharing hot path.
+        // Storage conversion is needed only when a non-ASCII key crosses the
+        // ordinary/binary representation boundary; ASCII has identical
+        // storage in both conventions.
+        let needs_normalization = if self.has_external_byte_keys() {
+            !key.is_binary_string() && !key_text.is_ascii()
+        } else {
+            key.is_binary_string() && !key_text.is_ascii()
+        };
+        if needs_normalization {
+            let normalized =
+                self.prepare_string_key_for_write(ArrayKey::String(key_text.to_string()), key);
+            match normalized {
+                ArrayKey::Int(key) => {
+                    self.set_int(key, val);
+                    return;
+                }
+                ArrayKey::String(normalized) if normalized != key_text => {
+                    self.set_owned_str(normalized, val);
+                    return;
+                }
+                ArrayKey::String(_) => {}
+            }
+        }
+        self.track_nested_release_value(&val);
         if matches!(&self.storage, ArrayStorage::Packed(_)) {
             self.transition_to_hash();
         }

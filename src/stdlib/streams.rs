@@ -475,10 +475,7 @@ fn fn_fread(
     match result {
         Some(Ok(read)) => {
             bytes.truncate(read);
-            return_value(
-                return_pointer,
-                Value::string(super::bytes_to_php_string(&bytes)),
-            )
+            return_value(return_pointer, super::php_byte_result(bytes, false))
         }
         _ => return_value(return_pointer, Value::bool(false)),
     }
@@ -505,10 +502,7 @@ fn fn_fgets(
     match result {
         Some(Ok(Some(read))) => {
             debug_assert_eq!(read, bytes.len());
-            return_value(
-                return_pointer,
-                Value::string(super::bytes_to_php_string(&bytes)),
-            )
+            return_value(return_pointer, super::php_byte_result(bytes, false))
         }
         _ => return_value(return_pointer, Value::bool(false)),
     }
@@ -554,7 +548,7 @@ fn fn_fgetcsv(
             let mut record = PhpArray::with_packed_capacity(fields.len());
             for field in fields {
                 record.push(match field {
-                    Some(bytes) => Value::string(super::bytes_to_php_string(&bytes)),
+                    Some(bytes) => super::php_byte_result(bytes, false),
                     None => Value::null(),
                 });
             }

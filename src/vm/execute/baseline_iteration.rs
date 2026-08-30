@@ -102,6 +102,7 @@ fn append_call_unpack_entry(
     target: &mut PhpArray,
     key: ArrayKey,
     value: Value,
+    external_byte_key: bool,
     seen_named_in_source: &mut bool,
 ) -> Result<(), String> {
     match key {
@@ -115,6 +116,17 @@ fn append_call_unpack_entry(
             target.push(value);
         }
         ArrayKey::String(name) => {
+            let name = if external_byte_key && !name.is_ascii() {
+                let source = Value::binary_string_from_storage(name.clone());
+                match target.prepare_string_key_for_write(ArrayKey::String(name), &source) {
+                    ArrayKey::String(name) => name,
+                    ArrayKey::Int(_) => {
+                        unreachable!("non-ASCII named-argument keys cannot canonicalize to int")
+                    }
+                }
+            } else {
+                name
+            };
             *seen_named_in_source = true;
             if target.get_str(&name).is_some() {
                 return Err(format!(
@@ -152,12 +164,12 @@ impl TraversableUnpackKind {
 fn traversable_unpack_key(
     value: &Value,
     kind: TraversableUnpackKind,
-) -> Result<ArrayKey, String> {
+) -> Result<(ArrayKey, bool), String> {
     let value = value.dereferenced();
     if let Some(key) = value.as_long() {
-        Ok(ArrayKey::Int(key))
+        Ok((ArrayKey::Int(key), false))
     } else if let Some(key) = value.as_str() {
-        Ok(ArrayKey::String(key.to_string()))
+        Ok((ArrayKey::String(key.to_string()), value.is_binary_string()))
     } else {
         Err(kind.key_error().to_string())
     }
@@ -167,7 +179,7 @@ fn collect_generator_unpack(
     eg: &mut ExecutorGlobals,
     value: &Value,
     kind: TraversableUnpackKind,
-) -> Result<Vec<(ArrayKey, Value)>, VmError> {
+) -> Result<Vec<(ArrayKey, Value, bool)>, VmError> {
     let generator = value
         .as_object_rc()
         .and_then(|object| object.borrow().generator.clone())
@@ -197,14 +209,18 @@ fn collect_generator_unpack(
         if data.state == crate::vm::generator::GeneratorState::Completed {
             break;
         }
-        let key = match traversable_unpack_key(&data.key, kind) {
+        let (key, external_byte_key) = match traversable_unpack_key(&data.key, kind) {
             Ok(key) => key,
             Err(message) => {
                 eg.exception = Some(make_error_value("Error", &message));
                 return Ok(entries);
             }
         };
-        entries.push((key, kind.value(data.value.dereferenced().clone())));
+        entries.push((
+            key,
+            kind.value(data.value.dereferenced().clone()),
+            external_byte_key,
+        ));
     }
     Ok(entries)
 }
@@ -213,7 +229,7 @@ fn collect_unpack_traversable(
     eg: &mut ExecutorGlobals,
     source: &Value,
     kind: TraversableUnpackKind,
-) -> Result<Option<Vec<(ArrayKey, Value)>>, VmError> {
+) -> Result<Option<Vec<(ArrayKey, Value, bool)>>, VmError> {
     let Some(object) = source.as_object() else {
         return Ok(None);
     };
@@ -226,10 +242,17 @@ fn collect_unpack_traversable(
     if let Some(values) = builtin_iterator_values(source, eg)
         && let Some(values) = values.as_array()
     {
+        let external_byte_keys = values.has_external_byte_keys();
         return Ok(Some(
             values
                 .iter()
-                .map(|(key, value)| (key, kind.value(value.dereferenced().clone())))
+                .map(|(key, value)| {
+                    (
+                        key,
+                        kind.value(value.dereferenced().clone()),
+                        external_byte_keys,
+                    )
+                })
                 .collect(),
         ));
     }
@@ -283,6 +306,7 @@ fn collect_unpack_traversable(
     if let Some(values) = builtin_iterator_values(&iterable, eg)
         && let Some(values) = values.as_array()
     {
+        let external_byte_keys = values.has_external_byte_keys();
         return Ok(Some(
             values
                 .iter()
@@ -290,6 +314,7 @@ fn collect_unpack_traversable(
                     (
                         key,
                         kind.value(value.dereferenced().clone()),
+                        external_byte_keys,
                     )
                 })
                 .collect(),
@@ -341,14 +366,18 @@ fn collect_unpack_traversable(
         if eg.exception.is_some() {
             break;
         }
-        let key = match traversable_unpack_key(&key, kind) {
+        let (key, external_byte_key) = match traversable_unpack_key(&key, kind) {
             Ok(key) => key,
             Err(message) => {
                 eg.exception = Some(make_error_value("Error", &message));
                 break;
             }
         };
-        entries.push((key, kind.value(value.dereferenced().clone())));
+        entries.push((
+            key,
+            kind.value(value.dereferenced().clone()),
+            external_byte_key,
+        ));
         let _ = crate::stdlib::call_object_protocol_method(
             eg,
             &iterable,
@@ -368,7 +397,7 @@ fn collect_unpack_traversable(
 pub(crate) fn collect_traversable_entries(
     eg: &mut ExecutorGlobals,
     source: &Value,
-) -> Result<Option<Vec<(ArrayKey, Value)>>, VmError> {
+) -> Result<Option<Vec<(ArrayKey, Value, bool)>>, VmError> {
     collect_unpack_traversable(eg, source, TraversableUnpackKind::Array)
 }
 
@@ -376,6 +405,7 @@ fn append_array_unpack_entry(
     target: &mut PhpArray,
     key: ArrayKey,
     value: Value,
+    external_byte_key: bool,
 ) -> Result<(), &'static str> {
     match key {
         ArrayKey::Int(_) => {
@@ -384,6 +414,22 @@ fn append_array_unpack_entry(
             }
         }
         ArrayKey::String(key) => {
+            let source = if external_byte_key {
+                Value::binary_string_from_storage(key.clone())
+            } else {
+                Value::string(key.clone())
+            };
+            let key = match target.prepare_string_key_for_write(ArrayKey::String(key), &source) {
+                ArrayKey::String(key) => key,
+                ArrayKey::Int(_) => {
+                    if !target.try_push(value) {
+                        return Err(
+                            "Cannot add element to the array as the next element is already occupied",
+                        );
+                    }
+                    return Ok(());
+                }
+            };
             if canonical_decimal_array_key(&key).is_some() {
                 if !target.try_push(value) {
                     return Err(
@@ -416,10 +462,11 @@ fn op_add_array_unpack<'a>(
     };
     let source = source.dereferenced();
     let entries = if let Some(source) = source.as_array() {
+        let external_byte_keys = source.has_external_byte_keys();
         Some(
             source
                 .iter()
-                .map(|(key, value)| (key, value.dereferenced().clone()))
+                .map(|(key, value)| (key, value.dereferenced().clone(), external_byte_keys))
                 .collect::<Vec<_>>(),
         )
     } else if opline._pad & ARRAY_UNPACK_CONSTANT_EXPRESSION != 0 {
@@ -462,8 +509,10 @@ fn op_add_array_unpack<'a>(
     let target = unsafe { &mut *(*frame).get_op_mut(opline.op1 as u32, opline.op1_type) }
         .as_array_mut()
         .ok_or_else(|| VmError::Fatal("AddArrayUnpack target is not an array".to_string()))?;
-    for (key, value) in entries {
-        if let Err(message) = append_array_unpack_entry(target, key, value) {
+    for (key, value, external_byte_key) in entries {
+        if let Err(message) =
+            append_array_unpack_entry(target, key, value, external_byte_key)
+        {
             return Ok(unpack_error(
                 eg,
                 frame,
@@ -537,8 +586,9 @@ fn op_add_call_unpack<'a>(
 ) -> Result<ColdResult<'a>, VmError> {
     let collect_source = |eg: &mut ExecutorGlobals,
                           source: &mut Value|
-     -> Result<Option<Vec<(ArrayKey, Value)>>, VmError> {
+     -> Result<Option<Vec<(ArrayKey, Value, bool)>>, VmError> {
         if let Some(source) = source.as_array_mut() {
+            let external_byte_keys = source.has_external_byte_keys();
             let keys: Vec<_> = source.iter().map(|(key, _)| key).collect();
             return keys
                 .into_iter()
@@ -546,7 +596,7 @@ fn op_add_call_unpack<'a>(
                 .map(|(position, key)| {
                     source
                         .argument_unpack_reference_at(position)
-                        .map(|value| (key, value))
+                        .map(|value| (key, value, external_byte_keys))
                         .ok_or_else(|| {
                             VmError::Fatal(
                                 "Argument unpack source changed during iteration".to_string(),
@@ -625,8 +675,10 @@ fn op_add_call_unpack<'a>(
     .as_array_mut()
     .ok_or_else(|| VmError::Fatal("AddCallUnpack target is not an array".to_string()))?;
     let mut seen_named = false;
-    for (key, value) in entries {
-        if let Err(message) = append_call_unpack_entry(target, key, value, &mut seen_named) {
+    for (key, value, external_byte_key) in entries {
+        if let Err(message) =
+            append_call_unpack_entry(target, key, value, external_byte_key, &mut seen_named)
+        {
             return Ok(unpack_error(
                 eg,
                 frame,
@@ -2136,6 +2188,7 @@ fn resolve_yield_from_source(
                     .iter()
                     .map(|(key, value)| (key, value.clone()))
                     .collect(),
+                array.has_external_byte_keys(),
             )
         }));
     };
@@ -2152,8 +2205,8 @@ fn resolve_yield_from_source(
     }
     drop(object);
 
-    if let Some(entries) = snapshot_builtin_yield_from_iterator(eg, source) {
-        return Ok(Some(YieldFromSource::Array(entries)));
+    if let Some((entries, external_byte_keys)) = snapshot_builtin_yield_from_iterator(eg, source) {
+        return Ok(Some(YieldFromSource::Array(entries, external_byte_keys)));
     }
     if !eg.class_is_a(&class_name, "Traversable") {
         return Ok(None);
@@ -2209,8 +2262,10 @@ fn resolve_yield_from_source(
             ));
             return Ok(None);
         }
-        if let Some(entries) = snapshot_builtin_yield_from_iterator(eg, &iterable) {
-            return Ok(Some(YieldFromSource::Array(entries)));
+        if let Some((entries, external_byte_keys)) =
+            snapshot_builtin_yield_from_iterator(eg, &iterable)
+        {
+            return Ok(Some(YieldFromSource::Array(entries, external_byte_keys)));
         }
     }
 
@@ -2236,20 +2291,23 @@ enum YieldFromSource {
         crate::vm::generator::GeneratorRef,
         crate::vm::generator::YieldFromGeneratorMode,
     ),
-    Array(Vec<(crate::value::ArrayKey, Value)>),
+    Array(Vec<(crate::value::ArrayKey, Value)>, bool),
     Iterator(Value),
 }
 
 fn snapshot_builtin_yield_from_iterator(
     eg: &ExecutorGlobals,
     source: &Value,
-) -> Option<Vec<(crate::value::ArrayKey, Value)>> {
+) -> Option<(Vec<(crate::value::ArrayKey, Value)>, bool)> {
     let values = builtin_iterator_values(source, eg)?;
     values.as_array().map(|array| {
-        array
-            .iter()
-            .map(|(key, value)| (key, value.clone()))
-            .collect()
+        (
+            array
+                .iter()
+                .map(|(key, value)| (key, value.clone()))
+                .collect(),
+            array.has_external_byte_keys(),
+        )
     })
 }
 
@@ -2489,7 +2547,7 @@ fn op_yield_from<'a>(
                     value,
                 ))
             }
-            YieldFromSource::Array(entries) => {
+            YieldFromSource::Array(entries, external_byte_keys) => {
                 if entries.is_empty() {
                     eg.active_generator = Some(gen_ref);
                     if opline.result_type != OpType::Unused {
@@ -2507,6 +2565,9 @@ fn op_yield_from<'a>(
                     let (key, value) = &entries[0];
                     let key = match key {
                         crate::value::ArrayKey::Int(key) => Value::long(*key),
+                        crate::value::ArrayKey::String(key) if external_byte_keys => {
+                            Value::binary_string_from_storage(key.clone())
+                        }
                         crate::value::ArrayKey::String(key) => Value::string(key),
                     };
                     (key, value.clone())
@@ -2517,7 +2578,7 @@ fn op_yield_from<'a>(
                     op_array,
                     opline,
                     gen_ref,
-                    YieldFromDelegate::Array(entries, 1),
+                    YieldFromDelegate::Array(entries, 1, external_byte_keys),
                     key,
                     value,
                 ))

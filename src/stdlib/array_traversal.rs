@@ -19,9 +19,12 @@ enum TraversalResult {
     All,
 }
 
-fn key_value(key: &ArrayKey) -> Value {
+fn key_value(key: &ArrayKey, external_byte_keys: bool) -> Value {
     match key {
         ArrayKey::Int(value) => Value::long(*value),
+        ArrayKey::String(value) if external_byte_keys => {
+            Value::binary_string_from_storage(value.clone())
+        }
         ArrayKey::String(value) => Value::string(value.clone()),
     }
 }
@@ -77,18 +80,23 @@ fn traverse(
         return Ok(());
     };
 
-    let entries = traversal_entries(array.as_array().expect("validated array argument"));
+    let array = array.as_array().expect("validated array argument");
+    let external_byte_keys = array.has_external_byte_keys();
+    let entries = traversal_entries(array);
     for (key, value) in entries {
         let callback_value = value.dereferenced().clone();
-        let accepted =
-            super::call_resolved_with_values(eg, &resolved, &[callback_value, key_value(&key)])?;
+        let accepted = super::call_resolved_with_values(
+            eg,
+            &resolved,
+            &[callback_value, key_value(&key, external_byte_keys)],
+        )?;
         if eg.exception.is_some() {
             return Ok(());
         }
         if accepted.is_truthy() {
             let value = match result {
                 TraversalResult::Value => value.dereferenced().clone(),
-                TraversalResult::Key => key_value(&key),
+                TraversalResult::Key => key_value(&key, external_byte_keys),
                 TraversalResult::Any => Value::bool(true),
                 TraversalResult::All => continue,
             };

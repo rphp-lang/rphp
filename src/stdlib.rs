@@ -441,7 +441,20 @@ fn direct_arg_str(args: &[Value], index: usize) -> Cow<'_, str> {
 }
 
 #[inline(always)]
-fn json_decode_values(input: &Value, associative: Option<&Value>) -> Value {
+fn php_bytes_after_weak_string_coercion(value: &Value) -> (Cow<'_, [u8]>, bool) {
+    let value = value.dereferenced();
+    match value.php_string_bytes() {
+        Some(bytes) => (bytes, value.is_binary_string()),
+        None => (Cow::Owned(value.echo_to_string().into_bytes()), false),
+    }
+}
+
+#[inline(always)]
+fn json_decode_values(
+    input: &Value,
+    associative: Option<&Value>,
+    eg: &mut ExecutorGlobals,
+) -> Value {
     let input = if input.is_reference() {
         unsafe { &*input.as_ref_ptr() }
     } else {
@@ -454,16 +467,32 @@ fn json_decode_values(input: &Value, associative: Option<&Value>) -> Value {
             value
         }
     });
-    let json = match input.as_str() {
-        Some(json) => Cow::Borrowed(json),
-        None => Cow::Owned(input.echo_to_string()),
+    let associative = associative.is_some_and(Value::is_truthy);
+    let result = if input.value_type() == ValueType::String {
+        let Some(bytes) = input.php_string_bytes() else {
+            eg.set_json_last_error(JSON_ERROR_UTF8);
+            return Value::null();
+        };
+        match std::str::from_utf8(bytes.as_ref()) {
+            Ok(json) => json_decode::decode_php_value(json, associative),
+            Err(_) => {
+                eg.set_json_last_error(JSON_ERROR_UTF8);
+                return Value::null();
+            }
+        }
+    } else {
+        json_decode::decode_php_value(&input.echo_to_string(), associative)
     };
-    json_decode_string(&json, associative.is_some_and(Value::is_truthy))
-}
-
-#[inline(always)]
-fn direct_json_decode(args: &[Value]) -> Result<Value, VmError> {
-    Ok(json_decode_values(&args[0], args.get(1)))
+    match result {
+        Ok(value) => {
+            eg.set_json_last_error(JSON_ERROR_NONE);
+            value
+        }
+        Err(_) => {
+            eg.set_json_last_error(4);
+            Value::null()
+        }
+    }
 }
 
 /// Attempt the exact-string unary `chunk_split` fast path. Callers must resume
@@ -522,7 +551,7 @@ pub(crate) fn invoke_direct_internal2(
 
     match kind {
         DirectInternalKind::Intdiv => direct_intdiv_values(first, second),
-        DirectInternalKind::JsonDecode => Ok(json_decode_values(first, Some(second))),
+        DirectInternalKind::JsonDecode => Ok(json_decode_values(first, Some(second), eg)),
         DirectInternalKind::Min2 => direct_extrema2::<false>(first, second, eg),
         DirectInternalKind::Max2 => direct_extrema2::<true>(first, second, eg),
         _ => Err(VmError::Fatal(
@@ -1002,6 +1031,7 @@ fn array_unshift_values(
             ArrayKey::String(key) => result.set_str(&key, value),
         }
     }
+    copy_array_key_provenance(array, &result);
     *arr = Value::array(result);
     if inserted != 0 {
         crate::vm::execute::adjust_live_foreach_reference_positions_for_splice(
@@ -1044,8 +1074,12 @@ fn fn_array_key_exists_named(
         ret!(rv, Value::bool(array.get_int(key).is_some()));
     }
     if let Some(key) = key.as_str() {
-        if array.has_utf8_text_keys() && arg!(ed, 0).is_binary_string() {
-            let key = array.normalize_utf8_text_key(ArrayKey::String(key.to_string()), arg!(ed, 0));
+        if (arg!(ed, 0).is_binary_string() && !key.is_ascii())
+            || (array.has_external_byte_keys()
+                && !arg!(ed, 0).is_binary_string()
+                && !key.is_ascii())
+        {
+            let key = array.normalize_string_key(ArrayKey::String(key.to_string()), arg!(ed, 0));
             let exists = match key {
                 ArrayKey::Int(key) => array.get_int(key).is_some(),
                 ArrayKey::String(key) => array.get_str(&key).is_some(),
@@ -1155,7 +1189,7 @@ fn fn_array_key_exists_named(
     let Some(array) = source.dereferenced().as_array() else {
         ret!(rv, Value::bool(false));
     };
-    let key = array.normalize_utf8_text_key(key, key_value);
+    let key = array.normalize_string_key(key, key_value);
     let exists = match key {
         ArrayKey::Int(key) => array.get_int(key).is_some(),
         ArrayKey::String(key) => array.get_str(&key).is_some(),
@@ -1304,6 +1338,7 @@ fn fn_array_change_key_case(
             }
         }
     }
+    copy_array_key_provenance(array, &result);
     ret!(rv, Value::array(result));
 }
 
@@ -1400,6 +1435,7 @@ fn fn_array_reverse(
     for (key, value) in entries.into_iter().rev() {
         array_projection_insert(&mut result, key, value, key_policy);
     }
+    copy_array_key_provenance(array, &result);
     ret!(rv, Value::array(result));
 }
 
@@ -1410,10 +1446,12 @@ fn fn_iterator_to_array(
 ) -> Result<(), VmError> {
     let source = arg!(ed, 0).dereferenced();
     let preserve_keys = arg_opt!(ed, 1).is_none_or(Value::is_truthy);
-    let entries = if let Some(array) = source.as_array() {
+    let source_array = source.as_array();
+    let entries = if let Some(array) = source_array {
+        let external_byte_keys = array.has_external_byte_keys();
         array
             .iter()
-            .map(|(key, value)| (key, value.dereferenced().clone()))
+            .map(|(key, value)| (key, value.dereferenced().clone(), external_byte_keys))
             .collect()
     } else if let Some(entries) = crate::vm::execute::collect_traversable_entries(eg, source)? {
         entries
@@ -1432,8 +1470,19 @@ fn fn_iterator_to_array(
         ret!(rv, Value::null());
     }
     let mut result = PhpArray::new();
-    for (key, value) in entries {
+    for (key, value, external_byte_key) in entries {
         if preserve_keys {
+            let key = match key {
+                ArrayKey::String(key) => {
+                    let source = if external_byte_key {
+                        Value::binary_string_from_storage(key.clone())
+                    } else {
+                        Value::string(key.clone())
+                    };
+                    result.prepare_string_key_for_write(ArrayKey::String(key), &source)
+                }
+                key => key,
+            };
             match key {
                 ArrayKey::Int(key) => result.set_int(key, value),
                 ArrayKey::String(key) => result.set_str(&key, value),
@@ -1484,6 +1533,8 @@ fn fn_array_merge(
     }
     let mut total = 0usize;
     let mut has_string_keys = false;
+    let mut has_external_byte_keys = false;
+    let mut has_utf8_text_keys = false;
     for value in arrays.values() {
         let array = value
             .as_array()
@@ -1497,6 +1548,8 @@ fn fn_array_merge(
             return Ok(());
         }
         has_string_keys |= array.has_string_keys();
+        has_external_byte_keys |= array.has_external_byte_keys();
+        has_utf8_text_keys |= array.has_utf8_text_keys();
     }
 
     let mut merged = if has_string_keys {
@@ -1504,11 +1557,17 @@ fn fn_array_merge(
     } else {
         PhpArray::with_packed_capacity(total)
     };
+    if has_external_byte_keys {
+        merged.mark_external_byte_keys();
+    } else if has_utf8_text_keys {
+        merged.mark_utf8_text_keys();
+    }
     for value in arrays.values() {
         let array = value
             .as_array()
             .expect("array_merge arguments were validated before allocation");
         for (key, val) in array.iter() {
+            let key = merged.normalize_key_from_array(key, array);
             match &key {
                 ArrayKey::Int(_) => merged.push(array_projection_value(val)),
                 ArrayKey::String(k) => merged.set_str(k, array_projection_value(val)),
@@ -1533,7 +1592,9 @@ fn fn_array_replace(
             let Some(replacement) = replacement.as_array() else {
                 ret!(rv, Value::null());
             };
+            result.absorb_key_provenance_from(replacement);
             for (key, value) in replacement.iter() {
+                let key = result.normalize_key_from_array(key, replacement);
                 match key {
                     ArrayKey::Int(key) => result.set_int(key, value.clone()),
                     ArrayKey::String(key) => result.set_str(&key, value.clone()),
@@ -1549,11 +1610,9 @@ fn fn_array_replace(
 #[inline(never)]
 fn collect_array_keys(array: &PhpArray) -> PhpArray {
     let mut result = PhpArray::new();
+    let external_byte_keys = array.has_external_byte_keys();
     for (key, _) in array.iter() {
-        match key {
-            ArrayKey::Int(key) => result.push(Value::long(key)),
-            ArrayKey::String(key) => result.push(Value::string(key)),
-        }
+        result.push(array_key_into_value(key, external_byte_keys));
     }
     result
 }
@@ -1593,6 +1652,7 @@ fn fn_array_keys(
     }
     let filter = arg!(ed, 1);
     let mut result = PhpArray::with_packed_capacity(array.len());
+    let external_byte_keys = array.has_external_byte_keys();
     for (key, value) in array.iter() {
         let matches = match array_values_match(value, filter, strict, eg.precision) {
             Ok(matches) => matches,
@@ -1602,7 +1662,7 @@ fn fn_array_keys(
             }
         };
         if matches {
-            result.push(array_key_into_value(key));
+            result.push(array_key_into_value(key, external_byte_keys));
         }
     }
     ret!(rv, Value::array(result));
@@ -1698,6 +1758,7 @@ fn fn_array_slice(
     for (key, value) in array.iter().skip(start).take(result_length) {
         array_projection_insert(&mut result, key, value, key_policy);
     }
+    copy_array_key_provenance(array, &result);
     ret!(rv, Value::array(result));
 }
 
@@ -1735,9 +1796,9 @@ fn fn_array_unique(
     {
         let mut result = PhpArray::new();
         let mut linear_seen = Vec::with_capacity(values.len().min(64));
-        let mut hashed_seen = None::<std::collections::HashSet<&str>>;
+        let mut hashed_seen = None::<std::collections::HashSet<Vec<u8>>>;
         for (index, value) in values.iter().enumerate() {
-            let rendered = value.as_str().unwrap_or("");
+            let rendered = value.php_string_bytes().unwrap_or_default().into_owned();
             let unseen = if let Some(seen) = hashed_seen.as_mut() {
                 seen.insert(rendered)
             } else if linear_seen.contains(&rendered) {
@@ -1761,10 +1822,19 @@ fn fn_array_unique(
     if matches!(flags & !SORT_FLAG_CASE, SORT_STRING | SORT_LOCALE_STRING) {
         let mut result = PhpArray::new();
         let mut linear_seen = Vec::with_capacity(array.len().min(64));
-        let mut hashed_seen = None::<std::collections::HashSet<String>>;
+        let mut hashed_seen = None::<std::collections::HashSet<Vec<u8>>>;
         for (key, value) in array.iter() {
-            let Some(mut rendered) = internal_value_to_string(ed, eg, value)? else {
-                return Ok(());
+            let comparison_value = value.dereferenced();
+            let mut rendered = if comparison_value.value_type() == ValueType::String {
+                comparison_value
+                    .php_string_bytes()
+                    .unwrap_or_default()
+                    .into_owned()
+            } else {
+                let Some(rendered) = internal_value_to_string(ed, eg, comparison_value)? else {
+                    return Ok(());
+                };
+                rendered.into_bytes()
             };
             if eg.exception.is_some() {
                 return Ok(());
@@ -1790,6 +1860,7 @@ fn fn_array_unique(
                 array_projection_insert(&mut result, key, value, ArrayProjectionKeys::PreserveAll);
             }
         }
+        copy_array_key_provenance(array, &result);
         ret!(rv, Value::array(result));
     }
 
@@ -1823,6 +1894,7 @@ fn fn_array_unique(
             );
         }
     }
+    copy_array_key_provenance(array, &result);
     ret!(rv, Value::array(result));
 }
 
@@ -1836,9 +1908,10 @@ fn fn_array_flip(
         typed_internal_argument_error(eg, "array_flip", source.dereferenced(), 1, "array", "array");
         return Ok(());
     };
+    let external_byte_keys = array.has_external_byte_keys();
     let mut result = PhpArray::with_packed_capacity(array.len());
     for (key, value) in array.iter() {
-        let flipped_value = array_key_into_value(key);
+        let flipped_value = array_key_into_value(key, external_byte_keys);
         let value = value.dereferenced();
         match value.value_type() {
             ValueType::Long => result.set_int(value.as_long().unwrap(), flipped_value),
@@ -1924,27 +1997,31 @@ fn fn_array_combine(
         PhpArray::with_deferred_hash_capacity(keys.len())
     };
     for (key, value) in keys.values().zip(values.values()) {
+        let key_source = key.dereferenced();
         let scalar_key = {
-            let key = key.dereferenced();
-            key.as_long().map(ArrayKey::Int).or_else(|| {
-                key.as_str().map(|key| {
+            key_source.as_long().map(ArrayKey::Int).or_else(|| {
+                key_source.as_str().map(|key| {
                     crate::value::canonical_decimal_array_key(key)
                         .map_or_else(|| ArrayKey::String(key.to_string()), ArrayKey::Int)
                 })
             })
         };
-        if let Some(key) = scalar_key {
+        if let Some(mut key) = scalar_key {
+            key = result.prepare_string_key_for_write(key, key_source);
             result.set(key, array_projection_value(value));
             continue;
         }
 
         let key = array_projection_value(key);
         let value = array_projection_value(value);
-        let Some(key) = array_constructor_key(ed, eg, &key)? else {
+        let Some((mut key, key_source)) = array_constructor_key(ed, eg, &key)? else {
             return Ok(());
         };
         if eg.exception.is_some() {
             return Ok(());
+        }
+        if let Some(key_source) = key_source.as_ref() {
+            key = result.prepare_string_key_for_write(key, key_source);
         }
         result.set(key, value);
     }
@@ -2450,17 +2527,32 @@ fn fn_array_count_values(
                 }
             }
             ValueType::String => {
-                let key = value.as_str().unwrap();
-                if let Some(key) = crate::value::canonical_decimal_array_key(key) {
+                let raw_key = value.as_str().unwrap();
+                if let Some(key) = crate::value::canonical_decimal_array_key(raw_key) {
                     if let Some(count) = result.get_int_mut(key) {
                         *count = Value::long(count.as_long().unwrap().saturating_add(1));
                     } else {
                         result.set_int(key, Value::long(1));
                     }
-                } else if let Some(count) = result.get_str_mut(key) {
-                    *count = Value::long(count.as_long().unwrap().saturating_add(1));
                 } else {
-                    result.set_str_value(value, Value::long(1));
+                    let key = result
+                        .prepare_string_key_for_write(ArrayKey::String(raw_key.to_string()), value);
+                    match key {
+                        ArrayKey::Int(key) => {
+                            if let Some(count) = result.get_int_mut(key) {
+                                *count = Value::long(count.as_long().unwrap().saturating_add(1));
+                            } else {
+                                result.set_int(key, Value::long(1));
+                            }
+                        }
+                        ArrayKey::String(key) => {
+                            if let Some(count) = result.get_str_mut(&key) {
+                                *count = Value::long(count.as_long().unwrap().saturating_add(1));
+                            } else {
+                                result.set_owned_str(key, Value::long(1));
+                            }
+                        }
+                    }
                 }
             }
             _ => {
@@ -2484,10 +2576,10 @@ fn array_constructor_key(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
     value: &Value,
-) -> Result<Option<ArrayKey>, VmError> {
+) -> Result<Option<(ArrayKey, Option<Value>)>, VmError> {
     let value = value.dereferenced();
     if let Some(key) = value.as_long() {
-        return Ok(Some(ArrayKey::Int(key)));
+        return Ok(Some((ArrayKey::Int(key), None)));
     }
     if value.as_double().is_some_and(f64::is_nan) {
         report_internal_diagnostic(
@@ -2501,16 +2593,18 @@ fn array_constructor_key(
             return Ok(None);
         }
     }
-    let Some(key) = internal_value_to_string(ed, eg, value)? else {
+    let Some(source) = internal_value_to_string_value(ed, eg, value)? else {
         return Ok(None);
     };
     if eg.exception.is_some() {
         return Ok(None);
     }
-    Ok(Some(
-        crate::value::canonical_decimal_array_key(&key)
-            .map_or_else(|| ArrayKey::String(key), ArrayKey::Int),
-    ))
+    let key = source.as_str().unwrap_or_default();
+    Ok(Some((
+        crate::value::canonical_decimal_array_key(key)
+            .map_or_else(|| ArrayKey::String(key.to_string()), ArrayKey::Int),
+        Some(source),
+    )))
 }
 
 fn fn_array_fill_keys(
@@ -2539,9 +2633,13 @@ fn fn_array_fill_keys(
     let value = arg!(ed, 1).clone();
     let mut result = PhpArray::new();
     for source_key in &keys {
-        let Some(key) = array_constructor_key(ed, eg, source_key)? else {
+        let source_key = source_key.dereferenced();
+        let Some((mut key, key_source)) = array_constructor_key(ed, eg, source_key)? else {
             return Ok(());
         };
+        if let Some(key_source) = key_source.as_ref() {
+            key = result.prepare_string_key_for_write(key, key_source);
+        }
         result.set(key, value.clone());
     }
     ret!(rv, Value::array(result));
@@ -2681,6 +2779,7 @@ fn fn_array_pad(
             result.push(value.clone());
         }
     }
+    copy_array_key_provenance(array, &result);
     ret!(rv, Value::array(result));
 }
 
@@ -2750,6 +2849,9 @@ fn fn_array_chunk(
         array_projection_insert(&mut chunk, key, value, key_policy);
         chunk_length += 1;
         if chunk_length == length {
+            if preserve_keys {
+                copy_array_key_provenance(array, &chunk);
+            }
             result.push(Value::array(chunk));
             chunk = if preserve_keys {
                 PhpArray::with_deferred_hash_capacity(chunk_capacity)
@@ -2760,6 +2862,9 @@ fn fn_array_chunk(
         }
     }
     if chunk_length != 0 {
+        if preserve_keys {
+            copy_array_key_provenance(array, &chunk);
+        }
         result.push(Value::array(chunk));
     }
     ret!(rv, Value::array(result));
@@ -2768,7 +2873,10 @@ fn fn_array_chunk(
 #[derive(Clone)]
 enum ArrayColumnSelector {
     WholeRow,
-    Key(ArrayKey),
+    Key {
+        key: ArrayKey,
+        source: Option<Value>,
+    },
 }
 
 fn typed_array_column_selector(
@@ -2782,19 +2890,22 @@ fn typed_array_column_selector(
     let strict = internal_call_is_strict(ed);
     let selector = match argument.value_type() {
         ValueType::Null => Some(ArrayColumnSelector::WholeRow),
-        ValueType::Long => Some(ArrayColumnSelector::Key(ArrayKey::Int(
-            argument.as_long().unwrap(),
-        ))),
+        ValueType::Long => Some(ArrayColumnSelector::Key {
+            key: ArrayKey::Int(argument.as_long().unwrap()),
+            source: None,
+        }),
         ValueType::String => {
             let key = argument.as_str().unwrap_or("");
-            Some(ArrayColumnSelector::Key(
-                crate::value::canonical_decimal_array_key(key)
+            Some(ArrayColumnSelector::Key {
+                key: crate::value::canonical_decimal_array_key(key)
                     .map_or_else(|| ArrayKey::String(key.to_string()), ArrayKey::Int),
-            ))
+                source: Some(argument.clone()),
+            })
         }
-        ValueType::True | ValueType::False if !strict => Some(ArrayColumnSelector::Key(
-            ArrayKey::Int(i64::from(argument.is_truthy())),
-        )),
+        ValueType::True | ValueType::False if !strict => Some(ArrayColumnSelector::Key {
+            key: ArrayKey::Int(i64::from(argument.is_truthy())),
+            source: None,
+        }),
         ValueType::Double if !strict => {
             let number = argument.as_double().unwrap_or(f64::NAN);
             let upper_exclusive = -(i64::MIN as f64);
@@ -2815,7 +2926,10 @@ fn typed_array_column_selector(
                         return Ok(None);
                     }
                 }
-                Some(ArrayColumnSelector::Key(ArrayKey::Int(integer)))
+                Some(ArrayColumnSelector::Key {
+                    key: ArrayKey::Int(integer),
+                    source: None,
+                })
             }
         }
         ValueType::Object if !strict => {
@@ -2825,11 +2939,10 @@ fn typed_array_column_selector(
             }
             rendered.and_then(|rendered| {
                 let rendered = rendered.dereferenced();
-                rendered.as_str().map(|key| {
-                    ArrayColumnSelector::Key(
-                        crate::value::canonical_decimal_array_key(key)
-                            .map_or_else(|| ArrayKey::String(key.to_string()), ArrayKey::Int),
-                    )
+                rendered.as_str().map(|key| ArrayColumnSelector::Key {
+                    key: crate::value::canonical_decimal_array_key(key)
+                        .map_or_else(|| ArrayKey::String(key.to_string()), ArrayKey::Int),
+                    source: Some(rendered.clone()),
                 })
             })
         }
@@ -2849,7 +2962,18 @@ fn typed_array_column_selector(
 }
 
 #[inline]
-fn array_column_array_value(array: &PhpArray, key: &ArrayKey) -> Option<Value> {
+fn array_column_array_value(
+    array: &PhpArray,
+    key: &ArrayKey,
+    source: Option<&Value>,
+) -> Option<Value> {
+    let normalized;
+    let key = if let Some(source) = source {
+        normalized = array.normalize_string_key(key.clone(), source);
+        &normalized
+    } else {
+        key
+    };
     let value = match key {
         ArrayKey::Int(key) => array.get_int(*key),
         ArrayKey::String(key) => array.get_str(key),
@@ -2862,10 +2986,26 @@ fn array_column_object_value(
     eg: &mut ExecutorGlobals,
     object_value: &Value,
     key: &ArrayKey,
+    source: Option<&Value>,
 ) -> Result<Option<Value>, VmError> {
     let name = match key {
         ArrayKey::Int(key) => key.to_string(),
-        ArrayKey::String(key) => key.clone(),
+        ArrayKey::String(key) => {
+            if let Some(bytes) = source
+                .filter(|source| source.is_binary_string())
+                .and_then(Value::php_string_bytes)
+            {
+                let Ok(name) = String::from_utf8(bytes.into_owned()) else {
+                    // Object property storage has no byte-key provenance yet;
+                    // an invalid byte selector must not alias a different,
+                    // valid UTF-8 property through the Latin-1 bridge.
+                    return Ok(None);
+                };
+                name
+            } else {
+                key.clone()
+            }
+        }
     };
     let object = object_value
         .as_object()
@@ -2934,12 +3074,12 @@ fn array_column_row_value(
     if matches!(selector, ArrayColumnSelector::WholeRow) {
         return Ok(Some(array_projection_value(row)));
     }
-    let ArrayColumnSelector::Key(key) = selector else {
+    let ArrayColumnSelector::Key { key, source } = selector else {
         unreachable!();
     };
     let row = row.dereferenced();
     if let Some(array) = row.as_array() {
-        return Ok(array_column_array_value(array, key));
+        return Ok(array_column_array_value(array, key, source.as_ref()));
     }
     if row.as_object().is_none() {
         return Ok(None);
@@ -2952,7 +3092,13 @@ fn array_column_row_value(
     if eg.exception.is_some() {
         return Ok(None);
     }
-    array_column_object_value(ed, eg, initialized.as_ref().unwrap_or(row), key)
+    array_column_object_value(
+        ed,
+        eg,
+        initialized.as_ref().unwrap_or(row),
+        key,
+        source.as_ref(),
+    )
 }
 
 fn array_column_result_key(
@@ -3065,11 +3211,11 @@ fn fn_array_column(
                 }
                 ret!(rv, Value::array(result));
             }
-            ArrayColumnSelector::Key(key) => {
+            ArrayColumnSelector::Key { key, source } => {
                 for row in array.values() {
                     let row = row.dereferenced();
                     if let Some(inner) = row.as_array() {
-                        if let Some(value) = array_column_array_value(inner, key) {
+                        if let Some(value) = array_column_array_value(inner, key, source.as_ref()) {
                             result.push(value);
                         }
                         continue;
@@ -3112,10 +3258,13 @@ fn fn_array_column(
             return Ok(());
         }
         if let Some(key) = key {
-            let Some(key) = array_column_result_key(ed, eg, &key)? else {
+            let external_byte_key = key.dereferenced().is_binary_string();
+            let Some(key_value) = array_column_result_key(ed, eg, &key)? else {
                 return Ok(());
             };
-            result.set(key, value);
+            result.absorb_key_provenance(external_byte_key, false);
+            let key_value = result.normalize_key_from_provenance(key_value, external_byte_key);
+            result.set(key_value, value);
         } else {
             result.push(value);
         }
@@ -3199,6 +3348,8 @@ const SORT_LOCALE_STRING: i64 = 5;
 
 struct MultisortColumn {
     entries: Vec<(ArrayKey, Value)>,
+    external_byte_keys: bool,
+    utf8_text_keys: bool,
     direction: i64,
     direction_set: bool,
     flags: i64,
@@ -3254,16 +3405,25 @@ fn multisort_argument_error(
     ));
 }
 
-fn multisort_array_value(value: &Value) -> Option<Vec<(ArrayKey, Value)>> {
+fn multisort_array_value(value: &Value) -> Option<(Vec<(ArrayKey, Value)>, bool, bool)> {
     value.as_array().map(|array| {
-        array
-            .iter()
-            .map(|(key, value)| (key, array_sort_snapshot_value(value)))
-            .collect()
+        (
+            array
+                .iter()
+                .map(|(key, value)| (key, array_sort_snapshot_value(value)))
+                .collect(),
+            array.has_external_byte_keys(),
+            array.has_utf8_text_keys(),
+        )
     })
 }
 
-fn multisort_rebuild(entries: &[(ArrayKey, Value)], order: &[usize]) -> Value {
+fn multisort_rebuild(
+    entries: &[(ArrayKey, Value)],
+    order: &[usize],
+    external_byte_keys: bool,
+    utf8_text_keys: bool,
+) -> Value {
     let mut result = PhpArray::new();
     for &index in order {
         let (key, value) = &entries[index];
@@ -3275,6 +3435,11 @@ fn multisort_rebuild(entries: &[(ArrayKey, Value)], order: &[usize]) -> Value {
                 result.set_str(key, array_projection_value(value));
             }
         }
+    }
+    if external_byte_keys {
+        result.mark_external_byte_keys();
+    } else if utf8_text_keys {
+        result.mark_utf8_text_keys();
     }
     Value::array(result)
 }
@@ -3301,7 +3466,9 @@ fn fn_array_multisort(
         ));
         return Ok(());
     }
-    let Some(first_entries) = multisort_array_value(first_value) else {
+    let Some((first_entries, first_external_byte_keys, first_utf8_text_keys)) =
+        multisort_array_value(first_value)
+    else {
         let violation = match first_value.as_long() {
             Some(flag) if multisort_flag_kind(flag).is_some() => {
                 MultisortArgumentViolation::DuplicateFlag
@@ -3323,6 +3490,8 @@ fn fn_array_multisort(
     };
     let mut columns = vec![MultisortColumn {
         entries: first_entries,
+        external_byte_keys: first_external_byte_keys,
+        utf8_text_keys: first_utf8_text_keys,
         direction: SORT_ASC,
         direction_set: false,
         flags: SORT_REGULAR,
@@ -3334,7 +3503,9 @@ fn fn_array_multisort(
     if let Some(rest) = arg!(ed, 1).as_array() {
         for (offset, argument) in rest.values().enumerate() {
             let value = argument.dereferenced();
-            if let Some(entries) = multisort_array_value(value) {
+            if let Some((entries, external_byte_keys, utf8_text_keys)) =
+                multisort_array_value(value)
+            {
                 if entries.len() != expected_len {
                     eg.exception = Some(crate::value::make_error_value(
                         "ValueError",
@@ -3351,6 +3522,8 @@ fn fn_array_multisort(
                 };
                 columns.push(MultisortColumn {
                     entries,
+                    external_byte_keys,
+                    utf8_text_keys,
                     direction: SORT_ASC,
                     direction_set: false,
                     flags: SORT_REGULAR,
@@ -3450,7 +3623,12 @@ fn fn_array_multisort(
     }
 
     for column in columns {
-        let sorted = multisort_rebuild(&column.entries, &order);
+        let sorted = multisort_rebuild(
+            &column.entries,
+            &order,
+            column.external_byte_keys,
+            column.utf8_text_keys,
+        );
         if !column.destination.is_null() {
             // SAFETY: destinations are either the live fixed CV or targets of
             // reference handles retained by the live variadic argument array.
@@ -3482,6 +3660,7 @@ fn fn_array_search(
 
     let needle = arg!(ed, 0);
     let haystack = arg!(ed, 1).as_array().unwrap();
+    let external_byte_keys = haystack.has_external_byte_keys();
     let numeric_string_needle = array_lookup_numeric_string_needle(needle, strict);
     for (key, value) in haystack.iter() {
         let matches = match array_lookup_values_match(
@@ -3498,7 +3677,7 @@ fn fn_array_search(
             }
         };
         if matches {
-            ret!(rv, array_key_into_value(key));
+            ret!(rv, array_key_into_value(key, external_byte_keys));
         }
     }
     ret!(rv, Value::bool(false));
@@ -3585,7 +3764,7 @@ fn range_endpoint_argument(
         ValueType::String => {
             let source = argument.as_str().unwrap_or("");
             RangeEndpoint::String(RangeStringEndpoint {
-                bytes: php_string_to_bytes(source),
+                bytes: argument.php_string_bytes().unwrap_or_default().into_owned(),
                 numeric: range_numeric_string(source),
             })
         }
@@ -3808,7 +3987,7 @@ fn range_character_values(
     }
     if start == end {
         let mut result = PhpArray::with_packed_capacity(1);
-        result.push(Value::string(bytes_to_php_string(&[start as u8])));
+        result.push(php_byte_result(vec![start as u8], false));
         return Ok(Some(result));
     }
     let distance = start.abs_diff(end);
@@ -3832,7 +4011,7 @@ fn range_character_values(
         } else {
             start as usize - delta
         } as u8;
-        result.push(Value::string(bytes_to_php_string(&[byte])));
+        result.push(php_byte_result(vec![byte], false));
     }
     Ok(Some(result))
 }
@@ -4200,6 +4379,8 @@ fn fn_array_splice(
     let source = target
         .as_array()
         .expect("array_splice target was validated before conversion");
+    let source_external_byte_keys = source.has_external_byte_keys();
+    let source_utf8_text_keys = source.has_utf8_text_keys();
     let entries = source
         .iter()
         .map(|(key, value)| (key, array_projection_value(value)))
@@ -4291,6 +4472,15 @@ fn fn_array_splice(
         }
     }
 
+    if source_external_byte_keys {
+        result.mark_external_byte_keys();
+        removed.mark_external_byte_keys();
+    }
+    if source_utf8_text_keys {
+        result.mark_utf8_text_keys();
+        removed.mark_utf8_text_keys();
+    }
+
     *target = Value::array(result);
     crate::vm::execute::adjust_live_foreach_reference_positions_for_splice(
         ed,
@@ -4365,11 +4555,12 @@ fn fn_array_rand(
     }
 
     let num = num as usize;
+    let external_byte_keys = array.has_external_byte_keys();
     if num == 1 {
         let (_, key) = array
             .get_at(shuffle_index(eg, array.len()))
             .expect("non-empty array random position must exist");
-        ret!(rv, array_key_into_value(key));
+        ret!(rv, array_key_into_value(key, external_byte_keys));
     }
 
     // Sequential sampling selects every k-subset uniformly without a second
@@ -4380,7 +4571,7 @@ fn fn_array_rand(
     let mut remaining = array.len();
     for (key, _) in array.iter() {
         if needed == remaining || shuffle_index(eg, remaining) < needed {
-            result.push(array_key_into_value(key));
+            result.push(array_key_into_value(key, external_byte_keys));
             needed -= 1;
         }
         remaining -= 1;
@@ -4550,6 +4741,7 @@ fn fn_array_map(
                     }
                     result.set(key, mapped);
                 }
+                copy_array_key_provenance(first_array, &result);
                 return Ok(Some(result));
             }
 
@@ -4647,13 +4839,15 @@ fn fn_array_filter(
     };
 
     let mut result = PhpArray::new();
+    let external_byte_keys = array.has_external_byte_keys();
+    let utf8_text_keys = array.has_utf8_text_keys();
     if let Some(resolved) = resolved.as_ref() {
         match mode {
             1 => {
                 for (key, value) in array.iter() {
                     let arguments = [
                         value.dereferenced().clone(),
-                        array_key_into_value(key.clone()),
+                        array_key_into_value(key.clone(), external_byte_keys),
                     ];
                     let accepted = call_resolved_with_values(eg, resolved, &arguments)?;
                     if eg.exception.is_some() {
@@ -4666,7 +4860,7 @@ fn fn_array_filter(
             }
             2 => {
                 for (key, value) in array.iter() {
-                    let argument = array_key_into_value(key.clone());
+                    let argument = array_key_into_value(key.clone(), external_byte_keys);
                     let accepted =
                         call_resolved_with_values(eg, resolved, std::slice::from_ref(&argument))?;
                     if eg.exception.is_some() {
@@ -4701,6 +4895,12 @@ fn fn_array_filter(
                 result.set(key, array_projection_value(value));
             }
         }
+    }
+    if external_byte_keys {
+        result.mark_external_byte_keys();
+    }
+    if utf8_text_keys {
+        result.mark_utf8_text_keys();
     }
     ret!(rv, Value::array(result));
 }
@@ -5388,7 +5588,7 @@ fn fn_md5(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Res
     };
     let digest = md5_digest(&php_string_to_bytes(&input));
     if binary {
-        ret!(rv, Value::string(bytes_to_php_string(&digest)));
+        ret!(rv, php_byte_result(digest.to_vec(), true));
     }
     ret!(rv, Value::string(format_hex_digest(&digest)));
 }
@@ -5528,24 +5728,21 @@ fn fn_hash(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Re
     if algorithm.eq_ignore_ascii_case("md5") {
         let digest = md5_digest(&php_string_to_bytes(&data));
         if binary {
-            ret!(rv, Value::string(bytes_to_php_string(&digest)));
+            ret!(rv, php_byte_result(digest.to_vec(), true));
         }
         ret!(rv, Value::string(format_hex_digest(&digest)));
     }
     if algorithm.eq_ignore_ascii_case("xxh128") {
         let digest = xxhash_rust::xxh3::xxh3_128(data.as_bytes());
         if binary {
-            ret!(
-                rv,
-                Value::string(bytes_to_php_string(&digest.to_be_bytes()))
-            );
+            ret!(rv, php_byte_result(digest.to_be_bytes().to_vec(), true));
         }
         ret!(rv, Value::string(format!("{digest:032x}")));
     }
     if algorithm.eq_ignore_ascii_case("crc32") {
         let digest = php_crc32(data.as_bytes()).to_le_bytes();
         if binary {
-            ret!(rv, Value::string(bytes_to_php_string(&digest)));
+            ret!(rv, php_byte_result(digest.to_vec(), true));
         }
         let mut output = String::with_capacity(8);
         for byte in digest {
@@ -5644,10 +5841,7 @@ fn fn_hash_final(
     }
     let digest = xxhash_rust::xxh3::xxh3_128(buffer.as_bytes());
     if arg_opt!(ed, 1).is_some_and(Value::is_truthy) {
-        ret!(
-            rv,
-            Value::string(bytes_to_php_string(&digest.to_be_bytes()))
-        );
+        ret!(rv, php_byte_result(digest.to_be_bytes().to_vec(), true));
     }
     ret!(rv, Value::string(format!("{digest:032x}")));
 }
@@ -6647,10 +6841,14 @@ fn fn_stristr(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(haystack) = typed_internal_string_argument(ed, eg, "stristr", 0, "haystack")? else {
+    let Some(haystack) =
+        typed_internal_string_value_argument_expected(ed, eg, "stristr", 0, "haystack", "string")?
+    else {
         return Ok(());
     };
-    let Some(needle) = typed_internal_string_argument(ed, eg, "stristr", 1, "needle")? else {
+    let Some(needle) =
+        typed_internal_string_value_argument_expected(ed, eg, "stristr", 1, "needle", "string")?
+    else {
         return Ok(());
     };
     let before_needle = if arg_opt!(ed, 2).is_some() {
@@ -6664,8 +6862,9 @@ fn fn_stristr(
         false
     };
 
-    let haystack = php_string_to_bytes(&haystack);
-    let needle = php_string_to_bytes(&needle);
+    let binary = haystack.is_binary_string();
+    let haystack = haystack.php_string_bytes().unwrap_or_default();
+    let needle = needle.php_string_bytes().unwrap_or_default();
     let Some(position) = ascii_case_insensitive_position(&haystack, &needle) else {
         ret!(rv, Value::bool(false));
     };
@@ -6674,7 +6873,7 @@ fn fn_stristr(
     } else {
         &haystack[position..]
     };
-    ret!(rv, Value::string(bytes_to_php_string(bytes)));
+    ret!(rv, php_byte_result(bytes.to_vec(), binary));
 }
 
 fn fn_strrpos(
@@ -7615,6 +7814,7 @@ fn string_replace_builtin(
                 replace_php_bytes(subject, &replacements, case_insensitive, &mut count),
             );
         }
+        copy_array_key_provenance(subjects, &result);
         Value::array(result)
     } else {
         replace_php_bytes(
@@ -7932,9 +8132,10 @@ pub(super) fn substr_replace_builtin(
         SubstrIntegerArgument::Scalar(length) => length,
         SubstrIntegerArgument::Array(_) => None,
     };
-    let subjects = subject
+    let subject_array = subject
         .as_array()
-        .expect("typed subject is either a string or an array")
+        .expect("typed subject is either a string or an array");
+    let subjects = subject_array
         .iter()
         .map(|(key, value)| (key, value.clone()))
         .collect::<Vec<_>>();
@@ -7990,16 +8191,17 @@ pub(super) fn substr_replace_builtin(
         };
         result.set(key, value);
     }
+    copy_array_key_provenance(subject_array, &result);
     ret!(rv, Value::array(result));
 }
 
 #[inline(always)]
 fn direct_strtolower(args: &[Value]) -> Result<Value, VmError> {
-    let s = direct_arg_str(args, 0);
+    let (bytes, binary) = php_bytes_after_weak_string_coercion(&args[0]);
     // PHP strtolower is ASCII-only — use make_ascii_lowercase for performance
-    let mut bytes = s.as_bytes().to_vec();
+    let mut bytes = bytes.into_owned();
     bytes.make_ascii_lowercase();
-    Ok(Value::string(unsafe { String::from_utf8_unchecked(bytes) }))
+    Ok(php_byte_result(bytes, binary))
 }
 
 fn fn_strtolower(
@@ -8013,10 +8215,10 @@ fn fn_strtolower(
 
 #[inline(always)]
 fn direct_strtoupper(args: &[Value]) -> Result<Value, VmError> {
-    let s = direct_arg_str(args, 0);
-    let mut bytes = s.as_bytes().to_vec();
+    let (bytes, binary) = php_bytes_after_weak_string_coercion(&args[0]);
+    let mut bytes = bytes.into_owned();
     bytes.make_ascii_uppercase();
-    Ok(Value::string(unsafe { String::from_utf8_unchecked(bytes) }))
+    Ok(php_byte_result(bytes, binary))
 }
 
 fn fn_strtoupper(
@@ -9067,19 +9269,29 @@ fn fn_str_pad(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(input) = typed_internal_string_argument(ed, eg, "str_pad", 0, "string")? else {
+    let Some(input) =
+        typed_internal_string_value_argument_expected(ed, eg, "str_pad", 0, "string", "string")?
+    else {
         return Ok(());
     };
     let Some(length) = typed_internal_int_argument(ed, eg, "str_pad", 1, "length")? else {
         return Ok(());
     };
     let pad = if arg_opt!(ed, 2).is_some() {
-        let Some(pad) = typed_internal_string_argument(ed, eg, "str_pad", 2, "pad_string")? else {
+        let Some(pad) = typed_internal_string_value_argument_expected(
+            ed,
+            eg,
+            "str_pad",
+            2,
+            "pad_string",
+            "string",
+        )?
+        else {
             return Ok(());
         };
         pad
     } else {
-        " ".to_string()
+        Value::string(" ")
     };
     let pad_type = if arg_opt!(ed, 3).is_some() {
         let Some(pad_type) = typed_internal_int_argument(ed, eg, "str_pad", 3, "pad_type")? else {
@@ -9090,11 +9302,12 @@ fn fn_str_pad(
         STR_PAD_RIGHT
     };
 
-    let input_bytes = php_string_to_bytes(&input);
+    let binary = input.is_binary_string() || pad.is_binary_string();
+    let input_bytes = input.php_string_bytes().unwrap_or_default();
     if length <= input_bytes.len() as i64 {
-        ret!(rv, Value::string(input));
+        ret!(rv, input);
     }
-    let pad_bytes = php_string_to_bytes(&pad);
+    let pad_bytes = pad.php_string_bytes().unwrap_or_default();
     if pad_bytes.is_empty() {
         eg.exception = Some(crate::value::make_error_value(
             "ValueError",
@@ -9127,7 +9340,7 @@ fn fn_str_pad(
     append_repeated_padding(&mut output, &pad_bytes, left_length);
     output.extend_from_slice(&input_bytes);
     append_repeated_padding(&mut output, &pad_bytes, right_length);
-    ret!(rv, Value::string(bytes_to_php_string(&output)));
+    ret!(rv, php_byte_result(output, binary));
 }
 
 fn append_repeated_padding(output: &mut Vec<u8>, padding: &[u8], length: usize) {
@@ -9196,17 +9409,14 @@ fn fn_ucfirst(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    if s.is_empty() {
+    let (bytes, binary) = php_bytes_after_weak_string_coercion(arg!(ed, 0));
+    let mut bytes = bytes.into_owned();
+    if bytes.is_empty() {
         ret!(rv, Value::string(""));
     } else {
         // PHP ucfirst is ASCII-only
-        let mut bytes = s.as_bytes().to_vec();
         bytes[0] = bytes[0].to_ascii_uppercase();
-        ret!(
-            rv,
-            Value::string(unsafe { String::from_utf8_unchecked(bytes) })
-        );
+        ret!(rv, php_byte_result(bytes, binary));
     }
 }
 
@@ -9215,16 +9425,13 @@ fn fn_lcfirst(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    if s.is_empty() {
+    let (bytes, binary) = php_bytes_after_weak_string_coercion(arg!(ed, 0));
+    let mut bytes = bytes.into_owned();
+    if bytes.is_empty() {
         ret!(rv, Value::string(""));
     } else {
-        let mut bytes = s.as_bytes().to_vec();
         bytes[0] = bytes[0].to_ascii_lowercase();
-        ret!(
-            rv,
-            Value::string(unsafe { String::from_utf8_unchecked(bytes) })
-        );
+        ret!(rv, php_byte_result(bytes, binary));
     }
 }
 
@@ -9233,13 +9440,13 @@ fn fn_levenshtein(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let first = arg_str!(ed, 0);
-    let second = arg_str!(ed, 1);
+    let (first, _) = php_bytes_after_weak_string_coercion(arg!(ed, 0));
+    let (second, _) = php_bytes_after_weak_string_coercion(arg!(ed, 1));
     let insertion = arg_opt!(ed, 2).map_or(1, Value::to_long_val).max(0);
     let replacement = arg_opt!(ed, 3).map_or(1, Value::to_long_val).max(0);
     let deletion = arg_opt!(ed, 4).map_or(1, Value::to_long_val).max(0);
-    let first = first.as_bytes();
-    let second = second.as_bytes();
+    let first = first.as_ref();
+    let second = second.as_ref();
 
     let mut previous = Vec::with_capacity(second.len() + 1);
     previous.push(0i64);
@@ -9369,26 +9576,28 @@ fn fn_strtok(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(first) = typed_internal_string_argument(ed, eg, "strtok", 0, "string")? else {
+    let Some(first) =
+        typed_internal_string_value_argument_expected(ed, eg, "strtok", 0, "string", "string")?
+    else {
         return Ok(());
     };
     let second = arg_opt!(ed, 1);
     let starts_tokenization = second.is_some_and(|value| value.value_type() != ValueType::Null);
     let delimiters = if starts_tokenization {
         let Some(token) =
-            typed_internal_string_argument_expected(ed, eg, "strtok", 1, "token", "?string")?
+            typed_internal_string_value_argument_expected(ed, eg, "strtok", 1, "token", "?string")?
         else {
             return Ok(());
         };
         eg.string_utility_state
             .get_or_insert_with(|| Box::new(crate::runtime::StringUtilityState::default()))
             .strtok = Some(crate::runtime::StrtokState {
-            input: php_string_to_bytes(&first),
+            input: first.php_string_bytes().unwrap_or_default().into_owned(),
             position: 0,
         });
-        php_string_to_bytes(&token)
+        token.php_string_bytes().unwrap_or_default().into_owned()
     } else {
-        php_string_to_bytes(&first)
+        first.php_string_bytes().unwrap_or_default().into_owned()
     };
 
     let step = eg
@@ -9411,7 +9620,7 @@ fn fn_strtok(
     };
 
     match step {
-        StrtokStep::Token(token) => ret!(rv, Value::string(bytes_to_php_string(&token))),
+        StrtokStep::Token(token) => ret!(rv, php_byte_result(token, false)),
         StrtokStep::Exhausted => ret!(rv, Value::bool(false)),
         StrtokStep::Invalidated => {
             if let Some(state) = eg.string_utility_state.as_mut() {
@@ -9427,12 +9636,20 @@ fn fn_str_shuffle(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(string) = typed_internal_string_argument(ed, eg, "str_shuffle", 0, "string")? else {
+    let Some(string) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "str_shuffle",
+        0,
+        "string",
+        "string",
+    )?
+    else {
         return Ok(());
     };
-    let mut bytes = php_string_to_bytes(&string);
+    let mut bytes = string.php_string_bytes().unwrap_or_default().into_owned();
     shuffle_slice(eg, &mut bytes);
-    ret!(rv, Value::string(bytes_to_php_string(&bytes)));
+    ret!(rv, php_byte_result(bytes, false));
 }
 
 #[cfg(test)]
@@ -10278,13 +10495,17 @@ fn fn_chr(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Res
 fn fn_bin2hex(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let input = arg_str!(ed, 0);
-    let bytes = php_string_to_bytes(&input);
+    let Some(input) =
+        typed_internal_string_value_argument_expected(ed, eg, "bin2hex", 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let bytes = input.php_string_bytes().unwrap_or_default();
     let mut output = String::with_capacity(bytes.len().saturating_mul(2));
-    for byte in bytes {
+    for byte in bytes.iter().copied() {
         output.push(HEX[(byte >> 4) as usize] as char);
         output.push(HEX[(byte & 0x0f) as usize] as char);
     }
@@ -10323,7 +10544,7 @@ fn fn_random_bytes(
         ));
         return Ok(());
     }
-    ret!(rv, Value::string(bytes_to_php_string(&bytes)));
+    ret!(rv, Value::binary_string(&bytes));
 }
 
 fn fn_hex2bin(
@@ -11780,15 +12001,15 @@ fn settype_nan_object_value<'a>(live: &'a Value, original: &'a Value) -> Value {
     Value::object(object)
 }
 
-fn internal_value_to_string(
+fn internal_value_to_string_value(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
     value: &Value,
-) -> Result<Option<String>, VmError> {
+) -> Result<Option<Value>, VmError> {
     let value = value.dereferenced();
     if value.value_type() == ValueType::Array {
         report_internal_diagnostic(eg, ed, 2, "Warning", "Array to string conversion")?;
-        return Ok(Some("Array".to_string()));
+        return Ok(Some(Value::string("Array")));
     }
     if value.value_type() == ValueType::Closure {
         eg.exception = Some(crate::value::make_error_value(
@@ -11798,7 +12019,11 @@ fn internal_value_to_string(
         return Ok(None);
     }
     if value.value_type() != ValueType::Object {
-        return Ok(Some(value.echo_to_string_with_precision(eg.precision)));
+        return Ok(Some(if value.value_type() == ValueType::String {
+            value.clone()
+        } else {
+            Value::string(value.echo_to_string_with_precision(eg.precision))
+        }));
     }
 
     let class_name = value
@@ -11816,14 +12041,23 @@ fn internal_value_to_string(
         ));
         return Ok(None);
     };
-    let Some(rendered) = rendered.as_str() else {
+    if rendered.value_type() != ValueType::String {
         eg.exception = Some(crate::value::make_error_value(
             "TypeError",
             &format!("{class_name}::__toString(): Return value must be of type string"),
         ));
         return Ok(None);
-    };
-    Ok(Some(rendered.to_string()))
+    }
+    Ok(Some(rendered.clone()))
+}
+
+fn internal_value_to_string(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    value: &Value,
+) -> Result<Option<String>, VmError> {
+    Ok(internal_value_to_string_value(ed, eg, value)?
+        .and_then(|value| value.as_str().map(str::to_owned)))
 }
 
 fn fn_is_array(
@@ -13457,37 +13691,13 @@ fn fn_var_dump(
     if eg.exception.is_some() {
         return Ok(());
     }
-    if first_value.is_binary_string() {
-        let bytes = first_value.php_string_bytes().unwrap_or_default();
-        eg.write_output(format!("string({}) \"", bytes.len()).as_bytes());
-        eg.write_output(&bytes);
-        eg.write_output(b"\"\n");
-    } else if first_value
-        .as_array()
-        .is_some_and(PhpArray::has_external_byte_keys)
-    {
-        eg.write_output(&php_string_to_bytes(&first));
-    } else {
-        eg.write_output(first.as_bytes());
-    }
+    eg.write_output(first.as_bytes());
     for value in remaining {
         let output = var_dump_output_value(&value, eg, ed)?;
         if eg.exception.is_some() {
             return Ok(());
         }
-        if value.is_binary_string() {
-            let bytes = value.php_string_bytes().unwrap_or_default();
-            eg.write_output(format!("string({}) \"", bytes.len()).as_bytes());
-            eg.write_output(&bytes);
-            eg.write_output(b"\"\n");
-        } else if value
-            .as_array()
-            .is_some_and(PhpArray::has_external_byte_keys)
-        {
-            eg.write_output(&php_string_to_bytes(&output));
-        } else {
-            eg.write_output(output.as_bytes());
-        }
+        eg.write_output(output.as_bytes());
     }
     Ok(())
 }
@@ -13496,7 +13706,7 @@ fn debug_zval_dump_value(
     value: &Value,
     eg: &mut ExecutorGlobals,
     ed: *mut ExecuteData,
-) -> Result<String, VmError> {
+) -> Result<PhpOutputBytes, VmError> {
     dump_output_value(value, eg, ed, DumpContext::debug(ed))
 }
 
@@ -13567,7 +13777,7 @@ fn fn_var_export(
         }
     }
     if return_str {
-        ret!(rv, Value::string(output));
+        ret!(rv, php_byte_result(output.into_bytes(), false));
     } else {
         eg.write_output(output.as_bytes());
         ret!(rv, Value::null());
@@ -13931,9 +14141,12 @@ fn fn_constant(
 
 const JSON_PARTIAL_OUTPUT_ON_ERROR_FLAG: i64 = 512;
 const JSON_PRESERVE_ZERO_FRACTION_FLAG: i64 = 1024;
+const JSON_INVALID_UTF8_IGNORE_FLAG: i64 = 1_048_576;
+const JSON_INVALID_UTF8_SUBSTITUTE_FLAG: i64 = 2_097_152;
 const JSON_THROW_ON_ERROR_FLAG: i64 = 4_194_304;
 
 const JSON_ERROR_NONE: i64 = 0;
+const JSON_ERROR_UTF8: i64 = 5;
 const JSON_ERROR_RECURSION: i64 = 6;
 const JSON_ERROR_INF_OR_NAN: i64 = 7;
 const JSON_ERROR_NON_BACKED_ENUM: i64 = 11;
@@ -14020,14 +14233,9 @@ fn fn_json_last_error_msg(
 fn fn_json_decode(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    let assoc = match arg_opt!(ed, 1) {
-        Some(v) => v.is_truthy(),
-        None => false,
-    };
-    ret!(rv, json_decode_string(&s, assoc));
+    ret!(rv, json_decode_values(arg!(ed, 0), arg_opt!(ed, 1), eg));
 }
 
 // ============================================================================
@@ -14693,13 +14901,22 @@ fn transform_output_buffer(
     let Some(resolved) = resolved else {
         return Ok(raw);
     };
-    let arguments = [Value::string(bytes_to_php_string(&raw)), Value::long(mode)];
+    let callback_input = if raw.is_ascii() {
+        Value::string(
+            String::from_utf8(raw.clone()).expect("ASCII output-buffer contents are valid UTF-8"),
+        )
+    } else {
+        Value::binary_string(&raw)
+    };
+    let arguments = [callback_input, Value::long(mode)];
     let previous_handler_depth = eg.enter_output_handler();
     let transformed = call_resolved_with_values(eg, &resolved, &arguments);
     eg.leave_output_handler(previous_handler_depth);
     let transformed = transformed?;
     if transformed.value_type() == ValueType::False {
         Ok(raw)
+    } else if let Some(bytes) = transformed.php_string_bytes() {
+        Ok(bytes.into_owned())
     } else {
         Ok(transformed.echo_to_string().into_bytes())
     }
@@ -15736,8 +15953,8 @@ fn cmp_val(cmp: i32) -> std::cmp::Ordering {
 const SORT_NATURAL: i64 = 6;
 const SORT_FLAG_CASE: i64 = 8;
 
-fn natural_string_cmp(left: &str, right: &str, case_insensitive: bool) -> std::cmp::Ordering {
-    natural_compare(left.as_bytes(), right.as_bytes(), case_insensitive)
+fn natural_string_cmp(left: &[u8], right: &[u8], case_insensitive: bool) -> std::cmp::Ordering {
+    natural_compare(left, right, case_insensitive)
 }
 
 fn natural_value_order(
@@ -15747,19 +15964,23 @@ fn natural_value_order(
     right: &Value,
     case_insensitive: bool,
 ) -> Result<Option<std::cmp::Ordering>, VmError> {
-    let Some(left) = internal_value_to_string(ed, eg, left)? else {
+    let Some(left) = internal_value_to_string_value(ed, eg, left)? else {
         return Ok(None);
     };
     if eg.exception.is_some() {
         return Ok(None);
     }
-    let Some(right) = internal_value_to_string(ed, eg, right)? else {
+    let Some(right) = internal_value_to_string_value(ed, eg, right)? else {
         return Ok(None);
     };
     if eg.exception.is_some() {
         return Ok(None);
     }
-    Ok(Some(natural_string_cmp(&left, &right, case_insensitive)))
+    Ok(Some(natural_string_cmp(
+        &left.php_string_bytes().unwrap_or_default(),
+        &right.php_string_bytes().unwrap_or_default(),
+        case_insensitive,
+    )))
 }
 
 fn array_sort_snapshot_value(value: &Value) -> Value {
@@ -15804,6 +16025,16 @@ fn array_projection_insert(
         | (ArrayProjectionKeys::ReindexAll, _) => {
             result.push(value);
         }
+    }
+}
+
+#[inline]
+fn copy_array_key_provenance(source: &PhpArray, result: &PhpArray) {
+    if source.has_external_byte_keys() {
+        result.mark_external_byte_keys();
+    }
+    if source.has_utf8_text_keys() {
+        result.mark_utf8_text_keys();
     }
 }
 
@@ -15918,6 +16149,7 @@ fn fn_natural_key_preserving_sort(
     for (key, value) in entries {
         result.set(key, array_projection_value(&value));
     }
+    copy_array_key_provenance(array, &result);
     arg_mut!(ed, 0, Value::array(result));
     ret!(rv, Value::bool(true));
 }
@@ -15938,10 +16170,18 @@ fn fn_natcasesort(
     fn_natural_key_preserving_sort(ed, rv, eg, "natcasesort", true)
 }
 
-fn ascii_case_insensitive_order(left: &str, right: &str) -> std::cmp::Ordering {
-    left.bytes()
+fn ascii_case_insensitive_order(left: &[u8], right: &[u8]) -> std::cmp::Ordering {
+    left.iter()
+        .copied()
         .map(|byte| byte.to_ascii_lowercase())
-        .cmp(right.bytes().map(|byte| byte.to_ascii_lowercase()))
+        .cmp(right.iter().copied().map(|byte| byte.to_ascii_lowercase()))
+}
+
+#[inline]
+fn non_reentrant_sort_string(value: &Value, precision: i32) -> Cow<'_, [u8]> {
+    value
+        .php_string_bytes()
+        .unwrap_or_else(|| Cow::Owned(value.echo_to_string_with_precision(precision).into_bytes()))
 }
 
 fn sort_value_order(
@@ -15955,17 +16195,17 @@ fn sort_value_order(
             .partial_cmp(&explicit_float_conversion(right))
             .unwrap_or(std::cmp::Ordering::Equal),
         SORT_STRING | SORT_LOCALE_STRING => {
-            let left = left.echo_to_string_with_precision(precision);
-            let right = right.echo_to_string_with_precision(precision);
+            let left = non_reentrant_sort_string(left, precision);
+            let right = non_reentrant_sort_string(right, precision);
             if flags & SORT_FLAG_CASE != 0 {
                 ascii_case_insensitive_order(&left, &right)
             } else {
-                left.cmp(&right)
+                left.as_ref().cmp(right.as_ref())
             }
         }
         SORT_NATURAL => natural_string_cmp(
-            &left.echo_to_string_with_precision(precision),
-            &right.echo_to_string_with_precision(precision),
+            &non_reentrant_sort_string(left, precision),
+            &non_reentrant_sort_string(right, precision),
             flags & SORT_FLAG_CASE != 0,
         ),
         _ => cmp_val(crate::vm::execute::values_compare_checked_with_precision(
@@ -16002,38 +16242,44 @@ fn sort_value_order_runtime(
                 .unwrap_or(std::cmp::Ordering::Equal)
         }
         SORT_STRING | SORT_LOCALE_STRING => {
-            let Some(left) = internal_value_to_string(ed, eg, left)? else {
+            let Some(left) = internal_value_to_string_value(ed, eg, left)? else {
                 return Ok(std::cmp::Ordering::Equal);
             };
             if eg.exception.is_some() {
                 return Ok(std::cmp::Ordering::Equal);
             }
-            let Some(right) = internal_value_to_string(ed, eg, right)? else {
+            let Some(right) = internal_value_to_string_value(ed, eg, right)? else {
                 return Ok(std::cmp::Ordering::Equal);
             };
             if eg.exception.is_some() {
                 return Ok(std::cmp::Ordering::Equal);
             }
+            let left = left.php_string_bytes().unwrap_or_default();
+            let right = right.php_string_bytes().unwrap_or_default();
             if flags & SORT_FLAG_CASE != 0 {
                 ascii_case_insensitive_order(&left, &right)
             } else {
-                left.cmp(&right)
+                left.as_ref().cmp(right.as_ref())
             }
         }
         SORT_NATURAL => {
-            let Some(left) = internal_value_to_string(ed, eg, left)? else {
+            let Some(left) = internal_value_to_string_value(ed, eg, left)? else {
                 return Ok(std::cmp::Ordering::Equal);
             };
             if eg.exception.is_some() {
                 return Ok(std::cmp::Ordering::Equal);
             }
-            let Some(right) = internal_value_to_string(ed, eg, right)? else {
+            let Some(right) = internal_value_to_string_value(ed, eg, right)? else {
                 return Ok(std::cmp::Ordering::Equal);
             };
             if eg.exception.is_some() {
                 return Ok(std::cmp::Ordering::Equal);
             }
-            natural_string_cmp(&left, &right, flags & SORT_FLAG_CASE != 0)
+            natural_string_cmp(
+                &left.php_string_bytes().unwrap_or_default(),
+                &right.php_string_bytes().unwrap_or_default(),
+                flags & SORT_FLAG_CASE != 0,
+            )
         }
         _ => sort_regular_value_order_runtime(eg, left, right)?,
     };
@@ -16106,10 +16352,11 @@ fn sort_regular_value_order_runtime(
     }
 }
 
-fn sort_key_string(key: &ArrayKey) -> Cow<'_, str> {
+fn sort_key_bytes(key: &ArrayKey, external_byte_keys: bool) -> Cow<'_, [u8]> {
     match key {
-        ArrayKey::Int(value) => Cow::Owned(value.to_string()),
-        ArrayKey::String(value) => Cow::Borrowed(value),
+        ArrayKey::Int(value) => Cow::Owned(value.to_string().into_bytes()),
+        ArrayKey::String(value) if external_byte_keys => Cow::Owned(php_string_to_bytes(value)),
+        ArrayKey::String(value) => Cow::Borrowed(value.as_bytes()),
     }
 }
 
@@ -16118,44 +16365,45 @@ fn sort_key_order(
     right: &ArrayKey,
     flags: i64,
     precision: i32,
+    external_byte_keys: bool,
 ) -> Result<std::cmp::Ordering, ()> {
     match flags & !SORT_FLAG_CASE {
         SORT_NUMERIC => Ok(match (left, right) {
             (ArrayKey::Int(left), ArrayKey::Int(right)) => left.cmp(right),
             _ => {
-                let left = php_numeric_string_to_float(&sort_key_string(left)).unwrap_or(0.0);
-                let right = php_numeric_string_to_float(&sort_key_string(right)).unwrap_or(0.0);
+                let left = sort_key_bytes(left, external_byte_keys);
+                let right = sort_key_bytes(right, external_byte_keys);
+                let left = std::str::from_utf8(&left)
+                    .ok()
+                    .and_then(php_numeric_string_to_float)
+                    .unwrap_or(0.0);
+                let right = std::str::from_utf8(&right)
+                    .ok()
+                    .and_then(php_numeric_string_to_float)
+                    .unwrap_or(0.0);
                 left.partial_cmp(&right)
                     .unwrap_or(std::cmp::Ordering::Equal)
             }
         }),
         SORT_STRING | SORT_LOCALE_STRING => {
-            let left = sort_key_string(left);
-            let right = sort_key_string(right);
+            let left = sort_key_bytes(left, external_byte_keys);
+            let right = sort_key_bytes(right, external_byte_keys);
             Ok(if flags & SORT_FLAG_CASE != 0 {
-                ascii_case_insensitive_order(&left, &right)
+                left.iter()
+                    .map(|byte| byte.to_ascii_lowercase())
+                    .cmp(right.iter().map(|byte| byte.to_ascii_lowercase()))
             } else {
                 left.cmp(&right)
             })
         }
         SORT_NATURAL => {
-            let left = sort_key_string(left);
-            let right = sort_key_string(right);
-            Ok(natural_string_cmp(
-                &left,
-                &right,
-                flags & SORT_FLAG_CASE != 0,
-            ))
+            let left = sort_key_bytes(left, external_byte_keys);
+            let right = sort_key_bytes(right, external_byte_keys);
+            Ok(natural_compare(&left, &right, flags & SORT_FLAG_CASE != 0))
         }
         _ => {
-            let left = match left {
-                ArrayKey::Int(value) => Value::long(*value),
-                ArrayKey::String(value) => Value::string(value.clone()),
-            };
-            let right = match right {
-                ArrayKey::Int(value) => Value::long(*value),
-                ArrayKey::String(value) => Value::string(value.clone()),
-            };
+            let left = array_key_value(left, external_byte_keys);
+            let right = array_key_value(right, external_byte_keys);
             sort_value_order(&left, &right, SORT_REGULAR, precision)
         }
     }
@@ -16873,6 +17121,62 @@ fn php_visible_ownership(
     }
 }
 
+/// Byte-oriented renderer for diagnostics whose payload may contain arbitrary
+/// PHP strings. Static text is appended as UTF-8, while PHP values contribute
+/// their actual byte representation instead of the runtime's Latin-1 storage
+/// bridge.
+#[derive(Default)]
+struct PhpOutputBytes(Vec<u8>);
+
+impl PhpOutputBytes {
+    #[inline]
+    fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    #[inline]
+    fn from_text(text: impl AsRef<str>) -> Self {
+        Self(text.as_ref().as_bytes().to_vec())
+    }
+
+    #[inline]
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    #[inline]
+    fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+
+    #[inline]
+    fn push_str(&mut self, text: &str) {
+        self.0.extend_from_slice(text.as_bytes());
+    }
+
+    #[inline]
+    fn push_php_bytes(&mut self, bytes: &[u8]) {
+        self.0.extend_from_slice(bytes);
+    }
+
+    #[inline]
+    fn push_ascii(&mut self, byte: u8) {
+        debug_assert!(byte.is_ascii());
+        self.0.push(byte);
+    }
+
+    #[inline]
+    fn append(&mut self, mut output: Self) {
+        self.0.append(&mut output.0);
+    }
+
+    #[inline]
+    fn insert_ascii(&mut self, index: usize, byte: u8) {
+        debug_assert!(byte.is_ascii());
+        self.0.insert(index, byte);
+    }
+}
+
 fn dump_object_header(
     context: DumpContext,
     value: &Value,
@@ -16882,14 +17186,16 @@ fn dump_object_header(
     handle: u32,
     property_count: usize,
     eg: &ExecutorGlobals,
-) -> String {
+) -> PhpOutputBytes {
     if context.debug_zval {
-        format!(
+        PhpOutputBytes::from_text(format!(
             "{prefix}{kind}object({class_name})#{handle} ({property_count}) refcount({}){{\n",
             context.refcount(value, eg)
-        )
+        ))
     } else {
-        format!("{prefix}{kind}object({class_name})#{handle} ({property_count}) {{\n")
+        PhpOutputBytes::from_text(format!(
+            "{prefix}{kind}object({class_name})#{handle} ({property_count}) {{\n"
+        ))
     }
 }
 
@@ -16897,7 +17203,7 @@ fn var_dump_output_value(
     value: &Value,
     eg: &mut ExecutorGlobals,
     ed: *mut ExecuteData,
-) -> Result<String, VmError> {
+) -> Result<PhpOutputBytes, VmError> {
     dump_output_value(value, eg, ed, DumpContext::PLAIN)
 }
 
@@ -16906,7 +17212,7 @@ fn dump_output_value(
     eg: &mut ExecutorGlobals,
     ed: *mut ExecuteData,
     context: DumpContext,
-) -> Result<String, VmError> {
+) -> Result<PhpOutputBytes, VmError> {
     if value.value_type() != ValueType::Object {
         return Ok(dump_value(value, 0, eg, context));
     }
@@ -16918,7 +17224,7 @@ fn dump_output_value(
         return Ok(dump_value(&receiver, 0, eg, context));
     };
     if eg.exception.is_some() {
-        return Ok(String::new());
+        return Ok(PhpOutputBytes::new());
     }
     let debug_info = debug_info.dereferenced();
     let empty_projection;
@@ -16935,7 +17241,7 @@ fn dump_output_value(
             ),
         )?;
         if eg.exception.is_some() {
-            return Ok(String::new());
+            return Ok(PhpOutputBytes::new());
         }
         // The legacy null form projects an empty object rather than falling
         // back to the receiver's ordinary properties.
@@ -16962,7 +17268,7 @@ fn var_dump_debug_info_object(
     indent: usize,
     eg: &ExecutorGlobals,
     context: DumpContext,
-) -> String {
+) -> PhpOutputBytes {
     let prefix = "  ".repeat(indent);
     let object = object_value
         .as_object()
@@ -17001,12 +17307,18 @@ fn var_dump_debug_info_object(
         visited_objects.insert(identity);
     }
     for (key, value) in properties.iter() {
-        let key = match key {
-            ArrayKey::Int(key) => format!("[{key}]"),
-            ArrayKey::String(key) => var_dump_debug_info_key(&key),
-        };
-        output.push_str(&format!("{}  {}=>\n", prefix, key));
-        output.push_str(&var_dump_value_inner(
+        output.push_str(&format!("{}  ", prefix));
+        match key {
+            ArrayKey::Int(key) => output.push_str(&format!("[{key}]")),
+            ArrayKey::String(key) if properties.has_external_byte_keys() => {
+                output.push_str("[\"");
+                output.push_php_bytes(&php_string_to_bytes(&key));
+                output.push_str("\"]");
+            }
+            ArrayKey::String(key) => output.push_str(&var_dump_debug_info_key(&key)),
+        }
+        output.push_str("=>\n");
+        output.append(var_dump_value_inner(
             value,
             indent + 1,
             eg,
@@ -17032,7 +17344,12 @@ fn var_dump_debug_info_key(key: &str) -> String {
     format!("[\"{key}\"]")
 }
 
-fn dump_value(val: &Value, indent: usize, eg: &ExecutorGlobals, context: DumpContext) -> String {
+fn dump_value(
+    val: &Value,
+    indent: usize,
+    eg: &ExecutorGlobals,
+    context: DumpContext,
+) -> PhpOutputBytes {
     var_dump_value_inner(
         val,
         indent,
@@ -17158,7 +17475,7 @@ fn var_dump_value_inner(
     context: DumpContext,
     visited_arrays: &mut std::collections::HashSet<usize>,
     visited_objects: &mut std::collections::HashSet<usize>,
-) -> String {
+) -> PhpOutputBytes {
     if val.is_reference() {
         let mut output = var_dump_value_inner(
             val.dereferenced(),
@@ -17169,18 +17486,20 @@ fn var_dump_value_inner(
             visited_arrays,
             visited_objects,
         );
-        let recursive = output[indent * 2..].starts_with("*RECURSION*");
+        let recursive = output.as_bytes()[indent * 2..].starts_with(b"*RECURSION*");
         if show_reference && val.owned_reference_is_aliased() && !recursive {
-            output.insert(indent * 2, '&');
+            output.insert_ascii(indent * 2, b'&');
         }
         return output;
     }
     let prefix = "  ".repeat(indent);
     match val.value_type() {
-        ValueType::Null => format!("{}NULL\n", prefix),
-        ValueType::True => format!("{}bool(true)\n", prefix),
-        ValueType::False => format!("{}bool(false)\n", prefix),
-        ValueType::Long => format!("{}int({})\n", prefix, val.as_long().unwrap()),
+        ValueType::Null => PhpOutputBytes::from_text(format!("{}NULL\n", prefix)),
+        ValueType::True => PhpOutputBytes::from_text(format!("{}bool(true)\n", prefix)),
+        ValueType::False => PhpOutputBytes::from_text(format!("{}bool(false)\n", prefix)),
+        ValueType::Long => {
+            PhpOutputBytes::from_text(format!("{}int({})\n", prefix, val.as_long().unwrap()))
+        }
         ValueType::Double => {
             let number = val.as_double().unwrap();
             let display = if number.is_nan() {
@@ -17192,15 +17511,19 @@ fn var_dump_value_inner(
             } else {
                 val.echo_to_string_with_precision(eg.serialize_precision)
             };
-            format!("{prefix}float({display})\n")
+            PhpOutputBytes::from_text(format!("{prefix}float({display})\n"))
         }
         ValueType::String => {
-            let s = val.as_str().unwrap();
+            let bytes = val.php_string_bytes().unwrap_or_default();
             if !context.debug_zval {
-                return format!("{}string({}) \"{}\"\n", prefix, s.len(), s);
+                let mut output =
+                    PhpOutputBytes::from_text(format!("{}string({}) \"", prefix, bytes.len()));
+                output.push_php_bytes(&bytes);
+                output.push_str("\"\n");
+                return output;
             }
             let annotation = if val.is_interned_string() {
-                if context.immutable_array_member && s.len() > 1 {
+                if context.immutable_array_member && bytes.len() > 1 {
                     format!("refcount({})", context.refcount(val, eg))
                 } else {
                     "interned".to_string()
@@ -17213,22 +17536,26 @@ fn var_dump_value_inner(
             } else {
                 format!("refcount({})", context.refcount(val, eg))
             };
-            format!("{}string({}) \"{}\" {}\n", prefix, s.len(), s, annotation)
+            let mut output =
+                PhpOutputBytes::from_text(format!("{}string({}) \"", prefix, bytes.len()));
+            output.push_php_bytes(&bytes);
+            output.push_str(&format!("\" {annotation}\n"));
+            output
         }
         ValueType::Array => {
             let identity = val
                 .array_identity()
                 .expect("array tag must expose array identity");
             if !visited_arrays.insert(identity) {
-                return format!("{}*RECURSION*\n", prefix);
+                return PhpOutputBytes::from_text(format!("{}*RECURSION*\n", prefix));
             }
             let arr = val.as_array().unwrap();
             let mut out = if context.debug_zval {
                 if arr.is_pristine_empty() {
-                    format!("{}array(0) interned {{\n", prefix)
+                    PhpOutputBytes::from_text(format!("{}array(0) interned {{\n", prefix))
                 } else {
                     let packed = if arr.is_packed() { " packed" } else { "" };
-                    format!(
+                    PhpOutputBytes::from_text(format!(
                         "{}array({}){} refcount({}){{\n",
                         prefix,
                         arr.len(),
@@ -17238,19 +17565,28 @@ fn var_dump_value_inner(
                         } else {
                             context.refcount(val, eg)
                         }
-                    )
+                    ))
                 }
             } else {
-                format!("{}array({}) {{\n", prefix, arr.len())
+                PhpOutputBytes::from_text(format!("{}array({}) {{\n", prefix, arr.len()))
             };
             let member_context = context.array_member(val.is_immutable_array_literal());
             for (key, v) in arr.iter() {
-                let key_str = match &key {
-                    ArrayKey::Int(k) => format!("[{}]", k),
-                    ArrayKey::String(k) => format!("[\"{}\"]", k),
-                };
-                out.push_str(&format!("{}  {}=>\n", prefix, key_str));
-                out.push_str(&var_dump_value_inner(
+                out.push_str(&format!("{}  [", prefix));
+                match &key {
+                    ArrayKey::Int(k) => out.push_str(&k.to_string()),
+                    ArrayKey::String(k) => {
+                        out.push_str("\"");
+                        if arr.has_external_byte_keys() {
+                            out.push_php_bytes(&php_string_to_bytes(k));
+                        } else {
+                            out.push_str(k);
+                        }
+                        out.push_str("\"");
+                    }
+                }
+                out.push_str("]=>\n");
+                out.append(var_dump_value_inner(
                     v,
                     indent + 1,
                     eg,
@@ -17269,7 +17605,7 @@ fn var_dump_value_inner(
                 .object_identity()
                 .expect("object tag must expose object identity");
             if !visited_objects.insert(identity) {
-                return format!("{}*RECURSION*\n", prefix);
+                return PhpOutputBytes::from_text(format!("{}*RECURSION*\n", prefix));
             }
             let object = val.as_object().unwrap();
             // PHP exposes an object as ordinary storage while its lazy
@@ -17312,7 +17648,7 @@ fn var_dump_value_inner(
                 );
                 out.push_str(&format!("{}  [\"name\"]=>\n", prefix));
                 drop(object);
-                out.push_str(&var_dump_value_inner(
+                out.append(var_dump_value_inner(
                     &name,
                     indent + 1,
                     eg,
@@ -17351,7 +17687,7 @@ fn var_dump_value_inner(
                 );
                 out.push_str(&format!("{}  [\"instance\"]=>\n", prefix));
                 drop(object);
-                out.push_str(&var_dump_value_inner(
+                out.append(var_dump_value_inner(
                     &instance,
                     indent + 1,
                     eg,
@@ -17393,7 +17729,7 @@ fn var_dump_value_inner(
                     eg,
                 );
                 out.push_str(&format!("{}  [\"function\"]=>\n", prefix));
-                out.push_str(&var_dump_value_inner(
+                out.append(var_dump_value_inner(
                     &Value::string(function_name),
                     indent + 1,
                     eg,
@@ -17419,7 +17755,7 @@ fn var_dump_value_inner(
                     eg,
                 );
                 out.push_str(&format!("{}  [\"object\"]=>\n", prefix));
-                out.push_str(&var_dump_value_inner(
+                out.append(var_dump_value_inner(
                     &target,
                     indent + 1,
                     eg,
@@ -17449,7 +17785,7 @@ fn var_dump_value_inner(
                         "{}  [{}]=>\n{}  array(2) {{\n{}    [\"key\"]=>\n",
                         prefix, index, prefix, prefix,
                     ));
-                    out.push_str(&var_dump_value_inner(
+                    out.append(var_dump_value_inner(
                         key,
                         indent + 2,
                         eg,
@@ -17459,7 +17795,7 @@ fn var_dump_value_inner(
                         visited_objects,
                     ));
                     out.push_str(&format!("{}    [\"value\"]=>\n", prefix));
-                    out.push_str(&var_dump_value_inner(
+                    out.append(var_dump_value_inner(
                         value,
                         indent + 2,
                         eg,
@@ -17482,7 +17818,10 @@ fn var_dump_value_inner(
                     .get_property("name")
                     .and_then(Value::as_str)
                     .unwrap_or("");
-                format!("{}enum({}::{})\n", prefix, object.class_name, case)
+                PhpOutputBytes::from_text(format!(
+                    "{}enum({}::{})\n",
+                    prefix, object.class_name, case
+                ))
             } else {
                 let class = eg.class_by_id(object.class_id);
                 let mut property_count = if let Some(class) = class {
@@ -17545,7 +17884,7 @@ fn var_dump_value_inner(
                         }
                         let key = var_dump_property_key(definition);
                         out.push_str(&format!("{}  {}=>\n", prefix, key));
-                        out.push_str(&var_dump_value_inner(
+                        out.append(var_dump_value_inner(
                             value,
                             indent + 1,
                             eg,
@@ -17561,7 +17900,7 @@ fn var_dump_value_inner(
                         return;
                     }
                     out.push_str(&format!("{}  [\"{}\"]=>\n", prefix, name));
-                    out.push_str(&var_dump_value_inner(
+                    out.append(var_dump_value_inner(
                         value,
                         indent + 1,
                         eg,
@@ -17583,7 +17922,7 @@ fn var_dump_value_inner(
                 .map(|closure| closure as *const PhpClosure as usize)
                 .expect("closure tag must expose closure identity");
             if !visited_objects.insert(identity) {
-                return format!("{}*RECURSION*\n", prefix);
+                return PhpOutputBytes::from_text(format!("{}*RECURSION*\n", prefix));
             }
             let closure = val.as_closure().unwrap();
             let properties = closure_debug_properties(closure, eg);
@@ -17599,7 +17938,7 @@ fn var_dump_value_inner(
             );
             let mut append_property = |name: &str, value: &Value| {
                 out.push_str(&format!("{}  [\"{}\"]=>\n", prefix, name));
-                out.push_str(&var_dump_value_inner(
+                out.append(var_dump_value_inner(
                     value,
                     indent + 1,
                     eg,
@@ -17621,14 +17960,14 @@ fn var_dump_value_inner(
         }
         ValueType::Resource => {
             let id = val.as_resource_id().unwrap();
-            format!(
+            PhpOutputBytes::from_text(format!(
                 "{}resource({}) of type ({})\n",
                 prefix,
                 id,
                 resource::type_for_request(eg, id)
-            )
+            ))
         }
-        _ => format!("{}unknown\n", prefix),
+        _ => PhpOutputBytes::from_text(format!("{}unknown\n", prefix)),
     }
 }
 
@@ -17889,24 +18228,24 @@ fn enum_case_export(val: &Value, eg: &ExecutorGlobals) -> Option<String> {
 }
 
 #[inline]
-fn var_export_string(value: &str) -> String {
-    let mut output = String::with_capacity(value.len() + 2);
-    output.push('\'');
-    for character in value.chars() {
-        match character {
-            '\0' => output.push_str("' . \"\\0\" . '"),
-            '\\' | '\'' => {
-                output.push('\\');
-                output.push(character);
+fn var_export_string(value: &[u8]) -> PhpOutputBytes {
+    let mut output = PhpOutputBytes::new();
+    output.push_ascii(b'\'');
+    for &byte in value {
+        match byte {
+            b'\0' => output.push_str("' . \"\\0\" . '"),
+            b'\\' | b'\'' => {
+                output.push_ascii(b'\\');
+                output.push_ascii(byte);
             }
-            _ => output.push(character),
+            _ => output.push_php_bytes(&[byte]),
         }
     }
-    output.push('\'');
+    output.push_ascii(b'\'');
     output
 }
 
-fn push_var_export_indent(output: &mut String, level: usize) {
+fn push_var_export_indent(output: &mut PhpOutputBytes, level: usize) {
     for _ in 0..level {
         output.push_str("  ");
     }
@@ -17927,8 +18266,8 @@ struct VarExportState {
 }
 
 fn push_var_export_entry(
-    output: &mut String,
-    key: &str,
+    output: &mut PhpOutputBytes,
+    key: PhpOutputBytes,
     value: &Value,
     eg: &mut ExecutorGlobals,
     level: usize,
@@ -17938,16 +18277,16 @@ fn push_var_export_entry(
     let exported = var_export_value_at(value, eg, level + 1, state)?;
     push_var_export_indent(output, level);
     for _ in 0..key_padding {
-        output.push(' ');
+        output.push_ascii(b' ');
     }
-    output.push_str(key);
-    if var_export_nested_value(value) && exported != "NULL" {
+    output.append(key);
+    if var_export_nested_value(value) && exported.as_bytes() != b"NULL" {
         output.push_str(" => \n");
         push_var_export_indent(output, level + 1);
-        output.push_str(&exported);
+        output.append(exported);
     } else {
         output.push_str(" => ");
-        output.push_str(&exported);
+        output.append(exported);
     }
     output.push_str(",\n");
     Ok(())
@@ -18030,18 +18369,20 @@ fn var_export_value_at(
     eg: &mut ExecutorGlobals,
     level: usize,
     state: &mut VarExportState,
-) -> Result<String, VmError> {
+) -> Result<PhpOutputBytes, VmError> {
     let val = val.dereferenced();
     Ok(match val.value_type() {
-        ValueType::Null => "NULL".to_string(),
-        ValueType::True => "true".to_string(),
-        ValueType::False => "false".to_string(),
-        ValueType::Long => val.as_long().unwrap().to_string(),
-        ValueType::Double => crate::value::php_var_export_float_to_string(
-            val.as_double().unwrap(),
-            eg.serialize_precision,
-        ),
-        ValueType::String => var_export_string(val.as_str().unwrap()),
+        ValueType::Null => PhpOutputBytes::from_text("NULL"),
+        ValueType::True => PhpOutputBytes::from_text("true"),
+        ValueType::False => PhpOutputBytes::from_text("false"),
+        ValueType::Long => PhpOutputBytes::from_text(val.as_long().unwrap().to_string()),
+        ValueType::Double => {
+            PhpOutputBytes::from_text(crate::value::php_var_export_float_to_string(
+                val.as_double().unwrap(),
+                eg.serialize_precision,
+            ))
+        }
+        ValueType::String => var_export_string(&val.php_string_bytes().unwrap_or_default()),
         ValueType::Array => {
             let arr = val.as_array().unwrap();
             let can_recurse = arr.values().any(var_export_nested_value);
@@ -18051,23 +18392,26 @@ fn var_export_value_at(
                     .expect("array export requires a live array identity");
                 if state.arrays.contains(&identity) {
                     state.recursive_values += 1;
-                    return Ok("NULL".to_string());
+                    return Ok(PhpOutputBytes::from_text("NULL"));
                 }
                 state.arrays.push(identity);
                 Some(identity)
             } else {
                 None
             };
-            let mut out = "array (\n".to_string();
+            let mut out = PhpOutputBytes::from_text("array (\n");
             for (key, v) in arr.iter() {
-                let key_str = match &key {
-                    ArrayKey::Int(k) => k.to_string(),
-                    ArrayKey::String(k) => var_export_string(k),
+                let key_output = match &key {
+                    ArrayKey::Int(k) => PhpOutputBytes::from_text(k.to_string()),
+                    ArrayKey::String(k) if arr.has_external_byte_keys() => {
+                        var_export_string(&php_string_to_bytes(k))
+                    }
+                    ArrayKey::String(k) => var_export_string(k.as_bytes()),
                 };
-                push_var_export_entry(&mut out, &key_str, v, eg, level, 2, state)?;
+                push_var_export_entry(&mut out, key_output, v, eg, level, 2, state)?;
             }
             push_var_export_indent(&mut out, level);
-            out.push(')');
+            out.push_ascii(b')');
             if let Some(identity) = identity {
                 let completed = state.arrays.pop();
                 debug_assert_eq!(completed, Some(identity));
@@ -18076,14 +18420,14 @@ fn var_export_value_at(
         }
         ValueType::Object => {
             if let Some(case) = enum_case_export(val, eg) {
-                return Ok(case);
+                return Ok(PhpOutputBytes::from_text(case));
             }
             let identity = val
                 .object_identity()
                 .expect("object export requires a live object identity");
             if state.objects.contains(&identity) {
                 state.recursive_values += 1;
-                return Ok("NULL".to_string());
+                return Ok(PhpOutputBytes::from_text("NULL"));
             }
             state.objects.push(identity);
             let object = val
@@ -18097,32 +18441,32 @@ fn var_export_value_at(
                 .expect("object-to-array projection must return an array");
             let std_class = class_name.eq_ignore_ascii_case("stdClass");
             let mut out = if std_class {
-                "(object) array(\n".to_string()
+                PhpOutputBytes::from_text("(object) array(\n")
             } else {
-                format!(
+                PhpOutputBytes::from_text(format!(
                     "\\{}::__set_state(array(\n",
                     class_name.trim_start_matches('\\')
-                )
+                ))
             };
             for (key, value) in properties.iter() {
                 let key = match key {
-                    ArrayKey::Int(key) => key.to_string(),
+                    ArrayKey::Int(key) => PhpOutputBytes::from_text(key.to_string()),
                     ArrayKey::String(key) => {
-                        var_export_string(var_export_object_property_name(&key))
+                        var_export_string(var_export_object_property_name(&key).as_bytes())
                     }
                 };
-                push_var_export_entry(&mut out, &key, value, eg, level, 3, state)?;
+                push_var_export_entry(&mut out, key, value, eg, level, 3, state)?;
             }
             push_var_export_indent(&mut out, level);
-            out.push(')');
+            out.push_ascii(b')');
             if !std_class {
-                out.push(')');
+                out.push_ascii(b')');
             }
             let completed = state.objects.pop();
             debug_assert_eq!(completed, Some(identity));
             out
         }
-        _ => "NULL".to_string(),
+        _ => PhpOutputBytes::from_text("NULL"),
     })
 }
 
@@ -18130,7 +18474,7 @@ fn var_export_value(
     val: &Value,
     eg: &mut ExecutorGlobals,
     state: &mut VarExportState,
-) -> Result<String, VmError> {
+) -> Result<PhpOutputBytes, VmError> {
     var_export_value_at(val, eg, 0, state)
 }
 
@@ -18170,9 +18514,9 @@ impl serde::Serialize for PhpJsonValue {
     }
 }
 
-#[derive(Default)]
 struct PhpJsonEncodeState {
     error_code: i64,
+    flags: i64,
 }
 
 struct PhpJsonContainer<'a> {
@@ -18181,9 +18525,72 @@ struct PhpJsonContainer<'a> {
 }
 
 impl PhpJsonEncodeState {
+    fn new(flags: i64) -> Self {
+        Self {
+            error_code: JSON_ERROR_NONE,
+            flags,
+        }
+    }
+
     fn record_error(&mut self, code: i64) {
         self.error_code = code;
     }
+}
+
+fn repair_json_utf8(bytes: &[u8], substitute: bool) -> String {
+    let mut output = String::new();
+    let mut remaining = bytes;
+    while !remaining.is_empty() {
+        match std::str::from_utf8(remaining) {
+            Ok(valid) => {
+                output.push_str(valid);
+                break;
+            }
+            Err(error) => {
+                let valid = error.valid_up_to();
+                output.push_str(
+                    std::str::from_utf8(&remaining[..valid])
+                        .expect("from_utf8 error prefix must remain valid UTF-8"),
+                );
+                if substitute {
+                    output.push('\u{fffd}');
+                }
+                let skipped = error.error_len().unwrap_or(remaining.len() - valid);
+                remaining = &remaining[valid + skipped..];
+            }
+        }
+    }
+    output
+}
+
+fn json_utf8_string(bytes: &[u8], state: &mut PhpJsonEncodeState) -> Option<String> {
+    match std::str::from_utf8(bytes) {
+        Ok(value) => Some(value.to_string()),
+        Err(_) if state.flags & JSON_INVALID_UTF8_IGNORE_FLAG != 0 => {
+            Some(repair_json_utf8(bytes, false))
+        }
+        Err(_) if state.flags & JSON_INVALID_UTF8_SUBSTITUTE_FLAG != 0 => {
+            Some(repair_json_utf8(bytes, true))
+        }
+        Err(_) => {
+            state.record_error(JSON_ERROR_UTF8);
+            None
+        }
+    }
+}
+
+#[inline]
+fn json_php_string(value: &Value, state: &mut PhpJsonEncodeState) -> Option<String> {
+    let bytes = value.php_string_bytes().unwrap_or_default();
+    json_utf8_string(&bytes, state)
+}
+
+#[inline]
+fn json_php_array_key(key: String, external: bool, state: &mut PhpJsonEncodeState) -> String {
+    if !external {
+        return key;
+    }
+    json_utf8_string(&php_string_to_bytes(&key), state).unwrap_or_default()
 }
 
 fn json_container_is_recursive(mut container: Option<&PhpJsonContainer<'_>>, key: usize) -> bool {
@@ -18356,7 +18763,9 @@ fn value_to_json(
                 PhpJsonValue::Number(serde_json::Number::from(0))
             }
         }
-        ValueType::String => PhpJsonValue::String(val.as_str().unwrap().to_string()),
+        ValueType::String => json_php_string(val, state)
+            .map(PhpJsonValue::String)
+            .unwrap_or(PhpJsonValue::Null),
         ValueType::Array => {
             // A JsonSerializable callback reached through a referenced array
             // may mutate or unset that array. Retain its current COW storage
@@ -18395,10 +18804,13 @@ fn value_to_json(
                 PhpJsonValue::Array(values)
             } else {
                 let mut entries = Vec::with_capacity(arr.len());
+                let external_byte_keys = arr.has_external_byte_keys();
                 for (key, value) in arr.iter() {
                     let key = match key {
                         ArrayKey::Int(number) => number.to_string(),
-                        ArrayKey::String(string) => string,
+                        ArrayKey::String(string) => {
+                            json_php_array_key(string, external_byte_keys, state)
+                        }
                     };
                     entries.push((
                         key,
@@ -18585,7 +18997,7 @@ fn json_encode_value(
 ) -> Result<PhpJsonEncodeResult, VmError> {
     let preserve_zero_fraction = flags & JSON_PRESERVE_ZERO_FRACTION_FLAG != 0;
     let mut compact_formatter_compatible = eg.serialize_precision == -1 && !preserve_zero_fraction;
-    let mut state = PhpJsonEncodeState::default();
+    let mut state = PhpJsonEncodeState::new(flags);
     let value = value_to_json(val, eg, &mut compact_formatter_compatible, &mut state, None)?;
     let output = if compact_formatter_compatible {
         serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string())
@@ -18763,7 +19175,7 @@ fn synchronize_aborted_generator_delegate(
             let generator = current.borrow();
             match generator.delegate.as_ref() {
                 Some(YieldFromDelegate::Generator(delegate, _)) => Some(delegate.clone()),
-                Some(YieldFromDelegate::Array(_, _))
+                Some(YieldFromDelegate::Array(_, _, _))
                 | Some(YieldFromDelegate::Iterator(_))
                 | None => None,
             }
@@ -18798,7 +19210,7 @@ fn visible_generator_delegate(
                     Some(delegate.clone())
                 }
                 Some(YieldFromDelegate::Generator(_, _))
-                | Some(YieldFromDelegate::Array(_, _))
+                | Some(YieldFromDelegate::Array(_, _, _))
                 | Some(YieldFromDelegate::Iterator(_))
                 | None => None,
             }
@@ -18819,7 +19231,7 @@ fn has_completed_generator_delegate(gen_ref: &crate::vm::generator::GeneratorRef
             let generator = current.borrow();
             match generator.delegate.as_ref() {
                 Some(YieldFromDelegate::Generator(delegate, _)) => Some(delegate.clone()),
-                Some(YieldFromDelegate::Array(_, _))
+                Some(YieldFromDelegate::Array(_, _, _))
                 | Some(YieldFromDelegate::Iterator(_))
                 | None => None,
             }
@@ -19177,6 +19589,12 @@ fn fn_preg_replace(
                 ArrayKey::String(key) => result.set_str(&key, Value::string(replaced)),
             }
         }
+        copy_array_key_provenance(
+            arg!(ed, 2)
+                .as_array()
+                .expect("preg_replace subject array was matched above"),
+            &result,
+        );
         if has_count {
             arg_mut!(ed, 4, Value::long(total_count as i64));
         }
@@ -21156,6 +21574,7 @@ fn call_resolved_owned_iter_with_named<I>(
     num_args: usize,
     args: I,
     named_variadic: Vec<(String, Value)>,
+    named_variadic_external_byte_keys: bool,
 ) -> Result<Value, VmError>
 where
     I: Iterator<Item = Value>,
@@ -21169,8 +21588,15 @@ where
         for value in values.drain(start..end) {
             arguments.push(value);
         }
+        if named_variadic_external_byte_keys {
+            arguments.promote_keys_to_external_storage();
+        }
         for (name, value) in named_variadic {
-            arguments.set_str(&name, value);
+            if named_variadic_external_byte_keys {
+                arguments.set(ArrayKey::String(name), value);
+            } else {
+                arguments.set_str(&name, value);
+            }
         }
         return call_magic_resolved_with_array(eg, resolved, arguments);
     }
@@ -21195,6 +21621,7 @@ where
         resolved.use_vars.len(),
         resolved.closure_static_vars.clone(),
         named_variadic,
+        named_variadic_external_byte_keys,
     )
 }
 
@@ -21204,6 +21631,7 @@ fn call_resolved_owned_iter_with_named_from<I>(
     num_args: usize,
     args: I,
     named_variadic: Vec<(String, Value)>,
+    named_variadic_external_byte_keys: bool,
     logical_caller: *mut ExecuteData,
     file: &str,
     line: usize,
@@ -21233,6 +21661,7 @@ where
         resolved.use_vars.len(),
         resolved.closure_static_vars.clone(),
         named_variadic,
+        named_variadic_external_byte_keys,
         (file.to_string(), line),
         None,
         true,
@@ -21463,6 +21892,7 @@ fn call_resolved_with_values_from(
             resolved.use_vars.len(),
             resolved.closure_static_vars.clone(),
             Vec::new(),
+            false,
             (file.to_string(), line),
             Some(&error),
             false,
@@ -21491,6 +21921,7 @@ fn call_resolved_with_values_from(
         resolved.use_vars.len(),
         resolved.closure_static_vars.clone(),
         Vec::new(),
+        false,
         (file.to_string(), line),
         None,
         capture_preentry_error_origin,
@@ -21560,6 +21991,7 @@ fn call_resolved_with_php_array_at(
                     .chain(normalized)
                     .chain(resolved.use_vars.iter().map(Value::clone_closure_capture)),
                 Vec::new(),
+                false,
                 logical_caller,
                 file,
                 line,
@@ -21587,17 +22019,26 @@ fn call_resolved_with_php_array_at(
     let mut named_variadic: Vec<(String, Value)> = Vec::new();
     let mut pos_cursor = 0usize;
     let mut seen_named = false;
+    let external_byte_keys = args.has_external_byte_keys();
 
     for (key, val) in args.iter() {
         match key {
             ArrayKey::String(name) => {
                 seen_named = true;
-                if let Some(idx) = param_names.iter().position(|p| p == name.as_str()) {
+                let lookup_name = named_argument_lookup_name(&name, external_byte_keys);
+                if let Some(idx) = lookup_name.as_deref().and_then(|lookup_name| {
+                    param_names
+                        .iter()
+                        .position(|parameter| parameter.as_str() == lookup_name)
+                }) {
                     if idx < num_params {
                         if !positional[idx].is_undef() {
                             eg.exception = Some(crate::value::make_error_value(
                                 "Error",
-                                &format!("Named parameter ${} overwrites previous argument", name),
+                                &format!(
+                                    "Named parameter ${} overwrites previous argument",
+                                    lookup_name.as_deref().unwrap_or(name.as_str())
+                                ),
                             ));
                             return Ok(Value::null());
                         }
@@ -21613,7 +22054,10 @@ fn call_resolved_with_php_array_at(
                 } else {
                     eg.exception = Some(crate::value::make_error_value(
                         "Error",
-                        &format!("Unknown named parameter ${}", name),
+                        &format!(
+                            "Unknown named parameter ${}",
+                            lookup_name.as_deref().unwrap_or(name.as_str())
+                        ),
                     ));
                     return Ok(Value::null());
                 }
@@ -21682,6 +22126,7 @@ fn call_resolved_with_php_array_at(
                 .chain(normalized)
                 .chain(resolved.use_vars.iter().map(Value::clone_closure_capture)),
             named_variadic,
+            args.has_external_byte_keys(),
             logical_caller,
             file,
             line,
@@ -21698,6 +22143,7 @@ fn call_resolved_with_php_array_at(
             .chain(normalized)
             .chain(resolved.use_vars.iter().cloned()),
         named_variadic,
+        args.has_external_byte_keys(),
     )
 }
 
@@ -21708,6 +22154,20 @@ fn call_resolved_with_php_array(
     preserve_reference_aliases: bool,
 ) -> Result<Value, VmError> {
     call_resolved_with_php_array_at(eg, resolved, args, preserve_reference_aliases, None)
+}
+
+/// Materialize the PHP bytes of a named-argument key only for signature
+/// lookup. Arrays using the external byte-key convention keep their original
+/// storage key for a variadic capture, while valid UTF-8 names bind to the
+/// same declared parameter as an ordinary source identifier.
+#[inline]
+fn named_argument_lookup_name(name: &str, external_byte_keys: bool) -> Option<Cow<'_, str>> {
+    if !external_byte_keys || name.is_ascii() {
+        return Some(Cow::Borrowed(name));
+    }
+    String::from_utf8(php_string_to_bytes(name))
+        .map(Cow::Owned)
+        .ok()
 }
 
 fn source_unpack_argument(
@@ -21816,7 +22276,9 @@ fn call_resolved_with_source_unpack(
 ) -> Result<Value, VmError> {
     if resolved.is_magic_call {
         let mut arguments = PhpArray::new();
+        arguments.absorb_key_provenance_from(args);
         for (key, value) in args.iter() {
+            let key = arguments.normalize_key_from_array(key, args);
             arguments.set(key, value.dereferenced().clone());
         }
         return call_magic_resolved_with_array(eg, &resolved, arguments);
@@ -21832,6 +22294,7 @@ fn call_resolved_with_source_unpack(
     let mut named_extras = Vec::new();
     let mut positional_cursor = 0usize;
     let mut highest_fixed = 0usize;
+    let external_byte_keys = args.has_external_byte_keys();
 
     for (key, value) in args.iter() {
         match key {
@@ -21871,12 +22334,20 @@ fn call_resolved_with_source_unpack(
                 positional_cursor += 1;
             }
             ArrayKey::String(name) => {
-                if let Some(index) = param_names.iter().position(|parameter| parameter == &name) {
+                let lookup_name = named_argument_lookup_name(&name, external_byte_keys);
+                if let Some(index) = lookup_name.as_deref().and_then(|lookup_name| {
+                    param_names
+                        .iter()
+                        .position(|parameter| parameter.as_str() == lookup_name)
+                }) {
                     if index < fixed_count {
                         if !fixed[index].is_undef() {
                             eg.exception = Some(crate::value::make_error_value(
                                 "Error",
-                                &format!("Named parameter ${name} overwrites previous argument"),
+                                &format!(
+                                    "Named parameter ${} overwrites previous argument",
+                                    lookup_name.as_deref().unwrap_or(name.as_str())
+                                ),
                             ));
                             return Ok(Value::null());
                         }
@@ -21916,7 +22387,7 @@ fn call_resolved_with_source_unpack(
                         else {
                             return Ok(Value::null());
                         };
-                        named_extras.push((name, value));
+                        named_extras.push((name.clone(), value));
                     }
                 } else if is_variadic {
                     if named_extras.iter().any(|(existing, _)| existing == &name) {
@@ -21939,11 +22410,14 @@ fn call_resolved_with_source_unpack(
                     else {
                         return Ok(Value::null());
                     };
-                    named_extras.push((name, value));
+                    named_extras.push((name.clone(), value));
                 } else {
                     eg.exception = Some(crate::value::make_error_value(
                         "Error",
-                        &format!("Unknown named parameter ${name}"),
+                        &format!(
+                            "Unknown named parameter ${}",
+                            lookup_name.as_deref().unwrap_or(name.as_str())
+                        ),
                     ));
                     return Ok(Value::null());
                 }
@@ -21985,6 +22459,7 @@ fn call_resolved_with_source_unpack(
             .chain(normalized)
             .chain(resolved.use_vars.iter().map(Value::clone_closure_capture)),
         named_extras,
+        args.has_external_byte_keys(),
     )
 }
 
@@ -22268,6 +22743,7 @@ pub(crate) fn callback_reference_warning_messages(
     let public_arity = signature.public_arity() as usize;
     let mut positional_index = 0usize;
     let mut warnings = Vec::new();
+    let external_byte_keys = arguments.has_external_byte_keys();
     for (key, value) in arguments.iter() {
         let parameter_index = match key {
             ArrayKey::Int(_) => {
@@ -22275,11 +22751,18 @@ pub(crate) fn callback_reference_warning_messages(
                 positional_index += 1;
                 index
             }
-            ArrayKey::String(name) => signature
-                .param_names
-                .iter()
-                .position(|parameter| parameter == name.as_str())
-                .unwrap_or(public_arity),
+            ArrayKey::String(name) => {
+                let lookup_name = named_argument_lookup_name(&name, external_byte_keys);
+                lookup_name
+                    .as_deref()
+                    .and_then(|lookup_name| {
+                        signature
+                            .param_names
+                            .iter()
+                            .position(|parameter| parameter.as_str() == lookup_name)
+                    })
+                    .unwrap_or(public_arity)
+            }
         };
         let reference_index = if parameter_index < public_arity {
             parameter_index
@@ -22574,7 +23057,8 @@ fn fn_exit(ed: *mut ExecuteData, _rv: *mut Value, eg: &mut ExecutorGlobals) -> R
     match status.value_type() {
         ValueType::Long => Err(VmError::Exit(status.as_long().unwrap_or(0) as i32)),
         ValueType::String => {
-            print!("{}", status.as_str().unwrap_or(""));
+            let bytes = status.php_string_bytes().unwrap_or_default();
+            eg.write_output(&bytes);
             Err(VmError::Exit(0))
         }
         ValueType::Null if !strict => {
@@ -22625,7 +23109,8 @@ fn fn_exit(ed: *mut ExecuteData, _rv: *mut Value, eg: &mut ExecutorGlobals) -> R
                     return Ok(());
                 }
             }
-            print!("{}", status.echo_to_string_with_precision(eg.precision));
+            let rendered = status.echo_to_string_with_precision(eg.precision);
+            eg.write_output(rendered.as_bytes());
             Err(VmError::Exit(0))
         }
         ValueType::Object if !strict => {
@@ -22636,7 +23121,7 @@ fn fn_exit(ed: *mut ExecuteData, _rv: *mut Value, eg: &mut ExecutorGlobals) -> R
             let Some(converted) = converted else {
                 return reject(eg);
             };
-            let Some(rendered) = converted.as_str() else {
+            let Some(rendered) = converted.php_string_bytes() else {
                 let class_name = status.diagnostic_type_name();
                 eg.exception = Some(crate::value::make_error_value(
                     "TypeError",
@@ -22644,7 +23129,7 @@ fn fn_exit(ed: *mut ExecuteData, _rv: *mut Value, eg: &mut ExecutorGlobals) -> R
                 ));
                 return Ok(());
             };
-            print!("{rendered}");
+            eg.write_output(&rendered);
             Err(VmError::Exit(0))
         }
         _ => reject(eg),
@@ -23031,9 +23516,10 @@ fn array_key_value(key: &ArrayKey, external_byte_keys: bool) -> Value {
 }
 
 #[inline(always)]
-fn array_key_into_value(key: ArrayKey) -> Value {
+fn array_key_into_value(key: ArrayKey, external_byte_keys: bool) -> Value {
     match key {
         ArrayKey::Int(value) => Value::long(value),
+        ArrayKey::String(value) if external_byte_keys => Value::binary_string_from_storage(value),
         ArrayKey::String(value) => Value::string(value),
     }
 }
@@ -23742,10 +24228,10 @@ fn fn_array_walk(
             else {
                 break;
             };
-            let key_value = match &key {
-                ArrayKey::Int(key) => Value::long(*key),
-                ArrayKey::String(key) => Value::string(key.clone()),
-            };
+            let external_byte_keys = (&*arr_ptr)
+                .as_array()
+                .is_some_and(PhpArray::has_external_byte_keys);
+            let key_value = array_key_value(&key, external_byte_keys);
             if !report_array_walk_userdata_reference_warning(
                 ed,
                 eg,
@@ -23832,6 +24318,7 @@ fn walk_array_recursive_snapshot(
     userdata: Option<&Value>,
     callback_arg0_by_ref: bool,
 ) -> Result<PhpArray, VmError> {
+    let external_byte_keys = array.has_external_byte_keys();
     let pairs = array
         .iter()
         .map(|(key, value)| (key, value.clone()))
@@ -23851,10 +24338,7 @@ fn walk_array_recursive_snapshot(
                 callback_arg0_by_ref,
             )?)
         } else {
-            let key_value = match &key {
-                ArrayKey::Int(key) => Value::long(*key),
-                ArrayKey::String(key) => Value::string(key.clone()),
-            };
+            let key_value = array_key_value(&key, external_byte_keys);
             if !report_array_walk_userdata_reference_warning(
                 ed,
                 eg,
@@ -23961,10 +24445,10 @@ fn walk_array_recursive_live(
                     scalar_completed,
                 )?;
             } else {
-                let key_value = match &key {
-                    ArrayKey::Int(key) => Value::long(*key),
-                    ArrayKey::String(key) => Value::string(key.clone()),
-                };
+                let external_byte_keys = (&*owner)
+                    .as_array()
+                    .is_some_and(PhpArray::has_external_byte_keys);
+                let key_value = array_key_value(&key, external_byte_keys);
                 if !report_array_walk_userdata_reference_warning(
                     ed,
                     eg,
@@ -24456,7 +24940,7 @@ fn fn_ksort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
             .collect();
         stable_sort_checked(&mut pairs, |(left, _), (right, _)| {
             Ok::<_, VmError>(
-                sort_key_order(left, right, flags, eg.precision)
+                sort_key_order(left, right, flags, eg.precision, external_byte_keys)
                     .unwrap_or(std::cmp::Ordering::Equal),
             )
         })?;
@@ -24493,7 +24977,7 @@ fn fn_krsort(
             .collect();
         stable_sort_checked(&mut pairs, |(left, _), (right, _)| {
             Ok::<_, VmError>(
-                sort_key_order(left, right, flags, eg.precision)
+                sort_key_order(left, right, flags, eg.precision, external_byte_keys)
                     .unwrap_or(std::cmp::Ordering::Equal)
                     .reverse(),
             )
@@ -26160,10 +26644,7 @@ fn fn_array_key_first(
     let arr_val = arg!(ed, 0);
     if let Some(arr) = arr_val.as_array() {
         if let Some((k, _)) = arr.iter().next() {
-            match k {
-                ArrayKey::Int(i) => ret!(rv, Value::long(i)),
-                ArrayKey::String(s) => ret!(rv, Value::string(s.clone())),
-            }
+            ret!(rv, array_key_into_value(k, arr.has_external_byte_keys()));
         }
     }
     ret!(rv, Value::null());
@@ -26355,11 +26836,13 @@ fn fn_prev(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Re
 
 /// key($array): int|string|null for the array's current internal cursor.
 fn fn_key(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    if let Some(key) = arg!(ed, 0).as_array().and_then(PhpArray::cursor_key) {
-        match key {
-            ArrayKey::Int(key) => ret!(rv, Value::long(key)),
-            ArrayKey::String(key) => ret!(rv, Value::string(key)),
-        }
+    if let Some(array) = arg!(ed, 0).as_array()
+        && let Some(key) = array.cursor_key()
+    {
+        ret!(
+            rv,
+            array_key_into_value(key, array.has_external_byte_keys())
+        );
     }
     if arg!(ed, 0).as_object().is_some() {
         return object_cursor_value(ed, rv, eg, "key", ObjectCursorOperation::Key);
@@ -26380,10 +26863,7 @@ fn fn_array_key_last(
     let arr_val = arg!(ed, 0);
     if let Some(arr) = arr_val.as_array() {
         if let Some((k, _)) = arr.iter().last() {
-            match k {
-                ArrayKey::Int(i) => ret!(rv, Value::long(i)),
-                ArrayKey::String(s) => ret!(rv, Value::string(s.clone())),
-            }
+            ret!(rv, array_key_into_value(k, arr.has_external_byte_keys()));
         }
     }
     ret!(rv, Value::null());
@@ -26947,14 +27427,6 @@ fn percent_decode_php_bytes(bytes: &[u8], plus_as_space: bool) -> Vec<u8> {
         }
     }
     out
-}
-
-fn percent_decode_bytes(value: &str, plus_as_space: bool) -> String {
-    let decoded = percent_decode_php_bytes(value.as_bytes(), plus_as_space);
-    match String::from_utf8(decoded) {
-        Ok(decoded) => decoded,
-        Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
-    }
 }
 
 fn parse_str_normalize_key(key: &[u8], malformed_bracket: bool) -> Vec<u8> {

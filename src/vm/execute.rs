@@ -100,7 +100,7 @@ use crate::runtime::ExecutorGlobals;
 use crate::value::ExactOrderedIntLayout;
 use crate::value::{
     ArrayKey, PhpArray, PhpClosure, PhpObject, Value, ValueType, canonical_decimal_array_key,
-    make_error_value,
+    make_error_value, php_byte_string_bytes, php_byte_string_from_bytes,
 };
 #[cfg(all(
     feature = "quick-loops",
@@ -4391,6 +4391,76 @@ struct ComparisonContext {
     active_right: std::collections::HashSet<usize>,
 }
 
+#[inline]
+fn php_string_values_cmp(left: &Value, right: &Value) -> std::cmp::Ordering {
+    debug_assert_eq!(left.value_type(), ValueType::String);
+    debug_assert_eq!(right.value_type(), ValueType::String);
+    let left_storage = left.as_str().unwrap();
+    let right_storage = right.as_str().unwrap();
+    match (left.is_binary_string(), right.is_binary_string()) {
+        (false, false) | (true, true) => left_storage.cmp(right_storage),
+        (true, false) => php_byte_string_bytes(left_storage)
+            .as_slice()
+            .cmp(right_storage.as_bytes()),
+        (false, true) => left_storage
+            .as_bytes()
+            .cmp(php_byte_string_bytes(right_storage).as_slice()),
+    }
+}
+
+#[inline]
+fn php_string_values_equal(left: &Value, right: &Value) -> bool {
+    php_string_values_cmp(left, right) == std::cmp::Ordering::Equal
+}
+
+#[inline]
+fn php_array_keys_equal(
+    left: &ArrayKey,
+    left_external_byte_keys: bool,
+    right: &ArrayKey,
+    right_external_byte_keys: bool,
+) -> bool {
+    match (left, right) {
+        (ArrayKey::Int(left), ArrayKey::Int(right)) => left == right,
+        (ArrayKey::String(left), ArrayKey::String(right))
+            if left_external_byte_keys == right_external_byte_keys =>
+        {
+            left == right
+        }
+        (ArrayKey::String(left), ArrayKey::String(right)) if left_external_byte_keys => {
+            php_byte_string_bytes(left).as_slice() == right.as_bytes()
+        }
+        (ArrayKey::String(left), ArrayKey::String(right)) => {
+            left.as_bytes() == php_byte_string_bytes(right).as_slice()
+        }
+        _ => false,
+    }
+}
+
+#[inline]
+fn php_array_get_with_key_provenance<'a>(
+    array: &'a PhpArray,
+    key: &ArrayKey,
+    source_external_byte_keys: bool,
+) -> Option<&'a Value> {
+    match key {
+        ArrayKey::Int(key) => array.get_int(*key),
+        ArrayKey::String(key) if array.has_external_byte_keys() == source_external_byte_keys => {
+            array.get_str(key)
+        }
+        ArrayKey::String(key) if array.has_external_byte_keys() => {
+            let storage = php_byte_string_from_bytes(key.as_bytes().iter().copied());
+            array.get_str(&storage)
+        }
+        ArrayKey::String(key) => {
+            let bytes = php_byte_string_bytes(key);
+            std::str::from_utf8(&bytes)
+                .ok()
+                .and_then(|text| array.get_str(text))
+        }
+    }
+}
+
 /// PHP == comparison for compound values. Recursive structures raise a
 /// catchable Error through the checked entry point rather than overflowing the
 /// host stack. Scalar leaves retain PHP's ordinary loose behavior.
@@ -4455,7 +4525,7 @@ pub(crate) fn values_equal_checked_with_precision(
                     (Some(left), Some(right)) => {
                         compare_php_numeric_strings(left, right) == Some(std::cmp::Ordering::Equal)
                     }
-                    _ => left == right,
+                    _ => php_string_values_equal(a, b),
                 }
             }
             (ValueType::Long | ValueType::Double | ValueType::Resource, ValueType::String) => {
@@ -4524,7 +4594,7 @@ pub(crate) fn values_equal_checked_with_precision(
                     (Some(left), Some(right)) => {
                         compare_php_numeric_strings(left, right) == Some(std::cmp::Ordering::Equal)
                     }
-                    _ => left == right,
+                    _ => php_string_values_equal(a, b),
                 }
             }
             (ValueType::Long | ValueType::Double | ValueType::Resource, ValueType::String) => {
@@ -4550,12 +4620,11 @@ pub(crate) fn values_equal_checked_with_precision(
                 let result = if left.len() != right.len() {
                     Ok(false)
                 } else {
+                    let left_external_byte_keys = left.has_external_byte_keys();
                     let mut equal = true;
                     for (key, value) in left.iter() {
-                        let other = match key {
-                            ArrayKey::Int(key) => right.get_int(key),
-                            ArrayKey::String(key) => right.get_str(&key),
-                        };
+                        let other =
+                            php_array_get_with_key_provenance(right, &key, left_external_byte_keys);
                         let Some(other) = other else {
                             equal = false;
                             break;
@@ -4714,7 +4783,7 @@ pub(crate) fn values_compare_checked_with_precision(
                     ) {
                         (Some(left), Some(right)) => compare_php_numeric_strings(left, right)
                             .map_or(PHP_COMPARISON_UNORDERED, ordering),
-                        _ => ordering(left.cmp(right)),
+                        _ => ordering(php_string_values_cmp(a, b)),
                     },
                 )
             }
@@ -4764,11 +4833,10 @@ pub(crate) fn values_compare_checked_with_precision(
                 let mut result = ordering(left.len().cmp(&right.len()));
                 let mut comparison_error = false;
                 if result == 0 {
+                    let left_external_byte_keys = left.has_external_byte_keys();
                     for (key, value) in left.iter() {
-                        let other = match key {
-                            ArrayKey::Int(key) => right.get_int(key),
-                            ArrayKey::String(key) => right.get_str(&key),
-                        };
+                        let other =
+                            php_array_get_with_key_provenance(right, &key, left_external_byte_keys);
                         let Some(other) = other else {
                             result = 1;
                             break;
@@ -4895,7 +4963,7 @@ pub(crate) fn values_identical_checked(a: &Value, b: &Value) -> Result<bool, ()>
             ValueType::True | ValueType::False => true,
             ValueType::Long => a.as_long() == b.as_long(),
             ValueType::Double => a.as_double() == b.as_double(),
-            ValueType::String => a.as_str() == b.as_str(),
+            ValueType::String => php_string_values_equal(a, b),
             ValueType::Array => {
                 let left_identity = a.array_identity().unwrap();
                 let right_identity = b.array_identity().unwrap();
@@ -4916,8 +4984,16 @@ pub(crate) fn values_identical_checked(a: &Value, b: &Value) -> Result<bool, ()>
                     return Ok(false);
                 }
                 let mut identical = true;
+                let left_external_byte_keys = arr_a.has_external_byte_keys();
+                let right_external_byte_keys = arr_b.has_external_byte_keys();
                 for ((ka, va), (kb, vb)) in arr_a.iter().zip(arr_b.iter()) {
-                    if ka != kb || !identical_inner(va, vb, context, depth + 1)? {
+                    if !php_array_keys_equal(
+                        &ka,
+                        left_external_byte_keys,
+                        &kb,
+                        right_external_byte_keys,
+                    ) || !identical_inner(va, vb, context, depth + 1)?
+                    {
                         identical = false;
                         break;
                     }
@@ -4961,7 +5037,7 @@ pub(crate) fn values_identical_checked(a: &Value, b: &Value) -> Result<bool, ()>
             ValueType::True | ValueType::False => true,
             ValueType::Long => a.as_long() == b.as_long(),
             ValueType::Double => a.as_double() == b.as_double(),
-            ValueType::String => a.as_str() == b.as_str(),
+            ValueType::String => php_string_values_equal(a, b),
             ValueType::Object => a.object_identity() == b.object_identity(),
             ValueType::Closure => a
                 .as_closure()
