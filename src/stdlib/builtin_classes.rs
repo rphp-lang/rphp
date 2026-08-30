@@ -7,6 +7,9 @@
 use super::*;
 use crate::compiler::compile::ClassDef;
 use crate::value::make_error_value;
+use crate::vm::instruction::{
+    FETCH_DIM_COMPOUND, FETCH_DIM_EMPTY, FETCH_DIM_MUTABLE, FETCH_DIM_UNSET,
+};
 
 const ROUNDING_MODE_CLASS: &str = "RoundingMode";
 const ROUNDING_MODE_CASES: [&str; 8] = [
@@ -1129,6 +1132,25 @@ fn fn_closure_invoke(
     ret!(rv, result);
 }
 
+const ARRAY_OBJECT_STORAGE: &str = "ArrayObject\0storage";
+const ARRAY_ITERATOR_STORAGE: &str = "ArrayIterator\0storage";
+
+#[inline]
+fn array_object_storage_key(object: &PhpObject) -> &'static str {
+    if object.contains_property(ARRAY_OBJECT_STORAGE) {
+        ARRAY_OBJECT_STORAGE
+    } else {
+        ARRAY_ITERATOR_STORAGE
+    }
+}
+
+pub(crate) fn array_object_iterable_values(receiver: &Value) -> Option<Value> {
+    receiver.as_object().and_then(|object| {
+        let storage = array_object_storage_key(&object);
+        object.get_property(storage).cloned()
+    })
+}
+
 fn fn_array_iterator_construct(
     ed: *mut ExecuteData,
     _rv: *mut Value,
@@ -1139,7 +1161,8 @@ fn fn_array_iterator_construct(
         .cloned()
         .unwrap_or_else(|| Value::array(PhpArray::new()));
     if let Some(mut object) = arg!(ed, 0).as_object_mut() {
-        object.set_property("__rphp_iterator_values", values);
+        let storage = array_object_storage_key(&object);
+        object.set_property(storage, values);
     }
     Ok(())
 }
@@ -1150,8 +1173,9 @@ fn fn_array_iterator_count(
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let count = arg!(ed, 0).as_object().map_or(0, |object| {
+        let storage = array_object_storage_key(&object);
         object
-            .get_property("__rphp_iterator_values")
+            .get_property(storage)
             .and_then(Value::as_array)
             .map_or(0, PhpArray::len)
     });
@@ -1161,15 +1185,312 @@ fn fn_array_iterator_count(
 fn fn_array_object_append(
     ed: *mut ExecuteData,
     _rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let value = arg!(ed, 1).dereferenced().clone();
     if let Some(mut object) = arg!(ed, 0).as_object_mut()
+        && let storage = array_object_storage_key(&object)
         && let Some(values) = object
-            .get_property_mut("__rphp_iterator_values")
+            .get_property_mut(storage)
+            .and_then(Value::as_array_mut)
+        && !values.try_push(value)
+    {
+        eg.exception = Some(make_error_value(
+            "Error",
+            "Cannot add element to the array as the next element is already occupied",
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum ArrayObjectOffsetOperation {
+    Access,
+    Isset,
+    Unset,
+}
+
+fn array_object_offset_key(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    value: &Value,
+    operation: ArrayObjectOffsetOperation,
+) -> Result<Option<ArrayKey>, VmError> {
+    let value = value.dereferenced();
+    let key = match value_to_array_key(value) {
+        Ok(key) => key,
+        Err(ArrayKeyError::DeprecatedNull) => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                "Using null as an array offset is deprecated, use an empty string instead",
+            )?;
+            ArrayKey::String(String::new())
+        }
+        Err(ArrayKeyError::DeprecatedFloat(integer)) => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                &format!(
+                    "Implicit conversion from float {} to int loses precision",
+                    value.echo_to_string_with_precision(-1)
+                ),
+            )?;
+            ArrayKey::Int(integer)
+        }
+        Err(ArrayKeyError::NonRepresentableFloat {
+            integer,
+            also_deprecated,
+        }) => {
+            let rendered = value.echo_to_string_with_precision(-1);
+            report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("The float {rendered} is not representable as an int, cast occurred"),
+            )?;
+            if eg.exception.is_none() && also_deprecated {
+                report_internal_deprecation(
+                    eg,
+                    ed,
+                    &format!("Implicit conversion from float {rendered} to int loses precision"),
+                )?;
+            }
+            ArrayKey::Int(integer)
+        }
+        Err(ArrayKeyError::Resource(resource)) => {
+            report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("Resource ID#{resource} used as offset, casting to integer ({resource})"),
+            )?;
+            ArrayKey::Int(resource)
+        }
+        Err(ArrayKeyError::Illegal) => {
+            let kind = value.diagnostic_type_name();
+            let message = match operation {
+                ArrayObjectOffsetOperation::Access => {
+                    format!("Cannot access offset of type {kind} on ArrayObject")
+                }
+                ArrayObjectOffsetOperation::Isset => {
+                    format!("Cannot access offset of type {kind} in isset or empty")
+                }
+                ArrayObjectOffsetOperation::Unset => {
+                    format!("Cannot unset offset of type {kind} on ArrayObject")
+                }
+            };
+            eg.exception = Some(make_error_value("TypeError", &message));
+            return Ok(None);
+        }
+    };
+    Ok(eg.exception.is_none().then_some(key))
+}
+
+#[inline]
+fn array_object_value<'a>(array: &'a PhpArray, key: &ArrayKey) -> Option<&'a Value> {
+    match key {
+        ArrayKey::Int(key) => array.get_int(*key),
+        ArrayKey::String(key) => array.get_str(key),
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArrayObjectOffsetGetContext {
+    Read,
+    Mutable,
+    Append,
+    AfterExists,
+    Unset,
+}
+
+fn array_object_offset_get_context(ed: *mut ExecuteData) -> ArrayObjectOffsetGetContext {
+    // Internal ArrayObject dimensions are engine handlers rather than user
+    // overloads. The current-site protocol bridge links their synchronous
+    // activation to the consuming opcode, which is the distinction Zend uses
+    // between a read, a writable dimension, and anonymous append fetch.
+    let Some((opcode, flags)) = crate::vm::execute::instruction_for_internal_call(ed) else {
+        return ArrayObjectOffsetGetContext::Read;
+    };
+    match opcode {
+        OpCode::BindArrayAppendRef => ArrayObjectOffsetGetContext::Append,
+        OpCode::BindArrayDimRef => ArrayObjectOffsetGetContext::Mutable,
+        OpCode::FetchDimR if flags & FETCH_DIM_UNSET != 0 => ArrayObjectOffsetGetContext::Unset,
+        OpCode::FetchDimR if flags & FETCH_DIM_EMPTY != 0 => {
+            ArrayObjectOffsetGetContext::AfterExists
+        }
+        OpCode::FetchDimR if flags & FETCH_DIM_COMPOUND != 0 => ArrayObjectOffsetGetContext::Read,
+        OpCode::FetchDimR if flags & FETCH_DIM_MUTABLE != 0 => ArrayObjectOffsetGetContext::Mutable,
+        _ => ArrayObjectOffsetGetContext::Read,
+    }
+}
+
+fn array_object_offset_key_after_exists(value: &Value) -> Option<ArrayKey> {
+    match value_to_array_key(value.dereferenced()) {
+        Ok(key) => Some(key),
+        Err(ArrayKeyError::DeprecatedNull) => Some(ArrayKey::String(String::new())),
+        Err(ArrayKeyError::DeprecatedFloat(integer)) | Err(ArrayKeyError::Resource(integer)) => {
+            Some(ArrayKey::Int(integer))
+        }
+        Err(ArrayKeyError::NonRepresentableFloat { integer, .. }) => Some(ArrayKey::Int(integer)),
+        Err(ArrayKeyError::Illegal) => None,
+    }
+}
+
+fn fn_array_object_offset_get(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let context = array_object_offset_get_context(ed);
+    if context == ArrayObjectOffsetGetContext::Append {
+        ret!(rv, Value::null());
+    }
+    if context == ArrayObjectOffsetGetContext::Unset
+        && matches!(
+            value_to_array_key(arg!(ed, 1).dereferenced()),
+            Err(ArrayKeyError::Illegal)
+        )
+    {
+        ret!(rv, Value::null());
+    }
+    let key = if context == ArrayObjectOffsetGetContext::AfterExists {
+        let Some(key) = array_object_offset_key_after_exists(arg!(ed, 1)) else {
+            return Ok(());
+        };
+        key
+    } else {
+        let Some(key) =
+            array_object_offset_key(ed, eg, arg!(ed, 1), ArrayObjectOffsetOperation::Access)?
+        else {
+            return Ok(());
+        };
+        key
+    };
+    let Some(mut object) = arg!(ed, 0).as_object_mut() else {
+        ret!(rv, Value::null());
+    };
+    let storage = array_object_storage_key(&object);
+    let Some(array) = object
+        .get_property_mut(storage)
+        .and_then(Value::as_array_mut)
+    else {
+        ret!(rv, Value::null());
+    };
+    if array_object_value(array, &key).is_none() && context == ArrayObjectOffsetGetContext::Mutable
+    {
+        array.set(key.clone(), Value::null());
+    } else if array_object_value(array, &key).is_none() {
+        let displayed = match &key {
+            ArrayKey::Int(key) => key.to_string(),
+            ArrayKey::String(key) => format!("\"{key}\""),
+        };
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!("Undefined array key {displayed}"),
+        )?;
+        ret!(rv, Value::null());
+    }
+    let slot = array
+        .get_key_mut(&key)
+        .expect("ArrayObject storage key was checked before reference promotion");
+    let binding = if slot.is_owned_reference() {
+        slot.clone_owned_reference_alias()
+    } else if slot.is_reference() {
+        // The ArrayObject storage retains the borrowed reference while the
+        // protocol result is consumed synchronously by the VM.
+        slot.clone_closure_capture()
+    } else {
+        let value = std::mem::replace(slot, Value::undef());
+        let reference = Value::owned_reference(value);
+        let binding = reference.clone_owned_reference_alias();
+        *slot = reference;
+        binding
+    };
+    ret!(rv, binding);
+}
+
+fn fn_array_object_offset_set(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = arg!(ed, 2).dereferenced().clone();
+    let append = arg!(ed, 1).value_type() == ValueType::Null;
+    let key = if append {
+        None
+    } else {
+        let Some(key) =
+            array_object_offset_key(ed, eg, arg!(ed, 1), ArrayObjectOffsetOperation::Access)?
+        else {
+            return Ok(());
+        };
+        Some(key)
+    };
+    let Some(mut object) = arg!(ed, 0).as_object_mut() else {
+        return Ok(());
+    };
+    let storage = array_object_storage_key(&object);
+    let Some(array) = object
+        .get_property_mut(storage)
+        .and_then(Value::as_array_mut)
+    else {
+        return Ok(());
+    };
+    if let Some(key) = key {
+        array.set(key, value);
+    } else if !array.try_push(value) {
+        eg.exception = Some(make_error_value(
+            "Error",
+            "Cannot add element to the array as the next element is already occupied",
+        ));
+    }
+    Ok(())
+}
+
+fn fn_array_object_offset_exists(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(key) =
+        array_object_offset_key(ed, eg, arg!(ed, 1), ArrayObjectOffsetOperation::Isset)?
+    else {
+        return Ok(());
+    };
+    let exists = arg!(ed, 0).as_object().is_some_and(|object| {
+        let storage = array_object_storage_key(&object);
+        object
+            .get_property(storage)
+            .and_then(Value::as_array)
+            .and_then(|array| array_object_value(array, &key))
+            .is_some_and(|value| value.dereferenced().value_type() != ValueType::Null)
+    });
+    ret!(rv, Value::bool(exists));
+}
+
+fn fn_array_object_offset_unset(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(key) =
+        array_object_offset_key(ed, eg, arg!(ed, 1), ArrayObjectOffsetOperation::Unset)?
+    else {
+        return Ok(());
+    };
+    if let Some(mut object) = arg!(ed, 0).as_object_mut()
+        && let storage = array_object_storage_key(&object)
+        && let Some(array) = object
+            .get_property_mut(storage)
             .and_then(Value::as_array_mut)
     {
-        values.push(value);
+        array.remove(&key);
     }
     Ok(())
 }
@@ -2693,7 +3014,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             false,
         );
         class.properties.push(PropertyDefinition::new(
-            "__rphp_iterator_values".to_string(),
+            "storage".to_string(),
             Some(Value::array(PhpArray::new())),
             Visibility::Private,
             name.to_string(),
@@ -2708,9 +3029,33 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             "array"
         );
         reg_method!(name, "count", fn_array_iterator_count, 1, 0);
-        if name == "ArrayObject" {
-            reg_method!(name, "append", fn_array_object_append, 2, 1, "value");
-        }
+        reg_method!(name, "append", fn_array_object_append, 2, 1, "value");
+        reg_method!(name, "offsetGet", fn_array_object_offset_get, 2, 1, "key");
+        reg_method!(
+            name,
+            "offsetSet",
+            fn_array_object_offset_set,
+            3,
+            2,
+            "key",
+            "value"
+        );
+        reg_method!(
+            name,
+            "offsetExists",
+            fn_array_object_offset_exists,
+            2,
+            1,
+            "key"
+        );
+        reg_method!(
+            name,
+            "offsetUnset",
+            fn_array_object_offset_unset,
+            2,
+            1,
+            "key"
+        );
     }
     let mut spl_object_storage = empty_internal_type(
         "SplObjectStorage",

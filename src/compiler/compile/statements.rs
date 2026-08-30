@@ -95,6 +95,11 @@ pub(super) enum ForeachArrayWriteback {
         line: usize,
     },
     Array(MutableArrayPath),
+    AnonymousDimension {
+        container: u16,
+        container_type: OpType,
+        binding: u16,
+    },
 }
 
 fn compiled_hook_uses_backing_property(
@@ -320,6 +325,20 @@ impl Compiler {
             root = array.as_ref();
         }
         reversed_indices.reverse();
+        if let Expr::ArrayAppendArgument { target, .. } = root {
+            let (source, source_type) =
+                self.compile_array_append_argument_reference(target, &reversed_indices)?;
+            let mut bind = Instruction::new(OpCode::BindCvRef);
+            bind.op1 = source;
+            bind.op1_type = source_type;
+            bind.result = destination;
+            bind.result_type = OpType::Cv;
+            if internal_result {
+                bind._pad |= REFERENCE_RESULT_INTERNAL;
+            }
+            self.push_instruction_at_line(bind, expression_source_line(root));
+            return Ok(());
+        }
         let path = self.compile_mutable_array_path(
             root,
             &reversed_indices,
@@ -365,6 +384,8 @@ impl Compiler {
             array_type,
             writeback,
             keys,
+            false,
+            expression_source_line(target),
         ))
     }
 
@@ -374,6 +395,8 @@ impl Compiler {
         array_type: OpType,
         writeback: ForeachArrayWriteback,
         keys: Vec<(u16, OpType)>,
+        compound: bool,
+        line: usize,
     ) -> (u16, OpType) {
         let appended = self.resolve_cv(&format!("\0array_append_argument_{}", self.next_cv));
         let mut bind_append = Instruction::new(OpCode::BindArrayAppendRef);
@@ -382,12 +405,15 @@ impl Compiler {
         bind_append.result = appended;
         bind_append.result_type = OpType::Cv;
         bind_append._pad |= REFERENCE_RESULT_INTERNAL;
-        self.instructions.push(bind_append);
+        if compound {
+            bind_append._pad |= BIND_ARRAY_APPEND_COMPOUND;
+        }
+        self.push_instruction_at_line(bind_append, line);
 
         // Publish the appended reference cell before the call. The cell then
         // carries later callee mutations back to copied property/nested roots,
         // including when the callee exits by throwing.
-        self.emit_foreach_reference_source_writeback(writeback, array, array_type);
+        self.emit_array_append_source_writeback(writeback, array, array_type);
 
         let mut current = appended;
         for (key, key_type) in keys {
@@ -400,7 +426,7 @@ impl Compiler {
             bind_dimension.result = child;
             bind_dimension.result_type = OpType::Cv;
             bind_dimension._pad |= REFERENCE_RESULT_INTERNAL;
-            self.instructions.push(bind_dimension);
+            self.push_instruction_at_line(bind_dimension, line);
             current = child;
         }
         (current, OpType::Cv)
@@ -510,6 +536,26 @@ impl Compiler {
         Ok(destination)
     }
 
+    /// Compile a dimension supplied to a by-reference call parameter. PHP
+    /// accepts a detached value returned by ArrayAccess::offsetGet() in this
+    /// context without the indirect-modification notice used by an actual
+    /// nested write.
+    pub(super) fn compile_call_array_element_reference_source(
+        &mut self,
+        source: &Expr,
+    ) -> Result<u16, String> {
+        let instruction_start = self.instructions.len();
+        let destination = self.compile_array_element_reference_source(source)?;
+        if let Some(bind) = self.instructions[instruction_start..]
+            .iter_mut()
+            .rev()
+            .find(|instruction| instruction.opcode == OpCode::BindArrayDimRef)
+        {
+            bind._pad |= FETCH_DIM_FUNC_ARG;
+        }
+        Ok(destination)
+    }
+
     pub(super) fn compile_runtime_call_property_argument(
         &mut self,
         source: &Expr,
@@ -602,12 +648,18 @@ impl Compiler {
                 let (value, value_type) = self.compile_expr(source);
                 Ok((value, value_type, ForeachArrayWriteback::Discard))
             }
-            _ => self.compile_foreach_reference_source(
-                source,
-                silent_fetch,
-                warn_undefined_root,
-                false,
-            ),
+            _ => {
+                let result = self.compile_foreach_reference_source(
+                    source,
+                    silent_fetch,
+                    warn_undefined_root,
+                    false,
+                )?;
+                if matches!(&result.2, ForeachArrayWriteback::Array(_)) {
+                    self.mark_trailing_mutable_dimension_fetches();
+                }
+                Ok(result)
+            }
         }
     }
 
@@ -985,6 +1037,50 @@ impl Compiler {
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
             }
+            ForeachArrayWriteback::AnonymousDimension {
+                container,
+                container_type,
+                binding,
+            } => {
+                let mut update = Instruction::new(OpCode::AssignCv);
+                update.op1 = binding;
+                update.op1_type = OpType::Cv;
+                update.op2 = array;
+                update.op2_type = array_type;
+                self.instructions.push(update);
+
+                let mut assign = Instruction::new(OpCode::ArrayPushOp);
+                assign.op1 = container;
+                assign.op1_type = container_type;
+                assign.op2 = array;
+                assign.op2_type = array_type;
+                assign._pad |= ARRAY_ELEMENT_COMPOUND_APPEND_WRITEBACK;
+                self.instructions.push(assign);
+            }
+        }
+    }
+
+    /// Commit a container fetched only to support a nested anonymous append.
+    /// Array parents still need ordinary COW reconstruction. ArrayAccess
+    /// parents instead follow PHP's indirect-modification contract: a returned
+    /// reference was mutated in place and a returned value remains detached,
+    /// so the VM must not synthesize a later `offsetSet()` call.
+    pub(super) fn emit_array_append_source_writeback(
+        &mut self,
+        writeback: ForeachArrayWriteback,
+        array: u16,
+        array_type: OpType,
+    ) {
+        let indirect_dimension = matches!(&writeback, ForeachArrayWriteback::Array(_));
+        self.emit_foreach_reference_source_writeback(writeback, array, array_type);
+        if indirect_dimension
+            && let Some(assign) = self
+                .instructions
+                .iter_mut()
+                .rev()
+                .find(|instruction| instruction.opcode == OpCode::AssignDim)
+        {
+            assign._pad |= ASSIGN_DIM_INDIRECT_REBUILD;
         }
     }
 
@@ -1339,6 +1435,7 @@ impl Compiler {
                 array: u16,
                 array_type: OpType,
                 writeback: ForeachArrayWriteback,
+                deferred_fetches: Vec<Instruction>,
             },
             DeferredObjectAppend {
                 object: u16,
@@ -1485,10 +1582,24 @@ impl Compiler {
                 _ => {
                     let (array, array_type, writeback) =
                         self.compile_array_append_source(target, true, false)?;
+                    let mut deferred_fetches = Vec::new();
+                    while self
+                        .instructions
+                        .last()
+                        .is_some_and(|instruction| instruction.opcode == OpCode::FetchDimR)
+                    {
+                        deferred_fetches.push(
+                            self.instructions
+                                .pop()
+                                .expect("checked trailing dimension fetch"),
+                        );
+                    }
+                    deferred_fetches.reverse();
                     WriteTarget::Append {
                         array,
                         array_type,
                         writeback,
+                        deferred_fetches,
                     }
                 }
             },
@@ -1582,14 +1693,20 @@ impl Compiler {
                 array,
                 array_type,
                 writeback,
+                deferred_fetches,
             } => {
+                let deferred_dimension = !deferred_fetches.is_empty();
+                self.instructions.extend(deferred_fetches);
+                if deferred_dimension {
+                    self.record_last_instruction_source_line(expression_source_line(target));
+                }
                 let mut append = Instruction::new(OpCode::ArrayPushOp);
                 append.op1 = array;
                 append.op1_type = array_type;
                 append.op2 = result;
                 append.op2_type = OpType::Tmp;
-                self.instructions.push(append);
-                self.emit_foreach_reference_source_writeback(writeback, array, array_type);
+                self.push_instruction_at_line(append, expression_source_line(target));
+                self.emit_array_append_source_writeback(writeback, array, array_type);
             }
             WriteTarget::DeferredObjectAppend {
                 object,
@@ -1669,7 +1786,7 @@ impl Compiler {
             append.op2_type = OpType::Cv;
             append._pad |= ARRAY_ELEMENT_REFERENCE;
             self.instructions.push(append);
-            self.emit_foreach_reference_source_writeback(writeback, array, array_type);
+            self.emit_array_append_source_writeback(writeback, array, array_type);
             return Ok((source, OpType::Cv));
         }
         let source_is_call = Self::is_call_result_reference_source(source);
@@ -2200,7 +2317,8 @@ impl Compiler {
             rebuild.op2_type = key_type;
             rebuild.result = child;
             rebuild.result_type = child_type;
-            rebuild._pad |= ASSIGN_DIM_KEY_ALREADY_NORMALIZED;
+            rebuild._pad |=
+                ASSIGN_DIM_KEY_ALREADY_NORMALIZED | ASSIGN_DIM_INDIRECT_REBUILD;
             self.instructions.push(rebuild);
         }
     }
@@ -2221,7 +2339,9 @@ impl Compiler {
             rebuild.op2_type = key_type;
             rebuild.result = child;
             rebuild.result_type = child_type;
-            rebuild._pad |= ASSIGN_DIM_UNSET_REBUILD | ASSIGN_DIM_KEY_ALREADY_NORMALIZED;
+            rebuild._pad |= ASSIGN_DIM_UNSET_REBUILD
+                | ASSIGN_DIM_KEY_ALREADY_NORMALIZED
+                | ASSIGN_DIM_INDIRECT_REBUILD;
             self.push_instruction_at_line(rebuild, source_line);
         }
     }
@@ -2853,26 +2973,27 @@ impl Compiler {
                             line,
                         ));
                     }
-                    let (o, t) = if self.returns_reference_context
-                        && matches!(
-                            e,
+                    let (o, t) = if self.returns_reference_context {
+                        match e {
+                            Expr::ArrayAppendArgument { target, .. } => {
+                                self.compile_array_append_argument_reference(target, &[])?
+                            }
                             Expr::Variable { .. }
-                                | Expr::DynamicVariable { .. }
-                                | Expr::PropertyAccess {
-                                    nullsafe: false,
-                                    ..
-                                }
-                                | Expr::DynamicPropertyAccess {
-                                    nullsafe: false,
-                                    ..
-                                }
-                                | Expr::StaticProperty { .. }
-                                | Expr::DynamicNamedStaticProperty { .. }
-                                | Expr::DynamicStaticProperty { .. }
-                                | Expr::ArrayAccess { .. }
-                        )
-                    {
-                        (self.compile_array_element_reference_source(e)?, OpType::Cv)
+                            | Expr::DynamicVariable { .. }
+                            | Expr::PropertyAccess {
+                                nullsafe: false, ..
+                            }
+                            | Expr::DynamicPropertyAccess {
+                                nullsafe: false, ..
+                            }
+                            | Expr::StaticProperty { .. }
+                            | Expr::DynamicNamedStaticProperty { .. }
+                            | Expr::DynamicStaticProperty { .. }
+                            | Expr::ArrayAccess { .. } => {
+                                (self.compile_array_element_reference_source(e)?, OpType::Cv)
+                            }
+                            _ => self.compile_expr(e),
+                        }
                     } else {
                         self.compile_expr(e)
                     };
@@ -3490,14 +3611,32 @@ impl Compiler {
                 } else {
                     let (array, array_type, writeback) =
                         self.compile_array_append_source(target, true, false)?;
+                    let mut deferred_fetches = Vec::new();
+                    while self
+                        .instructions
+                        .last()
+                        .is_some_and(|instruction| instruction.opcode == OpCode::FetchDimR)
+                    {
+                        deferred_fetches.push(
+                            self.instructions
+                                .pop()
+                                .expect("checked trailing dimension fetch"),
+                        );
+                    }
+                    deferred_fetches.reverse();
                     let (value, value_type) = self.compile_expr(expr);
+                    let deferred_dimension = !deferred_fetches.is_empty();
+                    self.instructions.extend(deferred_fetches);
+                    if deferred_dimension {
+                        self.record_last_instruction_source_line(expression_source_line(target));
+                    }
                     let mut append = Instruction::new(OpCode::ArrayPushOp);
                     append.op1 = array;
                     append.op1_type = array_type;
                     append.op2 = value;
                     append.op2_type = value_type;
-                    self.instructions.push(append);
-                    self.emit_foreach_reference_source_writeback(writeback, array, array_type);
+                    self.push_instruction_at_line(append, expression_source_line(target));
+                    self.emit_array_append_source_writeback(writeback, array, array_type);
                 }
             }
             Stmt::BindArrayAppendReference { var, target } => {
@@ -3509,8 +3648,8 @@ impl Compiler {
                 bind.op1_type = array_type;
                 bind.result = cv;
                 bind.result_type = OpType::Cv;
-                self.instructions.push(bind);
-                self.emit_foreach_reference_source_writeback(writeback, array, array_type);
+                self.push_instruction_at_line(bind, expression_source_line(target));
+                self.emit_array_append_source_writeback(writeback, array, array_type);
             }
             Stmt::Foreach {
                 line,
@@ -3847,6 +3986,9 @@ impl Compiler {
                                 true,
                                 *line,
                             )?;
+                            for &fetch in &path.mutable_fetches {
+                                self.instructions[fetch]._pad |= FETCH_DIM_UNSET;
+                            }
                             let &(leaf, leaf_type) = path.containers.last().unwrap();
                             let &(key, key_type) = path.keys.last().unwrap();
                             let mut unset = Instruction::new(OpCode::UnsetDim);
@@ -5322,6 +5464,12 @@ impl Compiler {
                                 });
                                 None
                             }
+                            Err(reason) if reason == "Cannot use [] for reading" => {
+                                return Err(self.goto_error(
+                                    &reason,
+                                    expression_source_line(expr),
+                                ));
+                            }
                             Err(reason) => {
                                 return Err(format!(
                                     "Cannot use non-constant expression as default value for property {}::${}: {}",
@@ -6289,6 +6437,12 @@ impl Compiler {
                                     source_line: prop.line,
                                 });
                                 None
+                            }
+                            Err(reason) if reason == "Cannot use [] for reading" => {
+                                return Err(self.goto_error(
+                                    &reason,
+                                    expression_source_line(expr),
+                                ));
                             }
                             Err(reason) => {
                                 return Err(format!(

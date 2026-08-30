@@ -1334,7 +1334,9 @@ impl Parser {
                 }
                 let mut args = Vec::new();
                 let arg = self.parse_expr()?;
-                if !Self::is_isset_target(&arg) {
+                if let Expr::ArrayAppendArgument { line, .. } = &arg {
+                    self.compile_error("Cannot use [] for reading", *line);
+                } else if !Self::is_isset_target(&arg) {
                     self.compile_error(
                         "Cannot use isset() on the result of an expression (you can use \"null !== expression\" instead)",
                         self.last_primary_line.unwrap_or(list_line),
@@ -1343,7 +1345,9 @@ impl Parser {
                 args.push(arg);
                 while self.comma_list_has_next(list_line)? {
                     let arg = self.parse_expr()?;
-                    if !Self::is_isset_target(&arg) {
+                    if let Expr::ArrayAppendArgument { line, .. } = &arg {
+                        self.compile_error("Cannot use [] for reading", *line);
+                    } else if !Self::is_isset_target(&arg) {
                         self.compile_error(
                             "Cannot use isset() on the result of an expression (you can use \"null !== expression\" instead)",
                             self.last_primary_line.unwrap_or(list_line),

@@ -33,13 +33,13 @@ use crate::vm::execute::{
     ScalarLongReferenceMutationCallback, ScalarLongSortOrder, VmError, arithmetic_operator_operand,
     call_function, call_function_iter, call_function_iter_with_context, call_function_owned_iter,
     call_function_owned_iter_readback_arg0_with_context, call_function_owned_iter_with_context,
-    call_function_owned_iter_with_context_and_named, call_object_property_get_hook,
-    call_object_property_magic_get, call_object_property_magic_isset, check_type_hint,
-    displayed_function_name, explicit_float_conversion, explicit_long_conversion,
-    explicit_numeric_cast_warning, php_numeric_string_to_float, prepare_call_argument,
-    prepare_scalar_long_callback, prepare_scalar_long_reference_mutation_callback,
-    try_execute_scalar_long_callback, value_to_array_key, values_equal_checked_with_precision,
-    values_identical_checked,
+    call_function_owned_iter_with_context_and_named, call_internal_function_iter_from_current_site,
+    call_object_property_get_hook, call_object_property_magic_get,
+    call_object_property_magic_isset, check_type_hint, displayed_function_name,
+    explicit_float_conversion, explicit_long_conversion, explicit_numeric_cast_warning,
+    php_numeric_string_to_float, prepare_call_argument, prepare_scalar_long_callback,
+    prepare_scalar_long_reference_mutation_callback, try_execute_scalar_long_callback,
+    value_to_array_key, values_equal_checked_with_precision, values_identical_checked,
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
@@ -203,6 +203,7 @@ mod weak;
 
 use filesystem::{bytes_to_php_string, php_string_to_bytes};
 
+pub(crate) use builtin_classes::array_object_iterable_values;
 pub use builtin_classes::register_builtin_classes;
 
 pub(super) fn owned_argument(ed: *mut ExecuteData, index: u32) -> Value {
@@ -19265,8 +19266,11 @@ pub(crate) fn call_object_protocol_method(
     method: &str,
     args: &[Value],
 ) -> Result<Option<Value>, VmError> {
+    let append_get = method.eq_ignore_ascii_case("offsetGetAppend");
     let public_method = if method.eq_ignore_ascii_case("offsetSetAppend") {
         "offsetSet"
+    } else if append_get {
+        "offsetGet"
     } else {
         method
     };
@@ -19280,6 +19284,28 @@ pub(crate) fn call_object_protocol_method(
     }
     if class_name == "WeakMap" && interface == "ArrayAccess" {
         return weak::call_map_protocol(eg, receiver, method, args).map(Some);
+    }
+    if append_get
+        && !class_name.eq_ignore_ascii_case("ArrayObject")
+        && eg.class_is_a(&class_name, "ArrayObject")
+    {
+        if let Some(resolved) = resolve_object_public_method(eg, receiver, public_method)
+            && resolved.common().sig.required_num_args != 0
+        {
+            let parameter = resolved
+                .common()
+                .sig
+                .param_names
+                .first()
+                .map(String::as_str)
+                .unwrap_or("offset");
+            eg.exception = Some(crate::value::make_error_value(
+                "ArgumentCountError",
+                &format!("{class_name}::offsetGet(): Argument #1 (${parameter}) not passed"),
+            ));
+            return Ok(Some(Value::null()));
+        }
+        return call_object_public_method(eg, receiver, public_method, &[]);
     }
     call_object_public_method(eg, receiver, public_method, args)
 }
@@ -19330,6 +19356,16 @@ pub(crate) fn call_object_public_method(
     let Some(resolved) = resolve_object_public_method(eg, receiver, method) else {
         return Ok(None);
     };
+    if resolved.common().fn_type == FunctionType::Internal {
+        let num_args = resolved.prepend_args.len() + args.len();
+        return call_internal_function_iter_from_current_site(
+            eg,
+            resolved.func_ptr,
+            num_args,
+            resolved.prepend_args.iter().chain(args.iter()),
+        )
+        .map(Some);
+    }
     call_resolved_with_values(eg, &resolved, args).map(Some)
 }
 

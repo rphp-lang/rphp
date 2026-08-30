@@ -140,6 +140,27 @@ echo 'other:', $ordinary[0], ':', $side, "\n";
 }
 
 #[test]
+fn direct_append_deprecation_uses_the_target_source_line() {
+    let (status, stdout, stderr) = run_stdin(
+        r#"<?php
+set_error_handler(function ($level, $message, $file, $line) {
+    echo $line, ':', $message, "\n";
+    return true;
+});
+$container = false;
+$container[] = 1;
+"#,
+    );
+
+    assert_eq!(status, 0, "stderr={stderr:?}");
+    assert_eq!(stderr, "");
+    assert_eq!(
+        stdout,
+        "7:Automatic conversion of false to array is deprecated\n"
+    );
+}
+
+#[test]
 fn foreach_append_targets_cover_values_keys_and_nested_destinations() {
     let (status, stdout, stderr) = run_stdin(
         r#"<?php

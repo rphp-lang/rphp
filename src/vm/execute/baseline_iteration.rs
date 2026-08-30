@@ -223,6 +223,17 @@ fn collect_unpack_traversable(
         return Ok(None);
     }
 
+    if let Some(values) = builtin_iterator_values(source, eg)
+        && let Some(values) = values.as_array()
+    {
+        return Ok(Some(
+            values
+                .iter()
+                .map(|(key, value)| (key, kind.value(value.dereferenced().clone())))
+                .collect(),
+        ));
+    }
+
     let mut iterable = source.clone();
     let mut aggregate_identities = Vec::new();
     while eg.class_is_a(&class_name, "IteratorAggregate") {
@@ -269,14 +280,8 @@ fn collect_unpack_traversable(
         return collect_generator_unpack(eg, &iterable, kind).map(Some);
     }
 
-    if let Some(values) = iterable.as_object().and_then(|object| {
-        matches!(
-            object.class_name.as_ref(),
-            "ArrayIterator" | "ArrayObject" | "SplObjectStorage" | "SplPriorityQueue"
-        )
-        .then(|| object.get_property("__rphp_iterator_values").cloned())
-        .flatten()
-    }) && let Some(values) = values.as_array()
+    if let Some(values) = builtin_iterator_values(&iterable, eg)
+        && let Some(values) = values.as_array()
     {
         return Ok(Some(
             values
@@ -1064,6 +1069,23 @@ fn uses_user_iterator_protocol(value: &Value, eg: &ExecutorGlobals) -> bool {
 }
 
 #[inline]
+fn builtin_iterator_values(value: &Value, eg: &ExecutorGlobals) -> Option<Value> {
+    let object = value.as_object()?;
+    let class_name = object.class_name.to_string();
+    let legacy_values = object.get_property("__rphp_iterator_values").cloned();
+    drop(object);
+    if eg.class_is_a(&class_name, "ArrayIterator") || eg.class_is_a(&class_name, "ArrayObject") {
+        crate::stdlib::array_object_iterable_values(value)
+    } else if eg.class_is_a(&class_name, "SplObjectStorage")
+        || eg.class_is_a(&class_name, "SplPriorityQueue")
+    {
+        legacy_values
+    } else {
+        None
+    }
+}
+
+#[inline]
 fn flush_foreach_reference_value(
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
@@ -1323,14 +1345,7 @@ fn op_foreach_init<'a>(
             set_foreach_iteration_state(frame, opline, Some(arr_val.clone()), -1);
             return Ok(ColdResult::Done);
         }
-        let iterator_values = arr_val.as_object().and_then(|object| {
-            matches!(
-                object.class_name.as_ref(),
-                "ArrayIterator" | "ArrayObject" | "SplObjectStorage" | "SplPriorityQueue"
-            )
-                .then(|| object.get_property("__rphp_iterator_values").cloned())
-                .flatten()
-        });
+        let iterator_values = builtin_iterator_values(arr_val, eg);
         let object_values = if iterator_values.is_none() && arr_val.as_object().is_some() {
             let direct_property_iteration = object_uses_direct_property_iteration(arr_val, eg);
             let materialized = if by_reference || direct_property_iteration {
@@ -2229,22 +2244,7 @@ fn snapshot_builtin_yield_from_iterator(
     eg: &ExecutorGlobals,
     source: &Value,
 ) -> Option<Vec<(crate::value::ArrayKey, Value)>> {
-    let object = source.as_object()?;
-    let class_name = object.class_name.to_string();
-    let values = object.get_property("__rphp_iterator_values").cloned();
-    drop(object);
-    if ![
-        "ArrayIterator",
-        "ArrayObject",
-        "SplObjectStorage",
-        "SplPriorityQueue",
-    ]
-    .iter()
-    .any(|builtin| eg.class_is_a(&class_name, builtin))
-    {
-        return None;
-    }
-    let values = values?;
+    let values = builtin_iterator_values(source, eg)?;
     values.as_array().map(|array| {
         array
             .iter()

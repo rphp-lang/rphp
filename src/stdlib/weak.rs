@@ -343,6 +343,10 @@ pub(super) fn call_map_protocol(
             arguments.first().unwrap_or(&Value::null()),
             true,
         )),
+        "offsetgetappend" => {
+            eg.exception = Some(make_error_value("Error", "Cannot append to WeakMap"));
+            Ok(Value::null())
+        }
         "offsetset" | "offsetsetappend" => {
             let key = arguments.first().cloned().unwrap_or_else(Value::null);
             let value = arguments.get(1).cloned().unwrap_or_else(Value::null);

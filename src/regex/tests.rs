@@ -130,6 +130,20 @@ fn test_anchors() {
 }
 
 #[test]
+fn dollar_anchor_accepts_one_final_newline_unless_end_only() {
+    let regular = Regex::new("^payload$", RegexFlags::default()).unwrap();
+    assert!(regular.is_match("payload\n"));
+    assert!(regular.is_match("payload\r\n"));
+    assert!(!regular.is_match("payload\nnext"));
+
+    let mut cache = RegexCache::default();
+    let end_only = cache.get_or_compile("/^payload$/D").unwrap();
+    assert!(end_only.is_match("payload"));
+    assert!(!end_only.is_match("payload\n"));
+    assert!(!end_only.is_match("payload\r\n"));
+}
+
+#[test]
 fn test_case_insensitive() {
     let flags = RegexFlags {
         case_insensitive: true,

@@ -214,6 +214,29 @@ echo json_encode($box->storage), "\n";
 }
 
 #[test]
+fn incdec_on_an_overloaded_reference_getter_updates_only_through_magic_set() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class CounterFacade {
+    private int $post = 4;
+    private int $pre = 7;
+    public array $writes = [];
+
+    public function &__get($name) { return $this->$name; }
+    public function __set($name, $value) { $this->writes[] = "$name:$value"; }
+    public function state() { return [$this->post, $this->pre, $this->writes]; }
+}
+$counter = new CounterFacade;
+var_dump($counter->post++, --$counter->pre);
+echo json_encode($counter->state());
+"#,
+        ),
+        "int(4)\nint(6)\n[4,7,[\"post:5\",\"pre:6\"]]"
+    );
+}
+
+#[test]
 fn explicitly_unset_declared_property_dispatches_magic_once_and_survives_clone() {
     assert_eq!(
         run_php(

@@ -36,19 +36,18 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `closure-object-facade-and-binding-boundaries` train retains
-6,183 exact passes across the 7,174-case PHP 8.5 corpus, with 597 supported
+The accepted AMD64 `dimension-container-lvalue-protocol` train retains 6,205
+exact passes across the 7,174-case PHP 8.5 corpus, with 575 supported
 failures, 182 skips, 212 unsupported cases and no timeout or crash. Its pass-set
 hash is
-`777b32d9569c5d4753e36f1d9c758e88a2bea532a2bb13f6dda8863a3da4e181`;
-the exact parent delta is `+18/-0`. Compact closures now share the ordinary
-object facade and one binding boundary for receiver, dummy lexical scope,
-late-static class, captures, statics and identity without enlarging `Value`.
-Seven selected holdouts have separate destructor, parent-private storage,
-diagnostic, allocation-limit or eval/trace roots. Exact-final CPU-pinned
-32-pair startup, ordinary-call, Closure invoke and binding controls retain
-matching checksums and remain within the approximately one-percent regression
-ceiling.
+`2dd5f61e8f0f6c3548230c7919e2f24f6fd9024d50b856a8959118b77e742c07`;
+the exact parent delta is `+22/-0`. One dimension l-value transaction now
+preserves protocol order, references, copy-on-write identity and failure state
+across arrays, scalar autovivification, `ArrayAccess` and the admitted
+`ArrayObject` facade. Exact-final CPU-pinned 32-pair ordinary startup, call,
+array and property controls retain matching checksums and remain within the
+approximately one-percent cumulative-regression ceiling; the directly changed
+`ArrayAccess` read/write path records a localized +2.842% pay-for-use cost.
 Current compatibility work is selected as a 10–30-case train around one shared
 root-cause hypothesis and one cumulative full/performance evidence packet.
 Smaller checkpoints require a crash, security issue, framework blocker or

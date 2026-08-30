@@ -3267,7 +3267,22 @@ fn op_bind_array_dim_ref<'a>(
         let array_ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
         let raw_type = (*array_ptr).dereferenced().value_type();
         if raw_type == ValueType::String {
-            let error = make_error_value("Error", "Cannot create references to/from string offsets");
+            let (class_name, message) = if matches!(string_offset_key(index), StringOffsetKey::Invalid)
+            {
+                (
+                    "TypeError",
+                    format!(
+                        "Cannot access offset of type {} on string",
+                        index.diagnostic_type_name()
+                    ),
+                )
+            } else {
+                (
+                    "Error",
+                    "Cannot create references to/from string offsets".to_string(),
+                )
+            };
+            let error = make_error_value(class_name, &message);
             let instruction_index = (opline as *const Instruction)
                 .offset_from(op_array.instructions.as_ptr()) as usize;
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
@@ -3317,19 +3332,21 @@ fn op_bind_array_dim_ref<'a>(
             } else if returned.is_reference() {
                 Value::reference(returned.as_ref_ptr())
             } else {
-                let class_name = receiver
-                    .as_object()
-                    .map(|object| object.class_name.to_string())
-                    .unwrap_or_else(|| "object".to_string());
-                report_php_notice(
-                    eg,
-                    frame,
-                    op_array,
-                    opline,
-                    &format!(
-                        "Indirect modification of overloaded element of {class_name} has no effect"
-                    ),
-                )?;
+                if opline._pad & FETCH_DIM_FUNC_ARG == 0 {
+                    let class_name = receiver
+                        .as_object()
+                        .map(|object| object.class_name.to_string())
+                        .unwrap_or_else(|| "object".to_string());
+                    report_php_notice(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        &format!(
+                            "Indirect modification of overloaded element of {class_name} has no effect"
+                        ),
+                    )?;
+                }
                 Value::owned_reference(returned)
             };
             if internal_result {
@@ -3460,9 +3477,23 @@ fn op_bind_array_dim_ref<'a>(
         if matches!(mutable_source.value_type(), ValueType::Null | ValueType::Undef) {
             slot_set(mutable_source, Value::array(PhpArray::new()));
         }
-        let array = mutable_source
-            .as_array_mut()
-            .ok_or_else(|| VmError::Fatal("Cannot acquire reference to non-array offset".into()))?;
+        let Some(array) = mutable_source.as_array_mut() else {
+            let instruction_index = (opline as *const Instruction)
+                .offset_from(op_array.instructions.as_ptr())
+                as usize;
+            return Ok(match throw_array_dimension_error(
+                eg,
+                frame,
+                op_array,
+                instruction_index,
+                "Cannot use a scalar value as an array",
+            )? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+            });
+        };
         if array.get_key_mut(&key).is_none() {
             array.set(key.clone(), Value::null());
         }

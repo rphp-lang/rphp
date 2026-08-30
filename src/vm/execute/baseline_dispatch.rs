@@ -1126,7 +1126,13 @@ fn throw_object_as_array<'a>(
     } else {
         receiver
             .as_object()
-            .map(|object| object.class_name.to_string())
+            .map(|object| {
+                let internal_name = object.class_name.to_string();
+                eg.class_by_id(object.class_id)
+                    .and_then(|class| class.anonymous_public_name())
+                    .map(|name| name.split('\0').next().unwrap_or(&name).to_string())
+                    .unwrap_or(internal_name)
+            })
             .unwrap_or_else(|| "object".to_string())
     };
     throw_array_dimension_error(
@@ -2261,7 +2267,20 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         if opline.result_type != OpType::Unused {
                             let result =
                                 (*frame).get_op_mut(opline.result as u32, opline.result_type);
-                            frame_tmp_set(frame, result, source.clone());
+                            let value = if opline._pad
+                                & crate::vm::instruction::FETCH_CV_LIVE_UNPACK_SOURCE
+                                != 0
+                            {
+                                let target = if source.is_reference() {
+                                    source.as_ref_ptr()
+                                } else {
+                                    source as *const Value as *mut Value
+                                };
+                                Value::reference(target)
+                            } else {
+                                source.clone()
+                            };
+                            frame_tmp_set(frame, result, value);
                         }
                     } else {
                         if opline.result_type != OpType::Unused {
@@ -5565,13 +5584,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // optional writeback CV into initialized slots of this active
                 // frame.
                 unsafe {
-                    let old_slot = &*(*frame).get_op_ptr(
+                    let source_ptr = (*frame).get_op_ptr(
                         opline.op1 as u32,
                         opline.op1_type,
                         op_array,
                     );
+                    let old_slot = &*source_ptr;
                     let value_only = opline.op2_type == OpType::Unused
                         && matches!(opline.op1_type, OpType::Tmp | OpType::Var);
+                    let value_only_reference = value_only && old_slot.is_reference();
                     debug_assert!(
                         value_only
                             || opline.op2_type == OpType::Cv
@@ -5586,6 +5607,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         && let Some(number) = old_slot.as_long()
                         && let Some(incremented) = number.checked_add(1)
                     {
+                        if value_only_reference {
+                            assignment_slot_set(&mut *(source_ptr as *mut Value), Value::long(incremented));
+                        }
                         if opline.result_type != OpType::Unused {
                             let result_ptr =
                                 (*frame).get_op_mut(opline.result as u32, opline.result_type);
@@ -5616,6 +5640,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         &old,
                         PropertyIncDecOverflow::Increment
                     );
+                    if value_only_reference
+                        && old_slot.is_owned_reference()
+                        && let Some(message) = reference_incdec_overflow_message(
+                            old_slot,
+                            &old,
+                            eg,
+                            PropertyIncDecOverflow::Increment,
+                        )
+                    {
+                        throw_operator!("TypeError", &message);
+                    }
                     let Some((new_val, diagnostic)) = increment_php_value(&old) else {
                         throw_operator!(
                             "TypeError",
@@ -5631,9 +5666,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     let new_val = if let Some(writeback_cv) = writeback_cv {
                         prepare_reference_write!(writeback_cv, new_val)
+                    } else if value_only_reference && old_slot.is_owned_reference() {
+                        let constraints = old_slot.reference_property_constraints();
+                        prepare_constrained_write!(constraints, new_val)
                     } else {
                         new_val
                     };
+                    if value_only_reference {
+                        assignment_slot_set(&mut *(source_ptr as *mut Value), new_val.clone());
+                    }
                     if opline.result_type != OpType::Unused {
                         let result_ptr =
                             (*frame).get_op_mut(opline.result as u32, opline.result_type);
@@ -5656,13 +5697,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // frame. TMP/VAR without an op2 CV is the value-only form used
                 // before property or dimension writeback.
                 unsafe {
-                    let old_slot = &*(*frame).get_op_ptr(
+                    let source_ptr = (*frame).get_op_ptr(
                         opline.op1 as u32,
                         opline.op1_type,
                         op_array,
                     );
+                    let old_slot = &*source_ptr;
                     let value_only = opline.op2_type == OpType::Unused
                         && matches!(opline.op1_type, OpType::Tmp | OpType::Var);
+                    let value_only_reference = value_only && old_slot.is_reference();
                     debug_assert!(
                         value_only
                             || opline.op2_type == OpType::Cv
@@ -5677,6 +5720,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         && let Some(number) = old_slot.as_long()
                         && let Some(decremented) = number.checked_sub(1)
                     {
+                        if value_only_reference {
+                            assignment_slot_set(&mut *(source_ptr as *mut Value), Value::long(decremented));
+                        }
                         if opline.result_type != OpType::Unused {
                             let result_ptr =
                                 (*frame).get_op_mut(opline.result as u32, opline.result_type);
@@ -5707,6 +5753,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         &old,
                         PropertyIncDecOverflow::Decrement
                     );
+                    if value_only_reference
+                        && old_slot.is_owned_reference()
+                        && let Some(message) = reference_incdec_overflow_message(
+                            old_slot,
+                            &old,
+                            eg,
+                            PropertyIncDecOverflow::Decrement,
+                        )
+                    {
+                        throw_operator!("TypeError", &message);
+                    }
                     let Some((new_val, diagnostic)) = decrement_php_value(&old) else {
                         throw_operator!(
                             "TypeError",
@@ -5722,9 +5779,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     let new_val = if let Some(writeback_cv) = writeback_cv {
                         prepare_reference_write!(writeback_cv, new_val)
+                    } else if value_only_reference && old_slot.is_owned_reference() {
+                        let constraints = old_slot.reference_property_constraints();
+                        prepare_constrained_write!(constraints, new_val)
                     } else {
                         new_val
                     };
+                    if value_only_reference {
+                        assignment_slot_set(&mut *(source_ptr as *mut Value), new_val.clone());
+                    }
                     if opline.result_type != OpType::Unused {
                         let result_ptr =
                             (*frame).get_op_mut(opline.result as u32, opline.result_type);
@@ -6609,6 +6672,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else if matches!(arr_val.value_type(), ValueType::Object | ValueType::Closure) {
                     let receiver = arr_val.clone();
                     let key = idx_val.clone();
+                    let internal_array_object = receiver.as_object().is_some_and(|object| {
+                        matches!(object.class_name.as_ref(), "ArrayObject" | "ArrayIterator")
+                    });
                     let method = if opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_EMPTY) != 0 {
                         "offsetExists"
                     } else {
@@ -6653,6 +6719,31 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                     };
+                    if opline._pad & FETCH_DIM_COMPOUND != 0
+                        && !internal_array_object
+                        && eg.exception.take().is_some()
+                    {
+                        let instruction_index = (opline_ptr as usize
+                            - op_array.instructions.as_ptr() as usize)
+                            / std::mem::size_of::<Instruction>();
+                        match throw_object_as_array(
+                            eg,
+                            frame,
+                            op_array,
+                            instruction_index,
+                            &receiver,
+                        )? {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue 'vm;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
                     if let Some(exception) = eg.exception.take() {
                         match throw_in_frame(eg, frame, exception)? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
@@ -6700,7 +6791,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                         value
                     };
-                    if opline._pad & FETCH_DIM_MUTABLE != 0 && !value.is_reference() {
+                    if opline._pad & FETCH_DIM_MUTABLE != 0
+                        && opline._pad & FETCH_DIM_COMPOUND == 0
+                        && !value.is_reference()
+                    {
                         let class_name = receiver
                             .as_object()
                             .map(|object| object.class_name.to_string())
@@ -6728,7 +6822,26 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                     }
-                    write_fetch_dim_result(frame, result_ptr, value.dereferenced().clone());
+                    if opline._pad & FETCH_DIM_UNSET != 0
+                        && internal_array_object
+                        && matches!(value_to_array_key(&key), Err(ArrayKeyError::Illegal))
+                    {
+                        let message = format!(
+                            "Cannot unset offset of type {} on ArrayObject",
+                            key.diagnostic_type_name()
+                        );
+                        throw_operator!("TypeError", &message);
+                    }
+                    let value = if opline._pad & FETCH_DIM_MUTABLE != 0 {
+                        let mut value = value;
+                        if value.is_owned_reference() {
+                            value.mark_internal_reference_alias();
+                        }
+                        value
+                    } else {
+                        value.dereferenced().clone()
+                    };
+                    write_fetch_dim_result(frame, result_ptr, value);
                 } else {
                     if matches!(arr_val.value_type(), ValueType::Null | ValueType::Undef)
                         && opline._pad & FETCH_DIM_MUTABLE != 0
@@ -6989,6 +7102,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // any reentrant callback and remains owned by its operand.
                 let arr = unsafe { &mut *arr_ptr };
                 if matches!(arr.value_type(), ValueType::Object | ValueType::Closure) {
+                    if opline._pad
+                        & (ASSIGN_DIM_INDIRECT_REBUILD
+                            | ASSIGN_DIM_INCDEC_INCREMENT
+                            | ASSIGN_DIM_INCDEC_DECREMENT)
+                        != 0
+                    {
+                        break 'assign_dim;
+                    }
                     let receiver = arr.clone();
                     let args = [idx_val.clone(), cloned_val];
                     let suppressed = opline._pad & ASSIGN_DIM_ERROR_SUPPRESS != 0;
@@ -7262,6 +7383,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::ArrayPushOp => 'array_push: {
                 // op1[] = op2
                 let reference_append = opline._pad & ARRAY_ELEMENT_REFERENCE != 0;
+                let compound_append_writeback =
+                    opline._pad & ARRAY_ELEMENT_COMPOUND_APPEND_WRITEBACK != 0;
                 let deferred_reference_notice = opline._pad
                     & ARRAY_ELEMENT_DEFER_NONREFERENCEABLE_NOTICE
                     != 0;
@@ -7343,6 +7466,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if !reference_append {
                         let arr = &mut *arr_ptr;
                         if let Some(array) = arr.as_array_mut() {
+                            if compound_append_writeback {
+                                break 'array_push;
+                            }
                             let value = &*(*frame).get_op_ptr(
                                 opline.op2 as u32,
                                 opline.op2_type,
@@ -7533,9 +7659,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             debug_assert!(pushed);
                         }
                     } else {
-                        return Err(VmError::Fatal(
-                            "[] operator not supported for non-array".into(),
-                        ));
+                        match (&*arr_ptr).value_type() {
+                            ValueType::String => {
+                                throw_operator!("Error", "[] operator not supported for strings");
+                            }
+                            ValueType::Object | ValueType::Closure => unreachable!(
+                                "object append targets dispatch before scalar validation"
+                            ),
+                            _ => {
+                                throw_operator!("Error", "Cannot use a scalar value as an array");
+                            }
+                        }
                     }
                 }
             }
@@ -7599,21 +7733,47 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // existing reference here would replace the caller's value
                     // and leave this local bound to the old cell.
                     let target = (*frame).cv_mut(opline.result as u32) as *mut Value;
-                    let mut binding = Value::owned_reference(Value::null());
-                    if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
-                        binding.mark_internal_reference_alias();
-                    }
-                    frame_slot_set(frame, target, binding);
                     if matches!(array_value.value_type(), ValueType::Object | ValueType::Closure) {
                         let receiver = array_value.clone();
+                        let receiver_class = receiver
+                            .as_object()
+                            .map(|object| object.class_name.to_string())
+                            .unwrap_or_else(|| "object".to_string());
+                        let array_object_append_overload = !receiver_class
+                            .eq_ignore_ascii_case("ArrayObject")
+                            && eg.class_is_a(&receiver_class, "ArrayObject");
+                        if array_object_append_overload {
+                            report_php_notice(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                &format!(
+                                    "Indirect modification of overloaded element of {receiver_class} has no effect"
+                                ),
+                            )?;
+                            if let Some(exception) = eg.exception.take() {
+                                match throw_in_frame(eg, frame, exception)? {
+                                    ThrowResult::Handled(new_frame, new_op_array) => {
+                                        frame = new_frame;
+                                        op_array = new_op_array;
+                                        continue 'vm;
+                                    }
+                                    ThrowResult::Unhandled(exception) => {
+                                        eg.exception = Some(exception);
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                        }
                         let handled = crate::stdlib::call_object_protocol_method(
                             eg,
                             &receiver,
                             "ArrayAccess",
-                            "offsetSetAppend",
-                            &[Value::null(), Value::null()],
+                            "offsetGetAppend",
+                            &[Value::null()],
                         )?;
-                        if handled.is_none() {
+                        let Some(returned) = handled else {
                             let instruction_index = (opline_ptr as usize
                                 - op_array.instructions.as_ptr() as usize)
                                 / std::mem::size_of::<Instruction>();
@@ -7634,7 +7794,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     return Ok(());
                                 }
                             }
-                        }
+                        };
                         if let Some(exception) = eg.exception.take() {
                             match throw_in_frame(eg, frame, exception)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
@@ -7648,14 +7808,77 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 }
                             }
                         }
+                        let mut binding = if returned.is_owned_reference() {
+                            returned.clone_owned_reference_alias()
+                        } else if returned.is_reference() {
+                            Value::reference(returned.as_ref_ptr())
+                        } else {
+                            if opline._pad & BIND_ARRAY_APPEND_COMPOUND == 0
+                                && !array_object_append_overload
+                            {
+                                report_php_notice(
+                                    eg,
+                                    frame,
+                                    op_array,
+                                    opline,
+                                    &format!(
+                                        "Indirect modification of overloaded element of {} has no effect",
+                                        receiver
+                                            .as_object()
+                                            .map(|object| object.class_name.to_string())
+                                            .unwrap_or_else(|| "object".to_string())
+                                    ),
+                                )?;
+                                if let Some(exception) = eg.exception.take() {
+                                    match throw_in_frame(eg, frame, exception)? {
+                                        ThrowResult::Handled(new_frame, new_op_array) => {
+                                            frame = new_frame;
+                                            op_array = new_op_array;
+                                            continue 'vm;
+                                        }
+                                        ThrowResult::Unhandled(exception) => {
+                                            eg.exception = Some(exception);
+                                            return Ok(());
+                                        }
+                                    }
+                                }
+                            }
+                            Value::owned_reference(returned.dereferenced().clone())
+                        };
+                        if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+                            binding.mark_internal_reference_alias();
+                        }
+                        frame_slot_set(frame, target, binding);
                     } else {
                         if matches!(array_value.value_type(), ValueType::Null | ValueType::Undef) {
                             slot_set(array_ptr, Value::array(PhpArray::new()));
                         }
-                        let array = (&mut *array_ptr).as_array_mut().ok_or_else(|| {
-                            VmError::Fatal("Cannot append a reference to a non-array".into())
-                        })?;
-                        if !array.try_push((*target).clone_owned_reference_alias()) {
+                        if (&*array_ptr).as_array().is_none() {
+                            match (&*array_ptr).value_type() {
+                                ValueType::String => {
+                                    throw_operator!(
+                                        "Error",
+                                        "[] operator not supported for strings"
+                                    );
+                                }
+                                _ => {
+                                    throw_operator!(
+                                        "Error",
+                                        "Cannot use a scalar value as an array"
+                                    );
+                                }
+                            }
+                        }
+                        let mut binding = Value::owned_reference(Value::null());
+                        if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+                            binding.mark_internal_reference_alias();
+                        }
+                        frame_slot_set(frame, target, binding);
+                        if !(&mut *array_ptr)
+                            .as_array_mut()
+                            .expect("validated append reference target")
+                            .try_push((*target).clone_owned_reference_alias())
+                        {
                             throw_operator!(
                                 "Error",
                                 "Cannot add element to the array as the next element is already occupied"
@@ -7680,7 +7903,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         OpType::Const | OpType::Unused => None,
                     }
                 };
-                let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
+                // SAFETY: the same live UnsetDim operand remains owned by this
+                // frame; following its reference produces the mutable target
+                // consumed before the dispatch arm advances or calls userland.
+                let arr_ptr = unsafe {
+                    let ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                    if (&*ptr).is_reference() {
+                        (&mut *ptr).as_ref_ptr()
+                    } else {
+                        ptr
+                    }
+                };
                 let arr = unsafe { &mut *arr_ptr };
                 if matches!(arr.value_type(), ValueType::Object | ValueType::Closure) {
                     let receiver = arr.clone();
@@ -7730,6 +7963,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe { (*frame).opline = opline_ptr.add(1) };
                     continue 'vm;
                 }
+                // `unset($array[null])` silently selects the empty-string key,
+                // while float/resource conversions retain their ordinary
+                // diagnostics. ArrayObject's outer offsetUnset remains a
+                // distinct protocol operation and reports its own null use.
+                let report_conversion =
+                    !matches!(value_to_array_key(idx_val), Err(ArrayKeyError::DeprecatedNull));
                 let mut key = array_key_owned_or_throw!(
                     idx_val,
                     &format!(
@@ -7737,7 +7976,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         idx_val.diagnostic_type_name()
                     ),
                     false,
-                    true
+                    report_conversion
                 );
                 match arr.value_type() {
                     ValueType::Array => {

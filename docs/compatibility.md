@@ -8,6 +8,67 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is
+`dimension-container-lvalue-protocol`, pinned to php-src 8.5 commit `fcc29c8`
+and validated against PHP 8.5.10. Dimension operations now share a canonical
+read/modify/commit boundary across arrays, scalar autovivification,
+`ArrayAccess` and the admitted `ArrayObject`/`ArrayIterator` facade. It
+preserves `offsetExists()`/`offsetGet()`/`offsetSet()` order, append and
+compound/pre/post behavior, indirect writeback, exceptions, references and
+copy-on-write state. Top-level unpack keeps live by-reference members, and
+self-referential array cells survive separation without retaining incidental
+temporary owners.
+
+Original E2E coverage exercises successful and rejected reads/writes,
+evaluation order, append, false/null conversion, magic-property bridges,
+references, unpack and self-referential COW. The clean-room oracle source and
+byte-exact output hash to
+`12c125aa14ec88626131388e8cb212238057f67c3733a7fc848d94f1b31a5c3d`
+and `b5ea528cb9dfcf794178ef3edc38fea6c6520cc05cdd9048ddb4c003d2f5c47f`.
+The focused no-loss manifest hashes to
+`f18b922720a49177cb6242497a2fa221db3fc00bad5a695efc58022c87b8adb8`.
+
+The final 5,599-case Zend/lang run is 4,746 pass, 557 fail, 115 skip and 181
+unsupported; its manifest hashes to
+`5dae6d652548289013b520a5417936acbe08cb0f2efa913c7ba84185cbddab86`.
+The 1,575-case strings/array projection remains 1,459 pass, 18 fail, 67 skip
+and 31 unsupported, with manifest hash
+`9f5edf942abcc866a1c0c833bca1a4dbef97b344295e36fd07314f233e29b0ce`.
+The combined classification and pass-set hashes are
+`dfc0c088b9e142e9a96bd4fd8613cd19d9625686dc5f759de9f58428778d7589`
+and `2dd5f61e8f0f6c3548230c7919e2f24f6fd9024d50b856a8959118b77e742c07`:
+6,205 pass, 575 fail, 182 skip and 212 unsupported, with no timeout or crash.
+The exact parent delta is `+22/-0`; supported debt is 557 Zend/lang failures,
+18 strings failures and zero array failures.
+
+The exact final candidate SHA-256 is
+`a192d69182ba538087201ad4fb421359469a4db40af160a1a0f69bb808dca35b`.
+All default, no-default, erased-generics, reified-generics and all-feature Cargo
+test configurations, all-feature/all-target checking, formatting, HTML data,
+PHPT runner and both unsafe-policy checks pass. Production remains at the
+ratchet of 1,623 unsafe blocks and 289 unsafe functions, with 395 SAFETY
+annotations and seven `# Safety` sections. Two reference/COW Valgrind canaries
+are clean. Composer 2.8.12 S0, all four Symfony S1 gates and PHP 8.5.10
+warmed-kernel S2 and cold-build S3 pass.
+
+The fixed accepted-baseline CPU-2 gate uses 32 balanced pairs with exact
+checksums; its raw result hashes to
+`ffbb2938f27fbf0e63fefaddb52399777c0b9332f42bcc3ebe3914a9fe736bd6`.
+Paired medians are startup -0.563%, ordinary calls +0.199%, packed append/read
++0.231%, packed indexed writes +0.004%, ordinary property writes -0.793% and
+`ArrayAccess` append +0.135%. The directly changed `ArrayAccess` read/write
+protocol path is +2.842%; that localized pay-for-use cost does not affect the
+representative ordinary controls, which remain within the approximately
+one-percent cumulative-regression ceiling.
+
+This checkpoint does not claim seven independently blocked selected offset
+cases, `SplFixedArray` or general SPL representation, Fiber/generator
+suspension, 32-bit behavior or allocation-limit/OOM equivalence. The
+implementation checkpoint is the commit containing this status. The
+immediately preceding accepted checkpoint is
+`closure-object-facade-and-binding-boundaries`; the fixed performance baseline
+remains `overloaded-property-lvalue-boundaries`.
+
+The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `closure-object-facade-and-binding-boundaries`, pinned to php-src 8.5 commit
 `fcc29c8` and validated against PHP 8.5.10. Compact `Closure` values now use the
 ordinary object facade for sealed properties, cloning, empty iteration,
@@ -64,8 +125,8 @@ retain the general validation path.
 This checkpoint does not claim the seven retained independent cases, general
 SPL, Fiber/generator suspension, PHP 8.2, 32-bit behavior or allocation-limit/
 OOM equivalence. The implementation checkpoint is the commit containing this
-status. The immediately preceding accepted checkpoint and fixed performance
-baseline is `overloaded-property-lvalue-boundaries` below.
+status. Its fixed performance baseline is
+`overloaded-property-lvalue-boundaries` below.
 
 The immediately preceding measured AMD64 PHP 8.5 contract checkpoint is
 `scalar-coercion-diagnostic-boundaries`, pinned to php-src 8.5 commit `fcc29c8`

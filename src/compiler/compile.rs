@@ -63,22 +63,24 @@ use crate::value::{
     canonical_decimal_array_key as canonical_string_literal_array_key,
 };
 use crate::vm::instruction::{
-    ARITHMETIC_COMPOUND_ASSIGN, ARRAY_ELEMENT_DEFER_NONREFERENCEABLE_NOTICE,
-    ARRAY_ELEMENT_FINAL_IMMUTABLE_LITERAL, ARRAY_ELEMENT_IMMUTABLE_CONTAINER,
-    ARRAY_ELEMENT_MOVE_SOURCE, ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_DYNAMIC_CALL_CLASS,
-    ARRAY_INIT_HASH_HINT, ARRAY_INIT_IMMUTABLE_LITERAL, ARRAY_UNPACK_CONSTANT_EXPRESSION,
-    ASSIGN_CV_MOVE_SOURCE, ASSIGN_CV_REBIND, ASSIGN_DIM_ERROR_SUPPRESS,
-    ASSIGN_DIM_INCDEC_DECREMENT, ASSIGN_DIM_INCDEC_INCREMENT, ASSIGN_DIM_KEY_ALREADY_NORMALIZED,
-    ASSIGN_DIM_REFERENCE, ASSIGN_DIM_RESULT_VALUE, ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_CLONE_WITH,
+    ARITHMETIC_COMPOUND_ASSIGN, ARRAY_ELEMENT_COMPOUND_APPEND_WRITEBACK,
+    ARRAY_ELEMENT_DEFER_NONREFERENCEABLE_NOTICE, ARRAY_ELEMENT_FINAL_IMMUTABLE_LITERAL,
+    ARRAY_ELEMENT_IMMUTABLE_CONTAINER, ARRAY_ELEMENT_MOVE_SOURCE, ARRAY_ELEMENT_REFERENCE,
+    ARRAY_INIT_DYNAMIC_CALL_CLASS, ARRAY_INIT_HASH_HINT, ARRAY_INIT_IMMUTABLE_LITERAL,
+    ARRAY_UNPACK_CONSTANT_EXPRESSION, ASSIGN_CV_MOVE_SOURCE, ASSIGN_CV_REBIND,
+    ASSIGN_DIM_ERROR_SUPPRESS, ASSIGN_DIM_INCDEC_DECREMENT, ASSIGN_DIM_INCDEC_INCREMENT,
+    ASSIGN_DIM_INDIRECT_REBUILD, ASSIGN_DIM_KEY_ALREADY_NORMALIZED, ASSIGN_DIM_REFERENCE,
+    ASSIGN_DIM_RESULT_VALUE, ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_CLONE_WITH,
     ASSIGN_OBJ_ERROR_SUPPRESS, ASSIGN_OBJ_MODIFY, ASSIGN_PROP_MOVE_SOURCE,
-    ASSIGN_PROP_RESULT_VALUE, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE,
-    CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_RETURN_EXPLICITLY_IGNORED,
-    CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME,
-    CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_CALL_OWNER, CLASS_CONST_DYNAMIC_NAME,
-    CLASS_CONST_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES, EVAL_FLAG_ERROR_SUPPRESS,
+    ASSIGN_PROP_RESULT_VALUE, BIND_ARRAY_APPEND_COMPOUND, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
+    CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS,
+    CALL_FLAG_RETURN_EXPLICITLY_IGNORED, CALL_USER_FUNC_ARRAY_SOURCE_UNPACK,
+    CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_CALL_OWNER,
+    CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES,
+    EVAL_FLAG_ERROR_SUPPRESS, FETCH_CV_LIVE_UNPACK_SOURCE, FETCH_DIM_COMPOUND,
     FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_FUNC_ARG,
     FETCH_DIM_FUNC_ARG_NAMED, FETCH_DIM_FUNC_ARG_ROOT_CV, FETCH_DIM_ISSET, FETCH_DIM_MUTABLE,
-    FETCH_DIM_REFERENCE_SOURCE, FETCH_DIM_SILENT, FETCH_DYNAMIC_ERROR_SUPPRESS,
+    FETCH_DIM_REFERENCE_SOURCE, FETCH_DIM_SILENT, FETCH_DIM_UNSET, FETCH_DYNAMIC_ERROR_SUPPRESS,
     FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND,
     FETCH_OBJ_CONSTANT_EXPRESSION, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY,
     FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache,
@@ -5832,6 +5834,17 @@ impl Compiler {
         }
     }
 
+    fn mark_trailing_compound_dimension_fetches(&mut self) {
+        for instruction in self
+            .instructions
+            .iter_mut()
+            .rev()
+            .take_while(|instruction| instruction.opcode == OpCode::FetchDimR)
+        {
+            instruction._pad |= FETCH_DIM_MUTABLE | FETCH_DIM_COMPOUND;
+        }
+    }
+
     /// Build a snapshot of all currently known function ref_args
     /// (own functions + inherited known_ref_args) to pass to child compilers.
     fn build_known_ref_args(&self) -> HashMap<String, KnownRefArgs> {
@@ -7608,6 +7621,7 @@ impl Compiler {
                     .cloned()
                     .ok_or_else(|| "undefined array key in constant expression".to_string())
             }
+            Expr::ArrayAppendArgument { .. } => Err("Cannot use [] for reading".to_string()),
             _ => Err(format!(
                 "expression {:?} is not a compile-time constant",
                 expr
@@ -9249,7 +9263,7 @@ impl Compiler {
                 self.push_instruction_at_line(fetch, line);
                 (result, OpType::Tmp)
             }
-            Expr::ArrayAccess { array, index, .. } => {
+            Expr::ArrayAccess { array, index, line } => {
                 if matches!(array.as_ref(), Expr::Globals { .. }) {
                     let (key, key_type) = self.compile_expr(index);
                     let result = self.alloc_tmp();
@@ -9259,7 +9273,7 @@ impl Compiler {
                     isset.result = result;
                     isset.result_type = OpType::Tmp;
                     isset._pad |= FETCH_DIM_ISSET;
-                    self.instructions.push(isset);
+                    self.push_instruction_at_line(isset, *line);
                     return (result, OpType::Tmp);
                 }
                 let (array_op, array_type) = self.compile_isset_object_base(array);
@@ -9272,8 +9286,12 @@ impl Compiler {
                 fetch.op2_type = index_type;
                 fetch.result = result;
                 fetch.result_type = OpType::Tmp;
-                fetch._pad |= FETCH_DIM_SILENT;
-                self.instructions.push(fetch);
+                // An intermediate ArrayAccess dimension in isset/empty/?? is
+                // a two-stage probe: offsetExists() short-circuits a miss and
+                // offsetGet() runs only when the container must be traversed.
+                // Arrays retain the existing silent fetch behavior.
+                fetch._pad |= FETCH_DIM_SILENT | FETCH_DIM_EMPTY;
+                self.push_instruction_at_line(fetch, *line);
                 (result, OpType::Tmp)
             }
             _ => self.compile_expr(expr),
@@ -9313,7 +9331,7 @@ impl Compiler {
                 self.push_instruction_at_line(isset, *line);
                 (result, OpType::Tmp)
             }
-            Expr::ArrayAccess { array, index, .. } => {
+            Expr::ArrayAccess { array, index, line } => {
                 if matches!(array.as_ref(), Expr::Globals { .. }) {
                     let (key, key_type) = self.compile_expr(index);
                     let result = self.alloc_tmp();
@@ -9323,7 +9341,7 @@ impl Compiler {
                     isset.result = result;
                     isset.result_type = OpType::Tmp;
                     isset._pad |= FETCH_DIM_ISSET;
-                    self.instructions.push(isset);
+                    self.push_instruction_at_line(isset, *line);
                     return (result, OpType::Tmp);
                 }
                 let (array_op, array_type) = self.compile_isset_object_base(array);
@@ -9337,7 +9355,7 @@ impl Compiler {
                 isset.result = result;
                 isset.result_type = OpType::Tmp;
                 isset._pad |= FETCH_DIM_ISSET;
-                self.instructions.push(isset);
+                self.push_instruction_at_line(isset, *line);
                 (result, OpType::Tmp)
             }
             _ => self.compile_isset_object_base(expr),
@@ -9913,7 +9931,7 @@ impl Compiler {
                                 right_type,
                             )
                         }
-                        Expr::ArrayAppendArgument { target, .. } => {
+                        Expr::ArrayAppendArgument { target, line } => {
                             let (array, array_type, append_writeback) =
                                 match self.compile_array_append_source(target, true, false) {
                                     Ok(source) => source,
@@ -9930,22 +9948,22 @@ impl Compiler {
                                     array_type,
                                     append_writeback,
                                     Vec::new(),
+                                    true,
+                                    *line,
                                 );
                             (
                                 left,
                                 left_type,
-                                ForeachArrayWriteback::Variable(left),
+                                ForeachArrayWriteback::AnonymousDimension {
+                                    container: array,
+                                    container_type: array_type,
+                                    binding: left,
+                                },
                                 right,
                                 right_type,
                             )
                         }
                         _ => {
-                            let mut root = target.as_ref();
-                            while let Expr::ArrayAccess { array, .. } = root {
-                                root = array;
-                            }
-                            let defer_temporary_array_fetches =
-                                Self::is_array_write_call_result(root);
                             let (left, left_type, writeback) = match self
                                 .compile_foreach_reference_source(target, false, true, false)
                             {
@@ -9957,12 +9975,10 @@ impl Compiler {
                                 }
                             };
                             if matches!(&writeback, ForeachArrayWriteback::Array(_)) {
-                                self.mark_trailing_mutable_dimension_fetches();
+                                self.mark_trailing_compound_dimension_fetches();
                             }
                             let mut deferred_fetches = Vec::new();
-                            if defer_temporary_array_fetches
-                                && matches!(&writeback, ForeachArrayWriteback::Array(_))
-                            {
+                            if matches!(&writeback, ForeachArrayWriteback::Array(_)) {
                                 while self.instructions.last().is_some_and(|instruction| {
                                     instruction.opcode == OpCode::FetchDimR
                                 }) {
@@ -9975,7 +9991,13 @@ impl Compiler {
                                 deferred_fetches.reverse();
                             }
                             let (right, right_type) = self.compile_expr(expr);
+                            let deferred_dimension = !deferred_fetches.is_empty();
                             self.instructions.extend(deferred_fetches);
+                            if deferred_dimension {
+                                self.record_last_instruction_source_line(
+                                    incdec_target_source_line(target),
+                                );
+                            }
                             (left, left_type, writeback, right, right_type)
                         }
                     }
@@ -10097,8 +10119,17 @@ impl Compiler {
                 } else {
                     OpCode::PreDec
                 });
-                operation.op1 = original;
-                operation.op1_type = OpType::Tmp;
+                // An overloaded dimension may return a live reference and
+                // therefore performs the update through its fetched l-value.
+                // Property overloading instead exposes a value snapshot to
+                // the paired __set() writeback even when &__get() was used.
+                let live_dimension = matches!(target.as_ref(), Expr::ArrayAccess { .. });
+                operation.op1 = if live_dimension { current } else { original };
+                operation.op1_type = if live_dimension {
+                    current_type
+                } else {
+                    OpType::Tmp
+                };
                 operation.result = updated;
                 operation.result_type = OpType::Tmp;
                 self.push_instruction_at_line(operation, source_line);
@@ -10181,14 +10212,26 @@ impl Compiler {
                         | ForeachArrayWriteback::StaticProperty { .. }
                 );
                 let array_writeback = matches!(&writeback, ForeachArrayWriteback::Array(_));
+                let (operation_source, operation_source_type) = if property_writeback {
+                    let snapshot = self.alloc_tmp();
+                    let mut preserve = Instruction::new(OpCode::AssignCv);
+                    preserve.op1 = snapshot;
+                    preserve.op1_type = OpType::Tmp;
+                    preserve.op2 = left;
+                    preserve.op2_type = left_type;
+                    self.instructions.push(preserve);
+                    (snapshot, OpType::Tmp)
+                } else {
+                    (left, left_type)
+                };
                 let result = self.alloc_tmp();
                 let mut operation = Instruction::new(if matches!(expr, Expr::PreIncTarget(_)) {
                     OpCode::PreInc
                 } else {
                     OpCode::PreDec
                 });
-                operation.op1 = left;
-                operation.op1_type = left_type;
+                operation.op1 = operation_source;
+                operation.op1_type = operation_source_type;
                 operation.result = result;
                 operation.result_type = OpType::Tmp;
                 self.push_instruction_at_line(operation, source_line);
@@ -10709,6 +10752,21 @@ impl Compiler {
                                         }
                                     }
                                 }
+                                CallArg::Positional(expr @ Expr::ArrayAccess { .. })
+                                    if Self::positional_argument_is_ref(
+                                        ref_args,
+                                        variadic_ref_start,
+                                        index,
+                                    ) =>
+                                {
+                                    match self.compile_call_array_element_reference_source(expr) {
+                                        Ok(result) => (result, OpType::Cv, None, None),
+                                        Err(error) => {
+                                            self.deferred_error = Some(error);
+                                            (0, OpType::Unused, None, None)
+                                        }
+                                    }
+                                }
                                 CallArg::Positional(expr)
                                     if Self::positional_argument_is_ref(
                                         ref_args,
@@ -10751,7 +10809,7 @@ impl Compiler {
                                     if named_reference_args[index]
                                         && Self::is_mutable_call_reference_source(value) =>
                                 {
-                                    match self.compile_array_element_reference_source(value) {
+                                    match self.compile_call_array_element_reference_source(value) {
                                         Ok(op) => {
                                             let name =
                                                 self.add_literal(Value::string(name.clone()));
@@ -12975,9 +13033,9 @@ impl Compiler {
                 if deferred_reference_notice {
                     append._pad |= ARRAY_ELEMENT_DEFER_NONREFERENCEABLE_NOTICE;
                 }
-                self.instructions.push(append);
+                self.push_instruction_at_line(append, expression_source_line(target));
                 if let Some((_, _, writeback)) = mutable_source {
-                    self.emit_foreach_reference_source_writeback(writeback, array, array_type);
+                    self.emit_array_append_source_writeback(writeback, array, array_type);
                 }
                 if let Some(cv) = direct_cv {
                     self.definitely_defined_cvs.insert(cv);
@@ -13848,6 +13906,7 @@ impl Compiler {
                                 | Expr::StaticProperty { .. }
                                 | Expr::DynamicNamedStaticProperty { .. }
                                 | Expr::DynamicStaticProperty { .. }
+                                | Expr::ArrayAccess { .. }
                         ))
                         || (use_var_ex
                             && (matches!(
@@ -13883,9 +13942,10 @@ impl Compiler {
                             "matched runtime property argument must compile as a reference source",
                         )
                     } else {
-                        self.compile_array_element_reference_source(expr).expect(
-                            "matched mutable call argument must compile as a reference source",
-                        )
+                        self.compile_call_array_element_reference_source(expr)
+                            .expect(
+                                "matched mutable call argument must compile as a reference source",
+                            )
                     };
                     let mut send = Instruction::new(if use_var_ex {
                         OpCode::SendVarEx
@@ -14177,6 +14237,24 @@ impl Compiler {
             .collect()
     }
 
+    fn compile_source_unpack_operand(&mut self, expression: &Expr) -> (u16, OpType) {
+        let (value, value_type) = self.compile_expr(expression);
+        if value_type == OpType::Tmp
+            && matches!(expression, Expr::Variable { .. })
+            && let Some(fetch) = self.instructions.last_mut()
+            && fetch.opcode == OpCode::FetchCvR
+            && fetch.result == value
+        {
+            // A top-level call invalidates the compiler's defined-CV proof,
+            // but `...$array` remains a live l-value source after its checked
+            // read. Avoid manufacturing a second PHP array owner: a later
+            // by-reference unpack parameter must promote the original member,
+            // while an actually undefined variable still consumes null.
+            fetch._pad |= FETCH_CV_LIVE_UNPACK_SOURCE;
+        }
+        (value, value_type)
+    }
+
     fn compile_mixed_unpacked_call_arguments(
         &mut self,
         args: &[CallArg],
@@ -14201,7 +14279,7 @@ impl Compiler {
             match argument {
                 CallArg::Unpack(expression) => {
                     saw_unpack = true;
-                    let (value, value_type) = self.compile_expr(expression);
+                    let (value, value_type) = self.compile_source_unpack_operand(expression);
                     let mut unpack = Instruction::new(OpCode::AddCallUnpack);
                     unpack.op1 = arguments;
                     unpack.op1_type = OpType::Tmp;

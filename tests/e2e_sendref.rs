@@ -469,6 +469,7 @@ fn test_positional_reference_argument_supports_intermediate_append_dimensions() 
 function bind_fresh_slot(&$slot, $value) {
     $slot = $value;
 }
+
 function first_key() {
     global $items;
     echo count($items), ":";
@@ -488,6 +489,27 @@ echo $items[0]["first"]["second"], ":", $holder->items[0]["property"];
 "#,
     );
     assert_eq!(out, "0:second:nested:stored");
+}
+
+#[test]
+fn intermediate_append_reference_binding_defers_publication_until_keys() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function reference_key() {
+    global $items;
+    echo count($items), ":";
+    return "key";
+}
+
+$items = [];
+$alias =& $items[][reference_key()];
+$alias = "bound";
+echo $items[0]["key"];
+"#,
+        ),
+        "0:bound"
+    );
 }
 
 #[test]
@@ -530,6 +552,76 @@ call_observer([]);
 "#,
     );
     assert_eq!(out, "key:Cannot use [] for reading:0");
+}
+
+#[test]
+fn by_value_property_snapshot_is_owned_before_nested_reference_mutation() {
+    let out = run_php(
+        r#"<?php
+function replace_snapshot_leaf(&$leaf) { $leaf = true; }
+function mutate_snapshot($snapshot, &$live) {
+    replace_snapshot_leaf($snapshot['leaf']);
+    echo json_encode([$snapshot, $live]), "\n";
+}
+class SnapshotHolder { public $items = ['leaf' => 'original']; }
+$holder = new SnapshotHolder;
+mutate_snapshot($holder->items, $holder->items['leaf']);
+echo json_encode($holder->items), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "[{\"leaf\":true},\"original\"]\n{\"leaf\":\"original\"}\n"
+    );
+}
+
+#[test]
+fn temporary_dimension_reference_dereferences_when_a_later_array_copy_separates() {
+    let out = run_php(
+        r#"<?php
+function replace_slot(&$slot) { $slot = 'changed'; }
+function separate_after_reference($input) {
+    replace_slot($input['slot']);
+    $copy = $input;
+    $copy['slot'] = 'copy';
+    echo $input['slot'], ':', $copy['slot'], "\n";
+}
+$source = ['slot' => 'initial'];
+separate_after_reference($source);
+echo $source['slot'], "\n";
+"#,
+    );
+    assert_eq!(out, "changed:copy\ninitial\n");
+}
+
+#[test]
+fn checked_top_level_unpack_keeps_the_original_array_members_live() {
+    let out = run_php(
+        r#"<?php
+function mutate_unpacked($value, &$slot) { $slot++; }
+$items = [0, 0];
+strlen("invalidate the top-level defined-CV proof");
+mutate_unpacked(0, ...$items);
+echo $items[0], ":", $items[1];
+"#,
+    );
+    assert_eq!(out, "1:0");
+}
+
+#[test]
+fn self_referential_array_cell_survives_copy_on_write_separation() {
+    let out = run_php(
+        r#"<?php
+$items = [];
+$items[] =& $items;
+$first = $items;
+unset($items);
+$second = $first;
+$second[0] = 123;
+echo $first[0], ":", $second[0];
+"#,
+    );
+    assert_eq!(out, "123:123");
 }
 
 // ============================================================

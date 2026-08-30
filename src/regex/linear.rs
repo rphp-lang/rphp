@@ -4,8 +4,8 @@
 //! or perturb the canonical backtracking loop used by the full PCRE subset.
 
 use super::{
-    Anchor, CaptureView, Match, Node, Regex, RegexFlags, chars_equal, is_word_boundary,
-    match_class_item, match_shorthand, subject_chars,
+    Anchor, CaptureView, Match, Node, Regex, RegexFlags, chars_equal, end_anchor_matches,
+    is_word_boundary, match_class_item, match_shorthand, subject_chars,
 };
 
 mod ascii;
@@ -197,14 +197,7 @@ fn match_atom(node: &Node, pos: usize, chars: &[char], flags: RegexFlags) -> Opt
             };
             matches.then_some(pos)
         }
-        Node::Anchor(Anchor::End) => {
-            let matches = if flags.multiline {
-                pos == chars.len() || chars[pos] == '\n'
-            } else {
-                pos == chars.len()
-            };
-            matches.then_some(pos)
-        }
+        Node::Anchor(Anchor::End) => end_anchor_matches(pos, chars, flags).then_some(pos),
         Node::WordBoundary(positive) => (is_word_boundary(chars, pos) == *positive).then_some(pos),
         Node::CharClass { negated, items } => {
             if pos >= chars.len() {

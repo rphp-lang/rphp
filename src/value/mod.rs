@@ -4662,13 +4662,16 @@ impl ExactSizeIterator for PhpArrayValues<'_> {}
 impl Clone for PhpArray {
     fn clone(&self) -> Self {
         let cloned_storage = match &self.storage {
-            ArrayStorage::Packed(values) => {
-                ArrayStorage::Packed(values.iter().map(Value::clone_for_array_cow).collect())
-            }
+            ArrayStorage::Packed(values) => ArrayStorage::Packed(
+                values
+                    .iter()
+                    .map(|value| value.clone_for_array_cow(self))
+                    .collect(),
+            ),
             ArrayStorage::SmallHash(small) => {
                 let mut cloned = SmallHashStorage::new();
                 for (key, value) in small.entries.iter().flatten() {
-                    let inserted = cloned.push(key.clone(), value.clone_for_array_cow());
+                    let inserted = cloned.push(key.clone(), value.clone_for_array_cow(self));
                     debug_assert!(inserted);
                 }
                 ArrayStorage::SmallHash(cloned)
@@ -4678,7 +4681,7 @@ impl Clone for PhpArray {
                     linear
                         .entries
                         .iter()
-                        .map(|(key, value)| (key.clone(), value.clone_for_array_cow()))
+                        .map(|(key, value)| (key.clone(), value.clone_for_array_cow(self)))
                         .collect(),
                 ))
             }
@@ -4690,7 +4693,7 @@ impl Clone for PhpArray {
             } => ArrayStorage::Hash {
                 entries: entries
                     .iter()
-                    .map(|(key, value)| (key.clone(), value.clone_for_array_cow()))
+                    .map(|(key, value)| (key.clone(), value.clone_for_array_cow(self)))
                     .collect(),
                 str_index: str_index.clone(),
                 int_index: int_index.clone(),
@@ -6810,8 +6813,10 @@ impl Value {
     /// Clone an array element while preserving an explicit reference cell
     /// across copy-on-write separation.
     #[inline]
-    fn clone_for_array_cow(&self) -> Self {
-        if self.is_owned_reference() {
+    fn clone_for_array_cow(&self, source: &PhpArray) -> Self {
+        let self_reference = self.is_owned_reference()
+            && self.dereferenced().array_identity() == Some(source as *const PhpArray as usize);
+        if self.is_owned_reference() && (self.owned_reference_is_aliased() || self_reference) {
             self.clone_owned_reference_alias()
         } else {
             self.clone()

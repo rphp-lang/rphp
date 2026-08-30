@@ -28,8 +28,9 @@ use crate::vm::function::{
     CapturedTypedLongFunctionPlan, IndirectScalarLongCallable, IndirectScalarLongFunctionPlan,
 };
 use crate::vm::instruction::{
-    FETCH_DIM_FUNC_ARG, FETCH_DIM_REFERENCE_SOURCE, InlineCache, Instruction, KnownScalarType,
-    LATE_STATIC_PROP_EMBEDDED_SCOPE, OBJ_PROP_FUNC_ARG, OpType, SEND_FLAG_YIELD_SNAPSHOT,
+    FETCH_DIM_FUNC_ARG, FETCH_DIM_MUTABLE, FETCH_DIM_REFERENCE_SOURCE, InlineCache, Instruction,
+    KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE, OBJ_PROP_FUNC_ARG, OpType,
+    SEND_FLAG_YIELD_SNAPSHOT,
 };
 use crate::vm::opcode::OpCode;
 use crate::vm::planner::{BlockInfo, BlockPlan};
@@ -1372,8 +1373,21 @@ fn build_borrowable_heap_args(function: &UserFunction) -> u64 {
             | OpCode::AddCallUnpack
             | OpCode::AssignDim
             | OpCode::ArrayPushOp
+            | OpCode::BindArrayAppendRef
+            | OpCode::BindArrayDimRef
             | OpCode::UnsetDim
                 if instruction.op1_type == OpType::Cv =>
+            {
+                clear_cv(&mut mask, instruction.op1)
+            }
+            // Mutable/reference dimension traversal may detach the root or
+            // publish a cell that a nested call mutates. A borrowed parameter
+            // would then alias a caller-owned Rc without contributing an
+            // owner, violating the COW decrement performed by the canonical
+            // dimension opcode.
+            OpCode::FetchDimR
+                if instruction.op1_type == OpType::Cv
+                    && instruction._pad & (FETCH_DIM_MUTABLE | FETCH_DIM_REFERENCE_SOURCE) != 0 =>
             {
                 clear_cv(&mut mask, instruction.op1)
             }

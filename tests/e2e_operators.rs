@@ -1085,6 +1085,10 @@ fn empty_array_dimensions_reject_reads_and_unsets_but_allow_append_writes() {
         compile_error("<?php\nisset($slots\n[]);"),
         "Cannot use [] for reading on line 2"
     );
+    assert_eq!(
+        compile_error("<?php\nclass InvalidDefault { public $slot = [][]; }"),
+        "Cannot use [] for reading on line 2"
+    );
 
     assert_eq!(
         run_php(

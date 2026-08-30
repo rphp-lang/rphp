@@ -98,6 +98,11 @@ pub const SEND_FLAG_PREPARED_PROPERTY_ARGUMENT: u16 = 1 << 6;
 /// FetchCvR flag: evaluate this read under PHP's `@` reporting mask. Custom
 /// handlers still run and observe the suppressed mask.
 pub const FETCH_CV_ERROR_SUPPRESS: u16 = 1;
+/// FetchCvR result is the live source for PHP argument unpacking. A defined
+/// CV is exposed through a frame-bounded borrowed reference so by-reference
+/// parameters can promote its members without an incidental array COW copy;
+/// an undefined CV still snapshots null before its warning handler runs.
+pub const FETCH_CV_LIVE_UNPACK_SOURCE: u16 = 1 << 1;
 /// Direct increment/decrement executes inside an `@` suppression scope.
 pub const INCDEC_ERROR_SUPPRESS: u16 = 1;
 
@@ -325,6 +330,14 @@ pub const FETCH_DIM_FUNC_ARG_ROOT_CV: u16 = 1 << 8;
 /// `foreach`. A string container must normalize the key diagnostics and then
 /// reject reference creation before materializing an offset value.
 pub const FETCH_DIM_REFERENCE_SOURCE: u16 = 1 << 9;
+/// `FetchDimR` is the read half of a compound dimension assignment. It needs
+/// mutable null/false and missing-key handling, but an ArrayAccess value result
+/// is intentionally followed by `offsetSet()` and therefore must not emit the
+/// indirect-modification notice used by nested/inc-dec l-values.
+pub const FETCH_DIM_COMPOUND: u16 = 1 << 10;
+/// Intermediate dimension of a nested unset. Internal ArrayObject handlers
+/// retain Zend's notice-before-invalid-unset ordering for this context.
+pub const FETCH_DIM_UNSET: u16 = 1 << 11;
 
 /// `FetchDynamicVar` reads the symbol-table entry without reporting an
 /// undefined-variable diagnostic. Unlike `FETCH_DIM_ISSET`, the fetched value
@@ -419,6 +432,12 @@ pub const ASSIGN_DIM_ERROR_SUPPRESS: u16 = 1 << 4;
 /// diagnostic and must reject before the element target is mutated.
 pub const ASSIGN_DIM_INCDEC_INCREMENT: u16 = 1 << 5;
 pub const ASSIGN_DIM_INCDEC_DECREMENT: u16 = 1 << 6;
+/// Synthetic writeback of an intermediate mutable dimension. Array parents
+/// receive the detached child value, but an ArrayAccess parent has already
+/// exposed its storage through `offsetGet()`: a by-reference result was
+/// modified directly, while a by-value result must remain ineffective after
+/// PHP's indirect-modification notice. Neither form calls `offsetSet()`.
+pub const ASSIGN_DIM_INDIRECT_REBUILD: u16 = 1 << 7;
 /// UnsetDim addresses the leaf of a multi-dimensional path. String parents use
 /// PHP's nested-offset diagnostic rather than the flat string-unset message.
 pub const UNSET_DIM_NESTED: u16 = 1;
@@ -427,6 +446,10 @@ pub const UNSET_DIM_NESTED: u16 = 1;
 /// handle owns the shared cell for execution lifetime but is not a PHP-visible
 /// alias and must not affect reference-wrapper observation.
 pub const REFERENCE_RESULT_INTERNAL: u16 = 1;
+/// `BindArrayAppendRef` prepares an anonymous dimension for compound
+/// assignment. Its paired writeback invokes `offsetSet(null, value)`, so a
+/// by-value `offsetGet(null)` result must not emit the indirect-write notice.
+pub const BIND_ARRAY_APPEND_COMPOUND: u16 = 1 << 2;
 
 /// The source of a reference destructuring operation is a temporary
 /// expression. A by-value result must emit PHP's non-referenceable notice,
@@ -471,6 +494,10 @@ pub const ARRAY_ELEMENT_DEFER_NONREFERENCEABLE_NOTICE: u16 = 1 << 4;
 /// The compiler proved that this array-literal value temporary has no consumer
 /// after AddArrayElement and may transfer its owner into the array.
 pub const ARRAY_ELEMENT_MOVE_SOURCE: u16 = 1 << 5;
+/// ArrayPushOp is the commit half of an anonymous-dimension compound
+/// assignment. Arrays were already extended by `BindArrayAppendRef`, while an
+/// ArrayAccess receiver still requires `offsetSet(null, value)`.
+pub const ARRAY_ELEMENT_COMPOUND_APPEND_WRITEBACK: u16 = 1 << 6;
 
 /// Arithmetic/bitwise opcode flag: the operation is the read phase of a
 /// compound assignment. PHP validates commutative binary operands as an

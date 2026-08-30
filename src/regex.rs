@@ -98,6 +98,7 @@ pub struct RegexFlags {
     pub dotall: bool,
     pub extended: bool,
     pub ungreedy: bool,
+    pub dollar_end_only: bool,
 }
 
 impl Default for RegexFlags {
@@ -108,8 +109,24 @@ impl Default for RegexFlags {
             dotall: false,
             extended: false,
             ungreedy: false,
+            dollar_end_only: false,
         }
     }
+}
+
+#[inline]
+fn end_anchor_matches(pos: usize, chars: &[char], flags: RegexFlags) -> bool {
+    if pos == chars.len() {
+        return true;
+    }
+    if flags.multiline {
+        return chars.get(pos) == Some(&'\n');
+    }
+    if flags.dollar_end_only {
+        return false;
+    }
+    (pos + 1 == chars.len() && chars[pos] == '\n')
+        || (pos + 2 == chars.len() && chars[pos] == '\r' && chars[pos + 1] == '\n')
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -883,11 +900,7 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             if ok { match_rest(rest, pos, ctx) } else { None }
         }
         Node::Anchor(Anchor::End) => {
-            let ok = if ctx.flags.multiline {
-                pos == ctx.chars.len() || ctx.chars[pos] == '\n'
-            } else {
-                pos == ctx.chars.len()
-            };
+            let ok = end_anchor_matches(pos, ctx.chars, ctx.flags);
             if ok { match_rest(rest, pos, ctx) } else { None }
         }
         Node::WordBoundary(positive) => {
@@ -2087,10 +2100,7 @@ pub fn parse_php_regex(input: &str) -> Result<(String, RegexFlags), String> {
             // PCRE's study modifier is an optimization hint and cannot alter
             // observable match or replacement results.
             'S' => {}
-            // The engine's `$` anchor is already strict, which is precisely
-            // PCRE_DOLLAR_ENDONLY semantics. Accept the modifier so generated
-            // framework patterns can state that requirement explicitly.
-            'D' => {}
+            'D' => flags.dollar_end_only = true,
             _ => return Err(format!("Unknown modifier '{}'", ch)),
         }
     }

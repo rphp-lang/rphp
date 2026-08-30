@@ -488,12 +488,21 @@ impl Parser {
                         }
                         self.advance();
                         self.advance();
-                        let message = if self.empty_dimension_unset_context {
-                            "Cannot use [] for unsetting"
+                        if self.empty_dimension_unset_context {
+                            expr = self.compile_error(
+                                "Cannot use [] for unsetting",
+                                expression_line.unwrap_or(line),
+                            );
                         } else {
-                            "Cannot use [] for reading"
-                        };
-                        expr = self.compile_error(message, expression_line.unwrap_or(line));
+                            // Keep the anonymous dimension in the AST so a
+                            // by-reference return can materialize its l-value.
+                            // Ordinary reads remain compile errors in the
+                            // compiler's context-sensitive lowering.
+                            expr = Expr::ArrayAppendArgument {
+                                target: Box::new(expr),
+                                line: expression_line.unwrap_or(line),
+                            };
+                        }
                         continue;
                     }
                     self.advance();
