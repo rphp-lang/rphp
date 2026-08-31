@@ -1269,6 +1269,9 @@ pub struct SignatureInfo {
     pub prefer_ref_args: u64,
     /// Whether the declaration uses `function &name()` return-by-reference syntax.
     pub returns_reference: bool,
+    /// A relative user parameter or return contract may acquire class scope
+    /// later through closure binding. Internal signatures leave this false.
+    pub(crate) needs_bound_type_scope: bool,
     /// Number of hidden CV slots before explicit args (0 for functions, 1 for methods with $this).
     /// DoFcall uses `num_args - this_offset` for public arity check.
     pub this_offset: u32,
@@ -1283,6 +1286,11 @@ pub struct SignatureInfo {
 }
 
 impl SignatureInfo {
+    #[inline(always)]
+    pub(crate) fn needs_bound_type_scope(&self) -> bool {
+        self.needs_bound_type_scope
+    }
+
     /// Number of public (user-visible) parameters, excluding hidden $this.
     #[inline]
     pub fn public_arity(&self) -> u32 {

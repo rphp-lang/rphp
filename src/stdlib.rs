@@ -17126,20 +17126,72 @@ pub(crate) unsafe fn collect_debug_backtrace(
             }
         }
         if (name == "{closure}" || name.starts_with("{closure:"))
-            && let Some(class) = eg.declaring_class_of((*frame).func)
+            && let Some(class) = eg
+                .declaring_class_of((*frame).func)
+                .map(str::to_owned)
+                .or_else(|| crate::vm::execute::lexical_class_name_for_frame(eg, frame))
         {
-            let receiver = user.and_then(|function| {
-                function
-                    .op_array
-                    .all_cvs
-                    .iter()
-                    .find(|(_, candidate)| candidate == "this")
-                    .map(|(this_cv, _)| (*frame).cv(*this_cv).dereferenced())
-                    .filter(|value| value.as_object().is_some())
-            });
+            let receiver = user
+                .and_then(|function| {
+                    function
+                        .op_array
+                        .all_cvs
+                        .iter()
+                        .find(|(_, candidate)| candidate == "this")
+                        .map(|(this_cv, _)| (*frame).cv(*this_cv).dereferenced())
+                        .filter(|value| value.as_object().is_some())
+                })
+                .cloned()
+                .or_else(|| {
+                    // A closure that never reads `$this` keeps no receiver CV on
+                    // its hot frame. During a cold trace, recover the still-live
+                    // closure operand from the paired dynamic call instead of
+                    // widening every ordinary closure activation.
+                    let caller = (*frame).prev_execute_data;
+                    if caller.is_null() || (*caller).func.is_null() {
+                        return None;
+                    }
+                    let caller_function = Function::from_common_ptr((*caller).func);
+                    if caller_function.fn_type() != FunctionType::User {
+                        return None;
+                    }
+                    let caller_op_array = &caller_function.as_user().op_array;
+                    let base = caller_op_array.instructions.as_ptr();
+                    let resume = (*caller).opline;
+                    let resume_index = resume.offset_from(base);
+                    let do_fcall = if resume_index >= 0
+                        && (resume_index as usize) < caller_op_array.instructions.len()
+                        && (*resume).opcode == OpCode::DoFcall
+                    {
+                        resume
+                    } else if resume_index > 0
+                        && (resume_index as usize) <= caller_op_array.instructions.len()
+                        && (*resume.sub(1)).opcode == OpCode::DoFcall
+                    {
+                        resume.sub(1)
+                    } else {
+                        return None;
+                    };
+                    let initializer =
+                        crate::vm::execute::call_initializer_before(caller_op_array, do_fcall)?;
+                    if initializer.opcode != OpCode::InitDynamicCall {
+                        return None;
+                    }
+                    let callable = &*(*caller).get_op_ptr(
+                        initializer.op1 as u32,
+                        initializer.op1_type,
+                        caller_op_array,
+                    );
+                    callable
+                        .as_closure()
+                        .and_then(|closure| closure.bound_this.clone())
+                });
             entry.set_str("function", Value::string(name));
-            entry.set_str("class", Value::string(class.to_string()));
-            if include_object && let Some(receiver) = receiver {
+            entry.set_str(
+                "class",
+                Value::string(crate::vm::execute::displayed_class_name(eg, &class)),
+            );
+            if include_object && let Some(receiver) = receiver.as_ref() {
                 entry.set_str("object", receiver.clone());
             }
             entry.set_str(

@@ -1034,6 +1034,7 @@ pub fn make_user_function_full(
                 ref_args,
                 prefer_ref_args: 0,
                 returns_reference: false,
+                needs_bound_type_scope: false,
                 this_offset: 0,
                 param_type_hints: vec![],
                 param_names: vec![],
@@ -1147,6 +1148,10 @@ pub(crate) fn make_user_function_typed_with_return_mode(
     returns_reference: bool,
 ) -> UserFunction {
     let needs_trait_class_scope = op_array.trait_class_scope_tmp.is_some();
+    let needs_bound_type_scope = return_type_hint.uses_declaring_class_scope()
+        || param_type_hints
+            .iter()
+            .any(ParamTypeHint::uses_declaring_class_scope);
     op_array.specialize_foreach_target_writes(ref_args, 0, &[]);
     op_array.resolve_tmp_offsets();
     op_array.specialize_opcodes_with_hints(&param_type_hints);
@@ -1249,6 +1254,7 @@ pub(crate) fn make_user_function_typed_with_return_mode(
                 ref_args,
                 prefer_ref_args: 0,
                 returns_reference,
+                needs_bound_type_scope,
                 this_offset: 0,
                 param_type_hints,
                 param_names,
@@ -5965,6 +5971,7 @@ pub fn make_internal_function(
                 ref_args: 0,
                 prefer_ref_args: 0,
                 returns_reference: false,
+                needs_bound_type_scope: false,
                 this_offset: 0,
                 param_type_hints: vec![],
                 param_names,
@@ -6232,6 +6239,7 @@ pub fn clone_trait_method_with_static_storage(
                 ref_args: signature.ref_args,
                 prefer_ref_args: signature.prefer_ref_args,
                 returns_reference: signature.returns_reference,
+                needs_bound_type_scope: signature.needs_bound_type_scope(),
                 this_offset: signature.this_offset,
                 param_type_hints: signature.param_type_hints.clone(),
                 param_names: signature.param_names.clone(),
@@ -6294,6 +6302,7 @@ pub fn make_internal_method(
                 ref_args: 0,
                 prefer_ref_args: 0,
                 returns_reference: false,
+                needs_bound_type_scope: false,
                 this_offset: 1,
                 param_type_hints: vec![],
                 param_names,
@@ -6345,6 +6354,7 @@ pub fn make_internal_method_variadic(
                 ref_args: 0,
                 prefer_ref_args: 0,
                 returns_reference: false,
+                needs_bound_type_scope: false,
                 this_offset: 1,
                 param_type_hints: vec![],
                 param_names,
@@ -6408,6 +6418,7 @@ pub fn make_internal_function_ref(
                 ref_args,
                 prefer_ref_args: 0,
                 returns_reference: false,
+                needs_bound_type_scope: false,
                 this_offset: 0,
                 param_type_hints: vec![],
                 param_names,
@@ -6455,6 +6466,7 @@ pub fn make_internal_function_variadic(
                 ref_args: 0,
                 prefer_ref_args: 0,
                 returns_reference: false,
+                needs_bound_type_scope: false,
                 this_offset: 0,
                 param_type_hints: vec![],
                 param_names,
@@ -6562,6 +6574,7 @@ pub fn make_internal_function_variadic_prefer_ref(
                 ref_args: reference_args,
                 prefer_ref_args: reference_args,
                 returns_reference: false,
+                needs_bound_type_scope: false,
                 this_offset: 0,
                 param_type_hints: vec![],
                 param_names,

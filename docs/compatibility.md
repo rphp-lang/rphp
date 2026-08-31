@@ -8,44 +8,49 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 language checkpoint is
-`declaration-front-end-validation`, based on `41405ed2`, pinned to php-src
-commit `fcc29c8` and validated against PHP 8.5.10. Class-like modifiers and
-`instanceof` are ASCII case-insensitive without reclassifying contextual names;
-qualified property types use the shared type parser; and ampersands retain
-their own source line. Nullable/attribute-split intersections, repeated grouped
-property types, unsupported `mixed` casts, bare ampersands and `try` without a
-handler now fail at PHP's stage with its canonical token and line diagnostic.
-Interfaces whose parent is unresolved, forward or self-referential enter the
-existing runtime declaration linker, so dependency errors remain catchable and
-propagate to dependent declarations instead of publishing a cyclic graph.
+`callable-return-contract-validation`, based on `398a98e1`, pinned to php-src
+commit `fcc29c8` and validated against PHP 8.5.10. Return-type checks now retain
+the lexical or explicitly bound class scope needed by `self`, `parent` and
+`static`, including inherited methods and bound closures, without adding a
+per-frame field or recursively walking ordinary argument types. Anonymous
+classes use their public parent-derived name in diagnostics. Implicit returns
+from `never` functions and methods raise the callable-specific catchable
+`TypeError` with source origin, while explicit throws and weak/strict return
+coercion keep their established ordering.
 
-Ten original byte-exact CLI tests cover valid forms, invalid syntax, source
-locations, error stage and the self-interface crash boundary. The exact final
-5,599-case Zend/lang manifest is 4,843 pass, 460 fail, 115 skip and 181
-unsupported: thirteen paths become exact and no pass is lost. It hashes to
-`a42eab0836d0c53074b3a2a3744931873e03a557647cf7c33aa587c939219e97`;
+Reflection classifies `void` and `never` as builtin non-null types and includes
+the closing brace in multiline method spans. `ReturnTypeWillChange` is admitted
+only on methods, rejects repetition, and cooperates with
+`DelayedTargetValidation`. Twelve original E2E cases cover positive and
+negative return contracts, inheritance, anonymous and bound callables,
+evaluation order, traces, reflection and attribute validation. The exact final
+5,599-case Zend/lang manifest is 4,855 pass, 448 fail, 115 skip and 181
+unsupported: twelve paths become exact and no pass is lost. It hashes to
+`4886ea609c724db07710204144922323bf667c6132fe04846baabc60f79cc1dd`;
 the sorted exact pass set hashes to
-`203991ebf2db125d0dc59b971e01e1920d4d6d286b2d6984930be598998590fa`.
+`16f1df61ef7fc1c7e4b8d5da548bc90478e25be5ac501dd84e0392431adbc916`.
 The adjacent 1,575-case strings/array manifest is parent-identical at 1,458
 pass, 19 fail, 67 skip and 31 unsupported and hashes to
 `226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`;
 its sorted pass set hashes to
 `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
-The stable 7,174-case core is therefore 6,301 pass, 479 fail, 182 skip and 212
-unsupported, exact delta `+13/-0`, with no timeout or crash.
+The stable 7,174-case core is therefore 6,313 pass, 467 fail, 182 skip and 212
+unsupported, exact delta `+12/-0`, with no timeout or crash.
 
 All five Cargo configurations, all-feature/all-target checking, formatting,
 PHPT, Composer 2.8.12 S0, all four Symfony S1 gates and FrameworkBundle 7.4.16
-S2/S3 pass. Production remains at 1,623 unsafe blocks and 289 unsafe functions,
-with 408 SAFETY annotations and seven `# Safety` sections. The fixed-parent
-CPU-2 release gate compares candidate
-`3f42d74f1efa53bb1d6ac10397ae3e38d30e411e6eff60d7ea3083422b4bd985`
+S2/S3 pass. Production retains the 1,623 unsafe-block/289 unsafe-function
+ratchet. The fixed-parent CPU-2 release gate compares candidate
+`3beddaaa910547e9be7aef9592c22a984ae197d3e9210320ad2aeba3e9fb91dd`
 with parent
-`c249d6b0f338f152f3bdc0c7d2eb0705e30e7656313a1e0e52c93482614a137d`
-across 32 balanced pairs per lane and exact outputs. Paired medians are startup
-+0.048%, 500 class/interface links +0.126%, inherited constant reads -0.045%
-and the ordinary `strlen()` control -0.853%; raw observations hash to
-`b9817aad508383002d577cce32ab9986c54570a9a153727a2cce8b77ddf9bee9`.
+`b4d176d96276f1b56e18adbaa1918a1db4e8cf0759ab1ab6b02f3c8b2d950de4`
+across 32 deterministically randomized pairs per lane with exact output,
+stderr and status checks. Paired medians are startup +0.095%, ordinary
+`strlen()` +0.299%, typed scalar calls -0.600%, typed variadic calls -1.811%,
+class closures -1.076%, bound absolute class calls -3.478% and valid attribute
+reflection -0.084%. Every lane stays below +5% and the representative ordinary
+control stays below +1%; raw observations hash to
+`d2f42257166f08045ff974d3e791a41fa8e524b5402e158d8ef171236f96d446`.
 
 General SPL, Fiber/generator suspension, 32-bit and allocation-limit/OOM
 equivalence remain separate boundaries. The implementation is the commit

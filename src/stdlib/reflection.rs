@@ -4488,6 +4488,8 @@ fn reflection_type_is_builtin(
                     | "iterable"
                     | "object"
                     | "mixed"
+                    | "void"
+                    | "never"
                     | "null"
                     | "false"
                     | "true"
@@ -5132,13 +5134,18 @@ fn reflection_user_source_span(user: &UserFunction) -> Option<(usize, usize)> {
             .iter()
             .find_map(|(index, line)| (*index != u32::MAX).then_some(*line as usize))
     })?;
-    let end = user
+    let last_instruction_line = user
         .op_array
         .source_lines
         .iter()
         .filter_map(|(index, line)| (*index != u32::MAX).then_some(*line as usize))
         .max()
         .unwrap_or(start);
+    let end = if last_instruction_line > start {
+        last_instruction_line + 1
+    } else {
+        last_instruction_line
+    };
     Some((start, end))
 }
 

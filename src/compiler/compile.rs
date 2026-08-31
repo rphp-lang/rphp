@@ -6941,6 +6941,27 @@ impl Compiler {
         target_line: usize,
     ) -> Result<(), String> {
         self.validate_attribute_constant_expressions(attributes, target_line)?;
+        let mut return_type_will_change_lines = attributes.iter().filter_map(|attribute| {
+            self.resolve_name(&attribute.name)
+                .eq_ignore_ascii_case("ReturnTypeWillChange")
+                .then_some(attribute.line)
+        });
+        if let Some(first_line) = return_type_will_change_lines.next() {
+            if target != "method" && !self.has_delayed_target_validation(attributes) {
+                return Err(self.goto_error(
+                    &format!(
+                        "Attribute \"ReturnTypeWillChange\" cannot target {target} (allowed targets: method)"
+                    ),
+                    first_line,
+                ));
+            }
+            if let Some(line) = return_type_will_change_lines.next() {
+                return Err(self.goto_error(
+                    "Attribute \"ReturnTypeWillChange\" must not be repeated",
+                    line,
+                ));
+            }
+        }
         let mut lines = attributes.iter().filter_map(|attribute| {
             self.resolve_name(&attribute.name)
                 .eq_ignore_ascii_case("Attribute")
@@ -10960,7 +10981,11 @@ impl Compiler {
                 generic_args,
                 line,
             } => {
-                if generic_args.is_empty() && self.is_global_builtin_call(name, "compact") {
+                if generic_args.is_empty()
+                    && ["compact", "debug_backtrace"]
+                        .iter()
+                        .any(|builtin| self.is_global_builtin_call(name, builtin))
+                {
                     self.needs_compact_receiver = true;
                 }
                 if generic_args.is_empty()
@@ -12267,9 +12292,10 @@ impl Compiler {
                 if let Err(error) = func_compiler.finalize_gotos() {
                     self.deferred_error = Some(error);
                 }
-                // A direct compact() call can observe a bound receiver even
-                // when the closure body never otherwise spells `$this`.
-                // Reserve its ordinary named CV after body analysis.
+                // Direct compact()/debug_backtrace() calls can observe a bound
+                // receiver even when the body never otherwise spells `$this`.
+                // Relative late-static type contracts need the same ordinary
+                // named CV after body analysis.
                 if !*is_static
                     && (func_compiler.needs_compact_receiver
                         || cp.return_type_hint.uses_late_static()

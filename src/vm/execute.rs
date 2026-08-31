@@ -351,6 +351,16 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
     eg.class_by_id(class_id).map(|class| class.name.clone())
 }
 
+/// Recover the lexical or explicitly bound class scope carried by one live
+/// user frame. This is a cold metadata projection for diagnostics and traces;
+/// ordinary dispatch continues to use compact numeric scope IDs.
+pub(crate) fn lexical_class_name_for_frame(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+) -> Option<String> {
+    get_caller_class(frame, eg)
+}
+
 /// Resolve the class part of a static call without rewriting its bytecode
 /// literal. The literal must stay `self`/`parent`: late-static return checks
 /// recover forwarding call scope from that exact call-site spelling.
@@ -2873,7 +2883,7 @@ fn execute_fast_scalar_method_call<'a>(
 /// Find the call initializer paired with one DoFcall while ignoring complete
 /// nested calls used to build its arguments.
 #[cold]
-fn call_initializer_before<'a>(
+pub(crate) fn call_initializer_before<'a>(
     op_array: &'a crate::compiler::OpArray,
     do_fcall_ptr: *const Instruction,
 ) -> Option<&'a Instruction> {
@@ -3241,6 +3251,14 @@ fn registered_function_name(eg: &ExecutorGlobals, function: *const FunctionCommo
         .unwrap_or("internal function")
 }
 
+#[cold]
+pub(crate) fn displayed_class_name(eg: &ExecutorGlobals, class: &str) -> String {
+    eg.find_class(class)
+        .and_then(|definition| definition.anonymous_public_name())
+        .map(|name| name.split('\0').next().unwrap_or(&name).to_string())
+        .unwrap_or_else(|| class.to_string())
+}
+
 pub(crate) fn displayed_function_name(
     eg: &ExecutorGlobals,
     function: *const FunctionCommon,
@@ -3249,7 +3267,7 @@ pub(crate) fn displayed_function_name(
     if let Some((_, hook)) = registered_name.split_once("::$") {
         return eg
             .declaring_class_of(function)
-            .map(|class| format!("{class}::${hook}"))
+            .map(|class| format!("{}::${hook}", displayed_class_name(eg, class)))
             .unwrap_or_else(|| registered_name.to_string());
     }
     if registered_name.starts_with("__closure_")
@@ -3268,7 +3286,7 @@ pub(crate) fn displayed_function_name(
             })
     } else if let Some((_, method)) = registered_name.rsplit_once("::") {
         eg.declaring_class_of(function)
-            .map(|class| format!("{class}::{method}"))
+            .map(|class| format!("{}::{method}", displayed_class_name(eg, class)))
             .unwrap_or_else(|| registered_name.to_string())
     } else {
         registered_name.to_string()
@@ -3595,8 +3613,9 @@ fn execute_full_call<'a>(
         let internal = (common.fn_type == FunctionType::Internal).then(|| {
             &*(common as *const FunctionCommon as *const super::function::InternalFunction)
         });
-        let user_op_array = (common.fn_type == FunctionType::User)
-            .then(|| &(*(common as *const FunctionCommon as *const UserFunction)).op_array);
+        let user = (common.fn_type == FunctionType::User)
+            .then(|| &*(common as *const FunctionCommon as *const UserFunction));
+        let user_op_array = user.map(|function| &function.op_array);
         let raw_handler = if common.sig.is_variadic && pending_named.is_none() {
             // A single positional variadic value is already a stable call
             // slot. Multiple values normally retain the packed ABI; the
@@ -3679,6 +3698,9 @@ fn execute_full_call<'a>(
             {
                 resolved = Some(scope.to_string());
             }
+        }
+        if resolved.is_none() && func_common.sig.needs_bound_type_scope() {
+            resolved = get_caller_class(call, eg);
         }
         resolved
     };

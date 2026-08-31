@@ -40,12 +40,7 @@ fn return_type_error_value(
     hint: &ParamTypeHint,
     outcome: &str,
 ) -> Value {
-    let mut function_name = displayed_frame_function_name(eg, frame);
-    if function_name.starts_with("{closure:")
-        && let Some(class) = eg.class_by_id(late_static_call_class_id(eg, frame))
-    {
-        function_name = format!("{}::{function_name}", class.name);
-    }
+    let function_name = displayed_return_function_name(eg, frame);
     let error = make_error_value(
         "TypeError",
         &format!(
@@ -60,6 +55,67 @@ fn return_type_error_value(
         .expect("active return instruction belongs to its op array");
     attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
     error
+}
+
+#[cold]
+fn displayed_return_function_name(eg: &ExecutorGlobals, frame: *mut ExecuteData) -> String {
+    let mut function_name = displayed_frame_function_name(eg, frame);
+    if function_name.starts_with("{closure:")
+        && let Some(class) = eg.class_by_id(late_static_call_class_id(eg, frame))
+    {
+        function_name = format!(
+            "{}::{function_name}",
+            displayed_class_name(eg, &class.name)
+        );
+    }
+    function_name
+}
+
+#[cold]
+fn never_return_type_error_value(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    function: *const FunctionCommon,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Value {
+    let function_name = displayed_return_function_name(eg, frame);
+    let has_class_scope = eg.declaring_class_of(function).is_some()
+        || late_static_call_class_id(eg, frame) != 0;
+    let callable_kind = if has_class_scope {
+        "method"
+    } else {
+        "function"
+    };
+    let error = make_error_value(
+        "TypeError",
+        &format!(
+            "{function_name}(): never-returning {callable_kind} must not implicitly return"
+        ),
+    );
+    let instruction_index = op_array
+        .instructions
+        .iter()
+        .position(|instruction| std::ptr::eq(instruction, opline))
+        .expect("active return instruction belongs to its op array");
+    attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+    error
+}
+
+#[inline]
+fn return_type_callee_class(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    function: *const FunctionCommon,
+    hint: &ParamTypeHint,
+) -> Option<String> {
+    eg.declaring_class_of(function)
+        .map(str::to_owned)
+        .or_else(|| {
+            hint.uses_declaring_class_scope()
+                .then(|| get_caller_class(frame, eg))
+                .flatten()
+        })
 }
 
 #[cold]
@@ -9631,9 +9687,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         };
                         if check_fast_scalar_return_type_hint(retval, ret_hint) != Some(true) {
                             let source = retval.dereferenced().clone();
-                            let callee_class = eg
-                                .declaring_class_of(func_common_ret as *const FunctionCommon)
-                                .map(str::to_owned);
+                            let callee_class = return_type_callee_class(
+                                eg,
+                                frame,
+                                func_common_ret as *const FunctionCommon,
+                                ret_hint,
+                            );
                             let preparation = prepare_return_type_value(
                                 &source,
                                 ret_hint,
@@ -9901,8 +9960,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             // bare "return;" is OK for void
                         }
                         crate::vm::function::ParamTypeHint::Never => {
-                            let err = make_error_value("TypeError",
-                                "A never-returning function must not return");
+                            let err = never_return_type_error_value(
+                                eg,
+                                frame,
+                                func_common as *const FunctionCommon,
+                                op_array,
+                                opline,
+                            );
                             match throw_in_frame(eg, frame, err)? {
                                 ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
                                 ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
@@ -9927,9 +9991,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                                 };
                                 let source = retval.dereferenced().clone();
-                                let ret_callee_class = eg
-                                    .declaring_class_of(func_common as *const FunctionCommon)
-                                    .map(str::to_owned);
+                                let ret_callee_class = return_type_callee_class(
+                                    eg,
+                                    frame,
+                                    func_common as *const FunctionCommon,
+                                    hint,
+                                );
                                 let preparation = prepare_return_type_value(
                                     &source,
                                     hint,
