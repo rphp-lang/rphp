@@ -23,6 +23,12 @@ static LEGACY_UTF8_DEPRECATION: InternalFunctionDeprecation = InternalFunctionDe
     message: "visit the php.net documentation for various alternatives",
 };
 
+static LIBXML_ENTITY_LOADER_DEPRECATION: InternalFunctionDeprecation =
+    InternalFunctionDeprecation {
+        since: "8.0",
+        message: "as external entity loading is disabled by default",
+    };
+
 // ============================================================================
 // Registration
 // ============================================================================
@@ -318,13 +324,29 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         0,
         "arrays"
     );
-    reg_var!("array_replace", fn_array_replace, 1, "array");
-    reg_var!(
-        "array_replace_recursive",
-        fn_array_replace_recursive,
-        1,
-        "array"
-    );
+    for (name, handler) in [
+        (
+            "array_replace",
+            fn_array_replace as crate::vm::function::InternalFunctionHandler,
+        ),
+        (
+            "array_replace_recursive",
+            fn_array_replace_recursive as crate::vm::function::InternalFunctionHandler,
+        ),
+    ] {
+        let mut function = Box::new(make_internal_function_variadic(
+            handler,
+            1,
+            pn!["array", "replacements"],
+        ));
+        function.common.sig.param_type_hints = vec![ParamTypeHint::Array, ParamTypeHint::Array];
+        function.common.sig.return_type_hint = ParamTypeHint::Array;
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function(name, pointer).unwrap();
+        eg.register_internal_function_extension(pointer, "standard");
+        funcs.push(function);
+    }
     reg!(
         "array_keys",
         fn_array_keys,
@@ -541,7 +563,31 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     // S3 exposes md5, xxh128 and crc32, including binary output. The wider
     // algorithm catalogue stays explicit compatibility work rather than
     // returning invented digests.
-    reg!("hash", fn_hash, 3, 2, "algo", "data", "binary");
+    reg_typed!(
+        "hash",
+        fn_hash,
+        4,
+        2,
+        ["algo", "data", "binary", "options"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::Bool,
+            ParamTypeHint::Array,
+        ],
+        ParamTypeHint::String
+    );
+    let hash = eg.find_function("hash").expect("hash was just registered");
+    eg.register_internal_function_reflection_metadata(
+        hash,
+        vec![
+            None,
+            None,
+            Some(Value::bool(false)),
+            Some(Value::array(PhpArray::new())),
+        ],
+        "hash",
+    );
     reg!("hash_init", fn_hash_init, 1, 1, "algo");
     reg!("hash_update", fn_hash_update, 2, 2, "context", "data");
     reg!("hash_final", fn_hash_final, 2, 1, "context", "binary");
@@ -1622,12 +1668,21 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         0
     );
     reg!("get_exception_handler", fn_get_exception_handler, 0, 0);
-    reg_var!(
-        "register_shutdown_function",
-        fn_register_shutdown_function,
-        1,
-        "callback"
-    );
+    {
+        let mut function = Box::new(make_internal_function_variadic(
+            fn_register_shutdown_function,
+            1,
+            pn!["callback", "args"],
+        ));
+        function.common.sig.param_type_hints = vec![ParamTypeHint::Callable, ParamTypeHint::Mixed];
+        function.common.sig.return_type_hint = ParamTypeHint::Void;
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("register_shutdown_function", pointer)
+            .unwrap();
+        eg.register_internal_function_extension(pointer, "standard");
+        funcs.push(function);
+    }
     reg_typed!(
         "error_reporting",
         fn_error_reporting,
@@ -2061,14 +2116,38 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         .find_function("parse_str")
         .expect("parse_str was just registered");
     eg.register_internal_function_extension(parse_str, "standard");
-    reg!(
+    reg_typed!(
         "http_build_query",
         fn_http_build_query,
-        3,
+        4,
         1,
-        "data",
-        "numeric_prefix",
-        "arg_separator"
+        ["data", "numeric_prefix", "arg_separator", "encoding_type"],
+        [
+            ParamTypeHint::Union(vec![
+                ParamTypeHint::ClassName("object".to_string()),
+                ParamTypeHint::Array,
+            ]),
+            ParamTypeHint::String,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+            ParamTypeHint::Int,
+        ],
+        ParamTypeHint::String
+    );
+    const HTTP_BUILD_QUERY_DEFAULT_DIAGNOSTICS: &[Option<&str>] =
+        &[None, None, None, Some("PHP_QUERY_RFC1738")];
+    let http_build_query = eg
+        .find_function("http_build_query")
+        .expect("http_build_query was just registered");
+    eg.register_internal_function_reflection_metadata_with_diagnostics(
+        http_build_query,
+        vec![
+            None,
+            Some(Value::string("")),
+            Some(Value::null()),
+            Some(Value::long(1)),
+        ],
+        HTTP_BUILD_QUERY_DEFAULT_DIAGNOSTICS,
+        "standard",
     );
 
     // --- Regex (extended) ---
@@ -2403,14 +2482,28 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             ParamTypeHint::ClassName("false".to_string()),
         ])
     );
-    reg!(
+    reg_typed!(
         "filter_var",
         fn_filter_var,
         3,
-        2,
-        "value",
+        1,
+        ["value", "filter", "options"],
+        [
+            ParamTypeHint::Mixed,
+            ParamTypeHint::Int,
+            ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::Int]),
+        ],
+        ParamTypeHint::Mixed
+    );
+    const FILTER_VAR_DEFAULT_DIAGNOSTICS: &[Option<&str>] = &[None, Some("FILTER_DEFAULT"), None];
+    let filter_var = eg
+        .find_function("filter_var")
+        .expect("filter_var was just registered");
+    eg.register_internal_function_reflection_metadata_with_diagnostics(
+        filter_var,
+        vec![None, Some(Value::long(516)), Some(Value::long(0))],
+        FILTER_VAR_DEFAULT_DIAGNOSTICS,
         "filter",
-        "options"
     );
 
     // --- Case-insensitive string functions ---
@@ -2697,7 +2790,30 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
 
     // --- Environment / system ---
-    reg!("getenv", fn_getenv, 1, 1, "name");
+    reg_typed!(
+        "getenv",
+        fn_getenv,
+        2,
+        0,
+        ["name", "local_only"],
+        [
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+            ParamTypeHint::Bool,
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    let getenv = eg
+        .find_function("getenv")
+        .expect("getenv was just registered");
+    eg.register_internal_function_reflection_metadata(
+        getenv,
+        vec![Some(Value::null()), Some(Value::bool(false))],
+        "standard",
+    );
     reg!("putenv", fn_putenv, 1, 1, "assignment");
     reg!("php_uname", fn_php_uname, 1, 0, "mode");
     reg!("php_sapi_name", fn_php_sapi_name, 0, 0);
@@ -2736,7 +2852,49 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         funcs.push(function);
     }
     reg!("extension_loaded", fn_extension_loaded, 1, 1, "extension");
-    reg!("headers_sent", fn_headers_sent, 2, 0, "filename", "line");
+    {
+        let mut function = Box::new(make_internal_function_ref(
+            fn_headers_sent,
+            2,
+            0,
+            0b11,
+            pn!["filename", "line"],
+        ));
+        function.common.sig.return_type_hint = ParamTypeHint::Bool;
+        // Keep the ordinary internal ABI for the common zero-argument call.
+        // SendRef/SendVal already enforce the two optional by-reference slots,
+        // as they do for the existing str_replace() ref-output registration.
+        function.common.plan.call = crate::vm::function::CallStrategy::Fast;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("headers_sent", pointer).unwrap();
+        eg.register_internal_function_reflection_metadata(
+            pointer,
+            vec![Some(Value::null()), Some(Value::null())],
+            "standard",
+        );
+        funcs.push(function);
+    }
+    {
+        let mut function = Box::new(make_internal_function(
+            fn_libxml_disable_entity_loader,
+            1,
+            0,
+            pn!["disable"],
+        ));
+        function.common.sig.param_type_hints = vec![ParamTypeHint::Bool];
+        function.common.sig.return_type_hint = ParamTypeHint::Bool;
+        function.handler_validates_types = true;
+        function.set_deprecation(&LIBXML_ENTITY_LOADER_DEPRECATION);
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("libxml_disable_entity_loader", pointer)
+            .unwrap();
+        eg.register_internal_function_reflection_metadata(
+            pointer,
+            vec![Some(Value::bool(true))],
+            "libxml",
+        );
+        funcs.push(function);
+    }
     reg!(
         "header",
         fn_header,

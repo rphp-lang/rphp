@@ -3804,6 +3804,7 @@ fn builtin_ref_args(name: &str) -> u64 {
         "is_callable" => 0b100,                   // arg 2 (&$callable_name)
         "exec" => 0b110,                          // args 1 and 2 (&$output, &$result_code)
         "parse_str" => 0b10,                      // arg 1 (&$result)
+        "headers_sent" => 0b11,                   // args 0 and 1 (&$filename, &$line)
         "sscanf" | "fscanf" => u64::MAX << 2,     // variadic arg 2+ (&...$vars)
         "extract" => 0b1,                         // arg 0 (&$array for EXTR_REFS)
         _ => 0,

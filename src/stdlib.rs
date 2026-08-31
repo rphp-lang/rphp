@@ -1652,29 +1652,40 @@ fn fn_array_merge(
 fn fn_array_replace(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(first) = arg!(ed, 0).as_array() else {
-        ret!(rv, Value::null());
+    let first = arg!(ed, 0);
+    let Some(first_array) = first.as_array() else {
+        typed_internal_argument_error(eg, "array_replace", first, 1, "array", "array");
+        return Ok(());
     };
-    let mut result = first.clone();
-    let replacements = arg!(ed, 1);
-    if let Some(replacements) = replacements.as_array() {
-        for replacement in replacements.values() {
-            let Some(replacement) = replacement.as_array() else {
-                ret!(rv, Value::null());
-            };
-            result.absorb_key_provenance_from(replacement);
-            for (key, value) in replacement.iter() {
-                let key = result.normalize_key_from_array(key, replacement);
-                match key {
-                    ArrayKey::Int(key) => result.set_int(key, value.clone()),
-                    ArrayKey::String(key) => result.set_str(&key, value.clone()),
-                }
+
+    let packed = arg!(ed, 1);
+    let replacements = packed.as_array();
+    for (index, replacement) in replacements
+        .iter()
+        .flat_map(|arguments| arguments.values())
+        .enumerate()
+    {
+        if replacement.as_array().is_none() {
+            typed_internal_argument_error(eg, "array_replace", replacement, index + 2, "", "array");
+            return Ok(());
+        }
+    }
+
+    let mut result = first_array.clone();
+    for replacement in replacements.iter().flat_map(|arguments| arguments.values()) {
+        let replacement = replacement
+            .as_array()
+            .expect("array_replace arguments were validated before mutation");
+        result.absorb_key_provenance_from(replacement);
+        for (key, value) in replacement.iter() {
+            let key = result.normalize_key_from_array(key, replacement);
+            match key {
+                ArrayKey::Int(key) => result.set_int(key, value.clone()),
+                ArrayKey::String(key) => result.set_str(&key, value.clone()),
             }
         }
-    } else if replacements.value_type() != ValueType::Undef {
-        ret!(rv, Value::null());
     }
     ret!(rv, Value::array(result));
 }
@@ -5836,25 +5847,88 @@ fn fn_sha1_file(
 }
 
 fn fn_hash(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let algorithm = arg_str!(ed, 0);
-    let data = arg_str!(ed, 1);
-    let binary = arg_opt!(ed, 2).is_some_and(Value::is_truthy);
+    let algorithm_argument = arg!(ed, 0);
+    let algorithm_storage = if algorithm_argument.as_str().is_some() {
+        None
+    } else {
+        let Some(algorithm) = typed_internal_string_argument(ed, eg, "hash", 0, "algo")? else {
+            return Ok(());
+        };
+        Some(algorithm)
+    };
+    let algorithm = algorithm_argument
+        .as_str()
+        .or_else(|| algorithm_storage.as_deref())
+        .unwrap_or_default();
+
+    let data_argument = arg!(ed, 1);
+    let data_storage = if data_argument.value_type() == ValueType::String {
+        None
+    } else {
+        let Some(data) =
+            typed_internal_string_value_argument_expected(ed, eg, "hash", 1, "data", "string")?
+        else {
+            return Ok(());
+        };
+        Some(data)
+    };
+    let data = data_storage.as_ref().unwrap_or(data_argument);
+    let binary = if arg_opt!(ed, 2).is_some() {
+        let Some(binary) = typed_internal_bool_argument(ed, eg, "hash", 2, "binary")? else {
+            return Ok(());
+        };
+        binary
+    } else {
+        false
+    };
+    let options = if let Some(options) = arg_opt!(ed, 3) {
+        let options = options.dereferenced();
+        let Some(options) = options.as_array() else {
+            typed_internal_argument_error(eg, "hash", options, 4, "options", "array");
+            return Ok(());
+        };
+        Some(options)
+    } else {
+        None
+    };
+    let data = data.php_string_bytes().unwrap_or_default();
     if algorithm.eq_ignore_ascii_case("md5") {
-        let digest = md5_digest(&php_string_to_bytes(&data));
+        let digest = md5_digest(data.as_ref());
         if binary {
             ret!(rv, php_byte_result(digest.to_vec(), true));
         }
         ret!(rv, Value::string(format_hex_digest(&digest)));
     }
     if algorithm.eq_ignore_ascii_case("xxh128") {
-        let digest = xxhash_rust::xxh3::xxh3_128(data.as_bytes());
+        let seed = match options.and_then(|options| options.get_str("seed")) {
+            None => 0,
+            Some(seed) if seed.dereferenced().value_type() == ValueType::Long => {
+                seed.dereferenced().as_long().unwrap_or_default() as u64
+            }
+            Some(_) => {
+                report_internal_deprecation(
+                    eg,
+                    ed,
+                    "hash(): Passing a seed of a type other than int is deprecated because it is ignored",
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+                0
+            }
+        };
+        let digest = if seed == 0 {
+            xxhash_rust::xxh3::xxh3_128(data.as_ref())
+        } else {
+            xxhash_rust::xxh3::xxh3_128_with_seed(data.as_ref(), seed)
+        };
         if binary {
             ret!(rv, php_byte_result(digest.to_be_bytes().to_vec(), true));
         }
         ret!(rv, Value::string(format!("{digest:032x}")));
     }
     if algorithm.eq_ignore_ascii_case("crc32") {
-        let digest = php_crc32(data.as_bytes()).to_le_bytes();
+        let digest = php_crc32(data.as_ref()).to_le_bytes();
         if binary {
             ret!(rv, php_byte_result(digest.to_vec(), true));
         }
@@ -15305,6 +15379,9 @@ fn invalid_handler_callback_detail(callback: &Value, eg: &ExecutorGlobals) -> St
         return format!("function \"{name}\" not found or invalid function name");
     }
     if let Some(array) = callback.as_array() {
+        if array.len() != 2 {
+            return "array callback must have exactly two members".to_string();
+        }
         if let Some(class) = array.get_value_at(0).and_then(Value::as_str)
             && find_class_case_insensitive(eg, class.trim_start_matches('\\')).is_none()
         {
@@ -27441,14 +27518,38 @@ fn parts_to_unix(year: i64, month: i64, day: i64, hour: i64, min: i64, sec: i64)
 // Misc missing functions
 // ============================================================================
 
-/// getenv($name): string|false
+/// getenv(?string $name = null, bool $local_only = false): array|string|false
 fn fn_getenv(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let name = arg_str!(ed, 0);
-    match std::env::var(name.as_ref()) {
+    let name = match arg_opt!(ed, 0) {
+        None => None,
+        Some(value) if value.dereferenced().value_type() == ValueType::Null => None,
+        Some(_) => {
+            let Some(name) =
+                typed_internal_string_argument_expected(ed, eg, "getenv", 0, "name", "?string")?
+            else {
+                return Ok(());
+            };
+            Some(name)
+        }
+    };
+    if arg_opt!(ed, 1).is_some()
+        && typed_internal_bool_argument(ed, eg, "getenv", 1, "local_only")?.is_none()
+    {
+        return Ok(());
+    }
+
+    let Some(name) = name else {
+        let mut environment = PhpArray::new();
+        for (name, value) in std::env::vars() {
+            environment.set_str(&name, Value::string(value));
+        }
+        ret!(rv, Value::array(environment));
+    };
+    match std::env::var(&name) {
         Ok(val) => ret!(rv, Value::string(val)),
         Err(_) => ret!(rv, Value::bool(false)),
     }
@@ -27888,11 +27989,42 @@ fn fn_extension_loaded(
 /// support Composer's generated platform failure path without pretending to
 /// publish HTTP headers.
 fn fn_headers_sent(
-    _ed: *mut ExecuteData,
+    ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::bool(false));
+    let sent = eg.headers_sent();
+    let has_file = arg_opt!(ed, 0).is_some();
+    let has_line = arg_opt!(ed, 1).is_some();
+    if has_file || has_line {
+        let (file, line) = eg.header_output_origin();
+        if has_file {
+            arg_mut!(ed, 0, Value::string(file));
+        }
+        if has_line {
+            arg_mut!(ed, 1, Value::long(line as i64));
+        }
+    }
+    ret!(rv, Value::bool(sent));
+}
+
+fn fn_libxml_disable_entity_loader(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let disable = if arg_opt!(ed, 0).is_some() {
+        let Some(disable) =
+            typed_internal_bool_argument(ed, eg, "libxml_disable_entity_loader", 0, "disable")?
+        else {
+            return Ok(());
+        };
+        disable
+    } else {
+        true
+    };
+    let previous = eg.replace_libxml_entity_loader_disabled(disable);
+    ret!(rv, Value::bool(previous));
 }
 
 fn fn_header(
@@ -27994,8 +28126,12 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
                     .insert(normalized, published);
             }
-            "highlight.string" | "highlight.comment" | "highlight.keyword"
-            | "highlight.default" | "highlight.html" => {
+            "highlight.string"
+            | "highlight.comment"
+            | "highlight.keyword"
+            | "highlight.default"
+            | "highlight.html"
+            | "arg_separator.output" => {
                 eg.ini_overrides
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
                     .insert(normalized, value.clone());
@@ -28083,6 +28219,9 @@ fn fn_ini_get(
     if option.eq_ignore_ascii_case("serialize_precision") {
         ret!(rv, Value::string(eg.serialize_precision.to_string()));
     }
+    if option.eq_ignore_ascii_case("arg_separator.output") {
+        ret!(rv, Value::string("&"));
+    }
     ret!(rv, Value::bool(false));
 }
 
@@ -28110,6 +28249,7 @@ pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> 
         "memory_limit" => "-1".to_string(),
         "zend.exception_string_param_max_len" => "15".to_string(),
         "fiber.stack_size" => "2097152".to_string(),
+        "arg_separator.output" => "&".to_string(),
         "highlight.string" => "#DD0000".to_string(),
         "highlight.comment" => "#FF8000".to_string(),
         "highlight.keyword" => "#007700".to_string(),
@@ -29296,87 +29436,272 @@ fn fn_parse_str(
     ret!(rv, Value::null());
 }
 
-/// Helper: percent-encode a string for URL query
-fn percent_encode_query(s: &str) -> String {
-    let extra_bytes = s
-        .bytes()
-        .filter(|b| !matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b' '))
-        .count()
-        * 2;
-    let mut out = String::with_capacity(s.len() + extra_bytes);
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
+/// Percent-encode one PHP query component. RFC 1738 treats `~` as escaped and
+/// spaces as `+`; RFC 3986 retains `~` and uses `%20`.
+fn percent_encode_query(bytes: &[u8], rfc3986: bool) -> String {
+    let mut output = String::with_capacity(bytes.len());
+    for byte in bytes.iter().copied() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
+                output.push(byte as char);
             }
-            b' ' => out.push('+'),
-            _ => push_percent_escape(&mut out, b),
+            b'~' if rfc3986 => output.push('~'),
+            b' ' if !rfc3986 => output.push('+'),
+            _ => push_percent_escape(&mut output, byte),
         }
     }
-    out
+    output
 }
 
-/// http_build_query($data, $numeric_prefix = "", $arg_separator = "&"): string
+fn http_build_query_object_array(value: &Value, eg: &ExecutorGlobals) -> PhpArray {
+    let Some(object) = value.as_object() else {
+        return PhpArray::new();
+    };
+    let dynamic_len = object
+        .dynamic_properties
+        .as_ref()
+        .map_or(0, |properties| properties.len());
+    let mut result = PhpArray::with_hash_capacity(object.property_values.len() + dynamic_len);
+    let mut declared = std::collections::HashSet::new();
+    for slot in eg.visible_instance_property_slots(object.class_id, None) {
+        let Some(definition) = eg.instance_property_definition(object.class_id, slot) else {
+            continue;
+        };
+        declared.insert(definition.name.clone());
+        let Some(property) = object.get_property_slot(slot) else {
+            continue;
+        };
+        if !property.is_undef() && !definition.has_get_hook {
+            result.set_str(&definition.name, property.clone_for_php_storage());
+        }
+    }
+    object.for_each_dynamic_property(|name, property| {
+        if !property.is_undef() && !declared.contains(name) {
+            result.set_str(name, property.clone_for_php_storage());
+        }
+    });
+    result
+}
+
+#[derive(Default)]
+struct HttpQueryActiveContainers {
+    inline: [usize; 16],
+    inline_len: usize,
+    overflow: Option<std::collections::HashSet<usize>>,
+}
+
+impl HttpQueryActiveContainers {
+    fn enter(&mut self, identity: usize) -> bool {
+        if self.inline[..self.inline_len].contains(&identity)
+            || self
+                .overflow
+                .as_ref()
+                .is_some_and(|overflow| overflow.contains(&identity))
+        {
+            return false;
+        }
+        if self.inline_len < self.inline.len() {
+            self.inline[self.inline_len] = identity;
+            self.inline_len += 1;
+            true
+        } else {
+            self.overflow
+                .get_or_insert_with(std::collections::HashSet::new)
+                .insert(identity)
+        }
+    }
+
+    fn leave(&mut self, identity: usize) {
+        if self.inline_len > 0 && self.inline[self.inline_len - 1] == identity {
+            self.inline_len -= 1;
+        } else if let Some(overflow) = self.overflow.as_mut() {
+            overflow.remove(&identity);
+        }
+    }
+}
+
+fn http_build_query_array_pairs(
+    array: &PhpArray,
+    identity: Option<usize>,
+    parent_key: &str,
+    numeric_prefix: &str,
+    rfc3986: bool,
+    eg: &ExecutorGlobals,
+    active: &mut HttpQueryActiveContainers,
+    pairs: &mut Vec<String>,
+) {
+    if identity.is_some_and(|identity| !active.enter(identity)) {
+        return;
+    }
+    for (key, child) in array.iter() {
+        if child.dereferenced().value_type() == ValueType::Null {
+            continue;
+        }
+        let key = match key {
+            ArrayKey::Int(key) if parent_key.is_empty() => {
+                format!("{numeric_prefix}{key}")
+            }
+            ArrayKey::Int(key) => format!("{parent_key}[{key}]"),
+            ArrayKey::String(key) if parent_key.is_empty() => key,
+            ArrayKey::String(key) => format!("{parent_key}[{key}]"),
+        };
+        http_build_query_pairs(child, &key, numeric_prefix, rfc3986, eg, active, pairs);
+    }
+    if let Some(identity) = identity {
+        active.leave(identity);
+    }
+}
+
+fn http_build_query_pairs(
+    value: &Value,
+    parent_key: &str,
+    numeric_prefix: &str,
+    rfc3986: bool,
+    eg: &ExecutorGlobals,
+    active: &mut HttpQueryActiveContainers,
+    pairs: &mut Vec<String>,
+) {
+    let value = value.dereferenced();
+    if let Some(array) = value.as_array() {
+        http_build_query_array_pairs(
+            &array,
+            value.array_identity(),
+            parent_key,
+            numeric_prefix,
+            rfc3986,
+            eg,
+            active,
+            pairs,
+        );
+        return;
+    }
+    if value.value_type() == ValueType::Object {
+        let array = http_build_query_object_array(value, eg);
+        http_build_query_array_pairs(
+            &array,
+            value.object_identity(),
+            parent_key,
+            numeric_prefix,
+            rfc3986,
+            eg,
+            active,
+            pairs,
+        );
+        return;
+    }
+    if value.value_type() == ValueType::Closure {
+        return;
+    }
+
+    if parent_key.is_empty() {
+        return;
+    }
+    let rendered = match value.value_type() {
+        ValueType::True => Cow::Borrowed(&b"1"[..]),
+        ValueType::False => Cow::Borrowed(&b"0"[..]),
+        ValueType::String => value
+            .php_string_bytes()
+            .unwrap_or_else(|| Cow::Borrowed(&b""[..])),
+        _ => Cow::Owned(
+            value
+                .echo_to_string_with_precision(eg.precision)
+                .into_bytes(),
+        ),
+    };
+    pairs.push(format!(
+        "{}={}",
+        percent_encode_query(parent_key.as_bytes(), rfc3986),
+        percent_encode_query(rendered.as_ref(), rfc3986),
+    ));
+}
+
+/// http_build_query(object|array $data, string $numeric_prefix = "",
+///     ?string $arg_separator = null,
+///     int $encoding_type = PHP_QUERY_RFC1738): string
 fn fn_http_build_query(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let data = arg!(ed, 0);
-    let prefix = arg_opt!(ed, 1)
-        .map(|v| v.echo_to_string())
-        .unwrap_or_default();
-    let sep = arg_opt!(ed, 2)
-        .map(|v| v.echo_to_string())
-        .unwrap_or_else(|| "&".to_string());
+    if data.as_array().is_none()
+        && !matches!(data.value_type(), ValueType::Object | ValueType::Closure)
+    {
+        // PHP's historical diagnostic still says `array` although Reflection
+        // exposes the widened object|array declaration.
+        typed_internal_argument_error(eg, "http_build_query", data, 1, "data", "array");
+        return Ok(());
+    }
 
-    fn build_pairs(arr: &PhpArray, parent_key: &str, prefix: &str, pairs: &mut Vec<String>) {
-        for (key, val) in arr.iter() {
-            // PHP: null values are omitted entirely
-            if val.value_type() == ValueType::Null {
-                continue;
-            }
-            let key_str = match &key {
-                ArrayKey::Int(i) => {
-                    if parent_key.is_empty() {
-                        format!("{}{}", prefix, i)
-                    } else {
-                        format!("{}[{}]", parent_key, i)
-                    }
-                }
-                ArrayKey::String(s) => {
-                    if parent_key.is_empty() {
-                        s.clone()
-                    } else {
-                        format!("{}[{}]", parent_key, s)
-                    }
-                }
-            };
-            if let Some(sub_arr) = val.as_array() {
-                build_pairs(&sub_arr, &key_str, prefix, pairs);
-            } else {
-                // PHP: booleans serialize as "1" / "0", not "1" / ""
-                let v = match val.value_type() {
-                    ValueType::True => "1".to_string(),
-                    ValueType::False => "0".to_string(),
-                    _ => val.echo_to_string(),
-                };
-                pairs.push(format!(
-                    "{}={}",
-                    percent_encode_query(&key_str),
-                    percent_encode_query(&v)
-                ));
-            }
+    let numeric_prefix = match arg_opt!(ed, 1) {
+        None => Cow::Borrowed(""),
+        Some(prefix) if prefix.as_str().is_some() => {
+            Cow::Borrowed(prefix.as_str().unwrap_or_default())
         }
-    }
+        Some(_) => {
+            let Some(prefix) =
+                typed_internal_string_argument(ed, eg, "http_build_query", 1, "numeric_prefix")?
+            else {
+                return Ok(());
+            };
+            Cow::Owned(prefix)
+        }
+    };
+    let encoding_type = if arg_opt!(ed, 3).is_some() {
+        let Some(encoding_type) =
+            typed_internal_int_argument(ed, eg, "http_build_query", 3, "encoding_type")?
+        else {
+            return Ok(());
+        };
+        encoding_type
+    } else {
+        1
+    };
+    let separator = match arg_opt!(ed, 2) {
+        None => Cow::Borrowed(
+            eg.ini_overrides
+                .as_deref()
+                .and_then(|overrides| overrides.get("arg_separator.output"))
+                .map(String::as_str)
+                .unwrap_or("&"),
+        ),
+        Some(value) if value.dereferenced().value_type() == ValueType::Null => Cow::Borrowed(
+            eg.ini_overrides
+                .as_deref()
+                .and_then(|overrides| overrides.get("arg_separator.output"))
+                .map(String::as_str)
+                .unwrap_or("&"),
+        ),
+        Some(value) if value.as_str().is_some() => {
+            Cow::Borrowed(value.as_str().unwrap_or_default())
+        }
+        Some(_) => {
+            let Some(separator) = typed_internal_string_argument_expected(
+                ed,
+                eg,
+                "http_build_query",
+                2,
+                "arg_separator",
+                "?string",
+            )?
+            else {
+                return Ok(());
+            };
+            Cow::Owned(separator)
+        }
+    };
 
-    if let Some(arr) = data.as_array() {
-        let mut pairs = Vec::new();
-        build_pairs(&arr, "", &prefix, &mut pairs);
-        ret!(rv, Value::string(pairs.join(&sep)));
-    }
-
-    ret!(rv, Value::string(String::new()));
+    let mut pairs = Vec::new();
+    http_build_query_pairs(
+        &data,
+        "",
+        &numeric_prefix,
+        encoding_type == 2,
+        eg,
+        &mut HttpQueryActiveContainers::default(),
+        &mut pairs,
+    );
+    ret!(rv, Value::string(pairs.join(&separator)));
 }
 
 /// preg_match_all($pattern, $subject, &$matches = null, $flags = 0, $offset = 0): int

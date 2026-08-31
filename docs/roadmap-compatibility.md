@@ -36,25 +36,28 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `object-string-conversion-boundaries` train keeps 6,275
-exact passes across the stable 7,174-case PHP 8.5 Zend/lang plus strings/array
-core, with 505 supported failures, 182 skips, 212 unsupported cases and no
-timeout or crash. Its exact delta is `+10/-0`: casts, output, concatenation,
-typed calls and writes, references, comparisons, dynamic names, includes,
-string offsets, direct string builtins and Throwable rendering now share one
-`__toString()` contract while preserving strictness, reference/COW identity,
-evaluation order, call sites and re-entrant state. Five Cargo configurations,
-exact upstream no-loss, Composer/Symfony S0-S3 and unsafe gates pass. The
-fixed-parent 32-pair CPU-2 gate keeps every measured median under the accepted
-+5% ceiling; ordinary concatenation is +0.728% and ordinary calls are -0.750%.
+The accepted AMD64 `symfony-builtin-callable-surface` train keeps 6,275 exact
+passes across the stable 7,174-case PHP 8.5 Zend/lang plus strings/array core,
+with 505 supported failures, 182 skips, 212 unsupported cases and no timeout or
+crash. Its exact core delta is `+0/-0`. Nine vendor-reached functions now have
+exact PHP 8.5 Reflection and call shapes while their handlers cover the
+exercised array replacement, filter, hash, environment, header-origin, query,
+libxml-switch and shutdown contracts. Twenty-two original E2E tests pass; the
+focused PHPT projection is 13 pass and 14 explicit filter-extension skips.
+Five Cargo configurations, exact upstream no-loss, Composer/Symfony S0-S3,
+format, data and unsafe gates pass.
 
-The on-demand builtin audit maps 1,201 PHP 8.5 global functions onto RPHP: 467
-are present, 734 are missing, 15 present functions retain a call-shape mismatch,
-384 retain a metadata mismatch and 68 are exact. Symfony's admitted DI/Routing
-vendor fixtures use 178 distinct builtins; one is missing and eight retain a
-shape mismatch. This makes callable surface a measured compatibility dimension
-alongside behavioral PHPT passes. Current work remains selected as a 10–30-case
-train around one shared root-cause hypothesis and one cumulative
+The on-demand builtin audit maps 1,201 PHP 8.5 global functions onto RPHP: 468
+are present, 733 are missing, seven present functions retain a call-shape
+mismatch, 384 retain a metadata mismatch and 77 are exact. Symfony's admitted
+DI/Routing vendor fixtures use 178 distinct builtins; all are present and
+call-shape compatible, with 32 exact. Callable surface therefore remains a
+measured compatibility dimension alongside behavioral PHPT passes. Two
+independent fixed-parent CPU-2 gates keep every 32-pair median under the +5%
+ceiling; unsent-header probes are +2.039%/+2.071%, filter +0.768%/+0.837%,
+ordinary calls -0.198%/-0.009%, and the other lanes are neutral or faster
+apart from shutdown at +1.208%/+0.949%. Current work remains selected as a
+10–30-case train around one shared root-cause hypothesis and one cumulative
 full/performance evidence packet. Smaller checkpoints require a crash, security
 issue, framework blocker or similarly explicit reason; Fiber/generator
 suspension additionally requires a pay-for-use performance design.

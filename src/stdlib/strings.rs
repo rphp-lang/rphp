@@ -18,7 +18,8 @@ use super::{
     legacy_encoding::LegacyEncoding,
     owned_argument, percent_decode_php_bytes, php_byte_result, push_percent_escape,
     report_internal_deprecation, report_internal_diagnostic, string_position_builtin,
-    typed_internal_bool_argument, typed_internal_int_argument, typed_internal_string_argument,
+    typed_internal_bool_argument, typed_internal_int_argument,
+    typed_internal_int_value_argument_expected, typed_internal_string_argument,
     typed_internal_string_argument_expected, typed_internal_string_value_argument_expected,
 };
 
@@ -1371,43 +1372,128 @@ pub(super) fn fn_get_html_translation_table(
 pub(super) fn fn_filter_var(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     const FILTER_VALIDATE_INT: i64 = 257;
     const FILTER_VALIDATE_BOOL: i64 = 258;
     const FILTER_VALIDATE_FLOAT: i64 = 259;
     const FILTER_VALIDATE_IP: i64 = 275;
+    const FILTER_FLAG_ALLOW_OCTAL: i64 = 1;
+    const FILTER_FLAG_ALLOW_HEX: i64 = 2;
     const FILTER_NULL_ON_FAILURE: i64 = 134_217_728;
     const FILTER_FLAG_IPV4: i64 = 1_048_576;
     const FILTER_FLAG_IPV6: i64 = 2_097_152;
 
+    const FILTER_DEFAULT: i64 = 516;
+
     let value = arg!(ed, 0);
-    let filter = arg_long!(ed, 1);
-    let options = arg_opt!(ed, 2);
-    let flags = options.map_or(0, |options| {
-        options
-            .as_array()
-            .and_then(|array| array.get_str("flags"))
-            .unwrap_or(options)
-            .to_long_val()
-    });
+    let filter = if arg_opt!(ed, 1).is_some() {
+        let Some(filter) = typed_internal_int_argument(ed, eg, "filter_var", 1, "filter")? else {
+            return Ok(());
+        };
+        filter
+    } else {
+        FILTER_DEFAULT
+    };
+    let options = arg!(ed, 2);
+    let (flags, validator_options) = if options.value_type() == ValueType::Undef {
+        (0, None)
+    } else if let Some(options) = options.as_array() {
+        (
+            options
+                .get_str("flags")
+                .map(Value::to_long_val)
+                .unwrap_or(0),
+            options.get_str("options").and_then(Value::as_array),
+        )
+    } else {
+        let Some(flags) = typed_internal_int_value_argument_expected(
+            ed,
+            eg,
+            options,
+            "filter_var",
+            2,
+            "options",
+            "array|int",
+        )?
+        else {
+            return Ok(());
+        };
+        (flags, None)
+    };
+    if filter == FILTER_VALIDATE_INT
+        && value.value_type() == ValueType::Long
+        && flags == 0
+        && validator_options.is_none()
+    {
+        ret!(rv, value.clone());
+    }
+    let default = validator_options
+        .and_then(|options| options.get_str("default"))
+        .cloned();
     let invalid = || {
-        if flags & FILTER_NULL_ON_FAILURE != 0 {
-            Value::null()
-        } else {
-            Value::bool(false)
+        default.clone().unwrap_or_else(|| {
+            if flags & FILTER_NULL_ON_FAILURE != 0 {
+                Value::null()
+            } else {
+                Value::bool(false)
+            }
+        })
+    };
+    let parse_integer = |source: &str| {
+        let source = source.trim();
+        if flags & FILTER_FLAG_ALLOW_HEX != 0
+            && source.len() > 2
+            && (source.starts_with("0x") || source.starts_with("0X"))
+        {
+            return i64::from_str_radix(&source[2..], 16).ok();
         }
+        if flags & FILTER_FLAG_ALLOW_OCTAL != 0 && source.len() > 1 && source.starts_with('0') {
+            return i64::from_str_radix(&source[1..], 8).ok();
+        }
+        let digits = source.strip_prefix(['+', '-']).unwrap_or(source);
+        (!digits.is_empty()
+            && digits.bytes().all(|byte| byte.is_ascii_digit())
+            && (digits.len() == 1 || !digits.starts_with('0')))
+        .then(|| source.parse::<i64>().ok())
+        .flatten()
     };
 
     let result = match filter {
-        FILTER_VALIDATE_INT => match value.value_type() {
-            ValueType::Long => value.clone(),
-            ValueType::String => value
-                .as_str()
-                .and_then(|source| source.parse::<i64>().ok())
-                .map_or_else(invalid, Value::long),
+        FILTER_DEFAULT => match value.value_type() {
+            ValueType::String => value.clone(),
+            ValueType::Long | ValueType::Double | ValueType::True | ValueType::False => {
+                Value::string(value.echo_to_string_with_precision(eg.precision))
+            }
+            ValueType::Null => Value::string(String::new()),
             _ => invalid(),
         },
+        FILTER_VALIDATE_INT => {
+            let parsed = match value.value_type() {
+                ValueType::Long => value.as_long(),
+                ValueType::True => Some(1),
+                ValueType::Double => {
+                    parse_integer(&value.echo_to_string_with_precision(eg.precision))
+                }
+                ValueType::String => value.as_str().and_then(parse_integer),
+                _ => None,
+            };
+            let in_range = parsed.is_some_and(|parsed| {
+                let minimum = validator_options
+                    .and_then(|options| options.get_str("min_range"))
+                    .map(Value::to_long_val);
+                let maximum = validator_options
+                    .and_then(|options| options.get_str("max_range"))
+                    .map(Value::to_long_val);
+                minimum.is_none_or(|minimum| parsed >= minimum)
+                    && maximum.is_none_or(|maximum| parsed <= maximum)
+            });
+            if in_range {
+                Value::long(parsed.expect("validated integer filter result"))
+            } else {
+                invalid()
+            }
+        }
         FILTER_VALIDATE_BOOL => {
             let normalized = value.echo_to_string().to_ascii_lowercase();
             match normalized.as_str() {
@@ -1435,7 +1521,19 @@ pub(super) fn fn_filter_var(
             });
             if valid { value.clone() } else { invalid() }
         }
-        _ => value.clone(),
+        _ => {
+            report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("filter_var(): Unknown filter with ID {filter}"),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            Value::bool(false)
+        }
     };
     ret!(rv, result);
 }

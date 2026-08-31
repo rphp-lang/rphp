@@ -7,6 +7,85 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The latest measured AMD64 PHP 8.5 standard-library checkpoint is
+`symfony-builtin-callable-surface`, based on `cf13460d`, pinned to php-src
+commit `fcc29c8` and validated against PHP 8.5.10. The nine vendor-reached
+functions `array_replace()`, `array_replace_recursive()`, `filter_var()`,
+`getenv()`, `hash()`, `headers_sent()`, `http_build_query()`,
+`libxml_disable_entity_loader()` and `register_shutdown_function()` now expose
+their exact reflected parameter order, names, arity, optional/variadic and
+by-reference shape, types, defaults, return types, extension ownership and
+deprecation metadata.
+
+The same handlers implement the exercised PHP behavior rather than signature
+stubs. Array replacement validates every variadic input before mutation and
+preserves key, reference and copy-on-write behavior. The admitted filter
+validators cover the default string filter, integer/boolean/float/IP modes,
+range/default options and the selected octal, hexadecimal, address-family and
+null-on-failure flags. The admitted hash algorithms are `md5`, `xxh128` and
+`crc32`, including binary output, xxHash seed options and the PHP 8.5 seed
+deprecation. `getenv()` supports omitted/null names and `local_only`;
+`http_build_query()` covers RFC 1738/3986 encoding, the request-local output
+separator, public object properties, references and recursive containers.
+Shutdown callbacks retain FIFO order and positional variadics. CLI output now
+tracks the first non-empty unbuffered write so `headers_sent()` can return its
+real request-local state and source origin; the deprecated libxml switch is
+request-local as well.
+
+Twenty-two original E2E tests cover reflection, named and strict calls,
+positive and negative values, diagnostics, references/COW, recursion,
+re-entry, output buffering, source origins and shutdown order. The focused
+27-case upstream projection is 13 pass and 14 explicit filter-extension skips;
+the extension remains conservatively unadvertised. The exact final 5,599-case
+Zend/lang manifest is unchanged at 4,817 pass, 486 fail, 115 skip and 181
+unsupported and hashes to
+`2461505e7cc2aa72589b3a565c6f91bb3b4c707603b40cdc0bee86b3e6c7bb08`.
+The adjacent 1,575-case strings/array manifest is byte-identical to the parent
+at 1,458 pass, 19 fail, 67 skip and 31 unsupported, with hash
+`226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`.
+The stable 7,174-case core therefore remains 6,275 pass, 505 fail, 182 skip and
+212 unsupported, exact delta `+0/-0`, with no timeout or crash.
+
+The on-demand PHP builtin audit now reports 1,201 reference global functions:
+468 names are present, 733 are missing, seven present functions retain a
+call-shape mismatch, 384 retain a metadata mismatch and 77 are exact. Its
+Symfony-base extension projection is 466 present, 267 missing, seven
+call-shape mismatches, 383 metadata mismatches and 76 exact across 733 names.
+The previously captured 332-file DependencyInjection/Routing vendor scan uses
+178 distinct builtins; all 178 are now present and call-shape compatible, 32
+with exact reflected metadata. The exact final audit summary and report hash to
+`75f8d3cdb61711014c112dc747cea8893a96957fe3be0e853c9a1ef6c7e357a5`
+and `7402303f86432723f42d1709e8429c22976c1d89dd6c18f17aa23b3cd5aca557`.
+This inventory proves callable surface, not behavioral equivalence for every
+present function.
+
+All five Cargo test configurations, all-feature/all-target compilation,
+formatting, HTML data, PHPT runner and both unsafe-policy gates pass. Production
+remains at the ceiling of 1,623 unsafe blocks and 289 unsafe functions, with
+408 SAFETY annotations and seven `# Safety` sections. Composer 2.8.12 S0, all
+four Symfony S1 gates and FrameworkBundle 7.4.16 warmed-kernel S2 and cold-build
+S3 pass against PHP 8.5.10.
+
+Two independent fixed-parent CPU-2 release gates compare candidate
+`7b75e426c2ce9a6855caf8cac0cf833e396ec9538ff4e63dc1c22c32343c25c0`
+with exact parent
+`abb1c3fea54f414ceeeed8a455fde436114ded921b09571f80ae207c9e594e39`.
+Each retains all 32 balanced randomized pairs per lane after five warmups and
+requires exact output, stderr and status equality. The two paired-median
+results are respectively startup +0.560%/+0.748%, ordinary calls
+-0.198%/-0.009%, unsent-header probes +2.039%/+2.071%, existing output
+-0.540%/-2.573%, hash -7.134%/-7.191%, filter +0.768%/+0.837%, combined
+query/array replacement -6.820%/-5.509% and shutdown +1.208%/+0.949%. Every
+lane remains below the accepted +5% ceiling. The raw observations hash to
+`a6d02d9a9557c0aa445bfc079984c843306538213b92d6aa3f47e2282d8d5b0b`
+and `4d89b583eb3827e8290e33d4d2d620859431b06bbc6b6d5868993091f487ec88`.
+
+This checkpoint does not advertise complete filter, hash or libxml extensions,
+additional hash algorithms or validators, an HTTP SAPI, repeated-request S4,
+the 733 missing globals, behavior for every present builtin, 32-bit behavior or
+allocation-limit/OOM equivalence. The implementation is the commit containing
+this status.
+
 The latest measured AMD64 PHP 8.5 language checkpoint is
 `object-string-conversion-boundaries`, based on `93d9a1b1`, pinned to php-src
 commit `fcc29c8` and validated against PHP 8.5.10. Engine string consumers now

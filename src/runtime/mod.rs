@@ -17,7 +17,7 @@ use crate::generics::{GenericMetadata, GenericMethodContract, ReifiedBinding};
 use crate::parser::Visibility;
 use crate::value::{ClosureStaticVars, ObjectLayout, PhpArray, PhpObject, Value};
 use crate::vm::frame::ExecuteData;
-use crate::vm::function::{Function, FunctionCommon};
+use crate::vm::function::{Function, FunctionCommon, FunctionType};
 use crate::vm::instruction::OpType;
 use crate::vm::opcode::OpCode;
 use crate::vm::stack::VmStack;
@@ -474,6 +474,13 @@ enum ExecutionTimerCommand {
     Disable,
 }
 
+/// Cold raw-pointer provenance queries share one audited boundary. Both
+/// variants are sourced exclusively from executor-owned live tables/stacks.
+enum SourceLocationQuery {
+    Declaration(*const FunctionCommon),
+    CurrentOutput(*mut ExecuteData),
+}
+
 struct ExecutionTimer {
     commands: Sender<ExecutionTimerCommand>,
 }
@@ -676,6 +683,16 @@ pub struct ExecutorGlobals {
     /// Output buffer — collected output for testing, or stdout
     output: std::cell::RefCell<Box<dyn Write>>,
     output_buffers: std::cell::RefCell<Vec<OutputBuffer>>,
+    /// Whether at least one non-empty byte reached the underlying request
+    /// sink. Buffered and empty writes do not publish headers in PHP.
+    headers_sent: Cell<bool>,
+    /// Source of the first underlying write. The allocation stays absent for
+    /// requests which produce no output or whose source has no PHP location.
+    header_output_origin: std::cell::RefCell<Option<(String, usize)>>,
+    /// Historical libxml entity-loader switch. PHP 8 keeps the deprecated API
+    /// request-local even though external entity loading is disabled by
+    /// default independently of this compatibility bit.
+    libxml_entity_loader_disabled: Cell<bool>,
     /// Active user output-handler calls. PHP's source presentation helpers
     /// use an internal output buffer and must reject re-entry from one of
     /// these callbacks, while ordinary output remains writable there.
@@ -1555,6 +1572,9 @@ impl ExecutorGlobals {
 
             output: std::cell::RefCell::new(Box::new(std::io::stdout())),
             output_buffers: std::cell::RefCell::new(Vec::new()),
+            headers_sent: Cell::new(false),
+            header_output_origin: std::cell::RefCell::new(None),
+            libxml_entity_loader_disabled: Cell::new(false),
             output_handler_depth: Cell::new(0),
             pending_named_variadic: HashMap::new(),
             pending_closure_captures: HashMap::new(),
@@ -1678,6 +1698,9 @@ impl ExecutorGlobals {
 
             output: std::cell::RefCell::new(output),
             output_buffers: std::cell::RefCell::new(Vec::new()),
+            headers_sent: Cell::new(false),
+            header_output_origin: std::cell::RefCell::new(None),
+            libxml_entity_loader_disabled: Cell::new(false),
             output_handler_depth: Cell::new(0),
             pending_named_variadic: HashMap::new(),
             pending_closure_captures: HashMap::new(),
@@ -8428,24 +8451,76 @@ impl ExecutorGlobals {
     }
 
     #[cold]
-    fn function_declaration_location(function: *const FunctionCommon) -> Option<(String, usize)> {
-        if function.is_null() {
-            return None;
+    fn source_location(query: SourceLocationQuery) -> Option<(String, usize)> {
+        // SAFETY: declaration pointers come from live executor-owned function
+        // tables or registration candidates. CurrentOutput comes from the
+        // synchronous active VM stack, whose complete predecessor chain stays
+        // live during an output write. In both cases FunctionType selects the
+        // enclosing descriptor before user OpArray metadata is accessed.
+        unsafe {
+            match query {
+                SourceLocationQuery::Declaration(function) => {
+                    if function.is_null() {
+                        return None;
+                    }
+                    Function::from_common_ptr(function).dispatch(
+                        |user| {
+                            user.op_array
+                                .declaration_line()
+                                .filter(|_| !user.op_array.source_file.is_empty())
+                                .map(|line| (user.op_array.source_file.to_string(), line))
+                        },
+                        |_| None,
+                    )
+                }
+                SourceLocationQuery::CurrentOutput(mut frame) => {
+                    let mut below_internal = false;
+                    for _ in 0..64 {
+                        if frame.is_null() || (*frame).func.is_null() {
+                            return None;
+                        }
+                        let function = Function::from_common_ptr((*frame).func);
+                        if function.fn_type() == FunctionType::User {
+                            let op_array = &function.as_user().op_array;
+                            if op_array.instructions.is_empty() {
+                                return None;
+                            }
+                            let offset =
+                                (*frame).opline.offset_from(op_array.instructions.as_ptr());
+                            let mut instruction = usize::try_from(offset)
+                                .ok()?
+                                .min(op_array.instructions.len());
+                            if below_internal {
+                                instruction = instruction.saturating_sub(1);
+                            }
+                            instruction = instruction.min(op_array.instructions.len() - 1);
+                            let line = op_array.source_line(instruction).or_else(|| {
+                                op_array
+                                    .source_lines
+                                    .iter()
+                                    .rev()
+                                    .find(|(index, _)| *index <= instruction as u32)
+                                    .map(|(_, line)| *line as usize)
+                            })?;
+                            let file = if op_array.source_file.is_empty() {
+                                op_array.name.clone()
+                            } else {
+                                op_array.source_file.to_string()
+                            };
+                            return (!file.is_empty() && line != 0).then_some((file, line));
+                        }
+                        below_internal = true;
+                        frame = (*frame).prev_execute_data;
+                    }
+                    None
+                }
+            }
         }
-        // SAFETY: function-table entries and registration candidates point to
-        // live FunctionCommon headers owned by the executor, a compiled unit,
-        // or the startup registry. The discriminant selects the enclosing
-        // representation before user metadata is accessed.
-        let function = unsafe { Function::from_common_ptr(function) };
-        function.dispatch(
-            |user| {
-                user.op_array
-                    .declaration_line()
-                    .filter(|_| !user.op_array.source_file.is_empty())
-                    .map(|line| (user.op_array.source_file.to_string(), line))
-            },
-            |_| None,
-        )
+    }
+
+    #[cold]
+    fn function_declaration_location(function: *const FunctionCommon) -> Option<(String, usize)> {
+        Self::source_location(SourceLocationQuery::Declaration(function))
     }
 
     #[cold]
@@ -9370,10 +9445,56 @@ impl ExecutorGlobals {
         false
     }
 
+    /// Resolve the PHP source site which caused an underlying output write.
+    /// Direct `echo` executes in a user frame at its current opcode; output
+    /// produced by an internal function observes the suspended user caller's
+    /// preceding call opcode instead.
+    #[cold]
+    #[inline(never)]
+    fn current_output_origin(&self) -> Option<(String, usize)> {
+        Self::source_location(SourceLocationQuery::CurrentOutput(
+            self.current_execute_data.get(),
+        ))
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn record_first_output(&self) {
+        debug_assert!(!self.headers_sent.get());
+        self.headers_sent.set(true);
+        self.header_output_origin
+            .replace(self.current_output_origin());
+    }
+
+    #[inline]
+    pub(crate) fn headers_sent(&self) -> bool {
+        self.headers_sent.get()
+    }
+
+    /// Return PHP's request-local first-output origin. Callers only materialize
+    /// the owned filename when one of `headers_sent()`'s by-reference outputs
+    /// was actually supplied.
+    pub(crate) fn header_output_origin(&self) -> (String, usize) {
+        let origin = self.header_output_origin.borrow();
+        origin
+            .as_ref()
+            .map(|(file, line)| (file.clone(), *line))
+            .unwrap_or_else(|| (String::new(), 0))
+    }
+
+    /// Replace the deprecated request-local libxml switch and return its prior
+    /// value, matching `libxml_disable_entity_loader()`'s historical API.
+    pub(crate) fn replace_libxml_entity_loader_disabled(&self, disabled: bool) -> bool {
+        self.libxml_entity_loader_disabled.replace(disabled)
+    }
+
     pub fn write_output(&self, data: &[u8]) {
         if let Some(buffer) = self.output_buffers.borrow_mut().last_mut() {
             buffer.data.extend_from_slice(data);
             return;
+        }
+        if !data.is_empty() && !self.headers_sent.get() {
+            self.record_first_output();
         }
         self.output.borrow_mut().write_all(data).unwrap();
     }
