@@ -3958,6 +3958,100 @@ fn parameter_is_default_available(
     )
 }
 
+fn reflection_parameter_require_default(ed: *mut ExecuteData, eg: &mut ExecutorGlobals) -> bool {
+    if parameter_property_bool(ed, "__reflection_has_default") {
+        return true;
+    }
+    reflection_exception(eg, "Internal error: Failed to retrieve the default value");
+    false
+}
+
+fn is_php_identifier_segment(segment: &str) -> bool {
+    let mut bytes = segment.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    if !(first == b'_' || first.is_ascii_alphabetic() || first >= 0x80) {
+        return false;
+    }
+    bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric() || byte >= 0x80)
+}
+
+fn is_php_qualified_name(name: &str) -> bool {
+    let name = name.strip_prefix('\\').unwrap_or(name);
+    !name.is_empty() && name.split('\\').all(is_php_identifier_segment)
+}
+
+fn reflection_default_constant_name(diagnostic: &str) -> Option<&str> {
+    if diagnostic.trim() != diagnostic {
+        return None;
+    }
+    if let Some((class, constant)) = diagnostic.split_once("::") {
+        if constant.contains("::")
+            || constant.eq_ignore_ascii_case("class")
+            || !is_php_qualified_name(class)
+            || !is_php_identifier_segment(constant)
+        {
+            return None;
+        }
+        return Some(diagnostic);
+    }
+    if matches!(
+        diagnostic.to_ascii_lowercase().as_str(),
+        "null" | "true" | "false"
+    ) || !is_php_qualified_name(diagnostic)
+    {
+        return None;
+    }
+    Some(diagnostic)
+}
+
+fn parameter_default_constant_name(ed: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<String> {
+    let function = reflected_function(ed)?;
+    let position = reflected_property(ed, "__reflection_position")
+        .and_then(|value| value.as_long())
+        .and_then(|position| usize::try_from(position).ok())?;
+    let diagnostic = reflected_user_function_from_common(function)
+        .and_then(|function| function.parameter_default_diagnostics.as_deref())
+        .and_then(|diagnostics| diagnostics.get(position))
+        .and_then(|diagnostic| diagnostic.as_deref())
+        .or_else(|| {
+            eg.internal_function_parameter_default_diagnostic(
+                function as *const FunctionCommon,
+                position,
+            )
+        })?;
+    reflection_default_constant_name(diagnostic).map(str::to_owned)
+}
+
+fn parameter_is_default_value_constant(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if !reflection_parameter_require_default(ed, eg) {
+        return Ok(());
+    }
+    return_value(
+        rv,
+        Value::bool(parameter_default_constant_name(ed, eg).is_some()),
+    )
+}
+
+fn parameter_get_default_value_constant_name(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if !reflection_parameter_require_default(ed, eg) {
+        return Ok(());
+    }
+    return_value(
+        rv,
+        parameter_default_constant_name(ed, eg).map_or_else(Value::null, Value::string),
+    )
+}
+
 fn parameter_get_default_value(
     ed: *mut ExecuteData,
     rv: *mut Value,

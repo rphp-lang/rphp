@@ -11972,6 +11972,13 @@ impl Compiler {
                     cp.return_type_hint,
                     *returns_by_ref,
                 );
+                let default_class_scope = if self.dynamic_static_scope {
+                    None
+                } else {
+                    self.lexical_static_class.as_deref()
+                };
+                user_func.parameter_default_diagnostics =
+                    self.method_parameter_default_diagnostics(params, default_class_scope);
                 user_func.set_attributes(self.compile_attributes_in_scope_mode(
                     attributes,
                     2,

@@ -586,7 +586,17 @@ pub(crate) fn invoke_direct_internal2(
     use crate::builtin_metadata::DirectInternalKind;
 
     match kind {
-        DirectInternalKind::Intdiv => direct_intdiv_values(first, second),
+        DirectInternalKind::Intdiv => {
+            let left = first.dereferenced();
+            let right = second.dereferenced();
+            if let (Some(left), Some(right)) = (left.as_long(), right.as_long())
+                && right != 0
+                && !(left == i64::MIN && right == -1)
+            {
+                return Ok(Value::long(left / right));
+            }
+            invoke_direct_intdiv_canonical(first, second, eg)
+        }
         DirectInternalKind::JsonDecode => invoke_direct_json_decode2(first, second, eg),
         DirectInternalKind::Min2 => direct_extrema2::<false>(first, second, eg),
         DirectInternalKind::Max2 => direct_extrema2::<true>(first, second, eg),
@@ -594,6 +604,24 @@ pub(crate) fn invoke_direct_internal2(
             "Invalid binary direct internal handler ID".into(),
         )),
     }
+}
+
+/// Re-enter the ordinary internal frame for the uncommon intdiv paths. Weak
+/// coercions need the caller's strict-types state and diagnostics, while the
+/// two arithmetic failures need an observable `intdiv` frame in Throwable
+/// traces. The exact Long success path above remains fully frame-free.
+#[cold]
+#[inline(never)]
+fn invoke_direct_intdiv_canonical(
+    first: &Value,
+    second: &Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<Value, VmError> {
+    let arguments = [first.clone(), second.clone()];
+    let function = eg
+        .find_function("intdiv")
+        .ok_or_else(|| VmError::Fatal("Unknown function intdiv".into()))?;
+    call_internal_function_iter_from_current_site(eg, function, arguments.len(), arguments.iter())
 }
 
 #[cold]
@@ -11832,8 +11860,27 @@ fn fn_intval(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let argument = arg!(ed, 0);
-    let converted = explicit_long_conversion(argument);
+    let supplied_base = arg_opt!(ed, 1);
+    // An inexact base may publish a coercion deprecation. PHP has already
+    // separated the by-value mixed argument before that handler runs, even
+    // when the caller supplied an existing reference.
+    let argument_snapshot = supplied_base
+        .filter(|base| base.dereferenced().value_type() != ValueType::Long)
+        .map(|_| owned_argument(ed, 0));
+    let base = if supplied_base.is_some() {
+        let Some(base) = typed_internal_int_argument(ed, eg, "intval", 1, "base")? else {
+            return Ok(());
+        };
+        base
+    } else {
+        10
+    };
+    let argument = argument_snapshot.as_ref().unwrap_or_else(|| arg!(ed, 0));
+    let converted = if argument.dereferenced().value_type() == ValueType::String && base != 10 {
+        intval_string_with_base(argument.dereferenced(), base)
+    } else {
+        explicit_long_conversion(argument)
+    };
     if let Some(message) = explicit_numeric_cast_warning(argument, ExplicitNumericCastTarget::Int) {
         report_internal_diagnostic(eg, ed, 2, "Warning", &message)?;
         if eg.exception.is_some() {
@@ -11841,6 +11888,109 @@ fn fn_intval(
         }
     }
     ret!(rv, Value::long(converted));
+}
+
+/// Parse the integer-prefix grammar used only when intval() receives a string
+/// and a non-decimal base. Base zero performs PHP's 0/0b/0x detection; bases
+/// outside zero or 2..=36 deliberately produce zero rather than a ValueError.
+fn intval_string_with_base(value: &Value, requested_base: i64) -> i64 {
+    // PHP exposes PHP_INT_MIN as the same autodetection boundary as base zero.
+    // Preserve that result rather than grouping it with other invalid bases.
+    let requested_base = if requested_base == i64::MIN {
+        0
+    } else {
+        requested_base
+    };
+    if requested_base != 0 && !(2..=36).contains(&requested_base) {
+        return 0;
+    }
+    let Some(bytes) = value.php_string_bytes() else {
+        return 0;
+    };
+    let mut index = 0usize;
+    while bytes
+        .get(index)
+        .is_some_and(|byte| matches!(*byte, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c))
+    {
+        index += 1;
+    }
+    let negative = match bytes.get(index) {
+        Some(b'-') => {
+            index += 1;
+            true
+        }
+        Some(b'+') => {
+            index += 1;
+            false
+        }
+        _ => false,
+    };
+
+    let mut base = requested_base;
+    if base == 0 {
+        base = if bytes.get(index) == Some(&b'0')
+            && matches!(bytes.get(index + 1), Some(b'x' | b'X'))
+        {
+            index += 2;
+            16
+        } else if bytes.get(index) == Some(&b'0')
+            && matches!(bytes.get(index + 1), Some(b'b' | b'B'))
+        {
+            index += 2;
+            2
+        } else if bytes.get(index) == Some(&b'0') {
+            8
+        } else {
+            10
+        };
+    } else if base == 16
+        && bytes.get(index) == Some(&b'0')
+        && matches!(bytes.get(index + 1), Some(b'x' | b'X'))
+    {
+        index += 2;
+    } else if base == 2
+        && bytes.get(index) == Some(&b'0')
+        && matches!(bytes.get(index + 1), Some(b'b' | b'B'))
+    {
+        index += 2;
+    }
+
+    let limit = if negative {
+        i64::MAX as u128 + 1
+    } else {
+        i64::MAX as u128
+    };
+    let mut magnitude = 0u128;
+    let mut found_digit = false;
+    while let Some(byte) = bytes.get(index).copied() {
+        let digit = match byte {
+            b'0'..=b'9' => u32::from(byte - b'0'),
+            b'a'..=b'z' => u32::from(byte - b'a') + 10,
+            b'A'..=b'Z' => u32::from(byte - b'A') + 10,
+            _ => break,
+        };
+        if digit >= base as u32 {
+            break;
+        }
+        found_digit = true;
+        magnitude = magnitude
+            .saturating_mul(base as u128)
+            .saturating_add(u128::from(digit))
+            .min(limit);
+        index += 1;
+    }
+    if !found_digit {
+        return 0;
+    }
+    if negative {
+        if magnitude == i64::MAX as u128 + 1 {
+            i64::MIN
+        } else {
+            -(magnitude as i64)
+        }
+    } else {
+        magnitude as i64
+    }
 }
 
 fn fn_strval(
@@ -13450,36 +13600,665 @@ fn fn_ceil(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
     ret!(rv, Value::double(arg_float!(ed, 0).ceil()));
 }
 
-fn fn_round(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let d = arg_float!(ed, 0);
-    let precision = match arg_opt!(ed, 1) {
-        Some(v) => v.to_long_val(),
-        None => 0,
-    };
-    if precision == 0 {
-        ret!(rv, Value::double(d.round()));
-    } else {
-        let factor = 10f64.powi(precision as i32);
-        ret!(rv, Value::double((d * factor).round() / factor));
+/// PHP's internal float parameters admit Long values in both strict and weak
+/// callers. Strings, booleans and null use the ordinary weak ZPP boundary;
+/// null additionally publishes the PHP 8.5 deprecation before conversion.
+#[inline(always)]
+fn exact_internal_float_value(argument: &Value) -> Option<f64> {
+    let argument = argument.dereferenced();
+    match argument.value_type() {
+        ValueType::Double => argument.as_double(),
+        ValueType::Long => argument.as_long().map(|number| number as f64),
+        _ => None,
     }
 }
 
-fn fn_pow(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let base = arg!(ed, 0);
-    let exp = arg!(ed, 1);
-    if let (Some(b), Some(e)) = (base.as_long(), exp.as_long()) {
-        if e >= 0 {
-            ret!(rv, Value::long(b.wrapping_pow(e as u32)));
+#[inline]
+fn typed_internal_float_argument_expected(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    index: u32,
+    parameter: &str,
+    expected: &str,
+) -> Result<Option<f64>, VmError> {
+    let argument = arg!(ed, index);
+    if let Some(number) = exact_internal_float_value(argument) {
+        return Ok(Some(number));
+    }
+    let argument = owned_argument(ed, index);
+    typed_internal_float_value_argument_coerced(
+        ed, eg, &argument, function, index, parameter, expected,
+    )
+}
+
+#[cold]
+#[inline(never)]
+fn typed_internal_float_value_argument_coerced(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    argument: &Value,
+    function: &str,
+    index: u32,
+    parameter: &str,
+    expected: &str,
+) -> Result<Option<f64>, VmError> {
+    let argument = argument.dereferenced();
+    let strict = internal_call_is_strict(ed);
+    let converted = match argument.value_type() {
+        ValueType::String if !strict => argument.as_str().and_then(php_numeric_string_to_float),
+        ValueType::True | ValueType::False if !strict => Some(f64::from(argument.is_truthy())),
+        ValueType::Null if !strict => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                &format!(
+                    "{function}(): Passing null to parameter #{} (${parameter}) of type {expected} is deprecated",
+                    index + 1
+                ),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            Some(0.0)
+        }
+        _ => None,
+    };
+    if converted.is_none() && eg.exception.is_none() {
+        typed_internal_argument_error(
+            eg,
+            function,
+            argument,
+            index as usize + 1,
+            parameter,
+            expected,
+        );
+    }
+    Ok(converted)
+}
+
+#[inline]
+fn typed_internal_float_value_argument_expected(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    argument: &Value,
+    function: &str,
+    index: u32,
+    parameter: &str,
+    expected: &str,
+) -> Result<Option<f64>, VmError> {
+    if let Some(number) = exact_internal_float_value(argument) {
+        return Ok(Some(number));
+    }
+    typed_internal_float_value_argument_coerced(
+        ed, eg, argument, function, index, parameter, expected,
+    )
+}
+
+#[inline]
+fn typed_internal_float_pair(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    first_parameter: &str,
+    second_parameter: &str,
+) -> Result<Option<(f64, f64)>, VmError> {
+    let first = exact_internal_float_value(arg!(ed, 0));
+    let second = exact_internal_float_value(arg!(ed, 1));
+    if let (Some(first), Some(second)) = (first, second) {
+        return Ok(Some((first, second)));
+    }
+
+    // A diagnostic from either weak conversion may run arbitrary user code.
+    // Snapshot both by-value arguments first so references in the caller
+    // cannot make the later conversion observe a post-call mutation.
+    let arguments = [owned_argument(ed, 0), owned_argument(ed, 1)];
+    let Some(first) = typed_internal_float_value_argument_expected(
+        ed,
+        eg,
+        &arguments[0],
+        function,
+        0,
+        first_parameter,
+        "float",
+    )?
+    else {
+        return Ok(None);
+    };
+    let Some(second) = typed_internal_float_value_argument_expected(
+        ed,
+        eg,
+        &arguments[1],
+        function,
+        1,
+        second_parameter,
+        "float",
+    )?
+    else {
+        return Ok(None);
+    };
+    Ok(Some((first, second)))
+}
+
+#[derive(Clone, Copy)]
+enum PhpRoundingMode {
+    HalfAwayFromZero,
+    HalfTowardsZero,
+    HalfEven,
+    HalfOdd,
+    TowardsZero,
+    AwayFromZero,
+    NegativeInfinity,
+    PositiveInfinity,
+}
+
+fn rounding_mode_case_value(eg: &ExecutorGlobals, requested: &str) -> Option<Value> {
+    let class = eg.find_class("RoundingMode")?;
+    let class_id = class.class_id;
+    let index = class
+        .static_properties
+        .iter()
+        .position(|case| case.name == requested)?;
+    let slot = eg.static_property_storage_slot(class_id, index)?;
+    eg.static_property_value(slot).cloned()
+}
+
+fn rounding_mode_from_case(value: &Value, eg: &ExecutorGlobals) -> Option<PhpRoundingMode> {
+    let value = value.dereferenced();
+    let identity = value.object_identity()?;
+    let class = eg.find_class("RoundingMode")?;
+    if !class.is_enum {
+        return None;
+    }
+    let class_id = class.class_id;
+    for (index, case) in class.static_properties.iter().enumerate() {
+        let slot = eg.static_property_storage_slot(class_id, index)?;
+        if eg
+            .static_property_value(slot)
+            .and_then(Value::object_identity)
+            != Some(identity)
+        {
+            continue;
+        }
+        return match case.name.as_str() {
+            "HalfAwayFromZero" => Some(PhpRoundingMode::HalfAwayFromZero),
+            "HalfTowardsZero" => Some(PhpRoundingMode::HalfTowardsZero),
+            "HalfEven" => Some(PhpRoundingMode::HalfEven),
+            "HalfOdd" => Some(PhpRoundingMode::HalfOdd),
+            "TowardsZero" => Some(PhpRoundingMode::TowardsZero),
+            "AwayFromZero" => Some(PhpRoundingMode::AwayFromZero),
+            "NegativeInfinity" => Some(PhpRoundingMode::NegativeInfinity),
+            "PositiveInfinity" => Some(PhpRoundingMode::PositiveInfinity),
+            _ => None,
+        };
+    }
+    None
+}
+
+fn rounding_mode_from_integer(mode: i64) -> Option<PhpRoundingMode> {
+    match mode {
+        1 => Some(PhpRoundingMode::HalfAwayFromZero),
+        2 => Some(PhpRoundingMode::HalfTowardsZero),
+        3 => Some(PhpRoundingMode::HalfEven),
+        4 => Some(PhpRoundingMode::HalfOdd),
+        5 => Some(PhpRoundingMode::PositiveInfinity),
+        6 => Some(PhpRoundingMode::NegativeInfinity),
+        7 => Some(PhpRoundingMode::TowardsZero),
+        8 => Some(PhpRoundingMode::AwayFromZero),
+        _ => None,
+    }
+}
+
+const ROUND_DECIMAL_FACTORS: [f64; 23] = [
+    1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
+    1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
+];
+
+fn round_decimal_factor(digits: u32) -> f64 {
+    ROUND_DECIMAL_FACTORS
+        .get(digits as usize)
+        .copied()
+        .unwrap_or_else(|| 10.0f64.powf(f64::from(digits)))
+}
+
+fn round_decimal_edge(index: f64, factor: f64, places: i32, offset: f64) -> f64 {
+    let boundary = index + offset.copysign(index);
+    if places > 0 {
+        (boundary / factor).abs()
+    } else {
+        (boundary * factor).abs()
+    }
+}
+
+fn round_decimal_index(
+    index: f64,
+    value: f64,
+    factor: f64,
+    places: i32,
+    mode: PhpRoundingMode,
+) -> f64 {
+    let magnitude = value.abs();
+    let half_edge = || round_decimal_edge(index, factor, places, 0.5);
+    let zero_edge = || round_decimal_edge(index, factor, places, 0.0);
+    let step = 1.0f64.copysign(index);
+    match mode {
+        PhpRoundingMode::HalfAwayFromZero => {
+            if magnitude >= half_edge() {
+                index + step
+            } else {
+                index
+            }
+        }
+        PhpRoundingMode::HalfTowardsZero => {
+            if magnitude > half_edge() {
+                index + step
+            } else {
+                index
+            }
+        }
+        PhpRoundingMode::HalfEven => {
+            let edge = half_edge();
+            if magnitude > edge || (magnitude == edge && index % 2.0 != 0.0) {
+                index + step
+            } else {
+                index
+            }
+        }
+        PhpRoundingMode::HalfOdd => {
+            let edge = half_edge();
+            if magnitude > edge || (magnitude == edge && index % 2.0 == 0.0) {
+                index + step
+            } else {
+                index
+            }
+        }
+        PhpRoundingMode::TowardsZero => index,
+        PhpRoundingMode::AwayFromZero => {
+            if magnitude > zero_edge() {
+                index + step
+            } else {
+                index
+            }
+        }
+        PhpRoundingMode::NegativeInfinity => {
+            if value < 0.0 && magnitude > zero_edge() {
+                index - 1.0
+            } else {
+                index
+            }
+        }
+        PhpRoundingMode::PositiveInfinity => {
+            if value > 0.0 && magnitude > zero_edge() {
+                index + 1.0
+            } else {
+                index
+            }
         }
     }
-    ret!(
-        rv,
-        Value::double(base.to_float_val().powf(exp.to_float_val()))
+}
+
+fn round_to_integer(value: f64, mode: PhpRoundingMode) -> f64 {
+    let fraction = (value - value.trunc()).abs();
+    let tie = fraction == 0.5;
+    match mode {
+        PhpRoundingMode::HalfAwayFromZero => value.round(),
+        PhpRoundingMode::HalfTowardsZero if tie => value.trunc(),
+        PhpRoundingMode::HalfTowardsZero => value.round(),
+        PhpRoundingMode::HalfEven => value.round_ties_even(),
+        PhpRoundingMode::HalfOdd if tie => {
+            let lower = value.floor();
+            if lower % 2.0 != 0.0 {
+                lower
+            } else {
+                value.ceil()
+            }
+        }
+        PhpRoundingMode::HalfOdd => value.round(),
+        PhpRoundingMode::TowardsZero => value.trunc(),
+        PhpRoundingMode::AwayFromZero if value.is_sign_negative() => value.floor(),
+        PhpRoundingMode::AwayFromZero => value.ceil(),
+        PhpRoundingMode::NegativeInfinity => value.floor(),
+        PhpRoundingMode::PositiveInfinity => value.ceil(),
+    }
+}
+
+#[inline(always)]
+fn php_round_value(value: f64, precision: i64, mode: PhpRoundingMode) -> f64 {
+    if !value.is_finite() || value == 0.0 {
+        return value;
+    }
+    if precision == 0 {
+        return round_to_integer(value, mode);
+    }
+    if precision > 0 && value.fract() == 0.0 {
+        return value;
+    }
+    let places = precision.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+    let places = places.max(i32::MIN + 1);
+    let digits = places.unsigned_abs();
+    let factor = round_decimal_factor(digits);
+    let scaled = if places > 0 {
+        value * factor
+    } else {
+        value / factor
+    };
+    let mut index = if value >= 0.0 {
+        scaled.floor()
+    } else {
+        scaled.ceil()
+    };
+
+    // Correct a decimal grid point that landed one binary step below its
+    // source. The equality is against the original value, so nearby genuine
+    // non-ties remain on their own side of the boundary.
+    let adjacent = index + 1.0f64.copysign(index);
+    let adjacent_value = if places > 0 {
+        adjacent / factor
+    } else {
+        adjacent * factor
+    };
+    if adjacent_value == value {
+        index = adjacent;
+    }
+    if index.abs() >= 1e16 {
+        return value;
+    }
+
+    let rounded = round_decimal_index(index, value, factor, places, mode);
+    if digits < 23 {
+        return if places > 0 {
+            rounded / factor
+        } else {
+            rounded * factor
+        };
+    }
+
+    // Direct multiplication/division outside the exact decimal-factor table
+    // can select the neighboring binary float. A short scientific decimal
+    // round-trip asks the parser for the nearest representable result.
+    let exponent = -i64::from(places);
+    let rendered = format!("{rounded:.6}e{exponent}");
+    let Ok(result) = rendered.parse::<f64>() else {
+        return value;
+    };
+    if !result.is_finite() {
+        value
+    } else if result == 0.0 {
+        0.0
+    } else {
+        result
+    }
+}
+
+fn fn_round(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    if arg_opt!(ed, 2).is_none()
+        && let Some(number) = exact_internal_float_value(arg!(ed, 0))
+    {
+        let precision = match arg_opt!(ed, 1) {
+            Some(argument) => argument.dereferenced().as_long(),
+            None => Some(0),
+        };
+        if let Some(precision) = precision {
+            let rounded = if precision == 0 {
+                number.round()
+            } else {
+                php_round_value(number, precision, PhpRoundingMode::HalfAwayFromZero)
+            };
+            ret!(rv, Value::double(rounded));
+        }
+    }
+    fn_round_canonical(ed, rv, eg)
+}
+
+#[cold]
+#[inline(never)]
+fn fn_round_canonical(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let supplied_precision = arg_opt!(ed, 1).is_some();
+    let supplied_mode = arg_opt!(ed, 2).is_some();
+    let exact_num = matches!(
+        arg!(ed, 0).value_type(),
+        ValueType::Long | ValueType::Double
     );
+    let exact_precision = !supplied_precision || arg!(ed, 1).value_type() == ValueType::Long;
+    let exact_mode = !supplied_mode
+        || matches!(
+            arg!(ed, 2).value_type(),
+            ValueType::Long | ValueType::Object
+        );
+    let arguments = (!(exact_num && exact_precision && exact_mode)).then(|| {
+        [
+            owned_argument(ed, 0),
+            owned_argument(ed, 1),
+            owned_argument(ed, 2),
+        ]
+    });
+    let number_argument = arguments
+        .as_ref()
+        .map_or_else(|| arg!(ed, 0), |arguments| &arguments[0]);
+    let Some(number) = typed_internal_float_value_argument_expected(
+        ed,
+        eg,
+        number_argument,
+        "round",
+        0,
+        "num",
+        "int|float",
+    )?
+    else {
+        return Ok(());
+    };
+    let precision = if supplied_precision {
+        let value = arguments
+            .as_ref()
+            .map_or_else(|| arg!(ed, 1), |arguments| &arguments[1]);
+        if let Some(precision) = value.dereferenced().as_long() {
+            precision
+        } else {
+            let Some(precision) = typed_internal_int_value_argument_expected(
+                ed,
+                eg,
+                value,
+                "round",
+                1,
+                "precision",
+                "int",
+            )?
+            else {
+                return Ok(());
+            };
+            precision
+        }
+    } else {
+        0
+    };
+    let mode = if supplied_mode {
+        let value = arguments
+            .as_ref()
+            .map_or_else(|| arg!(ed, 2), |arguments| &arguments[2]);
+        if let Some(mode) = rounding_mode_from_case(value, eg) {
+            mode
+        } else {
+            let Some(mode) = typed_internal_int_value_argument_expected(
+                ed,
+                eg,
+                value,
+                "round",
+                2,
+                "mode",
+                "RoundingMode|int",
+            )?
+            else {
+                return Ok(());
+            };
+            let Some(mode) = rounding_mode_from_integer(mode) else {
+                eg.exception = Some(crate::value::make_error_value(
+                    "ValueError",
+                    "round(): Argument #3 ($mode) must be a valid rounding mode (RoundingMode::*)",
+                ));
+                return Ok(());
+            };
+            mode
+        }
+    } else {
+        PhpRoundingMode::HalfAwayFromZero
+    };
+    ret!(rv, Value::double(php_round_value(number, precision, mode)));
+}
+
+#[cold]
+#[inline(never)]
+fn pow_operand_type_error(eg: &mut ExecutorGlobals, left: &Value, right: &Value) {
+    let left = left.dereferenced().diagnostic_type_name();
+    let right = right.dereferenced().diagnostic_type_name();
+    eg.exception = Some(crate::value::make_error_value(
+        "TypeError",
+        &format!("Unsupported operand types: {left} ** {right}"),
+    ));
+}
+
+#[inline]
+fn checked_integer_pow(mut base: i64, exponent: i64) -> Option<i64> {
+    let mut exponent = u64::try_from(exponent).ok()?;
+    let mut result = 1i64;
+    while exponent != 0 {
+        if exponent & 1 != 0 {
+            result = result.checked_mul(base)?;
+        }
+        exponent >>= 1;
+        if exponent != 0 {
+            base = base.checked_mul(base)?;
+        }
+    }
+    Some(result)
+}
+
+#[inline]
+fn finish_pow_numeric(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    base_integer: Option<i64>,
+    base_number: f64,
+    exponent_integer: Option<i64>,
+    exponent_number: f64,
+) -> Result<(), VmError> {
+    if let (Some(base), Some(exponent)) = (base_integer, exponent_integer)
+        && let Some(result) = checked_integer_pow(base, exponent)
+    {
+        ret!(rv, Value::long(result));
+    }
+    if base_number == 0.0 && exponent_number < 0.0 {
+        report_internal_deprecation(
+            eg,
+            ed,
+            "Power of base 0 and negative exponent is deprecated",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    let result = if let (Some(base), Some(exponent)) = (base_integer, exponent_integer)
+        && base < 0
+        && exponent >= 0
+    {
+        let magnitude = base_number.abs().powf(exponent_number);
+        if exponent & 1 == 0 {
+            magnitude
+        } else {
+            -magnitude
+        }
+    } else {
+        base_number.powf(exponent_number)
+    };
+    ret!(rv, Value::double(result));
+}
+
+#[cold]
+#[inline(never)]
+fn fn_pow_coerced(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    // Prepare both by-value operands before the first leading-numeric warning
+    // can invoke user code. This enforces PHP's separated call-frame semantics
+    // even when RPHP's source slots arrived as existing references.
+    let originals = [owned_argument(ed, 0), owned_argument(ed, 1)];
+    let Ok(base) = arithmetic_operator_operand(&originals[0]) else {
+        pow_operand_type_error(eg, &originals[0], &originals[1]);
+        return Ok(());
+    };
+    let exponent = arithmetic_operator_operand(&originals[1]);
+    if base.leading_numeric {
+        report_internal_diagnostic(eg, ed, 2, "Warning", "A non-numeric value encountered")?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    let Ok(exponent) = exponent else {
+        pow_operand_type_error(eg, &originals[0], &originals[1]);
+        return Ok(());
+    };
+    if exponent.leading_numeric {
+        report_internal_diagnostic(eg, ed, 2, "Warning", "A non-numeric value encountered")?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    let base = base.value;
+    let exponent = exponent.value;
+    let base_integer = base.as_long();
+    let exponent_integer = exponent.as_long();
+    let base_number = base
+        .as_double()
+        .or_else(|| base_integer.map(|number| number as f64))
+        .expect("prepared power base is numeric");
+    let exponent_number = exponent
+        .as_double()
+        .or_else(|| exponent_integer.map(|number| number as f64))
+        .expect("prepared power exponent is numeric");
+    finish_pow_numeric(
+        ed,
+        rv,
+        eg,
+        base_integer,
+        base_number,
+        exponent_integer,
+        exponent_number,
+    )
+}
+
+fn fn_pow(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let base = arg!(ed, 0).dereferenced();
+    let exponent = arg!(ed, 1).dereferenced();
+    if matches!(base.value_type(), ValueType::Long | ValueType::Double)
+        && matches!(exponent.value_type(), ValueType::Long | ValueType::Double)
+    {
+        let base_integer = base.as_long();
+        let exponent_integer = exponent.as_long();
+        let base_number = base
+            .as_double()
+            .or_else(|| base_integer.map(|number| number as f64))
+            .expect("exact power base is numeric");
+        let exponent_number = exponent
+            .as_double()
+            .or_else(|| exponent_integer.map(|number| number as f64))
+            .expect("exact power exponent is numeric");
+        return finish_pow_numeric(
+            ed,
+            rv,
+            eg,
+            base_integer,
+            base_number,
+            exponent_integer,
+            exponent_number,
+        );
+    }
+    fn_pow_coerced(ed, rv, eg)
 }
 
 #[inline(always)]
@@ -13493,44 +14272,76 @@ fn fn_sqrt(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
 }
 
 #[inline(always)]
-fn direct_intdiv_values(first: &Value, second: &Value) -> Result<Value, VmError> {
-    let a = if first.is_reference() {
-        unsafe { &*first.as_ref_ptr() }
+fn intdiv_exact_values(first: i64, second: i64, eg: &mut ExecutorGlobals) -> Value {
+    if second == 0 {
+        eg.exception = Some(crate::value::make_error_value(
+            "DivisionByZeroError",
+            "Division by zero",
+        ));
+        Value::undef()
+    } else if first == i64::MIN && second == -1 {
+        eg.exception = Some(crate::value::make_error_value(
+            "ArithmeticError",
+            "Division of PHP_INT_MIN by -1 is not an integer",
+        ));
+        Value::undef()
     } else {
-        first
+        Value::long(first / second)
     }
-    .to_long_val();
-    let b = if second.is_reference() {
-        unsafe { &*second.as_ref_ptr() }
-    } else {
-        second
-    }
-    .to_long_val();
-    if b == 0 {
-        Ok(Value::bool(false)) // PHP throws DivisionByZeroError
-    } else {
-        Ok(Value::long(a / b))
-    }
-}
-
-#[inline(always)]
-fn direct_intdiv(args: &[Value]) -> Result<Value, VmError> {
-    direct_intdiv_values(direct_arg(args, 0), direct_arg(args, 1))
 }
 
 fn fn_intdiv(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let result = direct_intdiv_values(arg!(ed, 0), arg!(ed, 1))?;
-    ret!(rv, result);
+    let exact =
+        arg!(ed, 0).value_type() == ValueType::Long && arg!(ed, 1).value_type() == ValueType::Long;
+    let arguments = (!exact).then(|| [owned_argument(ed, 0), owned_argument(ed, 1)]);
+    let first_argument = arguments
+        .as_ref()
+        .map_or_else(|| arg!(ed, 0), |arguments| &arguments[0]);
+    let second_argument = arguments
+        .as_ref()
+        .map_or_else(|| arg!(ed, 1), |arguments| &arguments[1]);
+    let Some(first) = typed_internal_int_value_argument_expected(
+        ed,
+        eg,
+        first_argument,
+        "intdiv",
+        0,
+        "num1",
+        "int",
+    )?
+    else {
+        return Ok(());
+    };
+    let Some(second) = typed_internal_int_value_argument_expected(
+        ed,
+        eg,
+        second_argument,
+        "intdiv",
+        1,
+        "num2",
+        "int",
+    )?
+    else {
+        return Ok(());
+    };
+    ret!(rv, intdiv_exact_values(first, second, eg));
 }
 
-fn fn_fmod(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let a = arg_float!(ed, 0);
-    let b = arg_float!(ed, 1);
-    ret!(rv, Value::double(a % b));
+fn fn_fmod(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    if let (Some(first), Some(second)) = (
+        exact_internal_float_value(arg!(ed, 0)),
+        exact_internal_float_value(arg!(ed, 1)),
+    ) {
+        ret!(rv, Value::double(first % second));
+    }
+    let Some((first, second)) = typed_internal_float_pair(ed, eg, "fmod", "num1", "num2")? else {
+        return Ok(());
+    };
+    ret!(rv, Value::double(first % second));
 }
 
 fn fn_fdiv(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -13539,8 +14350,37 @@ fn fn_fdiv(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
     ret!(rv, Value::double(numerator / denominator));
 }
 
-fn fn_log(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::double(arg_float!(ed, 0).ln()));
+fn fn_log(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let supplied_base = arg_opt!(ed, 1).is_some();
+    let (number, base) = if supplied_base {
+        let Some((number, base)) = typed_internal_float_pair(ed, eg, "log", "num", "base")? else {
+            return Ok(());
+        };
+        (number, Some(base))
+    } else {
+        let Some(number) =
+            typed_internal_float_argument_expected(ed, eg, "log", 0, "num", "float")?
+        else {
+            return Ok(());
+        };
+        (number, None)
+    };
+    if let Some(base) = base {
+        if base <= 0.0 {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                "log(): Argument #2 ($base) must be greater than 0",
+            ));
+            return Ok(());
+        }
+        if base == 1.0 {
+            ret!(rv, Value::double(f64::NAN));
+        }
+    }
+    ret!(
+        rv,
+        Value::double(base.map_or_else(|| number.ln(), |base| number.log(base)))
+    );
 }
 
 fn fn_log10(
@@ -26080,18 +26920,38 @@ fn typed_internal_int_argument_expected(
     parameter: &str,
     expected: &str,
 ) -> Result<Option<i64>, VmError> {
+    let exact = arg!(ed, index).dereferenced();
+    if exact.value_type() == ValueType::Long {
+        return Ok(exact.as_long());
+    }
     let argument = owned_argument(ed, index);
+    typed_internal_int_value_argument_expected(
+        ed, eg, &argument, function, index, parameter, expected,
+    )
+}
+
+fn typed_internal_int_value_argument_expected(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    argument: &Value,
+    function: &str,
+    index: u32,
+    parameter: &str,
+    expected: &str,
+) -> Result<Option<i64>, VmError> {
     let argument = argument.dereferenced();
+    if argument.value_type() == ValueType::Long {
+        return Ok(argument.as_long());
+    }
     let strict = internal_call_is_strict(ed);
     let converted = match argument.value_type() {
-        ValueType::Long => argument.as_long(),
         ValueType::Null if !strict => {
             report_internal_deprecation(
                 eg,
                 ed,
                 &format!(
-                    "{function}(): Passing null to parameter #{} (${parameter}) of type int is deprecated",
-                    index + 1
+                    "{function}(): Passing null to parameter #{} (${parameter}) of type {expected} is deprecated",
+                    index + 1,
                 ),
             )?;
             if eg.exception.is_some() {

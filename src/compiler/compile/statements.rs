@@ -3018,6 +3018,8 @@ impl Compiler {
                     cp.return_type_hint,
                     *returns_by_ref,
                 );
+                user_func.parameter_default_diagnostics =
+                    self.method_parameter_default_diagnostics(params, None);
                 user_func.set_attributes(self.compile_attributes(attributes, 2));
                 user_func.parameter_attributes = params
                     .iter()

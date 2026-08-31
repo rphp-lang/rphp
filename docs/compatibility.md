@@ -7,6 +7,88 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The latest measured AMD64 PHP 8.5 standard-library checkpoint is
+`numeric-builtin-call-contracts`, based on `fb83b0f6`, pinned to php-src commit
+`fcc29c8` and validated against PHP 8.5.10. `intval()`, `intdiv()`, `fmod()`,
+`log()`, `pow()` and `round()` now share their exact reflected PHP 8.5 parameter
+names, arity, defaults, types, return types, named-argument behavior and
+weak/strict call boundaries. Their direct, dynamic, first-class callback and
+unpacked forms preserve evaluation order, operand snapshots and Throwable
+origins. The value implementations cover byte-oriented integer bases,
+saturation and deprecations; division errors; IEEE-754 results and domains;
+integer/float power selection; all eight PHP rounding modes, extreme precision
+and signed zero. The core table also exposes `M_E` and the four
+`PHP_ROUND_HALF_*` constants.
+
+`ReflectionParameter::isDefaultValueConstant()` and
+`ReflectionParameter::getDefaultValueConstantName()` expose constant, qualified,
+imported and enum-case defaults for functions, methods and closures. Compile-time
+default diagnostics retain the same source spelling and scope. Twenty-five
+original E2E cases cover the six builtins, constants, callbacks, reflection,
+diagnostics and evaluation-order edges. A 2,572-case `intval()` oracle and a
+50,000-case `round()` oracle match PHP 8.5 without a mismatch.
+
+The exact 174-case numeric projection moves from 80 to 109 passes, with 52
+failures, 12 skips and one unsupported case. Its candidate manifest hashes to
+`d0a60022d9d383db86067af200b4817c8d0d82ce804e08cd18920c98d5922f39`.
+The adjacent seven-case Reflection projection moves from zero to two passes and
+its candidate manifest hashes to
+`e45073156279b6040d1cff02a03f4534da84ba5b700f3871d08b6d7456f79daf`.
+The targeted exact delta is therefore `+31/-0`. The remaining selected failures
+stay visible behind independent exponent-operator, printf-rendering, parser,
+DateTime and default-materialization gaps.
+
+The exact final 5,599-case Zend/lang run remains 4,807 pass, 496 fail, 115 skip
+and 181 unsupported, with manifest hash
+`605092e6067f4d4fb70cdbf8d5b6f5b06f737f7a61b80a139da8e7490e83cb29`.
+The 1,575-case strings/array projection remains 1,458 pass, 19 fail, 67 skip and
+31 unsupported, with manifest hash
+`226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`.
+Both candidate manifests are byte-identical to their exact parent manifests, so
+the stable 7,174-case core remains 6,265 pass, 515 fail, 182 skip and 212
+unsupported with no timeout, crash or lost pass.
+
+The repository now includes an on-demand PHP builtin audit that maps reference
+names, parameter order and names, required/optional/variadic shape, by-reference
+markers, types, defaults and return types onto RPHP registrations and reflected
+metadata. Against PHP 8.5 it reports 1,201 reference global functions: 467 are
+present, 734 are missing, 15 present functions retain a call-shape mismatch,
+384 retain a metadata mismatch and 68 are exact. The Symfony-base projection
+contains 733 reference functions: 466 are present, 267 are missing, 15 retain a
+call-shape mismatch and 68 are exact. A scan of the admitted DependencyInjection
+and Routing vendor fixtures finds 178 used builtin names across 332 PHP files;
+only `libxml_disable_entity_loader()` is missing and eight present functions
+retain a call-shape mismatch. This inventory proves callable surface and
+metadata coverage, not behavioral equivalence for every present function.
+
+Default, no-default, erased-generics, reified-generics and all-feature Cargo
+test configurations, the all-feature/all-target check, formatting, HTML data,
+PHPT-runner and both unsafe-policy gates pass. Production uses 1,620 unsafe
+blocks against a ceiling of 1,623, 289 unsafe functions, 399 SAFETY annotations
+and seven `# Safety` sections. Composer 2.8.12 S0, Symfony EventDispatcher
+7.4.15, HttpFoundation 7.4.16, Routing 7.4.15 and DependencyInjection 7.4.16 S1,
+and FrameworkBundle 7.4.16 warmed-kernel S2 and cold-build S3 all pass.
+
+The fixed-parent CPU-2 release gate compares candidate
+`5c5cf11d8a39e85000225f3e2835d43d4ce72679a3f72ab474fa53ea64aebeee`
+with exact parent
+`f30c06e04adfdf2717eca82fbdcbd5b43ce89fe83d795162e437e172838f464c`.
+It uses 32 randomized, balanced A/B pairs per workload, four warmups, exact
+output checks and no outlier removal. Paired medians are startup -2.998%, the
+unchanged ordinary-`strlen()` layout control +4.460%, `intval()` +1.218%, direct
+`intdiv()` -1.103%, dynamic `intdiv()` +1.978%, `fmod()` -0.831%, `log()`
+-0.341%, `pow()` +0.571%, precision-zero `round()` -1.283% and precision-two
+`round()` +3.941%. Every measured lane remains within the accepted +5% ceiling;
+the raw observations hash to
+`643494d31a38df5f6804c0fb71c396d927b56e2021e9c853349aafce72c81efe`.
+
+This checkpoint proves a bounded CLI/autoload/Composer and Symfony S0-S3 path,
+not an HTTP/FPM server, repeated-request isolation or production readiness. It
+does not claim the 734 missing global functions, behavior for every present
+builtin, 32-bit equivalence, allocation-limit/OOM equivalence or every
+platform-specific floating-point boundary. The implementation checkpoint is
+the commit containing this status.
+
 The latest measured AMD64 PHP 8.5 language checkpoint is
 `property-write-capability-and-nested-mutation`, based on `f51713c0`, pinned to
 php-src commit `fcc29c8` and validated against PHP 8.5.10. Property fetches now

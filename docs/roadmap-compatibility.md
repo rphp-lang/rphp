@@ -36,18 +36,24 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `property-write-capability-and-nested-mutation` train reaches
-6,265 exact passes across the 7,174-case PHP 8.5 Zend/lang plus strings/array
-corpus, with 515 supported failures, 182 skips, 212 unsupported cases and no
-timeout or crash. Its exact delta over the JSON parent is `+11/-0`: readonly and
-asymmetric-set storage writes, detached object references, nested unset/magic
-dispatch and cached diagnostics now share one capability-aware property path.
-The two selected holdouts remain explicit under independent clone-rendering and
-`ArrayObject` gaps. Five Cargo configurations, upstream no-loss, Composer/Symfony
-S0-S3 and unsafe gates pass. Eighty CPU-2 pairs keep all property canaries within
-approximately one percent of the exact parent; the unrelated ordinary-call
-layout control is disclosed at +1.334%. Current compatibility work is selected
-as a 10–30-case train around one shared root-cause hypothesis and one cumulative
+The accepted AMD64 `numeric-builtin-call-contracts` train keeps 6,265 exact
+passes across the stable 7,174-case PHP 8.5 Zend/lang plus strings/array core,
+with 515 supported failures, 182 skips, 212 unsupported cases and no timeout or
+crash. Its targeted standard-library/Reflection delta is `+31/-0`: `intval()`,
+`intdiv()`, `fmod()`, `log()`, `pow()` and `round()` now share exact PHP 8.5
+callable metadata, conversion, numeric and callback behavior, while default-
+constant Reflection and diagnostics use one scope-aware path. Five Cargo
+configurations, exact upstream no-loss, Composer/Symfony S0-S3 and unsafe gates
+pass. Thirty-two CPU-2 A/B pairs per workload keep all ten candidate and control
+lanes within the accepted +5% ceiling.
+
+The on-demand builtin audit maps 1,201 PHP 8.5 global functions onto RPHP: 467
+are present, 734 are missing, 15 present functions retain a call-shape mismatch,
+384 retain a metadata mismatch and 68 are exact. Symfony's admitted DI/Routing
+vendor fixtures use 178 distinct builtins; one is missing and eight retain a
+shape mismatch. This makes callable surface a measured compatibility dimension
+alongside behavioral PHPT passes. Current work remains selected as a 10–30-case
+train around one shared root-cause hypothesis and one cumulative
 full/performance evidence packet. Smaller checkpoints require a crash, security
 issue, framework blocker or similarly explicit reason; Fiber/generator
 suspension additionally requires a pay-for-use performance design.

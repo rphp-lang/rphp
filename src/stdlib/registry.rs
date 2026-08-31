@@ -1117,7 +1117,23 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
 
     // --- Type functions ---
-    reg!("intval", fn_intval, 1, 1, "value");
+    reg_typed!(
+        "intval",
+        fn_intval,
+        2,
+        1,
+        ["value", "base"],
+        [ParamTypeHint::Mixed, ParamTypeHint::Int],
+        ParamTypeHint::Int
+    );
+    let intval = eg
+        .find_function("intval")
+        .expect("intval was just registered");
+    eg.register_internal_function_reflection_metadata(
+        intval,
+        vec![None, Some(Value::long(10))],
+        "standard",
+    );
     reg!("strval", fn_strval, 1, 1, "value");
     reg!("floatval", fn_floatval, 1, 1, "value");
     reg!("boolval", fn_boolval, 1, 1, "value");
@@ -1363,21 +1379,93 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg_var_ref!("min", fn_min, fn_min_raw_variadic, 1, 0, "value", "values");
     reg_direct!("floor", fn_floor, direct_floor, 1, 1, "num");
     reg!("ceil", fn_ceil, 1, 1, "num");
-    reg!("round", fn_round, 2, 1, "num", "precision");
-    reg!("pow", fn_pow, 2, 2, "base", "exponent");
+    reg_typed!(
+        "round",
+        fn_round,
+        3,
+        1,
+        ["num", "precision", "mode"],
+        [
+            ParamTypeHint::Union(vec![ParamTypeHint::Int, ParamTypeHint::Float]),
+            ParamTypeHint::Int,
+            ParamTypeHint::Union(vec![
+                ParamTypeHint::ClassName("RoundingMode".to_string()),
+                ParamTypeHint::Int,
+            ]),
+        ],
+        ParamTypeHint::Float
+    );
+    const ROUND_DEFAULT_DIAGNOSTICS: &[Option<&str>] =
+        &[None, Some("0"), Some("RoundingMode::HalfAwayFromZero")];
+    let round = eg
+        .find_function("round")
+        .expect("round was just registered");
+    let default_rounding_mode = rounding_mode_case_value(eg, "HalfAwayFromZero")
+        .expect("RoundingMode default case is registered before stdlib functions");
+    eg.register_internal_function_reflection_metadata_with_diagnostics(
+        round,
+        vec![None, Some(Value::long(0)), Some(default_rounding_mode)],
+        ROUND_DEFAULT_DIAGNOSTICS,
+        "standard",
+    );
+    reg_typed!(
+        "pow",
+        fn_pow,
+        2,
+        2,
+        ["num", "exponent"],
+        [ParamTypeHint::Mixed, ParamTypeHint::Mixed],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::ClassName("object".to_string()),
+            ParamTypeHint::Int,
+            ParamTypeHint::Float,
+        ])
+    );
+    let pow = eg.find_function("pow").expect("pow was just registered");
+    eg.register_internal_function_reflection_metadata(pow, vec![None, None], "standard");
     reg_direct!("sqrt", fn_sqrt, direct_sqrt, 1, 1, "num");
-    reg_direct!(
+    reg_typed!(
         "intdiv",
         fn_intdiv,
-        direct_intdiv,
         2,
         2,
-        "dividend",
-        "divisor"
+        ["num1", "num2"],
+        [ParamTypeHint::Int, ParamTypeHint::Int],
+        ParamTypeHint::Int
     );
-    reg!("fmod", fn_fmod, 2, 2, "x", "y");
+    let intdiv = eg
+        .find_function("intdiv")
+        .expect("intdiv was just registered");
+    eg.register_internal_function_reflection_metadata(intdiv, vec![None, None], "standard");
+    reg_typed!(
+        "fmod",
+        fn_fmod,
+        2,
+        2,
+        ["num1", "num2"],
+        [ParamTypeHint::Float, ParamTypeHint::Float],
+        ParamTypeHint::Float
+    );
+    let fmod = eg.find_function("fmod").expect("fmod was just registered");
+    eg.register_internal_function_reflection_metadata(fmod, vec![None, None], "standard");
     reg!("fdiv", fn_fdiv, 2, 2, "num1", "num2");
-    reg!("log", fn_log, 1, 1, "num");
+    reg_typed!(
+        "log",
+        fn_log,
+        2,
+        1,
+        ["num", "base"],
+        [ParamTypeHint::Float, ParamTypeHint::Float],
+        ParamTypeHint::Float
+    );
+    const LOG_DEFAULT_DIAGNOSTICS: &[Option<&str>] = &[None, Some("M_E")];
+    let log = eg.find_function("log").expect("log was just registered");
+    eg.register_internal_function_reflection_metadata_with_diagnostics(
+        log,
+        vec![None, Some(Value::double(std::f64::consts::E))],
+        LOG_DEFAULT_DIAGNOSTICS,
+        "standard",
+    );
     reg!("log10", fn_log10, 1, 1, "num");
     reg!("log2", fn_log2, 1, 1, "num");
     reg!("pi", fn_pi, 0, 0);

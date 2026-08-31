@@ -117,7 +117,12 @@ fn test_known_binary_builtin_is_lowered_to_frame_free_call() {
     assert!(!opcodes.contains(&OpCode::DoFcall));
 
     assert_eq!(run_php("<?php echo intdiv('9', 2);"), "4");
-    assert_eq!(run_php("<?php echo gettype(intdiv(1, 0));"), "boolean");
+    assert_eq!(
+        run_php(
+            "<?php try { intdiv(1, 0); } catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(); }"
+        ),
+        "DivisionByZeroError:Division by zero"
+    );
 }
 
 #[test]
@@ -221,7 +226,7 @@ fn test_named_builtin_argument_keeps_regular_call_protocol() {
     assert!(opcodes.contains(&OpCode::SendNamed));
     assert!(opcodes.contains(&OpCode::DoFcall));
 
-    let binary = main_opcodes("<?php intdiv(dividend: 9, divisor: 2);");
+    let binary = main_opcodes("<?php intdiv(num1: 9, num2: 2);");
     assert!(!binary.contains(&OpCode::DirectInternalCall2));
     assert!(binary.contains(&OpCode::InitFcall));
     assert!(binary.contains(&OpCode::SendNamed));
