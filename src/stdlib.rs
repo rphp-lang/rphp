@@ -737,17 +737,43 @@ fn fn_assert(
     ret!(rv, Value::bool(false));
 }
 
-fn assertion_option_bool(value: &Value) -> bool {
-    match value
-        .as_str()
-        .map(|value| value.trim().to_ascii_lowercase())
-    {
-        Some(value) if matches!(value.as_str(), "" | "0" | "off" | "no" | "false" | "none") => {
-            false
-        }
-        Some(_) => true,
-        None => value.is_truthy(),
+fn assertion_option_bool(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    value: &Value,
+) -> Result<Option<bool>, VmError> {
+    let Some(value) = internal_value_to_string_value(ed, eg, value)? else {
+        return Ok(None);
+    };
+    if eg.exception.is_some() {
+        return Ok(None);
     }
+    let bytes = value.php_string_bytes().unwrap_or_default();
+    if bytes.eq_ignore_ascii_case(b"true")
+        || bytes.eq_ignore_ascii_case(b"yes")
+        || bytes.eq_ignore_ascii_case(b"on")
+    {
+        return Ok(Some(true));
+    }
+    let mut index = 0;
+    while bytes
+        .get(index)
+        .is_some_and(|byte| byte.is_ascii_whitespace())
+    {
+        index += 1;
+    }
+    if bytes
+        .get(index)
+        .is_some_and(|byte| matches!(*byte, b'+' | b'-'))
+    {
+        index += 1;
+    }
+    let mut nonzero = false;
+    while let Some(digit) = bytes.get(index).filter(|digit| digit.is_ascii_digit()) {
+        nonzero |= *digit != b'0';
+        index += 1;
+    }
+    Ok(Some(nonzero))
 }
 
 fn fn_assert_options(
@@ -755,13 +781,18 @@ fn fn_assert_options(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let what = arg_long!(ed, 0);
+    let Some(what) = typed_internal_int_argument(ed, eg, "assert_options", 0, "option")? else {
+        return Ok(());
+    };
     let value = arg_opt!(ed, 1).cloned();
     match what {
         1 => {
             let previous = eg.assertion_state.active;
             if let Some(value) = value.as_ref() {
-                eg.assertion_state.active = assertion_option_bool(value);
+                let Some(value) = assertion_option_bool(ed, eg, value)? else {
+                    return Ok(());
+                };
+                eg.assertion_state.active = value;
             }
             ret!(rv, Value::long(previous as i64));
         }
@@ -780,21 +811,30 @@ fn fn_assert_options(
         3 => {
             let previous = eg.assertion_state.bail;
             if let Some(value) = value.as_ref() {
-                eg.assertion_state.bail = assertion_option_bool(value);
+                let Some(value) = assertion_option_bool(ed, eg, value)? else {
+                    return Ok(());
+                };
+                eg.assertion_state.bail = value;
             }
             ret!(rv, Value::long(previous as i64));
         }
         4 => {
             let previous = eg.assertion_state.warning;
             if let Some(value) = value.as_ref() {
-                eg.assertion_state.warning = assertion_option_bool(value);
+                let Some(value) = assertion_option_bool(ed, eg, value)? else {
+                    return Ok(());
+                };
+                eg.assertion_state.warning = value;
             }
             ret!(rv, Value::long(previous as i64));
         }
         5 => {
             let previous = eg.assertion_state.exception;
             if let Some(value) = value.as_ref() {
-                eg.assertion_state.exception = assertion_option_bool(value);
+                let Some(value) = assertion_option_bool(ed, eg, value)? else {
+                    return Ok(());
+                };
+                eg.assertion_state.exception = value;
             }
             ret!(rv, Value::long(previous as i64));
         }
@@ -5660,7 +5700,7 @@ mod checksum_digest_tests {
 
 #[cfg(test)]
 mod md5_tests {
-    use super::{format_hex_digest, md5_digest};
+    use super::{format_hex_digest, hmac_md5_digest, md5_digest};
 
     #[test]
     fn matches_rfc_1321_vectors() {
@@ -5695,6 +5735,18 @@ mod md5_tests {
         assert_eq!(
             format_hex_digest(&md5_digest(&vec![b'a'; 1_000_000])),
             "7707d6ae4e027c70eea2a935c2296f21"
+        );
+    }
+
+    #[test]
+    fn hmac_matches_binary_and_long_key_vectors() {
+        assert_eq!(
+            format_hex_digest(&hmac_md5_digest(b"secret", b"a\0b")),
+            "14c96434fa23325ec63500a00787f315"
+        );
+        assert_eq!(
+            format_hex_digest(&hmac_md5_digest(&vec![0xaa; 80], b"long-key input")),
+            "1b174e6283f1c673f7fd1ea8a0df2b0d"
         );
     }
 }
@@ -5945,15 +5997,103 @@ fn fn_hash(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Re
     ret!(rv, Value::null());
 }
 
-fn hash_context_buffer(value: &Value) -> Option<String> {
+#[inline]
+fn value_is_hash_context(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    object.class_name.eq_ignore_ascii_case("HashContext")
+}
+
+#[inline]
+fn hash_string_bytes(value: &Value) -> Option<Cow<'_, [u8]>> {
+    let storage = value.as_str()?;
+    if value.is_binary_string() && !storage.is_ascii() {
+        value.php_string_bytes()
+    } else {
+        Some(Cow::Borrowed(storage.as_bytes()))
+    }
+}
+
+fn hmac_md5_digest(key: &[u8], data: &[u8]) -> [u8; 16] {
+    const BLOCK_SIZE: usize = 64;
+    let mut normalized_key = [0_u8; BLOCK_SIZE];
+    if key.len() > BLOCK_SIZE {
+        normalized_key[..16].copy_from_slice(&md5_digest(key));
+    } else {
+        normalized_key[..key.len()].copy_from_slice(key);
+    }
+
+    let mut inner = Vec::with_capacity(BLOCK_SIZE + data.len());
+    inner.extend(normalized_key.iter().map(|byte| *byte ^ 0x36));
+    inner.extend_from_slice(data);
+    let inner_digest = md5_digest(&inner);
+
+    let mut outer = Vec::with_capacity(BLOCK_SIZE + inner_digest.len());
+    outer.extend(normalized_key.iter().map(|byte| *byte ^ 0x5c));
+    outer.extend_from_slice(&inner_digest);
+    md5_digest(&outer)
+}
+
+enum HashContextDigest {
+    Md5([u8; 16]),
+    Xxh128(u128),
+    Crc32([u8; 4]),
+}
+
+impl HashContextDigest {
+    fn into_bytes(self) -> Vec<u8> {
+        match self {
+            Self::Md5(digest) => digest.to_vec(),
+            Self::Xxh128(digest) => digest.to_be_bytes().to_vec(),
+            Self::Crc32(digest) => digest.to_vec(),
+        }
+    }
+
+    fn into_hex(self) -> String {
+        match self {
+            Self::Md5(digest) => format_hex_digest(&digest),
+            Self::Xxh128(digest) => format!("{digest:032x}"),
+            Self::Crc32(digest) => format_hex_digest(&digest),
+        }
+    }
+}
+
+fn hash_context_digest(value: &Value) -> Option<HashContextDigest> {
     let object = value.as_object()?;
     if !object.class_name.eq_ignore_ascii_case("HashContext") {
         return None;
     }
-    object
-        .get_property("__rphp_hash_buffer")?
-        .as_str()
-        .map(str::to_owned)
+    let algorithm = object.get_property("__rphp_hash_algorithm")?.as_str()?;
+    let flags = object
+        .get_property("__rphp_hash_flags")
+        .and_then(Value::as_long)
+        .unwrap_or(0);
+    let key = object
+        .get_property("__rphp_hash_key")
+        .and_then(hash_string_bytes)
+        .unwrap_or_else(|| Cow::Borrowed(&[]));
+    let seed = object
+        .get_property("__rphp_hash_seed")
+        .and_then(Value::as_long)
+        .unwrap_or(0) as u64;
+    let buffer = hash_string_bytes(object.get_property("__rphp_hash_buffer")?)?;
+    if flags & 1 != 0 {
+        return Some(HashContextDigest::Md5(hmac_md5_digest(&key, &buffer)));
+    }
+    Some(match algorithm {
+        "md5" => HashContextDigest::Md5(md5_digest(&buffer)),
+        "xxh128" => {
+            let digest = if seed == 0 {
+                xxhash_rust::xxh3::xxh3_128(&buffer)
+            } else {
+                xxhash_rust::xxh3::xxh3_128_with_seed(&buffer, seed)
+            };
+            HashContextDigest::Xxh128(digest)
+        }
+        "crc32" => HashContextDigest::Crc32(php_crc32(&buffer).to_le_bytes()),
+        _ => unreachable!("hash_init only creates admitted algorithm contexts"),
+    })
 }
 
 fn fn_hash_init(
@@ -5961,17 +6101,110 @@ fn fn_hash_init(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let algorithm = arg_str!(ed, 0);
-    if !algorithm.eq_ignore_ascii_case("xxh128") {
+    let supplied_algorithm = arg!(ed, 0);
+    let algorithm = if supplied_algorithm.value_type() == ValueType::String {
+        Cow::Borrowed(supplied_algorithm.as_str().unwrap_or_default())
+    } else {
+        let Some(algorithm) = typed_internal_string_argument(ed, eg, "hash_init", 0, "algo")?
+        else {
+            return Ok(());
+        };
+        Cow::Owned(algorithm)
+    };
+    let flags = if arg_opt!(ed, 1).is_some() {
+        let Some(flags) = typed_internal_int_argument(ed, eg, "hash_init", 1, "flags")? else {
+            return Ok(());
+        };
+        flags
+    } else {
+        0
+    };
+    let key = if arg_opt!(ed, 2).is_some() {
+        let Some(key) =
+            typed_internal_string_value_argument_expected(ed, eg, "hash_init", 2, "key", "string")?
+        else {
+            return Ok(());
+        };
+        key.php_string_bytes().unwrap_or_default().into_owned()
+    } else {
+        Vec::new()
+    };
+    let options = if let Some(options) = arg_opt!(ed, 3) {
+        let options = options.dereferenced();
+        let Some(options) = options.as_array() else {
+            typed_internal_argument_error(eg, "hash_init", options, 4, "options", "array");
+            return Ok(());
+        };
+        Some(options)
+    } else {
+        None
+    };
+    let algorithm = if algorithm.eq_ignore_ascii_case("md5") {
+        "md5"
+    } else if algorithm.eq_ignore_ascii_case("xxh128") {
+        "xxh128"
+    } else if algorithm.eq_ignore_ascii_case("crc32") {
+        "crc32"
+    } else {
         eg.exception = Some(crate::value::make_error_value(
             "ValueError",
             "hash_init(): Argument #1 ($algo) must be a valid hashing algorithm",
         ));
         return Ok(());
+    };
+    let hmac = flags & 1 != 0;
+    if hmac && algorithm != "md5" {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "hash_init(): Argument #1 ($algo) must be a cryptographic hashing algorithm if HMAC is requested",
+        ));
+        return Ok(());
     }
-    let mut properties = std::collections::HashMap::new();
-    properties.insert("__rphp_hash_algorithm".to_string(), Value::string("xxh128"));
-    properties.insert("__rphp_hash_buffer".to_string(), Value::string(""));
+    if hmac && key.is_empty() {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "hash_init(): Argument #3 ($key) must not be empty when HMAC is requested",
+        ));
+        return Ok(());
+    }
+    let seed = if algorithm == "xxh128" {
+        match options.and_then(|options| options.get_str("seed")) {
+            None => 0,
+            Some(seed) if seed.dereferenced().value_type() == ValueType::Long => {
+                seed.dereferenced().as_long().unwrap_or_default()
+            }
+            Some(_) => {
+                report_internal_deprecation(
+                    eg,
+                    ed,
+                    "hash_init(): Passing a seed of a type other than int is deprecated because it is ignored",
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+                0
+            }
+        }
+    } else {
+        0
+    };
+    let optional_state =
+        usize::from(flags != 0) + usize::from(!key.is_empty()) + usize::from(seed != 0);
+    let mut properties = std::collections::HashMap::with_capacity(2 + optional_state);
+    properties.insert(
+        "__rphp_hash_algorithm".to_string(),
+        Value::string(algorithm),
+    );
+    if flags != 0 {
+        properties.insert("__rphp_hash_flags".to_string(), Value::long(flags));
+    }
+    if !key.is_empty() {
+        properties.insert("__rphp_hash_key".to_string(), Value::binary_string(&key));
+    }
+    if seed != 0 {
+        properties.insert("__rphp_hash_seed".to_string(), Value::long(seed));
+    }
+    properties.insert("__rphp_hash_buffer".to_string(), Value::binary_string(&[]));
     ret!(
         rv,
         Value::object(crate::value::PhpObject::dynamic(
@@ -5987,19 +6220,40 @@ fn fn_hash_update(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let data = arg_str!(ed, 1).into_owned();
     let context = arg!(ed, 0);
-    let Some(mut object) = context.as_object_mut() else {
-        eg.exception = Some(crate::value::make_error_value(
-            "TypeError",
-            "hash_update(): Argument #1 ($context) must be a valid, non-finalized HashContext",
-        ));
+    if !value_is_hash_context(context) {
+        typed_internal_argument_error(eg, "hash_update", context, 1, "context", "HashContext");
         return Ok(());
+    }
+    let supplied_data = arg!(ed, 1);
+    let converted_data;
+    let data = if supplied_data.value_type() == ValueType::String {
+        hash_string_bytes(supplied_data).unwrap_or_default()
+    } else {
+        let Some(value) = typed_internal_string_value_argument_expected(
+            ed,
+            eg,
+            "hash_update",
+            1,
+            "data",
+            "string",
+        )?
+        else {
+            return Ok(());
+        };
+        converted_data = value;
+        hash_string_bytes(&converted_data).unwrap_or_default()
     };
-    let Some(buffer) = object
-        .get_property("__rphp_hash_buffer")
+    let Some(mut object) = context.as_object_mut() else {
+        unreachable!("validated HashContext remains an object");
+    };
+    let algorithm_is_active = object
+        .get_property("__rphp_hash_algorithm")
         .and_then(Value::as_str)
-        .map(str::to_owned)
+        .is_some();
+    let Some(buffer_value) = object
+        .get_property_mut("__rphp_hash_buffer")
+        .filter(|buffer| algorithm_is_active && buffer.as_str().is_some())
     else {
         eg.exception = Some(crate::value::make_error_value(
             "TypeError",
@@ -6007,7 +6261,15 @@ fn fn_hash_update(
         ));
         return Ok(());
     };
-    object.set_property("__rphp_hash_buffer", Value::string(buffer + &data));
+    if let Some(buffer) = buffer_value.as_string_mut_if_unique() {
+        buffer.extend(data.iter().copied().map(char::from));
+    } else {
+        let mut buffer = hash_string_bytes(buffer_value)
+            .expect("validated HashContext buffer remains a string")
+            .into_owned();
+        buffer.extend_from_slice(&data);
+        *buffer_value = Value::binary_string(&buffer);
+    }
     ret!(rv, Value::bool(true));
 }
 
@@ -6017,21 +6279,32 @@ fn fn_hash_final(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let context = arg!(ed, 0);
-    let Some(buffer) = hash_context_buffer(context) else {
+    if !value_is_hash_context(context) {
+        typed_internal_argument_error(eg, "hash_final", context, 1, "context", "HashContext");
+        return Ok(());
+    }
+    let Some(digest) = hash_context_digest(context) else {
         eg.exception = Some(crate::value::make_error_value(
             "TypeError",
             "hash_final(): Argument #1 ($context) must be a valid, non-finalized HashContext",
         ));
         return Ok(());
     };
+    let binary = if arg_opt!(ed, 1).is_some() {
+        let Some(binary) = typed_internal_bool_argument(ed, eg, "hash_final", 1, "binary")? else {
+            return Ok(());
+        };
+        binary
+    } else {
+        false
+    };
     if let Some(mut object) = context.as_object_mut() {
         object.unset_property("__rphp_hash_buffer");
     }
-    let digest = xxhash_rust::xxh3::xxh3_128(buffer.as_bytes());
-    if arg_opt!(ed, 1).is_some_and(Value::is_truthy) {
-        ret!(rv, php_byte_result(digest.to_be_bytes().to_vec(), true));
+    if binary {
+        ret!(rv, php_byte_result(digest.into_bytes(), true));
     }
-    ret!(rv, Value::string(format!("{digest:032x}")));
+    ret!(rv, Value::string(digest.into_hex()));
 }
 
 /// PHP's `hash('crc32', ...)` uses the non-reflected CRC-32/BZIP2 recurrence
@@ -14839,32 +15112,26 @@ fn fn_define(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    if reject_strict_internal_string(eg, ed, arg!(ed, 0), "define", "constant_name") {
-        return Ok(());
-    }
-    let name_value = arg!(ed, 0).dereferenced();
-    if matches!(
-        name_value.value_type(),
-        ValueType::Array | ValueType::Object | ValueType::Closure | ValueType::Resource
-    ) {
-        eg.exception = Some(crate::value::make_error_value(
-            "TypeError",
-            &format!(
-                "define(): Argument #1 ($constant_name) must be of type string, {} given",
-                name_value.type_name()
-            ),
-        ));
-        ret!(rv, Value::null());
-    }
-    if name_value.value_type() == ValueType::Null {
-        report_internal_deprecation(
-            eg,
-            ed,
-            "define(): Passing null to parameter #1 ($constant_name) of type string is deprecated",
-        )?;
-    }
-    let name = arg_str!(ed, 0);
-    let val = arg!(ed, 1).clone();
+    let supplied_name = arg!(ed, 0);
+    let name = if supplied_name.value_type() == ValueType::String {
+        Cow::Borrowed(supplied_name.as_str().unwrap_or_default())
+    } else {
+        let Some(name) = typed_internal_string_argument(ed, eg, "define", 0, "constant_name")?
+        else {
+            return Ok(());
+        };
+        Cow::Owned(name)
+    };
+    let case_insensitive = if arg_opt!(ed, 2).is_some() {
+        let Some(case_insensitive) =
+            typed_internal_bool_argument(ed, eg, "define", 2, "case_insensitive")?
+        else {
+            return Ok(());
+        };
+        case_insensitive
+    } else {
+        false
+    };
     if name.contains("::") {
         eg.exception = Some(crate::value::make_error_value(
             "ValueError",
@@ -14872,6 +15139,19 @@ fn fn_define(
         ));
         ret!(rv, Value::null());
     }
+    if case_insensitive {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            "define(): Argument #3 ($case_insensitive) is ignored since declaration of case-insensitive constants is no longer supported",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    let val = arg!(ed, 1).clone();
     if name == "__COMPILER_HALT_OFFSET__" || eg.find_constant(&name).is_some() {
         report_internal_diagnostic(
             eg,
@@ -15622,27 +15902,6 @@ fn internal_call_is_strict(ed: *mut ExecuteData) -> bool {
         let function = Function::from_common_ptr((*caller).func);
         function.fn_type() == FunctionType::User && function.as_user().op_array.strict_types
     }
-}
-
-fn reject_strict_internal_string(
-    eg: &mut ExecutorGlobals,
-    ed: *mut ExecuteData,
-    argument: &Value,
-    function: &str,
-    parameter: &str,
-) -> bool {
-    let argument = argument.dereferenced();
-    if !internal_call_is_strict(ed) || argument.value_type() == ValueType::String {
-        return false;
-    }
-    eg.exception = Some(crate::value::make_error_value(
-        "TypeError",
-        &format!(
-            "{function}(): Argument #1 (${parameter}) must be of type string, {} given",
-            argument.type_name()
-        ),
-    ));
-    true
 }
 
 fn report_internal_deprecation(
@@ -24691,14 +24950,14 @@ fn fn_microtime(
     }
 }
 
-/// hrtime(bool $as_nanoseconds = false): array|int
+/// hrtime(bool $as_number = false): array|int|float|false
 /// Returns high-resolution monotonic time.
 /// hrtime(true) → int nanoseconds
 /// hrtime(false) → [seconds, nanoseconds]
 fn fn_hrtime(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     use std::time::Instant;
     // Use a lazy-initialized epoch for monotonic timing
@@ -24707,7 +24966,18 @@ fn fn_hrtime(
     let epoch = EPOCH.get_or_init(Instant::now);
     let elapsed = epoch.elapsed();
 
-    let as_ns = arg_opt!(ed, 0).map(|v| v.is_truthy()).unwrap_or(false);
+    let as_ns = match arg_opt!(ed, 0).map(Value::dereferenced) {
+        None => false,
+        Some(value) if value.value_type() == ValueType::False => false,
+        Some(value) if value.value_type() == ValueType::True => true,
+        Some(_) => {
+            let Some(as_number) = typed_internal_bool_argument(ed, eg, "hrtime", 0, "as_number")?
+            else {
+                return Ok(());
+            };
+            as_number
+        }
+    };
     if as_ns {
         ret!(rv, Value::long(elapsed.as_nanos() as i64));
     } else {

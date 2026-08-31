@@ -35,7 +35,7 @@ use super::{
     enum_get_backing_type, enum_get_case, enum_get_cases, enum_has_case, enum_is_backed_reflection,
     enum_unit_case_construct, function_construct, function_get_closure,
     function_get_closure_called_class, function_get_closure_scope_class, function_get_closure_this,
-    function_get_namespace_name, function_get_number_of_parameters,
+    function_get_extension_name, function_get_namespace_name, function_get_number_of_parameters,
     function_get_number_of_required_parameters, function_get_parameters, function_get_return_type,
     function_get_short_name, function_get_tentative_return_type, function_has_return_type,
     function_has_tentative_return_type, function_in_namespace, function_invoke,
@@ -1426,6 +1426,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         "ReflectionFunction",
         "getclosure",
         function_get_closure,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionFunctionAbstract",
+        "getextensionname",
+        function_get_extension_name,
         1,
         0,
         []

@@ -1,12 +1,11 @@
 use std::borrow::Cow;
 use std::io::SeekFrom;
 
-use crate::compiler::make_internal_function;
+use crate::compiler::{make_internal_function, make_internal_function_ref};
 use crate::runtime::ExecutorGlobals;
 use crate::value::{PhpArray, Value, ValueType};
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
-#[cfg(feature = "stream-registry")]
 use crate::vm::function::ParamTypeHint;
 use crate::vm::function::{FunctionCommon, InternalFunction, InternalFunctionHandler};
 
@@ -245,17 +244,33 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             &["stream"],
         ),
     ] {
-        let function = Box::new(make_internal_function(
-            handler,
-            maximum,
-            required,
-            parameter_names
-                .iter()
-                .map(|name| (*name).to_string())
-                .collect(),
-        ));
+        let parameter_names = parameter_names
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect();
+        let mut function = Box::new(if name == "flock" {
+            make_internal_function_ref(handler, maximum, required, 0b100, parameter_names)
+        } else {
+            make_internal_function(handler, maximum, required, parameter_names)
+        });
+        if name == "flock" {
+            function.common.sig.param_type_hints =
+                vec![ParamTypeHint::None, ParamTypeHint::Int, ParamTypeHint::None];
+            function.common.sig.return_type_hint = ParamTypeHint::Bool;
+            function.handler_validates_types = true;
+            // SendRef/SendVal enforce the optional output slot, so ordinary
+            // two-argument calls retain the compact fixed-arity ABI.
+            function.common.plan.call = crate::vm::function::CallStrategy::Fast;
+        }
         let pointer = &function.common as *const FunctionCommon;
         eg.register_function(name, pointer).unwrap();
+        if name == "flock" {
+            eg.register_internal_function_reflection_metadata(
+                pointer,
+                vec![None, None, Some(Value::null())],
+                "standard",
+            );
+        }
         functions.push(function);
     }
 
@@ -438,13 +453,16 @@ pub(super) fn register_extensions(
 fn argument_with_count<'a>(execute_data: *mut ExecuteData, index: u32) -> (&'a Value, u32) {
     // SAFETY: Internal-function handlers receive a live ExecuteData frame, and
     // the registered signature guarantees that `index` is inside its CV area.
-    let (value, supplied) = unsafe { ((*execute_data).cv(index), (*execute_data).num_args) };
-    if value.is_reference() {
-        // SAFETY: is_reference() guarantees that the payload is a live Value
-        // cell for the duration of the current request.
-        (unsafe { &*value.as_ref_ptr() }, supplied)
-    } else {
-        (value, supplied)
+    // SAFETY: a reference CV keeps its target live for the duration of this
+    // internal call, so both branches return a valid request-scoped borrow.
+    unsafe {
+        let value = (*execute_data).cv(index);
+        let value = if value.is_reference() {
+            &*value.as_ref_ptr()
+        } else {
+            value
+        };
+        (value, (*execute_data).num_args)
     }
 }
 
@@ -457,6 +475,15 @@ fn argument<'a>(execute_data: *mut ExecuteData, index: u32) -> &'a Value {
 fn optional_argument<'a>(execute_data: *mut ExecuteData, index: u32) -> Option<&'a Value> {
     let value = argument(execute_data, index);
     (value.value_type() != ValueType::Undef).then_some(value)
+}
+
+#[inline]
+fn set_argument(execute_data: *mut ExecuteData, index: u32, value: Value) {
+    // SAFETY: the registered signature reserves this CV, and a reference CV's
+    // payload remains live for the duration of the internal call.
+    unsafe {
+        (*execute_data).cv_mut(index).assign_dereferenced(value);
+    }
 }
 
 fn argument_string(execute_data: *mut ExecuteData, index: u32) -> Cow<'static, str> {
@@ -766,11 +793,68 @@ fn fn_flock(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let operation = argument(execute_data, 1).to_long_val();
-    let locked = argument(execute_data, 0)
-        .as_resource_id()
-        .and_then(|resource| with_stream(eg, resource, |stream| stream.lock(operation).is_ok()))
-        .unwrap_or(false);
+    let stream = argument(execute_data, 0);
+    let Some(resource) = stream.as_resource_id() else {
+        super::typed_internal_argument_error(eg, "flock", stream, 1, "stream", "resource");
+        return Ok(());
+    };
+    let supplied_operation = argument(execute_data, 1);
+    let operation = if supplied_operation.value_type() == ValueType::Long {
+        supplied_operation.as_long().unwrap_or_default()
+    } else {
+        if !super::resource::is_open_for_request(eg, resource) {
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                "flock(): Argument #1 ($stream) must be an open stream resource",
+            ));
+            return Ok(());
+        }
+        let Some(operation) =
+            super::typed_internal_int_argument(execute_data, eg, "flock", 1, "operation")?
+        else {
+            return Ok(());
+        };
+        operation
+    };
+    let result = with_stream(eg, resource, |stream| {
+        (1..=3)
+            .contains(&(operation & 3))
+            .then(|| stream.lock(operation))
+    });
+    let Some(result) = result else {
+        if !super::resource::is_open_for_request(eg, resource) {
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                "flock(): Argument #1 ($stream) must be an open stream resource",
+            ));
+            return Ok(());
+        }
+        if optional_argument(execute_data, 2).is_some() {
+            set_argument(execute_data, 2, Value::long(0));
+        }
+        return return_value(return_pointer, Value::bool(false));
+    };
+    let Some(result) = result else {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "flock(): Argument #2 ($operation) must be one of LOCK_SH, LOCK_EX, or LOCK_UN",
+        ));
+        return Ok(());
+    };
+    let has_would_block = optional_argument(execute_data, 2).is_some();
+    if has_would_block {
+        set_argument(execute_data, 2, Value::long(0));
+    }
+    let locked = match result {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            if has_would_block {
+                set_argument(execute_data, 2, Value::long(1));
+            }
+            false
+        }
+        Err(_) => false,
+    };
     return_value(return_pointer, Value::bool(locked))
 }
 

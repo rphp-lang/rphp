@@ -3289,6 +3289,7 @@ fn magic_call_trampoline_parameter(function: &FunctionCommon) -> Value {
             ("__reflection_allows_null", Value::bool(true)),
             ("__reflection_variadic", Value::bool(true)),
             ("__reflection_passed_by_reference", Value::bool(false)),
+            ("__reflection_optional", Value::bool(true)),
             ("__reflection_has_default", Value::bool(false)),
             ("__reflection_declaring_class", Value::null()),
         ],
@@ -3309,6 +3310,7 @@ fn populate_magic_call_trampoline_parameter(receiver: &Value, function: &Functio
         object.set_property("__reflection_allows_null", Value::bool(true));
         object.set_property("__reflection_variadic", Value::bool(true));
         object.set_property("__reflection_passed_by_reference", Value::bool(false));
+        object.set_property("__reflection_optional", Value::bool(true));
         object.set_property("__reflection_has_default", Value::bool(false));
         object.set_property("__reflection_declaring_class", Value::null());
     }
@@ -3349,7 +3351,13 @@ fn function_get_parameters(
         let (type_kind, type_name, allows_null) = hint_metadata(hint);
         let has_type = !matches!(hint, ParamTypeHint::None);
         let is_variadic = function.sig.is_variadic && index == fixed;
-        let has_default = !is_variadic && index >= function.sig.required_num_args;
+        let is_optional = is_variadic || index >= function.sig.required_num_args;
+        let has_default = !is_variadic
+            && index >= function.sig.required_num_args
+            && !eg.internal_function_parameter_default_is_unknown(
+                function as *const FunctionCommon,
+                index as usize,
+            );
         let parameter = object_value(
             "ReflectionParameter",
             [
@@ -3368,6 +3376,7 @@ fn function_get_parameters(
                     "__reflection_passed_by_reference",
                     Value::bool(function.sig.is_param_by_ref(index)),
                 ),
+                ("__reflection_optional", Value::bool(is_optional)),
                 ("__reflection_has_default", Value::bool(has_default)),
                 (
                     "__reflection_declaring_class",
@@ -3446,6 +3455,26 @@ fn function_is_deprecated(
     }) || reflected_internal_function(ed)
         .is_some_and(|function| function.deprecation.is_some());
     return_value(rv, Value::bool(deprecated))
+}
+
+fn function_get_extension_name(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(function) = reflected_function(ed) else {
+        return return_value(rv, Value::bool(false));
+    };
+    if function.fn_type != FunctionType::Internal {
+        return return_value(rv, Value::bool(false));
+    }
+    return_value(
+        rv,
+        Value::string(
+            eg.internal_function_extension(function as *const FunctionCommon)
+                .unwrap_or("Core"),
+        ),
+    )
 }
 
 fn function_has_return_type(
@@ -3633,6 +3662,7 @@ fn populate_reflection_parameter(
     function: &FunctionCommon,
     index: u32,
     declaring_class: Option<&str>,
+    eg: &ExecutorGlobals,
 ) {
     let fixed = function.sig.public_arity();
     let name = function
@@ -3668,8 +3698,19 @@ fn populate_reflection_parameter(
             Value::bool(function.sig.is_param_by_ref(index)),
         );
         object.set_property(
+            "__reflection_optional",
+            Value::bool(is_variadic || index >= function.sig.required_num_args),
+        );
+        object.set_property(
             "__reflection_has_default",
-            Value::bool(!is_variadic && index >= function.sig.required_num_args),
+            Value::bool(
+                !is_variadic
+                    && index >= function.sig.required_num_args
+                    && !eg.internal_function_parameter_default_is_unknown(
+                        function as *const FunctionCommon,
+                        index as usize,
+                    ),
+            ),
         );
         object.set_property(
             "__reflection_declaring_class",
@@ -3842,7 +3883,7 @@ fn parameter_construct(
         return Ok(());
     };
     let receiver = with_argument(ed, 0, Clone::clone);
-    populate_reflection_parameter(&receiver, common, index, declaring_class.as_deref());
+    populate_reflection_parameter(&receiver, common, index, declaring_class.as_deref(), eg);
     if let Some(scope) = type_scope_class {
         eg.register_reflection_parameter_scope(&receiver, scope);
     }
@@ -4072,11 +4113,8 @@ fn parameter_to_string(
         .unwrap_or_default();
     let variadic = parameter_property_bool(ed, "__reflection_variadic");
     let has_default = parameter_property_bool(ed, "__reflection_has_default");
-    let requirement = if variadic || has_default {
-        "optional"
-    } else {
-        "required"
-    };
+    let optional = parameter_property_bool(ed, "__reflection_optional") || has_default || variadic;
+    let requirement = if optional { "optional" } else { "required" };
     let type_prefix = if parameter_property_bool(ed, "__reflection_has_type") {
         reflected_property(ed, "__reflection_type_name")
             .and_then(|value| {
@@ -4116,6 +4154,8 @@ fn parameter_to_string(
                     .map(|value| format!(" = {}", reflection_default_text(value)))
             })
             .unwrap_or_else(|| " = <default>".to_string())
+    } else if optional && !variadic {
+        " = <default>".to_string()
     } else {
         String::new()
     };
@@ -4231,7 +4271,8 @@ fn parameter_is_optional(
     return_value(
         rv,
         Value::bool(
-            parameter_property_bool(ed, "__reflection_has_default")
+            parameter_property_bool(ed, "__reflection_optional")
+                || parameter_property_bool(ed, "__reflection_has_default")
                 || parameter_property_bool(ed, "__reflection_variadic"),
         ),
     )

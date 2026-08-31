@@ -52,6 +52,73 @@ equivalence remain separate boundaries. The implementation is the commit
 containing this status.
 
 The latest measured AMD64 PHP 8.5 standard-library checkpoint is
+`global-call-shape-zero`, based on `df2b44c`, pinned to php-src commit
+`fcc29c8` and validated against PHP 8.5.10. The final seven reflected global
+call-shape mismatches are closed: `assert_options()`, `debug_zval_dump()`,
+`define()`, `flock()`, `hash_init()`, `hrtime()` and `var_dump()` now expose
+PHP's parameter names, required/optional and variadic arity, by-reference
+slots, types, defaults, return types, deprecation and extension ownership.
+Reflection also distinguishes an optional internal parameter whose default is
+the unavailable `UNKNOWN` sentinel from a parameter with a materializable
+default.
+
+The handlers implement the exercised contracts rather than metadata-only
+stubs. `assert_options()` validates and updates the admitted assertion state;
+the dump functions consume every variadic value; and `define()` validates its
+legacy case-insensitive flag while retaining PHP's class-constant rejection
+and warning order. `flock()` implements the operation bit contract, open-stream
+diagnostics and optional `$would_block` output. Streaming hash contexts admit
+`md5`, `xxh128` and `crc32`, binary output, xxHash seed options and MD5 HMAC,
+including finalized-context and invalid-key diagnostics. `hrtime()` validates
+its boolean switch and returns the requested pair or scalar form.
+
+Seventeen original E2E tests cover reflected metadata, strict and named calls,
+coercions and diagnostics, variadic consumption, references, stream contention,
+binary data, HMAC, seeds and finalized contexts. The focused seven-case
+upstream projection passes 7/7. The final 5,599-case Zend/lang manifest remains
+4,843 pass, 460 fail, 115 skip and 181 unsupported, and hashes to
+`900a09578c2df4d2f3e7d4b3d07e0c8145bf306ecee18b4f8ee8d66854216153`;
+its exact sorted pass set retains hash
+`203991ebf2db125d0dc59b971e01e1920d4d6d286b2d6984930be598998590fa`.
+The adjacent 1,575-case strings/array manifest remains 1,458 pass, 19 fail, 67
+skip and 31 unsupported, hashes to
+`226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`,
+and retains sorted pass-set hash
+`0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+The stable 7,174-case core is therefore unchanged at 6,301 pass, 479 fail, 182
+skip and 212 unsupported, exact delta `+0/-0`, with no timeout or crash.
+
+The on-demand builtin inventory now reports 1,201 reference globals: 468 are
+present, 733 are missing, zero present functions have a call-shape mismatch,
+382 retain a metadata mismatch and 86 are exact. The Symfony-base extension
+projection is 466 present, 267 missing, zero call-shape mismatches, 381 metadata
+mismatches and 85 exact across 733 names. The exact audit summary and report
+hash to `a8c2a1981c261bed35d0803b8d05ffdad527b06257b79a17e40224733e755320`
+and `61b87dfdb763aee34de55af5818f925e3d5484ebe58b0067bc9ab706c1db2e04`.
+This inventory proves the reflected callable surface, not semantic equivalence
+for every present builtin.
+
+All five Cargo configurations, all-feature/all-target checking, formatting,
+PHPT runner, Composer 2.8.12 S0, all four Symfony S1 gates and FrameworkBundle
+7.4.16 S2/S3 pass. Production remains at 1,623 unsafe blocks and 289 unsafe
+functions, with 409 SAFETY annotations and seven `# Safety` sections. The
+fixed-parent CPU-2 release gate compares candidate
+`b4d176d96276f1b56e18adbaa1918a1db4e8cf0759ab1ab6b02f3c8b2d950de4`
+with parent
+`3f42d74f1efa53bb1d6ac10397ae3e38d30e411e6eff60d7ea3083422b4bd985`
+across 32 randomized balanced pairs per lane after five warmups, with exact
+output, stderr and status checks. Paired medians are startup -2.249%, ordinary
+`strlen()` -1.122%, assertion Reflection +3.464%, `define()` +4.875%, streaming
+hash -1.565%, `hrtime()` +4.801% and regular-file `flock()` -1.753%. Every lane
+stays below the accepted +5% ceiling; raw observations hash to
+`937be4ce4cf47644145ac885ec9e8b8b940c19dbda5bede3703c846cc0995127`.
+
+This checkpoint does not advertise the 733 missing globals, complete hash or
+assertion extensions, behavior for every present builtin, non-CLI SAPIs,
+32-bit equivalence or allocation-limit/OOM equivalence. The implementation is
+the commit containing this status.
+
+The preceding measured AMD64 PHP 8.5 standard-library checkpoint is
 `symfony-builtin-callable-surface`, based on `cf13460d`, pinned to php-src
 commit `fcc29c8` and validated against PHP 8.5.10. The nine vendor-reached
 functions `array_replace()`, `array_replace_recursive()`, `filter_var()`,

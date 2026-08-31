@@ -36,27 +36,27 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `declaration-front-end-validation` train keeps 6,301 exact
-passes across the stable 7,174-case PHP 8.5 Zend/lang plus strings/array core,
-with 479 supported failures, 182 skips, 212 unsupported cases and no timeout or
-crash. Its exact delta is `+13/-0`. One shared declaration/type parser now owns
-case-insensitive class-like modifiers and `instanceof`, qualified property
-types, located ampersands, intersection/property token diagnostics and the
-handler-less `try` compile fatal. Unresolved, forward and self-referential
-interface parents use the existing deferred linker, preserving catchable Error
-ordering and preventing cyclic publication. Ten original CLI regressions and
-the selected upstream cluster preserve valid forms, error stage, token, source
-line and the former crash boundary.
+The accepted AMD64 `global-call-shape-zero` train keeps 6,301 exact passes
+across the stable 7,174-case PHP 8.5 Zend/lang plus strings/array core, with 479
+supported failures, 182 skips, 212 unsupported cases and no timeout or crash.
+Its exact delta is `+0/-0`. The on-demand PHP 8.5 inventory now has zero global
+call-shape mismatches among all 468 present reference names: the final seven
+functions align parameter names, arity, variadics, by-reference slots and
+Reflection metadata while their handlers enforce the corresponding assertion,
+dump, constant, stream-lock, streaming-hash and high-resolution-time contracts.
+Seventeen original E2E cases and seven focused upstream PHPT cases cover the
+new boundary.
 
 Five Cargo configurations, all-target, exact upstream no-loss,
 Composer/Symfony S0-S3, format and the unchanged 1,623/289 unsafe ratchet pass.
-The fixed-parent CPU-2 32-pair gate keeps startup at +0.048%, 500 class/interface
-links at +0.126%, inherited constant reads at -0.045% and the ordinary
-`strlen()` control at -0.853%, with exact outputs. Current work remains selected
-as a 10–30-case train around one shared root-cause hypothesis and one cumulative
-evidence packet. Smaller checkpoints require a crash, security issue, framework
-blocker or similarly explicit reason; Fiber/generator suspension additionally
-requires a pay-for-use performance design.
+The fixed-parent CPU-2 32-pair gate keeps startup at -2.249%, ordinary
+`strlen()` at -1.122%, assertion Reflection at +3.464%, `define()` at +4.875%,
+streaming hash at -1.565%, `hrtime()` at +4.801% and regular-file `flock()` at
+-1.753%, with exact outputs and every lane below +5%. Current work remains
+selected as a 10–30-case train around one shared root-cause hypothesis and one
+cumulative evidence packet. Smaller checkpoints require a crash, security
+issue, framework blocker or similarly explicit reason; Fiber/generator
+suspension additionally requires a pay-for-use performance design.
 
 ## Starting evidence
 

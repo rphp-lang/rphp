@@ -29,6 +29,11 @@ static LIBXML_ENTITY_LOADER_DEPRECATION: InternalFunctionDeprecation =
         message: "as external entity loading is disabled by default",
     };
 
+static ASSERT_OPTIONS_DEPRECATION: InternalFunctionDeprecation = InternalFunctionDeprecation {
+    since: "8.3",
+    message: "",
+};
+
 // ============================================================================
 // Registration
 // ============================================================================
@@ -185,6 +190,29 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             let ptr = &f.common as *const FunctionCommon;
             eg.register_function($name, ptr).unwrap();
             funcs.push(f);
+        }};
+    }
+
+    macro_rules! reg_var_typed {
+        (
+            $name:expr,
+            $handler:expr,
+            $min_args:expr,
+            [$($pname:expr),* $(,)?],
+            [$($hint:expr),* $(,)?],
+            $return_hint:expr
+        ) => {{
+            let mut function = Box::new(make_internal_function_variadic(
+                $handler,
+                $min_args,
+                pn![$($pname),*],
+            ));
+            function.common.sig.param_type_hints = vec![$($hint),*];
+            function.common.sig.return_type_hint = $return_hint;
+            function.handler_validates_types = true;
+            let pointer = &function.common as *const FunctionCommon;
+            eg.register_function($name, pointer).unwrap();
+            funcs.push(function);
         }};
     }
 
@@ -588,9 +616,69 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         "hash",
     );
-    reg!("hash_init", fn_hash_init, 1, 1, "algo");
-    reg!("hash_update", fn_hash_update, 2, 2, "context", "data");
-    reg!("hash_final", fn_hash_final, 2, 1, "context", "binary");
+    reg_typed!(
+        "hash_init",
+        fn_hash_init,
+        4,
+        1,
+        ["algo", "flags", "key", "options"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::String,
+            ParamTypeHint::Array,
+        ],
+        ParamTypeHint::ClassName("HashContext".to_string())
+    );
+    let hash_init = eg
+        .find_function("hash_init")
+        .expect("hash_init was just registered");
+    eg.register_internal_function_reflection_metadata(
+        hash_init,
+        vec![
+            None,
+            Some(Value::long(0)),
+            Some(Value::string("")),
+            Some(Value::array(PhpArray::new())),
+        ],
+        "hash",
+    );
+    reg_typed!(
+        "hash_update",
+        fn_hash_update,
+        2,
+        2,
+        ["context", "data"],
+        [
+            ParamTypeHint::ClassName("HashContext".to_string()),
+            ParamTypeHint::String,
+        ],
+        ParamTypeHint::ClassName("true".to_string())
+    );
+    let hash_update = eg
+        .find_function("hash_update")
+        .expect("hash_update was just registered");
+    eg.register_internal_function_reflection_metadata(hash_update, vec![None, None], "hash");
+    reg_typed!(
+        "hash_final",
+        fn_hash_final,
+        2,
+        1,
+        ["context", "binary"],
+        [
+            ParamTypeHint::ClassName("HashContext".to_string()),
+            ParamTypeHint::Bool,
+        ],
+        ParamTypeHint::String
+    );
+    let hash_final = eg
+        .find_function("hash_final")
+        .expect("hash_final was just registered");
+    eg.register_internal_function_reflection_metadata(
+        hash_final,
+        vec![None, Some(Value::bool(false))],
+        "hash",
+    );
     reg!("serialize", serialization::serialize, 1, 1, "value");
     reg!(
         "unserialize",
@@ -1523,15 +1611,61 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("random_int", fn_random_int, 2, 2, "min", "max");
 
     // --- Output ---
-    reg_var!("var_dump", fn_var_dump, 1, "value");
-    reg_var!("debug_zval_dump", fn_debug_zval_dump, 1, "value");
+    reg_var_typed!(
+        "var_dump",
+        fn_var_dump,
+        1,
+        ["value", "values"],
+        [ParamTypeHint::Mixed, ParamTypeHint::Mixed],
+        ParamTypeHint::Void
+    );
+    let var_dump = eg
+        .find_function("var_dump")
+        .expect("var_dump was just registered");
+    eg.register_internal_function_reflection_metadata(var_dump, vec![None, None], "standard");
+    reg_var_typed!(
+        "debug_zval_dump",
+        fn_debug_zval_dump,
+        1,
+        ["value", "values"],
+        [ParamTypeHint::Mixed, ParamTypeHint::Mixed],
+        ParamTypeHint::Void
+    );
+    let debug_zval_dump = eg
+        .find_function("debug_zval_dump")
+        .expect("debug_zval_dump was just registered");
+    eg.register_internal_function_reflection_metadata(
+        debug_zval_dump,
+        vec![None, None],
+        "standard",
+    );
     reg!("print_r", fn_print_r, 2, 1, "value", "return");
     reg!("var_export", fn_var_export, 2, 1, "value", "return");
     reg!("spl_object_hash", fn_spl_object_hash, 1, 1, "object");
     reg!("spl_object_id", fn_spl_object_id, 1, 1, "object");
 
     // --- Constants ---
-    reg!("define", fn_define, 2, 2, "constant_name", "value");
+    reg_typed!(
+        "define",
+        fn_define,
+        3,
+        2,
+        ["constant_name", "value", "case_insensitive"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Mixed,
+            ParamTypeHint::Bool,
+        ],
+        ParamTypeHint::Bool
+    );
+    let define = eg
+        .find_function("define")
+        .expect("define was just registered");
+    eg.register_internal_function_reflection_metadata(
+        define,
+        vec![None, None, Some(Value::bool(false))],
+        "Core",
+    );
     reg!("defined", fn_defined, 1, 1, "constant_name");
     reg!("constant", fn_constant, 1, 1, "name");
 
@@ -1805,11 +1939,51 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("is_scalar", fn_is_scalar, 1, 1, "value");
     reg!("function_exists", fn_function_exists, 1, 1, "function");
     reg!("assert", fn_assert, 2, 1, "assertion", "description");
-    reg!("assert_options", fn_assert_options, 2, 1, "what", "value");
+    {
+        let mut function = Box::new(make_internal_function(
+            fn_assert_options,
+            2,
+            1,
+            pn!["option", "value"],
+        ));
+        function.common.sig.param_type_hints = vec![ParamTypeHint::Int, ParamTypeHint::Mixed];
+        function.common.sig.return_type_hint = ParamTypeHint::Mixed;
+        function.handler_validates_types = true;
+        function.set_deprecation(&ASSERT_OPTIONS_DEPRECATION);
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("assert_options", pointer).unwrap();
+        eg.register_internal_function_reflection_metadata(
+            pointer,
+            vec![None, Some(Value::undef())],
+            "standard",
+        );
+        funcs.push(function);
+    }
 
     // --- Time functions ---
     reg!("microtime", fn_microtime, 1, 0, "as_float");
-    reg!("hrtime", fn_hrtime, 1, 0, "as_nanoseconds");
+    reg_typed!(
+        "hrtime",
+        fn_hrtime,
+        1,
+        0,
+        ["as_number"],
+        [ParamTypeHint::Bool],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::Int,
+            ParamTypeHint::Float,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    let hrtime = eg
+        .find_function("hrtime")
+        .expect("hrtime was just registered");
+    eg.register_internal_function_reflection_metadata(
+        hrtime,
+        vec![Some(Value::bool(false))],
+        "standard",
+    );
     reg!("time", fn_time, 0, 0);
     reg!("date", fn_date, 2, 1, "format", "timestamp");
     reg!("gmdate", fn_gmdate, 2, 1, "format", "timestamp");

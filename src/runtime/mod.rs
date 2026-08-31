@@ -1990,6 +1990,25 @@ impl ExecutorGlobals {
             .and_then(|metadata| metadata.get(&function))
             .and_then(|(defaults, _, _)| defaults.get(index))
             .and_then(Option::as_ref)
+            .filter(|value| !value.is_undef())
+    }
+
+    /// PHP's internal stubs use `UNKNOWN` for a small number of optional
+    /// parameters. Reflection reports those parameters as optional while
+    /// deliberately withholding a retrievable default value. An Undef entry
+    /// is a cold metadata sentinel for that distinction; it never reaches a
+    /// PHP value or an ordinary call frame.
+    pub(crate) fn internal_function_parameter_default_is_unknown(
+        &self,
+        function: *const FunctionCommon,
+        index: usize,
+    ) -> bool {
+        self.internal_function_reflection_metadata
+            .as_deref()
+            .and_then(|metadata| metadata.get(&function))
+            .and_then(|(defaults, _, _)| defaults.get(index))
+            .and_then(Option::as_ref)
+            .is_some_and(Value::is_undef)
     }
 
     pub(crate) fn internal_function_parameter_default_diagnostic(

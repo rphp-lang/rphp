@@ -564,7 +564,11 @@ impl PhpStream {
     /// released by explicit LOCK_UN or automatically when the stream closes.
     pub fn lock(&self, operation: i64) -> io::Result<()> {
         let nonblocking = operation & 4 != 0;
-        let operation = operation & !4;
+        // PHP validates and dispatches the public operation through its low
+        // two action bits. Higher wrapper flags (and sign-extension bits) are
+        // ignored after LOCK_NB is observed, so -1 is the same unlock action
+        // as LOCK_UN.
+        let operation = operation & 3;
         let StreamBackend::File(file) = &self.backend else {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
