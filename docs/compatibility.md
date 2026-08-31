@@ -7,6 +7,51 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The latest measured AMD64 PHP 8.5 language checkpoint is
+`deferred-constant-expression-materialization`, based on `7624d2e0`, pinned to
+php-src commit `fcc29c8` and validated against PHP 8.5.10. One compiler/runtime
+boundary now separates fixed constant values from expressions that must remain
+deferred. Parameter defaults, static variables, attributes, global and class
+constants, and instance/static property defaults preserve PHP's construction,
+cast, symbol lookup, autoload, retry, evaluation-order and identity rules.
+Silent coalesce probes no longer hide invalid keys, direct reads retain their
+warnings, unresolved `self`/`parent` raise the runtime Error at use, and located
+property/default failures carry PHP's `[constant expression]` trace without
+changing the ordinary class-constant frame.
+
+Fourteen original E2E tests cover positive, invalid-context, evaluation-order,
+reference/identity, repeated-failure, state-preservation, source-line and
+lexical-scope cases. The exact final 5,599-case Zend/lang manifest is 4,830
+pass, 473 fail, 115 skip and 181 unsupported: thirteen paths become exact and
+no pass is lost. It hashes to
+`cd7c4b88b33c6651be26db2092da5217caa611411c3737260a9838bf28247a14`.
+The adjacent 1,575-case strings/array manifest is parent-identical at 1,458
+pass, 19 fail, 67 skip and 31 unsupported and hashes to
+`d0cddfac8e67487950218f8f7e00c7e23ba0e8cb447ea553fbae83a60b2a2c5a`.
+The stable 7,174-case core is therefore 6,288 pass, 492 fail, 182 skip and 212
+unsupported, exact delta `+13/-0`, with no timeout or crash.
+
+All five Cargo configurations, all-feature/all-target checking, formatting,
+PHPT, Composer 2.8.12 S0, all four Symfony S1 gates and FrameworkBundle 7.4.16
+S2/S3 pass. Production remains at 1,623 unsafe blocks and 289 unsafe functions,
+with 408 SAFETY annotations and seven `# Safety` sections. The fixed-parent
+CPU-2 release gate compares candidate
+`c249d6b0f338f152f3bdc0c7d2eb0705e30e7656313a1e0e52c93482614a137d`
+with parent
+`7b75e426c2ce9a6855caf8cac0cf833e396ec9538ff4e63dc1c22c32343c25c0`
+across 32 balanced pairs per lane and exact outputs. Paired medians are startup
+-3.104%, scalar-default compilation -0.185%, ordinary construction -2.455%,
+ordinary arrays +0.196%, scalar parameter defaults -0.040%, object parameter
+defaults +1.416%, static object initialization -1.210% and scalar attribute
+reflection -0.593%; raw observations hash to
+`7958bbb8f47a6037a1df8f94b9744fb783ec729ce19ed97bdf27a1df4cb37b34`.
+
+Three selected `new` PHPTs remain output-only holdouts because RPHP does not
+promise Zend object-handle numbering. DateTime/SPL materialization, general
+SPL, Fiber/generator suspension, 32-bit and allocation-limit/OOM equivalence
+remain separate boundaries. The implementation is the commit containing this
+status.
+
 The latest measured AMD64 PHP 8.5 standard-library checkpoint is
 `symfony-builtin-callable-surface`, based on `cf13460d`, pinned to php-src
 commit `fcc29c8` and validated against PHP 8.5.10. The nine vendor-reached

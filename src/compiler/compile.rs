@@ -86,14 +86,15 @@ use crate::vm::instruction::{
     FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT,
     INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, JMP_NZ_RELEASE_TEMPS,
     KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
-    NEW_FLAG_UNPACKED_ARGUMENTS, OBJ_PROP_FUNC_ARG, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND,
-    OBJ_PROP_TEMPORARY_RECEIVER, OpType, PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT,
-    REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE,
-    RELEASE_TEMPS_NESTED_OBJECTS, RELEASE_TEMPS_ON_RETURN, RELEASE_TEMPS_RETURN_COMPLETION_SITE,
-    SEND_FLAG_GLOBALS, SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE,
-    SEND_FLAG_PREPARED_PROPERTY_ARGUMENT, SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME,
-    STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND,
-    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    NEW_FLAG_UNPACKED_ARGUMENTS, NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE, OBJ_PROP_FUNC_ARG,
+    OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OBJ_PROP_TEMPORARY_RECEIVER, OpType,
+    PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
+    REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, RELEASE_TEMPS_NESTED_OBJECTS,
+    RELEASE_TEMPS_ON_RETURN, RELEASE_TEMPS_RETURN_COMPLETION_SITE, SEND_FLAG_GLOBALS,
+    SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_PREPARED_PROPERTY_ARGUMENT,
+    SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
+    STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH,
+    STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -2670,6 +2671,8 @@ fn invalid_typed_declaration_default_message(
     )
 }
 
+#[cold]
+#[inline(never)]
 fn constant_expression_references_symbol(expression: &Expr) -> bool {
     match expression {
         Expr::Constant { .. }
@@ -2727,6 +2730,8 @@ fn resolved_constant_expression_key(source: &str) -> String {
     format!("{RESOLVED_CONSTANT_EXPRESSION_PREFIX}{source}")
 }
 
+#[cold]
+#[inline(never)]
 fn constant_expression_contains_runtime_variable(expression: &Expr) -> bool {
     let recurse = constant_expression_contains_runtime_variable;
     match expression {
@@ -2830,6 +2835,8 @@ fn local_class_constant_reference_line(
     }
 }
 
+#[cold]
+#[inline(never)]
 fn constant_expression_contains_runtime_callable(expression: &Expr) -> bool {
     match expression {
         Expr::Closure { .. }
@@ -2881,10 +2888,109 @@ fn constant_expression_contains_runtime_callable(expression: &Expr) -> bool {
     }
 }
 
-fn invalid_runtime_callable_constant_expression(
-    expression: &Expr,
-) -> Option<(&'static str, usize)> {
-    let recurse = invalid_runtime_callable_constant_expression;
+/// Object construction and object casts are syntactically valid constant
+/// expressions in PHP 8.5, but their ownership boundary is runtime-specific.
+/// This classifier deliberately follows only object-producing syntax: a named
+/// constant that happens to contain an object must keep that constant's shared
+/// identity instead of being rematerialized by its consumer.
+#[cold]
+#[inline(never)]
+fn constant_expression_materializes_object(expression: &Expr) -> bool {
+    let recurse = constant_expression_materializes_object;
+    match expression {
+        Expr::New { .. } | Expr::DynamicNew { .. } | Expr::AnonymousNew { .. } => true,
+        Expr::Cast {
+            cast_type: CastType::Object,
+            ..
+        } => true,
+        Expr::BinaryOp { left, right, .. }
+        | Expr::NullCoalesce { left, right }
+        | Expr::Elvis { left, right } => recurse(left) || recurse(right),
+        Expr::Not(inner)
+        | Expr::UnaryPlus(inner)
+        | Expr::UnaryMinus(inner)
+        | Expr::BitwiseNot { expr: inner, .. }
+        | Expr::ErrorSuppress(inner)
+        | Expr::Cast { expr: inner, .. } => recurse(inner),
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => recurse(condition) || recurse(then_expr) || recurse(else_expr),
+        Expr::ArrayLiteral(elements) => elements
+            .iter()
+            .any(|element| element.key.as_ref().is_some_and(recurse) || recurse(&element.value)),
+        Expr::ArrayAccess { array, index, .. } => recurse(array) || recurse(index),
+        Expr::PropertyAccess { object, .. } => recurse(object),
+        Expr::DynamicPropertyAccess {
+            object, property, ..
+        } => recurse(object) || recurse(property),
+        Expr::DynamicNamedClassConstant { constant, .. } => recurse(constant),
+        Expr::DynamicClassConstant {
+            class, constant, ..
+        } => recurse(class) || recurse(constant),
+        _ => false,
+    }
+}
+
+/// Property defaults and class constants retain PHP's older, narrower
+/// constant-expression surface even though parameter/static/global defaults
+/// and attribute arguments accept object materialization in PHP 8.5.
+#[cold]
+#[inline(never)]
+fn forbidden_object_constant_expression(expression: &Expr) -> Option<(&'static str, usize)> {
+    let recurse = forbidden_object_constant_expression;
+    match expression {
+        Expr::New { line, .. }
+        | Expr::DynamicNew { line, .. }
+        | Expr::AnonymousNew { line, .. } => {
+            Some(("New expressions are not supported in this context", *line))
+        }
+        Expr::Cast {
+            cast_type: CastType::Object,
+            line,
+            ..
+        } => Some(("Object casts are not supported in this context", *line)),
+        Expr::BinaryOp { left, right, .. }
+        | Expr::NullCoalesce { left, right }
+        | Expr::Elvis { left, right } => recurse(left).or_else(|| recurse(right)),
+        Expr::Not(inner)
+        | Expr::UnaryPlus(inner)
+        | Expr::UnaryMinus(inner)
+        | Expr::BitwiseNot { expr: inner, .. }
+        | Expr::ErrorSuppress(inner)
+        | Expr::Cast { expr: inner, .. } => recurse(inner),
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => recurse(condition)
+            .or_else(|| recurse(then_expr))
+            .or_else(|| recurse(else_expr)),
+        Expr::ArrayLiteral(elements) => elements.iter().find_map(|element| {
+            element
+                .key
+                .as_ref()
+                .and_then(recurse)
+                .or_else(|| recurse(&element.value))
+        }),
+        Expr::ArrayAccess { array, index, .. } => recurse(array).or_else(|| recurse(index)),
+        Expr::PropertyAccess { object, .. } => recurse(object),
+        Expr::DynamicPropertyAccess {
+            object, property, ..
+        } => recurse(object).or_else(|| recurse(property)),
+        Expr::DynamicNamedClassConstant { constant, .. } => recurse(constant),
+        Expr::DynamicClassConstant {
+            class, constant, ..
+        } => recurse(class).or_else(|| recurse(constant)),
+        _ => None,
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn invalid_constant_expression(expression: &Expr) -> Option<(&'static str, usize)> {
+    let recurse = invalid_constant_expression;
     match expression {
         Expr::Closure {
             line,
@@ -2933,6 +3039,61 @@ fn invalid_runtime_callable_constant_expression(
             },
             *line,
         )),
+        Expr::FunctionCall {
+            args, generic_args, ..
+        } if cfg!(any(
+            feature = "php-generics-erased",
+            feature = "php-generics-reified"
+        )) && !generic_args.is_empty() =>
+        {
+            args.iter().find_map(|argument| recurse(argument.expr()))
+        }
+        Expr::FunctionCall { line, .. }
+        | Expr::MethodCall { line, .. }
+        | Expr::StaticCall { line, .. }
+        | Expr::DynamicCall { line, .. }
+        | Expr::DynamicStaticCall { line, .. }
+        | Expr::Variable { line, .. }
+        | Expr::DynamicVariable { line, .. }
+        | Expr::Globals { line } => {
+            Some(("Constant expression contains invalid operations", *line))
+        }
+        Expr::DynamicNew { line, .. } => Some((
+            "Cannot use dynamic class name in constant expression",
+            *line,
+        )),
+        Expr::AnonymousNew { line, .. } => {
+            Some(("Cannot use anonymous class in constant expression", *line))
+        }
+        Expr::New { args, line, .. } => {
+            if args
+                .iter()
+                .any(|argument| matches!(argument, CallArg::Unpack(_)))
+            {
+                Some((
+                    "Argument unpacking in constant expressions is not supported",
+                    *line,
+                ))
+            } else {
+                args.iter().find_map(|argument| recurse(argument.expr()))
+            }
+        }
+        Expr::DynamicClassConstant {
+            class,
+            constant,
+            line,
+            ..
+        } => {
+            if !Compiler::is_compile_time_class_constant_name(class) {
+                Some((
+                    "Dynamic class names are not allowed in compile-time class constant references",
+                    *line,
+                ))
+            } else {
+                recurse(class).or_else(|| recurse(constant))
+            }
+        }
+        Expr::DynamicNamedClassConstant { constant, .. } => recurse(constant),
         Expr::BinaryOp { left, right, .. }
         | Expr::NullCoalesce { left, right }
         | Expr::Elvis { left, right } => recurse(left).or_else(|| recurse(right)),
@@ -2969,6 +3130,8 @@ fn invalid_runtime_callable_constant_expression(
 /// this evaluator can reproduce after a define() or external class becomes
 /// available. An unavailable symbol must not postpone an otherwise invalid
 /// operation such as a function call from compile time to first use.
+#[cold]
+#[inline(never)]
 fn deferred_constant_expression_is_supported(expression: &Expr) -> bool {
     match expression {
         Expr::Integer(_)
@@ -3291,6 +3454,11 @@ impl DeferredInstancePropertyDefaults {
     #[inline]
     pub(crate) fn has_runtime_entries(&self) -> bool {
         !self.entries.is_empty()
+    }
+
+    #[inline]
+    pub(crate) fn has_runtime_static_entries(&self) -> bool {
+        !self.static_entries.is_empty()
     }
 
     #[inline]
@@ -4005,66 +4173,6 @@ impl Compiler {
         }
     }
 
-    #[cold]
-    #[inline(never)]
-    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
-    fn invalid_attribute_constant_expression(expression: &Expr) -> Option<&'static str> {
-        let recurse = Self::invalid_attribute_constant_expression;
-        match expression {
-            Expr::FunctionCall { .. }
-            | Expr::MethodCall { .. }
-            | Expr::StaticCall { .. }
-            | Expr::DynamicCall { .. }
-            | Expr::DynamicStaticCall { .. } => {
-                Some("Constant expression contains invalid operations")
-            }
-            Expr::DynamicClassConstant {
-                class, constant, ..
-            } => {
-                if !Self::is_compile_time_class_constant_name(class) {
-                    Some(
-                        "Dynamic class names are not allowed in compile-time class constant references",
-                    )
-                } else {
-                    recurse(class).or_else(|| recurse(constant))
-                }
-            }
-            Expr::DynamicNamedClassConstant { constant, .. } => recurse(constant),
-            Expr::BinaryOp { left, right, .. }
-            | Expr::NullCoalesce { left, right }
-            | Expr::Elvis { left, right } => recurse(left).or_else(|| recurse(right)),
-            Expr::Not(inner)
-            | Expr::UnaryPlus(inner)
-            | Expr::UnaryMinus(inner)
-            | Expr::BitwiseNot { expr: inner, .. }
-            | Expr::ErrorSuppress(inner)
-            | Expr::Cast { expr: inner, .. } => recurse(inner),
-            Expr::Ternary {
-                condition,
-                then_expr,
-                else_expr,
-            } => recurse(condition)
-                .or_else(|| recurse(then_expr))
-                .or_else(|| recurse(else_expr)),
-            Expr::ArrayLiteral(elements) => elements.iter().find_map(|element| {
-                element
-                    .key
-                    .as_ref()
-                    .and_then(recurse)
-                    .or_else(|| recurse(&element.value))
-            }),
-            Expr::ArrayAccess { array, index, .. } => recurse(array).or_else(|| recurse(index)),
-            Expr::PropertyAccess { object, .. } => recurse(object),
-            Expr::DynamicPropertyAccess {
-                object, property, ..
-            } => recurse(object).or_else(|| recurse(property)),
-            Expr::New { args, .. } | Expr::DynamicNew { args, .. } => {
-                args.iter().find_map(|argument| recurse(argument.expr()))
-            }
-            _ => None,
-        }
-    }
-
     pub fn new() -> Self {
         Self {
             instructions: Vec::new(),
@@ -4362,10 +4470,10 @@ impl Compiler {
     fn compile_runtime_callable_constant_factory(
         &mut self,
         expression: &Expr,
-        lexical_class: &str,
+        lexical_class: Option<&str>,
         lexical_parent: Option<&str>,
     ) -> Result<(String, Vec<String>), String> {
-        if let Some((message, line)) = invalid_runtime_callable_constant_expression(expression) {
+        if let Some((message, line)) = invalid_constant_expression(expression) {
             return Err(self.goto_error(message, line));
         }
 
@@ -4373,7 +4481,7 @@ impl Compiler {
         let registry_name = format!("\0constant_expression#{factory_id}");
         let declaration_line = expression_source_line(expression);
         let mut factory = self.child_compiler();
-        factory.lexical_static_class = Some(lexical_class.to_string());
+        factory.lexical_static_class = lexical_class.map(str::to_string);
         factory.lexical_static_parent = lexical_parent.map(str::to_string);
         factory.dynamic_static_scope = false;
         factory.bindable_closure_scope = false;
@@ -5057,6 +5165,7 @@ impl Compiler {
                         };
                         if declared.insert(fqn.clone())
                             && !known.contains_key(&fqn)
+                            && !constant_expression_materializes_object(value)
                             && let Ok(val) = Self::eval_const_expr_with_context(
                                 value,
                                 known,
@@ -6742,15 +6851,17 @@ impl Compiler {
     }
 
     fn compile_attributes(
-        &self,
+        &mut self,
         attributes: &[Attribute],
         target: i64,
     ) -> Vec<AttributeDefinition> {
+        let lexical_class = self.lexical_static_class.clone();
+        let lexical_parent = self.lexical_static_parent.clone();
         self.compile_attributes_in_scope(
             attributes,
             target,
-            self.lexical_static_class.as_deref(),
-            self.lexical_static_parent.as_deref(),
+            lexical_class.as_deref(),
+            lexical_parent.as_deref(),
         )
     }
 
@@ -6864,8 +6975,9 @@ impl Compiler {
     ) -> Result<(), String> {
         for attribute in attributes {
             for argument in &attribute.args {
-                if let Some(message) = Self::invalid_attribute_constant_expression(argument.expr())
-                {
+                if let Some((message, _)) = invalid_constant_expression(argument.expr()) {
+                    // Attribute expression errors are attributed to the
+                    // annotated declaration, not the inner operation token.
                     return Err(self.goto_error(message, target_line));
                 }
             }
@@ -7054,7 +7166,7 @@ impl Compiler {
     }
 
     fn compile_attributes_in_scope(
-        &self,
+        &mut self,
         attributes: &[Attribute],
         target: i64,
         lexical_class: Option<&str>,
@@ -7070,7 +7182,7 @@ impl Compiler {
     }
 
     fn compile_attributes_in_scope_with_property(
-        &self,
+        &mut self,
         attributes: &[Attribute],
         target: i64,
         lexical_class: Option<&str>,
@@ -7088,7 +7200,7 @@ impl Compiler {
     }
 
     fn compile_attributes_in_scope_mode(
-        &self,
+        &mut self,
         attributes: &[Attribute],
         target: i64,
         lexical_class: Option<&str>,
@@ -7106,7 +7218,7 @@ impl Compiler {
     }
 
     fn compile_attributes_in_scope_mode_with_property(
-        &self,
+        &mut self,
         attributes: &[Attribute],
         target: i64,
         lexical_class: Option<&str>,
@@ -7147,44 +7259,63 @@ impl Compiler {
             "__PROPERTY__".to_string(),
             Value::string(lexical_property.unwrap_or_default()),
         );
-        attributes
+        let mut definitions = Vec::with_capacity(attributes.len());
+        for attribute in attributes
             .iter()
             .filter(|attribute| !attribute.is_non_enum_case_marker())
-            .map(|attribute| AttributeDefinition {
+        {
+            let mut arguments = Vec::with_capacity(attribute.args.len());
+            for argument in &attribute.args {
+                let (name, expression) = match argument {
+                    CallArg::Positional(expression) => (None, expression),
+                    CallArg::Named { name, value } => (Some(name.clone()), value),
+                    CallArg::Unpack(expression) => (None, expression),
+                };
+                let value = self.eval_const_expr_in_source_with_property(
+                    expression,
+                    &known,
+                    lexical_property,
+                );
+                let runtime_factory = (constant_expression_contains_runtime_callable(expression)
+                    || constant_expression_materializes_object(expression))
+                .then(|| {
+                    self.compile_runtime_callable_constant_factory(
+                        expression,
+                        lexical_class,
+                        lexical_parent,
+                    )
+                })
+                .transpose()
+                .unwrap_or_else(|error| {
+                    if self.deferred_error.is_none() {
+                        self.deferred_error = Some(error);
+                    }
+                    None
+                })
+                .map(|(name, lexical_functions)| {
+                    Rc::new(RuntimeCallableConstantFactory::new(name, lexical_functions))
+                });
+                arguments.push(AttributeArgument {
+                    name,
+                    value,
+                    runtime_factory,
+                    // Attribute arguments are instantiated only on cold
+                    // semantic/Reflection paths. Retaining their source
+                    // expression also preserves deprecated-symbol reporting.
+                    deferred_expression: Some(Box::new(expression.clone())),
+                });
+            }
+            definitions.push(AttributeDefinition {
                 name: self.resolve_name(&attribute.name),
-                arguments: attribute
-                    .args
-                    .iter()
-                    .map(|argument| {
-                        let (name, expression) = match argument {
-                            CallArg::Positional(expression) => (None, expression),
-                            CallArg::Named { name, value } => (Some(name.clone()), value),
-                            CallArg::Unpack(expression) => (None, expression),
-                        };
-                        let value = self.eval_const_expr_in_source_with_property(
-                            expression,
-                            &known,
-                            lexical_property,
-                        );
-                        AttributeArgument {
-                            name,
-                            // Attribute arguments are instantiated only on
-                            // cold semantic/Reflection paths. Retaining their
-                            // source expression lets PHP 8.5 diagnose a
-                            // deprecated constant used as another symbol's
-                            // deprecation message, including self references.
-                            deferred_expression: Some(Box::new(expression.clone())),
-                            value,
-                        }
-                    })
-                    .collect(),
+                arguments,
                 evaluation_scope: evaluation_scope.clone(),
                 target,
                 source_file: self.source_file.clone(),
                 source_line: attribute.line,
                 strict_types: self.strict_types,
-            })
-            .collect()
+            });
+        }
+        definitions
     }
 
     /// PHP rejects an array-unpack operand during compilation only when its
@@ -7319,6 +7450,137 @@ impl Compiler {
             precision,
             &HashSet::new(),
         )
+    }
+
+    /// Evaluate the left side of `??` with PHP's silent constant-expression
+    /// probe rules. Missing dimensions/properties collapse to null so only the
+    /// selected fallback is evaluated; invalid array-key types remain errors.
+    fn eval_const_coalesce_probe(
+        expr: &Expr,
+        known: &HashMap<String, Value>,
+        file_context: Option<(&str, &str)>,
+        precision: i32,
+        known_enum_classes: &HashSet<String>,
+    ) -> Result<Value, String> {
+        match expr {
+            Expr::ArrayAccess { array, index, .. } => {
+                let container = Self::eval_const_coalesce_probe(
+                    array,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
+                if matches!(container.value_type(), ValueType::Null | ValueType::Undef) {
+                    return Ok(Value::null());
+                }
+                let index = Self::eval_const_expr_with_context_and_enum_classes(
+                    index,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
+                let Some(array) = container.as_array() else {
+                    return Ok(Value::null());
+                };
+                let key = if matches!(index.value_type(), ValueType::Long | ValueType::String) {
+                    crate::vm::execute::value_to_array_key(&index)
+                        .ok()
+                        .map(|key| array.normalize_string_key(key, &index))
+                } else if matches!(index.value_type(), ValueType::True | ValueType::False) {
+                    Some(crate::value::ArrayKey::Int(i64::from(index.is_truthy())))
+                } else if index.value_type() == ValueType::Null {
+                    Some(crate::value::ArrayKey::String(String::new()))
+                } else {
+                    return Err(format!(
+                        "Cannot access offset of type {} on array",
+                        index.diagnostic_type_name()
+                    ));
+                };
+                Ok(key
+                    .and_then(|key| match key {
+                        crate::value::ArrayKey::Int(key) => array.get_int(key),
+                        crate::value::ArrayKey::String(key) => array.get_str(&key),
+                    })
+                    .cloned()
+                    .unwrap_or_else(Value::null))
+            }
+            Expr::PropertyAccess {
+                object, property, ..
+            } => {
+                let receiver = Self::eval_const_coalesce_probe(
+                    object,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
+                if matches!(receiver.value_type(), ValueType::Null | ValueType::Undef) {
+                    return Ok(Value::null());
+                }
+                let Some(object) = receiver.as_object() else {
+                    return Ok(Value::null());
+                };
+                if !known_enum_classes.contains(object.class_name.as_ref()) {
+                    return Err(
+                        "Fetching properties on non-enums in constant expressions is not allowed"
+                            .to_string(),
+                    );
+                }
+                Ok(object
+                    .get_property(property)
+                    .cloned()
+                    .unwrap_or_else(Value::null))
+            }
+            Expr::DynamicPropertyAccess {
+                object, property, ..
+            } => {
+                let receiver = Self::eval_const_coalesce_probe(
+                    object,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
+                if matches!(receiver.value_type(), ValueType::Null | ValueType::Undef) {
+                    return Ok(Value::null());
+                }
+                let property = Self::eval_const_expr_with_context_and_enum_classes(
+                    property,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )?;
+                let Some(property) = property.as_str() else {
+                    return Err(format!(
+                        "value of type {} cannot be folded as a property name",
+                        property.type_name()
+                    ));
+                };
+                let Some(object) = receiver.as_object() else {
+                    return Ok(Value::null());
+                };
+                if !known_enum_classes.contains(object.class_name.as_ref()) {
+                    return Err(
+                        "Fetching properties on non-enums in constant expressions is not allowed"
+                            .to_string(),
+                    );
+                }
+                Ok(object
+                    .get_property(property)
+                    .cloned()
+                    .unwrap_or_else(Value::null))
+            }
+            _ => Self::eval_const_expr_with_context_and_enum_classes(
+                expr,
+                known,
+                file_context,
+                precision,
+                known_enum_classes,
+            ),
+        }
     }
 
     fn eval_const_expr_with_context_and_enum_classes(
@@ -7604,7 +7866,7 @@ impl Compiler {
                 }
             }
             Expr::NullCoalesce { left, right } => {
-                let left = Self::eval_const_expr_with_context_and_enum_classes(
+                let left = Self::eval_const_coalesce_probe(
                     left,
                     known,
                     file_context,
@@ -8163,6 +8425,18 @@ impl Compiler {
                 let cv_idx = func_compiler.resolve_cv(&param.name);
                 func_compiler.definitely_defined_cvs.insert(cv_idx);
                 if let Some(default_expr) = &param.default {
+                    if let Some((message, expression_line)) =
+                        invalid_constant_expression(default_expr)
+                    {
+                        return Err(func_compiler.goto_error(
+                            message,
+                            if expression_line == 0 {
+                                param.line
+                            } else {
+                                expression_line
+                            },
+                        ));
+                    }
                     let default_is_compile_time_fixed =
                         Self::parameter_default_is_compile_time_fixed(default_expr);
                     let mut normalized_default = None;
@@ -8267,6 +8541,10 @@ impl Compiler {
                     && Self::parameter_default_is_compile_time_fixed(then_expr)
                     && Self::parameter_default_is_compile_time_fixed(else_expr)
             }
+            Expr::Cast {
+                cast_type: CastType::Object,
+                ..
+            } => false,
             Expr::UnaryPlus(inner)
             | Expr::UnaryMinus(inner)
             | Expr::Not(inner)
@@ -9065,7 +9343,11 @@ impl Compiler {
         // Compute default expression (only reached if arg was NOT passed)
         let (val_op, val_type) = match normalized_default {
             Some(value) => (compiler.add_literal(value), OpType::Const),
-            None => compiler.compile_constant_expression(default_expr),
+            None => {
+                let value = compiler.compile_constant_expression(default_expr);
+                compiler.record_last_instruction_source_line(line);
+                value
+            }
         };
 
         // Assign computed default to CV
@@ -9120,6 +9402,18 @@ impl Compiler {
         if !self.unscoped_named_function() || self.deferred_error.is_some() {
             return;
         }
+        if self.compiling_constant_expression
+            && matches!(
+                expr,
+                Expr::New { class_name, .. }
+                    if class_name.eq_ignore_ascii_case("self")
+                        || class_name.eq_ignore_ascii_case("parent")
+            )
+        {
+            // Deferred constant-expression defaults fail when they are
+            // materialized, not while their containing function is compiled.
+            return;
+        }
         let relative = match expr {
             Expr::New {
                 class_name, line, ..
@@ -9149,6 +9443,22 @@ impl Compiler {
                 &format!("Cannot use \"{relative}\" when no class scope is active"),
                 line,
             ));
+        }
+    }
+
+    fn unresolved_lexical_new_scope(&self, class_name: &str) -> bool {
+        if !self.compiling_constant_expression
+            || self.dynamic_static_scope
+            || self.bindable_closure_scope
+        {
+            return false;
+        }
+        if class_name.eq_ignore_ascii_case("self") {
+            self.lexical_static_class.is_none()
+        } else if class_name.eq_ignore_ascii_case("parent") {
+            self.lexical_static_parent.is_none()
+        } else {
+            false
         }
     }
 
@@ -12021,11 +12331,13 @@ impl Compiler {
                 };
                 user_func.parameter_default_diagnostics =
                     self.method_parameter_default_diagnostics(params, default_class_scope);
+                let attribute_lexical_class = self.lexical_static_class.clone();
+                let attribute_lexical_parent = self.lexical_static_parent.clone();
                 user_func.set_attributes(self.compile_attributes_in_scope_mode(
                     attributes,
                     2,
-                    self.lexical_static_class.as_deref(),
-                    self.lexical_static_parent.as_deref(),
+                    attribute_lexical_class.as_deref(),
+                    attribute_lexical_parent.as_deref(),
                     true,
                 ));
                 user_func.parameter_attributes = params
@@ -12034,8 +12346,8 @@ impl Compiler {
                         self.compile_attributes_in_scope_mode(
                             &parameter.attributes,
                             32,
-                            self.lexical_static_class.as_deref(),
-                            self.lexical_static_parent.as_deref(),
+                            attribute_lexical_class.as_deref(),
+                            attribute_lexical_parent.as_deref(),
                             true,
                         )
                     })
@@ -12151,6 +12463,7 @@ impl Compiler {
                 line,
                 call_line,
             } => {
+                let unresolved_lexical_scope = self.unresolved_lexical_new_scope(class_name);
                 if generic_args.is_empty()
                     && args
                         .iter()
@@ -12158,8 +12471,11 @@ impl Compiler {
                 {
                     let (arguments, arguments_type) =
                         self.compile_mixed_unpacked_call_arguments(args, 0, None);
-                    let (resolved_class, dynamic_static_scope) =
-                        self.resolve_static_member_owner(class_name);
+                    let (resolved_class, dynamic_static_scope) = if unresolved_lexical_scope {
+                        (class_name.clone(), false)
+                    } else {
+                        self.resolve_static_member_owner(class_name)
+                    };
                     let name_idx = self.add_literal(Value::string(resolved_class));
                     let tmp = self.alloc_tmp();
                     let mut new_obj = Instruction::new(OpCode::NewObj);
@@ -12173,11 +12489,17 @@ impl Compiler {
                     if dynamic_static_scope {
                         new_obj._pad |= NEW_FLAG_DYNAMIC_STATIC_SCOPE;
                     }
+                    if unresolved_lexical_scope {
+                        new_obj._pad |= NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE;
+                    }
                     self.push_instruction_at_line(new_obj, *line);
                     return (tmp, OpType::Tmp);
                 }
-                let (resolved_class, dynamic_static_scope) =
-                    self.resolve_static_member_owner(class_name);
+                let (resolved_class, dynamic_static_scope) = if unresolved_lexical_scope {
+                    (class_name.clone(), false)
+                } else {
+                    self.resolve_static_member_owner(class_name)
+                };
                 // A linked source constructor with no by-reference parameters
                 // cannot change argument selection at runtime. Keep its plain
                 // CV operands compact so the existing object-pipeline region
@@ -12214,6 +12536,9 @@ impl Compiler {
                 new_obj.extended_value = args.len() as u32;
                 if dynamic_static_scope {
                     new_obj._pad |= NEW_FLAG_DYNAMIC_STATIC_SCOPE;
+                }
+                if unresolved_lexical_scope {
+                    new_obj._pad |= NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE;
                 }
                 self.push_instruction_at_line(new_obj, *line);
 

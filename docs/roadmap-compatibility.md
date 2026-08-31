@@ -36,31 +36,26 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `symfony-builtin-callable-surface` train keeps 6,275 exact
-passes across the stable 7,174-case PHP 8.5 Zend/lang plus strings/array core,
-with 505 supported failures, 182 skips, 212 unsupported cases and no timeout or
-crash. Its exact core delta is `+0/-0`. Nine vendor-reached functions now have
-exact PHP 8.5 Reflection and call shapes while their handlers cover the
-exercised array replacement, filter, hash, environment, header-origin, query,
-libxml-switch and shutdown contracts. Twenty-two original E2E tests pass; the
-focused PHPT projection is 13 pass and 14 explicit filter-extension skips.
-Five Cargo configurations, exact upstream no-loss, Composer/Symfony S0-S3,
-format, data and unsafe gates pass.
+The accepted AMD64 `deferred-constant-expression-materialization` train keeps
+6,288 exact passes across the stable 7,174-case PHP 8.5 Zend/lang plus
+strings/array core, with 492 supported failures, 182 skips, 212 unsupported
+cases and no timeout or crash. Its exact delta is `+13/-0`. One deferred-value
+boundary now covers object construction/casts, delayed symbol lookup and retry,
+silent coalesce probes, lexical `self`/`parent`, attributes, parameter/static
+defaults and class/property/global constants. Fourteen original E2E tests and
+the selected upstream cluster preserve error stage, source, trace, identity and
+evaluation order; three object-handle-numbering cases remain explicit output-
+only holdouts.
 
-The on-demand builtin audit maps 1,201 PHP 8.5 global functions onto RPHP: 468
-are present, 733 are missing, seven present functions retain a call-shape
-mismatch, 384 retain a metadata mismatch and 77 are exact. Symfony's admitted
-DI/Routing vendor fixtures use 178 distinct builtins; all are present and
-call-shape compatible, with 32 exact. Callable surface therefore remains a
-measured compatibility dimension alongside behavioral PHPT passes. Two
-independent fixed-parent CPU-2 gates keep every 32-pair median under the +5%
-ceiling; unsent-header probes are +2.039%/+2.071%, filter +0.768%/+0.837%,
-ordinary calls -0.198%/-0.009%, and the other lanes are neutral or faster
-apart from shutdown at +1.208%/+0.949%. Current work remains selected as a
-10–30-case train around one shared root-cause hypothesis and one cumulative
-full/performance evidence packet. Smaller checkpoints require a crash, security
-issue, framework blocker or similarly explicit reason; Fiber/generator
-suspension additionally requires a pay-for-use performance design.
+Five Cargo configurations, all-target, exact upstream no-loss,
+Composer/Symfony S0-S3, format and the unchanged 1,623/289 unsafe ratchet pass.
+The fixed-parent CPU-2 32-pair gate keeps ordinary arrays at +0.196%, scalar
+defaults at -0.040%, compilation at -0.185% and object-default pay-use at
++1.416%, with exact outputs. Current work remains selected as a 10–30-case
+train around one shared root-cause hypothesis and one cumulative evidence
+packet. Smaller checkpoints require a crash, security issue, framework blocker
+or similarly explicit reason; Fiber/generator suspension additionally requires
+a pay-for-use performance design.
 
 ## Starting evidence
 

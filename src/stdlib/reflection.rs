@@ -348,11 +348,13 @@ fn internal_deprecated_attribute(deprecation: &InternalFunctionDeprecation) -> A
             AttributeArgument {
                 name: Some("since".to_string()),
                 value: Ok(Value::string(deprecation.since)),
+                runtime_factory: None,
                 deferred_expression: None,
             },
             AttributeArgument {
                 name: Some("message".to_string()),
                 value: Ok(Value::string(deprecation.message)),
+                runtime_factory: None,
                 deferred_expression: None,
             },
         ],
@@ -556,12 +558,41 @@ impl DeferredAttributeError {
     }
 }
 
+#[cold]
+#[inline(never)]
+fn report_deferred_attribute_warning(
+    message: &str,
+    source_file: &str,
+    line: usize,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), DeferredAttributeError> {
+    let frame = eg.current_execute_data.get();
+    let handled = if frame.is_null() {
+        false
+    } else {
+        crate::stdlib::dispatch_php_error(eg, frame, 2, message, source_file, line)?
+    };
+    if eg.exception.is_some() {
+        return Err(DeferredAttributeError::PendingException);
+    }
+    if !handled {
+        eg.record_last_error(2, message, source_file, line);
+    }
+    if !handled && eg.error_reporting & 2 != 0 {
+        eg.write_output(
+            format!("\nWarning: {message} in {source_file} on line {line}\n").as_bytes(),
+        );
+    }
+    Ok(())
+}
+
 fn evaluate_runtime_callable_constant_factory(
     factory: &crate::compiler::compile::RuntimeCallableConstantFactory,
     scope: &AttributeEvaluationScope,
     eg: &mut ExecutorGlobals,
+    cache_result: bool,
 ) -> Result<Value, DeferredAttributeError> {
-    if let Some(value) = factory.resolved() {
+    if cache_result && let Some(value) = factory.resolved() {
         return Ok(value);
     }
     let function = eg.find_private_function(&factory.name).ok_or_else(|| {
@@ -587,7 +618,9 @@ fn evaluate_runtime_callable_constant_factory(
     if eg.exception.is_some() {
         Err(DeferredAttributeError::PendingException)
     } else {
-        factory.cache(value.clone());
+        if cache_result {
+            factory.cache(value.clone());
+        }
         Ok(value)
     }
 }
@@ -874,6 +907,123 @@ fn deferred_class_constant(
     Ok(definition.value)
 }
 
+/// Evaluate the left side of `??` using PHP's silent dimension/property probe
+/// rules. Missing containers and keys become null so the fallback can run;
+/// an invalid array key remains a real TypeError. Keeping this separate from
+/// ordinary constant evaluation prevents `??` from hiding errors in its RHS
+/// or in unrelated arithmetic expressions.
+#[cold]
+#[inline(never)]
+fn evaluate_deferred_attribute_coalesce_probe(
+    expression: &Expr,
+    scope: &AttributeEvaluationScope,
+    source_file: &str,
+    eg: &mut ExecutorGlobals,
+) -> Result<Value, DeferredAttributeError> {
+    match expression {
+        Expr::ArrayAccess { array, index, line } => {
+            let container =
+                evaluate_deferred_attribute_coalesce_probe(array, scope, source_file, eg)?;
+            if matches!(container.value_type(), ValueType::Null | ValueType::Undef) {
+                return Ok(Value::null());
+            }
+            let index = evaluate_deferred_attribute_expression(index, scope, source_file, eg)?;
+            let Some(array) = container.as_array() else {
+                return Ok(Value::null());
+            };
+            let value = if let Some(index) = index.as_long() {
+                array.get_int(index)
+            } else if let Some(index) = index.as_str() {
+                array.get_str(index)
+            } else if matches!(index.value_type(), ValueType::True | ValueType::False) {
+                array.get_int(i64::from(index.is_truthy()))
+            } else if index.value_type() == ValueType::Null {
+                array.get_str("")
+            } else {
+                return Err(DeferredAttributeError::Message(format!(
+                    "Cannot access offset of type {} on array",
+                    index.diagnostic_type_name()
+                ))
+                .with_location_if_missing(source_file, *line));
+            };
+            Ok(value.cloned().unwrap_or_else(Value::null))
+        }
+        Expr::PropertyAccess {
+            object,
+            property,
+            nullsafe,
+            line,
+        } => {
+            let receiver =
+                evaluate_deferred_attribute_coalesce_probe(object, scope, source_file, eg)?;
+            if matches!(receiver.value_type(), ValueType::Null | ValueType::Undef) {
+                return Ok(Value::null());
+            }
+            let Some(object) = receiver.as_object() else {
+                return Ok(Value::null());
+            };
+            if !eg
+                .find_class(&object.class_name)
+                .is_some_and(|class| class.is_enum)
+            {
+                if *nullsafe {
+                    return Ok(Value::null());
+                }
+                return Err(DeferredAttributeError::Message(
+                    "Fetching properties on non-enums in constant expressions is not allowed"
+                        .to_string(),
+                )
+                .with_location_if_missing(source_file, *line));
+            }
+            Ok(object
+                .get_property(property)
+                .cloned()
+                .unwrap_or_else(Value::null))
+        }
+        Expr::DynamicPropertyAccess {
+            object,
+            property,
+            nullsafe,
+            line,
+        } => {
+            let receiver =
+                evaluate_deferred_attribute_coalesce_probe(object, scope, source_file, eg)?;
+            if matches!(receiver.value_type(), ValueType::Null | ValueType::Undef) {
+                return Ok(Value::null());
+            }
+            let property =
+                evaluate_deferred_attribute_expression(property, scope, source_file, eg)?;
+            let Some(property) = property.as_str() else {
+                return Err(DeferredAttributeError::Message(format!(
+                    "Cannot use value of type {} as a property name",
+                    property.type_name()
+                )));
+            };
+            let Some(object) = receiver.as_object() else {
+                return Ok(Value::null());
+            };
+            if !eg
+                .find_class(&object.class_name)
+                .is_some_and(|class| class.is_enum)
+            {
+                if *nullsafe {
+                    return Ok(Value::null());
+                }
+                return Err(DeferredAttributeError::Message(
+                    "Fetching properties on non-enums in constant expressions is not allowed"
+                        .to_string(),
+                )
+                .with_location_if_missing(source_file, *line));
+            }
+            Ok(object
+                .get_property(property)
+                .cloned()
+                .unwrap_or_else(Value::null))
+        }
+        _ => evaluate_deferred_attribute_expression(expression, scope, source_file, eg),
+    }
+}
+
 fn evaluate_deferred_attribute_expression(
     expression: &Expr,
     scope: &AttributeEvaluationScope,
@@ -887,12 +1037,13 @@ fn evaluate_deferred_attribute_expression(
         Expr::BinaryStringLiteral(value) => Ok(Value::binary_string_from_storage(value.clone())),
         Expr::Bool(value) => Ok(Value::bool(*value)),
         Expr::Null => Ok(Value::null()),
-        Expr::Constant { name, .. } => {
+        Expr::Constant { name, line } => {
             let (primary, fallback) = resolve_attribute_constant_name(name, scope);
             eg.find_constant(&primary)
                 .or_else(|| fallback.as_deref().and_then(|name| eg.find_constant(name)))
                 .ok_or_else(|| {
                     DeferredAttributeError::Message(format!("Undefined constant \"{primary}\""))
+                        .with_location_if_missing(source_file, *line)
                 })
         }
         Expr::MagicConstant { name, line } if name.eq_ignore_ascii_case("__LINE__") => {
@@ -1032,6 +1183,11 @@ fn evaluate_deferred_attribute_expression(
                 Ok(Value::long(value))
             } else if let Some(value) = value.as_double() {
                 Ok(Value::double(value))
+            } else if matches!(
+                value.value_type(),
+                ValueType::Null | ValueType::False | ValueType::True
+            ) {
+                Ok(Value::long(i64::from(value.is_truthy())))
             } else {
                 Err(DeferredAttributeError::Message(
                     "unsupported unary expression".to_string(),
@@ -1090,7 +1246,7 @@ fn evaluate_deferred_attribute_expression(
             }
         }
         Expr::NullCoalesce { left, right } => {
-            let left = evaluate_deferred_attribute_expression(left, scope, source_file, eg)?;
+            let left = evaluate_deferred_attribute_coalesce_probe(left, scope, source_file, eg)?;
             if left.value_type() == ValueType::Null {
                 evaluate_deferred_attribute_expression(right, scope, source_file, eg)
             } else {
@@ -1107,12 +1263,18 @@ fn evaluate_deferred_attribute_expression(
             if *nullsafe && receiver.value_type() == ValueType::Null {
                 return Ok(Value::null());
             }
-            let object = receiver.as_object().ok_or_else(|| {
-                DeferredAttributeError::Message(format!(
-                    "Attempt to read property \"{property}\" on {}",
-                    receiver.type_name()
-                ))
-            })?;
+            let Some(object) = receiver.as_object() else {
+                report_deferred_attribute_warning(
+                    &format!(
+                        "Attempt to read property \"{property}\" on {}",
+                        receiver.type_name()
+                    ),
+                    source_file,
+                    *line,
+                    eg,
+                )?;
+                return Ok(Value::null());
+            };
             if !eg
                 .find_class(&object.class_name)
                 .is_some_and(|class| class.is_enum)
@@ -1146,12 +1308,18 @@ fn evaluate_deferred_attribute_expression(
                     property.type_name()
                 )));
             };
-            let object = receiver.as_object().ok_or_else(|| {
-                DeferredAttributeError::Message(format!(
-                    "Attempt to read property \"{property}\" on {}",
-                    receiver.type_name()
-                ))
-            })?;
+            let Some(object) = receiver.as_object() else {
+                report_deferred_attribute_warning(
+                    &format!(
+                        "Attempt to read property \"{property}\" on {}",
+                        receiver.type_name()
+                    ),
+                    source_file,
+                    *line,
+                    eg,
+                )?;
+                return Ok(Value::null());
+            };
             if !eg
                 .find_class(&object.class_name)
                 .is_some_and(|class| class.is_enum)
@@ -1241,6 +1409,21 @@ fn evaluate_deferred_attribute_expression(
                     "constant expression cannot index a non-array".to_string(),
                 ));
             };
+            let display_key = if let Some(index) = index.as_long() {
+                index.to_string()
+            } else if let Some(index) = index.as_str() {
+                format!("\"{index}\"")
+            } else if matches!(index.value_type(), ValueType::True | ValueType::False) {
+                i64::from(index.is_truthy()).to_string()
+            } else if index.value_type() == ValueType::Null {
+                "\"\"".to_string()
+            } else {
+                return Err(DeferredAttributeError::Message(format!(
+                    "Cannot access offset of type {} on array",
+                    index.diagnostic_type_name()
+                ))
+                .with_location_if_missing(source_file, *line));
+            };
             let value = if let Some(index) = index.as_long() {
                 array.get_int(index)
             } else if let Some(index) = index.as_str() {
@@ -1250,13 +1433,19 @@ fn evaluate_deferred_attribute_expression(
             } else if index.value_type() == ValueType::Null {
                 array.get_str("")
             } else {
-                None
+                unreachable!("array key type was validated above")
             };
-            value.cloned().ok_or_else(|| {
-                DeferredAttributeError::Message(
-                    "undefined array key in constant expression".to_string(),
-                )
-            })
+            if let Some(value) = value {
+                Ok(value.clone())
+            } else {
+                report_deferred_attribute_warning(
+                    &format!("Undefined array key {display_key}"),
+                    source_file,
+                    *line,
+                    eg,
+                )?;
+                Ok(Value::null())
+            }
         }
         _ => Err(DeferredAttributeError::Message(format!(
             "expression {expression:?} is not a constant expression"
@@ -1617,10 +1806,22 @@ fn evaluate_deferred_class_constant_definition(
     else {
         return Ok(definition.value.clone());
     };
-    let value = if let Some(factory) = &definition.callable_factory {
-        evaluate_runtime_callable_constant_factory(factory, scope, eg)?
+    let evaluated = if let Some(factory) = &definition.callable_factory {
+        evaluate_runtime_callable_constant_factory(factory, scope, eg, true)
     } else {
-        evaluate_deferred_attribute_expression(expression, scope, definition.source_file(), eg)?
+        evaluate_deferred_attribute_expression(expression, scope, definition.source_file(), eg)
+    };
+    // A directly named, unresolved class-constant initializer is reported by
+    // PHP from the ordinary access frame. Other deferred expression failures
+    // retain their declaration location and synthetic constant-expression
+    // frame (for example `self::MISSING` and nested property defaults).
+    let value = match evaluated {
+        Err(DeferredAttributeError::LocatedMessage { message, .. })
+            if matches!(expression.as_ref(), Expr::Constant { .. }) =>
+        {
+            return Err(DeferredAttributeError::Message(message));
+        }
+        result => result?,
     };
     normalize_deferred_class_constant_value(
         value,
@@ -1644,7 +1845,7 @@ pub(crate) fn evaluate_deferred_property_default_value(
     eg: &mut ExecutorGlobals,
 ) -> Result<Option<Value>, VmError> {
     let evaluated = if let Some(factory) = &definition.callable_factory {
-        evaluate_runtime_callable_constant_factory(factory, &definition.evaluation_scope, eg)
+        evaluate_runtime_callable_constant_factory(factory, &definition.evaluation_scope, eg, true)
     } else {
         evaluate_deferred_attribute_expression(
             &definition.expression,
@@ -1664,9 +1865,18 @@ pub(crate) fn evaluate_deferred_property_default_value(
             }
             Ok(None)
         }
-        Err(DeferredAttributeError::LocatedMessage { message, .. }) => {
+        Err(DeferredAttributeError::LocatedMessage {
+            message,
+            source_file,
+            line,
+        }) => {
             if eg.exception.is_none() {
-                eg.exception = Some(make_error_value("Error", &message));
+                let error = make_error_value("Error", &message);
+                if let Some(mut object) = error.as_object_mut() {
+                    object.set_property("file", Value::string(source_file));
+                    object.set_property("line", Value::long(line as i64));
+                }
+                eg.exception = Some(error);
             }
             Ok(None)
         }
@@ -1818,8 +2028,15 @@ fn report_deprecated_expression_references(
             if eg.exception.is_some() {
                 return Ok(());
             }
-            let left_value =
-                evaluate_deferred_attribute_expression(left, scope, source_file, eg).ok();
+            let left_value = match expression {
+                Expr::NullCoalesce { .. } => {
+                    evaluate_deferred_attribute_coalesce_probe(left, scope, source_file, eg).ok()
+                }
+                Expr::Elvis { .. } => {
+                    evaluate_deferred_attribute_expression(left, scope, source_file, eg).ok()
+                }
+                _ => unreachable!(),
+            };
             let skip_right = match expression {
                 Expr::Elvis { .. } => left_value.is_some_and(|value| value.is_truthy()),
                 Expr::NullCoalesce { .. } => {
@@ -1911,8 +2128,48 @@ fn evaluate_attribute_arguments(
 ) -> Result<Option<Value>, VmError> {
     let mut arguments = PhpArray::with_packed_capacity(definition.arguments.len());
     for argument in &definition.arguments {
-        let value = match (&argument.value, &argument.deferred_expression) {
-            (_, Some(expression)) => {
+        let value = match (
+            &argument.runtime_factory,
+            &argument.value,
+            &argument.deferred_expression,
+        ) {
+            (Some(factory), _, expression) => {
+                if let (Some(use_site), Some(expression)) = (deprecated_use_site, expression) {
+                    report_deprecated_expression_references(
+                        expression,
+                        &definition.evaluation_scope,
+                        &definition.source_file,
+                        use_site,
+                        eg,
+                    )?;
+                    if eg.exception.is_some() {
+                        return Ok(None);
+                    }
+                }
+                match evaluate_runtime_callable_constant_factory(
+                    factory,
+                    &definition.evaluation_scope,
+                    eg,
+                    false,
+                ) {
+                    Ok(value) => value,
+                    Err(DeferredAttributeError::Message(error)) => {
+                        eg.exception = Some(make_error_value("Error", &error));
+                        return Ok(None);
+                    }
+                    Err(DeferredAttributeError::LocatedMessage { message, .. }) => {
+                        eg.exception = Some(make_error_value("Error", &message));
+                        return Ok(None);
+                    }
+                    Err(DeferredAttributeError::TypedClassConstant(error)) => {
+                        eg.exception = Some(make_error_value("TypeError", &error));
+                        return Ok(None);
+                    }
+                    Err(DeferredAttributeError::PendingException) => return Ok(None),
+                    Err(DeferredAttributeError::Vm(error)) => return Err(error),
+                }
+            }
+            (None, _, Some(expression)) => {
                 if let Some(use_site) = deprecated_use_site {
                     report_deprecated_expression_references(
                         expression,
@@ -1948,8 +2205,8 @@ fn evaluate_attribute_arguments(
                     Err(DeferredAttributeError::Vm(error)) => return Err(error),
                 }
             }
-            (Ok(value), None) => value.clone(),
-            (Err(error), None) => {
+            (None, Ok(value), None) => value.clone(),
+            (None, Err(error), None) => {
                 eg.exception = Some(make_error_value("Error", error));
                 return Ok(None);
             }

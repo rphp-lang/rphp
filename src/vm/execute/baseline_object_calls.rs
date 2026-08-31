@@ -196,8 +196,10 @@ fn op_new_obj<'a>(
     let ic = &op_array.cache[ip];
     let dynamic_static_scope = opline._pad & NEW_FLAG_DYNAMIC_STATIC_SCOPE != 0;
     let dynamic_class_name = opline._pad & NEW_FLAG_DYNAMIC_CLASS_NAME != 0;
+    let unresolved_relative_scope = opline._pad & NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE != 0;
     let literal_cache_hit = !dynamic_static_scope
         && !dynamic_class_name
+        && !unresolved_relative_scope
         && opline.op1_type == OpType::Const
         && ic.class_id != 0;
     if literal_cache_hit {
@@ -215,14 +217,24 @@ fn op_new_obj<'a>(
         // Cold literal, late-static and runtime class expressions still own
         // their evaluated name before autoload can re-enter the VM.
         stats::inc_newobj_class_name_materialization();
-        owned_name = if dynamic_static_scope {
-            let Some(resolved) = resolve_static_call_class(eg, frame, raw_name, true) else {
-                let error = make_error_value(
-                    "Error",
-                    &format!(
+        owned_name = if dynamic_static_scope || unresolved_relative_scope {
+            let Some(resolved) =
+                resolve_static_call_class(eg, frame, raw_name, dynamic_static_scope)
+            else {
+                let lexical_scope_exists = raw_name.eq_ignore_ascii_case("parent")
+                    && resolve_static_call_class(eg, frame, "self", dynamic_static_scope)
+                        .is_some();
+                let message = if lexical_scope_exists {
+                    "Cannot access \"parent\" when current class scope has no parent".to_string()
+                } else {
+                    format!(
                         "Cannot access \"{}\" when no class scope is active",
                         raw_name.to_ascii_lowercase()
-                    ),
+                    )
+                };
+                let error = make_error_value(
+                    "Error",
+                    &message,
                 );
                 attach_throwable_origin(&error, eg, frame, op_array, ip);
                 return Ok(match throw_in_frame(eg, frame, error)? {
@@ -413,18 +425,27 @@ fn attach_constant_expression_origin(
     op_array: &crate::compiler::OpArray,
     ip: usize,
 ) {
-    let already_stamped = throwable.as_object().is_some_and(|object| {
-        let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
+    let stamped_location = throwable.as_object().and_then(|object| {
         object
             .get_property("file")
             .and_then(Value::as_str)
-            .is_some_and(|file| !file.is_empty())
-            && object.contains_property(&trace_key)
+            .filter(|file| !file.is_empty())
+            .map(str::to_owned)
+            .zip(
+                object
+                    .get_property("line")
+                    .and_then(Value::as_long)
+                    .filter(|line| *line > 0),
+            )
     });
     if definition.source_file.is_empty() {
         return;
     }
-    if !already_stamped {
+    let trace_stamped = throwable.as_object().is_some_and(|object| {
+        let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
+        object.contains_property(&trace_key)
+    });
+    if !trace_stamped {
         attach_throwable_origin(throwable, eg, frame, op_array, ip);
     }
     let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
@@ -450,21 +471,12 @@ fn attach_constant_expression_origin(
     }
     let mut trace = PhpArray::new();
     let mut constant_expression = PhpArray::new();
-    let stamped_location = already_stamped.then(|| {
-        throwable.as_object().and_then(|object| {
-            object
-                .get_property("file")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .zip(object.get_property("line").and_then(Value::as_long))
-        })
-    }).flatten();
-    if let Some((file, line)) = stamped_location {
+    if let Some((file, line)) = stamped_location.as_ref() {
         if !file.is_empty() {
-            constant_expression.set_str("file", Value::string(file));
+            constant_expression.set_str("file", Value::string(file.clone()));
         }
-        if line > 0 {
-            constant_expression.set_str("line", Value::long(line));
+        if *line > 0 {
+            constant_expression.set_str("line", Value::long(*line));
         }
     } else {
         if !op_array.source_file.is_empty() {
@@ -486,13 +498,95 @@ fn attach_constant_expression_origin(
         trace.push(entry.clone());
     }
     if let Some(mut object) = throwable.as_object_mut() {
-        if !already_stamped {
+        if let Some((file, line)) = stamped_location {
+            object.set_property("file", Value::string(file));
+            object.set_property("line", Value::long(line));
+        } else {
             object.set_property("file", Value::string(definition.source_file.clone()));
             object.set_property("line", Value::long(definition.source_line as i64));
         }
         let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
         object.set_property(&trace_key, Value::array(trace));
     }
+}
+
+#[cold]
+fn materialize_deferred_static_defaults(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    ip: usize,
+    class_id: u32,
+) -> Result<bool, VmError> {
+    let Some((entries, class_name)) = eg.class_by_id(class_id).and_then(|class| {
+        class.deferred_instance_defaults.as_ref().map(|deferred| {
+            (deferred.static_entries(), class.name.clone())
+        })
+    }) else {
+        return Ok(true);
+    };
+
+    for deferred in entries.iter() {
+        let Some((storage_slot, definition)) = eg.class_by_id(class_id).and_then(|class| {
+            let definition = class.static_properties.get(deferred.property_index)?.clone();
+            let storage_slot =
+                eg.static_property_storage_slot(class_id, deferred.property_index)?;
+            Some((storage_slot, definition))
+        }) else {
+            return Err(VmError::Fatal(
+                "Invalid deferred static property default slot".into(),
+            ));
+        };
+        if eg
+            .static_property_value(storage_slot)
+            .is_some_and(|value| !value.is_undef())
+        {
+            continue;
+        }
+        let Some(value) = crate::stdlib::reflection::evaluate_deferred_property_default_value(
+            deferred,
+            eg,
+        )? else {
+            let exception = eg
+                .exception
+                .as_ref()
+                .expect("deferred static property default failure sets an exception");
+            attach_constant_expression_origin(
+                exception,
+                deferred,
+                eg,
+                frame,
+                op_array,
+                ip,
+            );
+            return Ok(false);
+        };
+        if eg.exception.is_some() {
+            return Ok(false);
+        }
+        let value = match prepare_property_assignment(value, &definition, eg, true, &class_name) {
+            Ok(value) => value,
+            Err(message) => {
+                let exception = make_error_value("TypeError", &message);
+                attach_constant_expression_origin(
+                    &exception,
+                    deferred,
+                    eg,
+                    frame,
+                    op_array,
+                    ip,
+                );
+                eg.exception = Some(exception);
+                return Ok(false);
+            }
+        };
+        if !eg.set_static_property_value(storage_slot, value) {
+            return Err(VmError::Fatal(
+                "Invalid deferred static property storage slot".into(),
+            ));
+        }
+    }
+    Ok(true)
 }
 
 #[cold]
@@ -696,9 +790,32 @@ fn op_new_obj_resolved<'a>(
     // unresolved symbolic defaults materializes a request-local template on
     // first construction and publishes it only after every expression and
     // typed-property guard succeeds.
-    let deferred_defaults = class_def
+    let (deferred_defaults, deferred_static_defaults) = class_def
         .and_then(|class| class.deferred_instance_defaults.as_ref())
-        .is_some_and(|defaults| defaults.has_runtime_entries());
+        .map_or((false, false), |defaults| {
+            (
+                defaults.has_runtime_entries(),
+                defaults.has_runtime_static_entries(),
+            )
+        });
+    let class_def = if deferred_static_defaults {
+        let class_id = class_def.expect("checked class definition").class_id;
+        if !materialize_deferred_static_defaults(eg, frame, op_array, ip, class_id)? {
+            let exception = eg
+                .exception
+                .take()
+                .expect("deferred static property default failure sets an exception");
+            return Ok(match throw_in_frame(eg, frame, exception)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+        eg.class_by_id(class_id)
+    } else {
+        class_def
+    };
     let deferred_defaults = if deferred_defaults {
         let class_id = class_def.expect("checked class definition").class_id;
         match materialize_deferred_instance_defaults(eg, frame, op_array, ip, class_id)? {

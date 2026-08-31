@@ -4623,7 +4623,7 @@ impl Compiler {
                     ));
                 }
                 if let Some((message, expression_line)) =
-                    invalid_runtime_callable_constant_expression(value)
+                    invalid_constant_expression(value)
                 {
                     return Err(self.goto_error(
                         message,
@@ -4690,9 +4690,9 @@ impl Compiler {
                         },
                     );
                 }
-                let compile_time = self
-                    .eval_const_expr_in_source(value, &self.known_constants)
-                    .ok();
+                let compile_time = (!constant_expression_materializes_object(value))
+                    .then(|| self.eval_const_expr_in_source(value, &self.known_constants).ok())
+                    .flatten();
                 let (val_op, val_type) = if let Some(ct_val) = compile_time {
                     if first_source_declaration {
                         self.known_constants
@@ -4701,7 +4701,9 @@ impl Compiler {
                     }
                     (self.add_literal(ct_val), OpType::Const)
                 } else {
-                    self.compile_constant_expression(value)
+                    let result = self.compile_constant_expression(value);
+                    self.record_last_instruction_source_line(*line);
+                    result
                 };
                 let name_idx = self.add_literal(Value::string(declaration_name));
                 let mut instr = Instruction::new(OpCode::FetchConst);
@@ -4807,7 +4809,13 @@ impl Compiler {
                         self.eval_const_expr_in_source(expr, &HashMap::new()).ok()
                     });
                     if let Some(def_expr) = default {
+                        // PHP static-variable initializers are runtime
+                        // expressions. They intentionally admit dynamic class
+                        // names, anonymous classes, unpacking and ordinary
+                        // function/variable operands that parameter defaults,
+                        // attributes and global constants reject.
                         let (def_op, def_type) = self.compile_constant_expression(def_expr);
+                        self.record_last_instruction_source_line(*line);
                         instr.result_type = def_type;
                         instr.result = def_op;
                     } else {
@@ -5518,13 +5526,39 @@ impl Compiler {
                         &resolved_class,
                         resolved_parent.as_deref(),
                     );
+                    if let Some(expr) = &prop.default {
+                        if let Some((message, expression_line)) =
+                            forbidden_object_constant_expression(expr)
+                        {
+                            return Err(self.goto_error(
+                                message,
+                                if expression_line == 0 {
+                                    prop.line
+                                } else {
+                                    expression_line
+                                },
+                            ));
+                        }
+                        if let Some((message, expression_line)) =
+                            invalid_constant_expression(expr)
+                        {
+                            return Err(self.goto_error(
+                                message,
+                                if expression_line == 0 {
+                                    prop.line
+                                } else {
+                                    expression_line
+                                },
+                            ));
+                        }
+                    }
                     let mut default_is_deferred = false;
                     let default = match &prop.default {
                         Some(expr) if constant_expression_contains_runtime_callable(expr) => {
                             let (callable_factory, lexical_functions) = self
                                 .compile_runtime_callable_constant_factory(
                                     expr,
-                                    &resolved_class,
+                                    Some(&resolved_class),
                                     resolved_parent.as_deref(),
                                 )?;
                             default_is_deferred = true;
@@ -5568,12 +5602,11 @@ impl Compiler {
                         ) {
                             Ok(value) => Some(value),
                             Err(reason)
-                                if !prop.is_static
-                                    && deferred_constant_expression_is_supported(expr)
+                                if deferred_constant_expression_is_supported(expr)
                                     && constant_expression_dependency_is_unavailable(&reason) =>
                             {
                                 default_is_deferred = true;
-                                deferred_instance_defaults.push(DeferredPropertyDefault {
+                                let definition = DeferredPropertyDefault {
                                     property_name: prop.name.clone(),
                                     declaring_class: resolved_class.clone(),
                                     property_index: 0,
@@ -5593,7 +5626,12 @@ impl Compiler {
                                     ),
                                     source_file: self.source_file.clone(),
                                     source_line: prop.line,
-                                });
+                                };
+                                if prop.is_static {
+                                    deferred_static_defaults.push(definition);
+                                } else {
+                                    deferred_instance_defaults.push(definition);
+                                }
                                 None
                             }
                             Err(reason) if reason == "Cannot use [] for reading" => {
@@ -5827,13 +5865,14 @@ impl Compiler {
                             .collect(),
                     })
                     .collect();
+                let compiled_class_attributes = self.compile_attributes_in_scope(
+                    attributes,
+                    1,
+                    Some(&resolved_class),
+                    resolved_parent.as_deref(),
+                );
                 self.class_defs.push(ClassDef {
-                    attributes: self.compile_attributes_in_scope(
-                        attributes,
-                        1,
-                        Some(&resolved_class),
-                        resolved_parent.as_deref(),
-                    ),
+                    attributes: compiled_class_attributes,
                     name: resolved_class.clone(),
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
@@ -6205,13 +6244,14 @@ impl Compiler {
                     )?;
                     compiled_properties.push(definition);
                 }
+                let compiled_interface_attributes = self.compile_attributes_in_scope(
+                    attributes,
+                    1,
+                    Some(&resolved_iface),
+                    None,
+                );
                 self.class_defs.push(ClassDef {
-                    attributes: self.compile_attributes_in_scope(
-                        attributes,
-                        1,
-                        Some(&resolved_iface),
-                        None,
-                    ),
+                    attributes: compiled_interface_attributes,
                     name: resolved_iface.clone(),
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
@@ -6556,6 +6596,32 @@ impl Compiler {
                         true,
                     )?;
                     let type_hint = self.convert_type_hint(&prop.type_hint);
+                    if let Some(expr) = &prop.default {
+                        if let Some((message, expression_line)) =
+                            forbidden_object_constant_expression(expr)
+                        {
+                            return Err(self.goto_error(
+                                message,
+                                if expression_line == 0 {
+                                    prop.line
+                                } else {
+                                    expression_line
+                                },
+                            ));
+                        }
+                        if let Some((message, expression_line)) =
+                            invalid_constant_expression(expr)
+                        {
+                            return Err(self.goto_error(
+                                message,
+                                if expression_line == 0 {
+                                    prop.line
+                                } else {
+                                    expression_line
+                                },
+                            ));
+                        }
+                    }
                     let mut default_is_deferred = false;
                     let default = match &prop.default {
                         Some(expr) => match self.eval_const_expr_in_source_with_property(
@@ -6752,13 +6818,14 @@ impl Compiler {
                             .collect(),
                     })
                     .collect();
+                let compiled_trait_attributes = self.compile_attributes_in_scope(
+                    attributes,
+                    1,
+                    Some(&resolved_trait),
+                    None,
+                );
                 self.class_defs.push(ClassDef {
-                    attributes: self.compile_attributes_in_scope(
-                        attributes,
-                        1,
-                        Some(&resolved_trait),
-                        None,
-                    ),
+                    attributes: compiled_trait_attributes,
                     name: resolved_trait.clone(),
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
@@ -7610,6 +7677,14 @@ impl Compiler {
             if let Some((message, line)) = forbidden_static_constant_expression(&constant.value) {
                 return Err(self.goto_error(message, line));
             }
+            if let Some((message, line)) = forbidden_object_constant_expression(&constant.value) {
+                return Err(self.goto_error(message, line));
+            }
+            if let Some((message, line)) =
+                invalid_constant_expression(&constant.value)
+            {
+                return Err(self.goto_error(message, line));
+            }
             if !names.insert(constant.name.as_str()) {
                 return Err(format!(
                     "Cannot redefine class constant {}::{}",
@@ -7624,7 +7699,7 @@ impl Compiler {
                 constant_expression_contains_runtime_callable(&constant.value).then(|| {
                     self.compile_runtime_callable_constant_factory(
                         &constant.value,
-                        owner,
+                        Some(owner),
                         parent,
                     )
                 })

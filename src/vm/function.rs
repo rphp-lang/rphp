@@ -1653,6 +1653,11 @@ impl FunctionCommon {
 pub struct AttributeArgument {
     pub name: Option<String>,
     pub value: Result<Value, String>,
+    /// Object-producing constant expressions execute through the ordinary VM
+    /// each time Reflection materializes an attribute argument. Unlike class
+    /// constants and static defaults, attribute arguments are not identity
+    /// caches: every getArguments()/newInstance() call receives a fresh value.
+    pub runtime_factory: Option<Rc<crate::compiler::compile::RuntimeCallableConstantFactory>>,
     /// Constant expressions that depend on runtime declarations are retained
     /// only on the cold Reflection path. This keeps ordinary attributes fully
     /// folded while allowing define(), autoload and delayed class linking to

@@ -430,7 +430,8 @@ pub fn detect_virtual_declared_object_read_span(
         || new_object.extended_value != 0
         || new_object._pad
             & (crate::vm::instruction::NEW_FLAG_DYNAMIC_STATIC_SCOPE
-                | crate::vm::instruction::NEW_FLAG_DYNAMIC_CLASS_NAME)
+                | crate::vm::instruction::NEW_FLAG_DYNAMIC_CLASS_NAME
+                | crate::vm::instruction::NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE)
             != 0
         || op_array
             .literals

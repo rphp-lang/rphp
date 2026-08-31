@@ -111,6 +111,7 @@ fn register_internal_marker_attribute(eg: &mut ExecutorGlobals, name: &str, targ
             arguments: vec![AttributeArgument {
                 name: None,
                 value: Ok(Value::long(target)),
+                runtime_factory: None,
                 deferred_expression: None,
             }],
             evaluation_scope: std::rc::Rc::new(AttributeEvaluationScope::default()),
@@ -596,6 +597,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
             arguments: vec![AttributeArgument {
                 name: None,
                 value: Ok(Value::long(1)),
+                runtime_factory: None,
                 deferred_expression: None,
             }],
             evaluation_scope: std::rc::Rc::new(AttributeEvaluationScope::default()),
@@ -673,6 +675,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
             arguments: vec![AttributeArgument {
                 name: None,
                 value: Ok(Value::long(12)),
+                runtime_factory: None,
                 deferred_expression: None,
             }],
             evaluation_scope: std::rc::Rc::new(AttributeEvaluationScope::default()),
@@ -717,6 +720,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
             arguments: vec![AttributeArgument {
                 name: None,
                 value: Ok(Value::long(32)),
+                runtime_factory: None,
                 deferred_expression: None,
             }],
             evaluation_scope: std::rc::Rc::new(AttributeEvaluationScope::default()),
@@ -785,6 +789,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
             arguments: vec![AttributeArgument {
                 name: None,
                 value: Ok(Value::long(87)),
+                runtime_factory: None,
                 deferred_expression: None,
             }],
             evaluation_scope: std::rc::Rc::new(AttributeEvaluationScope::default()),
@@ -853,6 +858,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
             arguments: vec![AttributeArgument {
                 name: None,
                 value: Ok(Value::long(6)),
+                runtime_factory: None,
                 deferred_expression: None,
             }],
             evaluation_scope: std::rc::Rc::new(AttributeEvaluationScope::default()),

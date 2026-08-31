@@ -387,6 +387,10 @@ pub const NEW_FLAG_DYNAMIC_CLASS_NAME: u16 = 1 << 2;
 /// NewObj receives a fully materialized source-unpack argument list in op2 and
 /// invokes the constructor without an undersized pending call frame.
 pub const NEW_FLAG_UNPACKED_ARGUMENTS: u16 = 1 << 4;
+/// `self`/`parent` was intentionally retained as a lexical pseudo-class so
+/// NewObj can raise the runtime Error required by a deferred constant
+/// expression. Ordinary resolved class literals never pay a string check.
+pub const NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE: u16 = 1 << 5;
 
 /// CallUserFuncArray was emitted for PHP source-level `...` syntax. Its op2 is
 /// an internal argument list whose array aliases and Traversable value markers

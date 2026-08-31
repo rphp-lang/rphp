@@ -857,7 +857,7 @@ fn invalid_property_expressions_are_not_postponed_by_a_symbol_reference() {
     assert!(
         error
             .to_string()
-            .contains("Cannot use non-constant expression as default value for property InvalidDeferredDefault::$value")
+            .contains("Constant expression contains invalid operations on line 1")
     );
 }
 
@@ -1844,14 +1844,12 @@ echo DYNAMIC;
 }
 
 // ============================================================================
-// Regression: P1 — side-effect defaults must NOT run when arg is passed
+// PHP validates default constant expressions before any call site can run.
 // ============================================================================
 
 #[test]
-fn test_default_side_effect_skipped_when_arg_passed() {
-    // The default calls a function with a side effect (echo).
-    // When arg IS passed, the default must NOT be evaluated.
-    let out = run_php(
+fn function_call_default_is_rejected_even_when_every_call_supplies_the_argument() {
+    let error = run_php_expect_error(
         r#"<?php
 function side() {
     echo "SIDE";
@@ -1863,14 +1861,15 @@ function test($x = side()) {
 test(5);
 "#,
     );
-    // Must output "5" only — "SIDE" must NOT appear
-    assert_eq!(out, "5");
+    assert_eq!(
+        error.to_string(),
+        "Constant expression contains invalid operations on line 6"
+    );
 }
 
 #[test]
-fn test_default_side_effect_runs_when_arg_omitted() {
-    // When arg is NOT passed, the default expression IS evaluated
-    let out = run_php(
+fn function_call_default_is_rejected_before_an_omitted_argument_can_run_it() {
+    let error = run_php_expect_error(
         r#"<?php
 function side() {
     echo "SIDE";
@@ -1882,13 +1881,15 @@ function test($x = side()) {
 test();
 "#,
     );
-    assert_eq!(out, "SIDE99");
+    assert_eq!(
+        error.to_string(),
+        "Constant expression contains invalid operations on line 6"
+    );
 }
 
 #[test]
-fn test_default_side_effect_mixed() {
-    // Multiple calls: first with arg (no side effect), second without (side effect)
-    let out = run_php(
+fn function_call_default_is_rejected_before_mixed_call_sites_execute() {
+    let error = run_php_expect_error(
         r#"<?php
 $count = 0;
 function counter() {
@@ -1903,7 +1904,10 @@ echo "|";
 test(3);
 "#,
     );
-    assert_eq!(out, "12|C31");
+    assert_eq!(
+        error.to_string(),
+        "Constant expression contains invalid operations on line 7"
+    );
 }
 
 // ============================================================================
@@ -2466,7 +2470,7 @@ fn invalid_class_constant_operation_is_not_deferred_by_an_unknown_constant() {
     )
     .to_string();
     assert!(
-        error.contains("Cannot use non-constant expression as value for class constant"),
+        error.contains("Constant expression contains invalid operations on line 1"),
         "unexpected class-constant diagnostic: {error}"
     );
 }
