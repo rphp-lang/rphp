@@ -12552,11 +12552,7 @@ fn fn_get_class_vars(
 }
 
 fn clone_object_var(value: &Value) -> Value {
-    if value.is_owned_reference() {
-        value.clone_owned_reference_alias()
-    } else {
-        value.clone()
-    }
+    value.clone_for_php_storage()
 }
 
 fn set_object_var(result: &mut PhpArray, name: &str, value: Value) {

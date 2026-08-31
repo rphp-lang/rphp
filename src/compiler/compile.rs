@@ -82,18 +82,18 @@ use crate::vm::instruction::{
     FETCH_DIM_FUNC_ARG_NAMED, FETCH_DIM_FUNC_ARG_ROOT_CV, FETCH_DIM_ISSET, FETCH_DIM_MUTABLE,
     FETCH_DIM_REFERENCE_SOURCE, FETCH_DIM_SILENT, FETCH_DIM_UNSET, FETCH_DYNAMIC_ERROR_SUPPRESS,
     FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND,
-    FETCH_OBJ_CONSTANT_EXPRESSION, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY,
-    FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache,
-    Instruction, JMP_NZ_RELEASE_TEMPS, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME,
-    NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS, OBJ_PROP_FUNC_ARG,
-    OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OBJ_PROP_TEMPORARY_RECEIVER, OpType,
-    PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
-    REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, RELEASE_TEMPS_NESTED_OBJECTS,
-    RELEASE_TEMPS_ON_RETURN, RELEASE_TEMPS_RETURN_COMPLETION_SITE, SEND_FLAG_GLOBALS,
-    SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_PREPARED_PROPERTY_ARGUMENT,
-    SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
-    STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH,
-    STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    FETCH_OBJ_COMPOUND_RECEIVER, FETCH_OBJ_CONSTANT_EXPRESSION, FETCH_OBJ_ERROR_SUPPRESS,
+    FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT,
+    INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, JMP_NZ_RELEASE_TEMPS,
+    KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
+    NEW_FLAG_UNPACKED_ARGUMENTS, OBJ_PROP_FUNC_ARG, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND,
+    OBJ_PROP_TEMPORARY_RECEIVER, OpType, PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT,
+    REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE,
+    RELEASE_TEMPS_NESTED_OBJECTS, RELEASE_TEMPS_ON_RETURN, RELEASE_TEMPS_RETURN_COMPLETION_SITE,
+    SEND_FLAG_GLOBALS, SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE,
+    SEND_FLAG_PREPARED_PROPERTY_ARGUMENT, SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME,
+    STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND,
+    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -10060,6 +10060,11 @@ impl Compiler {
                         } => {
                             let (object, object_type, mut deferred) =
                                 self.prepare_property_modify_base(object);
+                            for (fetch, _) in &mut deferred {
+                                if fetch.opcode == OpCode::FetchObjR {
+                                    fetch._pad |= FETCH_OBJ_COMPOUND_RECEIVER;
+                                }
+                            }
                             let property = self.add_literal(Value::string(property.clone()));
                             let left = self.alloc_tmp();
                             let mut fetch = Instruction::new(OpCode::FetchObjR);
@@ -10097,6 +10102,11 @@ impl Compiler {
                         } => {
                             let (object, object_type, mut deferred) =
                                 self.prepare_property_modify_base(object);
+                            for (fetch, _) in &mut deferred {
+                                if fetch.opcode == OpCode::FetchObjR {
+                                    fetch._pad |= FETCH_OBJ_COMPOUND_RECEIVER;
+                                }
+                            }
                             let (property, property_type) = self.compile_expr(property);
                             let left = self.alloc_tmp();
                             let mut fetch = Instruction::new(OpCode::FetchObjR);
@@ -10913,6 +10923,10 @@ impl Compiler {
                                         nullsafe: false,
                                         ..
                                     }
+                                    | Expr::DynamicPropertyAccess {
+                                        nullsafe: false,
+                                        ..
+                                    }
                                     | Expr::StaticProperty { .. }
                                     | Expr::DynamicNamedStaticProperty { .. }
                                     | Expr::DynamicStaticProperty { .. }
@@ -10947,12 +10961,19 @@ impl Compiler {
                                         }
                                     }
                                 }
-                                CallArg::Positional(expr @ Expr::ArrayAccess { .. })
-                                    if Self::positional_argument_is_ref(
-                                        ref_args,
-                                        variadic_ref_start,
-                                        index,
-                                    ) =>
+                                CallArg::Positional(
+                                    expr @ (Expr::ArrayAccess { .. }
+                                    | Expr::PropertyAccess {
+                                        nullsafe: false, ..
+                                    }
+                                    | Expr::DynamicPropertyAccess {
+                                        nullsafe: false, ..
+                                    }),
+                                ) if Self::positional_argument_is_ref(
+                                    ref_args,
+                                    variadic_ref_start,
+                                    index,
+                                ) =>
                                 {
                                     match self.compile_call_array_element_reference_source(expr) {
                                         Ok(result) => (result, OpType::Cv, None, None),

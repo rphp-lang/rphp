@@ -142,6 +142,54 @@ fn class_constant_temporary_write_line(expression: &Expr) -> Option<usize> {
 }
 
 impl Compiler {
+    fn prepare_unset_object_base(
+        &mut self,
+        expression: &Expr,
+    ) -> (u16, OpType, Vec<(Instruction, usize)>) {
+        let (operand, operand_type, mut deferred) =
+            self.prepare_property_modify_base(expression);
+        for (instruction, _) in &mut deferred {
+            if instruction.opcode == OpCode::FetchObjR
+                && instruction._pad & FETCH_OBJ_MODIFY != 0
+            {
+                instruction._pad |= crate::vm::instruction::FETCH_OBJ_UNSET | FETCH_OBJ_SILENT;
+            }
+        }
+        (operand, operand_type, deferred)
+    }
+
+    fn validate_virtual_hook_set_visibility(
+        &self,
+        class_name: &str,
+        property: &ClassProperty,
+        definition: &PropertyDefinition,
+        methods: &[crate::parser::ClassMethod],
+    ) -> Result<(), String> {
+        if property.set_visibility.is_none()
+            || !definition.is_virtual_hook_property()
+            || property.has_get_hook == property.has_set_hook
+        {
+            return Ok(());
+        }
+        let (access, hook) = if property.has_get_hook {
+            ("Read-only", "get")
+        } else {
+            ("Write-only", "set")
+        };
+        let hook_name = format!("${}::{hook}", property.name);
+        let line = methods
+            .iter()
+            .find(|method| method.name.eq_ignore_ascii_case(&hook_name))
+            .map_or(property.line, |method| method.line);
+        Err(self.goto_error(
+            &format!(
+                "{access} virtual property {class_name}::${} must not specify asymmetric visibility",
+                property.name
+            ),
+            line,
+        ))
+    }
+
     fn validate_promoted_callable_parameters(
         &self,
         params: &[Param],
@@ -1419,6 +1467,7 @@ impl Compiler {
                 object_type: OpType,
                 property: u16,
                 property_type: OpType,
+                deferred_fetches: Vec<(Instruction, usize)>,
                 line: usize,
             },
             Static {
@@ -1472,13 +1521,15 @@ impl Compiler {
                 nullsafe: false,
                 line,
             } => {
-                let (object, object_type) = self.compile_expr(object);
+                let (object, object_type, deferred_fetches) =
+                    self.prepare_property_modify_base(object);
                 let property = self.add_literal(Value::string(property.clone()));
                 WriteTarget::Object {
                     object,
                     object_type,
                     property,
                     property_type: OpType::Const,
+                    deferred_fetches,
                     line: *line,
                 }
             }
@@ -1488,13 +1539,15 @@ impl Compiler {
                 nullsafe: false,
                 line,
             } => {
-                let (object, object_type) = self.compile_expr(object);
+                let (object, object_type, deferred_fetches) =
+                    self.prepare_property_modify_base(object);
                 let (property, property_type) = self.compile_expr(property);
                 WriteTarget::Object {
                     object,
                     object_type,
                     property,
                     property_type,
+                    deferred_fetches,
                     line: *line,
                 }
             }
@@ -1633,8 +1686,12 @@ impl Compiler {
                 object_type,
                 property,
                 property_type,
+                deferred_fetches,
                 line,
             } => {
+                for (fetch, line) in deferred_fetches {
+                    self.push_instruction_at_line(fetch, line);
+                }
                 let mut assign = Instruction::new(OpCode::AssignObjProp);
                 assign.op1 = object;
                 assign.op1_type = object_type;
@@ -2062,10 +2119,30 @@ impl Compiler {
         warn_undefined_root: bool,
         root_source_line: usize,
     ) -> Result<MutableArrayPath, String> {
+        self.compile_mutable_array_path_with_unset_order(
+            root,
+            indices,
+            silent_root_fetch,
+            warn_undefined_root,
+            false,
+            root_source_line,
+        )
+    }
+
+    fn compile_mutable_array_path_with_unset_order(
+        &mut self,
+        root: &Expr,
+        indices: &[Expr],
+        silent_root_fetch: bool,
+        warn_undefined_root: bool,
+        defer_unset_fetches: bool,
+        root_source_line: usize,
+    ) -> Result<MutableArrayPath, String> {
         if indices.is_empty() {
             return Err("Array mutation requires at least one dimension".into());
         }
         self.validate_zend_special_builtin_write_result(root)?;
+        let mut deferred_object_fetches = Vec::new();
         let (root, writeback, path_indices) = match root {
             Expr::Variable { name: var, line } => {
                 let cv = self.resolve_cv(var);
@@ -2131,7 +2208,14 @@ impl Compiler {
                 nullsafe: false,
                 line,
             } => {
-                let (object, object_type) = self.compile_expr(object);
+                let (object, object_type) = if defer_unset_fetches {
+                    let (object, object_type, deferred) =
+                        self.prepare_property_modify_base(object);
+                    deferred_object_fetches.extend(deferred);
+                    (object, object_type)
+                } else {
+                    self.compile_property_modify_base(object)
+                };
                 let property = self.add_literal(Value::string(property.clone()));
                 let container = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchObjR);
@@ -2145,10 +2229,12 @@ impl Compiler {
                 if silent_root_fetch {
                     fetch._pad |= FETCH_OBJ_SILENT;
                 }
-                self.push_instruction_at_line(
-                    fetch,
-                    if *line == 0 { root_source_line } else { *line },
-                );
+                let line = if *line == 0 { root_source_line } else { *line };
+                if defer_unset_fetches {
+                    deferred_object_fetches.push((fetch, line));
+                } else {
+                    self.push_instruction_at_line(fetch, line);
+                }
                 (
                     (container, OpType::Tmp),
                     ArrayRootWriteback::Object {
@@ -2166,7 +2252,14 @@ impl Compiler {
                 nullsafe: false,
                 line,
             } => {
-                let (object, object_type) = self.compile_expr(object);
+                let (object, object_type) = if defer_unset_fetches {
+                    let (object, object_type, deferred) =
+                        self.prepare_property_modify_base(object);
+                    deferred_object_fetches.extend(deferred);
+                    (object, object_type)
+                } else {
+                    self.compile_property_modify_base(object)
+                };
                 let (property, property_type) = self.compile_expr(property);
                 let container = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchObjR);
@@ -2180,10 +2273,12 @@ impl Compiler {
                 if silent_root_fetch {
                     fetch._pad |= FETCH_OBJ_SILENT;
                 }
-                self.push_instruction_at_line(
-                    fetch,
-                    if *line == 0 { root_source_line } else { *line },
-                );
+                let line = if *line == 0 { root_source_line } else { *line };
+                if defer_unset_fetches {
+                    deferred_object_fetches.push((fetch, line));
+                } else {
+                    self.push_instruction_at_line(fetch, line);
+                }
                 (
                     (container, OpType::Tmp),
                     ArrayRootWriteback::Object {
@@ -2266,9 +2361,31 @@ impl Compiler {
         let mut containers = Vec::with_capacity(indices.len());
         let mut mutable_fetches = Vec::with_capacity(indices.len().saturating_sub(1));
         containers.push(root);
+        if defer_unset_fetches {
+            // PHP commits every dynamic name/index side effect before an
+            // unset-through-property fetch may report a capability error.
+            keys.extend(
+                path_indices
+                    .iter()
+                    .map(|index| self.compile_expr(index)),
+            );
+            for (mut fetch, line) in deferred_object_fetches {
+                if fetch.opcode == OpCode::FetchObjR
+                    && fetch._pad & FETCH_OBJ_MODIFY != 0
+                {
+                    fetch._pad |= crate::vm::instruction::FETCH_OBJ_UNSET | FETCH_OBJ_SILENT;
+                }
+                self.push_instruction_at_line(fetch, line);
+            }
+        }
         for (position, index) in path_indices.iter().enumerate() {
-            let (key, key_type) = self.compile_expr(index);
-            keys.push((key, key_type));
+            let (key, key_type) = if defer_unset_fetches {
+                keys[position]
+            } else {
+                let key = self.compile_expr(index);
+                keys.push(key);
+                key
+            };
             if position + 1 == path_indices.len() {
                 break;
             }
@@ -3493,8 +3610,9 @@ impl Compiler {
                 expr,
                 line,
             } => {
-                let path =
-                    self.compile_mutable_array_path(root, indices, true, false, *line)?;
+                let path = self.compile_mutable_array_path(
+                    root, indices, true, false, *line,
+                )?;
 
                 let (value, value_type) = self.compile_expr(expr);
                 let &(leaf, leaf_type) = path.containers.last().unwrap();
@@ -3979,9 +4097,10 @@ impl Compiler {
                                 self.instructions.push(unset);
                                 continue;
                             }
-                            let path = self.compile_mutable_array_path(
+                            let path = self.compile_mutable_array_path_with_unset_order(
                                 root,
                                 &indices,
+                                true,
                                 true,
                                 true,
                                 *line,
@@ -4021,7 +4140,8 @@ impl Compiler {
                                     | Expr::DynamicNamedStaticProperty { .. }
                                     | Expr::DynamicStaticProperty { .. }
                             );
-                            let (object, object_type) = self.compile_expr(object);
+                            let (object, object_type, deferred_fetches) =
+                                self.prepare_unset_object_base(object);
                             if silent_static_receiver
                                 && let Some(fetch) = self.instructions.last_mut()
                                 && matches!(
@@ -4032,6 +4152,9 @@ impl Compiler {
                                 fetch._pad |= STATIC_PROP_SILENT;
                             }
                             let property = self.add_literal(Value::string(property.clone()));
+                            for (fetch, fetch_line) in deferred_fetches {
+                                self.push_instruction_at_line(fetch, fetch_line);
+                            }
                             let mut unset = Instruction::new(OpCode::UnsetObj);
                             unset.op1 = object;
                             unset.op1_type = object_type;
@@ -4057,7 +4180,8 @@ impl Compiler {
                                     | Expr::DynamicNamedStaticProperty { .. }
                                     | Expr::DynamicStaticProperty { .. }
                             );
-                            let (object, object_type) = self.compile_expr(object);
+                            let (object, object_type, deferred_fetches) =
+                                self.prepare_unset_object_base(object);
                             if silent_static_receiver
                                 && let Some(fetch) = self.instructions.last_mut()
                                 && matches!(
@@ -4068,6 +4192,9 @@ impl Compiler {
                                 fetch._pad |= STATIC_PROP_SILENT;
                             }
                             let (property, property_type) = self.compile_expr(property);
+                            for (fetch, fetch_line) in deferred_fetches {
+                                self.push_instruction_at_line(fetch, fetch_line);
+                            }
                             let mut unset = Instruction::new(OpCode::UnsetObj);
                             unset.op1 = object;
                             unset.op1_type = object_type;
@@ -5544,6 +5671,12 @@ impl Compiler {
                             "set",
                         );
                     if definition.is_virtual_hook_property() {
+                        self.validate_virtual_hook_set_visibility(
+                            &resolved_class,
+                            prop,
+                            &definition,
+                            methods,
+                        )?;
                         if prop.default.is_some() && resolved_parent.is_none() {
                             return Err(self.goto_error(
                                 &format!(
@@ -5624,6 +5757,14 @@ impl Compiler {
                             &promoted.name,
                             "set",
                         );
+                    if definition.is_virtual_hook_property() {
+                        self.validate_virtual_hook_set_visibility(
+                            &resolved_class,
+                            promoted,
+                            &definition,
+                            methods,
+                        )?;
+                    }
                     compiled_props.push(definition);
                     if property_is_readonly {
                         readonly_props.push(promoted.name.clone());
@@ -6054,6 +6195,12 @@ impl Compiler {
                         property.has_set_hook,
                     );
                     definition.set_has_default(false);
+                    self.validate_virtual_hook_set_visibility(
+                        &resolved_iface,
+                        property,
+                        &definition,
+                        methods,
+                    )?;
                     compiled_properties.push(definition);
                 }
                 self.class_defs.push(ClassDef {
@@ -6518,6 +6665,12 @@ impl Compiler {
                             "set",
                         );
                     if definition.is_virtual_hook_property() {
+                        self.validate_virtual_hook_set_visibility(
+                            &resolved_trait,
+                            prop,
+                            &definition,
+                            methods,
+                        )?;
                         if prop.default.is_some() {
                             return Err(self.goto_error(
                                 &format!(

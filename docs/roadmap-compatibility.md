@@ -36,21 +36,19 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `json-depth-flags-and-error-contracts` train retains 6,254
-exact passes across the 7,174-case PHP 8.5 Zend/lang plus strings/array corpus,
-with 526 supported failures, 182 skips, 212 unsupported cases and no timeout
-or crash. Its pass-set remains unchanged from `user-stream-wrapper-lifecycle`.
-The separate 88-case `ext/json` projection advances from 36 to 52 exact passes
-with no loss. Four of five PHP JSON functions now have exact reflected
-signatures; `json_validate()` remains missing. Encode/decode depth, flags,
-error state, deep traversal and VM release share one tested contract. The
-on-demand builtin audit reports 467 of 1,201 reference functions present, 734
-missing, 21 call-shape mismatches, 385 metadata mismatches and 61 exact
-signatures. Fixed-parent CPU-2 medians keep all eight controls below the +5%
-gate, ranging from -64.452% for broad early-error decode to +3.319% for shared-
-closure release. Current compatibility work is selected as a 10–30-case
-train around one shared root-cause hypothesis and one cumulative full/
-performance evidence packet. Smaller checkpoints require a crash, security
+The accepted AMD64 `property-write-capability-and-nested-mutation` train reaches
+6,265 exact passes across the 7,174-case PHP 8.5 Zend/lang plus strings/array
+corpus, with 515 supported failures, 182 skips, 212 unsupported cases and no
+timeout or crash. Its exact delta over the JSON parent is `+11/-0`: readonly and
+asymmetric-set storage writes, detached object references, nested unset/magic
+dispatch and cached diagnostics now share one capability-aware property path.
+The two selected holdouts remain explicit under independent clone-rendering and
+`ArrayObject` gaps. Five Cargo configurations, upstream no-loss, Composer/Symfony
+S0-S3 and unsafe gates pass. Eighty CPU-2 pairs keep all property canaries within
+approximately one percent of the exact parent; the unrelated ordinary-call
+layout control is disclosed at +1.334%. Current compatibility work is selected
+as a 10–30-case train around one shared root-cause hypothesis and one cumulative
+full/performance evidence packet. Smaller checkpoints require a crash, security
 issue, framework blocker or similarly explicit reason; Fiber/generator
 suspension additionally requires a pay-for-use performance design.
 

@@ -32,6 +32,38 @@ fn asymmetric_property_compile_errors_include_the_declaration_location() {
 }
 
 #[test]
+fn one_sided_virtual_hooks_reject_asymmetric_visibility_at_the_hook() {
+    for (hook, message) in [
+        (
+            "get => 42;",
+            "Read-only virtual property Foo::$bar must not specify asymmetric visibility",
+        ),
+        (
+            "set {}",
+            "Write-only virtual property Foo::$bar must not specify asymmetric visibility",
+        ),
+    ] {
+        let (status, stderr) = run_stdin(&format!(
+            "<?php\nclass Foo {{\n    public private(set) int $bar {{\n        {hook}\n    }}\n}}\n"
+        ));
+        assert_eq!(status, 255);
+        assert_eq!(
+            stderr,
+            format!("Fatal error: {message} in Standard input code on line 4\n")
+        );
+    }
+
+    let (status, stderr) = run_stdin(
+        "<?php\nclass Promoted {\n    public function __construct(\n        public private(set) int $value { get => 42; },\n    ) {}\n}\n",
+    );
+    assert_eq!(status, 255);
+    assert_eq!(
+        stderr,
+        "Fatal error: Read-only virtual property Promoted::$value must not specify asymmetric visibility in Standard input code on line 4\n"
+    );
+}
+
+#[test]
 fn asymmetric_property_link_errors_include_the_child_declaration_location() {
     let (status, stderr) = run_stdin(
         "<?php\nclass ParentBox { public protected(set) string $value; }\nclass ChildBox extends ParentBox { public private(set) string $value; }\n",

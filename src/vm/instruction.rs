@@ -240,6 +240,16 @@ pub const FETCH_OBJ_REFERENCE_SOURCE: u16 = 1 << 6;
 /// permits enum-case receivers in this context; ordinary object receivers are
 /// rejected after the dynamic property name has been evaluated and converted.
 pub const FETCH_OBJ_CONSTANT_EXPRESSION: u16 = 1 << 7;
+/// `FetchObjR` is the receiver/root probe for `unset()` through a property.
+/// An uninitialized declared property is a silent no-op, while initialized
+/// scalar/array values still use the ordinary indirect-write capability
+/// checks before the nested unset can proceed.
+pub const FETCH_OBJ_UNSET: u16 = 1 << 8;
+/// `FetchObjR` is an intermediate receiver of a later compound property
+/// operation. An uninitialized typed receiver must fail as a read before its
+/// write capability is considered, while scalar receiver diagnostics retain
+/// the ordinary nested-modification wording.
+pub const FETCH_OBJ_COMPOUND_RECEIVER: u16 = 1 << 9;
 /// `AssignObjProp` is materializing a reference binding, which uses PHP's
 /// modification diagnostic for a null or scalar receiver.
 pub const ASSIGN_OBJ_MODIFY: u16 = 1;

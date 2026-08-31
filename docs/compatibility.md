@@ -7,6 +7,61 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The latest measured AMD64 PHP 8.5 language checkpoint is
+`property-write-capability-and-nested-mutation`, based on `f51713c0`, pinned to
+php-src commit `fcc29c8` and validated against PHP 8.5.10. Property fetches now
+distinguish replacing restricted storage from mutating an object stored inside
+it. Readonly and asymmetric-set properties preserve PHP's uninitialized-read,
+compound/inc-dec, nested-unset, magic-method, cache-warm and evaluation-order
+rules. Explicit and call-argument references to a restricted object property
+receive a detached storage view while retaining the contained object's identity;
+engine-only call aliases no longer escape through `get_object_vars()`. One-sided
+virtual property hooks are rejected by the shared declaration validator.
+
+Five original E2E cases and one declaration-diagnostic case cover ordinary and
+dynamic names, warm caches, readonly clone initialization, reference/COW state,
+detached views, nested magic unset and error priority. Eleven upstream Zend
+cases become exact with no lost pass: ten selected asymmetric-visibility and
+readonly-property cases plus the adjacent nested-unset `bug78644.phpt`. The two
+selected holdouts remain visible behind independent clone object-ID rendering
+and `ArrayObject` behavior. One remaining failure advances from an early runtime
+error to its later output mismatch; no failure moves earlier.
+
+The exact 5,599-case Zend/lang result is 4,807 pass, 496 fail, 115 skip and 181
+unsupported; the manifest hashes to
+`605092e6067f4d4fb70cdbf8d5b6f5b06f737f7a61b80a139da8e7490e83cb29`.
+The 1,575-case strings/array projection is unchanged at 1,458 pass, 19 fail, 67
+skip and 31 unsupported, with manifest hash
+`226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`.
+The combined 7,174-case status is therefore 6,265 pass, 515 fail, 182 skip and
+212 unsupported, with exact delta `+11/-0`, no timeout and no crash.
+
+All five Cargo configurations, the all-feature/all-target check, formatting,
+HTML data, PHPT-runner and both unsafe-policy gates pass. Production uses 1,622
+unsafe blocks against a ceiling of 1,623, 289 unsafe functions, 399 SAFETY
+annotations and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony
+S1 gates and PHP 8.5.10 warmed-kernel S2 and cold-build S3 pass.
+
+The CPU-2 release gate compares candidate
+`f30c06e04adfdf2717eca82fbdcbd5b43ce89fe83d795162e437e172838f464c`
+with the exact accepted JSON parent
+`06d73ccd384c48a87896d092517696a5037f38c6ca95cb2479abeb156ef5ae43`.
+Across all 80 balanced, order-alternated pairs with exact output checks and no
+outlier removal, paired medians are startup +0.762%, ordinary calls +1.334%,
+construction -0.894%, property read -1.028%, property write +0.305%, nested
+property write +0.153% and restricted nested write +0.709%. The three raw files
+hash to `81c65357dcd344bd78f6866002de54c9d0c0e2bf346db41d7de58d08a943b4f4`,
+`8df4f9903c46e7f16d7ef07a726596ed4c5d26fd1f6afd767ca3e3a86ae31534`
+and `863aa168ceeff9a21220a8920007e7517b525f5935d6df0b9f5e492fa789308e`.
+The candidate grows by 12,168 bytes (0.087%). The ordinary-call median is a
+small disclosed layout drift; this checkpoint does not change ordinary-call
+lowering, and every property-path median remains within approximately one
+percent of the accepted parent.
+
+This checkpoint does not claim the two selected holdouts, general SPL behavior,
+32-bit equivalence or allocation-limit/OOM equivalence. The implementation
+checkpoint is the commit containing this status.
+
 The latest measured AMD64 PHP 8.5 standard-library checkpoint is
 `json-depth-flags-and-error-contracts`, based on `b5feac5e`, pinned to php-src
 8.5 commit `fcc29c8` and validated against PHP 8.5.10. `json_encode()`,
