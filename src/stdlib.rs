@@ -489,6 +489,33 @@ fn json_decode_exact_value(
     }
 }
 
+#[inline(always)]
+fn json_validate_exact_result(
+    input: &Value,
+    maximum_depth: u32,
+    flags: i64,
+    eg: &mut ExecutorGlobals,
+) -> bool {
+    let input = input.dereferenced();
+    debug_assert_eq!(input.value_type(), ValueType::String);
+    let result = if input.is_binary_string() {
+        let bytes = input.php_string_bytes().unwrap_or_default();
+        json_decode::validate_php_api(&bytes, maximum_depth, flags)
+    } else {
+        json_decode::validate_php_str_api(input.as_str().unwrap_or_default(), maximum_depth)
+    };
+    match result {
+        Ok(()) => {
+            eg.set_json_last_error(JSON_ERROR_NONE);
+            true
+        }
+        Err(error) => {
+            eg.set_json_last_error(error.code());
+            false
+        }
+    }
+}
+
 #[cold]
 #[inline(never)]
 fn json_decode_values_fallback(
@@ -15387,6 +15414,7 @@ const JSON_PRESERVE_ZERO_FRACTION_FLAG: i64 = 1024;
 const JSON_INVALID_UTF8_IGNORE_FLAG: i64 = 1_048_576;
 const JSON_INVALID_UTF8_SUBSTITUTE_FLAG: i64 = 2_097_152;
 const JSON_THROW_ON_ERROR_FLAG: i64 = 4_194_304;
+const JSON_VALIDATE_ALLOWED_FLAGS: i64 = JSON_INVALID_UTF8_IGNORE_FLAG;
 
 const JSON_ERROR_NONE: i64 = 0;
 const JSON_ERROR_DEPTH: i64 = 1;
@@ -15610,6 +15638,105 @@ fn fn_json_decode(
         rv,
         json_decode_exact_value(&input, associative, maximum_depth as u32, flags, eg,)
     );
+}
+
+fn json_validate_with_validated_arguments(
+    input: &Value,
+    maximum_depth: i64,
+    flags: i64,
+    eg: &mut ExecutorGlobals,
+) -> Option<bool> {
+    // Zend validates the option mask before touching the request-local JSON
+    // error channel. An invalid flag must therefore preserve a prior error.
+    if flags & !JSON_VALIDATE_ALLOWED_FLAGS != 0 {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "json_validate(): Argument #3 ($flags) must be a valid flag (allowed flags: JSON_INVALID_UTF8_IGNORE)",
+        ));
+        return None;
+    }
+
+    eg.set_json_last_error(JSON_ERROR_NONE);
+    // PHP parses an empty document before applying the semantic depth range.
+    // This makes json_validate("", 0) a normal JSON_ERROR_SYNTAX result.
+    if input
+        .php_string_bytes()
+        .is_some_and(|bytes| bytes.is_empty())
+    {
+        return Some(json_validate_exact_result(input, 1, flags, eg));
+    }
+    if maximum_depth <= 0 {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "json_validate(): Argument #2 ($depth) must be greater than 0",
+        ));
+        return None;
+    }
+    if maximum_depth > i64::from(i32::MAX) {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "json_validate(): Argument #2 ($depth) must be less than 2147483647",
+        ));
+        return None;
+    }
+    Some(json_validate_exact_result(
+        input,
+        maximum_depth as u32,
+        flags,
+        eg,
+    ))
+}
+
+fn fn_json_validate(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    // The overwhelmingly common exact unary call stays borrowed end to end:
+    // validation traverses syntax without retaining the input or producing a
+    // PHP array/object tree.
+    if arg_opt!(ed, 1).is_none() && arg_opt!(ed, 2).is_none() {
+        let input = arg!(ed, 0).dereferenced();
+        if input.value_type() == ValueType::String {
+            ret!(
+                rv,
+                Value::bool(json_validate_exact_result(input, 512, 0, eg))
+            );
+        }
+    }
+
+    let Some(input) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "json_validate",
+        0,
+        "json",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    let maximum_depth = if arg_opt!(ed, 1).is_some() {
+        let Some(depth) = typed_internal_int_argument(ed, eg, "json_validate", 1, "depth")? else {
+            return Ok(());
+        };
+        depth
+    } else {
+        512
+    };
+    let flags = if arg_opt!(ed, 2).is_some() {
+        let Some(flags) = typed_internal_int_argument(ed, eg, "json_validate", 2, "flags")? else {
+            return Ok(());
+        };
+        flags
+    } else {
+        0
+    };
+    let Some(valid) = json_validate_with_validated_arguments(&input, maximum_depth, flags, eg)
+    else {
+        return Ok(());
+    };
+    ret!(rv, Value::bool(valid));
 }
 
 // ============================================================================

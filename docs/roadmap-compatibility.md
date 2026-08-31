@@ -36,28 +36,28 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `callable-return-contract-validation` train reaches 6,313
-exact passes across the stable 7,174-case PHP 8.5 Zend/lang plus strings/array
-core, with 467 supported failures, 182 skips, 212 unsupported cases and no
-timeout or crash. Its exact delta is `+12/-0`. Return validation now preserves
-qualified, inherited, anonymous and closure-bound class scope; reports public
-callable names and catchable implicit-`never` errors; reflects `void`/`never`
-and multiline method spans; and enforces the method-only, non-repeatable
-`ReturnTypeWillChange` attribute while retaining delayed target validation.
-Twelve original E2E cases and the exact twelve-case upstream projection cover
-type coercion, evaluation order, diagnostics, reflection and attribute targets.
+The accepted AMD64 `json-validate-contract` train preserves 6,313 exact passes
+across the stable 7,174-case PHP 8.5 Zend/lang plus strings/array core, with 467
+supported failures, 182 skips, 212 unsupported cases and no timeout or crash.
+Its full 88-case `ext/json` projection moves from 52 to 57 exact passes,
+precisely `+5/-0`: every upstream `json_validate_00*.phpt` case passes.
+`json_validate()` now exposes the exact PHP 8.5 reflected and runtime call
+contract, flags, depth, UTF-8 and error-state ordering while structurally
+validating a complete document without materializing its PHP value tree.
+Eighteen original E2E cases cover ordinary, boundary, diagnostic, call-shape
+and deep parser behavior.
 
 Five Cargo configurations, all-target, exact upstream no-loss,
 Composer/Symfony S0-S3, format and the unchanged 1,623/289 unsafe ratchet pass.
-The fixed-parent CPU-2 32-pair gate keeps startup at +0.095%, ordinary
-`strlen()` at +0.299%, typed scalar calls at -0.600%, typed variadics at
--1.811%, class closures at -1.076%, bound absolute class calls at -3.478% and
-valid attribute reflection at -0.084%, with exact outputs and every lane below
-+5%. Current work remains selected as a 10–30-case train around one shared
-root-cause hypothesis and one cumulative evidence packet. Smaller checkpoints
-require a crash, security issue, framework blocker or similarly explicit
-reason; Fiber/generator suspension additionally requires a pay-for-use
-performance design.
+The fixed-parent CPU-2 32-pair gate keeps unchanged valid `json_decode()` at
++0.269%; startup, ordinary calls and invalid decode are faster, while the new
+valid and nested structural validation lanes improve by 43.520% and 59.034%
+against the parent decode-materialization fallback. The on-demand inventory now
+has zero call-shape mismatches and all five JSON globals exact. Current work
+remains selected as a 10–30-case train around one shared root-cause hypothesis
+and one cumulative evidence packet. Smaller checkpoints require a crash,
+security issue, framework blocker or similarly explicit reason; Fiber/generator
+suspension additionally requires a pay-for-use performance design.
 
 ## Starting evidence
 

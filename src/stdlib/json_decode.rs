@@ -9,9 +9,33 @@ use std::borrow::Cow;
 use std::cell::Cell;
 use std::fmt;
 
-use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
+use serde::de::{DeserializeSeed, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
 use crate::value::{DynamicPropertyMap, PhpArray, PhpObject, Value, canonical_decimal_array_key};
+
+#[inline(always)]
+fn enter_json_container<E>(
+    maximum_depth: u32,
+    container_depth: u32,
+    parser_stack_cost: u32,
+    parser_cost: u32,
+) -> Result<(u32, u32), E>
+where
+    E: serde::de::Error,
+{
+    let container_depth = container_depth.saturating_add(1);
+    if container_depth >= maximum_depth {
+        return Err(E::custom(DEPTH_ERROR_MARKER));
+    }
+    let parser_stack_cost = parser_stack_cost.saturating_add(parser_cost);
+    // PHP 8.5's JSON parser accepts 4,998 nested arrays, or 2,499
+    // nested objects (an object consumes two parser stack entries), and
+    // reports JSON_ERROR_SYNTAX before the native stack can overflow.
+    if parser_stack_cost > 4_998 {
+        return Err(E::custom(PARSER_STACK_ERROR_MARKER));
+    }
+    Ok((container_depth, parser_stack_cost))
+}
 
 #[derive(Clone, Copy)]
 struct PhpValueSeed<'plan> {
@@ -54,20 +78,16 @@ impl<'plan> PhpValueSeed<'plan> {
     where
         E: serde::de::Error,
     {
-        if self.container_depth.saturating_add(1) >= self.maximum_depth {
-            return Err(E::custom(DEPTH_ERROR_MARKER));
-        }
-        let parser_stack_cost = self.parser_stack_cost.saturating_add(parser_cost);
-        // PHP 8.5's JSON parser accepts 4,998 nested arrays, or 2,499
-        // nested objects (an object consumes two parser stack entries), and
-        // reports JSON_ERROR_SYNTAX before the native stack can overflow.
-        if parser_stack_cost > 4_998 {
-            return Err(E::custom(PARSER_STACK_ERROR_MARKER));
-        }
+        let (container_depth, parser_stack_cost) = enter_json_container::<E>(
+            self.maximum_depth,
+            self.container_depth,
+            self.parser_stack_cost,
+            parser_cost,
+        )?;
         Ok(Self {
             associative: self.associative,
             maximum_depth: self.maximum_depth,
-            container_depth: self.container_depth.saturating_add(1),
+            container_depth,
             parser_stack_cost,
             number_plan: self.number_plan,
             negative_zero_seen: self.negative_zero_seen,
@@ -241,6 +261,137 @@ where
         value.mark_deep_drop_stack_checkpoint();
     }
     Ok(value)
+}
+
+/// Validate one JSON document without constructing its PHP projection.
+///
+/// `IgnoredAny` alone would skip the result efficiently, but it would also
+/// hide container boundaries from us. PHP applies the public `$depth` limit
+/// while parsing, so this seed walks only the structural edges and discards
+/// scalar payloads as soon as serde has validated them.
+#[derive(Clone, Copy)]
+struct JsonValidationSeed {
+    maximum_depth: u32,
+    container_depth: u32,
+    parser_stack_cost: u32,
+}
+
+impl JsonValidationSeed {
+    #[inline(always)]
+    const fn new(maximum_depth: u32) -> Self {
+        Self {
+            maximum_depth,
+            container_depth: 0,
+            parser_stack_cost: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn enter_container<E>(self, parser_cost: u32) -> Result<Self, E>
+    where
+        E: serde::de::Error,
+    {
+        let (container_depth, parser_stack_cost) = enter_json_container::<E>(
+            self.maximum_depth,
+            self.container_depth,
+            self.parser_stack_cost,
+            parser_cost,
+        )?;
+        Ok(Self {
+            maximum_depth: self.maximum_depth,
+            container_depth,
+            parser_stack_cost,
+        })
+    }
+}
+
+impl<'de> DeserializeSeed<'de> for JsonValidationSeed {
+    type Value = ();
+
+    #[inline]
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(JsonValidationVisitor { seed: self })
+    }
+}
+
+struct JsonValidationVisitor {
+    seed: JsonValidationSeed,
+}
+
+impl<'de> Visitor<'de> for JsonValidationVisitor {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a valid JSON value")
+    }
+
+    #[inline(always)]
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_borrowed_str<E>(self, _value: &'de str) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_string<E>(self, _value: String) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let child = self.seed.enter_container::<A::Error>(1)?;
+        while sequence.next_element_seed(child)?.is_some() {}
+        Ok(())
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let child = self.seed.enter_container::<A::Error>(2)?;
+        while map.next_key::<IgnoredAny>()?.is_some() {
+            map.next_value_seed(child)?;
+        }
+        Ok(())
+    }
 }
 
 const DEPTH_ERROR_MARKER: &str = "__rphp_json_depth__";
@@ -428,6 +579,14 @@ fn prior_json_error_code(
     .then_some(error.code)
 }
 
+fn prior_json_validation_error_code(input: &str, maximum_depth: u32) -> Option<i64> {
+    let error = validate_php_text(input, maximum_depth).err()?;
+    (error.code == JSON_ERROR_UTF16
+        || !error.incomplete
+        || prefix_ends_incomplete_scalar_token(input))
+    .then_some(error.code)
+}
+
 /// Repair invalid UTF-8 only while the offending bytes are inside a JSON
 /// string. PHP's ignore/substitute flags do not turn invalid structural bytes
 /// into a valid document.
@@ -576,18 +735,13 @@ struct PreparedNumbers {
     plan: NumberPlan,
 }
 
-/// Replace syntactically complete numeric tokens with a cheap placeholder and
-/// retain their PHP projections in encounter order. This cold path is used by
-/// JSON_BIGINT_AS_STRING and as a retry when serde's finite-f64 parser rejects
-/// an otherwise valid overflow such as `1e400`, which PHP represents as INF.
-fn prepare_numbers(input: &str, bigint_as_string: bool) -> PreparedNumbers {
+fn replace_valid_json_numbers(input: &str, mut observe: impl FnMut(&str)) -> String {
     let bytes = input.as_bytes();
     let mut in_string = false;
     let mut escaped = false;
     let mut index = 0usize;
     let mut copied_until = 0usize;
     let mut output = String::with_capacity(input.len());
-    let mut values = Vec::new();
 
     while index < bytes.len() {
         let byte = bytes[index];
@@ -626,18 +780,37 @@ fn prepare_numbers(input: &str, bigint_as_string: bool) -> PreparedNumbers {
             output.push_str(&input[copied_until..start]);
             output.push('0');
             copied_until = end;
-            values.push(php_number_from_lexeme(token, bigint_as_string));
+            observe(token);
         }
     }
 
     output.push_str(&input[copied_until..]);
+    output
+}
+
+/// Replace syntactically complete numeric tokens with a cheap placeholder and
+/// retain their PHP projections in encounter order. This cold path is used by
+/// JSON_BIGINT_AS_STRING and as a retry when serde's finite-f64 parser rejects
+/// an otherwise valid overflow such as `1e400`, which PHP represents as INF.
+fn prepare_numbers(input: &str, bigint_as_string: bool) -> PreparedNumbers {
+    let mut values = Vec::new();
+    let input = replace_valid_json_numbers(input, |token| {
+        values.push(php_number_from_lexeme(token, bigint_as_string));
+    });
     PreparedNumbers {
-        input: output,
+        input,
         plan: NumberPlan {
             values,
             cursor: Cell::new(0),
         },
     }
+}
+
+/// Normalize syntactically complete numbers only after serde reports numeric
+/// range overflow. Validation cares about the lexeme grammar, not its PHP
+/// numeric projection, so this cold retry avoids allocating a `Value` plan.
+fn prepare_validation_numbers(input: &str) -> String {
+    replace_valid_json_numbers(input, |_| {})
 }
 
 fn raw_control_error(input: &str) -> Option<i64> {
@@ -902,6 +1075,23 @@ fn classify_syntax_error_at(input: &str, error: &serde_json::Error) -> i64 {
     classify_syntax_error(syntax_error_prefix(input, error))
 }
 
+fn map_json_error(error: serde_json::Error, source: &str) -> PhpJsonDecodeError {
+    let message = error.to_string();
+    let code = if message.contains(DEPTH_ERROR_MARKER) {
+        JSON_ERROR_DEPTH
+    } else if message.contains(PARSER_STACK_ERROR_MARKER) {
+        JSON_ERROR_SYNTAX
+    } else if message.contains(INVALID_PROPERTY_ERROR_MARKER) {
+        JSON_ERROR_INVALID_PROPERTY_NAME
+    } else {
+        classify_syntax_error_at(source, &error)
+    };
+    PhpJsonDecodeError {
+        code,
+        incomplete: error.is_eof(),
+    }
+}
+
 fn decode_php_text(
     input: &str,
     associative: bool,
@@ -920,27 +1110,10 @@ fn decode_php_text(
             Ok(value)
         })
     };
-    let map_error = |error: serde_json::Error, source: &str| {
-        let message = error.to_string();
-        let code = if message.contains(DEPTH_ERROR_MARKER) {
-            JSON_ERROR_DEPTH
-        } else if message.contains(PARSER_STACK_ERROR_MARKER) {
-            JSON_ERROR_SYNTAX
-        } else if message.contains(INVALID_PROPERTY_ERROR_MARKER) {
-            JSON_ERROR_INVALID_PROPERTY_NAME
-        } else {
-            classify_syntax_error_at(source, &error)
-        };
-        PhpJsonDecodeError {
-            code,
-            incomplete: error.is_eof(),
-        }
-    };
-
     if bigint_as_string {
         let prepared = prepare_numbers(input, true);
         return decode(&prepared.input, Some(&prepared.plan), None)
-            .map_err(|error| map_error(error, &prepared.input));
+            .map_err(|error| map_json_error(error, &prepared.input));
     }
 
     let negative_zero_seen = Cell::new(false);
@@ -948,15 +1121,68 @@ fn decode_php_text(
         Err(error) if error.to_string().contains("number out of range") => {
             let prepared = prepare_numbers(input, false);
             decode(&prepared.input, Some(&prepared.plan), None)
-                .map_err(|error| map_error(error, &prepared.input))
+                .map_err(|error| map_json_error(error, &prepared.input))
         }
         Ok(_) if negative_zero_seen.get() => {
             let prepared = prepare_numbers(input, false);
             decode(&prepared.input, Some(&prepared.plan), None)
-                .map_err(|error| map_error(error, &prepared.input))
+                .map_err(|error| map_json_error(error, &prepared.input))
         }
-        result => result.map_err(|error| map_error(error, input)),
+        result => result.map_err(|error| map_json_error(error, input)),
     }
+}
+
+fn validate_php_text(input: &str, maximum_depth: u32) -> Result<(), PhpJsonDecodeError> {
+    let validate = |source: &str| {
+        let mut deserializer = serde_json::Deserializer::from_str(source);
+        deserializer.disable_recursion_limit();
+        let result = JsonValidationSeed::new(maximum_depth)
+            .deserialize(serde_stacker::Deserializer::new(&mut deserializer));
+        result.and_then(|()| deserializer.end())
+    };
+
+    match validate(input) {
+        Err(error) if error.to_string().contains("number out of range") => {
+            let prepared = prepare_validation_numbers(input);
+            validate(&prepared).map_err(|error| map_json_error(error, &prepared))
+        }
+        result => result.map_err(|error| map_json_error(error, input)),
+    }
+}
+
+pub(super) fn validate_php_bytes(
+    input: &[u8],
+    maximum_depth: u32,
+    utf8_policy: InvalidUtf8Policy,
+) -> Result<(), PhpJsonDecodeError> {
+    let prepared = json_input_with_utf8_policy(input, utf8_policy);
+    if let Some(invalid_error) = prepared.invalid_error {
+        if let Some(code) = prior_json_validation_error_code(&prepared.text, maximum_depth) {
+            return Err(PhpJsonDecodeError::new(code));
+        }
+        return Err(invalid_error);
+    }
+    validate_php_text(&prepared.text, maximum_depth)
+}
+
+pub(super) fn validate_php_str_api(
+    input: &str,
+    maximum_depth: u32,
+) -> Result<(), PhpJsonDecodeError> {
+    validate_php_text(input, maximum_depth)
+}
+
+pub(super) fn validate_php_api(
+    input: &[u8],
+    maximum_depth: u32,
+    flags: i64,
+) -> Result<(), PhpJsonDecodeError> {
+    let utf8_policy = if flags & JSON_INVALID_UTF8_IGNORE_FLAG != 0 {
+        InvalidUtf8Policy::Ignore
+    } else {
+        InvalidUtf8Policy::Reject
+    };
+    validate_php_bytes(input, maximum_depth, utf8_policy)
 }
 
 pub(super) fn decode_php_bytes(
@@ -1030,6 +1256,7 @@ mod tests {
         JSON_ERROR_INVALID_PROPERTY_NAME, JSON_ERROR_STATE_MISMATCH, JSON_ERROR_SYNTAX,
         JSON_ERROR_UTF8, JSON_ERROR_UTF16, JSON_INVALID_UTF8_IGNORE_FLAG,
         JSON_INVALID_UTF8_SUBSTITUTE_FLAG, decode_php_api, decode_php_bytes, decode_php_value,
+        validate_php_api, validate_php_bytes, validate_php_str_api,
     };
 
     #[test]
@@ -1274,5 +1501,52 @@ mod tests {
                 "input={input:?}",
             );
         }
+    }
+
+    #[test]
+    fn validation_discards_values_but_preserves_php_depth_and_number_grammar() {
+        for input in [
+            r#"{"\u0000x":1,"x":2,"x":3}"#,
+            "1e400",
+            "-1e400",
+            "999999999999999999999999999999999999999999999999",
+        ] {
+            assert!(validate_php_str_api(input, 512).is_ok(), "input={input}");
+        }
+        assert_eq!(
+            validate_php_str_api("[]", 1).unwrap_err().code(),
+            JSON_ERROR_DEPTH
+        );
+        assert!(validate_php_str_api("[]", 2).is_ok());
+        for input in ["01", "1e", "[1,]"] {
+            assert_eq!(
+                validate_php_str_api(input, 512).unwrap_err().code(),
+                JSON_ERROR_SYNTAX,
+                "input={input}",
+            );
+        }
+    }
+
+    #[test]
+    fn validation_applies_the_single_utf8_repair_flag_without_hiding_structure() {
+        assert_eq!(
+            validate_php_bytes(b"\"A\xffB\"", 512, InvalidUtf8Policy::Reject)
+                .unwrap_err()
+                .code(),
+            JSON_ERROR_UTF8
+        );
+        assert!(validate_php_api(b"\"A\xffB\"", 512, JSON_INVALID_UTF8_IGNORE_FLAG,).is_ok());
+        assert_eq!(
+            validate_php_api(b"[\xff]", 512, JSON_INVALID_UTF8_IGNORE_FLAG)
+                .unwrap_err()
+                .code(),
+            JSON_ERROR_UTF8
+        );
+        assert_eq!(
+            validate_php_api(b"[}\xff", 512, JSON_INVALID_UTF8_IGNORE_FLAG)
+                .unwrap_err()
+                .code(),
+            JSON_ERROR_STATE_MISMATCH
+        );
     }
 }

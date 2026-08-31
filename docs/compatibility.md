@@ -57,6 +57,78 @@ equivalence remain separate boundaries. The implementation is the commit
 containing this status.
 
 The latest measured AMD64 PHP 8.5 standard-library checkpoint is
+`json-validate-contract`, based on `309f7aa8`, pinned to php-src commit
+`fcc29c8` and validated against PHP 8.5.10. `json_validate()` now exposes the
+exact `json`, `depth` and `flags` parameter contract, reflected defaults and
+boolean return type across direct, dynamic, first-class, named and unpacked
+calls. Weak and strict scalar conversion, arity, evaluation order, depth range,
+the sole admitted `JSON_INVALID_UTF8_IGNORE` flag and request-local
+`json_last_error()` state follow the PHP 8.5 oracle.
+
+Validation uses a dedicated structural visitor: it consumes one complete JSON
+document without constructing the PHP array/object/value tree. It nevertheless
+shares the decoder's exact number lexer, invalid-UTF-8 repair boundary, first-
+error classification and guarded parser stack. Container depth is counted at
+the same edge as decode, including PHP's scalar, empty-input, maximum-depth and
+native parser-ceiling distinctions. Eighteen original E2E cases cover the
+signature, all call forms, valid scalar/container inputs, duplicate and NUL
+keys, numeric overflow, partial lexemes, error transitions, UTF-8 flags,
+strict/weak coercion and deep stack safety.
+
+All five upstream `ext/json/tests/json_validate_00*.phpt` cases become exact
+with no lost pass. The full 88-case `ext/json` projection moves from 52 pass,
+33 fail, two skip and one unsupported to 57 pass, 28 fail, two skip and one
+unsupported, exact delta `+5/-0`. Its candidate manifest hashes to
+`a2c6bc67225ce011403ed8b759e3da210315fdf408e549835f3b7e6bc8284779`;
+the sorted exact pass set hashes to
+`bb3317308ea0c8efed0ce7ce6adb2d90c1ef4c1d9829047e736628de4540bdf3`.
+
+The exact final 5,599-case Zend/lang manifest remains 4,855 pass, 448 fail, 115
+skip and 181 unsupported and hashes to
+`641d8313853a90c05733dfd2d05f397e4c45c623ff7371ee2e2c1cac19504714`.
+Its sorted pass set remains byte-identical to the parent at hash
+`16f1df61ef7fc1c7e4b8d5da548bc90478e25be5ac501dd84e0392431adbc916`.
+The adjacent 1,575-case strings/array projection remains 1,458 pass, 19 fail,
+67 skip and 31 unsupported; its pass set remains byte-identical at hash
+`0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+The stable 7,174-case core therefore remains 6,313 pass, 467 fail, 182 skip and
+212 unsupported, exact delta `+0/-0`, with no timeout or crash.
+
+The on-demand builtin inventory now reports 1,201 reference globals: 469 are
+present, 732 are missing, zero present functions have a call-shape mismatch,
+382 retain a metadata mismatch and 87 are exact. The Symfony-base projection
+contains 467 present and 266 missing functions, zero call-shape mismatches, 381
+metadata mismatches and 86 exact functions. All five JSON globals are present
+and exact. The audit summary and report hash to
+`04c8704b76448051d2bdc44c39cc25e97acd3470dbe7b7c4e898114ee31b3546`
+and `c6a734f72267db7a15da64fe41e57e3d67918be8aa1cff83b1b6698b3dca7f80`.
+
+All five Cargo configurations, all-feature/all-target checking, formatting,
+HTML data, PHPT-runner and both unsafe-policy gates pass. Production remains at
+1,623 unsafe blocks and 289 unsafe functions, with 409 SAFETY annotations and
+seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates and
+FrameworkBundle 7.4.16 warmed-kernel S2 and cold-build S3 pass.
+
+The fixed-parent CPU-2 release gate compares candidate
+`7f61f3e7bf428d0fe230333a534db054b827f9eade8ab43a87960e06d8834c09`
+with exact callable-return parent
+`3beddaaa910547e9be7aef9592c22a984ae197d3e9210320ad2aeba3e9fb91dd`.
+It retains 32 balanced, deterministically randomized A/B pairs per lane after
+five warmups, exact output checks and no outlier removal. Paired medians are
+startup -4.473%, ordinary `strlen()` -3.358%, unchanged valid `json_decode()`
++0.269%, unchanged invalid `json_decode()` -3.004%, valid `json_validate()`
+-43.520%, nested `json_validate()` -59.034% and invalid `json_validate()`
+-2.998%. Raw observations hash to
+`51fc2e8f928c4bd9ae475407a4a41aa25be8fc53bc799b1042f3e00887f3f5e3`;
+the candidate is 5,848 bytes smaller than the parent.
+
+This checkpoint does not claim the remaining 28 ordinary `ext/json` failures,
+the unimplemented legacy escaping and `JSON_NUMERIC_CHECK` encoder families,
+inputs beyond the guarded parser ceiling, 32-bit equivalence or allocation-
+limit/OOM equivalence. The implementation is the commit containing this
+status.
+
+The latest measured AMD64 PHP 8.5 standard-library checkpoint is
 `global-call-shape-zero`, based on `df2b44c`, pinned to php-src commit
 `fcc29c8` and validated against PHP 8.5.10. The final seven reflected global
 call-shape mismatches are closed: `assert_options()`, `debug_zval_dump()`,

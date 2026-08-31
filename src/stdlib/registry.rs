@@ -1743,6 +1743,27 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         "json",
     );
+    reg_typed!(
+        "json_validate",
+        fn_json_validate,
+        3,
+        1,
+        ["json", "depth", "flags"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::Int
+        ],
+        ParamTypeHint::Bool
+    );
+    let json_validate = eg
+        .find_function("json_validate")
+        .expect("json_validate was just registered");
+    eg.register_internal_function_reflection_metadata(
+        json_validate,
+        vec![None, Some(Value::long(512)), Some(Value::long(0))],
+        "json",
+    );
 
     // --- Misc ---
     reg!("isset_func", fn_isset_func, 1, 1, "value");
