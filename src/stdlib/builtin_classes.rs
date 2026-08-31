@@ -468,7 +468,7 @@ fn fn_throwable_get_previous(
 fn fn_throwable_get_message(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let this_val = arg!(ed, 0);
     if let Some(obj) = this_val.as_object() {
@@ -476,7 +476,14 @@ fn fn_throwable_get_message(
             .get_property("message")
             .cloned()
             .unwrap_or(Value::string(""));
-        ret!(rv, msg);
+        drop(obj);
+        let Some(message) = super::internal_value_to_string_value(ed, eg, &msg)? else {
+            return Ok(());
+        };
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        ret!(rv, message);
     }
     ret!(rv, Value::string(""));
 }
@@ -557,7 +564,119 @@ fn fn_throwable_to_string(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let rendered = crate::vm::execute::format_throwable_string(eg, arg!(ed, 0));
+    let thrown = arg!(ed, 0).clone();
+    let exact_terminal_message = thrown.as_object().is_some_and(|object| {
+        let previous_key = throwable_property_key(eg, &object, "previous");
+        object
+            .get_property("message")
+            .map(Value::dereferenced)
+            .is_none_or(|message| message.value_type() == ValueType::String)
+            && object.get_property(&previous_key).is_none_or(|previous| {
+                previous
+                    .dereferenced()
+                    .as_object()
+                    .is_none_or(|previous| !eg.class_is_a(&previous.class_name, "Throwable"))
+            })
+    });
+    if exact_terminal_message {
+        let object = thrown
+            .as_object()
+            .expect("terminal Throwable string formatting requires an object");
+        let trace_key = throwable_property_key(eg, &object, "trace");
+        let message = object
+            .get_property("message")
+            .map(Value::dereferenced)
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let mut rendered = object.class_name.to_string();
+        if !message.is_empty() {
+            rendered.push_str(": ");
+            rendered.push_str(message);
+        }
+        if let Some(((file, line), trace)) = object
+            .get_property("file")
+            .map(Value::dereferenced)
+            .and_then(Value::as_str)
+            .zip(
+                object
+                    .get_property("line")
+                    .map(Value::dereferenced)
+                    .and_then(Value::as_long),
+            )
+            .zip(
+                object
+                    .get_property(&trace_key)
+                    .map(Value::dereferenced)
+                    .and_then(Value::as_array),
+            )
+        {
+            if object.class_name.as_ref().eq_ignore_ascii_case("TypeError")
+                && message.contains(", called in ")
+                && message.contains(" on line ")
+            {
+                rendered.push_str(" and defined in ");
+            } else {
+                rendered.push_str(" in ");
+            }
+            rendered.push_str(file);
+            rendered.push(':');
+            rendered.push_str(&line.to_string());
+            rendered.push_str("\nStack trace:\n");
+            rendered.push_str(&crate::vm::trace::format_throwable_trace(
+                trace,
+                exception_string_param_max_len(eg),
+                eg,
+            ));
+        }
+        drop(object);
+        if let Some(mut object) = arg!(ed, 0).as_object_mut() {
+            let key = throwable_property_key(eg, &object, "string");
+            object.set_property(&key, Value::string(&rendered));
+        }
+        ret!(rv, Value::string(rendered));
+    }
+    let mut messages = std::collections::HashMap::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut current = thrown.clone();
+    loop {
+        let Some(identity) = current.object_identity() else {
+            break;
+        };
+        if !seen.insert(identity) {
+            break;
+        }
+        let (message, previous) = {
+            let Some(object) = current.as_object() else {
+                break;
+            };
+            let previous_key = throwable_property_key(eg, &object, "previous");
+            (
+                object
+                    .get_property("message")
+                    .cloned()
+                    .unwrap_or_else(|| Value::string("")),
+                object.get_property(&previous_key).cloned(),
+            )
+        };
+        let Some(message) = super::internal_value_to_string_value(ed, eg, &message)? else {
+            return Ok(());
+        };
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        messages.insert(identity, message.as_str().unwrap_or_default().to_string());
+        let Some(previous) = previous.filter(|previous| {
+            previous
+                .dereferenced()
+                .as_object()
+                .is_some_and(|object| eg.class_is_a(&object.class_name, "Throwable"))
+        }) else {
+            break;
+        };
+        current = previous.dereferenced().clone();
+    }
+    let rendered =
+        crate::vm::execute::format_throwable_string_with_messages(eg, &thrown, &messages);
     if let Some(mut object) = arg!(ed, 0).as_object_mut() {
         let key = throwable_property_key(eg, &object, "string");
         object.set_property(&key, Value::string(&rendered));

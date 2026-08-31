@@ -1216,38 +1216,31 @@ fn op_dynamic_variable<'a>(
             (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)).clone();
         let key = reference_initial_value(raw_key);
         let name = if key.value_type() == ValueType::Object {
-        let class_name = key
-            .as_object()
-            .map(|object| object.class_name.to_string())
-            .unwrap_or_else(|| "object".to_string());
-        let rendered = call_magic_method(eg, &key, "__tostring", &[])?;
-        if let Some(exception) = eg.exception.take() {
-            return Ok(match throw_in_frame(eg, frame, exception)? {
-                ThrowResult::Handled(new_frame, new_op_array) => {
-                    ColdResult::NewFrame(new_frame, new_op_array)
-                }
-                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
-            });
-        }
-        let Some(rendered) = rendered else {
-            return Ok(static_property_throw(
-                eg,
-                frame,
-                "Error",
-                format!("Object of class {class_name} could not be converted to string"),
-            )?);
-        };
-        let Some(rendered) = rendered.as_str() else {
-            return Ok(static_property_throw(
-                eg,
-                frame,
-                "TypeError",
-                format!(
-                    "{class_name}::__toString(): Return value must be of type string"
-                ),
-            )?);
-        };
-            rendered.to_string()
+            let class_name = key
+                .as_object()
+                .map(|object| object.class_name.to_string())
+                .unwrap_or_else(|| "object".to_string());
+            let rendered = call_object_string_conversion(eg, &key)?;
+            if let Some(exception) = eg.exception.take() {
+                return Ok(match throw_in_frame(eg, frame, exception)? {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+                });
+            }
+            let Some(rendered) = rendered else {
+                return Ok(static_property_throw(
+                    eg,
+                    frame,
+                    "Error",
+                    format!("Object of class {class_name} could not be converted to string"),
+                )?);
+            };
+            rendered
+                .as_str()
+                .expect("canonical object string conversion returns String")
+                .to_string()
         } else {
             if key.value_type() == ValueType::Array {
                 report_php_warning(
@@ -2365,6 +2358,15 @@ fn op_check_default_type<'a>(
                 return Ok(ColdResult::Done);
             }
             CallArgumentPreparation::Invalid => {}
+        }
+
+        if let Some(exception) = eg.exception.take() {
+            return Ok(match throw_in_frame(eg, frame, exception)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
         }
 
         let caller = (*frame).prev_execute_data;

@@ -5686,6 +5686,12 @@ fn build_property_init_method_plan(function: &UserFunction) -> Option<Box<Proper
 
     Some(Box::new(PropertyInitMethodPlan {
         public_args: public_args as u8,
+        needs_declaring_class_scope: common
+            .sig
+            .param_type_hints
+            .iter()
+            .take(public_args as usize)
+            .any(ParamTypeHint::uses_declaring_class_scope),
         assignments: assignments.into_boxed_slice(),
     }))
 }

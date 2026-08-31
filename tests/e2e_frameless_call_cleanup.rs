@@ -51,7 +51,8 @@ fn compiler_marks_only_unambiguous_positional_frameless_calls() {
 in_array(new stdClass, [new stdClass], true);
 \in_array(new stdClass, [new stdClass]);
 in_array(needle: new stdClass, haystack: [new stdClass], strict: true);
-strlen('value');
+$text = 'value';
+strlen($text);
 "#,
     );
     let releases = compiled

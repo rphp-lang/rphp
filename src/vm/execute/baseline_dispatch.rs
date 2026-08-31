@@ -137,25 +137,75 @@ fn comparison_object_string_conversion(
     eg: &mut ExecutorGlobals,
     object: &Value,
 ) -> Result<Option<Value>, VmError> {
-    let class_name = object.diagnostic_type_name();
-    let rendered = call_object_string_conversion(eg, object)?;
-    if eg.exception.is_none()
-        && let Some(rendered) = rendered.as_ref()
-        && rendered.as_str().is_none()
-    {
-        let outcome = if rendered.value_type() == ValueType::Null {
-            "none returned".to_string()
-        } else {
-            format!("{} returned", rendered.diagnostic_type_name())
+    call_object_string_conversion(eg, object)
+}
+
+#[cold]
+#[inline(never)]
+fn call_direct_string_internal_fallback(
+    eg: &mut ExecutorGlobals,
+    name: &str,
+    argument: &Value,
+) -> Result<Value, VmError> {
+    let argument = argument.clone();
+    let Some(function) = eg.find_function(name) else {
+        let kind = match name {
+            "strlen" => crate::builtin_metadata::DirectInternalKind::Strlen,
+            "strtolower" => crate::builtin_metadata::DirectInternalKind::Strtolower,
+            "strtoupper" => crate::builtin_metadata::DirectInternalKind::Strtoupper,
+            _ => return Err(VmError::Fatal(format!("Unknown function {name}"))),
         };
-        eg.exception = Some(make_error_value(
-            "TypeError",
-            &format!(
-                "{class_name}::__toString(): Return value must be of type string, {outcome}"
-            ),
-        ));
+        return crate::stdlib::invoke_direct_internal1(kind, &argument, eg.precision);
+    };
+    call_internal_function_iter_from_current_site(
+        eg,
+        function,
+        1,
+        std::iter::once(&argument),
+    )
+}
+
+#[cold]
+#[inline(never)]
+fn direct_strlen_fallback(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    argument: &Value,
+) -> Result<i64, VmError> {
+    let argument_value = argument.dereferenced();
+    if argument_value.value_type() == ValueType::Object {
+        return call_direct_string_internal_fallback(eg, "strlen", argument)
+            .map(|result| result.as_long().unwrap_or_default());
     }
-    Ok(rendered)
+    if argument_value.value_type() == ValueType::Null {
+        report_php_deprecation(
+            eg,
+            frame,
+            op_array,
+            opline,
+            "strlen(): Passing null to parameter #1 ($string) of type string is deprecated",
+        )?;
+    }
+    Ok(crate::stdlib::direct_strlen_len(argument, eg.precision))
+}
+
+#[cold]
+#[inline(never)]
+fn convert_string_offset_assignment_object(
+    eg: &mut ExecutorGlobals,
+    value: &Value,
+) -> Result<Result<Value, String>, VmError> {
+    let source = value.dereferenced().clone();
+    let class_name = source
+        .as_object()
+        .map(|object| object.class_name.to_string())
+        .unwrap_or_else(|| "object".to_string());
+    let rendered = call_object_string_conversion(eg, &source)?;
+    Ok(rendered.ok_or_else(|| {
+        format!("Object of class {class_name} could not be converted to string")
+    }))
 }
 
 /// Prepare the object-handler cases whose comparison may execute user code.
@@ -1282,6 +1332,29 @@ fn throw_operator_error<'a, M: OperatorErrorMessage + ?Sized>(
 }
 
 #[cold]
+#[inline(never)]
+fn throw_reference_assignment_error<'a, M: OperatorErrorMessage + ?Sized>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    instruction_index: usize,
+    message: &M,
+) -> Result<ThrowResult<'a>, VmError> {
+    if let Some(exception) = eg.exception.take() {
+        throw_in_frame(eg, frame, exception)
+    } else {
+        throw_operator_error(
+            eg,
+            frame,
+            op_array,
+            instruction_index,
+            "TypeError",
+            message,
+        )
+    }
+}
+
+#[cold]
 fn array_access_offset_error(value: &Value, isset_or_empty: bool) -> String {
     if isset_or_empty {
         format!(
@@ -1781,12 +1854,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             let instruction_index = (opline_ptr as usize
                                 - op_array.instructions.as_ptr() as usize)
                                 / std::mem::size_of::<Instruction>();
-                            match throw_operator_error(
+                            match throw_reference_assignment_error(
                                 eg,
                                 frame,
                                 op_array,
                                 instruction_index,
-                                "TypeError",
                                 &message,
                             )? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
@@ -2575,18 +2647,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let conversion = if val.value_type() == ValueType::Closure {
                         None
                     } else {
-                        call_magic_method(eg, val, "__tostring", &[])?
+                        call_object_string_conversion(eg, val)?
                     };
                     resume_pending_exception!();
                     if let Some(result) = conversion {
-                        let Some(output) = result.php_string_bytes() else {
-                            throw_operator!(
-                                "TypeError",
-                                &format!(
-                                    "{class_name}::__toString(): Return value must be of type string"
-                                )
-                            );
-                        };
+                        let output = result
+                            .php_string_bytes()
+                            .expect("canonical object string conversion returns String");
                         eg.write_output(output.as_ref());
                     } else {
                         throw_operator!(
@@ -3382,7 +3449,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     (*frame).get_op_mut(opline.result as u32, opline.result_type)
                 };
                 unsafe {
-                    frame_tmp_set(frame, result_ptr, concatenate_string_values(left, right))
+                    frame_tmp_set(
+                        frame,
+                        result_ptr,
+                        concatenate_proven_string_values(left, right),
+                    )
                 };
             }
 
@@ -3811,18 +3882,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 .as_object()
                                 .map(|object| object.class_name.to_string())
                                 .unwrap_or_else(|| "object".to_string());
-                            let conversion = call_magic_method(eg, source, "__tostring", &[])?;
+                            let conversion = call_object_string_conversion(eg, source)?;
                             resume_pending_exception!();
                             if let Some(result) = conversion {
-                                let Some(rendered) = result.as_str() else {
-                                    throw_operator!(
-                                        "TypeError",
-                                        &format!(
-                                            "{class_name}::__toString(): Return value must be of type string"
-                                        )
-                                    );
-                                };
-                                Value::string(rendered)
+                                result
                             } else {
                                 throw_operator!(
                                     "Error",
@@ -4174,6 +4237,22 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         resume_pending_exception!();
                         result
                     }
+                } else if matches!(
+                    kind,
+                    crate::builtin_metadata::DirectInternalKind::Strtolower
+                        | crate::builtin_metadata::DirectInternalKind::Strtoupper
+                ) && argument.dereferenced().value_type() == ValueType::Object
+                {
+                    let name = if kind
+                        == crate::builtin_metadata::DirectInternalKind::Strtolower
+                    {
+                        "strtolower"
+                    } else {
+                        "strtoupper"
+                    };
+                    let result = call_direct_string_internal_fallback(eg, name, argument)?;
+                    resume_pending_exception!();
+                    result
                 } else {
                     crate::stdlib::invoke_direct_internal1(kind, argument, eg.precision)?
                 };
@@ -4222,19 +4301,20 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Strlen => {
+                // SAFETY: the current instruction belongs to op_array and its
+                // operand descriptor resolves within this live frame or the
+                // op-array's immutable literal table.
                 let argument = unsafe {
                     &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                 };
-                if argument.dereferenced().value_type() == ValueType::Null {
-                    report_php_deprecation(
-                        eg,
-                        frame,
-                        op_array,
-                        opline,
-                        "strlen(): Passing null to parameter #1 ($string) of type string is deprecated",
-                    )?;
-                }
-                let length = crate::stdlib::direct_strlen_len(argument, eg.precision);
+                let argument_value = argument.dereferenced();
+                let length = if let Some(length) = argument_value.php_string_len() {
+                    length as i64
+                } else {
+                    let length = direct_strlen_fallback(eg, frame, op_array, opline, argument)?;
+                    resume_pending_exception!();
+                    length
+                };
 
                 if opline.result_type != OpType::Unused {
                     let result_ptr = unsafe {
@@ -4249,17 +4329,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Strlen_Cv => {
+                // SAFETY: Strlen_Cv is emitted only for a CV owned by the
+                // active frame; the read borrow ends before dispatch can
+                // replace or pop that frame.
                 let argument = unsafe { (*frame).cv(opline.op1 as u32) };
-                if argument.dereferenced().value_type() == ValueType::Null {
-                    report_php_deprecation(
-                        eg,
-                        frame,
-                        op_array,
-                        opline,
-                        "strlen(): Passing null to parameter #1 ($string) of type string is deprecated",
-                    )?;
-                }
-                let length = crate::stdlib::direct_strlen_len(argument, eg.precision);
+                let argument_value = argument.dereferenced();
+                let length = if let Some(length) = argument_value.php_string_len() {
+                    length as i64
+                } else {
+                    let length = direct_strlen_fallback(eg, frame, op_array, opline, argument)?;
+                    resume_pending_exception!();
+                    length
+                };
 
                 if opline.result_type != OpType::Unused {
                     let result_ptr = unsafe {
@@ -7094,6 +7175,29 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // SAFETY: the diagnostic callback has returned and the
                     // identity check proved that the converted operand still
                     // owns the published array. Resolve its current slot anew.
+                    arr_ptr = unsafe {
+                        let ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                        if (&*ptr).is_reference() {
+                            (&mut *ptr).as_ref_ptr()
+                        } else {
+                            ptr
+                        }
+                    };
+                }
+                if arr_type == ValueType::String
+                    && opline._pad & crate::vm::instruction::ASSIGN_DIM_REFERENCE == 0
+                    && cloned_val.dereferenced().value_type() == ValueType::Object
+                {
+                    let rendered = convert_string_offset_assignment_object(eg, &cloned_val)?;
+                    resume_pending_exception!();
+                    let rendered = match rendered {
+                        Ok(rendered) => rendered,
+                        Err(message) => throw_operator!("Error", &message),
+                    };
+                    cloned_val = rendered;
+                    // The conversion may have rebound a CV/reference target.
+                    // Resolve the destination anew before borrowing it for the
+                    // byte write so the outer assignment observes live state.
                     arr_ptr = unsafe {
                         let ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
                         if (&*ptr).is_reference() {

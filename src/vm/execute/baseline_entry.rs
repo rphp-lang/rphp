@@ -21,6 +21,92 @@ fn finish_request_shutdown(
     shutdown_error.map_or(Ok(()), Err)
 }
 
+#[cold]
+fn attach_uncaught_string_conversion_replacement_trace(
+    eg: &ExecutorGlobals,
+    replacement: &Value,
+    source: &Value,
+) {
+    let Some(mut replacement_object) = replacement.as_object_mut() else {
+        return;
+    };
+    let trace_key = crate::runtime::throwable_private_property_key(eg, &replacement_object, "trace");
+    let has_trace = replacement_object
+        .get_property(&trace_key)
+        .and_then(Value::as_array)
+        .is_some_and(|trace| !trace.is_empty());
+    if replacement_object.get_property("file").is_none() {
+        replacement_object.set_property("file", Value::string(""));
+    }
+    if replacement_object.get_property("line").is_none() {
+        replacement_object.set_property("line", Value::long(0));
+    }
+    let Some(source_object) = source.as_object() else {
+        return;
+    };
+    let method = format!("{}::__tostring", source_object.class_name.to_ascii_lowercase());
+    let function = eg.find_function(&method);
+    let display_class = function
+        .and_then(|function| eg.declaring_class_of(function))
+        .unwrap_or(source_object.class_name.as_ref())
+        .to_string();
+    let (display_method, normalize_internal_method) = function.map_or_else(
+        || ("__toString".to_string(), true),
+        // SAFETY: find_function returned a live immutable table entry. Read
+        // the UserFunction tail only after checking the common discriminant.
+        |function| unsafe {
+            if (*function).fn_type == FunctionType::User {
+                let user = &*(function as *const UserFunction);
+                (
+                    user.op_array
+                        .name
+                        .rsplit_once("::")
+                        .map_or("__toString", |(_, method)| method)
+                        .to_string(),
+                    false,
+                )
+            } else {
+                ("__toString".to_string(), true)
+            }
+        },
+    );
+    if has_trace {
+        let Some(mut trace) = replacement_object
+            .get_property(&trace_key)
+            .and_then(Value::as_array)
+            .cloned()
+        else {
+            return;
+        };
+        if normalize_internal_method
+            && let Some(mut first) = trace.get_value_at(0).cloned()
+            && let Some(frame) = first.as_array_mut()
+            && frame
+                .get_str("function")
+                .and_then(Value::as_str)
+                .is_some_and(|function| function.eq_ignore_ascii_case("__tostring"))
+        {
+            frame.set_str("function", Value::string("__toString"));
+            trace.set_int(0, first);
+            replacement_object.set_property(&trace_key, Value::array(trace));
+        }
+        return;
+    }
+    let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
+        .as_deref()
+        .is_some_and(crate::stdlib::ini_boolean);
+    let mut internal = PhpArray::with_hash_capacity(4);
+    internal.set_str("function", Value::string(display_method));
+    internal.set_str("class", Value::string(display_class));
+    internal.set_str("type", Value::string("->"));
+    if !ignore_arguments {
+        internal.set_str("args", Value::array(PhpArray::new()));
+    }
+    let mut trace = PhpArray::with_packed_capacity(1);
+    trace.push(Value::array(internal));
+    replacement_object.set_property(&trace_key, Value::array(trace));
+}
+
 pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Value, VmError> {
     crate::value::begin_object_handle_request();
     let func_ptr = &main_func.common as *const FunctionCommon;
@@ -63,6 +149,105 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
             Err(error) => execution = Err(error),
         }
     }
+    let mut prepared_uncaught = None;
+    if execution.is_ok()
+        && let Some(mut effective) = eg.exception.take()
+    {
+        let parse_error = effective.as_object().is_some_and(|object| {
+            object.class_name.as_ref().eq_ignore_ascii_case("ParseError")
+        });
+        if !parse_error {
+            eg.current_execute_data.set(frame);
+            let mut replaced_during_render = false;
+            for _ in 0..16 {
+                let rendered =
+                    call_object_string_conversion_from_internal(eg, frame, &effective)?;
+                if let Some(replacement) = eg.exception.take() {
+                    attach_uncaught_string_conversion_replacement_trace(
+                        eg,
+                        &replacement,
+                        &effective,
+                    );
+                    effective = replacement;
+                    replaced_during_render = true;
+                    continue;
+                }
+                if let Some(rendered) = rendered {
+                    let rendered = rendered.as_str().unwrap_or_default();
+                    let (file, line, type_error_definition_site) =
+                        effective.as_object().map_or_else(
+                        || ("[no active file]".to_string(), 0, false),
+                        |object| {
+                            let file = object
+                                .get_property("file")
+                                .and_then(Value::as_str)
+                                .unwrap_or("[no active file]")
+                                .to_string();
+                            let line = object
+                                .get_property("line")
+                                .and_then(Value::as_long)
+                                .unwrap_or(0);
+                            let type_error_definition_site = object
+                                .class_name
+                                .as_ref()
+                                .eq_ignore_ascii_case("TypeError")
+                                && object
+                                    .get_property("message")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|message| {
+                                        message.contains(", called in ")
+                                            && message.contains(" on line ")
+                                    });
+                            (file, line, type_error_definition_site)
+                        },
+                    );
+                    let mut rendered = if replaced_during_render && file.is_empty() {
+                        rendered.replacen(
+                            &format!(" in :{line}\nStack trace:"),
+                            &format!(" in [no active file]:{line}\nStack trace:"),
+                            1,
+                        )
+                    } else {
+                        rendered.to_string()
+                    };
+                    let canonical_definition =
+                        format!(" and defined in {file}:{line}\nStack trace:");
+                    if type_error_definition_site && !rendered.contains(&canonical_definition) {
+                        rendered = rendered.replacen(
+                            &format!(" in {file}:{line}\nStack trace:"),
+                            &canonical_definition,
+                            1,
+                        );
+                    }
+                    prepared_uncaught = effective.object_identity().map(|identity| {
+                        let thrown_file = if file.is_empty() {
+                            if replaced_during_render {
+                                "[no active file]"
+                            } else {
+                                "Unknown"
+                            }
+                        } else {
+                            &file
+                        };
+                        let rendered = if rendered.contains("\nStack trace:")
+                            || replaced_during_render
+                            || (!file.is_empty() && file != "[no active file]")
+                        {
+                            format!(
+                                "Uncaught {rendered}\n  thrown in {thrown_file} on line {line}"
+                            )
+                        } else {
+                            format!("Uncaught {rendered}")
+                        };
+                        (identity, rendered)
+                    });
+                    break;
+                }
+                break;
+            }
+        }
+        eg.exception = Some(effective);
+    }
     let mut shutdown_error = None;
     if execution.is_ok() && eg.exception.is_none() && eg.shutdown_functions.is_some() {
         shutdown_error = crate::stdlib::run_shutdown_functions(eg, frame).err();
@@ -86,6 +271,11 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
             object.class_name.as_ref().eq_ignore_ascii_case("ParseError")
         }) {
             return Err(VmError::Parse(format_parse_error(&exc)));
+        }
+        if let Some((identity, rendered)) = prepared_uncaught
+            && exc.object_identity() == Some(identity)
+        {
+            return Err(VmError::Fatal(rendered));
         }
         return Err(VmError::Fatal(format_uncaught_throwable(eg, &exc)));
     }
@@ -118,31 +308,50 @@ fn format_parse_error(thrown: &Value) -> String {
 
 #[cold]
 pub(crate) fn format_uncaught_throwable(eg: &ExecutorGlobals, thrown: &Value) -> String {
-    format_throwable_chain(eg, thrown, true)
+    format_throwable_chain(eg, thrown, true, None)
 }
 
 #[cold]
-pub(crate) fn format_throwable_string(eg: &ExecutorGlobals, thrown: &Value) -> String {
-    format_throwable_chain(eg, thrown, false)
+pub(crate) fn format_throwable_string_with_messages(
+    eg: &ExecutorGlobals,
+    thrown: &Value,
+    messages: &HashMap<usize, String>,
+) -> String {
+    format_throwable_chain(eg, thrown, false, Some(messages))
 }
 
 #[cold]
-fn format_throwable_chain(eg: &ExecutorGlobals, thrown: &Value, uncaught: bool) -> String {
+fn format_throwable_chain(
+    eg: &ExecutorGlobals,
+    thrown: &Value,
+    uncaught: bool,
+    messages: Option<&HashMap<usize, String>>,
+) -> String {
     struct Segment {
         class_name: String,
         message: String,
         location: Option<(String, i64, PhpArray)>,
     }
 
-    fn snapshot(eg: &ExecutorGlobals, value: &Value) -> Option<Segment> {
+    fn snapshot(
+        eg: &ExecutorGlobals,
+        value: &Value,
+        messages: Option<&HashMap<usize, String>>,
+    ) -> Option<Segment> {
         let object = value.as_object()?;
         let class_name = object.class_name.to_string();
         let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
-        let message = object
-            .get_property("message")
-            .map(Value::dereferenced)
-            .map(Value::echo_to_string)
-            .unwrap_or_default();
+        let message = value
+            .object_identity()
+            .and_then(|identity| messages.and_then(|messages| messages.get(&identity)))
+            .cloned()
+            .unwrap_or_else(|| {
+                object
+                    .get_property("message")
+                    .map(Value::dereferenced)
+                    .map(Value::echo_to_string)
+                    .unwrap_or_default()
+            });
         let location = object
             .get_property("file")
             .map(Value::dereferenced)
@@ -189,7 +398,7 @@ fn format_throwable_chain(eg: &ExecutorGlobals, thrown: &Value, uncaught: bool) 
             .cloned()
     }
 
-    let Some(final_segment) = snapshot(eg, thrown) else {
+    let Some(final_segment) = snapshot(eg, thrown, messages) else {
         let message = thrown.echo_to_string();
         return if message.is_empty() {
             if uncaught {
@@ -220,7 +429,7 @@ fn format_throwable_chain(eg: &ExecutorGlobals, thrown: &Value, uncaught: bool) 
         if !seen.insert(identity) {
             break;
         }
-        let Some(segment) = snapshot(eg, &candidate) else {
+        let Some(segment) = snapshot(eg, &candidate, messages) else {
             break;
         };
         segments.push(segment);
@@ -2882,6 +3091,10 @@ pub(crate) fn initialize_suspended_callback_frame(
                 }
             },
             CallArgumentPreparation::Invalid => {
+                if let Some(exception) = eg.exception.take() {
+                    argument_error = Some(exception);
+                    break;
+                }
                 let parameter = common
                     .sig
                     .param_names
@@ -2926,6 +3139,10 @@ pub(crate) fn initialize_suspended_callback_frame(
         if let Some(mut object) = error.as_object_mut()
             && let Some(line) = user.op_array.declaration_line()
             && !user.op_array.source_file.is_empty()
+            && object
+                .get_property("file")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
         {
             object.set_property(
                 "file",

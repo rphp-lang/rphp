@@ -432,6 +432,25 @@ enum ReferenceAssignmentError {
 
 #[cold]
 #[inline(never)]
+fn wrap_reference_string_conversion_exception(eg: &mut ExecutorGlobals, message: &str) {
+    let Some(previous) = eg.exception.take() else {
+        return;
+    };
+    let error = make_error_value("TypeError", message);
+    if let Some(mut object) = error.as_object_mut() {
+        let key = eg
+            .find_property_visibility("TypeError", "previous")
+            .map_or_else(
+                || "previous".to_string(),
+                |(_, declaring)| crate::runtime::mangle_private_prop(&declaring, "previous"),
+            );
+        object.set_property(&key, previous);
+    }
+    eg.exception = Some(error);
+}
+
+#[cold]
+#[inline(never)]
 fn prepare_reference_assignment(
     value: Value,
     constraints: &[crate::value::ReferencePropertyConstraint],
@@ -455,21 +474,21 @@ fn prepare_reference_assignment(
     {
         return prepared.map_err(ReferenceAssignmentError::Type);
     }
-    let rendered = match call_magic_method(eg, &value, "__tostring", &[]) {
+    let rendered = match call_object_string_conversion(eg, &value) {
         Ok(rendered) => rendered,
         Err(error) => return Err(ReferenceAssignmentError::Vm(error)),
     };
     if eg.exception.is_some() {
+        if let Err(message) = &prepared {
+            wrap_reference_string_conversion_exception(eg, message);
+        }
         return prepared.map_err(ReferenceAssignmentError::Type);
     }
     let Some(rendered) = rendered else {
         return prepared.map_err(ReferenceAssignmentError::Type);
     };
-    if rendered.dereferenced().value_type() != ValueType::String {
-        return prepared.map_err(ReferenceAssignmentError::Type);
-    }
     prepare_reference_assignment_scalar(
-        rendered.dereferenced().clone(),
+        rendered,
         constraints,
         eg,
         strict,
@@ -505,14 +524,11 @@ fn prepare_property_assignment_with_stringable(
     {
         return Ok(prepared);
     }
-    let Some(rendered) = call_magic_method(eg, &value, "__tostring", &[])? else {
+    let Some(rendered) = call_object_string_conversion(eg, &value)? else {
         return Ok(prepared);
     };
-    if rendered.dereferenced().value_type() != ValueType::String {
-        return Ok(prepared);
-    }
     let prepared = prepare_property_assignment_with_diagnostic(
-        rendered.dereferenced().clone(),
+        rendered,
         definition,
         eg,
         strict,
@@ -561,14 +577,18 @@ fn prepare_reference_assignment_with_stringable(
     {
         return Ok(prepared);
     }
-    let Some(rendered) = call_magic_method(eg, &value, "__tostring", &[])? else {
-        return Ok(prepared);
-    };
-    if rendered.dereferenced().value_type() != ValueType::String {
+    let rendered = call_object_string_conversion(eg, &value)?;
+    if eg.exception.is_some() {
+        if let Err(message) = &prepared {
+            wrap_reference_string_conversion_exception(eg, message);
+        }
         return Ok(prepared);
     }
+    let Some(rendered) = rendered else {
+        return Ok(prepared);
+    };
     Ok(prepare_reference_assignment_scalar(
-        rendered.dereferenced().clone(),
+        rendered,
         constraints,
         eg,
         strict,
@@ -626,6 +646,27 @@ fn instance_property_cache_accepts_exact_non_generic_write(
     }
     if cache.property_flags() != 2 {
         return false;
+    }
+    match cache.typed_instance_property_tag() {
+        crate::vm::instruction::InlineCache::TYPED_PROPERTY_INT => {
+            return value.dereferenced().value_type() == ValueType::Long;
+        }
+        crate::vm::instruction::InlineCache::TYPED_PROPERTY_FLOAT => {
+            return value.dereferenced().value_type() == ValueType::Double;
+        }
+        crate::vm::instruction::InlineCache::TYPED_PROPERTY_STRING => {
+            return value.dereferenced().value_type() == ValueType::String;
+        }
+        crate::vm::instruction::InlineCache::TYPED_PROPERTY_BOOL => {
+            return matches!(
+                value.dereferenced().value_type(),
+                ValueType::True | ValueType::False
+            );
+        }
+        crate::vm::instruction::InlineCache::TYPED_PROPERTY_ARRAY => {
+            return value.dereferenced().value_type() == ValueType::Array;
+        }
+        _ => {}
     }
     let definition = cache
         .typed_instance_property_definition()

@@ -977,7 +977,7 @@ fn evaluate_deferred_attribute_expression(
         Expr::BinaryOp {
             op, left, right, ..
         } => {
-            let left = evaluate_deferred_attribute_expression(left, scope, source_file, eg)?;
+            let mut left = evaluate_deferred_attribute_expression(left, scope, source_file, eg)?;
             match op {
                 crate::parser::BinOp::And if !left.is_truthy() => {
                     return Ok(Value::bool(false));
@@ -987,7 +987,40 @@ fn evaluate_deferred_attribute_expression(
                 }
                 _ => {}
             }
-            let right = evaluate_deferred_attribute_expression(right, scope, source_file, eg)?;
+            let mut right = evaluate_deferred_attribute_expression(right, scope, source_file, eg)?;
+            if *op == crate::parser::BinOp::Concat {
+                for value in [&mut left, &mut right] {
+                    let source = value.dereferenced();
+                    if source.value_type() == ValueType::Closure {
+                        eg.exception = Some(make_error_value(
+                            "Error",
+                            "Object of class Closure could not be converted to string",
+                        ));
+                        return Err(DeferredAttributeError::PendingException);
+                    }
+                    if source.value_type() != ValueType::Object {
+                        continue;
+                    }
+                    let class_name = source
+                        .as_object()
+                        .map(|object| object.class_name.to_string())
+                        .unwrap_or_else(|| "object".to_string());
+                    let rendered = crate::vm::execute::call_object_string_conversion(eg, source)?;
+                    if eg.exception.is_some() {
+                        return Err(DeferredAttributeError::PendingException);
+                    }
+                    let Some(rendered) = rendered else {
+                        eg.exception = Some(make_error_value(
+                            "Error",
+                            &format!(
+                                "Object of class {class_name} could not be converted to string"
+                            ),
+                        ));
+                        return Err(DeferredAttributeError::PendingException);
+                    };
+                    *value = rendered;
+                }
+            }
             Compiler::eval_const_binary(*op, &left, &right).map_err(DeferredAttributeError::Message)
         }
         Expr::Not(inner) => Ok(Value::bool(
@@ -8332,12 +8365,15 @@ fn prepare_reflected_property_assignment(
 
     if value.value_type() == ValueType::Object
         && property_hint_accepts_string(&definition.type_hint)
-        && let Some(rendered) =
-            crate::stdlib::call_object_public_method(eg, &value, "__tostring", &[])?
     {
+        let rendered = crate::vm::execute::call_object_string_conversion(eg, &value)?;
         if eg.exception.is_some() {
             return Ok(None);
         }
+        let Some(rendered) = rendered else {
+            eg.exception = Some(make_error_value("TypeError", &first_error));
+            return Ok(None);
+        };
         let called_class = target
             .as_object()
             .map(|object| object.class_name.to_string())

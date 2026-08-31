@@ -36,16 +36,17 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `numeric-builtin-call-contracts` train keeps 6,265 exact
-passes across the stable 7,174-case PHP 8.5 Zend/lang plus strings/array core,
-with 515 supported failures, 182 skips, 212 unsupported cases and no timeout or
-crash. Its targeted standard-library/Reflection delta is `+31/-0`: `intval()`,
-`intdiv()`, `fmod()`, `log()`, `pow()` and `round()` now share exact PHP 8.5
-callable metadata, conversion, numeric and callback behavior, while default-
-constant Reflection and diagnostics use one scope-aware path. Five Cargo
-configurations, exact upstream no-loss, Composer/Symfony S0-S3 and unsafe gates
-pass. Thirty-two CPU-2 A/B pairs per workload keep all ten candidate and control
-lanes within the accepted +5% ceiling.
+The accepted AMD64 `object-string-conversion-boundaries` train keeps 6,275
+exact passes across the stable 7,174-case PHP 8.5 Zend/lang plus strings/array
+core, with 505 supported failures, 182 skips, 212 unsupported cases and no
+timeout or crash. Its exact delta is `+10/-0`: casts, output, concatenation,
+typed calls and writes, references, comparisons, dynamic names, includes,
+string offsets, direct string builtins and Throwable rendering now share one
+`__toString()` contract while preserving strictness, reference/COW identity,
+evaluation order, call sites and re-entrant state. Five Cargo configurations,
+exact upstream no-loss, Composer/Symfony S0-S3 and unsafe gates pass. The
+fixed-parent 32-pair CPU-2 gate keeps every measured median under the accepted
++5% ceiling; ordinary concatenation is +0.728% and ordinary calls are -0.750%.
 
 The on-demand builtin audit maps 1,201 PHP 8.5 global functions onto RPHP: 467
 are present, 734 are missing, 15 present functions retain a call-shape mismatch,

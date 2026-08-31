@@ -78,6 +78,7 @@ pub struct PropertyInitAssignment {
 /// ExecuteData frame while preserving argument validation and property layout.
 pub struct PropertyInitMethodPlan {
     pub public_args: u8,
+    pub needs_declaring_class_scope: bool,
     pub assignments: Box<[PropertyInitAssignment]>,
 }
 
@@ -1000,6 +1001,24 @@ pub enum ParamTypeHint {
 }
 
 impl ParamTypeHint {
+    /// Whether checking this hint needs the method's lexical class to resolve
+    /// one of PHP's relative class names.
+    #[inline]
+    pub fn uses_declaring_class_scope(&self) -> bool {
+        match self {
+            Self::ClassName(name) => {
+                name.eq_ignore_ascii_case("self")
+                    || name.eq_ignore_ascii_case("parent")
+                    || name.eq_ignore_ascii_case("static")
+            }
+            Self::Nullable(inner) => inner.uses_declaring_class_scope(),
+            Self::Union(parts) | Self::Intersection(parts) => {
+                parts.iter().any(Self::uses_declaring_class_scope)
+            }
+            _ => false,
+        }
+    }
+
     /// Whether an explicit `null` satisfies this declared return contract.
     /// This does not make a bare or implicit return a value-producing return.
     pub fn allows_null(&self) -> bool {

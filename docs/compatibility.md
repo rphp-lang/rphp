@@ -7,6 +7,50 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The latest measured AMD64 PHP 8.5 language checkpoint is
+`object-string-conversion-boundaries`, based on `93d9a1b1`, pinned to php-src
+commit `fcc29c8` and validated against PHP 8.5.10. Engine string consumers now
+share one canonical `__toString()` call contract across casts, output,
+concatenation, typed calls and properties, references, comparisons, dynamic
+names, includes, string offsets and direct string builtins. Conversion preserves
+method strictness, reference returns, evaluation order, live COW/reference
+state and the original call site. Constructor reference arguments, re-entrant
+array sorting and deferred property defaults retain their mutation boundaries.
+Throwable rendering uses the same method path for caught and uncaught values,
+including replacement exceptions, traces and the single canonical TypeError
+definition site.
+
+Six original E2E groups cover positive, negative, strict/weak, reference/COW,
+re-entry, state-preservation and diagnostic-order boundaries. Ten upstream
+Zend cases become exact with no lost pass. The final 5,599-case Zend/lang
+manifest is 4,817 pass, 486 fail, 115 skip and 181 unsupported and hashes to
+`2461505e7cc2aa72589b3a565c6f91bb3b4c707603b40cdc0bee86b3e6c7bb08`.
+The adjacent strings/array manifest is unchanged at 1,458 pass, 19 fail, 67
+skip and 31 unsupported and hashes to
+`226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`.
+The stable 7,174-case core is therefore 6,275 pass, 505 fail, 182 skip and 212
+unsupported, with exact delta `+10/-0` and no timeout or crash.
+
+All five Cargo configurations, the all-feature/all-target check, formatting,
+HTML data, PHPT-runner and unsafe-policy gates pass. Production remains at the
+1,623 unsafe-block ceiling, with 289 unsafe functions, 408 SAFETY annotations
+and seven `# Safety` sections. Composer 2.8.12 S0, all four Symfony S1 gates and
+FrameworkBundle 7.4.16 warmed-kernel S2 and cold-build S3 pass.
+
+The fixed-parent CPU-2 release gate compares candidate
+`abb1c3fea54f414ceeeed8a455fde436114ded921b09571f80ae207c9e594e39`
+with exact parent
+`5c5cf11d8a39e85000225f3e2835d43d4ce72679a3f72ab474fa53ea64aebeee`.
+Thirty-two balanced A/B pairs per lane retain exact output and put every paired
+median below the +5% ceiling: folded literal `strlen()` is -97.689%,
+concatenation +0.728%, ordinary calls -0.750%, construction -4.356%, scalar
+sort -13.191%, object concatenation -32.110%, Throwable string rendering
+-25.505% and object sort +4.071%. The raw observations hash to
+`b046150ddf8610e4cb8e4b1dbad6c8b9dde7498a1ae3921f80e895d15e0d27c5`.
+This checkpoint does not claim general SPL behavior, Fiber/generator
+suspension, 32-bit or allocation-limit/OOM equivalence. Its implementation is
+the commit containing this status.
+
 The latest measured AMD64 PHP 8.5 standard-library checkpoint is
 `numeric-builtin-call-contracts`, based on `fb83b0f6`, pinned to php-src commit
 `fcc29c8` and validated against PHP 8.5.10. `intval()`, `intdiv()`, `fmod()`,

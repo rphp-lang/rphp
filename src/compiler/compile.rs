@@ -3229,6 +3229,7 @@ pub struct DeferredInstancePropertyDefaults {
     static_entries: Rc<Vec<DeferredPropertyDefault>>,
     rebound_trait_entries: Rc<Vec<ReboundTraitPropertyDefault>>,
     resolved: RefCell<Option<Rc<[Value]>>>,
+    evaluation_depth: Cell<u32>,
 }
 
 impl DeferredInstancePropertyDefaults {
@@ -3241,6 +3242,7 @@ impl DeferredInstancePropertyDefaults {
             static_entries: Rc::new(static_entries),
             rebound_trait_entries: Rc::new(Vec::new()),
             resolved: RefCell::new(None),
+            evaluation_depth: Cell::new(0),
         }
     }
 
@@ -3253,6 +3255,7 @@ impl DeferredInstancePropertyDefaults {
             static_entries: Rc::new(Vec::new()),
             rebound_trait_entries: Rc::new(rebound_trait_entries),
             resolved: RefCell::new(None),
+            evaluation_depth: Cell::new(0),
         }
     }
 
@@ -3266,6 +3269,7 @@ impl DeferredInstancePropertyDefaults {
             static_entries: Rc::new(static_entries),
             rebound_trait_entries: Rc::new(rebound_trait_entries),
             resolved: RefCell::new(None),
+            evaluation_depth: Cell::new(0),
         }
     }
 
@@ -3297,6 +3301,19 @@ impl DeferredInstancePropertyDefaults {
     #[inline]
     pub(crate) fn cache_resolved(&self, defaults: Rc<[Value]>) {
         *self.resolved.borrow_mut() = Some(defaults);
+    }
+
+    #[inline]
+    pub(crate) fn begin_evaluation(&self) -> bool {
+        let depth = self.evaluation_depth.get();
+        self.evaluation_depth.set(depth.saturating_add(1));
+        depth == 0
+    }
+
+    #[inline]
+    pub(crate) fn end_evaluation(&self) {
+        self.evaluation_depth
+            .set(self.evaluation_depth.get().saturating_sub(1));
     }
 }
 
@@ -3636,6 +3653,10 @@ pub struct Compiler {
     /// by child compilers). The repeated-tail boundary is compiler-only data
     /// for call positions beyond the ordinary 64-bit runtime mask.
     known_ref_args: HashMap<String, KnownRefArgs>,
+    /// Source-linked classes whose effective constructor has no by-reference
+    /// parameters. Child op arrays retain only this positive proof; unknown
+    /// and reference-bearing constructors keep the runtime signature path.
+    known_value_constructors: HashSet<String>,
     /// Parameter names for functions whose declarations are visible throughout
     /// the compilation unit. Together with `known_ref_args`, this lets named
     /// arguments select the same FUNC_ARG l-value context before or after the
@@ -4071,6 +4092,7 @@ impl Compiler {
             compile_deprecations: Rc::new(RefCell::new(Vec::new())),
             deferred_error: None,
             known_ref_args: HashMap::new(),
+            known_value_constructors: HashSet::new(),
             known_param_names: HashMap::new(),
             strict_types: false,
             zend_assertions: 1,
@@ -4316,6 +4338,14 @@ impl Compiler {
         child.source_directory = self.source_directory.clone();
         child.known_constants = self.known_constants.clone();
         child.known_enum_classes = Rc::clone(&self.known_enum_classes);
+        child.known_value_constructors = self.known_value_constructors.clone();
+        for class in &self.class_defs {
+            if self.known_constructor_is_by_value(&class.name) == Some(true) {
+                child
+                    .known_value_constructors
+                    .insert(class.name.trim_start_matches('\\').to_ascii_lowercase());
+            }
+        }
         child.compiler_halt_offset = self.compiler_halt_offset;
         child
     }
@@ -10711,6 +10741,17 @@ impl Compiler {
 
                         if let Some(direct_kind) = direct_kind {
                             let (argument_op, argument_type) = self.compile_expr(argument);
+                            if direct_kind.lowering()
+                                == crate::builtin_metadata::DirectInternalLowering::Strlen
+                                && argument_type == OpType::Const
+                                && let Some(length) = self
+                                    .literals
+                                    .get(argument_op as usize)
+                                    .and_then(Value::php_string_len)
+                                && let Ok(length) = i64::try_from(length)
+                            {
+                                return (self.add_literal(Value::long(length)), OpType::Const);
+                            }
                             let tmp = self.alloc_tmp();
                             let opcode = match direct_kind.lowering() {
                                 crate::builtin_metadata::DirectInternalLowering::Generic => {
@@ -12134,30 +12175,20 @@ impl Compiler {
                     self.push_instruction_at_line(new_obj, *line);
                     return (tmp, OpType::Tmp);
                 }
-                // Pre-compile arg expressions BEFORE NewObj so side effects
-                // always execute, even when the class has no __construct.
-                // Compile args, tracking which are named for SendNamed emission
-                let compiled_args: Vec<CompiledCallArg> =
-                    if args.iter().any(CallArg::contains_yield) {
-                        self.compile_call_args(args, 0, None, true)
-                    } else {
-                        args.iter()
-                            .map(|arg| match arg {
-                                CallArg::Positional(expr) | CallArg::Unpack(expr) => {
-                                    let (op, op_type) = self.compile_expr(expr);
-                                    (op, op_type, None, None)
-                                }
-                                CallArg::Named { name, value } => {
-                                    let (op, op_type) = self.compile_expr(value);
-                                    let name_idx = self.add_literal(Value::string(name.clone()));
-                                    (op, op_type, Some(name_idx), None)
-                                }
-                            })
-                            .collect()
-                    };
-
                 let (resolved_class, dynamic_static_scope) =
                     self.resolve_static_member_owner(class_name);
+                // A linked source constructor with no by-reference parameters
+                // cannot change argument selection at runtime. Keep its plain
+                // CV operands compact so the existing object-pipeline region
+                // remains admissible; unknown or reference-bearing
+                // constructors retain the late signature check and snapshot.
+                let compiled_args = if !args.iter().any(CallArg::contains_yield)
+                    && self.known_constructor_is_by_value(&resolved_class) == Some(true)
+                {
+                    self.compile_known_value_call_args(args)
+                } else {
+                    self.compile_call_args(args, 0, None, true)
+                };
                 let name_idx = self.add_literal(Value::string(resolved_class.clone()));
                 let runtime_generic_check = self.emit_generic_check(
                     if dynamic_static_scope {
@@ -12228,24 +12259,7 @@ impl Compiler {
                     self.push_instruction_at_line(new_obj, *line);
                     return (tmp, OpType::Tmp);
                 }
-                let compiled_args: Vec<CompiledCallArg> =
-                    if args.iter().any(CallArg::contains_yield) {
-                        self.compile_call_args(args, 0, None, true)
-                    } else {
-                        args.iter()
-                            .map(|arg| match arg {
-                                CallArg::Positional(expr) | CallArg::Unpack(expr) => {
-                                    let (op, op_type) = self.compile_expr(expr);
-                                    (op, op_type, None, None)
-                                }
-                                CallArg::Named { name, value } => {
-                                    let (op, op_type) = self.compile_expr(value);
-                                    let name_idx = self.add_literal(Value::string(name.clone()));
-                                    (op, op_type, Some(name_idx), None)
-                                }
-                            })
-                            .collect()
-                    };
+                let compiled_args = self.compile_call_args(args, 0, None, true);
                 let tmp = self.alloc_tmp();
                 let mut new_obj = Instruction::new(OpCode::NewObj);
                 new_obj.op1 = class_operand;
@@ -12284,25 +12298,11 @@ impl Compiler {
                     .iter()
                     .any(|argument| matches!(argument, CallArg::Unpack(_)))
                     .then(|| self.compile_mixed_unpacked_call_arguments(args, 0, None));
-                let compiled_args: Vec<CompiledCallArg> =
-                    if unpacked_arguments.is_none() && args.iter().any(CallArg::contains_yield) {
-                        self.compile_call_args(args, 0, None, true)
-                    } else {
-                        args.iter()
-                            .filter(|_| unpacked_arguments.is_none())
-                            .map(|arg| match arg {
-                                CallArg::Positional(expr) | CallArg::Unpack(expr) => {
-                                    let (op, op_type) = self.compile_expr(expr);
-                                    (op, op_type, None, None)
-                                }
-                                CallArg::Named { name, value } => {
-                                    let (op, op_type) = self.compile_expr(value);
-                                    let name_idx = self.add_literal(Value::string(name.clone()));
-                                    (op, op_type, Some(name_idx), None)
-                                }
-                            })
-                            .collect()
-                    };
+                let compiled_args = if unpacked_arguments.is_none() {
+                    self.compile_call_args(args, 0, None, true)
+                } else {
+                    Vec::new()
+                };
                 let sequence = ANONYMOUS_CLASS_COUNTER.fetch_add(1, Ordering::Relaxed);
                 let class_name = format!("class@anonymous#{sequence}");
                 let declaration = Stmt::Class {
@@ -14507,6 +14507,57 @@ impl Compiler {
                 (op, op_type, name_literal, source_cv)
             })
             .collect()
+    }
+
+    fn compile_known_value_call_args(&mut self, args: &[CallArg]) -> Vec<CompiledCallArg> {
+        args.iter()
+            .map(|argument| match argument {
+                CallArg::Positional(expression) | CallArg::Unpack(expression) => {
+                    let (operand, operand_type) = self.compile_expr(expression);
+                    (operand, operand_type, None, None)
+                }
+                CallArg::Named { name, value } => {
+                    let (operand, operand_type) = self.compile_expr(value);
+                    let name = self.add_literal(Value::string(name.clone()));
+                    (operand, operand_type, Some(name), None)
+                }
+            })
+            .collect()
+    }
+
+    fn known_constructor_is_by_value(&self, class_name: &str) -> Option<bool> {
+        let mut current = class_name.trim_start_matches('\\');
+        let mut seen = HashSet::new();
+        loop {
+            if !seen.insert(current.to_ascii_lowercase()) {
+                return None;
+            }
+            let Some(class) = self.class_defs.iter().find(|class| {
+                class
+                    .name
+                    .trim_start_matches('\\')
+                    .eq_ignore_ascii_case(current)
+            }) else {
+                return self
+                    .known_value_constructors
+                    .contains(&current.to_ascii_lowercase())
+                    .then_some(true);
+            };
+            if let Some((_, _, _, _, constructor)) = class
+                .methods
+                .iter()
+                .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case("__construct"))
+            {
+                let signature = &constructor.common.sig;
+                let variadic_reference =
+                    signature.is_variadic && signature.is_param_by_ref(signature.public_arity());
+                return Some(signature.ref_args == 0 && !variadic_reference);
+            }
+            let Some(parent) = class.parent.as_deref() else {
+                return Some(true);
+            };
+            current = parent.trim_start_matches('\\');
+        }
     }
 
     fn compile_source_unpack_operand(&mut self, expression: &Expr) -> (u16, OpType) {

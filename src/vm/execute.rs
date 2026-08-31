@@ -1430,8 +1430,7 @@ fn prepare_return_type_value(
     if !strict
         && value.dereferenced().value_type() == ValueType::Object
         && return_hint_contains(hint, &ParamTypeHint::String)
-        && let Some(rendered) = call_magic_method(eg, value, "__tostring", &[])?
-        && rendered.value_type() == ValueType::String
+        && let Some(rendered) = call_object_string_conversion(eg, value)?
     {
         return Ok(ReturnTypePreparation::Coerced(rendered, None));
     }
@@ -1469,11 +1468,8 @@ pub(crate) fn prepare_call_argument(
     }
 
     let coerced = match hint {
-        ParamTypeHint::String if value.value_type() == ValueType::Object => {
-            call_magic_method(eg, value, "__tostring", &[])?.and_then(|rendered| {
-                (rendered.value_type() == ValueType::String)
-                    .then(|| Value::string(rendered.as_str().unwrap()))
-            })
+        ParamTypeHint::String if value.dereferenced().value_type() == ValueType::Object => {
+            call_object_string_conversion(eg, value)?
         }
         ParamTypeHint::Nullable(inner)
             if value.value_type() != ValueType::Null
@@ -3803,6 +3799,14 @@ fn execute_full_call<'a>(
                     }
                     CallArgumentPreparation::Invalid => {}
                 }
+                if let Some(exception) = eg.exception.take() {
+                    cleanup_frame_slots(call);
+                    pop_vm_call_frame(eg, call);
+                    return Ok(match throw_in_frame(eg, frame, exception)? {
+                        ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+                        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                    });
+                }
                 type_error = Some(argument_type_error(
                     eg,
                     (*call).func,
@@ -4061,6 +4065,11 @@ fn execute_full_call<'a>(
                                 }
                             }
                             CallArgumentPreparation::Invalid => {
+                                if let Some(exception) = eg.exception.take() {
+                                    return cleanup_named_call_and_throw(
+                                        eg, frame, call, exception,
+                                    );
+                                }
                                 let type_err = make_error_value(
                                     "TypeError",
                                     &format!(

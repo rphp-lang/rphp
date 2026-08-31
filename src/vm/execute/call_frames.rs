@@ -2439,18 +2439,6 @@ fn call_magic_method_from_logical_caller(
     Ok(Some(result))
 }
 
-/// Engine-dispatched magic operations execute through a detached callback
-/// frame. Retain the active source instruction as that frame's logical caller
-/// when PHP exposes the operation itself in live or stored traces.
-fn call_magic_method_from_current_site(
-    eg: &mut ExecutorGlobals,
-    obj_val: &Value,
-    method_name: &str,
-    args: &[Value],
-) -> Result<Option<Value>, VmError> {
-    call_magic_method_with_trace_site(eg, obj_val, method_name, args, true)
-}
-
 fn call_magic_method_with_trace_site(
     eg: &mut ExecutorGlobals,
     obj_val: &Value,
@@ -2711,12 +2699,155 @@ pub(crate) fn call_object_property_magic_get(
     )
 }
 
+fn object_string_conversion_target(
+    eg: &ExecutorGlobals,
+    object: &Value,
+) -> Option<(Value, std::rc::Rc<str>, *const FunctionCommon)> {
+    let object = object.dereferenced();
+    if object.value_type() != ValueType::Object {
+        return None;
+    }
+    let class_name = object
+        .as_object()
+        .map(|object| object.class_name.clone())
+        .unwrap_or_else(|| std::rc::Rc::from("object"));
+    let method_name = format!("{}::__tostring", class_name.to_ascii_lowercase());
+    let function = eg.find_function(&method_name)?;
+    Some((object.clone(), class_name, function))
+}
+
+/// Execute the existing compiler proof for a zero-argument literal-string
+/// method without materializing a detached frame. Such a body cannot inspect
+/// a backtrace, throw, mutate `$this`, or run cleanup; the ordinary path stays
+/// canonical for every other `__toString()` implementation.
+fn constant_object_string_conversion(function: *const FunctionCommon) -> Option<Value> {
+    // SAFETY: the conversion target comes from the live immutable function
+    // table. Inspect the UserFunction tail only after its discriminant and
+    // retain all planner guards that make the literal result side-effect free.
+    unsafe {
+        if (*function).fn_type != FunctionType::User {
+            return None;
+        }
+        let user = &*(function as *const UserFunction);
+        let plan = user.scalar_string_plan.as_deref()?;
+        if plan.public_args != 0
+            || plan.trait_class_scope
+            || !plan.operations.is_empty()
+            || plan.select.is_some()
+        {
+            return None;
+        }
+        record_scalar_call(&user.common);
+        Some(Value::string(plan.when_true.to_string()))
+    }
+}
+
+fn validate_object_string_conversion(
+    eg: &mut ExecutorGlobals,
+    class_name: &str,
+    function: *const FunctionCommon,
+    rendered: Option<Value>,
+) -> Option<Value> {
+    if eg.exception.is_some() {
+        return None;
+    }
+    let rendered = rendered?;
+    let rendered = rendered.dereferenced();
+    if rendered.value_type() == ValueType::String {
+        return Some(rendered.clone());
+    }
+    if matches!(
+            rendered.value_type(),
+            ValueType::Long | ValueType::Double | ValueType::True | ValueType::False
+        )
+    {
+        // SAFETY: object_string_conversion_target resolved this immutable
+        // function-table entry and it remains live for the synchronous call.
+        let weak_user_method = unsafe {
+            (*function).fn_type == FunctionType::User
+                && !(*(function as *const UserFunction)).op_array.strict_types
+        };
+        if weak_user_method {
+            return Some(Value::string(
+                rendered.echo_to_string_with_precision(eg.precision),
+            ));
+        }
+    }
+
+    let outcome = match rendered.value_type() {
+        ValueType::Null => "none returned".to_string(),
+        ValueType::True => "true returned".to_string(),
+        ValueType::False => "false returned".to_string(),
+        _ => format!("{} returned", rendered.diagnostic_type_name()),
+    };
+    eg.exception = Some(make_error_value(
+        "TypeError",
+        &format!(
+            "{class_name}::__toString(): Return value must be of type string, {outcome}"
+        ),
+    ));
+    None
+}
+
 /// Reuse PHP object string conversion from internal handlers.
+#[inline(never)]
 pub(crate) fn call_object_string_conversion(
     eg: &mut ExecutorGlobals,
     object: &Value,
 ) -> Result<Option<Value>, VmError> {
-    call_magic_method(eg, object, "__tostring", &[])
+    let Some((object, class_name, function)) = object_string_conversion_target(eg, object)
+    else {
+        return Ok(None);
+    };
+    let rendered = if let Some(rendered) = constant_object_string_conversion(function) {
+        Some(rendered)
+    } else {
+        Some(call_function_iter_from_current_site(
+            eg,
+            function,
+            1,
+            std::slice::from_ref(&object).iter(),
+        )?)
+    };
+    Ok(validate_object_string_conversion(
+        eg,
+        &class_name,
+        function,
+        rendered,
+    ))
+}
+
+/// Render an uncaught Throwable through PHP's engine-origin magic call. The
+/// synthetic internal frame is observable in replacement-exception traces.
+#[inline(never)]
+pub(crate) fn call_object_string_conversion_from_internal(
+    eg: &mut ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+    object: &Value,
+) -> Result<Option<Value>, VmError> {
+    let Some((object, class_name, function)) = object_string_conversion_target(eg, object)
+    else {
+        return Ok(None);
+    };
+    let rendered = if let Some(rendered) = constant_object_string_conversion(function) {
+        Some(rendered)
+    } else {
+        Some(call_function_iter_from_logical_caller(
+            eg,
+            logical_caller,
+            true,
+            false,
+            function,
+            1,
+            std::slice::from_ref(&object).iter(),
+        )?)
+    };
+    Ok(validate_object_string_conversion(
+        eg,
+        &class_name,
+        function,
+        rendered,
+    ))
 }
 
 /// Reuse PHP object debug projection from output handlers. The method runs on

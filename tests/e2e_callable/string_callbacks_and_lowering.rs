@@ -152,13 +152,12 @@ fn test_discarded_direct_builtin_skips_tmp_result_write() {
     assert_eq!(direct.result_type, OpType::Unused);
 
     let compiled = compile_source("<?php $length = strlen('abc');");
-    let direct = compiled
+    assert!(!compiled
         .main
         .instructions
         .iter()
-        .find(|instruction| instruction.opcode == OpCode::Strlen)
-        .unwrap();
-    assert_eq!(direct.result_type, OpType::Tmp);
+        .any(|instruction| matches!(instruction.opcode, OpCode::Strlen | OpCode::Strlen_Cv)));
+    assert!(compiled.main.literals.iter().any(|value| value.as_long() == Some(3)));
 }
 
 #[test]
@@ -262,9 +261,10 @@ namespace DirectBuiltinShadow {
     let global = main_opcodes(
         r#"<?php
 namespace DirectBuiltinGlobal {
-    \strlen('abc');
+    $value = 'abc';
+    \strlen($value);
 }
 "#,
     );
-    assert!(global.contains(&OpCode::Strlen));
+    assert!(global.contains(&OpCode::Strlen_Cv));
 }

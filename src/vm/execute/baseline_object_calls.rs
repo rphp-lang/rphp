@@ -36,7 +36,10 @@ unsafe fn try_execute_property_init_constructor(
         return None;
     }
 
-    let declaring_class = eg.declaring_class_of(&callee.common as *const FunctionCommon);
+    let declaring_class = plan
+        .needs_declaring_class_scope
+        .then(|| eg.declaring_class_of(&callee.common as *const FunctionCommon))
+        .flatten();
     let mut arguments = [std::ptr::null(); 8];
     for index in 0..plan.public_args as usize {
         let send = &*sends.add(index);
@@ -418,10 +421,12 @@ fn attach_constant_expression_origin(
             .is_some_and(|file| !file.is_empty())
             && object.contains_property(&trace_key)
     });
-    if already_stamped || definition.source_file.is_empty() {
+    if definition.source_file.is_empty() {
         return;
     }
-    attach_throwable_origin(throwable, eg, frame, op_array, ip);
+    if !already_stamped {
+        attach_throwable_origin(throwable, eg, frame, op_array, ip);
+    }
     let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
         .as_deref()
         .is_some_and(crate::stdlib::ini_boolean);
@@ -434,16 +439,43 @@ fn attach_constant_expression_origin(
         })
         .and_then(|trace| trace.as_array().cloned())
         .unwrap_or_else(PhpArray::new);
+    if caller_trace.get_value_at(0).is_some_and(|entry| {
+        entry
+            .as_array()
+            .and_then(|entry| entry.get_str("function"))
+            .and_then(Value::as_str)
+            == Some("[constant expression]")
+    }) {
+        return;
+    }
     let mut trace = PhpArray::new();
     let mut constant_expression = PhpArray::new();
-    if !op_array.source_file.is_empty() {
-        constant_expression.set_str(
-            "file",
-            Value::shared_string(op_array.source_file.clone()),
-        );
-    }
-    if let Some(line) = op_array.source_line(ip) {
-        constant_expression.set_str("line", Value::long(line as i64));
+    let stamped_location = already_stamped.then(|| {
+        throwable.as_object().and_then(|object| {
+            object
+                .get_property("file")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .zip(object.get_property("line").and_then(Value::as_long))
+        })
+    }).flatten();
+    if let Some((file, line)) = stamped_location {
+        if !file.is_empty() {
+            constant_expression.set_str("file", Value::string(file));
+        }
+        if line > 0 {
+            constant_expression.set_str("line", Value::long(line));
+        }
+    } else {
+        if !op_array.source_file.is_empty() {
+            constant_expression.set_str(
+                "file",
+                Value::shared_string(op_array.source_file.clone()),
+            );
+        }
+        if let Some(line) = op_array.source_line(ip) {
+            constant_expression.set_str("line", Value::long(line as i64));
+        }
     }
     constant_expression.set_str("function", Value::string("[constant expression]"));
     if !ignore_arguments {
@@ -454,8 +486,10 @@ fn attach_constant_expression_origin(
         trace.push(entry.clone());
     }
     if let Some(mut object) = throwable.as_object_mut() {
-        object.set_property("file", Value::string(definition.source_file.clone()));
-        object.set_property("line", Value::long(definition.source_line as i64));
+        if !already_stamped {
+            object.set_property("file", Value::string(definition.source_file.clone()));
+            object.set_property("line", Value::long(definition.source_line as i64));
+        }
         let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
         object.set_property(&trace_key, Value::array(trace));
     }
@@ -488,65 +522,76 @@ fn materialize_deferred_instance_defaults(
         return Ok(Some(resolved));
     }
 
-    let mut defaults = base_defaults.as_ref().to_vec();
-    for deferred in entries.iter() {
-        let Some(value) = crate::stdlib::reflection::evaluate_deferred_property_default_value(
-            deferred,
-            eg,
-        )? else {
-            let exception = eg
-                .exception
-                .as_ref()
-                .expect("deferred property default failure sets an exception");
-            attach_constant_expression_origin(
-                exception,
+    let outermost = eg
+        .class_by_id(class_id)
+        .and_then(|class| class.deferred_instance_defaults.as_ref())
+        .is_some_and(|deferred| deferred.begin_evaluation());
+    let evaluated = (|| {
+        let mut defaults = base_defaults.as_ref().to_vec();
+        for deferred in entries.iter() {
+            let Some(value) = crate::stdlib::reflection::evaluate_deferred_property_default_value(
                 deferred,
                 eg,
-                frame,
-                op_array,
-                ip,
-            );
-            return Ok(None);
-        };
-        if eg.exception.is_some() {
-            return Ok(None);
-        }
-        let definition = eg
-            .class_by_id(class_id)
-            .and_then(|class| class.properties.get(deferred.property_index))
-            .ok_or_else(|| VmError::Fatal("Invalid deferred property default slot".into()))?;
-        let value = match prepare_property_assignment(value, definition, eg, true, &class_name) {
-            Ok(value) => value,
-            Err(message) => {
-                let exception = make_error_value("TypeError", &message);
+            )? else {
+                let exception = eg
+                    .exception
+                    .as_ref()
+                    .expect("deferred property default failure sets an exception");
                 attach_constant_expression_origin(
-                    &exception,
+                    exception,
                     deferred,
                     eg,
                     frame,
                     op_array,
                     ip,
                 );
-                eg.exception = Some(exception);
+                return Ok(None);
+            };
+            if eg.exception.is_some() {
                 return Ok(None);
             }
-        };
-        let Some(slot) = defaults.get_mut(deferred.property_index) else {
-            return Err(VmError::Fatal(
-                "Invalid deferred property default template slot".into(),
-            ));
-        };
-        *slot = value;
-    }
-
-    let resolved: std::rc::Rc<[Value]> = defaults.into();
+            let definition = eg
+                .class_by_id(class_id)
+                .and_then(|class| class.properties.get(deferred.property_index))
+                .ok_or_else(|| VmError::Fatal("Invalid deferred property default slot".into()))?;
+            let value = match prepare_property_assignment(value, definition, eg, true, &class_name)
+            {
+                Ok(value) => value,
+                Err(message) => {
+                    let exception = make_error_value("TypeError", &message);
+                    attach_constant_expression_origin(
+                        &exception,
+                        deferred,
+                        eg,
+                        frame,
+                        op_array,
+                        ip,
+                    );
+                    eg.exception = Some(exception);
+                    return Ok(None);
+                }
+            };
+            let Some(slot) = defaults.get_mut(deferred.property_index) else {
+                return Err(VmError::Fatal(
+                    "Invalid deferred property default template slot".into(),
+                ));
+            };
+            *slot = value;
+        }
+        Ok(Some(std::rc::Rc::<[Value]>::from(defaults)))
+    })();
     if let Some(deferred) = eg
         .class_by_id(class_id)
         .and_then(|class| class.deferred_instance_defaults.as_ref())
     {
-        deferred.cache_resolved(resolved.clone());
+        deferred.end_evaluation();
+        if outermost
+            && let Ok(Some(resolved)) = &evaluated
+        {
+            deferred.cache_resolved(resolved.clone());
+        }
     }
-    Ok(Some(resolved))
+    evaluated
 }
 
 #[inline(never)]
@@ -978,7 +1023,7 @@ fn convert_object_property_name<'a>(
         let rendered = if property.value_type() == ValueType::Closure {
             None
         } else {
-            call_magic_method(eg, &property, "__tostring", &[])?
+            call_object_string_conversion(eg, &property)?
         };
         if let Some(result) = take_magic_exception(eg, frame)? {
             return Ok(ConvertedPropertyName::Control(result));
@@ -991,15 +1036,12 @@ fn convert_object_property_name<'a>(
                 format!("Object of class {class_name} could not be converted to string"),
             )?));
         };
-        let Some(rendered) = rendered.as_str() else {
-            return Ok(ConvertedPropertyName::Control(object_property_throw(
-                eg,
-                frame,
-                "TypeError",
-                format!("{class_name}::__toString(): Return value must be of type string"),
-            )?));
-        };
-        return Ok(ConvertedPropertyName::Name(rendered.to_string()));
+        return Ok(ConvertedPropertyName::Name(
+            rendered
+                .as_str()
+                .expect("canonical object string conversion returns String")
+                .to_string(),
+        ));
     }
 
     if property.value_type() == ValueType::Array {

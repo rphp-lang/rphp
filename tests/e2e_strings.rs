@@ -1055,7 +1055,7 @@ set_error_handler(function(int $level, string $message): never {
 try { echo [1]; } catch (Exception $error) { echo "\n", $error->getMessage(); }
 "#,
         ),
-        "good|good\nObject of class stdClass could not be converted to string\nInvalidOutput::__toString(): Return value must be of type string\nArray to string conversion",
+        "good|good\nObject of class stdClass could not be converted to string\nInvalidOutput::__toString(): Return value must be of type string, array returned\nArray to string conversion",
     );
 }
 

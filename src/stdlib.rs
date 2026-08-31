@@ -3346,68 +3346,106 @@ fn fn_array_column(
 
 fn fn_sort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
-    let arr = unsafe { &mut *arg_mut!(ed, 0) };
-    if let Some(a) = arr.as_array_mut() {
-        let mut entries = a
-            .values()
-            .map(array_sort_snapshot_value)
-            .collect::<Vec<_>>();
-        if !sort_direct_long_entries(&mut entries, flags, false, |value| value)
-            && !sort_direct_total_scalar_entries(
-                &mut entries,
-                flags,
-                false,
-                eg.precision,
-                |value| value,
-            )
-        {
-            stable_sort_checked(&mut entries, |left, right| {
-                sort_value_order_runtime(ed, eg, left, right, flags)
-            })?;
-            if eg.exception.is_some() {
-                return Ok(());
+    let arr_ptr = arg_mut!(ed, 0);
+    // SAFETY: arg_mut returns the live writable first argument slot. No Rust
+    // reference derived from it crosses the comparator callback: entries and
+    // the optional guard are owned snapshots, and every later access resolves
+    // the raw slot again after user code may have rebound it.
+    unsafe {
+        if let Some(a) = (&*arr_ptr).as_array() {
+            let original_identity = (&*arr_ptr).array_identity();
+            let reentrant_guard = if a
+                .values()
+                .any(|value| value.dereferenced().value_type() == ValueType::Object)
+            {
+                Some((&*arr_ptr).clone())
+            } else {
+                None
+            };
+            let mut entries = a
+                .values()
+                .map(array_sort_snapshot_value)
+                .collect::<Vec<_>>();
+            if !sort_direct_long_entries(&mut entries, flags, false, |value| value)
+                && !sort_direct_total_scalar_entries(
+                    &mut entries,
+                    flags,
+                    false,
+                    eg.precision,
+                    |value| value,
+                )
+            {
+                stable_sort_checked(&mut entries, |left, right| {
+                    sort_value_order_runtime(ed, eg, left, right, flags)
+                })?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
             }
+            if reentrant_guard.is_some() && (&*arr_ptr).array_identity() != original_identity {
+                ret!(rv, Value::bool(true));
+            }
+            let mut new = PhpArray::new();
+            for value in entries {
+                new.push(array_projection_value(&value));
+            }
+            *arr_ptr = Value::array(new);
+            ret!(rv, Value::bool(true));
+        } else {
+            ret!(rv, Value::bool(false));
         }
-        let mut new = PhpArray::new();
-        for value in entries {
-            new.push(array_projection_value(&value));
-        }
-        *arr = Value::array(new);
-        ret!(rv, Value::bool(true));
-    } else {
-        ret!(rv, Value::bool(false));
     }
 }
 
 fn fn_rsort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
-    let arr = unsafe { &mut *arg_mut!(ed, 0) };
-    if let Some(a) = arr.as_array_mut() {
-        let mut entries = a
-            .values()
-            .map(array_sort_snapshot_value)
-            .collect::<Vec<_>>();
-        if !sort_direct_long_entries(&mut entries, flags, true, |value| value)
-            && !sort_direct_total_scalar_entries(&mut entries, flags, true, eg.precision, |value| {
-                value
-            })
-        {
-            stable_sort_checked(&mut entries, |left, right| {
-                sort_value_order_runtime(ed, eg, left, right, flags)
-                    .map(std::cmp::Ordering::reverse)
-            })?;
-            if eg.exception.is_some() {
-                return Ok(());
+    let arr_ptr = arg_mut!(ed, 0);
+    // SAFETY: this is the same live-slot/snapshot discipline as fn_sort; no
+    // derived reference survives a callback and writeback rechecks identity.
+    unsafe {
+        if let Some(a) = (&*arr_ptr).as_array() {
+            let original_identity = (&*arr_ptr).array_identity();
+            let reentrant_guard = if a
+                .values()
+                .any(|value| value.dereferenced().value_type() == ValueType::Object)
+            {
+                Some((&*arr_ptr).clone())
+            } else {
+                None
+            };
+            let mut entries = a
+                .values()
+                .map(array_sort_snapshot_value)
+                .collect::<Vec<_>>();
+            if !sort_direct_long_entries(&mut entries, flags, true, |value| value)
+                && !sort_direct_total_scalar_entries(
+                    &mut entries,
+                    flags,
+                    true,
+                    eg.precision,
+                    |value| value,
+                )
+            {
+                stable_sort_checked(&mut entries, |left, right| {
+                    sort_value_order_runtime(ed, eg, left, right, flags)
+                        .map(std::cmp::Ordering::reverse)
+                })?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
             }
+            if reentrant_guard.is_some() && (&*arr_ptr).array_identity() != original_identity {
+                ret!(rv, Value::bool(true));
+            }
+            let mut new = PhpArray::new();
+            for value in entries {
+                new.push(array_projection_value(&value));
+            }
+            *arr_ptr = Value::array(new);
+            ret!(rv, Value::bool(true));
+        } else {
+            ret!(rv, Value::bool(false));
         }
-        let mut new = PhpArray::new();
-        for value in entries {
-            new.push(array_projection_value(&value));
-        }
-        *arr = Value::array(new);
-        ret!(rv, Value::bool(true));
-    } else {
-        ret!(rv, Value::bool(false));
     }
 }
 
@@ -5160,18 +5198,22 @@ fn fn_strlen(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    if reject_strict_internal_string(eg, ed, arg!(ed, 0), "strlen", "string") {
+    let direct = arg!(ed, 0).dereferenced();
+    if direct.value_type() == ValueType::String {
+        ret!(
+            rv,
+            Value::long(direct.php_string_bytes().unwrap_or_default().len() as i64)
+        );
+    }
+    let Some(argument) =
+        typed_internal_string_value_argument_expected(ed, eg, "strlen", 0, "string", "string")?
+    else {
         return Ok(());
-    }
-    if arg!(ed, 0).dereferenced().value_type() == ValueType::Null {
-        report_internal_deprecation(
-            eg,
-            ed,
-            "strlen(): Passing null to parameter #1 ($string) of type string is deprecated",
-        )?;
-    }
-    let result = direct_strlen(std::slice::from_ref(arg!(ed, 0)), eg.precision)?;
-    ret!(rv, result);
+    };
+    ret!(
+        rv,
+        Value::long(argument.php_string_bytes().unwrap_or_default().len() as i64)
+    );
 }
 
 #[inline(always)]
@@ -6523,38 +6565,7 @@ fn typed_internal_string_value_argument_with_null_expected(
                 );
                 return Ok(None);
             };
-            let rendered = rendered.dereferenced();
-            match rendered.value_type() {
-                ValueType::String => Some(rendered.clone()),
-                ValueType::Long | ValueType::Double | ValueType::True | ValueType::False => {
-                    if rendered.as_double().is_some_and(f64::is_nan) {
-                        report_internal_diagnostic(
-                            eg,
-                            ed,
-                            2,
-                            "Warning",
-                            "unexpected NAN value was coerced to string",
-                        )?;
-                        if eg.exception.is_some() {
-                            return Ok(None);
-                        }
-                    }
-                    Some(Value::string(
-                        rendered.echo_to_string_with_precision(eg.precision),
-                    ))
-                }
-                _ => {
-                    let class_name = argument.diagnostic_type_name();
-                    let actual = rendered.diagnostic_type_name();
-                    eg.exception = Some(crate::value::make_error_value(
-                        "TypeError",
-                        &format!(
-                            "{class_name}::__toString(): Return value must be of type string, {actual} returned"
-                        ),
-                    ));
-                    return Ok(None);
-                }
-            }
+            Some(rendered)
         }
         _ => {
             typed_internal_argument_error(
@@ -7636,19 +7647,7 @@ fn typed_internal_array_or_string_argument(
                 );
                 return Ok(None);
             };
-            let rendered = rendered.dereferenced();
-            if rendered.value_type() != ValueType::String {
-                let class_name = argument.diagnostic_type_name();
-                let actual = rendered.diagnostic_type_name();
-                eg.exception = Some(crate::value::make_error_value(
-                    "TypeError",
-                    &format!(
-                        "{class_name}::__toString(): Return value must be of type string, {actual} returned"
-                    ),
-                ));
-                return Ok(None);
-            }
-            Some(rendered.clone())
+            Some(rendered)
         }
         _ => {
             typed_internal_argument_error(
@@ -8279,9 +8278,14 @@ fn direct_strtolower(args: &[Value]) -> Result<Value, VmError> {
 fn fn_strtolower(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let result = direct_strtolower(std::slice::from_ref(arg!(ed, 0)))?;
+    let Some(argument) =
+        typed_internal_string_value_argument_expected(ed, eg, "strtolower", 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let result = direct_strtolower(std::slice::from_ref(&argument))?;
     ret!(rv, result);
 }
 
@@ -8296,9 +8300,14 @@ fn direct_strtoupper(args: &[Value]) -> Result<Value, VmError> {
 fn fn_strtoupper(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let result = direct_strtoupper(std::slice::from_ref(arg!(ed, 0)))?;
+    let Some(argument) =
+        typed_internal_string_value_argument_expected(ed, eg, "strtoupper", 0, "string", "string")?
+    else {
+        return Ok(());
+    };
+    let result = direct_strtoupper(std::slice::from_ref(&argument))?;
     ret!(rv, result);
 }
 
@@ -26461,42 +26470,59 @@ fn fn_array_walk_recursive(
 /// asort(&$array): bool — sort by value, preserve keys
 fn fn_asort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
-    let arr = unsafe { &mut *arg_mut!(ed, 0) };
-    if let Some(php_arr) = arr.as_array() {
-        let external_byte_keys = php_arr.has_external_byte_keys();
-        let utf8_text_keys = php_arr.has_utf8_text_keys();
-        let mut pairs: Vec<(ArrayKey, Value)> = php_arr
-            .iter()
-            .map(|(key, value)| (key, array_sort_snapshot_value(value)))
-            .collect();
-        if !sort_direct_long_entries(&mut pairs, flags, false, |(_, value)| value)
-            && !sort_direct_total_scalar_entries(
-                &mut pairs,
-                flags,
-                false,
-                eg.precision,
-                |(_, value)| value,
-            )
-        {
-            stable_sort_checked(&mut pairs, |(_, left), (_, right)| {
-                sort_value_order_runtime(ed, eg, left, right, flags)
-            })?;
-            if eg.exception.is_some() {
-                return Ok(());
+    let arr_ptr = arg_mut!(ed, 0);
+    // SAFETY: arg_mut supplies the live array slot. All keys/values used by a
+    // comparator are owned snapshots, and the slot is re-read only after the
+    // callback returns, before any writeback.
+    unsafe {
+        if let Some(php_arr) = (&*arr_ptr).as_array() {
+            let original_identity = (&*arr_ptr).array_identity();
+            let reentrant_guard = if php_arr
+                .values()
+                .any(|value| value.dereferenced().value_type() == ValueType::Object)
+            {
+                Some((&*arr_ptr).clone())
+            } else {
+                None
+            };
+            let external_byte_keys = php_arr.has_external_byte_keys();
+            let utf8_text_keys = php_arr.has_utf8_text_keys();
+            let mut pairs: Vec<(ArrayKey, Value)> = php_arr
+                .iter()
+                .map(|(key, value)| (key, array_sort_snapshot_value(value)))
+                .collect();
+            if !sort_direct_long_entries(&mut pairs, flags, false, |(_, value)| value)
+                && !sort_direct_total_scalar_entries(
+                    &mut pairs,
+                    flags,
+                    false,
+                    eg.precision,
+                    |(_, value)| value,
+                )
+            {
+                stable_sort_checked(&mut pairs, |(_, left), (_, right)| {
+                    sort_value_order_runtime(ed, eg, left, right, flags)
+                })?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
             }
+            if reentrant_guard.is_some() && (&*arr_ptr).array_identity() != original_identity {
+                ret!(rv, Value::bool(true));
+            }
+            let mut new_arr = PhpArray::new();
+            for (key, value) in pairs {
+                new_arr.set(key, array_projection_value(&value));
+            }
+            if external_byte_keys {
+                new_arr.mark_external_byte_keys();
+            }
+            if utf8_text_keys {
+                new_arr.mark_utf8_text_keys();
+            }
+            *arr_ptr = Value::array(new_arr);
+            ret!(rv, Value::bool(true));
         }
-        let mut new_arr = PhpArray::new();
-        for (key, value) in pairs {
-            new_arr.set(key, array_projection_value(&value));
-        }
-        if external_byte_keys {
-            new_arr.mark_external_byte_keys();
-        }
-        if utf8_text_keys {
-            new_arr.mark_utf8_text_keys();
-        }
-        *arr = Value::array(new_arr);
-        ret!(rv, Value::bool(true));
     }
     ret!(rv, Value::bool(false));
 }
@@ -26508,43 +26534,59 @@ fn fn_arsort(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
-    let arr = unsafe { &mut *arg_mut!(ed, 0) };
-    if let Some(php_arr) = arr.as_array() {
-        let external_byte_keys = php_arr.has_external_byte_keys();
-        let utf8_text_keys = php_arr.has_utf8_text_keys();
-        let mut pairs: Vec<(ArrayKey, Value)> = php_arr
-            .iter()
-            .map(|(key, value)| (key, array_sort_snapshot_value(value)))
-            .collect();
-        if !sort_direct_long_entries(&mut pairs, flags, true, |(_, value)| value)
-            && !sort_direct_total_scalar_entries(
-                &mut pairs,
-                flags,
-                true,
-                eg.precision,
-                |(_, value)| value,
-            )
-        {
-            stable_sort_checked(&mut pairs, |(_, left), (_, right)| {
-                sort_value_order_runtime(ed, eg, left, right, flags)
-                    .map(std::cmp::Ordering::reverse)
-            })?;
-            if eg.exception.is_some() {
-                return Ok(());
+    let arr_ptr = arg_mut!(ed, 0);
+    // SAFETY: this mirrors fn_asort's snapshot/re-resolve discipline for the
+    // reverse comparator and never retains a slot reference across user code.
+    unsafe {
+        if let Some(php_arr) = (&*arr_ptr).as_array() {
+            let original_identity = (&*arr_ptr).array_identity();
+            let reentrant_guard = if php_arr
+                .values()
+                .any(|value| value.dereferenced().value_type() == ValueType::Object)
+            {
+                Some((&*arr_ptr).clone())
+            } else {
+                None
+            };
+            let external_byte_keys = php_arr.has_external_byte_keys();
+            let utf8_text_keys = php_arr.has_utf8_text_keys();
+            let mut pairs: Vec<(ArrayKey, Value)> = php_arr
+                .iter()
+                .map(|(key, value)| (key, array_sort_snapshot_value(value)))
+                .collect();
+            if !sort_direct_long_entries(&mut pairs, flags, true, |(_, value)| value)
+                && !sort_direct_total_scalar_entries(
+                    &mut pairs,
+                    flags,
+                    true,
+                    eg.precision,
+                    |(_, value)| value,
+                )
+            {
+                stable_sort_checked(&mut pairs, |(_, left), (_, right)| {
+                    sort_value_order_runtime(ed, eg, left, right, flags)
+                        .map(std::cmp::Ordering::reverse)
+                })?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
             }
+            if reentrant_guard.is_some() && (&*arr_ptr).array_identity() != original_identity {
+                ret!(rv, Value::bool(true));
+            }
+            let mut new_arr = PhpArray::new();
+            for (key, value) in pairs {
+                new_arr.set(key, array_projection_value(&value));
+            }
+            if external_byte_keys {
+                new_arr.mark_external_byte_keys();
+            }
+            if utf8_text_keys {
+                new_arr.mark_utf8_text_keys();
+            }
+            *arr_ptr = Value::array(new_arr);
+            ret!(rv, Value::bool(true));
         }
-        let mut new_arr = PhpArray::new();
-        for (key, value) in pairs {
-            new_arr.set(key, array_projection_value(&value));
-        }
-        if external_byte_keys {
-            new_arr.mark_external_byte_keys();
-        }
-        if utf8_text_keys {
-            new_arr.mark_utf8_text_keys();
-        }
-        *arr = Value::array(new_arr);
-        ret!(rv, Value::bool(true));
     }
     ret!(rv, Value::bool(false));
 }

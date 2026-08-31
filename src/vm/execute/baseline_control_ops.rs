@@ -1223,8 +1223,47 @@ fn op_include<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &crate::vm::instruction::Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let path_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-    let path_str = path_val.echo_to_string();
+    // SAFETY: opcode dispatch supplies a live frame and an operand descriptor
+    // belonging to this op-array. Clone the dereferenced value before any
+    // object conversion callback can re-enter and mutate the source slot.
+    let path_val = unsafe {
+        (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array))
+            .dereferenced()
+            .clone()
+    };
+    let path_str = if path_val.value_type() == ValueType::Object {
+        let class_name = path_val
+            .as_object()
+            .map(|object| object.class_name.to_string())
+            .unwrap_or_else(|| "object".to_string());
+        let rendered = call_object_string_conversion(eg, &path_val)?;
+        if let Some(exception) = eg.exception.take() {
+            return Ok(match throw_in_frame(eg, frame, exception)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+        let Some(rendered) = rendered else {
+            let error = make_error_value(
+                "Error",
+                &format!("Object of class {class_name} could not be converted to string"),
+            );
+            return Ok(match throw_in_frame(eg, frame, error)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        };
+        rendered
+            .as_str()
+            .expect("canonical object string conversion returns String")
+            .to_string()
+    } else {
+        path_val.echo_to_string()
+    };
     let is_require = (opline.extended_value & 1) != 0;
     let is_once = (opline.extended_value & 2) != 0;
 

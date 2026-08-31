@@ -60,7 +60,7 @@ fn prepare_concat_operand_value(
         let conversion = if value.value_type() == ValueType::Closure {
             None
         } else {
-            call_magic_method_from_current_site(eg, value, "__tostring", &[])?
+            call_object_string_conversion(eg, value)?
         };
         if eg.exception.is_some() {
             return Ok(None);
@@ -76,51 +76,7 @@ fn prepare_concat_operand_value(
             );
             return Ok(None);
         };
-        let conversion = conversion.dereferenced();
-        if conversion.value_type() == ValueType::String {
-            return Ok(Some(conversion.clone()));
-        }
-
-        // `__toString()` has an implicit string return contract even when the
-        // declaration omits `: string`. PHP weakly coerces scalar returns in a
-        // weak method file, while strict method files reject the same values.
-        let method_name = format!("{}::__tostring", class_name.to_lowercase());
-        // SAFETY: find_function returns a live immutable function-table entry;
-        // the discriminant is checked before reading the UserFunction tail.
-        let weak_method = eg.find_function(&method_name).is_some_and(|function| unsafe {
-            (*function).fn_type == FunctionType::User
-                && !(*(function as *const UserFunction)).op_array.strict_types
-        });
-        if weak_method
-            && matches!(
-                conversion.value_type(),
-                ValueType::Long | ValueType::Double | ValueType::True | ValueType::False
-            )
-        {
-            return Ok(Some(Value::string(
-                conversion.echo_to_string_with_precision(eg.precision),
-            )));
-        }
-
-        {
-            let returned_type = match conversion.value_type() {
-                ValueType::True => "true".into(),
-                ValueType::False => "false".into(),
-                _ => conversion.diagnostic_type_name(),
-            };
-            let outcome = format!("{returned_type} returned");
-            publish_concat_conversion_error(
-                eg,
-                frame,
-                op_array,
-                opline,
-                "TypeError",
-                &format!(
-                    "{class_name}::__toString(): Return value must be of type string, {outcome}"
-                ),
-            );
-            return Ok(None);
-        }
+        return Ok(Some(conversion));
     }
 
     Ok(Some(if value.value_type() == ValueType::String {
@@ -132,6 +88,34 @@ fn prepare_concat_operand_value(
 
 #[inline]
 fn concatenate_string_values(left: &Value, right: &Value) -> Value {
+    if !left.is_binary_string() && !right.is_binary_string() {
+        let left = left.as_str();
+        let right = right.as_str();
+        debug_assert!(left.is_some() && right.is_some());
+        let left = left.unwrap_or_default();
+        let right = right.unwrap_or_default();
+        let mut concatenated = String::with_capacity(left.len() + right.len());
+        concatenated.push_str(left);
+        concatenated.push_str(right);
+        return Value::string(concatenated);
+    }
+
+    let left = left.php_string_bytes();
+    let right = right.php_string_bytes();
+    debug_assert!(left.is_some() && right.is_some());
+    let left = left.unwrap_or_default();
+    let right = right.unwrap_or_default();
+    let mut concatenated = Vec::with_capacity(left.len() + right.len());
+    concatenated.extend_from_slice(left.as_ref());
+    concatenated.extend_from_slice(right.as_ref());
+    Value::binary_string(&concatenated)
+}
+
+/// The scalar-plan opcode proves both operands are strings and executes this
+/// leaf in tight loops. Keep its storage split local to that opcode without
+/// forcing the larger generic concat helper into every caller.
+#[inline(always)]
+fn concatenate_proven_string_values(left: &Value, right: &Value) -> Value {
     if !left.is_binary_string() && !right.is_binary_string() {
         let left = left.as_str();
         let right = right.as_str();
