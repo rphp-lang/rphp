@@ -93,7 +93,9 @@ impl Parser {
             Expr::ErrorSuppress(inner) => (*inner, true),
             target => (target, false),
         };
-        let assignment = if self.peek() == Token::Assign && self.peek_at(1) == Token::Ampersand {
+        let assignment = if self.peek() == Token::Assign
+            && matches!(self.peek_at(1), Token::Ampersand(_))
+        {
             // Reference assignment has lower precedence than bitwise AND. It
             // must be recognized before parse_bitwise_and consumes `&` as an
             // infix operator and asks for an expression after `$left =`.
@@ -143,7 +145,7 @@ impl Parser {
         self.expect_lbracket()?;
         self.expect(&Token::RBracket)?;
         self.expect(&Token::Assign)?;
-        let by_ref = if self.peek() == Token::Ampersand {
+        let by_ref = if matches!(self.peek(), Token::Ampersand(_)) {
             self.advance();
             true
         } else {
@@ -227,7 +229,7 @@ impl Parser {
 
     fn finish_assignment_expression(&mut self, target: Expr) -> Result<Expr, String> {
         self.expect(&Token::Assign)?;
-        let by_reference = if self.peek() == Token::Ampersand {
+        let by_reference = if matches!(self.peek(), Token::Ampersand(_)) {
             self.advance();
             true
         } else {
@@ -662,7 +664,7 @@ impl Parser {
     fn parse_bitwise_and(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_comparison()?;
 
-        while self.peek() == Token::Ampersand {
+        while matches!(self.peek(), Token::Ampersand(_)) {
             self.advance();
             let right = self.parse_comparison()?;
             let right = self.finish_assignment_tail(right)?;
@@ -683,7 +685,7 @@ impl Parser {
 
         loop {
             // instanceof has same precedence as comparison operators
-            if self.peek() == Token::Instanceof {
+            if self.peek_is_instanceof_keyword() {
                 self.advance();
                 left = if self.peek() == Token::Backslash
                     || matches!(self.peek(), Token::Identifier(_, _) | Token::Enum { .. })
@@ -892,7 +894,7 @@ impl Parser {
                 let mut expr = self.parse_unary()?;
                 // `instanceof` binds tighter than logical negation in PHP:
                 // `!$value instanceof Type` means `!($value instanceof Type)`.
-                if self.peek() == Token::Instanceof {
+                if self.peek_is_instanceof_keyword() {
                     self.advance();
                     expr = if self.peek() == Token::Backslash
                         || matches!(self.peek(), Token::Identifier(_, _) | Token::Enum { .. })
@@ -1066,6 +1068,23 @@ impl Parser {
                     Token::ArrayKw => (Some(CastType::Array), None),
                     _ => (None, None),
                 };
+                if matches!(&next, Token::Identifier(name, _) if name.eq_ignore_ascii_case("mixed"))
+                    && self.tokens.get(self.pos + 2) == Some(&Token::RParen)
+                {
+                    self.advance(); // (
+                    self.advance(); // mixed
+                    self.advance(); // )
+                    let unexpected = match self.peek() {
+                        Token::Integer(value) => format!("integer \"{value}\""),
+                        Token::Float(value) => format!("floating-point number \"{value}\""),
+                        Token::Identifier(name, _) => format!("identifier \"{name}\""),
+                        token => format!("token \"{token:?}\""),
+                    };
+                    return Err(self.source_error(
+                        &format!("syntax error, unexpected {unexpected}"),
+                        self.closest_token_source_line(),
+                    ));
+                }
                 if let Some(ct) = cast_type {
                     if self.tokens.get(self.pos + 2) == Some(&Token::RParen) {
                         if matches!(&next, Token::Identifier(name, _) if name.eq_ignore_ascii_case("real")) {
@@ -1936,6 +1955,10 @@ impl Parser {
                 self.expect(&Token::RParen)?;
                 Ok(Expr::ArrayLiteral(elements))
             }
+            Token::Ampersand(line) => Err(self.source_error(
+                "syntax error, unexpected token \"&\"",
+                line,
+            )),
             other => Err(format!("Expected expression, got {:?}", other)),
         }
     }
@@ -1978,7 +2001,7 @@ impl Parser {
                     by_reference: false,
                 });
             } else {
-                let leading_reference = if self.peek() == Token::Ampersand {
+                let leading_reference = if matches!(self.peek(), Token::Ampersand(_)) {
                     self.advance();
                     true
                 } else {
@@ -1991,7 +2014,7 @@ impl Parser {
                         return Err("Array keys cannot be references".into());
                     }
                     self.advance();
-                    let by_reference = if self.peek() == Token::Ampersand {
+                    let by_reference = if matches!(self.peek(), Token::Ampersand(_)) {
                         self.advance();
                         true
                     } else {

@@ -665,7 +665,10 @@ impl Parser {
                     // the compiler can preserve the source reference cell.
                     let is_push = self.tokens.get(self.pos + 2) == Some(&Token::RBracket)
                         && self.tokens.get(self.pos + 3) == Some(&Token::Assign)
-                        && self.tokens.get(self.pos + 4) != Some(&Token::Ampersand);
+                        && !matches!(
+                            self.tokens.get(self.pos + 4),
+                            Some(Token::Ampersand(_))
+                        );
                     if is_push {
                         let (var_name, line) = match self.advance() {
                             Token::Variable(name, line) => (name, line),
@@ -738,7 +741,7 @@ impl Parser {
                         _ => unreachable!(),
                     };
                     self.expect(&Token::Assign)?;
-                    if self.peek() == Token::Ampersand {
+                    if matches!(self.peek(), Token::Ampersand(_)) {
                         self.advance();
                         let target = self.parse_empty_dimension_target_prefix()?;
                         if !self.is_empty_array_dimension_suffix() {
@@ -1102,7 +1105,7 @@ impl Parser {
                 }
                 // foreach ($arr as $key => $val), foreach ($arr as $val),
                 // and the corresponding destructuring value forms.
-                let first_reference_line = if self.peek() == Token::Ampersand {
+                let first_reference_line = if matches!(self.peek(), Token::Ampersand(_)) {
                     // PHP locates the invalid key-reference diagnostic at the
                     // source/as boundary, including when the key starts on a
                     // following line.
@@ -1139,7 +1142,7 @@ impl Parser {
                         let _ = self.compile_error("Key element cannot be a reference", line);
                     }
                     self.advance(); // consume '=>'
-                    let by_ref = if self.peek() == Token::Ampersand {
+                    let by_ref = if matches!(self.peek(), Token::Ampersand(_)) {
                         self.advance();
                         true
                     } else {
@@ -1179,7 +1182,7 @@ impl Parser {
                         | Token::From
                         | Token::Exit { .. }
                 )
-                    || (self.peek_at(1) == Token::Ampersand
+                    || (matches!(self.peek_at(1), Token::Ampersand(_))
                         && matches!(
                             self.peek_at(2),
                             Token::Identifier(_, _)
@@ -1192,7 +1195,7 @@ impl Parser {
                 // Accept the PHP reference-return declaration marker. Return
                 // aliasing itself remains outside the current execution
                 // contract, matching the closure parser's bounded handling.
-                let returns_by_ref = self.peek() == Token::Ampersand;
+                let returns_by_ref = matches!(self.peek(), Token::Ampersand(_));
                 self.consume_reference_return_marker();
                 let name = match self.advance() {
                     Token::Identifier(n, _) | Token::Enum { name: n, .. } => n,
@@ -1290,7 +1293,11 @@ impl Parser {
                 self.attach_attributes(declaration, attributes)
             }
             Token::Class | Token::Abstract(_) | Token::Final(_) => self.parse_class(),
-            Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("class") => {
+            Token::Identifier(ref name, _)
+                if name.eq_ignore_ascii_case("class")
+                    || name.eq_ignore_ascii_case("abstract")
+                    || name.eq_ignore_ascii_case("final") =>
+            {
                 self.parse_class()
             }
             Token::Identifier(ref name, _)
@@ -1375,7 +1382,7 @@ impl Parser {
                         | Token::QuestionQuestion
                         | Token::Instanceof
                         | Token::Pipe
-                        | Token::Ampersand
+                        | Token::Ampersand(_)
                         | Token::Caret
                         | Token::StarStar
                         | Token::Spaceship

@@ -180,7 +180,7 @@ pub enum Token {
     Fn(usize),         // fn (arrow functions), with source line
     Use(usize),        // use (imports and closure capture), with source line
     Pipe,              // | (bitwise or, multi-catch separator)
-    Ampersand,         // & (bitwise and, reference)
+    Ampersand(usize),  // & (bitwise and, reference), with source line
     Caret,             // ^ (bitwise xor)
     Tilde(usize),      // ~ (bitwise not) with source line
     StarStar,          // ** (power)
@@ -608,7 +608,7 @@ impl<'a> Lexer<'a> {
                         self.pos += 2;
                     } else {
                         // Single & — bitwise and / reference
-                        tokens.push(Token::Ampersand);
+                        tokens.push(Token::Ampersand(self.source_line_at(self.pos)));
                         self.pos += 1;
                     }
                 }

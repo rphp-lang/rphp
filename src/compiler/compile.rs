@@ -1460,7 +1460,7 @@ fn class_has_runtime_interface_boundary(class: &ClassDef, class_defs: &[ClassDef
         class_defs
             .iter()
             .position(|candidate| candidate.name.eq_ignore_ascii_case(interface))
-            .is_none_or(|interface_index| interface_index > class_index)
+            .is_none_or(|interface_index| interface_index >= class_index)
     })
 }
 
@@ -1526,17 +1526,22 @@ fn runtime_class_declaration_names(
         .iter()
         .filter(|class| {
             !class.is_anonymous()
-                && !class.is_interface
                 && !class.is_trait
-                && (!class.uses.is_empty()
-                    || class_has_runtime_interface_boundary(class, class_defs)
-                    || class_has_runtime_variance_boundary(class, class_defs, &eager_class_names)
-                    || (class.is_enum
-                        && class.implements.iter().any(|interface| {
-                            !interface.eq_ignore_ascii_case("UnitEnum")
-                                && !interface.eq_ignore_ascii_case("BackedEnum")
-                                && !methodless_interfaces.contains(&interface.to_ascii_lowercase())
-                        })))
+                && (class_has_runtime_interface_boundary(class, class_defs)
+                    || (!class.is_interface
+                        && (!class.uses.is_empty()
+                            || class_has_runtime_variance_boundary(
+                                class,
+                                class_defs,
+                                &eager_class_names,
+                            )
+                            || (class.is_enum
+                                && class.implements.iter().any(|interface| {
+                                    !interface.eq_ignore_ascii_case("UnitEnum")
+                                        && !interface.eq_ignore_ascii_case("BackedEnum")
+                                        && !methodless_interfaces
+                                            .contains(&interface.to_ascii_lowercase())
+                                })))))
         })
         .map(|class| class.name.to_ascii_lowercase())
         .collect::<HashSet<_>>();
@@ -1544,13 +1549,17 @@ fn runtime_class_declaration_names(
     loop {
         let mut changed = false;
         for class in class_defs {
-            if class.is_anonymous() || class.is_interface || class.is_trait {
+            if class.is_anonymous() || class.is_trait {
                 continue;
             }
             if class
                 .parent
                 .as_ref()
                 .is_some_and(|parent| runtime.contains(&parent.to_ascii_lowercase()))
+                || class
+                    .implements
+                    .iter()
+                    .any(|interface| runtime.contains(&interface.to_ascii_lowercase()))
                 || class.constants.iter().any(|constant| {
                     class_constant_hint_references_runtime(&constant.type_hint, &runtime)
                 })

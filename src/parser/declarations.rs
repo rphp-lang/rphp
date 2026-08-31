@@ -161,7 +161,7 @@ impl Parser {
                     property.line,
                 );
             }
-            let hook_returns_by_ref = if self.peek() == Token::Ampersand {
+            let hook_returns_by_ref = if matches!(self.peek(), Token::Ampersand(_)) {
                 self.advance();
                 true
             } else {
@@ -300,6 +300,14 @@ impl Parser {
         loop {
             let (name, line) = match self.advance() {
                 Token::Variable(name, line) => (name, line),
+                Token::Identifier(name, line) => {
+                    return Err(self.source_error(
+                        &format!(
+                            "syntax error, unexpected identifier \"{name}\", expecting variable"
+                        ),
+                        line,
+                    ));
+                }
                 other => return Err(format!("Expected property variable, got {other:?}")),
             };
             if properties.is_empty() {
@@ -367,7 +375,7 @@ impl Parser {
                         property.line,
                     );
                 }
-                let hook_returns_by_ref = if self.peek() == Token::Ampersand {
+                let hook_returns_by_ref = if matches!(self.peek(), Token::Ampersand(_)) {
                     self.advance();
                     true
                 } else {
@@ -596,7 +604,7 @@ impl Parser {
                 // return-reference contract is a separate compatibility
                 // slice, but retaining the declaration as an ordinary method
                 // keeps unexercised library helpers loadable.
-                let returns_by_ref = self.peek() == Token::Ampersand;
+                let returns_by_ref = matches!(self.peek(), Token::Ampersand(_));
                 self.consume_reference_return_marker();
                 let token = self.advance();
                 let method_name = Self::token_as_named_arg_label(&token)
@@ -676,6 +684,10 @@ impl Parser {
     /// Parse try { } catch (Type $e) { } finally { }
     fn parse_try_catch(&mut self) -> Result<Stmt, String> {
         self.advance(); // consume 'try'
+        let try_line = match self.peek() {
+            Token::LBrace(line) => line,
+            _ => self.closest_token_source_line(),
+        };
         self.expect(&Token::LBrace(0))?;
         let mut try_body = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
@@ -756,7 +768,7 @@ impl Parser {
         };
 
         if catches.is_empty() && finally_body.is_none() {
-            return Err("Cannot use try without catch or finally".into());
+            let _ = self.compile_error("Cannot use try without catch or finally", try_line);
         }
 
         Ok(Stmt::TryCatch {
@@ -776,7 +788,10 @@ impl Parser {
             match self.peek() {
                 Token::Abstract(line) => {
                     self.advance();
-                    if is_final {
+                    if is_abstract {
+                        let _ = self
+                            .compile_error("Multiple abstract modifiers are not allowed", line);
+                    } else if is_final {
                         let _ = self.compile_error(
                             "Cannot use the final modifier on an abstract class",
                             line,
@@ -786,7 +801,40 @@ impl Parser {
                 }
                 Token::Final(line) => {
                     self.advance();
+                    if is_final {
+                        let _ =
+                            self.compile_error("Multiple final modifiers are not allowed", line);
+                    } else if is_abstract {
+                        let _ = self.compile_error(
+                            "Cannot use the final modifier on an abstract class",
+                            line,
+                        );
+                    }
+                    is_final = true;
+                }
+                Token::Identifier(ref modifier, line)
+                    if modifier.eq_ignore_ascii_case("abstract") =>
+                {
+                    self.advance();
                     if is_abstract {
+                        let _ = self
+                            .compile_error("Multiple abstract modifiers are not allowed", line);
+                    } else if is_final {
+                        let _ = self.compile_error(
+                            "Cannot use the final modifier on an abstract class",
+                            line,
+                        );
+                    }
+                    is_abstract = true;
+                }
+                Token::Identifier(ref modifier, line)
+                    if modifier.eq_ignore_ascii_case("final") =>
+                {
+                    self.advance();
+                    if is_final {
+                        let _ =
+                            self.compile_error("Multiple final modifiers are not allowed", line);
+                    } else if is_abstract {
                         let _ = self.compile_error(
                             "Cannot use the final modifier on an abstract class",
                             line,
@@ -807,7 +855,11 @@ impl Parser {
                 _ => break,
             }
         }
-        self.advance(); // consume 'class'
+        match self.advance() {
+            Token::Class => {}
+            Token::Identifier(name, _) if name.eq_ignore_ascii_case("class") => {}
+            other => return Err(format!("Expected class keyword, got {other:?}")),
+        }
         let (name, line) = self.parse_classlike_declaration_name("class")?;
         let generic_params = self.parse_generic_parameters()?;
         self.push_generic_scope(&generic_params);
@@ -929,7 +981,7 @@ impl Parser {
                     _ => unreachable!("method parser starts at function"),
                 };
                 self.defer_method_modifier_diagnostics(&modifiers, line);
-                let returns_by_ref = self.peek() == Token::Ampersand;
+                let returns_by_ref = matches!(self.peek(), Token::Ampersand(_));
                 self.consume_reference_return_marker();
                 let token = self.advance();
                 let method_name = Self::token_as_named_arg_label(&token)
@@ -1107,7 +1159,7 @@ impl Parser {
                     _ => unreachable!("method parser starts at function"),
                 };
                 self.defer_method_modifier_diagnostics(&modifiers, line);
-                let returns_by_ref = self.peek() == Token::Ampersand;
+                let returns_by_ref = matches!(self.peek(), Token::Ampersand(_));
                 self.consume_reference_return_marker();
                 let token = self.advance();
                 let method_name = Self::token_as_named_arg_label(&token)
@@ -1298,7 +1350,7 @@ impl Parser {
                     _ => unreachable!("method parser starts at function"),
                 };
                 self.defer_method_modifier_diagnostics(&modifiers, line);
-                let returns_by_ref = self.peek() == Token::Ampersand;
+                let returns_by_ref = matches!(self.peek(), Token::Ampersand(_));
                 self.consume_reference_return_marker();
                 let token = self.advance();
                 let method_name = Self::token_as_named_arg_label(&token)
@@ -1487,7 +1539,7 @@ impl Parser {
                         _ => unreachable!("method parser starts at function"),
                     };
                     self.defer_method_modifier_diagnostics(&modifiers, line);
-                    let returns_by_ref = self.peek() == Token::Ampersand;
+                    let returns_by_ref = matches!(self.peek(), Token::Ampersand(_));
                     self.consume_reference_return_marker();
                     let token = self.advance();
                     let method_name = Self::token_as_named_arg_label(&token)
@@ -1898,7 +1950,7 @@ impl Parser {
             Token::Fn(line) => line,
             token => return Err(format!("Expected fn, got {token:?}")),
         };
-        let returns_by_ref = if self.peek() == Token::Ampersand {
+        let returns_by_ref = if matches!(self.peek(), Token::Ampersand(_)) {
             self.advance();
             true
         } else {
@@ -2249,7 +2301,7 @@ impl Parser {
             Token::Function(line) => line,
             token => return Err(format!("Expected function, got {token:?}")),
         };
-        let returns_by_ref = if self.peek() == Token::Ampersand {
+        let returns_by_ref = if matches!(self.peek(), Token::Ampersand(_)) {
             self.advance();
             true
         } else {
@@ -2266,7 +2318,7 @@ impl Parser {
             self.advance();
             self.expect_lparen()?;
             loop {
-                let is_ref = if self.peek() == Token::Ampersand {
+                let is_ref = if matches!(self.peek(), Token::Ampersand(_)) {
                     self.advance();
                     true
                 } else {
@@ -2281,7 +2333,7 @@ impl Parser {
                         let unexpected = match other {
                             Token::RParen => "token \")\"".to_string(),
                             Token::Comma(_) => "token \",\"".to_string(),
-                            Token::Ampersand => "token \"&\"".to_string(),
+                            Token::Ampersand(_) => "token \"&\"".to_string(),
                             Token::Integer(value) => format!("integer \"{value}\""),
                             Token::Float(value) => format!("floating-point number \"{value}\""),
                             Token::Identifier(name, _) => format!("identifier \"{name}\""),

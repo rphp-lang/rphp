@@ -131,5 +131,8 @@ var_dump($holder->wide, $holder->empty, $holder->either);
 #[test]
 fn grouped_property_cannot_repeat_a_type_after_the_comma() {
     let error = run_php_expect_error("<?php class Bad { public $a, int $b; }");
-    assert!(format!("{error:?}").contains("Expected property variable"));
+    assert_eq!(
+        error.to_string(),
+        "syntax error, unexpected identifier \"int\", expecting variable on line 1"
+    );
 }

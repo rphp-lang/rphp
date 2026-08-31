@@ -44,6 +44,7 @@ impl Parser {
             | Token::Yield(line)
             | Token::Clone(line)
             | Token::AttributeStart(line)
+            | Token::Ampersand(line)
             | Token::ParseError(_, line)
             | Token::CompileError(_, line)
             | Token::CompileWarning(_, line)
@@ -88,6 +89,7 @@ impl Parser {
                 | Token::Yield(line)
                 | Token::Clone(line)
                 | Token::AttributeStart(line)
+                | Token::Ampersand(line)
                 | Token::ParseError(_, line)
                 | Token::CompileError(_, line)
                 | Token::CompileWarning(_, line)
@@ -113,7 +115,7 @@ impl Parser {
 
     /// Consume PHP's marker for a function or method returning by reference.
     pub(super) fn consume_reference_return_marker(&mut self) {
-        if self.peek() == Token::Ampersand {
+        if matches!(self.peek(), Token::Ampersand(_)) {
             self.advance();
         }
     }
@@ -720,7 +722,7 @@ impl Parser {
             Token::Variable(_, _)
                 | Token::This(_)
                 | Token::DotDotDot(_)
-                | Token::Ampersand
+                | Token::Ampersand(_)
                 | Token::Question
                 | Token::Backslash
                 | Token::Namespace
@@ -964,6 +966,12 @@ impl Parser {
             let hint = if self.peek() == Token::Question {
                 self.advance(); // consume '?'
                 let inner = self.parse_base_type_hint()?;
+                if matches!(self.peek(), Token::Ampersand(_)) {
+                    return Err(self.source_error(
+                        "syntax error, unexpected token \"&\", expecting \"{\"",
+                        self.closest_token_source_line(),
+                    ));
+                }
                 TypeHint::Nullable(Box::new(inner))
             } else {
                 let hint = self.parse_base_type_hint()?;
@@ -1003,7 +1011,12 @@ impl Parser {
 
     fn maybe_parse_intersection_type(&mut self, first: TypeHint) -> Result<TypeHint, String> {
         let mut types = vec![first];
-        while self.peek() == Token::Ampersand
+        if matches!(self.peek(), Token::Ampersand(_))
+            && let Some(Token::AttributeStart(line)) = self.tokens.get(self.pos + 1)
+        {
+            return Err(self.source_error("syntax error, unexpected token \"#[\"", *line));
+        }
+        while matches!(self.peek(), Token::Ampersand(_))
             && matches!(
                 self.tokens.get(self.pos + 1),
                 Some(Token::Identifier(_, _))
@@ -1048,7 +1061,10 @@ impl Parser {
                 }
                 matches!(
                     self.tokens.get(self.pos + 1),
-                    Some(Token::Variable(_, _)) | Some(Token::Pipe) | Some(Token::Ampersand)
+                    Some(Token::Variable(_, _))
+                        | Some(Token::Pipe)
+                        | Some(Token::Ampersand(_))
+                        | Some(Token::Backslash)
                 )
             }
             Token::Enum { .. } => {
@@ -1056,7 +1072,7 @@ impl Parser {
                     self.tokens.get(self.pos + 1),
                     Some(Token::Variable(_, _))
                         | Some(Token::Pipe)
-                        | Some(Token::Ampersand)
+                        | Some(Token::Ampersand(_))
                         | Some(Token::Backslash)
                         | Some(Token::Less)
                 )
@@ -1065,7 +1081,7 @@ impl Parser {
             Token::ArrayKw | Token::Null | Token::True | Token::False => {
                 matches!(
                     self.tokens.get(self.pos + 1),
-                    Some(Token::Variable(_, _)) | Some(Token::Pipe) | Some(Token::Ampersand)
+                    Some(Token::Variable(_, _)) | Some(Token::Pipe) | Some(Token::Ampersand(_))
                 )
             }
             // `static` is a return-only PHP type. Parameter/property parsing
@@ -1077,7 +1093,7 @@ impl Parser {
                 Some(Token::Less)
                     | Some(Token::Variable(_, _))
                     | Some(Token::Pipe)
-                    | Some(Token::Ampersand)
+                    | Some(Token::Ampersand(_))
             ),
             // PHP DNF types parenthesize intersection arms, for example
             // `(Countable&Iterator)|null`.
@@ -1154,7 +1170,7 @@ impl Parser {
                 let is_type_context = matches!(
                     next,
                     Some(Token::Variable(_, _))
-                        | Some(Token::Ampersand)
+                        | Some(Token::Ampersand(_))
                         | Some(Token::DotDotDot(_))
                         | Some(Token::Pipe)
                         | Some(Token::Backslash)
@@ -1186,7 +1202,7 @@ impl Parser {
                 let is_type_context = matches!(
                     next,
                     Some(Token::Variable(_, _))
-                        | Some(Token::Ampersand)
+                        | Some(Token::Ampersand(_))
                         | Some(Token::DotDotDot(_))
                         | Some(Token::Pipe)
                 );
@@ -1376,6 +1392,12 @@ impl Parser {
         }
     }
 
+    #[inline]
+    fn peek_is_instanceof_keyword(&self) -> bool {
+        matches!(self.peek(), Token::Instanceof)
+            || matches!(self.peek(), Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("instanceof"))
+    }
+
     fn type_hint_uses_static_generic_application(hint: &TypeHint) -> bool {
         match hint {
             TypeHint::GenericApplication { base, arguments } => {
@@ -1455,7 +1477,7 @@ impl Parser {
         // Optional type hint before &, ..., $var
         let type_hint = self.try_parse_type_hint(true)?;
         // Optional & prefix for pass-by-reference
-        let is_ref = if self.peek() == Token::Ampersand {
+        let is_ref = if matches!(self.peek(), Token::Ampersand(_)) {
             self.advance(); // consume '&'
             true
         } else {
@@ -1809,7 +1831,7 @@ impl Parser {
         }
         saw_dimension
             && self.tokens.get(i) == Some(&Token::Assign)
-            && self.tokens.get(i + 1) != Some(&Token::Ampersand)
+            && !matches!(self.tokens.get(i + 1), Some(Token::Ampersand(_)))
     }
 
     fn split_array_access(mut expr: Expr) -> (Expr, Vec<Expr>) {
@@ -2076,7 +2098,7 @@ impl Parser {
                 line,
             )));
         }
-        if self.peek() == Token::Ampersand {
+        if matches!(self.peek(), Token::Ampersand(_)) {
             self.advance();
             return Ok(ListTarget::Reference(self.parse_list_reference_target()?));
         }
