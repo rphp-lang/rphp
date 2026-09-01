@@ -36,29 +36,26 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `ctype-complete-builtin-surface` train retains 6,349 exact
-passes across the stable 7,174-case PHP 8.5 Zend/lang plus strings/array core,
-with 431 supported failures, 182 skips, 212 unsupported cases and no timeout or
-crash. All eleven Ctype globals now expose the exact `(mixed $text): bool`
-contract and share PHP 8.5's C/POSIX byte, empty-input, binary-storage, integer
-boundary and non-string deprecation behavior. The task-scoped 48-case
-`ext/ctype` projection advances from 16 to 48 exact passes with no loss,
-`+32/-0`; only its extension-loader section is removed, while source and
-expectations remain byte-identical and the locale-only case stays visible as a
-separate boundary.
+The accepted AMD64 `internal-inheritance-contract-metadata` train advances the
+stable 7,174-case PHP 8.5 Zend/lang plus strings/array core to 6,365 exact
+passes, 415 supported failures, 182 skips and 212 unsupported cases, with no
+timeout or crash. A sparse internal method-contract sidecar now supplies class
+linking with default diagnostics, hard variance requirements, tentative return
+types and link-time deprecation dispatch across eager, deferred, anonymous and
+include/eval declarations. The 5,599-case Zend/lang projection gains 16 exact
+passes and loses none; strings/array is byte-identical to the fixed parent.
+Link-only DateTime/SPL descriptors do not claim callable bodies or general
+object behavior, and the remaining DateTime materialization case stays visible.
 
-The builtin inventory improves from 469 to 474 present globals, 732 to 727
-missing globals, 382 to 376 metadata mismatches and 87 to 98 exact globals;
-call-shape mismatches remain zero. The Symfony-base projection improves from
-467 to 472 present, 266 to 261 missing, 381 to 375 metadata mismatches and 86
-to 97 exact globals. Five Cargo configurations, all-target, exact upstream
-no-loss, Composer/Symfony S0-S3, format and the unchanged 1,623/289 unsafe
-ratchet pass. A fixed-parent CPU-2 32-pair packet keeps startup, ordinary calls
-and binary rejection below +1%; the exercised Ctype lanes range from -3.526%
-to -0.553%. Current work remains selected as a 10–30-case train around one
-shared root-cause hypothesis and one cumulative evidence packet. Smaller
-checkpoints require a crash, security issue, framework blocker or similarly
-explicit reason; Fiber/generator suspension additionally requires a
+Five Cargo configurations, all-target, exact upstream no-loss,
+Composer/Symfony S0-S3, format and the unchanged 1,623/289 unsafe ratchet pass.
+A fixed-parent CPU-2 32-pair packet keeps startup and representative existing
+call/link controls between -4.212% and +0.864% paired, including ordinary
+methods at +0.324%; the new-only internal-contract link lane is +5.019% and is
+isolated to class linking. Current work remains selected as a 10–30-case train
+around one shared root-cause hypothesis and one cumulative evidence packet.
+Smaller checkpoints require a crash, security issue, framework blocker or
+similarly explicit reason; Fiber/generator suspension additionally requires a
 pay-for-use performance design.
 
 ## Starting evidence

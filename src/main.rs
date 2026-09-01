@@ -332,7 +332,7 @@ fn main() {
     // Register class definitions
     for class_def in result.class_defs {
         if let Err(e) = eg.register_compiled_class(class_def) {
-            if emitted_compile_deprecations {
+            if emitted_compile_deprecations || eg.has_recorded_php_error() {
                 eprintln!("\nFatal error: {}", e);
             } else {
                 eprintln!("Fatal error: {}", e);

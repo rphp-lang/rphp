@@ -3036,6 +3036,161 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         .unwrap();
     eg.register_class(empty_internal_type("HashContext", vec![], false, true))
         .unwrap();
+
+    // The date extension is not otherwise implemented yet, but its internal
+    // class and method declarations are part of PHP's inheritance contract.
+    // Keep them as link-only metadata: declarations can extend these types
+    // and receive canonical variance diagnostics without claiming callable
+    // DateTime behavior.
+    eg.register_internal_method_contract(
+        "DateTimeInterface",
+        "diff",
+        false,
+        1,
+        &["targetObject", "absolute"],
+        vec![
+            ParamTypeHint::ClassName("DateTimeInterface".to_string()),
+            ParamTypeHint::Bool,
+        ],
+        ParamTypeHint::ClassName("DateInterval".to_string()),
+        &[None, Some("false")],
+        true,
+    );
+    eg.register_internal_method_contract(
+        "DateTime",
+        "diff",
+        false,
+        1,
+        &["targetObject", "absolute"],
+        vec![
+            ParamTypeHint::ClassName("DateTimeInterface".to_string()),
+            ParamTypeHint::Bool,
+        ],
+        ParamTypeHint::ClassName("DateInterval".to_string()),
+        &[None, Some("false")],
+        true,
+    );
+    eg.register_internal_method_contract(
+        "DateTime",
+        "createFromFormat",
+        true,
+        2,
+        &["format", "datetime", "timezone"],
+        vec![
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+                "DateTimeZone".to_string(),
+            ))),
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::ClassName("DateTime".to_string()),
+            ParamTypeHint::ClassName("false".to_string()),
+        ]),
+        &[None, None, Some("null")],
+        true,
+    );
+    eg.register_internal_method_contract(
+        "DateTime",
+        "setTime",
+        false,
+        2,
+        &["hour", "minute", "second", "microsecond"],
+        vec![
+            ParamTypeHint::Int,
+            ParamTypeHint::Int,
+            ParamTypeHint::Int,
+            ParamTypeHint::Int,
+        ],
+        ParamTypeHint::ClassName("DateTime".to_string()),
+        &[None, None, Some("0"), Some("0")],
+        true,
+    );
+    for (name, return_type) in [
+        (
+            "getTimezone",
+            ParamTypeHint::Union(vec![
+                ParamTypeHint::ClassName("DateTimeZone".to_string()),
+                ParamTypeHint::ClassName("false".to_string()),
+            ]),
+        ),
+        ("getTimestamp", ParamTypeHint::Int),
+    ] {
+        eg.register_internal_method_contract(
+            "DateTime",
+            name,
+            false,
+            0,
+            &[],
+            vec![],
+            return_type,
+            &[],
+            true,
+        );
+    }
+    eg.register_internal_method_contract(
+        "DateTimeZone",
+        "getTransitions",
+        false,
+        0,
+        &["timestampBegin", "timestampEnd"],
+        vec![ParamTypeHint::Int, ParamTypeHint::Int],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::ClassName("false".to_string()),
+        ]),
+        &[Some("PHP_INT_MIN"), Some("2147483647")],
+        true,
+    );
+    eg.register_internal_method_contract(
+        "DateTimeZone",
+        "listIdentifiers",
+        true,
+        0,
+        &["timezoneGroup", "countryCode"],
+        vec![
+            ParamTypeHint::Int,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+        ],
+        ParamTypeHint::Array,
+        &[Some("DateTimeZone::ALL"), Some("null")],
+        true,
+    );
+
+    eg.register_class(empty_internal_type(
+        "DateTimeInterface",
+        vec![],
+        true,
+        false,
+    ))
+    .unwrap();
+    eg.register_class(empty_internal_type("DateInterval", vec![], false, false))
+        .unwrap();
+    let mut date_time_zone = empty_internal_type("DateTimeZone", vec![], false, false);
+    date_time_zone.constants.push(ClassConstantDefinition {
+        attributes: Vec::new(),
+        name: "ALL".to_string(),
+        value: crate::builtin_class_constant("DateTimeZone", "ALL")
+            .expect("DateTimeZone::ALL has a builtin value"),
+        source_file: String::new(),
+        evaluation_error: None,
+        source_expression: None,
+        callable_factory: None,
+        evaluation_scope: None,
+        value_is_deferred: false,
+        visibility: Visibility::Public,
+        declaring_class: "DateTimeZone".to_string(),
+        type_hint: ParamTypeHint::Int,
+        is_final: false,
+    });
+    eg.register_class(date_time_zone).unwrap();
+    eg.register_class(empty_internal_type(
+        "DateTime",
+        vec!["DateTimeInterface".to_string()],
+        false,
+        false,
+    ))
+    .unwrap();
     // Static methods still reserve the canonical hidden method slot at CV 0;
     // explicit Closure::bind arguments begin at CV 1.
     reg_static_method!(
@@ -3112,6 +3267,30 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     ] {
         eg.register_class(empty_internal_type(name, parents, true, false))
             .unwrap();
+    }
+    eg.register_internal_method_contract(
+        "ArrayAccess",
+        "offsetSet",
+        false,
+        2,
+        &["offset", "value"],
+        vec![ParamTypeHint::Mixed, ParamTypeHint::Mixed],
+        ParamTypeHint::Void,
+        &[None, None],
+        true,
+    );
+    for owner in ["ArrayIterator", "ArrayObject"] {
+        eg.register_internal_method_contract(
+            owner,
+            "offsetSet",
+            false,
+            2,
+            &["key", "value"],
+            vec![ParamTypeHint::Mixed, ParamTypeHint::Mixed],
+            ParamTypeHint::Void,
+            &[None, None],
+            true,
+        );
     }
     funcs.push(register_rounding_mode(eg));
     funcs.extend(random::register(eg));
@@ -3217,6 +3396,53 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         ],
         false,
         false,
+    );
+    for (name, return_type, tentative) in [
+        ("valid", ParamTypeHint::Bool, true),
+        (
+            "current",
+            ParamTypeHint::ClassName("object".to_string()),
+            true,
+        ),
+        ("__serialize", ParamTypeHint::Array, false),
+    ] {
+        eg.register_internal_method_contract(
+            "SplObjectStorage",
+            name,
+            false,
+            0,
+            &[],
+            vec![],
+            return_type,
+            &[],
+            tentative,
+        );
+    }
+    eg.register_internal_method_contract(
+        "SplObjectStorage",
+        "__unserialize",
+        false,
+        1,
+        &["data"],
+        vec![ParamTypeHint::Array],
+        ParamTypeHint::Void,
+        &[None],
+        false,
+    );
+    eg.register_internal_method_contract(
+        "SplObjectStorage",
+        "offsetSet",
+        false,
+        1,
+        &["object", "info"],
+        // The engine accepts SplObjectStorage's specialized receiver while
+        // linking it to ArrayAccess; expose that already-approved interface
+        // projection to descendant validation rather than re-litigating the
+        // built-in exception in userland.
+        vec![ParamTypeHint::Mixed, ParamTypeHint::Mixed],
+        ParamTypeHint::Void,
+        &[None, Some("null")],
+        true,
     );
     for (name, default) in [
         (SPL_STORAGE_DATA, Value::array(PhpArray::new())),

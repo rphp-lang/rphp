@@ -17,7 +17,7 @@ use crate::generics::{GenericMetadata, GenericMethodContract, ReifiedBinding};
 use crate::parser::Visibility;
 use crate::value::{ClosureStaticVars, ObjectLayout, PhpArray, PhpObject, Value};
 use crate::vm::frame::ExecuteData;
-use crate::vm::function::{Function, FunctionCommon, FunctionType};
+use crate::vm::function::{Function, FunctionCommon, FunctionType, ParamTypeHint, SignatureInfo};
 use crate::vm::instruction::OpType;
 use crate::vm::opcode::OpCode;
 use crate::vm::stack::VmStack;
@@ -97,8 +97,35 @@ struct MethodDeclaration<'a> {
     is_abstract: bool,
     source_file: Option<&'a str>,
     source_line: usize,
-    function: &'a FunctionCommon,
+    signature: &'a SignatureInfo,
     parameter_default_diagnostics: Option<&'a [Option<Box<str>>]>,
+    return_type_is_tentative: bool,
+    suppresses_tentative_return_deprecation: bool,
+}
+
+/// Cold callable contract for one built-in method. The descriptor is used by
+/// class linking only; it deliberately does not publish a callable body or
+/// claim that the surrounding extension is implemented.
+struct InternalMethodContract {
+    name: Box<str>,
+    is_static: bool,
+    signature: SignatureInfo,
+    parameter_default_diagnostics: Vec<Option<Box<str>>>,
+    return_type_is_tentative: bool,
+}
+
+type InternalFunctionReflectionMetadata = (
+    Vec<Option<Value>>,
+    &'static [Option<&'static str>],
+    Option<&'static str>,
+);
+
+/// Sparse request-startup metadata for internal callables. Extending the
+/// existing boxed owner keeps ExecutorGlobals and every hot ABI layout stable.
+#[derive(Default)]
+struct InternalCallableMetadata {
+    functions: HashMap<*const FunctionCommon, InternalFunctionReflectionMetadata>,
+    methods: HashMap<String, Vec<InternalMethodContract>>,
 }
 
 #[derive(Clone)]
@@ -659,21 +686,10 @@ pub struct ExecutorGlobals {
     /// Sparse canonical spellings for built-ins whose public name is not the
     /// lowercase lookup key. Most internal functions need no entry.
     internal_function_display_names: Option<Box<HashMap<*const FunctionCommon, String>>>,
-    /// Exact defaults for the sparse subset of internal functions whose
-    /// optional values are admitted through Reflection. Keeping this metadata
-    /// out of FunctionCommon preserves the hot descriptor layout.
-    internal_function_reflection_metadata: Option<
-        Box<
-            HashMap<
-                *const FunctionCommon,
-                (
-                    Vec<Option<Value>>,
-                    &'static [Option<&'static str>],
-                    Option<&'static str>,
-                ),
-            >,
-        >,
-    >,
+    /// Exact reflection defaults and link-only method contracts for sparse
+    /// internal callables. Keeping the combined owner boxed preserves both
+    /// the hot FunctionCommon descriptor and ExecutorGlobals field offsets.
+    internal_callable_metadata: Option<Box<InternalCallableMetadata>>,
     /// Internal static methods share the hidden class-call slot used by the
     /// method ABI, so staticness cannot be inferred from `this_offset` alone.
     internal_static_methods: Option<Box<std::collections::HashSet<*const FunctionCommon>>>,
@@ -1573,6 +1589,13 @@ impl ExecutorGlobals {
         });
     }
 
+    /// Whether startup diagnostics already established an output boundary.
+    /// The CLI uses this only to preserve PHP's blank line before a following
+    /// declaration fatal; the diagnostic payload remains request-private.
+    pub fn has_recorded_php_error(&self) -> bool {
+        self.last_error.is_some()
+    }
+
     pub(crate) fn begin_error_suppression(&mut self, frame: usize) {
         self.error_suppression_frames
             .push((frame, self.error_reporting));
@@ -1717,7 +1740,7 @@ impl ExecutorGlobals {
             weak_objects: None,
             method_declaring_class: HashMap::new(),
             internal_function_display_names: None,
-            internal_function_reflection_metadata: None,
+            internal_callable_metadata: None,
             internal_static_methods: None,
 
             output: std::cell::RefCell::new(Box::new(std::io::stdout())),
@@ -1845,7 +1868,7 @@ impl ExecutorGlobals {
             weak_objects: None,
             method_declaring_class: HashMap::new(),
             internal_function_display_names: None,
-            internal_function_reflection_metadata: None,
+            internal_callable_metadata: None,
             internal_static_methods: None,
 
             output: std::cell::RefCell::new(output),
@@ -2094,8 +2117,9 @@ impl ExecutorGlobals {
         function: *const FunctionCommon,
         extension: &'static str,
     ) {
-        self.internal_function_reflection_metadata
-            .get_or_insert_with(|| Box::new(HashMap::new()))
+        self.internal_callable_metadata
+            .get_or_insert_with(|| Box::new(InternalCallableMetadata::default()))
+            .functions
             .entry(function)
             .or_insert_with(|| (Vec::new(), &[], None))
             .2 = Some(extension);
@@ -2109,8 +2133,9 @@ impl ExecutorGlobals {
         extension: &'static str,
     ) {
         let metadata = self
-            .internal_function_reflection_metadata
-            .get_or_insert_with(|| Box::new(HashMap::new()))
+            .internal_callable_metadata
+            .get_or_insert_with(|| Box::new(InternalCallableMetadata::default()))
+            .functions
             .entry(function)
             .or_insert_with(|| (Vec::new(), &[], None));
         metadata.0 = defaults;
@@ -2126,8 +2151,9 @@ impl ExecutorGlobals {
         extension: &'static str,
     ) {
         let metadata = self
-            .internal_function_reflection_metadata
-            .get_or_insert_with(|| Box::new(HashMap::new()))
+            .internal_callable_metadata
+            .get_or_insert_with(|| Box::new(InternalCallableMetadata::default()))
+            .functions
             .entry(function)
             .or_insert_with(|| (Vec::new(), &[], None));
         metadata.0 = defaults;
@@ -2140,9 +2166,9 @@ impl ExecutorGlobals {
         function: *const FunctionCommon,
         index: usize,
     ) -> Option<&Value> {
-        self.internal_function_reflection_metadata
+        self.internal_callable_metadata
             .as_deref()
-            .and_then(|metadata| metadata.get(&function))
+            .and_then(|metadata| metadata.functions.get(&function))
             .and_then(|(defaults, _, _)| defaults.get(index))
             .and_then(Option::as_ref)
             .filter(|value| !value.is_undef())
@@ -2158,9 +2184,9 @@ impl ExecutorGlobals {
         function: *const FunctionCommon,
         index: usize,
     ) -> bool {
-        self.internal_function_reflection_metadata
+        self.internal_callable_metadata
             .as_deref()
-            .and_then(|metadata| metadata.get(&function))
+            .and_then(|metadata| metadata.functions.get(&function))
             .and_then(|(defaults, _, _)| defaults.get(index))
             .and_then(Option::as_ref)
             .is_some_and(Value::is_undef)
@@ -2171,9 +2197,9 @@ impl ExecutorGlobals {
         function: *const FunctionCommon,
         index: usize,
     ) -> Option<&str> {
-        self.internal_function_reflection_metadata
+        self.internal_callable_metadata
             .as_deref()
-            .and_then(|metadata| metadata.get(&function))
+            .and_then(|metadata| metadata.functions.get(&function))
             .and_then(|(_, diagnostics, _)| diagnostics.get(index))
             .copied()
             .flatten()
@@ -2183,10 +2209,71 @@ impl ExecutorGlobals {
         &self,
         function: *const FunctionCommon,
     ) -> Option<&str> {
-        self.internal_function_reflection_metadata
+        self.internal_callable_metadata
             .as_deref()
-            .and_then(|metadata| metadata.get(&function))
+            .and_then(|metadata| metadata.functions.get(&function))
             .and_then(|(_, _, extension)| *extension)
+    }
+
+    /// Register one link-only internal method contract. Public arity excludes
+    /// the hidden receiver because these descriptors never enter a call frame.
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn register_internal_method_contract(
+        &mut self,
+        owner: &str,
+        name: &str,
+        is_static: bool,
+        required_num_args: u32,
+        param_names: &[&str],
+        param_type_hints: Vec<ParamTypeHint>,
+        return_type_hint: ParamTypeHint,
+        parameter_default_diagnostics: &[Option<&str>],
+        return_type_is_tentative: bool,
+    ) {
+        debug_assert_eq!(param_names.len(), param_type_hints.len());
+        debug_assert_eq!(param_names.len(), parameter_default_diagnostics.len());
+        debug_assert!(required_num_args <= param_names.len() as u32);
+        let contract = InternalMethodContract {
+            name: name.into(),
+            is_static,
+            signature: SignatureInfo {
+                num_args: param_names.len() as u32,
+                required_num_args,
+                is_variadic: false,
+                variadic_cv_index: 0,
+                ref_args: 0,
+                prefer_ref_args: 0,
+                returns_reference: false,
+                needs_bound_type_scope: false,
+                this_offset: 0,
+                param_type_hints,
+                param_names: param_names.iter().map(|name| (*name).to_string()).collect(),
+                return_type_hint,
+            },
+            parameter_default_diagnostics: parameter_default_diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.map(Into::into))
+                .collect(),
+            return_type_is_tentative,
+        };
+        self.internal_callable_metadata
+            .get_or_insert_with(|| Box::new(InternalCallableMetadata::default()))
+            .methods
+            .entry(owner.to_string())
+            .or_default()
+            .push(contract);
+    }
+
+    #[inline]
+    fn internal_method_contracts(&self, owner: &str) -> &[InternalMethodContract] {
+        self.internal_callable_metadata
+            .as_deref()
+            .and_then(|metadata| metadata.methods.get(owner))
+            .map(Vec::as_slice)
+            .unwrap_or_default()
     }
 
     #[cold]
@@ -2686,8 +2773,34 @@ impl ExecutorGlobals {
                 .last()
                 .filter(|(opline, _)| *opline == u32::MAX)
                 .map_or(0, |(_, line)| *line as usize),
-            function: &method.4.common,
+            signature: &method.4.common.sig,
             parameter_default_diagnostics: method.4.parameter_default_diagnostics.as_deref(),
+            return_type_is_tentative: false,
+            suppresses_tentative_return_deprecation: method
+                .4
+                .attributes
+                .iter()
+                .any(|attribute| attribute.name.eq_ignore_ascii_case("ReturnTypeWillChange")),
+        }
+    }
+
+    fn internal_method_declaration<'a>(
+        class_def: &'a ClassDef,
+        contract: &'a InternalMethodContract,
+    ) -> MethodDeclaration<'a> {
+        MethodDeclaration {
+            owner: &class_def.name,
+            name: &contract.name,
+            visibility: Visibility::Public,
+            enforces_visibility: true,
+            is_static: contract.is_static,
+            is_abstract: class_def.is_interface,
+            source_file: None,
+            source_line: 0,
+            signature: &contract.signature,
+            parameter_default_diagnostics: Some(&contract.parameter_default_diagnostics),
+            return_type_is_tentative: contract.return_type_is_tentative,
+            suppresses_tentative_return_deprecation: false,
         }
     }
 
@@ -2738,6 +2851,13 @@ impl ExecutorGlobals {
         {
             return Some(Self::method_declaration(class_def, method));
         }
+        if let Some(contract) = self
+            .internal_method_contracts(&class_def.name)
+            .iter()
+            .find(|contract| contract.name.eq_ignore_ascii_case(method_name))
+        {
+            return Some(Self::internal_method_declaration(class_def, contract));
+        }
         for adaptation in &class_def.trait_aliases {
             let target = adaptation.alias.as_deref().unwrap_or(&adaptation.method);
             if target.eq_ignore_ascii_case(method_name)
@@ -2775,7 +2895,7 @@ impl ExecutorGlobals {
         implementation: MethodDeclaration<'_>,
         linking_class: Option<&ClassDef>,
     ) -> Vec<String> {
-        self.method_contract_errors_mode(required, implementation, linking_class, true, false)
+        self.method_contract_errors_mode(required, implementation, linking_class, true, false, true)
     }
 
     fn method_contract_potential_errors(
@@ -2784,7 +2904,7 @@ impl ExecutorGlobals {
         implementation: MethodDeclaration<'_>,
         linking_class: Option<&ClassDef>,
     ) -> Vec<String> {
-        self.method_contract_errors_mode(required, implementation, linking_class, true, true)
+        self.method_contract_errors_mode(required, implementation, linking_class, true, true, true)
     }
 
     fn method_contract_strict_errors(
@@ -2793,9 +2913,35 @@ impl ExecutorGlobals {
         implementation: MethodDeclaration<'_>,
         linking_class: Option<&ClassDef>,
     ) -> Vec<String> {
-        self.method_contract_errors_mode(required, implementation, linking_class, false, false)
+        self.method_contract_errors_mode(
+            required,
+            implementation,
+            linking_class,
+            false,
+            false,
+            true,
+        )
     }
 
+    fn method_contract_hard_errors(
+        &self,
+        required: MethodDeclaration<'_>,
+        implementation: MethodDeclaration<'_>,
+        linking_class: Option<&ClassDef>,
+    ) -> Vec<String> {
+        self.method_contract_errors_mode(
+            required,
+            implementation,
+            linking_class,
+            true,
+            false,
+            !required.return_type_is_tentative,
+        )
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
     fn method_contract_errors_mode(
         &self,
         required: MethodDeclaration<'_>,
@@ -2803,8 +2949,40 @@ impl ExecutorGlobals {
         linking_class: Option<&ClassDef>,
         allow_unresolved_relation: bool,
         allow_any_unresolved_relation: bool,
+        enforce_return_contract: bool,
     ) -> Vec<String> {
         use crate::vm::function::ParamTypeHint;
+
+        let required_signature = required.signature;
+        let implementation_signature = implementation.signature;
+        let exact_parameter_contract = required_signature.public_arity()
+            == implementation_signature.public_arity()
+            && required_signature.required_num_args == implementation_signature.required_num_args
+            && required_signature.is_variadic == implementation_signature.is_variadic
+            && required_signature.ref_args == implementation_signature.ref_args
+            && required_signature.param_type_hints == implementation_signature.param_type_hints
+            && !required_signature
+                .param_type_hints
+                .iter()
+                .any(ParamTypeHint::uses_declaring_class_scope);
+        let exact_return_contract = !enforce_return_contract
+            || (required_signature.return_type_hint == implementation_signature.return_type_hint
+                && !required_signature
+                    .return_type_hint
+                    .uses_declaring_class_scope());
+        if exact_parameter_contract
+            && exact_return_contract
+            && (!required.enforces_visibility
+                || Self::method_visibility_rank(implementation.visibility)
+                    >= Self::method_visibility_rank(required.visibility))
+            && implementation.is_static == required.is_static
+            && implementation_signature.returns_reference == required_signature.returns_reference
+            && !self
+                .generic_metadata
+                .method_has_parametric_signature(required.owner, required.name)
+        {
+            return Vec::new();
+        }
 
         let mut errors = Vec::new();
         if required.enforces_visibility
@@ -2820,13 +2998,10 @@ impl ExecutorGlobals {
                 "implementation cannot be static".to_string()
             });
         }
-        if required.function.sig.returns_reference && !implementation.function.sig.returns_reference
-        {
+        if required.signature.returns_reference && !implementation.signature.returns_reference {
             errors.push("implementation must return by reference".to_string());
         }
 
-        let required_signature = &required.function.sig;
-        let implementation_signature = &implementation.function.sig;
         let required_public = required_signature.public_arity();
         let implementation_public = implementation_signature.public_arity();
         if implementation_public < required_public && !implementation_signature.is_variadic {
@@ -2873,6 +3048,11 @@ impl ExecutorGlobals {
                         }
                     }
                     (Some(implementation_hint), Some(required_hint)) => {
+                        if implementation_hint == required_hint
+                            && !implementation_hint.uses_declaring_class_scope()
+                        {
+                            continue;
+                        }
                         let implementation_hint = self.resolve_variance_type_hint(
                             implementation_hint,
                             implementation.owner,
@@ -2928,55 +3108,59 @@ impl ExecutorGlobals {
             } else {
                 required_signature.return_type_hint.clone()
             };
-            if !matches!(&required_return, ParamTypeHint::None) {
+            if enforce_return_contract && !matches!(&required_return, ParamTypeHint::None) {
                 let implementation_return = if setter_hook(implementation.name) {
                     ParamTypeHint::Void
                 } else {
                     implementation_signature.return_type_hint.clone()
                 };
-                let implementation_return = self.resolve_variance_type_hint(
-                    &implementation_return,
-                    implementation.owner,
-                    linking_class,
-                );
-                let required_return = self.resolve_variance_type_hint(
-                    &required_return,
-                    required.owner,
-                    linking_class,
-                );
-                let compatible = if allow_any_unresolved_relation {
-                    self.is_return_type_potentially_compatible(
+                if implementation_return != required_return
+                    || implementation_return.uses_declaring_class_scope()
+                {
+                    let implementation_return = self.resolve_variance_type_hint(
                         &implementation_return,
-                        &required_return,
                         implementation.owner,
+                        linking_class,
+                    );
+                    let required_return = self.resolve_variance_type_hint(
+                        &required_return,
                         required.owner,
                         linking_class,
-                    )
-                } else if allow_unresolved_relation {
-                    self.is_return_type_compatible(
-                        &implementation_return,
-                        &required_return,
-                        implementation.owner,
-                        required.owner,
-                        linking_class,
-                    )
-                } else {
-                    self.is_return_type_compatible_mode(
-                        &implementation_return,
-                        &required_return,
-                        implementation.owner,
-                        required.owner,
-                        linking_class,
-                        false,
-                        false,
-                    )
-                };
-                if !compatible {
-                    errors.push(format!(
-                        "return type must be compatible with {}, got {}",
-                        required_return.display_name(),
-                        implementation_return.display_name()
-                    ));
+                    );
+                    let compatible = if allow_any_unresolved_relation {
+                        self.is_return_type_potentially_compatible(
+                            &implementation_return,
+                            &required_return,
+                            implementation.owner,
+                            required.owner,
+                            linking_class,
+                        )
+                    } else if allow_unresolved_relation {
+                        self.is_return_type_compatible(
+                            &implementation_return,
+                            &required_return,
+                            implementation.owner,
+                            required.owner,
+                            linking_class,
+                        )
+                    } else {
+                        self.is_return_type_compatible_mode(
+                            &implementation_return,
+                            &required_return,
+                            implementation.owner,
+                            required.owner,
+                            linking_class,
+                            false,
+                            false,
+                        )
+                    };
+                    if !compatible {
+                        errors.push(format!(
+                            "return type must be compatible with {}, got {}",
+                            required_return.display_name(),
+                            implementation_return.display_name()
+                        ));
+                    }
                 }
             }
         }
@@ -3014,7 +3198,7 @@ impl ExecutorGlobals {
         linking_class: &ClassDef,
     ) -> Option<String> {
         if self
-            .method_contract_errors(required, implementation, Some(linking_class))
+            .method_contract_hard_errors(required, implementation, Some(linking_class))
             .is_empty()
         {
             return None;
@@ -3073,6 +3257,169 @@ impl ExecutorGlobals {
             self.format_method_signature(required, Some(linking_class)),
             location
         ))
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn visit_internal_link_deprecation_contracts(
+        &self,
+        class_def: &ClassDef,
+        mut visit: impl FnMut(MethodDeclaration<'_>, MethodDeclaration<'_>),
+    ) -> bool {
+        if class_def.is_trait {
+            return false;
+        }
+        let mut implements_serializable = false;
+        let mut pending = Vec::new();
+        let mut visit_definition = |definition: &ClassDef| {
+            for contract in self
+                .internal_method_contracts(&definition.name)
+                .iter()
+                .filter(|contract| contract.return_type_is_tentative)
+            {
+                let Some(implementation) =
+                    self.find_effective_method(class_def, contract.name.as_ref())
+                else {
+                    continue;
+                };
+                visit(
+                    Self::internal_method_declaration(definition, contract),
+                    implementation,
+                );
+            }
+            definition.name.eq_ignore_ascii_case("Serializable")
+        };
+        // A direct leaf relation is overwhelmingly common and needs no
+        // ancestry allocation. Parent-first/reverse-interface order matches
+        // the existing stack walker and therefore keeps diagnostic priority.
+        for name in class_def
+            .parent
+            .iter()
+            .chain(class_def.implements.iter().rev())
+        {
+            let Some(definition) = self.find_class(name) else {
+                continue;
+            };
+            implements_serializable |= visit_definition(definition);
+            pending.extend(definition.implements.iter().cloned());
+            pending.extend(definition.parent.iter().cloned());
+        }
+        if pending.is_empty() {
+            return implements_serializable;
+        }
+        let mut seen = std::collections::HashSet::new();
+        while let Some(name) = pending.pop() {
+            let Some(definition) = self.find_class(&name) else {
+                continue;
+            };
+            if !seen.insert(definition.class_id) {
+                continue;
+            }
+            implements_serializable |= visit_definition(definition);
+            pending.extend(definition.implements.iter().cloned());
+            pending.extend(definition.parent.iter().cloned());
+        }
+        implements_serializable
+    }
+
+    /// Derive inheritance-time E_DEPRECATED diagnostics from the same method
+    /// contracts used by hard variance validation. Unknown class relations
+    /// remain fatal and are deliberately not projected as tentative notices.
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    pub(crate) fn class_link_deprecations(
+        &self,
+        class_def: &ClassDef,
+    ) -> Vec<crate::compiler::compile::CompileDeprecation> {
+        let mut diagnostics = Vec::new();
+        let mut seen_implementations = std::collections::HashSet::new();
+        let implements_serializable = self.visit_internal_link_deprecation_contracts(
+            class_def,
+            |required, implementation| {
+            if implementation.suppresses_tentative_return_deprecation {
+                return;
+            }
+
+            if implementation.signature.return_type_hint
+                == required.signature.return_type_hint
+                && !implementation
+                    .signature
+                    .return_type_hint
+                    .uses_declaring_class_scope()
+            {
+                return;
+            }
+            let required_return = self.resolve_variance_type_hint(
+                &required.signature.return_type_hint,
+                required.owner,
+                Some(class_def),
+            );
+            let implementation_return = self.resolve_variance_type_hint(
+                &implementation.signature.return_type_hint,
+                implementation.owner,
+                Some(class_def),
+            );
+            if self.variance_hint_mentions_unresolved_class(&required_return, class_def)
+                || self.variance_hint_mentions_unresolved_class(&implementation_return, class_def)
+                || self.is_return_type_compatible_mode(
+                    &implementation_return,
+                    &required_return,
+                    implementation.owner,
+                    required.owner,
+                    Some(class_def),
+                    false,
+                    false,
+            )
+            {
+                return;
+            }
+            if !self
+                .method_contract_hard_errors(required, implementation, Some(class_def))
+                .is_empty()
+            {
+                return;
+            }
+            if !seen_implementations.insert(implementation.name.to_ascii_lowercase()) {
+                return;
+            }
+
+            diagnostics.push(crate::compiler::compile::CompileDeprecation {
+                message: format!(
+                    "Return type of {} should either be compatible with {}, or the #[\\ReturnTypeWillChange] attribute should be used to temporarily suppress the notice",
+                    self.format_method_signature(implementation, Some(class_def)),
+                    self.format_method_signature(required, Some(class_def)),
+                ),
+                file: implementation
+                    .source_file
+                    .unwrap_or_else(|| class_def.source_file.as_deref().unwrap_or_default())
+                    .to_string(),
+                line: implementation.source_line,
+                warning: false,
+            });
+        },
+        );
+        if class_def.source_file.is_some()
+            && implements_serializable
+            && !class_def.is_interface
+            && !class_def.is_trait
+            && (class_def.is_enum
+                || (!class_def.is_abstract
+                    && !(self.class_like_has_effective_method(class_def, "__serialize")
+                        && self.class_like_has_effective_method(class_def, "__unserialize"))))
+        {
+            diagnostics.push(crate::compiler::compile::CompileDeprecation {
+                message: format!(
+                    "{} implements the Serializable interface, which is deprecated. Implement __serialize() and __unserialize() instead (or in addition, if support for old PHP versions is necessary)",
+                    class_def.name
+                ),
+                file: class_def.source_file.clone().unwrap_or_default(),
+                line: class_def.declaration_line,
+                warning: false,
+            });
+        }
+        diagnostics
     }
 
     #[inline]
@@ -3142,13 +3489,13 @@ impl ExecutorGlobals {
         let mut referenced_classes = Vec::new();
         let mut referenced_seen = std::collections::HashSet::new();
         for declaration in [required, implementation] {
-            for hint in &declaration.function.sig.param_type_hints {
+            for hint in &declaration.signature.param_type_hints {
                 let hint =
                     self.resolve_variance_type_hint(hint, declaration.owner, Some(linking_class));
                 collect_variance_class_names(&hint, &mut referenced_classes, &mut referenced_seen);
             }
             let return_hint = self.resolve_variance_type_hint(
-                &declaration.function.sig.return_type_hint,
+                &declaration.signature.return_type_hint,
                 declaration.owner,
                 Some(linking_class),
             );
@@ -3179,8 +3526,8 @@ impl ExecutorGlobals {
             return None;
         }
 
-        let required_signature = &required.function.sig;
-        let implementation_signature = &implementation.function.sig;
+        let required_signature = required.signature;
+        let implementation_signature = implementation.signature;
         let mut mentions_linking_class = false;
         for (required_hint, implementation_hint) in required_signature
             .param_type_hints
@@ -3230,18 +3577,17 @@ impl ExecutorGlobals {
         let mut dependencies = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let parameter_count = required
-            .function
-            .sig
+            .signature
             .param_type_hints
             .len()
-            .max(implementation.function.sig.param_type_hints.len());
+            .max(implementation.signature.param_type_hints.len());
         for index in 0..parameter_count {
             // Parameter contravariance asks whether the required input is a
             // subtype of the implementation input. PHP resolves that relation
             // in the same direction, which also fixes the observable autoload
             // and first-unavailable diagnostic order.
             for declaration in [required, implementation] {
-                let Some(hint) = declaration.function.sig.param_type_hints.get(index) else {
+                let Some(hint) = declaration.signature.param_type_hints.get(index) else {
                     continue;
                 };
                 let hint =
@@ -3253,7 +3599,7 @@ impl ExecutorGlobals {
         // implementation subtype before the required supertype.
         for declaration in [implementation, required] {
             let return_hint = self.resolve_variance_type_hint(
-                &declaration.function.sig.return_type_hint,
+                &declaration.signature.return_type_hint,
                 declaration.owner,
                 Some(linking_class),
             );
@@ -3264,6 +3610,7 @@ impl ExecutorGlobals {
 
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
     fn visit_method_variance_contracts(
         &self,
         class_def: &ClassDef,
@@ -3608,18 +3955,31 @@ impl ExecutorGlobals {
         &'a self,
         declaration: MethodDeclaration<'a>,
         linking_class: Option<&'a ClassDef>,
-    ) -> &'a str {
+    ) -> std::borrow::Cow<'a, str> {
+        if declaration.owner.starts_with("class@anonymous#")
+            && let Some(linking_class) = linking_class
+            && let Some(public_name) = linking_class.anonymous_public_name()
+        {
+            return std::borrow::Cow::Owned(
+                public_name
+                    .split('\0')
+                    .next()
+                    .unwrap_or(&public_name)
+                    .to_string(),
+            );
+        }
         if !declaration.is_abstract
             && let Some(linking_class) = linking_class
             && self
                 .find_class(declaration.owner)
                 .is_some_and(|definition| definition.is_trait)
         {
-            return self
-                .trait_composition_scope_from_definition(linking_class, declaration.owner)
-                .unwrap_or(linking_class.name.as_str());
+            return std::borrow::Cow::Borrowed(
+                self.trait_composition_scope_from_definition(linking_class, declaration.owner)
+                    .unwrap_or(linking_class.name.as_str()),
+            );
         }
-        declaration.owner
+        std::borrow::Cow::Borrowed(declaration.owner)
     }
 
     fn resolve_variance_type_hint(
@@ -3674,7 +4034,7 @@ impl ExecutorGlobals {
     ) -> String {
         use crate::vm::function::ParamTypeHint;
 
-        let signature = &declaration.function.sig;
+        let signature = declaration.signature;
         let parameter_count = Self::variance_parameter_count(signature) as usize;
         let mut parameters = Vec::with_capacity(parameter_count);
         for index in 0..parameter_count {
@@ -4286,7 +4646,14 @@ impl ExecutorGlobals {
     #[cold]
     #[inline(never)]
     fn validate_abstract_method_contracts(&self, class_def: &ClassDef) -> Result<(), String> {
-        if class_def.is_interface || class_def.is_trait {
+        // Internal classes are registered from trusted startup descriptors.
+        // Their callable bodies may be published after the class skeleton,
+        // while userland implementations and descendants must still satisfy
+        // every link-only internal interface contract below.
+        if (class_def.source_file.is_none() && class_def.declaration_line == 0)
+            || class_def.is_interface
+            || class_def.is_trait
+        {
             return Ok(());
         }
         let mut requirements = Vec::new();
@@ -4358,6 +4725,17 @@ impl ExecutorGlobals {
                 }
                 requires_private_trait_implementation |=
                     class_def.is_abstract && unforwarded_private_trait_requirement;
+                continue;
+            }
+            // Built-in classes are linked from trusted engine descriptors and
+            // may expose a historically narrower signature than their public
+            // interface. A userland descendant inheriting that method does
+            // not revalidate PHP's own implementation, while an explicit
+            // userland override below still receives the complete contract.
+            if self
+                .find_class(implementation.owner)
+                .is_some_and(|owner| owner.source_file.is_none() && owner.declaration_line == 0)
+            {
                 continue;
             }
             if let Some(error) =
@@ -4606,6 +4984,33 @@ impl ExecutorGlobals {
     /// Register an ordinary compiled class immediately, or retain an
     /// anonymous declaration until its expression executes.
     pub fn register_compiled_class(&mut self, class_def: ClassDef) -> Result<(), String> {
+        if !class_def.is_anonymous() {
+            let diagnostics = self.class_link_deprecations(&class_def);
+            self.emit_compile_deprecations(&diagnostics);
+        }
+        self.register_compiled_class_without_link_deprecations(class_def)
+    }
+
+    /// Runtime declarations route their link diagnostics through the active
+    /// PHP handler at the DeclareClass boundary, then call this side-effect
+    /// free registration core so the notice is not emitted twice.
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    pub(crate) fn register_runtime_compiled_class(
+        &mut self,
+        class_def: ClassDef,
+    ) -> Result<(), String> {
+        self.register_compiled_class_without_link_deprecations(class_def)
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn register_compiled_class_without_link_deprecations(
+        &mut self,
+        class_def: ClassDef,
+    ) -> Result<(), String> {
         if class_def.is_anonymous() {
             let name = class_def.name.to_ascii_lowercase();
             if self
@@ -4930,6 +5335,10 @@ impl ExecutorGlobals {
             .methods
             .iter()
             .any(|(name, ..)| name.eq_ignore_ascii_case(method))
+            || self
+                .internal_method_contracts(&class_def.name)
+                .iter()
+                .any(|contract| contract.name.eq_ignore_ascii_case(method))
             || class_def.trait_aliases.iter().any(|alias| {
                 alias
                     .alias
@@ -4957,6 +5366,10 @@ impl ExecutorGlobals {
                 .methods
                 .iter()
                 .any(|(name, ..)| name.eq_ignore_ascii_case(method))
+                || self
+                    .internal_method_contracts(&definition.name)
+                    .iter()
+                    .any(|contract| contract.name.eq_ignore_ascii_case(method))
                 || definition.trait_aliases.iter().any(|alias| {
                     alias
                         .alias
@@ -5102,23 +5515,6 @@ impl ExecutorGlobals {
         let implements_serializable = closure
             .iter()
             .any(|name| name.eq_ignore_ascii_case("Serializable"));
-        if class_def.source_file.is_some()
-            && implements_serializable
-            && (class_def.is_enum
-                || (!class_def.is_abstract
-                    && !(self.class_like_has_effective_method(class_def, "__serialize")
-                        && self.class_like_has_effective_method(class_def, "__unserialize"))))
-        {
-            self.emit_compile_deprecations(&[crate::compiler::compile::CompileDeprecation {
-                message: format!(
-                    "{} implements the Serializable interface, which is deprecated. Implement __serialize() and __unserialize() instead (or in addition, if support for old PHP versions is necessary)",
-                    class_def.name
-                ),
-                file: class_def.source_file.clone().unwrap_or_default(),
-                line: class_def.declaration_line,
-                warning: false,
-            }]);
-        }
         if class_def.is_enum && implements_serializable {
             return Err(format!(
                 "Enum {} cannot implement the Serializable interface{location}",
@@ -7076,8 +7472,18 @@ impl ExecutorGlobals {
 
         self.validate_interface_property_contracts(&class_name)?;
 
-        // Validate interface contracts for concrete classes
-        let missing = self.validate_interface_contracts(&class_name);
+        // Internal startup descriptors are trusted and may publish their
+        // callable handlers immediately after their class skeleton. Userland
+        // classes still pass the complete post-registration interface gate.
+        let missing = if self
+            .class_table
+            .get(&class_name)
+            .is_some_and(|class| class.source_file.is_none() && class.declaration_line == 0)
+        {
+            Vec::new()
+        } else {
+            self.validate_interface_contracts(&class_name)
+        };
         if !missing.is_empty() {
             let count = missing.len();
             let (method_word, remaining_word) = if count == 1 {
@@ -7187,7 +7593,7 @@ impl ExecutorGlobals {
                         self.find_effective_method(class_def, &format!("${}::set", property.name))
                     && let (Some(required_hint), Some(implementation_hint)) = (
                         required_setter.4.common.sig.param_type_hints.first(),
-                        implementation.function.sig.param_type_hints.first(),
+                        implementation.signature.param_type_hints.first(),
                     )
                     && !self.is_param_type_compatible_strict(
                         implementation_hint,
@@ -7222,7 +7628,7 @@ impl ExecutorGlobals {
                     && property.has_get_hook
                     && let Some(implementation) =
                         self.find_effective_method(class_def, &format!("${}::get", property.name))
-                    && !implementation.function.sig.returns_reference
+                    && !implementation.signature.returns_reference
                 {
                     let required = Self::method_declaration(interface, required_getter);
                     let location = class_def
@@ -8222,6 +8628,9 @@ impl ExecutorGlobals {
         if let Some(iface_def) = self.find_class(iface_name) {
             for method in &iface_def.methods {
                 result.push(Self::method_declaration(iface_def, method));
+            }
+            for contract in self.internal_method_contracts(&iface_def.name) {
+                result.push(Self::internal_method_declaration(iface_def, contract));
             }
             for parent_iface in &iface_def.implements {
                 self.collect_interface_methods_inner(parent_iface, result, visited);
@@ -9470,6 +9879,17 @@ impl ExecutorGlobals {
         // impl ?T vs iface ?T → already caught by exact match above
         // impl T vs iface ?T → INCOMPATIBLE (impl rejects null that iface promises to accept)
         match (impl_hint, iface_hint) {
+            (ParamTypeHint::Nullable(inner_impl), ParamTypeHint::Nullable(inner_iface)) => {
+                return self.is_param_type_compatible_mode(
+                    inner_impl,
+                    inner_iface,
+                    impl_owner,
+                    iface_owner,
+                    linking_class,
+                    allow_unresolved_relation,
+                    allow_any_unresolved_relation,
+                );
+            }
             (ParamTypeHint::Nullable(inner_impl), _) => {
                 // ?T in impl vs T in iface — impl accepts more, check inner
                 return self.is_param_type_compatible_mode(

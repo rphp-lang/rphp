@@ -657,6 +657,11 @@ pub fn builtin_class_constant(class: &str, constant: &str) -> Option<value::Valu
             "ARRAY_AS_PROPS" => 2,
             _ => return None,
         }
+    } else if class.eq_ignore_ascii_case("DateTimeZone") {
+        match constant {
+            "ALL" => 0x07ff,
+            _ => return None,
+        }
     } else {
         return None;
     };

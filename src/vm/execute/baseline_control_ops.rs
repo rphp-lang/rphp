@@ -92,6 +92,7 @@ fn runtime_variance_dependency_exception(
 
 #[cold]
 #[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
 fn op_declare_class<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -196,6 +197,8 @@ fn op_declare_class<'a>(
         .as_deref()
         .and_then(|parent| eg.find_class(parent))
         .is_some_and(|parent| parent.is_enum);
+    let link_deprecations = eg.class_link_deprecations(&class_def);
+    eg.emit_runtime_compile_deprecations(frame, &link_deprecations)?;
     if let Some((active_parent, outstanding_dependencies)) =
         eg.active_parent_link_dependencies(&class_def)
     {
@@ -293,6 +296,14 @@ fn op_declare_class<'a>(
             return Err(VmError::Fatal(error));
         }
         eg.mark_runtime_class_declared(declaration_key, class_name);
+        if let Some(exception) = eg.exception.take() {
+            return Ok(match throw_in_frame(eg, frame, exception)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
         return Ok(ColdResult::Done);
     }
 
@@ -350,7 +361,7 @@ fn op_declare_class<'a>(
         }
     }
 
-    if let Err(error) = eg.register_compiled_class(class_def) {
+    if let Err(error) = eg.register_runtime_compiled_class(class_def) {
         eg.abort_runtime_class_link(&class_name);
         // Reached enum declaration/link failures are uncatchable compile
         // fatals. Dependency-kind errors have already taken their catchable
@@ -362,6 +373,14 @@ fn op_declare_class<'a>(
         return Err(VmError::Fatal(error));
     }
     eg.mark_runtime_class_declared(declaration_key, class_name);
+    if let Some(exception) = eg.exception.take() {
+        return Ok(match throw_in_frame(eg, frame, exception)? {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+        });
+    }
     Ok(ColdResult::Done)
 }
 
@@ -492,6 +511,8 @@ fn clone_scope_binding(value: &Value) -> Value {
 /// same scope bridge, declaration registration and exception propagation; the
 /// caller supplies their distinct source identity and implicit return value.
 #[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
 fn execute_source_unit(
     eg: &mut ExecutorGlobals,
     source: String,
@@ -693,6 +714,12 @@ fn execute_source_unit(
                 )));
             }
         }
+        let link_deprecations = eg.class_link_deprecations(&class_def);
+        if let Some((frame, _)) = caller {
+            eg.emit_runtime_compile_deprecations(frame, &link_deprecations)?;
+        } else {
+            eg.emit_compile_deprecations(&link_deprecations);
+        }
         let mut unavailable_variance_dependencies = Vec::new();
         for dependency in eg.method_variance_dependencies(&class_def) {
             if eg.find_class(&dependency).is_some() {
@@ -748,6 +775,13 @@ fn execute_source_unit(
                 return Err(VmError::CompileFatal(error));
             }
             return Err(VmError::Fatal(error));
+        }
+        if let Some(exception) = eg.exception.take() {
+            if caller.is_some() {
+                return Ok(IncludeFileOutcome::Thrown(exception));
+            }
+            eg.exception = Some(exception);
+            return Ok(IncludeFileOutcome::Executed(Value::null()));
         }
     }
 

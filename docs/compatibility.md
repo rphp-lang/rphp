@@ -162,6 +162,63 @@ OOM equivalence remain separate boundaries. The implementation is the commit
 containing this status.
 
 The latest measured AMD64 PHP 8.5 language checkpoint is
+`internal-inheritance-contract-metadata`, based on `44ad7bc1`, pinned to
+php-src commit `fcc29c8` and validated against PHP 8.5.10. Internal functions,
+classes and interfaces now publish one sparse method-contract sidecar for
+required/default parameters, source-form default diagnostics, hard variance
+requirements and tentative return types. The class linker applies those
+contracts to eager, deferred, anonymous and include/eval declarations, while
+link-time tentative-return and legacy `Serializable` deprecations use the
+active PHP error handler and publish the class before a handler exception is
+propagated. Link-only DateTime and SPL descriptors expose only the declarations
+needed for inheritance validation; they do not claim callable bodies or
+extension completeness.
+
+Five original E2E regressions cover compatible and incompatible internal-parent
+contracts, defaults, unresolved types, tentative returns, suppression,
+deprecation ordering, throwing handlers, anonymous classes and the link-only
+boundary. Fourteen of the fifteen selected upstream cases become exact; the
+remaining caught-deprecation case reaches the correct handler behavior but
+still exposes the separately unimplemented DateTime object-state slots. Two
+adjacent cases share the same root cause, so the final 5,599-case Zend/lang
+projection advances from 4,891 pass and 412 fail to 4,907 pass and 396 fail,
+with 115 skip and 181 unsupported, exact delta `+16/-0` and no timeout or
+crash. Its manifest hashes to
+`c77c64dd0b090ec21ba084c16ba3943e00145ff1ba873edf5c2e151f4335cc23`
+and its sorted exact pass set to
+`cd27900cada66c9655c6f55d2017d48f4db06f299c357944b43ed013635beaa7`.
+The adjacent 1,575-case strings/array projection remains 1,458 pass, 19 fail,
+67 skip and 31 unsupported; its manifest and pass set hash to
+`226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`
+and `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+The stable 7,174-case core is therefore 6,365 pass, 415 fail, 182 skip and 212
+unsupported.
+
+All five Cargo configurations, all-feature/all-target checking, formatting,
+PHPT-runner, entity-data and unsafe-policy gates pass; production remains at
+1,623 unsafe blocks and 289 unsafe functions. Composer 2.8.12 S0, all four
+Symfony S1 gates and FrameworkBundle 7.4.16 warmed S2 and cold S3 pass. The
+release candidate hashes to
+`df416acd835e31abcdd332342a76968d79d153c309b0e17ed11564c3d712c444`
+and the exact fixed parent to
+`d5115ab252754cf22c0add61da4b098cabaf1645425533f0f38e13d0aaabbb85`.
+
+The CPU-2 release packet uses 32 balanced alternating pairs per lane, exact
+checksums and no outlier removal. Paired medians are startup -2.965%, ordinary
+functions -0.225%, ordinary methods +0.324%, typed returns +0.864%, existing
+class-contract linking -4.212% and runtime-alias linking -1.694%. The new-only
+four-method internal-contract link costs +5.019%; its work is isolated to class
+linking. An inlined anonymous-class diagnostic variant was rejected after two
+independent ordinary-method measurements above +2%; moving that branch to the
+cold section restored the common lane without changing semantics. Raw final
+observations hash to
+`20c1730d5e5084fce0c0ba33afcd4018807f878cac7b8fd1ce9446d13211fcba`.
+
+General DateTime/SPL object behavior and method bodies, 32-bit behavior and
+allocation-limit/OOM equivalence remain separate boundaries. The implementation
+is the commit containing this status.
+
+The preceding measured AMD64 PHP 8.5 language checkpoint is
 `early-class-declaration-validation`, based on `b3d9d549`, pinned to php-src
 commit `fcc29c8` and validated against PHP 8.5.10. Class, interface, trait and
 enum declarations now retain enough source shape to emit PHP's declaration-

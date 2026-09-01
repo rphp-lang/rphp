@@ -298,6 +298,7 @@ fn op_new_obj<'a>(
                 )));
             }
         }
+        emit_anonymous_class_link_deprecations(eg, frame, &class_def)?;
         for dependency in eg.method_variance_dependencies(&class_def) {
             stats::inc_newobj_class_hash_lookup();
             if eg.find_class(&dependency).is_some() {
@@ -350,6 +351,9 @@ fn op_new_obj<'a>(
                 op_array.name
             )));
         }
+        if let Some(outcome) = take_pending_anonymous_link_exception(eg, frame)? {
+            return Ok(outcome);
+        }
     }
 
     if !literal_cache_hit
@@ -396,6 +400,36 @@ fn op_new_obj<'a>(
         name,
         class_def.map(|class| class.class_id),
     )
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn emit_anonymous_class_link_deprecations(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    class_def: &crate::compiler::compile::ClassDef,
+) -> Result<(), VmError> {
+    let link_deprecations = eg.class_link_deprecations(class_def);
+    eg.emit_runtime_compile_deprecations(frame, &link_deprecations)
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn take_pending_anonymous_link_exception<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+) -> Result<Option<ColdResult<'a>>, VmError> {
+    let Some(exception) = eg.exception.take() else {
+        return Ok(None);
+    };
+    Ok(Some(match throw_in_frame(eg, frame, exception)? {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+    }))
 }
 
 #[cold]
