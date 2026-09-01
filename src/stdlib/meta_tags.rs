@@ -268,7 +268,16 @@ pub(super) fn fn_get_meta_tags(
         filename.clone()
     };
 
-    let bytes = match open_stream(&resolved).and_then(read_stream) {
+    let bytes = match open_stream(&resolved) {
+        Ok(stream) => {
+            if stream.metadata().wrapper_type == "plainfile" {
+                super::filesystem::clear_filesystem_stat_cache(eg);
+            }
+            read_stream(stream)
+        }
+        Err(error) => Err(error),
+    };
+    let bytes = match bytes {
         Ok(bytes) => bytes,
         Err(error) => {
             super::report_internal_diagnostic(

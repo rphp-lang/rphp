@@ -61,7 +61,7 @@ pub(super) fn fn_stream_get_line(
     let ending = super::super::php_string_to_bytes(&ending);
 
     let mut bytes = Vec::new();
-    let result = with_stream(eg, resource, |stream| {
+    let result = super::with_stream_io(eg, resource, |stream| {
         stream.read_until(&mut bytes, maximum, &ending)
     });
     match result {

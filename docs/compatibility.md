@@ -7,7 +7,80 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 PHP 8.5 language checkpoint is
+The latest measured AMD64 PHP 8.5 standard-library checkpoint is
+`filesystem-stat-introspection-contracts`, based on `65c5e18f`, pinned to
+php-src commit `fcc29c8` and validated against PHP 8.5.10. The complete
+Reflection-exact surface now includes `clearstatcache`, `disk_free_space`,
+`diskfreespace`, `disk_total_space`, `file_exists`, `fileatime`, `filectime`,
+`filemtime`, `filesize`, `is_dir`, `is_executable`, `is_file`, `is_readable`,
+`is_writable`, `is_writeable`, `lstat`, `realpath`, `stat` and
+`sys_get_temp_dir`. Nine of these functions are newly present and ten retained
+implementations now expose PHP's exact signature and return metadata.
+
+Local stat results project all 13 numeric and named fields with PHP's `stat`
+versus `lstat` symlink identity, timestamp, size, permission and file-kind
+semantics. User wrappers receive the canonical `url_stat` flags and their
+arrays share the same projection. Stat and lstat caches remain separate,
+repeat only the latest path in each category, and are cleared by
+`clearstatcache()` or relevant successful mutations and plain-file I/O without
+penalizing ordinary memory streams. Quiet predicates and `file_exists()` stay
+silent; warning-producing functions use the request error handler and preserve
+catchable exceptions. File URLs, named/dynamic/first-class/callback calls,
+strict scalar errors, embedded-NUL paths, historical aliases and request-local
+cache reset are covered by original regressions.
+
+The focused 24-case upstream file packet moves from 1 pass / 18 fail / 5
+unsupported to 14 pass / 5 fail / 5 unsupported, exact `+13/-0`, with no skip,
+timeout or crash. Its final manifest hashes to
+`5e24ee3f58ba27c8be326d11dbdb0bf7ec16a9421fcd7d32929539a93cd31958`;
+the five remaining attempted failures stop in an independent missing
+`fileowner()` SKIPIF prerequisite. The stable 5,599-case Zend/lang projection
+remains byte-identical at 4,918/385/115/181 with manifest hash
+`bbce81ed2cfaf206dd62f6bd17c90ff9b9da77c4dc813773539d2ffee21513f7`,
+and strings/array remains byte-identical at 1,458/19/67/31 with manifest hash
+`226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`.
+Their unchanged pass-set hashes are
+`d9cc854d35ba258795b6803c7b5f6273a45728c9cc0d37277a980d5cf3c7ca32`
+and `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`;
+the stable 7,174-case core therefore remains 6,376 pass, 404 fail, 182 skip and
+212 unsupported.
+
+The on-demand builtin inventory reports 1,201 globals exposed by the reference
+PHP installation: 483 are present, 718 are missing, zero present functions
+have a call-shape mismatch, 351 retain a metadata mismatch and 132 are exact.
+The Symfony-base projection contains 481 present and 252 missing functions,
+zero call-shape mismatches, 350 metadata mismatches and 131 exact functions.
+All 19 functions in this checkpoint are exact. The inventory CSV, summary and
+report hash to
+`364a53fe37f3a4d5b887e300770f766c2033e16ccbb32e3fdb017bfb034b79b9`,
+`1e159e56e45ba627002d7faba74b368dc12b27a08c02db8f345b9d86601f0d36`
+and `7663e32da77b8628ba490e0ed0b37dd6da5a0709a84189b197c313d0df65e418`.
+The missing count includes functions from extensions loaded by the reference
+PHP installation; Composer and Symfony package functions are not part of this
+inventory.
+
+All five Cargo test configurations, all-feature/all-target checking,
+formatting, PHPT-runner and the unchanged 1,623/289 unsafe ratchet pass.
+Composer 2.8.12 S0, all four Symfony S1 gates and FrameworkBundle 7.4.16 warmed
+S2 and cold S3 pass. The release candidate at
+`/tmp/rphp-candidate-filesystem-stat-introspection-contracts/release/rphp`
+hashes to
+`b90e80843f23649bfdfc5aa4edfd892bd76658a071100743b3168c9b66abebc4`.
+
+The final fixed-parent CPU-2 gate uses 32 order-balanced pairs per lane after
+four warmups, exact checksums and no outlier removal. Paired-median changes are
+-82.601% for cached `filemtime`, -89.655% for cached `stat`, -47.961% for file
+predicates, -1.579% for plain-file reads, +1.435% for plain-file writes,
+-3.863% for memory-stream reads, -1.085% for ordinary calls, +2.758% for
+`realpath` and -2.468% for startup. All regression medians remain below the
+five-percent ceiling. Raw observations and summary hash to
+`f31e271b334434a152a3a39ebda22b8f5f28d703f03b5c52b81785f036abaddf`
+and `dfa3821e14782f30544aa2e6a652469ab95ea56592f3f31f07c2073d7dd0e3ef`.
+Ownership/permission mutation functions, `fileowner`/`filegroup`/`fileinode`/
+`fileperms`/`filetype`, broader link operations, 32-bit boundaries and
+allocation-limit/OOM equivalence remain separate contracts.
+
+The preceding measured AMD64 PHP 8.5 language checkpoint is
 `dynamic-source-unit-context`, based on `d57b6287`, pinned to php-src commit
 `fcc29c8` and validated against PHP 8.5.10. Filesystem includes now tokenize
 leading or all-file inline text without weakening the primary CLI long-tag

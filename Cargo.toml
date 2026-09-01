@@ -48,6 +48,7 @@ include-path = ["stream-context", "file-contents", "file-write", "file-lines"]
 formatted-io = []
 
 [dependencies]
+fs2 = "0.4.3"
 memchr = "2.8.0"
 serde = "1.0.228"
 serde_json = { version = "1.0.149", features = ["unbounded_depth"] }

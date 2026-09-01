@@ -107,7 +107,7 @@ pub(in crate::stdlib) fn fn_file(
         return Ok(());
     }
     if flags == 0 && optional_argument(execute_data, 2).is_none() {
-        return super::super::filesystem::return_default_file_lines(&filename, return_pointer);
+        return super::super::filesystem::return_default_file_lines(&filename, return_pointer, eg);
     }
 
     #[cfg(feature = "include-path")]
@@ -120,6 +120,9 @@ pub(in crate::stdlib) fn fn_file(
         Ok(stream) => stream,
         Err(_) => return return_value(return_pointer, Value::bool(false)),
     };
+    if stream.metadata().wrapper_type == "plainfile" {
+        super::super::filesystem::clear_filesystem_stat_cache(eg);
+    }
     let ignore_new_lines = flags & FILE_IGNORE_NEW_LINES != 0;
     let skip_empty_lines = flags & FILE_SKIP_EMPTY_LINES != 0;
     let mut result = PhpArray::new();

@@ -333,6 +333,11 @@ impl PhpStream {
     }
 
     #[inline]
+    pub(crate) fn is_plain_file(&self) -> bool {
+        matches!(self.backend, StreamBackend::File(_))
+    }
+
+    #[inline]
     pub fn is_eof(&self) -> bool {
         self.eof
     }

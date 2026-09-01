@@ -58,7 +58,7 @@ fn filemtime_reports_unix_seconds_and_warns_for_missing_paths() {
     assert_eq!(
         run_php(&source),
         format!(
-            "timestamp|Warning: filemtime(): stat failed for {}\nbool(false)\n",
+            "timestamp|\nWarning: filemtime(): stat failed for {} in <main> on line 5\nbool(false)\n",
             missing.php_literal()
         )
     );

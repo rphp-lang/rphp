@@ -88,7 +88,7 @@ pub(super) fn fn_stream_copy_to_stream(
             break;
         }
 
-        let read = super::with_stream(eg, source, |stream| stream.read(&mut chunk[..requested]));
+        let read = super::with_stream_io(eg, source, |stream| stream.read(&mut chunk[..requested]));
         let read = match read {
             Some(Ok(read)) => read,
             _ => return super::return_value(return_pointer, Value::bool(false)),
@@ -99,7 +99,7 @@ pub(super) fn fn_stream_copy_to_stream(
 
         let mut written = 0;
         while written < read {
-            let write = super::with_stream(eg, destination, |stream| {
+            let write = super::with_stream_io(eg, destination, |stream| {
                 stream.write(&chunk[written..read])
             });
             match write {

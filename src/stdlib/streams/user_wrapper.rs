@@ -630,11 +630,11 @@ pub(crate) fn directory_rewind(
     Ok(Some(()))
 }
 
-pub(crate) fn url_stat(
+pub(crate) fn url_stat_value(
     eg: &mut ExecutorGlobals,
     path: &str,
     flags: i64,
-) -> Result<Option<bool>, VmError> {
+) -> Result<Option<Value>, VmError> {
     let Some(definition) = definition_for_url(eg, path) else {
         return Ok(None);
     };
@@ -645,7 +645,15 @@ pub(crate) fn url_stat(
         "url_stat",
         vec![Value::string(path), Value::long(flags)],
     )?;
-    Ok(Some(value.is_some_and(|value| value.is_truthy())))
+    Ok(Some(value.unwrap_or_else(|| Value::bool(false))))
+}
+
+pub(crate) fn url_stat(
+    eg: &mut ExecutorGlobals,
+    path: &str,
+    flags: i64,
+) -> Result<Option<bool>, VmError> {
+    Ok(url_stat_value(eg, path, flags)?.map(|value| value.is_truthy()))
 }
 
 pub(crate) fn open_include_source(

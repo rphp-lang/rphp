@@ -2098,18 +2098,79 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "flags",
         "context"
     );
-    reg!("file_exists", fn_file_exists, 1, 1, "filename");
-    reg!("stat", fn_stat, 1, 1, "filename");
-    reg!("filemtime", fn_filemtime, 1, 1, "filename");
-    reg!("is_file", fn_is_file, 1, 1, "filename");
-    reg!("is_dir", fn_is_dir, 1, 1, "filename");
+    {
+        let mut function = Box::new(make_internal_function(
+            fn_clearstatcache,
+            2,
+            0,
+            pn!["clear_realpath_cache", "filename"],
+        ));
+        function.common.sig.param_type_hints = vec![ParamTypeHint::Bool, ParamTypeHint::String];
+        function.common.sig.return_type_hint = ParamTypeHint::Void;
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("clearstatcache", pointer).unwrap();
+        eg.register_internal_function_reflection_metadata(
+            pointer,
+            vec![Some(Value::bool(false)), Some(Value::string(String::new()))],
+            "standard",
+        );
+        funcs.push(function);
+    }
+    let or_false =
+        |hint| ParamTypeHint::Union(vec![hint, ParamTypeHint::ClassName("false".to_string())]);
+    for (name, handler, return_type) in [
+        (
+            "disk_free_space",
+            fn_disk_free_space as crate::vm::function::InternalFunctionHandler,
+            or_false(ParamTypeHint::Float),
+        ),
+        (
+            "diskfreespace",
+            fn_diskfreespace,
+            or_false(ParamTypeHint::Float),
+        ),
+        (
+            "disk_total_space",
+            fn_disk_total_space,
+            or_false(ParamTypeHint::Float),
+        ),
+        ("file_exists", fn_file_exists, ParamTypeHint::Bool),
+        ("fileatime", fn_fileatime, or_false(ParamTypeHint::Int)),
+        ("filectime", fn_filectime, or_false(ParamTypeHint::Int)),
+        ("filemtime", fn_filemtime, or_false(ParamTypeHint::Int)),
+        ("filesize", fn_filesize, or_false(ParamTypeHint::Int)),
+        ("is_dir", fn_is_dir, ParamTypeHint::Bool),
+        ("is_executable", fn_is_executable, ParamTypeHint::Bool),
+        ("is_file", fn_is_file, ParamTypeHint::Bool),
+        ("is_readable", fn_is_readable, ParamTypeHint::Bool),
+        ("is_writable", fn_is_writable, ParamTypeHint::Bool),
+        ("is_writeable", fn_is_writeable, ParamTypeHint::Bool),
+        ("lstat", fn_lstat, or_false(ParamTypeHint::Array)),
+        ("realpath", fn_realpath, or_false(ParamTypeHint::String)),
+        ("stat", fn_stat, or_false(ParamTypeHint::Array)),
+    ] {
+        let mut function = Box::new(make_internal_function(handler, 1, 1, pn!["filename"]));
+        if name == "realpath" {
+            function.common.sig.param_names[0] = "path".to_string();
+        } else if matches!(
+            name,
+            "disk_free_space" | "diskfreespace" | "disk_total_space"
+        ) {
+            function.common.sig.param_names[0] = "directory".to_string();
+        }
+        function.common.sig.param_type_hints = vec![ParamTypeHint::String];
+        function.common.sig.return_type_hint = return_type;
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function(name, pointer).unwrap();
+        eg.register_internal_function_reflection_metadata(pointer, vec![None], "standard");
+        funcs.push(function);
+    }
     reg!("is_link", fn_is_link, 1, 1, "filename");
     reg!("chmod", fn_chmod, 2, 2, "filename", "permissions");
     reg!("fileperms", fn_fileperms, 1, 1, "filename");
     reg!("umask", fn_umask, 1, 0, "mask");
-    reg!("is_readable", fn_is_readable, 1, 1, "filename");
-    reg!("is_writable", fn_is_writable, 1, 1, "filename");
-    reg!("is_writeable", fn_is_writable, 1, 1, "filename");
     reg_typed!(
         "dirname",
         fn_dirname,
@@ -2128,7 +2189,6 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String, ParamTypeHint::String],
         ParamTypeHint::String
     );
-    reg!("realpath", fn_realpath, 1, 1, "path");
     reg_typed!(
         "pathinfo",
         fn_pathinfo,
@@ -2302,7 +2362,19 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         .find_function("tempnam")
         .expect("tempnam was just registered");
     eg.register_internal_function_reflection_metadata(tempnam, vec![None, None], "standard");
-    reg!("sys_get_temp_dir", fn_sys_get_temp_dir, 0, 0);
+    reg_typed!(
+        "sys_get_temp_dir",
+        fn_sys_get_temp_dir,
+        0,
+        0,
+        [],
+        [],
+        ParamTypeHint::String
+    );
+    let sys_get_temp_dir = eg
+        .find_function("sys_get_temp_dir")
+        .expect("sys_get_temp_dir was just registered");
+    eg.register_internal_function_extension(sys_get_temp_dir, "standard");
     reg_typed!(
         "glob",
         fn_glob,

@@ -529,6 +529,40 @@ pub(super) fn with_stream<R>(
     super::resource::with_request_payload_mut::<PhpStream, _>(eg, id, operation)
 }
 
+#[inline(always)]
+pub(super) fn with_stream_io<R>(
+    eg: &mut ExecutorGlobals,
+    id: i64,
+    operation: impl FnOnce(&mut PhpStream) -> R,
+) -> Option<R> {
+    if eg.static_vars.is_empty() {
+        return super::resource::with_request_payload_mut::<PhpStream, _>(eg, id, operation);
+    }
+
+    with_stream_io_maybe_cached(eg, id, operation)
+}
+
+#[cold]
+#[inline(never)]
+fn with_stream_io_maybe_cached<R>(
+    eg: &mut ExecutorGlobals,
+    id: i64,
+    operation: impl FnOnce(&mut PhpStream) -> R,
+) -> Option<R> {
+    if !super::filesystem::filesystem_stat_cache_is_populated(eg) {
+        return super::resource::with_request_payload_mut::<PhpStream, _>(eg, id, operation);
+    }
+    let mut plain_file = false;
+    let result = super::resource::with_request_payload_mut::<PhpStream, _>(eg, id, |stream| {
+        plain_file = stream.is_plain_file();
+        operation(stream)
+    })?;
+    if plain_file {
+        super::filesystem::clear_filesystem_stat_cache(eg);
+    }
+    Some(result)
+}
+
 #[cold]
 fn fn_fopen(
     execute_data: *mut ExecuteData,
@@ -567,10 +601,16 @@ fn fn_fopen(
         user_wrapper::OpenResult::NotRegistered => {}
     }
     let value = match PhpStream::open(path.as_ref(), mode.as_ref()) {
-        #[cfg(feature = "resource-lifetime")]
-        Ok(stream) => insert_stream(eg, stream),
-        #[cfg(not(feature = "resource-lifetime"))]
-        Ok(stream) => Value::resource(insert_stream(eg, stream)),
+        Ok(stream) => {
+            if stream.metadata().wrapper_type == "plainfile" {
+                super::filesystem::clear_filesystem_stat_cache(eg);
+            }
+            #[cfg(feature = "resource-lifetime")]
+            let value = insert_stream(eg, stream);
+            #[cfg(not(feature = "resource-lifetime"))]
+            let value = Value::resource(insert_stream(eg, stream));
+            value
+        }
         Err(error) => {
             let reason = match error.kind() {
                 std::io::ErrorKind::NotFound => "No such file or directory".to_string(),
@@ -610,8 +650,8 @@ fn fn_fread(
         return return_value(return_pointer, Value::bool(false));
     }
     bytes.resize(length, 0);
-    let result =
-        resource.and_then(|resource| with_stream(eg, resource, |stream| stream.read(&mut bytes)));
+    let result = resource
+        .and_then(|resource| with_stream_io(eg, resource, |stream| stream.read(&mut bytes)));
     match result {
         Some(Ok(read)) => {
             bytes.truncate(read);
@@ -645,7 +685,7 @@ fn fn_fgets(
     };
     let mut bytes = Vec::new();
     let result = resource.and_then(|resource| {
-        with_stream(eg, resource, |stream| stream.read_line(&mut bytes, length))
+        with_stream_io(eg, resource, |stream| stream.read_line(&mut bytes, length))
     });
     match result {
         Some(Ok(Some(read))) => {
@@ -687,7 +727,7 @@ fn fn_fgetcsv(
     };
 
     let result = resource.and_then(|resource| {
-        with_stream(eg, resource, |stream| {
+        with_stream_io(eg, resource, |stream| {
             stream.read_csv_record(length, separator, enclosure, escape)
         })
     });
@@ -759,7 +799,7 @@ fn fn_fwrite(
         bytes.truncate(length);
     }
     let result =
-        resource.and_then(|resource| with_stream(eg, resource, |stream| stream.write(&bytes)));
+        resource.and_then(|resource| with_stream_io(eg, resource, |stream| stream.write(&bytes)));
     match result {
         Some(Ok(written)) => return_value(return_pointer, Value::long(written as i64)),
         _ => return_value(return_pointer, Value::bool(false)),
@@ -795,7 +835,7 @@ fn fn_fflush(
 ) -> Result<(), VmError> {
     let resource = argument(execute_data, 0).as_resource_id();
     let flushed = resource
-        .and_then(|resource| with_stream(eg, resource, |stream| stream.flush().is_ok()))
+        .and_then(|resource| with_stream_io(eg, resource, |stream| stream.flush().is_ok()))
         .unwrap_or(false);
     #[cfg(feature = "stream-registry")]
     if !flushed

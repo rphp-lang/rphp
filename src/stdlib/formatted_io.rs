@@ -450,7 +450,7 @@ fn write_formatted(
         return Ok(());
     };
     let bytes = super::php_string_to_bytes(&rendered);
-    let result = super::streams::with_stream(eg, resource, |stream| stream.write(&bytes));
+    let result = super::streams::with_stream_io(eg, resource, |stream| stream.write(&bytes));
     let value = match result {
         Some(Ok(written)) => Value::long(written as i64),
         _ => Value::bool(false),
@@ -1102,7 +1102,7 @@ fn scan_stream_call(
     };
     let mut input = Vec::new();
     let read =
-        super::streams::with_stream(eg, resource, |stream| stream.read_line(&mut input, None));
+        super::streams::with_stream_io(eg, resource, |stream| stream.read_line(&mut input, None));
     if !matches!(read, Some(Ok(Some(_)))) {
         super::write_return_value(return_pointer, Value::bool(false));
         return Ok(());

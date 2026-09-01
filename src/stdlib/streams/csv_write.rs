@@ -122,7 +122,7 @@ pub(super) fn fn_fputcsv(
     };
 
     let record_length = record.len();
-    let result = super::with_stream(eg, resource, |stream| {
+    let result = super::with_stream_io(eg, resource, |stream| {
         let mut remaining = record.as_slice();
         while !remaining.is_empty() {
             let written = stream.write(remaining)?;

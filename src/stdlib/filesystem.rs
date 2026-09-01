@@ -29,6 +29,13 @@ pub(crate) const GLOB_ONLYDIR: i64 = 1 << 30;
 pub(crate) const GLOB_AVAILABLE_FLAGS: i64 =
     GLOB_ERR | GLOB_MARK | GLOB_NOCHECK | GLOB_NOSORT | GLOB_BRACE | GLOB_NOESCAPE | GLOB_ONLYDIR;
 
+const STAT_FIELD_NAMES: [&str; 13] = [
+    "dev", "ino", "mode", "nlink", "uid", "gid", "rdev", "size", "atime", "mtime", "ctime",
+    "blksize", "blocks",
+];
+const STAT_CACHE: &str = "\0rphp-filesystem-stat-cache";
+const LSTAT_CACHE: &str = "\0rphp-filesystem-lstat-cache";
+
 // ============================================================================
 // Filesystem functions
 // ============================================================================
@@ -55,8 +62,15 @@ pub(super) fn fn_file_get_contents(
             }
         }
     }
-    match std::fs::read(path.as_ref()) {
-        Ok(bytes) => ret!(rv, php_byte_result(bytes, false)),
+    match std::fs::File::open(path.as_ref()) {
+        Ok(mut file) => {
+            clear_filesystem_stat_cache(eg);
+            let mut bytes = Vec::new();
+            match std::io::Read::read_to_end(&mut file, &mut bytes) {
+                Ok(_) => ret!(rv, php_byte_result(bytes, false)),
+                Err(_) => ret!(rv, Value::bool(false)),
+            }
+        }
         Err(_) => ret!(rv, Value::bool(false)),
     }
 }
@@ -220,7 +234,7 @@ mod data_uri_tests {
 pub(super) fn fn_file_put_contents(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
     let data = arg_str!(ed, 1);
@@ -236,17 +250,29 @@ pub(super) fn fn_file_put_contents(
         } else {
             options.truncate(false);
         }
-        options.open(path.as_ref()).and_then(|mut file| {
-            if locked {
-                file.lock()?;
-                if !append {
-                    file.set_len(0)?;
-                }
+        match options.open(path.as_ref()) {
+            Ok(mut file) => {
+                clear_filesystem_stat_cache(eg);
+                (|| -> std::io::Result<()> {
+                    if locked {
+                        file.lock()?;
+                        if !append {
+                            file.set_len(0)?;
+                        }
+                    }
+                    file.write_all(&raw_bytes)
+                })()
             }
-            file.write_all(&raw_bytes)
-        })
+            Err(error) => Err(error),
+        }
     } else {
-        std::fs::write(path.as_ref(), &raw_bytes)
+        match std::fs::File::create(path.as_ref()) {
+            Ok(mut file) => {
+                clear_filesystem_stat_cache(eg);
+                file.write_all(&raw_bytes)
+            }
+            Err(error) => Err(error),
+        }
     };
     match result {
         Ok(()) => ret!(rv, Value::long(raw_bytes.len() as i64)),
@@ -254,42 +280,36 @@ pub(super) fn fn_file_put_contents(
     }
 }
 
-/// file_exists($filename): bool
-pub(super) fn fn_file_exists(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    #[cfg(not(feature = "stream-registry"))]
-    let _ = eg;
-    let path = arg_str!(ed, 0);
-    #[cfg(feature = "stream-registry")]
-    if let Some(exists) = super::user_wrapper::url_stat(eg, path.as_ref(), 6)? {
-        if eg.exception.is_some() {
-            return Ok(());
-        }
-        ret!(rv, Value::bool(exists));
-    }
-    ret!(
-        rv,
-        Value::bool(std::path::Path::new(path.as_ref()).exists())
-    );
+#[derive(Clone, Copy)]
+enum FilesystemStatQuery {
+    Quiet,
+    Report,
+    LinkReport,
+    LinkQuiet,
 }
 
-/// stat($filename): array|false
-pub(super) fn fn_stat(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let path = arg_str!(ed, 0);
-    let local = path.strip_prefix("file://").unwrap_or(path.as_ref());
-    let Ok(metadata) = std::fs::metadata(local) else {
-        ret!(rv, Value::bool(false));
-    };
+impl FilesystemStatQuery {
+    fn cache_key(self) -> &'static str {
+        match self {
+            Self::Quiet | Self::Report => STAT_CACHE,
+            Self::LinkReport | Self::LinkQuiet => LSTAT_CACHE,
+        }
+    }
 
+    #[cfg(feature = "stream-registry")]
+    fn wrapper_flags(self) -> i64 {
+        match self {
+            Self::Quiet => 6,
+            Self::Report => 4,
+            Self::LinkReport => 5,
+            Self::LinkQuiet => 7,
+        }
+    }
+}
+
+fn metadata_stat_fields(metadata: &std::fs::Metadata) -> [i64; 13] {
     #[cfg(unix)]
-    let fields = {
+    {
         use std::os::unix::fs::MetadataExt;
         [
             metadata.dev() as i64,
@@ -306,104 +326,714 @@ pub(super) fn fn_stat(
             metadata.blksize() as i64,
             metadata.blocks() as i64,
         ]
-    };
+    }
     #[cfg(not(unix))]
-    let fields = [
-        0,
-        0,
-        0,
-        1,
-        0,
-        0,
-        0,
-        i64::try_from(metadata.len()).unwrap_or(i64::MAX),
-        0,
-        0,
-        0,
-        0,
-        0,
-    ];
-    let names = [
-        "dev", "ino", "mode", "nlink", "uid", "gid", "rdev", "size", "atime", "mtime", "ctime",
-        "blksize", "blocks",
-    ];
+    {
+        let file_type = metadata.file_type();
+        let mut mode = if file_type.is_symlink() {
+            0o120000
+        } else if file_type.is_dir() {
+            0o040000
+        } else if file_type.is_file() {
+            0o100000
+        } else {
+            0
+        };
+        mode |= 0o444;
+        if !metadata.permissions().readonly() {
+            mode |= 0o222;
+        }
+        let timestamp = |value: std::io::Result<std::time::SystemTime>| {
+            value.map_or(0, |value| {
+                match value.duration_since(std::time::UNIX_EPOCH) {
+                    Ok(duration) => i64::try_from(duration.as_secs()).unwrap_or(i64::MAX),
+                    Err(error) => -i64::try_from(error.duration().as_secs()).unwrap_or(i64::MAX),
+                }
+            })
+        };
+        [
+            0,
+            0,
+            mode,
+            1,
+            0,
+            0,
+            0,
+            i64::try_from(metadata.len()).unwrap_or(i64::MAX),
+            timestamp(metadata.accessed()),
+            timestamp(metadata.modified()),
+            timestamp(metadata.created()),
+            0,
+            0,
+        ]
+    }
+}
+
+fn stat_array_value(fields: [i64; 13]) -> Value {
     let mut result = PhpArray::with_hash_capacity(fields.len() * 2);
     for value in fields {
         result.push(Value::long(value));
     }
-    for (name, value) in names.into_iter().zip(fields) {
+    for (name, value) in STAT_FIELD_NAMES.into_iter().zip(fields) {
         result.set_str(name, Value::long(value));
     }
-    ret!(rv, Value::array(result));
+    Value::array(result)
 }
 
-/// filemtime($filename): int|false
+#[cfg(feature = "stream-registry")]
+fn normalize_wrapper_stat(value: Value) -> Value {
+    let Some(array) = value.as_array() else {
+        return Value::bool(false);
+    };
+    let mut fields = [0; 13];
+    for (index, name) in STAT_FIELD_NAMES.into_iter().enumerate() {
+        fields[index] = array.get_str(name).map(Value::to_long_val).unwrap_or(0);
+    }
+    stat_array_value(fields)
+}
+
+fn cached_stat_value(
+    eg: &ExecutorGlobals,
+    query: FilesystemStatQuery,
+    path: &str,
+) -> Option<Value> {
+    eg.static_vars
+        .get(query.cache_key())
+        .and_then(|cache| cache.get(path))
+        .cloned()
+}
+
+fn cache_stat_value(
+    eg: &mut ExecutorGlobals,
+    query: FilesystemStatQuery,
+    path: &str,
+    value: &Value,
+) {
+    let key = query.cache_key();
+    if let Some(cache) = eg.static_vars.get_mut(key) {
+        cache.clear();
+        cache.insert(path.to_string(), value.clone());
+        return;
+    }
+    eg.static_vars.insert(
+        key.to_string(),
+        [(path.to_string(), value.clone())].into_iter().collect(),
+    );
+}
+
+pub(super) fn clear_filesystem_stat_cache(eg: &mut ExecutorGlobals) {
+    if eg.static_vars.is_empty() {
+        return;
+    }
+    for key in [STAT_CACHE, LSTAT_CACHE] {
+        if let Some(cache) = eg.static_vars.get_mut(key) {
+            cache.clear();
+        }
+    }
+}
+
+#[inline]
+pub(super) fn filesystem_stat_cache_is_populated(eg: &ExecutorGlobals) -> bool {
+    if eg.static_vars.is_empty() {
+        return false;
+    }
+    [STAT_CACHE, LSTAT_CACHE].into_iter().any(|key| {
+        eg.static_vars
+            .get(key)
+            .is_some_and(|cache| !cache.is_empty())
+    })
+}
+
+fn local_filesystem_path(path: &str) -> Option<&str> {
+    if path.len() >= 7 && path.as_bytes()[..7].eq_ignore_ascii_case(b"file://") {
+        let local = path.get(7..)?;
+        if local.len() >= 10 && local.as_bytes()[..10].eq_ignore_ascii_case(b"localhost/") {
+            return local.get(9..);
+        }
+        if local.is_empty() || local.starts_with('/') {
+            return Some(local);
+        }
+        #[cfg(windows)]
+        if local.as_bytes().get(1) == Some(&b':') {
+            return Some(local);
+        }
+        return None;
+    }
+
+    #[cfg(windows)]
+    if path.as_bytes().get(1) == Some(&b':') {
+        return Some(path);
+    }
+
+    if let Some(separator) = path.find("://") {
+        let protocol = &path[..separator];
+        if protocol.len() > 1
+            && protocol
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+        {
+            return None;
+        }
+    }
+
+    Some(path)
+}
+
+fn filesystem_stat_value(
+    eg: &mut ExecutorGlobals,
+    path: &str,
+    query: FilesystemStatQuery,
+) -> Result<Value, VmError> {
+    if let Some(value) = cached_stat_value(eg, query, path) {
+        return Ok(value);
+    }
+
+    #[cfg(feature = "stream-registry")]
+    if let Some(value) = super::user_wrapper::url_stat_value(eg, path, query.wrapper_flags())? {
+        if eg.exception.is_some() {
+            return Ok(Value::bool(false));
+        }
+        let value = normalize_wrapper_stat(value);
+        if value.value_type() == ValueType::Array {
+            cache_stat_value(eg, query, path, &value);
+            if matches!(
+                query,
+                FilesystemStatQuery::LinkReport | FilesystemStatQuery::LinkQuiet
+            ) && stat_mode(&value).is_some_and(|mode| mode & 0o170000 != 0o120000)
+            {
+                cache_stat_value(eg, FilesystemStatQuery::Report, path, &value);
+            }
+        }
+        return Ok(value);
+    }
+
+    let Some(local) = local_filesystem_path(path) else {
+        return Ok(Value::bool(false));
+    };
+    let metadata = match query {
+        FilesystemStatQuery::Quiet | FilesystemStatQuery::Report => std::fs::metadata(local),
+        FilesystemStatQuery::LinkReport | FilesystemStatQuery::LinkQuiet => {
+            std::fs::symlink_metadata(local)
+        }
+    };
+    let value = metadata
+        .map(|metadata| stat_array_value(metadata_stat_fields(&metadata)))
+        .unwrap_or_else(|_| Value::bool(false));
+    if value.value_type() == ValueType::Array {
+        cache_stat_value(eg, query, path, &value);
+        if matches!(
+            query,
+            FilesystemStatQuery::LinkReport | FilesystemStatQuery::LinkQuiet
+        ) && stat_mode(&value).is_some_and(|mode| mode & 0o170000 != 0o120000)
+        {
+            cache_stat_value(eg, FilesystemStatQuery::Report, path, &value);
+        }
+    }
+    Ok(value)
+}
+
+fn stat_mode(value: &Value) -> Option<i64> {
+    value
+        .as_array()
+        .and_then(|stat| stat.get_str("mode"))
+        .and_then(Value::as_long)
+}
+
+fn stat_long_field(value: &Value, field: &str) -> Option<i64> {
+    value
+        .as_array()
+        .and_then(|stat| stat.get_str(field))
+        .and_then(Value::as_long)
+}
+
+#[derive(Clone, Copy)]
+enum FileAccessKind {
+    Read,
+    Write,
+    Execute,
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_identity() -> &'static (u32, Vec<u32>) {
+    static IDENTITY: std::sync::OnceLock<(u32, Vec<u32>)> = std::sync::OnceLock::new();
+    IDENTITY.get_or_init(|| {
+        let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+        let uid = status
+            .lines()
+            .find_map(|line| line.strip_prefix("Uid:"))
+            .and_then(|line| line.split_ascii_whitespace().next())
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(u32::MAX);
+        let gid = status
+            .lines()
+            .find_map(|line| line.strip_prefix("Gid:"))
+            .and_then(|line| line.split_ascii_whitespace().next())
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(u32::MAX);
+        let mut groups = status
+            .lines()
+            .find_map(|line| line.strip_prefix("Groups:"))
+            .into_iter()
+            .flat_map(str::split_ascii_whitespace)
+            .filter_map(|value| value.parse().ok())
+            .collect::<Vec<_>>();
+        if gid != u32::MAX && !groups.contains(&gid) {
+            groups.push(gid);
+        }
+        (uid, groups)
+    })
+}
+
+fn stat_access_allowed_fields(
+    mode: i64,
+    owner: Option<i64>,
+    group: Option<i64>,
+    access: FileAccessKind,
+    plain_local: bool,
+) -> bool {
+    let bit = match access {
+        FileAccessKind::Read => 0o4,
+        FileAccessKind::Write => 0o2,
+        FileAccessKind::Execute => 0o1,
+    };
+
+    #[cfg(target_os = "linux")]
+    {
+        let (uid, groups) = linux_process_identity();
+        if plain_local && *uid == 0 {
+            return !matches!(access, FileAccessKind::Execute) || mode & 0o111 != 0;
+        }
+        let owner = owner.unwrap_or(-1);
+        let group = group.unwrap_or(-1);
+        let shift = if owner >= 0 && owner as u32 == *uid {
+            6
+        } else if group >= 0 && groups.contains(&(group as u32)) {
+            3
+        } else {
+            0
+        };
+        mode & (bit << shift) != 0
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (owner, group, plain_local);
+        mode & (bit | bit << 3 | bit << 6) != 0
+    }
+}
+
+fn stat_access_allowed(value: &Value, access: FileAccessKind) -> bool {
+    let Some(mode) = stat_mode(value) else {
+        return false;
+    };
+    stat_access_allowed_fields(
+        mode,
+        stat_long_field(value, "uid"),
+        stat_long_field(value, "gid"),
+        access,
+        false,
+    )
+}
+
+fn report_stat_failure(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    operation: &str,
+    path: &str,
+) -> Result<(), VmError> {
+    super::report_internal_diagnostic(
+        eg,
+        ed,
+        2,
+        "Warning",
+        &format!("{function}(): {operation} failed for {path}"),
+    )?;
+    Ok(())
+}
+
+enum StatFilenameArgument {
+    Path(Value),
+    Invalid,
+}
+
+fn stat_filename_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    quiet: bool,
+) -> Result<Option<StatFilenameArgument>, VmError> {
+    let Some(value) =
+        typed_internal_string_value_argument_expected(ed, eg, function, 0, "filename", "string")?
+    else {
+        return Ok(None);
+    };
+    let path = value.as_str().unwrap_or_default();
+    if path.is_empty() {
+        return Ok(Some(StatFilenameArgument::Invalid));
+    }
+    if path.as_bytes().contains(&0) {
+        if !quiet {
+            super::report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("{function}(): Filename contains null byte"),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+        }
+        return Ok(Some(StatFilenameArgument::Invalid));
+    }
+    Ok(Some(StatFilenameArgument::Path(value)))
+}
+
+fn stat_result(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    query: FilesystemStatQuery,
+) -> Result<(), VmError> {
+    let Some(path) = stat_filename_argument(ed, eg, function, false)? else {
+        return Ok(());
+    };
+    let StatFilenameArgument::Path(path) = path else {
+        ret!(rv, Value::bool(false));
+    };
+    let path = path.as_str().unwrap_or_default();
+    let value = filesystem_stat_value(eg, path, query)?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    if value.value_type() == ValueType::False {
+        report_stat_failure(
+            ed,
+            eg,
+            function,
+            if matches!(query, FilesystemStatQuery::LinkReport) {
+                "Lstat"
+            } else {
+                "stat"
+            },
+            path,
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    ret!(rv, value);
+}
+
+fn stat_field_result(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    field: &str,
+) -> Result<(), VmError> {
+    let Some(path) = stat_filename_argument(ed, eg, function, false)? else {
+        return Ok(());
+    };
+    let StatFilenameArgument::Path(path) = path else {
+        ret!(rv, Value::bool(false));
+    };
+    let path = path.as_str().unwrap_or_default();
+    let value = filesystem_stat_value(eg, path, FilesystemStatQuery::Report)?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    if let Some(value) = value
+        .as_array()
+        .and_then(|stat| stat.get_str(field))
+        .and_then(Value::as_long)
+    {
+        ret!(rv, Value::long(value));
+    }
+    report_stat_failure(ed, eg, function, "stat", path)?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    ret!(rv, Value::bool(false));
+}
+
+/// clearstatcache($clear_realpath_cache = false, $filename = ''): void
+pub(super) fn fn_clearstatcache(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if arg_opt!(ed, 0).is_some()
+        && typed_internal_bool_argument(ed, eg, "clearstatcache", 0, "clear_realpath_cache")?
+            .is_none()
+    {
+        return Ok(());
+    }
+    if arg_opt!(ed, 1).is_some()
+        && filesystem_string_value_argument(ed, eg, "clearstatcache", 1, "filename")?.is_none()
+    {
+        return Ok(());
+    }
+    clear_filesystem_stat_cache(eg);
+    ret!(rv, Value::null());
+}
+
+fn disk_space_result(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    available: bool,
+) -> Result<(), VmError> {
+    let Some(path) = filesystem_string_value_argument(ed, eg, function, 0, "directory")? else {
+        return Ok(());
+    };
+    let path = path.as_str().unwrap_or_default();
+    if path.is_empty() {
+        ret!(rv, Value::bool(false));
+    }
+    let result = if available {
+        fs2::available_space(path)
+    } else {
+        fs2::total_space(path)
+    };
+    match result {
+        Ok(space) => ret!(rv, Value::double(space as f64)),
+        Err(error) => {
+            let mut message = error.to_string();
+            if let Some(suffix) = message.rfind(" (os error ")
+                && message.ends_with(')')
+            {
+                message.truncate(suffix);
+            }
+            super::report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("{function}(): {message}"),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            ret!(rv, Value::bool(false));
+        }
+    }
+}
+
+pub(super) fn fn_disk_free_space(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    disk_space_result(ed, rv, eg, "disk_free_space", true)
+}
+
+pub(super) fn fn_diskfreespace(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    disk_space_result(ed, rv, eg, "diskfreespace", true)
+}
+
+pub(super) fn fn_disk_total_space(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    disk_space_result(ed, rv, eg, "disk_total_space", false)
+}
+
+/// file_exists($filename): bool
+pub(super) fn fn_file_exists(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(path) = stat_filename_argument(ed, eg, "file_exists", true)? else {
+        return Ok(());
+    };
+    let StatFilenameArgument::Path(path) = path else {
+        ret!(rv, Value::bool(false));
+    };
+    let path = path.as_str().unwrap_or_default();
+    #[cfg(feature = "stream-registry")]
+    let is_user_wrapper = super::user_wrapper::definition_for_url(eg, path).is_some();
+    #[cfg(not(feature = "stream-registry"))]
+    let is_user_wrapper = false;
+    if !is_user_wrapper {
+        let Some(local) = local_filesystem_path(path) else {
+            ret!(rv, Value::bool(false));
+        };
+        ret!(rv, Value::bool(std::fs::metadata(local).is_ok()));
+    }
+    let value = filesystem_stat_value(eg, path, FilesystemStatQuery::Quiet)?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    ret!(rv, Value::bool(value.value_type() == ValueType::Array));
+}
+
+/// stat($filename): array|false
+pub(super) fn fn_stat(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    stat_result(ed, rv, eg, "stat", FilesystemStatQuery::Report)
+}
+
+/// lstat($filename): array|false
+pub(super) fn fn_lstat(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    stat_result(ed, rv, eg, "lstat", FilesystemStatQuery::LinkReport)
+}
+
+pub(super) fn fn_filesize(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    stat_field_result(ed, rv, eg, "filesize", "size")
+}
+
+pub(super) fn fn_fileatime(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    stat_field_result(ed, rv, eg, "fileatime", "atime")
+}
+
 pub(super) fn fn_filemtime(
     ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let path = arg_str!(ed, 0);
-    let modified = std::fs::metadata(path.as_ref()).and_then(|metadata| metadata.modified());
-    match modified {
-        Ok(timestamp) => {
-            let seconds = match timestamp.duration_since(std::time::UNIX_EPOCH) {
-                Ok(duration) => i64::try_from(duration.as_secs()).unwrap_or(i64::MAX),
-                Err(error) => -i64::try_from(error.duration().as_secs()).unwrap_or(i64::MAX),
-            };
-            ret!(rv, Value::long(seconds));
-        }
-        Err(_) => {
-            eg.write_output(
-                format!("Warning: filemtime(): stat failed for {}\n", path.as_ref()).as_bytes(),
-            );
-            ret!(rv, Value::bool(false));
-        }
+    stat_field_result(ed, rv, eg, "filemtime", "mtime")
+}
+
+pub(super) fn fn_filectime(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    stat_field_result(ed, rv, eg, "filectime", "ctime")
+}
+
+fn file_mode_predicate(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    query: FilesystemStatQuery,
+    predicate: impl FnOnce(i64) -> bool,
+) -> Result<(), VmError> {
+    let Some(path) = stat_filename_argument(ed, eg, function, true)? else {
+        return Ok(());
+    };
+    let StatFilenameArgument::Path(path) = path else {
+        ret!(rv, Value::bool(false));
+    };
+    let value = filesystem_stat_value(eg, path.as_str().unwrap_or_default(), query)?;
+    if eg.exception.is_some() {
+        return Ok(());
     }
+    ret!(rv, Value::bool(stat_mode(&value).is_some_and(predicate)));
+}
+
+fn file_access_predicate(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    access: FileAccessKind,
+) -> Result<(), VmError> {
+    let Some(path) = stat_filename_argument(ed, eg, function, true)? else {
+        return Ok(());
+    };
+    let StatFilenameArgument::Path(path) = path else {
+        ret!(rv, Value::bool(false));
+    };
+    let path = path.as_str().unwrap_or_default();
+    #[cfg(feature = "stream-registry")]
+    let is_user_wrapper = super::user_wrapper::definition_for_url(eg, path).is_some();
+    #[cfg(not(feature = "stream-registry"))]
+    let is_user_wrapper = false;
+    let local = local_filesystem_path(path);
+    if !is_user_wrapper {
+        let Some(local) = local else {
+            ret!(rv, Value::bool(false));
+        };
+        let allowed = std::fs::metadata(local).is_ok_and(|metadata| {
+            let fields = metadata_stat_fields(&metadata);
+            stat_access_allowed_fields(fields[2], Some(fields[4]), Some(fields[5]), access, true)
+        });
+        ret!(rv, Value::bool(allowed));
+    }
+    let value = filesystem_stat_value(eg, path, FilesystemStatQuery::Quiet)?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    ret!(rv, Value::bool(stat_access_allowed(&value, access)));
 }
 
 /// is_file($filename): bool
 pub(super) fn fn_is_file(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let path = arg_str!(ed, 0);
-    ret!(
-        rv,
-        Value::bool(std::path::Path::new(path.as_ref()).is_file())
-    );
+    file_mode_predicate(ed, rv, eg, "is_file", FilesystemStatQuery::Quiet, |mode| {
+        mode & 0o170000 == 0o100000
+    })
 }
 
 /// is_dir($filename): bool
 pub(super) fn fn_is_dir(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let path = arg_str!(ed, 0);
-    ret!(
-        rv,
-        Value::bool(std::path::Path::new(path.as_ref()).is_dir())
-    );
+    file_mode_predicate(ed, rv, eg, "is_dir", FilesystemStatQuery::Quiet, |mode| {
+        mode & 0o170000 == 0o040000
+    })
+}
+
+pub(super) fn fn_is_executable(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    file_access_predicate(ed, rv, eg, "is_executable", FileAccessKind::Execute)
 }
 
 /// is_link($filename): bool — lstat semantics also recognize broken links.
 pub(super) fn fn_is_link(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let path = arg_str!(ed, 0);
-    let is_link = std::fs::symlink_metadata(path.as_ref())
-        .is_ok_and(|metadata| metadata.file_type().is_symlink());
-    ret!(rv, Value::bool(is_link));
+    file_mode_predicate(
+        ed,
+        rv,
+        eg,
+        "is_link",
+        FilesystemStatQuery::LinkQuiet,
+        |mode| mode & 0o170000 == 0o120000,
+    )
 }
 
 pub(super) fn fn_chmod(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
     let mode = arg_long!(ed, 1) as u32;
@@ -414,6 +1044,9 @@ pub(super) fn fn_chmod(
     };
     #[cfg(not(unix))]
     let result = false;
+    if result {
+        clear_filesystem_stat_cache(eg);
+    }
     ret!(rv, Value::bool(result));
 }
 
@@ -575,10 +1208,14 @@ pub(super) fn fn_basename(
 pub(super) fn fn_realpath(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let path = arg_str!(ed, 0);
-    match std::fs::canonicalize(path.as_ref()) {
+    let Some(path) = filesystem_string_value_argument(ed, eg, "realpath", 0, "path")? else {
+        return Ok(());
+    };
+    let path = path.as_str().unwrap_or_default();
+    let path = if path.is_empty() { "." } else { path };
+    match std::fs::canonicalize(path) {
         Ok(p) => ret!(rv, Value::string(p.to_string_lossy().into_owned())),
         Err(_) => ret!(rv, Value::bool(false)),
     }
@@ -601,9 +1238,15 @@ pub(super) fn fn_getcwd(
 pub(in crate::stdlib) fn return_default_file_lines(
     path: &str,
     rv: *mut Value,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    match std::fs::read(path) {
-        Ok(bytes) => {
+    match std::fs::File::open(path) {
+        Ok(mut file) => {
+            clear_filesystem_stat_cache(eg);
+            let mut bytes = Vec::new();
+            if std::io::Read::read_to_end(&mut file, &mut bytes).is_err() {
+                ret!(rv, Value::bool(false));
+            }
             let mut arr = PhpArray::new();
             let mut start = 0;
             while start < bytes.len() {
@@ -629,19 +1272,19 @@ pub(in crate::stdlib) fn return_default_file_lines(
 pub(super) fn fn_file(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
-    return_default_file_lines(path.as_ref(), rv)
+    return_default_file_lines(path.as_ref(), rv, eg)
 }
 
-fn filesystem_string_argument(
+fn filesystem_string_value_argument(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
     function: &str,
     index: u32,
     parameter: &str,
-) -> Result<Option<String>, VmError> {
+) -> Result<Option<Value>, VmError> {
     let Some(value) = typed_internal_string_value_argument_expected(
         ed, eg, function, index, parameter, "string",
     )?
@@ -659,7 +1302,20 @@ fn filesystem_string_argument(
         ));
         return Ok(None);
     }
-    Ok(Some(path.to_string()))
+    Ok(Some(value))
+}
+
+fn filesystem_string_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    index: u32,
+    parameter: &str,
+) -> Result<Option<String>, VmError> {
+    Ok(
+        filesystem_string_value_argument(ed, eg, function, index, parameter)?
+            .map(|value| value.as_str().unwrap_or_default().to_string()),
+    )
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -781,7 +1437,10 @@ pub(super) fn fn_mkdir(
         return Ok(());
     }
     match result {
-        Ok(()) => ret!(rv, Value::bool(true)),
+        Ok(()) => {
+            clear_filesystem_stat_cache(eg);
+            ret!(rv, Value::bool(true));
+        }
         Err(error) => {
             report_filesystem_diagnostic(
                 ed,
@@ -815,7 +1474,10 @@ pub(super) fn fn_rmdir(
         return Ok(());
     }
     match result {
-        Ok(()) => ret!(rv, Value::bool(true)),
+        Ok(()) => {
+            clear_filesystem_stat_cache(eg);
+            ret!(rv, Value::bool(true));
+        }
         Err(error) => {
             report_filesystem_diagnostic(
                 ed,
@@ -849,7 +1511,10 @@ pub(super) fn fn_unlink(
         return Ok(());
     }
     match result {
-        Ok(()) => ret!(rv, Value::bool(true)),
+        Ok(()) => {
+            clear_filesystem_stat_cache(eg);
+            ret!(rv, Value::bool(true));
+        }
         Err(error) => {
             report_filesystem_diagnostic(
                 ed,
@@ -886,7 +1551,10 @@ pub(super) fn fn_rename(
         return Ok(());
     }
     match result {
-        Ok(()) => ret!(rv, Value::bool(true)),
+        Ok(()) => {
+            clear_filesystem_stat_cache(eg);
+            ret!(rv, Value::bool(true));
+        }
         Err(error) => {
             report_filesystem_diagnostic(
                 ed,
@@ -974,12 +1642,17 @@ pub(super) fn fn_copy(
         }
         ret!(rv, Value::bool(false));
     }
-    let result = copy_file_contents(Path::new(&from), Path::new(&to));
+    let result = copy_file_contents(Path::new(&from), Path::new(&to), eg);
     if context == OptionalStreamContext::InvalidResource {
         return Ok(());
     }
     match result {
-        Ok(copied) => ret!(rv, Value::bool(copied)),
+        Ok(copied) => {
+            if copied {
+                clear_filesystem_stat_cache(eg);
+            }
+            ret!(rv, Value::bool(copied));
+        }
         Err(error) => {
             report_filesystem_diagnostic(
                 ed,
@@ -1000,14 +1673,20 @@ pub(super) fn fn_copy(
 }
 
 #[cfg(unix)]
-fn copy_file_contents(from: &Path, to: &Path) -> Result<bool, std::io::Error> {
+fn copy_file_contents(
+    from: &Path,
+    to: &Path,
+    eg: &mut ExecutorGlobals,
+) -> Result<bool, std::io::Error> {
     use std::os::unix::fs::MetadataExt;
 
     let mut source = std::fs::File::open(from)?;
+    clear_filesystem_stat_cache(eg);
     let mut destination = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .open(to)?;
+    clear_filesystem_stat_cache(eg);
 
     let source_metadata = source.metadata()?;
     let destination_metadata = destination.metadata()?;
@@ -1023,16 +1702,24 @@ fn copy_file_contents(from: &Path, to: &Path) -> Result<bool, std::io::Error> {
 }
 
 #[cfg(not(unix))]
-fn copy_file_contents(from: &Path, to: &Path) -> Result<bool, std::io::Error> {
-    use std::io::Write;
+fn copy_file_contents(
+    from: &Path,
+    to: &Path,
+    eg: &mut ExecutorGlobals,
+) -> Result<bool, std::io::Error> {
+    use std::io::{Read, Write};
 
     // Stable std has no portable hard-link identity. Buffer before opening an
     // existing destination so aliases cannot truncate the source.
-    let contents = std::fs::read(from)?;
+    let mut source = std::fs::File::open(from)?;
+    clear_filesystem_stat_cache(eg);
+    let mut contents = Vec::new();
+    source.read_to_end(&mut contents)?;
     let mut destination = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .open(to)?;
+    clear_filesystem_stat_cache(eg);
     destination.write_all(&contents)?;
     destination.set_len(contents.len() as u64)?;
     Ok(true)
@@ -1085,14 +1772,14 @@ pub(super) fn fn_tempnam(
         (system_temp.clone(), true)
     };
 
-    match create_tempnam_file(&directory, &prefix) {
+    match create_tempnam_file(&directory, &prefix, eg) {
         Ok(path) => ret!(rv, Value::string(path.to_string_lossy().into_owned())),
         Err(_) if !already_fell_back && directory != system_temp => {
             report_tempnam_fallback(ed, eg)?;
             if eg.exception.is_some() {
                 return Ok(());
             }
-            match create_tempnam_file(&system_temp, &prefix) {
+            match create_tempnam_file(&system_temp, &prefix, eg) {
                 Ok(path) => ret!(rv, Value::string(path.to_string_lossy().into_owned())),
                 Err(_) => ret!(rv, Value::bool(false)),
             }
@@ -1144,7 +1831,11 @@ fn tempnam_prefix(prefix: &str) -> String {
     basename[..end].to_string()
 }
 
-fn create_tempnam_file(directory: &Path, prefix: &str) -> Result<PathBuf, std::io::Error> {
+fn create_tempnam_file(
+    directory: &Path,
+    prefix: &str,
+    eg: &mut ExecutorGlobals,
+) -> Result<PathBuf, std::io::Error> {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1167,7 +1858,10 @@ fn create_tempnam_file(directory: &Path, prefix: &str) -> Result<PathBuf, std::i
             options.mode(0o600);
         }
         match options.open(&path) {
-            Ok(_) => return Ok(path),
+            Ok(_) => {
+                clear_filesystem_stat_cache(eg);
+                return Ok(path);
+            }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 last_collision = Some(error);
             }
@@ -1271,37 +1965,26 @@ fn pathinfo_value(path: &[u8], flags: i64, binary: bool) -> Value {
 pub(super) fn fn_is_readable(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let path = arg_str!(ed, 0);
-    let p = std::path::Path::new(path.as_ref());
-    // Simple check: file exists and we can open it for reading
-    ret!(rv, Value::bool(std::fs::File::open(p).is_ok()));
+    file_access_predicate(ed, rv, eg, "is_readable", FileAccessKind::Read)
 }
 
 /// is_writable($filename): bool / is_writeable()
 pub(super) fn fn_is_writable(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let path = arg_str!(ed, 0);
-    let p = std::path::Path::new(path.as_ref());
-    let writable = if p.is_dir() {
-        // For directories: try creating a temp file inside
-        let probe = p.join(format!(".rphp_writable_probe_{}", std::process::id()));
-        match std::fs::File::create(&probe) {
-            Ok(_) => {
-                let _ = std::fs::remove_file(&probe);
-                true
-            }
-            Err(_) => false,
-        }
-    } else {
-        // For files: try opening for append (non-destructive)
-        std::fs::OpenOptions::new().append(true).open(p).is_ok()
-    };
-    ret!(rv, Value::bool(writable));
+    file_access_predicate(ed, rv, eg, "is_writable", FileAccessKind::Write)
+}
+
+pub(super) fn fn_is_writeable(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    file_access_predicate(ed, rv, eg, "is_writeable", FileAccessKind::Write)
 }
 
 /// glob($pattern, $flags = 0): array|false

@@ -211,6 +211,9 @@ pub(super) fn fn_file_get_contents(
         Ok(stream) => stream,
         Err(_) => return return_value(return_pointer, Value::bool(false)),
     };
+    if stream.metadata().wrapper_type == "plainfile" {
+        super::filesystem::clear_filesystem_stat_cache(eg);
+    }
     let seek = if offset < 0 {
         stream.seek(SeekFrom::End(offset))
     } else {

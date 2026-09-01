@@ -137,6 +137,9 @@ pub(in crate::stdlib) fn fn_file_put_contents(
         Ok(stream) => stream,
         Err(_) => return return_value(return_pointer, Value::bool(false)),
     };
+    if destination.metadata().wrapper_type == "plainfile" {
+        super::super::filesystem::clear_filesystem_stat_cache(eg);
+    }
     if locked
         && (destination.lock_exclusive().is_err()
             || (!append && destination.truncate_file().is_err()))
@@ -174,7 +177,7 @@ fn copy_stream_data(
     let mut total = 0usize;
     loop {
         let read =
-            super::super::streams::with_stream(eg, resource, |source| source.read(&mut chunk))
+            super::super::streams::with_stream_io(eg, resource, |source| source.read(&mut chunk))
                 .transpose()?
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "stream closed"))?;
         if read == 0 {

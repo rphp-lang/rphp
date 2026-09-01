@@ -69,7 +69,7 @@ pub(super) fn fn_stream_get_contents(
     };
 
     let mut bytes = Vec::new();
-    let result = super::with_stream(eg, resource, |stream| {
+    let result = super::with_stream_io(eg, resource, |stream| {
         stream.read_contents(&mut bytes, length, offset)
     });
     match result {

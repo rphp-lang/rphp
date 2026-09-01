@@ -76,7 +76,7 @@ pub(super) fn fn_fgetcsv(
         }
     }
 
-    let result = super::with_stream(eg, resource, |stream| {
+    let result = super::with_stream_io(eg, resource, |stream| {
         stream.read_csv_record(length, separator, enclosure, escape)
     });
     match result {
@@ -114,7 +114,7 @@ fn try_fast_fgetcsv(
         _ => return None,
     };
 
-    let result = super::with_stream(eg, resource, |stream| {
+    let result = super::with_stream_io(eg, resource, |stream| {
         stream.read_csv_record(None, b',', b'"', escape)
     })?;
     Some(match result {

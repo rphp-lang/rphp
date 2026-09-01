@@ -177,6 +177,9 @@ pub(super) fn fn_fopen(
     }
     let value = match PhpStream::open(open_path, mode.as_ref()) {
         Ok(stream) => {
+            if stream.metadata().wrapper_type == "plainfile" {
+                super::super::filesystem::clear_filesystem_stat_cache(eg);
+            }
             #[cfg(feature = "resource-lifetime")]
             let value = insert_stream(eg, stream);
             #[cfg(not(feature = "resource-lifetime"))]
