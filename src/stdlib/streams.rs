@@ -261,6 +261,10 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             // SendRef/SendVal enforce the optional output slot, so ordinary
             // two-argument calls retain the compact fixed-arity ABI.
             function.common.plan.call = crate::vm::function::CallStrategy::Fast;
+        } else if name == "is_resource" {
+            function.common.sig.param_type_hints = vec![ParamTypeHint::Mixed];
+            function.common.sig.return_type_hint = ParamTypeHint::Bool;
+            function.handler_validates_types = true;
         }
         let pointer = &function.common as *const FunctionCommon;
         eg.register_function(name, pointer).unwrap();
@@ -270,6 +274,8 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
                 vec![None, None, Some(Value::null())],
                 "standard",
             );
+        } else if name == "is_resource" {
+            eg.register_internal_function_extension(pointer, "standard");
         }
         functions.push(function);
     }

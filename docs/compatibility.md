@@ -8,6 +8,80 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 standard-library checkpoint is
+`core-type-predicate-call-contracts`, based on `e976a2fd`, pinned to php-src
+commit `fcc29c8` and validated against PHP 8.5.10. The global functions
+`is_array`, `is_string`, `is_int`, `is_integer`, `is_long`, `is_float`,
+`is_double`, `is_null`, `is_bool`, `is_numeric`, `is_object`, `is_iterable`,
+`is_scalar`, `is_resource` and `gettype` now expose PHP's reflected
+`(mixed $value)` contract. Predicate returns are `bool`, `gettype()` returns
+`string`, and the historical aliases retain their own reflected names. The
+same contracts hold across ordinary, named, dynamic, first-class and callback
+dispatch, including namespace fallback, case-insensitive names, references,
+arity failures and strict types.
+
+Eleven original E2E regressions cover every function, alias and dispatch form
+over null, booleans, integers, floats, strings, arrays, objects, iterables and
+open or closed resources. `is_numeric()` recognizes PHP's complete decimal,
+exponent and ASCII-whitespace grammar without accepting `INF` or `NAN`; its
+boolean-only syntax scan avoids materializing a floating-point value. The
+remaining predicates preserve PHP's distinctions between objects, iterables,
+scalars and resources without invoking magic conversion or mutating referenced
+inputs. Of fifteen focused upstream cases, twelve pass exactly, two are
+platform-specific 32-bit skips and the sole failure is an unrelated later
+`settype()` section after the targeted `gettype()` output has matched.
+
+The 5,599-case Zend/lang projection remains 4,907 pass, 396 fail, 115 skip and
+181 unsupported with manifest hash
+`c77c64dd0b090ec21ba084c16ba3943e00145ff1ba873edf5c2e151f4335cc23`
+and sorted pass-set hash
+`cd27900cada66c9655c6f55d2017d48f4db06f299c357944b43ed013635beaa7`.
+The adjacent 1,575-case strings/array projection remains 1,458 pass, 19 fail,
+67 skip and 31 unsupported with manifest hash
+`226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`
+and pass-set hash
+`0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+Both pass sets are byte-identical to the fixed parent, so the stable 7,174-case
+core remains 6,365 pass, 415 fail, 182 skip and 212 unsupported, exact delta
+`+0/-0`, without timeout or crash.
+
+The on-demand builtin inventory reports 1,201 globals exposed by the reference
+PHP installation: 474 are present, 727 are missing, zero present functions
+have a call-shape mismatch, 361 retain a metadata mismatch and 113 are exact.
+The Symfony-base projection, restricted to Core, Ctype, Date, Filter, Hash,
+JSON, PCRE, Random, SPL and Standard, contains 472 present and 261 missing
+functions, zero call-shape mismatches, 360 metadata mismatches and 112 exact
+functions. All fifteen functions in this checkpoint are exact. The inventory
+CSV, summary and report hash to
+`497b33e01372e9e076c1b14c0b7d2fb3fb569f6f3ec9d47aa9fa0ce1be8fadb6`,
+`e0ac68c6a9a8306c713e5f5adcb325612d183b8f187e02e83b7600eea80b9032`
+and `64d4b64c6439ffee733338b2163a792dc5cbd528f467fc424e00b8f3e86bc340`.
+
+All five Cargo configurations, all-feature/all-target checking, formatting,
+PHPT-runner, entity-data and unsafe-policy gates pass; production remains at
+1,623 unsafe blocks and 289 unsafe functions. Composer 2.8.12 S0, all four
+Symfony S1 gates and FrameworkBundle 7.4.16 warmed S2 and cold S3 pass. The
+release candidate hashes to
+`185d164f849550763a0042e16a37b561eea453f0fa30435ad8fb4e57b1f041f0`
+and the exact fixed parent to
+`df416acd835e31abcdd332342a76968d79d153c309b0e17ed11564c3d712c444`.
+
+Two CPU-2 release packets use 32 balanced randomized pairs per lane after five
+warmups, byte-exact output/status/stderr checks and no outlier removal. The
+final confirmation reports startup -0.189%, ordinary predicates +0.271%,
+`is_array` +0.201%, `is_string` +0.125%, integer `is_numeric` -1.970%, string
+`is_numeric` -3.203%, rejected numeric strings -2.443%, `gettype` +0.886% and
+`is_resource` +0.152%. The two raw packets hash to
+`42d27fffc4248c78d11182cf1a66db61ce7b0d313d1d97b24f2400e76a884f7a`
+and `5de68d88830dabc883b35f8c0953a040040335655acc225776fb9983a28e975e`.
+
+The 727 global missing-function count includes extension functions loaded by
+the reference PHP installation; it is not a claim about Core alone. Composer
+or Symfony vendor functions are not included in this builtin inventory.
+Extension loading, 32-bit integer boundaries and allocation-limit/OOM
+equivalence remain separate boundaries. The implementation is the commit
+containing this status.
+
+The preceding measured AMD64 PHP 8.5 standard-library checkpoint is
 `ctype-complete-builtin-surface`, based on `035da4d7`, pinned to php-src commit
 `fcc29c8` and validated against PHP 8.5.10. All eleven Ctype globals are now
 present with the reflected PHP 8.5 `(mixed $text): bool` contract:

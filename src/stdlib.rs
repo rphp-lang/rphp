@@ -38,7 +38,7 @@ use crate::vm::execute::{
     call_object_property_get_hook, call_object_property_magic_get,
     call_object_property_magic_isset, called_class_name_for_internal_call, check_type_hint,
     displayed_function_name, explicit_float_conversion, explicit_long_conversion,
-    explicit_numeric_cast_warning, lexical_class_name_for_internal_call,
+    explicit_numeric_cast_warning, lexical_class_name_for_internal_call, php_is_numeric_string,
     php_numeric_string_to_float, prepare_call_argument, prepare_scalar_long_callback,
     prepare_scalar_long_reference_mutation_callback, try_execute_scalar_long_callback,
     value_to_array_key, values_equal_checked_with_precision, values_identical_checked,
@@ -12712,10 +12712,9 @@ fn fn_is_numeric(
     let v = arg!(ed, 0);
     let result = match v.value_type() {
         ValueType::Long | ValueType::Double => true,
-        ValueType::String => {
-            let s = v.as_str().unwrap().trim();
-            s.parse::<i64>().is_ok() || s.parse::<f64>().is_ok()
-        }
+        ValueType::String => v
+            .as_str()
+            .is_some_and(|value| value.parse::<i64>().is_ok() || php_is_numeric_string(value)),
         _ => false,
     };
     ret!(rv, Value::bool(result));

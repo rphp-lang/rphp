@@ -933,15 +933,22 @@ struct PhpNumericString {
     uses_float_syntax: bool,
 }
 
+#[derive(Clone, Copy)]
+struct PhpNumericStringScan<'a> {
+    numeric: &'a str,
+    complete: bool,
+    uses_float_syntax: bool,
+}
+
 #[inline]
 fn is_php_numeric_whitespace(character: char) -> bool {
     matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}')
 }
 
-/// Parse the numeric prefix accepted by PHP arithmetic without accepting
-/// Rust's `NaN`/`inf` spellings. The boolean reports whether only PHP ASCII
-/// whitespace remains after that prefix.
-fn parse_php_numeric_prefix(value: &str) -> Option<(PhpNumericString, bool)> {
+/// Scan the numeric prefix accepted by PHP arithmetic without accepting
+/// Rust's `NaN`/`inf` spellings. Keep syntax recognition separate from numeric
+/// materialization so predicates do not pay for an unused `f64` conversion.
+fn scan_php_numeric_prefix(value: &str) -> Option<PhpNumericStringScan<'_>> {
     let value = value.trim_start_matches(is_php_numeric_whitespace);
     if value.is_empty() {
         return None;
@@ -985,17 +992,28 @@ fn parse_php_numeric_prefix(value: &str) -> Option<(PhpNumericString, bool)> {
         }
     }
     let numeric = &value[..index];
-    let number = numeric.parse::<f64>().ok()?;
     let complete = value[index..].chars().all(is_php_numeric_whitespace);
+    Some(PhpNumericStringScan {
+        numeric,
+        complete,
+        uses_float_syntax,
+    })
+}
+
+/// Parse the numeric prefix accepted by PHP arithmetic. The boolean reports
+/// whether only PHP ASCII whitespace remains after that prefix.
+fn parse_php_numeric_prefix(value: &str) -> Option<(PhpNumericString, bool)> {
+    let scan = scan_php_numeric_prefix(value)?;
+    let number = scan.numeric.parse::<f64>().ok()?;
     Some((
         PhpNumericString {
             number,
-            integer: (!uses_float_syntax)
-                .then(|| numeric.parse::<i64>().ok())
+            integer: (!scan.uses_float_syntax)
+                .then(|| scan.numeric.parse::<i64>().ok())
                 .flatten(),
-            uses_float_syntax,
+            uses_float_syntax: scan.uses_float_syntax,
         },
-        complete,
+        scan.complete,
     ))
 }
 
@@ -1042,6 +1060,13 @@ fn compare_number_to_php_numeric_string(
 /// grammar while still admitting decimal overflow as an infinity.
 pub(crate) fn php_numeric_string_to_float(value: &str) -> Option<f64> {
     parse_php_numeric_string(value).map(|parsed| parsed.number)
+}
+
+/// Report whether the complete string uses PHP's numeric-string syntax.
+/// Unlike conversion boundaries, this predicate does not need to materialize
+/// a floating-point value and therefore remains cheap for ordinary strings.
+pub(crate) fn php_is_numeric_string(value: &str) -> bool {
+    scan_php_numeric_prefix(value).is_some_and(|scan| scan.complete)
 }
 
 pub(crate) struct ArithmeticOperatorOperand {

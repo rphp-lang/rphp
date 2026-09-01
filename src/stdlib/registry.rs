@@ -1272,19 +1272,34 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("floatval", fn_floatval, 1, 1, "value");
     reg!("boolval", fn_boolval, 1, 1, "value");
     reg_ref!("settype", fn_settype, 2, 2, 0b1, "var", "type");
-    reg!("is_array", fn_is_array, 1, 1, "value");
-    reg!("is_string", fn_is_string, 1, 1, "value");
-    reg!("is_int", fn_is_int, 1, 1, "value");
-    reg!("is_integer", fn_is_int, 1, 1, "value");
-    reg!("is_long", fn_is_int, 1, 1, "value");
-    reg!("is_float", fn_is_float, 1, 1, "value");
-    reg!("is_double", fn_is_float, 1, 1, "value");
-    reg!("is_null", fn_is_null, 1, 1, "value");
-    reg!("is_bool", fn_is_bool, 1, 1, "value");
-    reg!("is_numeric", fn_is_numeric, 1, 1, "value");
-    reg!("is_object", fn_is_object, 1, 1, "value");
-    reg!("is_iterable", fn_is_iterable, 1, 1, "value");
-    reg!("gettype", fn_gettype, 1, 1, "value");
+    for (name, handler, return_type) in [
+        (
+            "is_array",
+            fn_is_array as crate::vm::function::InternalFunctionHandler,
+            ParamTypeHint::Bool,
+        ),
+        ("is_string", fn_is_string, ParamTypeHint::Bool),
+        ("is_int", fn_is_int, ParamTypeHint::Bool),
+        ("is_integer", fn_is_int, ParamTypeHint::Bool),
+        ("is_long", fn_is_int, ParamTypeHint::Bool),
+        ("is_float", fn_is_float, ParamTypeHint::Bool),
+        ("is_double", fn_is_float, ParamTypeHint::Bool),
+        ("is_null", fn_is_null, ParamTypeHint::Bool),
+        ("is_bool", fn_is_bool, ParamTypeHint::Bool),
+        ("is_numeric", fn_is_numeric, ParamTypeHint::Bool),
+        ("is_object", fn_is_object, ParamTypeHint::Bool),
+        ("is_iterable", fn_is_iterable, ParamTypeHint::Bool),
+        ("gettype", fn_gettype, ParamTypeHint::String),
+    ] {
+        let mut function = Box::new(make_internal_function(handler, 1, 1, pn!["value"]));
+        function.common.sig.param_type_hints = vec![ParamTypeHint::Mixed];
+        function.common.sig.return_type_hint = return_type;
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function(name, pointer).unwrap();
+        eg.register_internal_function_extension(pointer, "standard");
+        funcs.push(function);
+    }
     reg!("get_debug_type", fn_get_debug_type, 1, 1, "value");
 
     // --- Reflection / class introspection ---
@@ -1957,7 +1972,19 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "syntax_only",
         "callable_name"
     );
-    reg!("is_scalar", fn_is_scalar, 1, 1, "value");
+    reg_typed!(
+        "is_scalar",
+        fn_is_scalar,
+        1,
+        1,
+        ["value"],
+        [ParamTypeHint::Mixed],
+        ParamTypeHint::Bool
+    );
+    let is_scalar = eg
+        .find_function("is_scalar")
+        .expect("is_scalar was just registered");
+    eg.register_internal_function_extension(is_scalar, "standard");
     reg!("function_exists", fn_function_exists, 1, 1, "function");
     reg!("assert", fn_assert, 2, 1, "assertion", "description");
     {
