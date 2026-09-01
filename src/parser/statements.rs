@@ -648,11 +648,15 @@ impl Parser {
                     _ => unreachable!(),
                 };
                 let path = self.parse_expr()?;
+                let line = self
+                    .following_semicolon_source_line()
+                    .unwrap_or_else(|| self.closest_token_source_line());
                 self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::Include {
                     path,
                     is_require,
                     is_once,
+                    line,
                 })
             }
             Token::Variable(_, _) => {

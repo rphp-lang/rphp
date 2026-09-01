@@ -1216,28 +1216,48 @@ where
         }
     }
     // Detached callback entries (Iterator, ArrayAccess, array_* callbacks, ...)
-    // bypass DoFcall. Publish the suspended caller's current global-scope CVs
-    // before a user callback that may execute `global $name`; otherwise the
-    // callback can bind to an older ExecutorGlobals snapshot.
+    // bypass DoFcall. Publish the suspended request's current main-scope CVs
+    // before a user callback that may execute `global $name` or access
+    // `$GLOBALS`; otherwise a callback entered from inside another function
+    // can bind to an older ExecutorGlobals snapshot.
     if let Some(user) = user_callee
         && user.op_array.may_access_globals
         && !saved_execute_data.is_null()
     {
         unsafe {
-            let caller = &mut *saved_execute_data;
-            sync_dirty_globals_to_frame(eg, caller);
-            let caller_op_array = caller.op_array();
-            let vars = if !caller_op_array.main_scope_vars.is_empty() {
-                &caller_op_array.main_scope_vars
-            } else {
-                &caller_op_array.global_vars
-            };
-            for (cv, name) in vars {
-                globals_set(
-                    &mut eg.globals,
-                    name,
-                    clone_scope_binding(caller.cv(*cv)),
-                );
+            let mut scope = saved_execute_data;
+            let mut fallback = None;
+            while !scope.is_null() {
+                let frame = &mut *scope;
+                sync_dirty_globals_to_frame(eg, frame);
+                let scope_op_array = frame.op_array();
+                if fallback.is_none() && !scope_op_array.global_vars.is_empty() {
+                    fallback = Some(scope);
+                }
+                if !scope_op_array.main_scope_vars.is_empty() {
+                    for (cv, name) in &scope_op_array.main_scope_vars {
+                        globals_set(
+                            &mut eg.globals,
+                            name,
+                            clone_scope_binding(frame.cv(*cv)),
+                        );
+                    }
+                    scope = std::ptr::null_mut();
+                } else {
+                    scope = frame.prev_execute_data;
+                }
+            }
+            if let Some(scope) = fallback {
+                let frame = &*scope;
+                if frame.op_array().main_scope_vars.is_empty() {
+                    for (cv, name) in &frame.op_array().global_vars {
+                        globals_set(
+                            &mut eg.globals,
+                            name,
+                            clone_scope_binding(frame.cv(*cv)),
+                        );
+                    }
+                }
             }
         }
     }
@@ -1389,11 +1409,15 @@ where
         eg.publish_detached_trace_origin(frame as usize, file.clone(), *line);
     }
     let mut return_value = Value::null();
+    let capture_source_start = num_args.saturating_sub(capture_count);
+    let first_surplus_argument = signature.public_arity();
     let mut trace_arguments = (user_callee.is_some()
-        && this_offset == 0
-        && capture_count == 0
         && public_num_args > signature.param_names.len())
-        .then(|| Vec::with_capacity(num_args));
+        .then(|| {
+            eg.take_function_argument_buffer(
+                positional_public_num_args.saturating_sub(first_surplus_argument as usize),
+            )
+        });
 
     // SAFETY: `frame` is a fresh compiler-sized activation. All argument and
     // variadic destinations are uninitialized slots described by `func_ptr`;
@@ -1408,23 +1432,43 @@ where
         (*frame).return_value = &mut return_value;
         // prev=null so Return exits execute_ex instead of continuing in caller
 
-        // Write args into CV slots — fresh uninitialized slots, use init (no drop).
+        // Initialize every CV slot described by the detached argument
+        // envelope. Surplus non-variadic user values live only in the stable
+        // tail snapshot; initialize their overlapping local slots directly as
+        // Undef so cleanup metadata remains valid without a retain/drop cycle.
+        let public_parameter_end = this_offset + signature.public_arity() as usize;
         for i in 0..num_args {
             let arg = args
                 .next()
                 .expect("callback argument iterator shorter than declared length");
-            if let Some(trace_arguments) = trace_arguments.as_mut() {
+            if let Some(trace_arguments) = trace_arguments.as_mut()
+                && i >= public_parameter_end
+                && i < capture_source_start
+            {
                 trace_arguments.push(arg.clone());
             }
-            callback_arg_init(frame, i, arg);
+            let needs_frame_value = user_callee.is_none()
+                || i < public_parameter_end
+                || (signature.is_variadic && i < capture_source_start)
+                || i >= capture_source_start;
+            callback_arg_init(
+                frame,
+                i,
+                if needs_frame_value { arg } else { Value::undef() },
+            );
         }
         debug_assert!(
             args.next().is_none(),
             "callback argument iterator longer than declared length"
         );
         if let Some(trace_arguments) = trace_arguments.take() {
-            eg.function_arguments
-                .insert(frame as usize, trace_arguments);
+            eg.publish_function_arguments(
+                frame as usize,
+                crate::runtime::FunctionArgumentSnapshot {
+                    first: first_surplus_argument,
+                    values: trace_arguments,
+                },
+            );
         }
 
         if called_scope_class_id != 0 {
@@ -3063,8 +3107,13 @@ pub(crate) fn initialize_suspended_callback_frame(
     if let Some(storage) = callback.closure_static_vars.clone() {
         eg.publish_closure_static_vars(frame as usize, storage);
     }
-    eg.function_arguments
-        .insert(frame as usize, arguments.to_vec());
+    eg.publish_function_arguments(
+        frame as usize,
+        crate::runtime::FunctionArgumentSnapshot {
+            first: 0,
+            values: arguments.to_vec(),
+        },
+    );
     eg.publish_detached_trace_caller(frame as usize, logical_caller as usize);
     eg.publish_detached_trace_origin(frame as usize, "Unknown".to_string(), 0);
     eg.current_execute_data.set(frame);

@@ -8,6 +8,62 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 language checkpoint is
+`error-handler-reentrancy-and-write-rollback`, based on `9748ba40`, pinned to
+php-src commit `fcc29c8` and validated against PHP 8.5.10. Request-local user
+error handlers now follow PHP's reentrant stack contract: the active handler is
+temporarily hidden, a replacement installed during the callback remains live,
+false returns fall back to the engine diagnostic, and thrown values propagate
+without a stale restore. Detached callbacks retain their logical caller,
+source origin, live globals and undeclared positional arguments for
+`func_get_arg(s)` and backtraces.
+
+Warning-producing array, string-offset, property and dimension writes now use a
+cold diagnostic transaction. The operand is observed at PHP's evaluation
+boundary, but a handler replacement of the target root prevents stale
+writeback; unchanged roots continue with the original reference, COW and key
+side effects. Include/require and stream warnings enter the same handler with
+their source line, while `php://memory` and `php://temp` accept PHP's legacy
+mode spellings without weakening filesystem mode validation. Thirteen original
+E2E cases cover nested handlers, false and throwing returns, globals,
+surplus-argument introspection, references/COW, evaluation order, rollback and
+stream warnings.
+
+All 20 focused upstream cases pass. The exact final 5,599-case Zend/lang
+manifest is 4,881 pass, 422 fail, 115 skip and 181 unsupported, exact delta
+`+26/-0`, and hashes to
+`ab22fc6f00ad47787f337d866f125aea7bbe4bd5fc0375ea8944c5e8b8d43420`;
+its sorted pass set hashes to
+`ebec0b44901292680df76e96915f1803b4021b26dd7223546e7969eb8c524c64`.
+The adjacent 1,575-case strings/array manifest remains 1,458 pass, 19 fail, 67
+skip and 31 unsupported, with manifest hash
+`226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`
+and unchanged sorted pass-set hash
+`0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+The stable 7,174-case core is therefore 6,339 pass, 441 fail, 182 skip and 212
+unsupported, with no timeout or crash.
+
+All five Cargo configurations, all-feature/all-target checking, formatting,
+Composer 2.8.12 S0, all four Symfony S1 gates and FrameworkBundle 7.4.16 S2/S3
+pass. Production retains the 1,623 unsafe-block/289 unsafe-function ratchet.
+The fixed-parent CPU-2 release gate compares candidate
+`142cf091437689ae57c3f69705c1e51f1c0462ee16453ed14bd91926434de1fb`
+with parent
+`7f61f3e7bf428d0fe230333a534db054b827f9eade8ab43a87960e06d8834c09`
+over 32 balanced pairs per lane with exact output, status and diagnostics.
+Holdout paired medians are startup -10.337%, ordinary calls -1.025%, array
+writes +1.146%, string writes -1.714%, a two-parameter handler receiving four
+arguments +4.787%, and memory streams -4.300%; an exact-arity handler is
++2.391%. The cold surplus-argument stack retains the former request-state
+field footprint, compile-time checked against it, so the optimization does not
+move later hot fields. The broad and exact raw observations hash to
+`446e4eed3241a4d5ba3d013163ed35cd6da816015e32633fdfa9085de474c5c2`
+and `e6eaa804630ee0a7a106c63552bd7d864e4249abb453f993d3f23a22c29d144d`.
+
+Generator/Fiber suspension, shutdown/output-buffer exception handling, 32-bit
+and allocation-limit/OOM equivalence remain separate boundaries. The
+implementation is the commit containing this status.
+
+The preceding measured AMD64 PHP 8.5 language checkpoint is
 `callable-return-contract-validation`, based on `398a98e1`, pinned to php-src
 commit `fcc29c8` and validated against PHP 8.5.10. Return-type checks now retain
 the lexical or explicitly bound class scope needed by `self`, `parent` and

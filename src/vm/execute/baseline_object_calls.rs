@@ -2480,7 +2480,16 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                 if let Some(result) = take_magic_exception(eg, frame)? {
                     return Ok(result);
                 }
-                let result = if opline._pad & FETCH_OBJ_INCDEC != 0 {
+                let result = if opline._pad & FETCH_OBJ_COMPOUND != 0 {
+                    // The undefined-property handler may install the member
+                    // that this compound operation must continue from. The
+                    // receiver owner is retained across dispatch, so reacquire
+                    // the post-handler property instead of reusing null.
+                    obj_val
+                        .as_object()
+                        .and_then(|object| object.get_property(&name).cloned())
+                        .unwrap_or_else(Value::null)
+                } else if opline._pad & FETCH_OBJ_INCDEC != 0 {
                     current_incdec_value()
                 } else {
                     Value::null()
@@ -3028,6 +3037,9 @@ fn op_bind_obj_prop_ref<'a>(
             )?);
         };
         let class_name = object.class_name.to_string();
+        let class_display_name = class_name
+            .strip_prefix("class@anonymous#")
+            .map_or_else(|| class_name.clone(), |_| "class@anonymous".to_string());
         drop(object);
 
         let caller_class = get_caller_class(frame, eg);
@@ -3511,23 +3523,40 @@ fn op_bind_obj_prop_ref<'a>(
                 op_array,
                 instruction_index,
                 "Error",
-                format!("Cannot create dynamic property {class_name}::${name}"),
+                format!("Cannot create dynamic property {class_display_name}::${name}"),
             )?);
         }
         if creates_dynamic_property
             && !dynamic_properties_allowed
             && !has_magic_get
-            && !internal_result
         {
             report_php_deprecation(
                 eg,
                 frame,
                 op_array,
                 opline,
-                &format!("Creation of dynamic property {class_name}::${name} is deprecated"),
+                &format!(
+                    "Creation of dynamic property {class_display_name}::${name} is deprecated"
+                ),
             )?;
             if let Some(result) = take_magic_exception(eg, frame)? {
                 return Ok(result);
+            }
+            let live_receiver = (&*(*frame).get_op_ptr(
+                opline.op1 as u32,
+                opline.op1_type,
+                op_array,
+            ))
+                .dereferenced();
+            if live_receiver.object_identity() != receiver.object_identity() {
+                return Ok(object_property_throw_at(
+                    eg,
+                    frame,
+                    op_array,
+                    instruction_index,
+                    "Error",
+                    format!("Cannot create dynamic property {class_display_name}::${name}"),
+                )?);
             }
         }
 
@@ -3710,20 +3739,62 @@ fn op_bind_array_dim_ref<'a>(
         let array_ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
         let raw_type = (*array_ptr).dereferenced().value_type();
         if raw_type == ValueType::String {
-            let (class_name, message) = if matches!(string_offset_key(index), StringOffsetKey::Invalid)
-            {
-                (
+            let (class_name, message) = match string_offset_key(index) {
+                StringOffsetKey::Cast(_) => {
+                    report_php_warning(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        "String offset cast occurred",
+                        false,
+                    )?;
+                    if let Some(exception) = eg.exception.take() {
+                        return Ok(match throw_in_frame(eg, frame, exception)? {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                ColdResult::NewFrame(new_frame, new_op_array)
+                            }
+                            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                        });
+                    }
+                    (
+                        "Error",
+                        "Cannot create references to/from string offsets".to_string(),
+                    )
+                }
+                StringOffsetKey::Illegal(text, _) => {
+                    report_php_warning(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        &format!("Illegal string offset \"{text}\""),
+                        false,
+                    )?;
+                    if let Some(exception) = eg.exception.take() {
+                        return Ok(match throw_in_frame(eg, frame, exception)? {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                ColdResult::NewFrame(new_frame, new_op_array)
+                            }
+                            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                        });
+                    }
+                    (
+                        "Error",
+                        "Cannot create references to/from string offsets".to_string(),
+                    )
+                }
+                StringOffsetKey::Invalid => (
                     "TypeError",
                     format!(
                         "Cannot access offset of type {} on string",
                         index.diagnostic_type_name()
                     ),
-                )
-            } else {
-                (
+                ),
+                StringOffsetKey::Exact(_) => (
                     "Error",
                     "Cannot create references to/from string offsets".to_string(),
-                )
+                ),
             };
             let error = make_error_value(class_name, &message);
             let instruction_index = (opline as *const Instruction)

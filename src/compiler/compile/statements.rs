@@ -33,6 +33,9 @@ pub(super) struct MutableArrayPath {
     keys: Vec<(u16, OpType)>,
     writeback: ArrayRootWriteback,
     mutable_fetches: Vec<usize>,
+    /// `(result TMP, instruction index)` for a direct-root snapshot emitted
+    /// only when a key is expected to enter the PHP error handler.
+    diagnostic_snapshot: Option<(u16, usize)>,
 }
 
 enum CoalesceWrite {
@@ -406,7 +409,7 @@ impl Compiler {
         if internal_result {
             bind._pad |= REFERENCE_RESULT_INTERNAL;
         }
-        self.instructions.push(bind);
+        self.push_instruction_at_line(bind, expression_source_line(source));
         self.rebuild_mutable_array_path(&path);
         self.write_back_mutable_array_root(&path);
         if let Expr::Variable { name, .. } = root {
@@ -895,7 +898,7 @@ impl Compiler {
                 ))
             }
             Expr::ArrayAccess { .. } => {
-                if let Expr::ArrayAccess { array, index, .. } = source
+                if let Expr::ArrayAccess { array, index, line } = source
                     && matches!(array.as_ref(), Expr::Globals { .. })
                 {
                     let (key, key_type) = self.compile_expr(index);
@@ -905,7 +908,10 @@ impl Compiler {
                     fetch.op1_type = key_type;
                     fetch.result = current;
                     fetch.result_type = OpType::Tmp;
-                    self.instructions.push(fetch);
+                    if warn_undefined_root {
+                        fetch._pad |= FETCH_GLOBAL_WARN_UNDEFINED;
+                    }
+                    self.push_instruction_at_line(fetch, *line);
                     return Ok((
                         current,
                         OpType::Tmp,
@@ -1081,6 +1087,7 @@ impl Compiler {
                 assign.result = array;
                 assign.result_type = array_type;
                 assign._pad |= ASSIGN_DIM_KEY_ALREADY_NORMALIZED;
+                self.guard_diagnostic_dimension_assignment(&path, &mut assign);
                 self.instructions.push(assign);
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
@@ -1105,6 +1112,35 @@ impl Compiler {
                 assign._pad |= ARRAY_ELEMENT_COMPOUND_APPEND_WRITEBACK;
                 self.instructions.push(assign);
             }
+        }
+    }
+
+    /// A terminal dimension read in a compound assignment may invoke an
+    /// error handler for a missing key. If that callback replaces the root or
+    /// installs the missing member, PHP abandons the stale read/modify/write
+    /// rather than publishing its pre-handler null snapshot. Record the same
+    /// statement-end abort target used by intermediate mutable fetches.
+    pub(super) fn mark_compound_dimension_abort(
+        &mut self,
+        writeback: &mut ForeachArrayWriteback,
+        result: u16,
+        result_type: OpType,
+    ) {
+        let ForeachArrayWriteback::Array(path) = writeback else {
+            return;
+        };
+        let instruction = self
+            .instructions
+            .iter()
+            .rposition(|instruction| {
+                instruction.opcode == OpCode::FetchDimR
+                    && instruction.result == result
+                    && instruction.result_type == result_type
+            })
+            .expect("array compound source retains its terminal dimension fetch");
+        self.instructions[instruction]._pad |= FETCH_DIM_MUTABLE | FETCH_DIM_COMPOUND;
+        if !path.mutable_fetches.contains(&instruction) {
+            path.mutable_fetches.push(instruction);
         }
     }
 
@@ -1425,6 +1461,7 @@ impl Compiler {
                 assign.result = value;
                 assign.result_type = value_type;
                 assign._pad |= ASSIGN_DIM_KEY_ALREADY_NORMALIZED;
+                self.guard_diagnostic_dimension_assignment(&path, &mut assign);
                 self.instructions.push(assign);
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
@@ -1742,6 +1779,7 @@ impl Compiler {
                 assign.result = result;
                 assign.result_type = OpType::Tmp;
                 assign._pad |= ASSIGN_DIM_RESULT_VALUE;
+                self.guard_diagnostic_dimension_assignment(&path, &mut assign);
                 self.instructions.push(assign);
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
@@ -1963,6 +2001,7 @@ impl Compiler {
                 assign.result = source;
                 assign.result_type = OpType::Cv;
                 assign._pad |= ASSIGN_DIM_REFERENCE;
+                self.guard_diagnostic_dimension_assignment(&path, &mut assign);
                 self.instructions.push(assign);
 
                 let mut bind = Instruction::new(OpCode::BindArrayDimRef);
@@ -2129,6 +2168,65 @@ impl Compiler {
         )
     }
 
+    fn dimension_index_may_invoke_error_handler(&self, index: &Expr) -> bool {
+        matches!(index, Expr::Float(_) | Expr::Null)
+            || matches!(index,
+                Expr::Variable { name, line }
+                    if *line != 0
+                        && self.cv_table.get(name).is_none_or(|cv| {
+                            !self.definitely_defined_cvs.contains(&(*cv as u16))
+                        })
+            )
+    }
+
+    fn emit_diagnostic_write_snapshot(
+        &mut self,
+        root: &Expr,
+        indices: &[Expr],
+    ) -> Option<(u16, usize)> {
+        let Expr::Variable { name, line } = root else {
+            return None;
+        };
+        if !indices
+            .iter()
+            .any(|index| self.dimension_index_may_invoke_error_handler(index))
+        {
+            return None;
+        }
+        let cv = self.resolve_cv(name);
+        Some(self.emit_diagnostic_write_snapshot_for_cv(cv, name, *line))
+    }
+
+    fn emit_diagnostic_write_snapshot_for_cv(
+        &mut self,
+        cv: u16,
+        name: &str,
+        line: usize,
+    ) -> (u16, usize) {
+        let result = self.alloc_tmp();
+        let instruction_index = self.instructions.len();
+        let mut snapshot = Instruction::new(OpCode::SnapshotDiagnosticWrite);
+        snapshot.op1 = cv;
+        snapshot.op1_type = OpType::Cv;
+        snapshot.op2 = self.add_literal(Value::string(name.to_string()));
+        snapshot.op2_type = OpType::Const;
+        snapshot.result = result;
+        snapshot.result_type = OpType::Tmp;
+        self.push_instruction_at_line(snapshot, line);
+        (result, instruction_index)
+    }
+
+    fn guard_diagnostic_dimension_assignment(
+        &self,
+        path: &MutableArrayPath,
+        assignment: &mut Instruction,
+    ) {
+        if let Some((snapshot, _)) = path.diagnostic_snapshot {
+            assignment._pad |= ASSIGN_DIM_DIAGNOSTIC_GUARD;
+            assignment.extended_value = u32::from(snapshot) + 1;
+        }
+    }
+
     fn compile_mutable_array_path_with_unset_order(
         &mut self,
         root: &Expr,
@@ -2142,6 +2240,7 @@ impl Compiler {
             return Err("Array mutation requires at least one dimension".into());
         }
         self.validate_zend_special_builtin_write_result(root)?;
+        let diagnostic_snapshot = self.emit_diagnostic_write_snapshot(root, indices);
         let mut deferred_object_fetches = Vec::new();
         let (root, writeback, path_indices) = match root {
             Expr::Variable { name: var, line } => {
@@ -2412,12 +2511,16 @@ impl Compiler {
             keys,
             writeback,
             mutable_fetches,
+            diagnostic_snapshot,
         })
     }
 
     fn patch_mutable_fetch_abort_targets(&mut self, path: &MutableArrayPath) {
         let target = self.instructions.len() as u32;
         for &instruction in &path.mutable_fetches {
+            self.instructions[instruction].extended_value = target;
+        }
+        if let Some((_, instruction)) = path.diagnostic_snapshot {
             self.instructions[instruction].extended_value = target;
         }
     }
@@ -2724,7 +2827,7 @@ impl Compiler {
                     self.definitely_defined_cvs.insert(cv);
                     return Ok(());
                 }
-                let (left, left_type, writeback, right, right_type) = if let Some(cv) = direct_cv {
+                let (left, left_type, mut writeback, right, right_type) = if let Some(cv) = direct_cv {
                     // A simple CV's value is consumed after the RHS. Calls on
                     // the RHS can therefore mutate or unset a main-scope
                     // global before this read, while the destination CV itself
@@ -2744,6 +2847,7 @@ impl Compiler {
                     let (right, right_type) = self.compile_expr(expr);
                     (left, left_type, writeback, right, right_type)
                 };
+                self.mark_compound_dimension_abort(&mut writeback, left, left_type);
                 let result = self.alloc_tmp();
                 let opcode = match op {
                     BinOp::Add => OpCode::Add,
@@ -3571,6 +3675,14 @@ impl Compiler {
             } => {
                 // $var[index] = expr
                 let first_tmp = self.next_tmp as u16;
+                let diagnostic_snapshot = if var != "GLOBALS"
+                    && self.dimension_index_may_invoke_error_handler(index)
+                {
+                    let cv = self.resolve_cv(var);
+                    Some(self.emit_diagnostic_write_snapshot_for_cv(cv, var, *line))
+                } else {
+                    None
+                };
                 let (idx_op, idx_type) = self.compile_expr(index);
                 let (val_op, val_type) = self.compile_expr(expr);
                 let mut instr = Instruction::new(if var == "GLOBALS" {
@@ -3590,8 +3702,13 @@ impl Compiler {
                     instr.op2 = idx_op;
                     instr.result_type = val_type;
                     instr.result = val_op;
+                    if let Some((snapshot, _)) = diagnostic_snapshot {
+                        instr._pad |= ASSIGN_DIM_DIAGNOSTIC_GUARD;
+                        instr.extended_value = u32::from(snapshot) + 1;
+                    }
                 }
                 self.push_instruction_at_line(instr, *line);
+                let diagnostic_abort_target = self.instructions.len() as u32;
                 let end_tmp = self.next_tmp as u16;
                 if end_tmp > first_tmp {
                     let mut release = Instruction::new(OpCode::ReleaseTemps);
@@ -3600,6 +3717,10 @@ impl Compiler {
                     release.op2 = end_tmp;
                     release.op2_type = OpType::Tmp;
                     self.instructions.push(release);
+                }
+                if let Some((_, snapshot_instruction)) = diagnostic_snapshot {
+                    self.instructions[snapshot_instruction].extended_value =
+                        diagnostic_abort_target;
                 }
                 if var != "GLOBALS" {
                     let cv = self.resolve_cv(var);
@@ -3626,6 +3747,7 @@ impl Compiler {
                 assign.op2_type = leaf_key_type;
                 assign.result = value;
                 assign.result_type = value_type;
+                self.guard_diagnostic_dimension_assignment(&path, &mut assign);
                 self.push_instruction_at_line(assign, *line);
 
                 self.rebuild_mutable_array_path(&path);
@@ -4491,6 +4613,7 @@ impl Compiler {
                 path,
                 is_require,
                 is_once,
+                line,
             } => {
                 let (path_op, path_type) = self.compile_expr(path);
                 let mut instr = Instruction::new(OpCode::Include);
@@ -4504,7 +4627,7 @@ impl Compiler {
                     flags |= 2;
                 }
                 instr.extended_value = flags;
-                self.instructions.push(instr);
+                self.push_instruction_at_line(instr, *line);
                 // Included code shares the active symbol table and may assign
                 // or unset any local known to this op array.
                 self.definitely_defined_cvs.clear();

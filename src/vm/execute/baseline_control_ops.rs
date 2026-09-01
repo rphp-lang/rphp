@@ -1060,7 +1060,6 @@ fn op_eval<'a>(
     }
 }
 
-#[cfg(feature = "stream-registry")]
 /// Return the public PHP spelling for the active include opcode.
 fn include_call_name(is_require: bool, is_once: bool) -> &'static str {
     match (is_require, is_once) {
@@ -1071,7 +1070,6 @@ fn include_call_name(is_require: bool, is_once: bool) -> &'static str {
     }
 }
 
-#[cfg(feature = "stream-registry")]
 fn include_origin_index(
     op_array: &crate::compiler::OpArray,
     opline: &crate::vm::instruction::Instruction,
@@ -1091,7 +1089,6 @@ fn include_origin_index(
     }
 }
 
-#[cfg(feature = "stream-registry")]
 fn include_source_origin(
     op_array: &crate::compiler::OpArray,
     opline: &crate::vm::instruction::Instruction,
@@ -1105,7 +1102,6 @@ fn include_source_origin(
     (file, op_array.source_line(ip).unwrap_or(0))
 }
 
-#[cfg(feature = "stream-registry")]
 fn report_include_warning(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -1137,8 +1133,7 @@ fn report_include_warning(
     Ok(())
 }
 
-#[cfg(feature = "stream-registry")]
-fn user_wrapper_include_failure<'a>(
+fn include_failure<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &'a crate::compiler::OpArray,
@@ -1170,7 +1165,10 @@ fn user_wrapper_include_failure<'a>(
         });
     }
 
+    #[cfg(feature = "include-path")]
     let include_path = crate::stdlib::include_path::current(eg);
+    #[cfg(not(feature = "include-path"))]
+    let include_path = ".";
     let second = if is_require {
         format!(
             "Failed opening required '{path}' (include_path='{include_path}')"
@@ -1355,7 +1353,7 @@ fn op_include<'a>(
                 };
             }
             crate::stdlib::user_wrapper::IncludeOpenResult::Declined { class } => {
-                return user_wrapper_include_failure(
+                return include_failure(
                     eg,
                     frame,
                     op_array,
@@ -1400,7 +1398,7 @@ fn op_include<'a>(
     let outcome = execute_included_file(eg, &resolved_path, is_once, Some((frame, op_array)))?;
     #[cfg(feature = "stream-registry")]
     if searched_user_include_path && matches!(outcome, IncludeFileOutcome::Missing(_)) {
-        return user_wrapper_include_failure(
+        return include_failure(
             eg,
             frame,
             op_array,
@@ -1426,29 +1424,20 @@ fn op_include<'a>(
             }
             ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
         }),
-        IncludeFileOutcome::Missing(error) if is_require => {
-            let message = format!(
-                "require({path_str}): Failed opening required '{resolved_path}' ({error})"
-            );
-            eg.write_output(format!("Warning: {message}\n").as_bytes());
-            let exception = make_error_value("Error", &message);
-            Ok(match throw_in_frame(eg, frame, exception)? {
-                ThrowResult::Handled(new_frame, new_op_array) => {
-                    ColdResult::NewFrame(new_frame, new_op_array)
-                }
-                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-            })
-        }
         IncludeFileOutcome::Missing(error) => {
-            eg.write_output(
-                format!(
-                    "Warning: include({path_str}): Failed opening '{resolved_path}' for inclusion ({error})\n"
-                )
-                .as_bytes(),
-            );
-            write_include_result(frame, opline, Value::bool(false));
-            unsafe { (*frame).opline = (*frame).opline.add(1) };
-            Ok(ColdResult::Continue)
+            // Preserve the backend error payload for callers which inspect
+            // IncludeFileOutcome while presenting PHP's canonical reason here.
+            let _kind = error.kind();
+            include_failure(
+                eg,
+                frame,
+                op_array,
+                opline,
+                &path_str,
+                None,
+                is_require,
+                is_once,
+            )
         }
     }
 }

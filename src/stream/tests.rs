@@ -1,4 +1,4 @@
-use super::{PhpStream, StreamMode};
+use super::{PhpStream, StreamMode, php_memory_stream_mode};
 use std::io::SeekFrom;
 
 #[test]
@@ -22,6 +22,30 @@ fn parses_php_file_modes_without_platform_dependencies() {
     assert!(StreamMode::parse("z").is_none());
     assert!(StreamMode::parse("r++").is_none());
     assert!(StreamMode::parse("").is_none());
+}
+
+#[test]
+fn memory_wrappers_keep_their_permissive_legacy_mode_grammar() {
+    assert_eq!(
+        php_memory_stream_mode("+r"),
+        StreamMode {
+            read: true,
+            write: true,
+            append: false,
+            create: true,
+            truncate: true,
+            exclusive: false,
+        }
+    );
+    assert!(PhpStream::open("php://memory", "+r").is_ok());
+    assert!(PhpStream::open("php://temp", "not-a-file-mode").is_ok());
+    assert!(PhpStream::open("/rphp/does-not-exist", "+r").is_err());
+    assert_eq!(
+        php_memory_stream_mode("r+"),
+        StreamMode::parse("r+").unwrap()
+    );
+    assert!(php_memory_stream_mode("x").read);
+    assert!(!php_memory_stream_mode("x").write);
 }
 
 #[test]

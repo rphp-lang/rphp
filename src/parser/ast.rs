@@ -1078,6 +1078,7 @@ pub enum Stmt {
         path: Expr,
         is_require: bool,
         is_once: bool,
+        line: usize,
     },
 }
 

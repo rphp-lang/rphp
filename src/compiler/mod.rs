@@ -242,7 +242,7 @@ impl OpArray {
     /// absolute slot offset (num_cvs + tmp_index). After this pass, runtime
     /// can access Tmp slots as `frame_base.add(operand)` without loading num_cvs.
     pub fn resolve_tmp_offsets(&mut self) {
-        use crate::vm::instruction::OpType;
+        use crate::vm::instruction::{ASSIGN_DIM_DIAGNOSTIC_GUARD, OpType};
         use crate::vm::opcode::OpCode;
         let offset = self.num_cvs;
         let offset16 = offset as u16;
@@ -261,6 +261,11 @@ impl OpArray {
             }
             // ForeachInit stores pos_tmp in extended_value as a TMP index.
             if instr.opcode == OpCode::ForeachInit {
+                instr.extended_value += offset;
+            }
+            // Diagnostic AssignDim stores a TMP+1 guard token in
+            // extended_value rather than an ordinary operand field.
+            if instr.opcode == OpCode::AssignDim && instr._pad & ASSIGN_DIM_DIAGNOSTIC_GUARD != 0 {
                 instr.extended_value += offset;
             }
         }

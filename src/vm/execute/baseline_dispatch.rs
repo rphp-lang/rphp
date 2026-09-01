@@ -166,6 +166,253 @@ fn enum_comparison_result(eg: &ExecutorGlobals, left: &Value, right: &Value) -> 
     })
 }
 
+enum DiagnosticFrameAction {
+    CloneOperand {
+        operand: u16,
+        op_type: OpType,
+    },
+    ArrayOwnerCount {
+        operand: u16,
+        op_type: OpType,
+    },
+    ReferenceHandleCount {
+        cv: u16,
+    },
+    Jump {
+        target: usize,
+    },
+    Snapshot {
+        source: u16,
+        source_type: OpType,
+        target: usize,
+        root_cv: u16,
+        root_name_literal: u16,
+        destination: u16,
+        destination_type: OpType,
+        generation: u64,
+    },
+    RefreshRoot {
+        token_slot: u16,
+        root: u16,
+        root_type: OpType,
+    },
+    Store {
+        destination: u16,
+        destination_type: OpType,
+        value: Value,
+    },
+}
+
+/// Keep all raw-frame work for the diagnostic-only write transaction behind
+/// one noinline cold boundary. The compiler supplies every operand and jump
+/// target from the same live OpArray, and the paired snapshot TMP remains live
+/// until AssignDim reaches either its commit or abort target.
+#[cold]
+#[inline(never)]
+fn diagnostic_frame_action(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    action: DiagnosticFrameAction,
+) -> Option<Value> {
+    // SAFETY: every variant is emitted and consumed within one active user
+    // frame. Resolved operand offsets and jump targets belong to `op_array`;
+    // Store/Refresh destinations are compiler-retained live TMP/CV slots.
+    unsafe {
+        match action {
+            DiagnosticFrameAction::CloneOperand { operand, op_type } => {
+                Some((&*(*frame).get_op_ptr(operand as u32, op_type, op_array)).clone())
+            }
+            DiagnosticFrameAction::ArrayOwnerCount { operand, op_type } => {
+                let value = (&*(*frame).get_op_ptr(operand as u32, op_type, op_array))
+                    .dereferenced();
+                let identity = value.array_identity()?;
+                let owner = std::mem::ManuallyDrop::new(std::rc::Rc::from_raw(
+                    identity as *const PhpArray,
+                ));
+                Some(Value::long(std::rc::Rc::strong_count(&owner) as i64))
+            }
+            DiagnosticFrameAction::ReferenceHandleCount { cv } => Some(Value::long(
+                (*frame).cv(cv as u32).owned_reference_handle_count() as i64,
+            )),
+            DiagnosticFrameAction::Jump { target } => {
+                (*frame).opline = op_array.instructions.as_ptr().add(target);
+                None
+            }
+            DiagnosticFrameAction::Snapshot {
+                source,
+                source_type,
+                target,
+                root_cv,
+                root_name_literal,
+                destination,
+                destination_type,
+                generation,
+            } => {
+                let source = &*(*frame).get_op_ptr(source as u32, source_type, op_array);
+                let mut token = PhpArray::with_packed_capacity(7);
+                token.push(Value::long(generation as i64));
+                token.push(source.dereferenced().clone());
+                token.push(Value::long(target as i64));
+                token.push(Value::long(root_cv as i64));
+                token.push(op_array.literals()[root_name_literal as usize].clone());
+                // Zero means this token still describes the pre-write root.
+                // AssignDim fills the slot only after engine auto-init.
+                token.push(Value::long(0));
+                token.push(Value::long(0));
+                let destination =
+                    (*frame).get_op_mut(destination as u32, destination_type);
+                frame_slot_set(frame, destination, Value::array(token));
+                None
+            }
+            DiagnosticFrameAction::RefreshRoot {
+                token_slot,
+                root,
+                root_type,
+            } => {
+                let root_value = (&*(*frame).get_op_ptr(root as u32, root_type, op_array))
+                    .dereferenced()
+                    .clone();
+                let token = &mut *(*frame).get_op_mut(token_slot as u32, OpType::Tmp);
+                if let Some(token) = token.as_array_mut() {
+                    token.set_int(1, root_value);
+                    let identity = token
+                        .get_int(1)
+                        .and_then(Value::array_identity)
+                        .expect("refreshed diagnostic root is an array");
+                    let owner = std::mem::ManuallyDrop::new(std::rc::Rc::from_raw(
+                        identity as *const PhpArray,
+                    ));
+                    token.set_int(5, Value::long(std::rc::Rc::strong_count(&owner) as i64));
+                    token.set_int(
+                        6,
+                        Value::long(
+                            (*frame).cv(root as u32).owned_reference_handle_count() as i64,
+                        ),
+                    );
+                } else {
+                    debug_assert!(false, "diagnostic write guard token must remain an array");
+                }
+                None
+            }
+            DiagnosticFrameAction::Store {
+                destination,
+                destination_type,
+                value,
+            } => {
+                let destination =
+                    (*frame).get_op_mut(destination as u32, destination_type);
+                frame_slot_set(frame, destination, value);
+                None
+            }
+        }
+    }
+}
+
+/// A compiler-owned snapshot token is present only for dimension writes whose
+/// key is expected to publish a PHP diagnostic. Keep the ordinary AssignDim
+/// lane branch-free apart from its existing flag word, and compare the root
+/// only after an error callback actually advanced the request-local epoch.
+#[cold]
+fn diagnostic_write_guard_target(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Option<(usize, u16, ValueType)> {
+    if opline._pad & ASSIGN_DIM_DIAGNOSTIC_GUARD == 0 || opline.extended_value == 0 {
+        return None;
+    }
+    let snapshot_slot = (opline.extended_value - 1) as u16;
+    let token = diagnostic_frame_action(
+        frame,
+        op_array,
+        DiagnosticFrameAction::CloneOperand {
+            operand: snapshot_slot,
+            op_type: OpType::Tmp,
+        },
+    )?;
+    let token = token.as_array()?;
+    let generation = token.get_int(0)?.as_long()? as u64;
+    if eg.error_handler_generation == generation {
+        return None;
+    }
+    let snapshot = token.get_int(1)?.dereferenced();
+    let target = token.get_int(2)?.as_long()? as usize;
+    let root_cv = u16::try_from(token.get_int(3)?.as_long()?).ok()?;
+    let root_name = token.get_int(4)?.as_str()?;
+    let auto_init_owner_count = token.get_int(5)?.as_long()? as usize;
+    let auto_init_reference_count = token.get_int(6)?.as_long()? as usize;
+    let externally_shared = auto_init_owner_count != 0
+        && diagnostic_frame_action(
+            frame,
+            op_array,
+            DiagnosticFrameAction::ArrayOwnerCount {
+                operand: root_cv,
+                op_type: OpType::Cv,
+            },
+        )
+        .and_then(|count| count.as_long())
+        .is_some_and(|count| count as usize > auto_init_owner_count);
+    let externally_aliased = auto_init_reference_count != 0
+        && diagnostic_frame_action(
+            frame,
+            op_array,
+            DiagnosticFrameAction::ReferenceHandleCount { cv: root_cv },
+        )
+        .and_then(|count| count.as_long())
+        .is_some_and(|count| count as usize > auto_init_reference_count);
+    let live = diagnostic_frame_action(
+        frame,
+        op_array,
+        DiagnosticFrameAction::CloneOperand {
+            operand: root_cv,
+            op_type: OpType::Cv,
+        },
+    )?;
+    let live = live.dereferenced();
+    let unchanged = if eg.error_handler_wrote_global_since(root_name, generation)
+        || externally_shared
+        || externally_aliased
+    {
+        false
+    } else if snapshot.value_type() != live.value_type() {
+        false
+    } else {
+        match snapshot.value_type() {
+            ValueType::Array => snapshot.array_identity() == live.array_identity(),
+            ValueType::Object => snapshot.object_identity() == live.object_identity(),
+            _ => values_identical(snapshot, live),
+        }
+    };
+    (!unchanged).then_some((target, root_cv, live.value_type()))
+}
+
+/// Null/undefined dimension roots are initialized by AssignDim itself before
+/// key normalization can emit its own diagnostic. Advance the retained root
+/// snapshot to that engine-created array so a passive handler does not look
+/// like a callback replacement, while any subsequent callback mutation still
+/// detaches the shared array and remains observable to the guard.
+#[cold]
+fn refresh_diagnostic_write_guard_root(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) {
+    if opline._pad & ASSIGN_DIM_DIAGNOSTIC_GUARD == 0 || opline.extended_value == 0 {
+        return;
+    }
+    let snapshot_slot = (opline.extended_value - 1) as u16;
+    diagnostic_frame_action(
+        frame,
+        op_array,
+        DiagnosticFrameAction::RefreshRoot {
+            token_slot: snapshot_slot,
+            root: opline.op1,
+            root_type: opline.op1_type,
+        },
+    );
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RuntimeComparisonMode {
     LooseEquality,
@@ -6461,6 +6708,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         };
                         match array_key {
                             Ok(array_key) => {
+                                let compound_key = (opline._pad & FETCH_DIM_COMPOUND != 0)
+                                    .then(|| match &array_key {
+                                        ArrayKeyRef::Int(key) => ArrayKey::Int(*key),
+                                        ArrayKeyRef::String(key) => {
+                                            ArrayKey::String((*key).to_string())
+                                        }
+                                    });
+                                let original_array_identity = arr_val.array_identity();
                                 let fetched = match &array_key {
                                     ArrayKeyRef::Int(key) => arr.get_int(*key),
                                     ArrayKeyRef::String(_) if definite_string_miss => None,
@@ -6562,6 +6817,45 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                             }
                                         }
                                     }
+                                    if let Some(key) = compound_key.as_ref()
+                                        && opline.extended_value != 0
+                                    {
+                                        // The handler ran synchronously while
+                                        // this dimension was still missing.
+                                        // Reacquire the live container: a
+                                        // replacement root, scalar clobber or
+                                        // newly installed target member owns
+                                        // the result and cancels this stale
+                                        // compound writeback.
+                                        let live = diagnostic_frame_action(
+                                            frame,
+                                            op_array,
+                                            DiagnosticFrameAction::CloneOperand {
+                                                operand: opline.op1,
+                                                op_type: opline.op1_type,
+                                            },
+                                        )
+                                        .expect("live dimension source remains addressable");
+                                        let live = live.dereferenced();
+                                        let unchanged = live.array_identity()
+                                            == original_array_identity
+                                            && live.as_array().is_some_and(|array| match key {
+                                                ArrayKey::Int(key) => array.get_int(*key).is_none(),
+                                                ArrayKey::String(key) => {
+                                                    array.get_str(key).is_none()
+                                                }
+                                        });
+                                        if !unchanged {
+                                            diagnostic_frame_action(
+                                                frame,
+                                                op_array,
+                                                DiagnosticFrameAction::Jump {
+                                                    target: opline.extended_value as usize,
+                                                },
+                                            );
+                                            continue 'vm;
+                                        }
+                                    }
                                 }
                                 let value = if opline._pad & FETCH_DIM_ISSET != 0 {
                                     Value::bool(fetched.is_some_and(|value| {
@@ -6643,7 +6937,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     }
                     write_fetch_dim_result(frame, result_ptr, Value::null());
-                } else if let Some(s) = arr_val.as_str() {
+                } else if arr_val.as_str().is_some() {
+                    // A string-offset diagnostic can invoke arbitrary user
+                    // code that replaces the source CV. Retain the already
+                    // evaluated string for this read while leaving the live
+                    // CV mutation intact.
+                    let string_source = arr_val.clone();
+                    let s = string_source
+                        .as_str()
+                        .expect("prechecked string snapshot remains a string");
                     if opline._pad & FETCH_DIM_DESTRUCTURE != 0 {
                         report_php_warning(
                             eg,
@@ -6669,7 +6971,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         write_fetch_dim_result(frame, result_ptr, Value::null());
                     } else {
                         // String offset access: $s[0] — PHP strings are byte-oriented
-                        let binary_source = arr_val.is_binary_string();
+                        let binary_source = string_source.is_binary_string();
                         let ordinary_bytes = s.as_bytes();
                         let byte_len = if binary_source {
                             s.chars().count()
@@ -7022,6 +7324,30 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 }
                             }
                         }
+                        if opline._pad & FETCH_DIM_COMPOUND != 0
+                            && opline.extended_value != 0
+                        {
+                            let live = diagnostic_frame_action(
+                                frame,
+                                op_array,
+                                DiagnosticFrameAction::CloneOperand {
+                                    operand: opline.op1,
+                                    op_type: opline.op1_type,
+                                },
+                            )
+                            .expect("live dimension source remains addressable");
+                            let live = live.dereferenced();
+                            if !matches!(live.value_type(), ValueType::Null | ValueType::Undef) {
+                                diagnostic_frame_action(
+                                    frame,
+                                    op_array,
+                                    DiagnosticFrameAction::Jump {
+                                        target: opline.extended_value as usize,
+                                    },
+                                );
+                                continue 'vm;
+                            }
+                        }
                     } else if arr_val.value_type() != ValueType::Undef
                         && opline._pad & FETCH_DIM_DESTRUCTURE == 0
                         && opline._pad & FETCH_DIM_MUTABLE == 0
@@ -7104,8 +7430,39 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::SnapshotDiagnosticWrite => {
+                diagnostic_frame_action(
+                    frame,
+                    op_array,
+                    DiagnosticFrameAction::Snapshot {
+                        source: opline.op1,
+                        source_type: opline.op1_type,
+                        target: opline.extended_value as usize,
+                        root_cv: opline.op1,
+                        root_name_literal: opline.op2,
+                        destination: opline.result,
+                        destination_type: opline.result_type,
+                        generation: eg.error_handler_generation,
+                    },
+                );
+            }
+
             OpCode::AssignDim => 'assign_dim: {
                 // op1[op2] = result (value source encoded in result/result_type)
+                if opline._pad & ASSIGN_DIM_DIAGNOSTIC_GUARD != 0
+                    && opline.op1_type == OpType::Cv
+                    && let Some((target, root_cv, live_type)) =
+                        diagnostic_write_guard_target(eg, frame, op_array, opline)
+                    && opline.op1 == root_cv
+                    && live_type != ValueType::String
+                {
+                    diagnostic_frame_action(
+                        frame,
+                        op_array,
+                        DiagnosticFrameAction::Jump { target },
+                    );
+                    continue 'vm;
+                }
                 let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let mut cloned_val = if opline._pad & crate::vm::instruction::ASSIGN_DIM_REFERENCE != 0 {
                     if opline.result_type != OpType::Cv {
@@ -7240,15 +7597,50 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     };
                 }
+                if matches!(arr_type, ValueType::Null | ValueType::Undef) {
+                    let constraints = operand_reference_property_constraints(
+                        frame,
+                        opline.op1,
+                        opline.op1_type,
+                    );
+                    if let Some(message) = reference_array_auto_init_error(&constraints, eg) {
+                        throw_operator!("TypeError", &message);
+                    }
+                    unsafe { slot_set(arr_ptr, Value::array(PhpArray::new())) };
+                    arr_ptr = unsafe {
+                        let ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                        if (&*ptr).is_reference() {
+                            (&mut *ptr).as_ref_ptr()
+                        } else {
+                            ptr
+                        }
+                    };
+                    // SAFETY: arr_ptr was just reacquired from this live
+                    // operand and points at the newly initialized array.
+                    if opline._pad & ASSIGN_DIM_DIAGNOSTIC_GUARD != 0 {
+                        refresh_diagnostic_write_guard_root(frame, op_array, opline);
+                    }
+                }
                 if arr_type == ValueType::String
                     && opline._pad & crate::vm::instruction::ASSIGN_DIM_REFERENCE == 0
-                    && cloned_val.dereferenced().value_type() == ValueType::Object
+                    && cloned_val.dereferenced().value_type() != ValueType::String
                 {
-                    let rendered = convert_string_offset_assignment_object(eg, &cloned_val)?;
-                    resume_pending_exception!();
-                    let rendered = match rendered {
-                        Ok(rendered) => rendered,
-                        Err(message) => throw_operator!("Error", &message),
+                    let rendered = match cloned_val.dereferenced().value_type() {
+                        ValueType::Object | ValueType::Closure => {
+                            let rendered =
+                                convert_string_offset_assignment_object(eg, &cloned_val)?;
+                            resume_pending_exception!();
+                            match rendered {
+                                Ok(rendered) => rendered,
+                                Err(message) => throw_operator!("Error", &message),
+                            }
+                        }
+                        ValueType::Array => cloned_val,
+                        _ => Value::string(
+                            cloned_val
+                                .dereferenced()
+                                .echo_to_string_with_precision(eg.precision),
+                        ),
                     };
                     cloned_val = rendered;
                     // The conversion may have rebound a CV/reference target.
@@ -7407,6 +7799,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                     };
+                    if opline._pad & ASSIGN_DIM_DIAGNOSTIC_GUARD != 0
+                        && let Some((target, _, _)) =
+                            diagnostic_write_guard_target(eg, frame, op_array, opline)
+                    {
+                        diagnostic_frame_action(
+                            frame,
+                            op_array,
+                            DiagnosticFrameAction::Jump { target },
+                        );
+                        continue 'vm;
+                    }
                     let mut bytes = arr.php_string_bytes().unwrap_or_default().into_owned();
                     let replacement = cloned_val.php_string_bytes().unwrap_or_default();
                     if replacement.is_empty() {
@@ -7472,6 +7875,25 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             Value::string,
                         )
                     };
+                    if opline._pad & crate::vm::instruction::ASSIGN_DIM_RESULT_VALUE != 0 {
+                        debug_assert_eq!(opline.result_type, OpType::Tmp);
+                        let assigned = if cloned_val.is_binary_string()
+                            || !replacement[0].is_ascii()
+                        {
+                            Value::binary_string(&replacement[..1])
+                        } else {
+                            Value::string(String::from(char::from(replacement[0])))
+                        };
+                        diagnostic_frame_action(
+                            frame,
+                            op_array,
+                            DiagnosticFrameAction::Store {
+                                destination: opline.result,
+                                destination_type: opline.result_type,
+                                value: assigned,
+                            },
+                        );
+                    }
                     *arr = result;
                     break 'assign_dim;
                 }
@@ -7485,22 +7907,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     ,
                     opline._pad & ASSIGN_DIM_KEY_ALREADY_NORMALIZED == 0
                 );
-                // Auto-create array if variable is null/undef
-                if arr.value_type() == ValueType::Null || arr.value_type() == ValueType::Undef {
-                    let constraints = operand_reference_property_constraints(
+                if opline._pad & ASSIGN_DIM_DIAGNOSTIC_GUARD != 0
+                    && let Some((target, _, _)) =
+                        diagnostic_write_guard_target(eg, frame, op_array, opline)
+                {
+                    diagnostic_frame_action(
                         frame,
-                        opline.op1,
-                        opline.op1_type,
+                        op_array,
+                        DiagnosticFrameAction::Jump { target },
                     );
-                    if let Some(message) = reference_array_auto_init_error(&constraints, eg) {
-                        throw_operator!("TypeError", &message);
-                    }
-                    unsafe { slot_set(arr_ptr, Value::array(PhpArray::new())) };
-                    let arr = unsafe { &mut *arr_ptr };
-                    let php_arr = arr.as_array_mut().unwrap();
-                    key = php_arr.prepare_string_key_for_write(key, idx_val);
-                    php_arr.set(key, cloned_val);
-                } else if let Some(php_arr) = arr.as_array_mut() {
+                    continue 'vm;
+                }
+                if let Some(php_arr) = arr.as_array_mut() {
                     key = php_arr.prepare_string_key_for_write(key, idx_val);
                     if let Some(element) =
                         php_arr.get_key_mut_for_replacement(&key, &cloned_val)
@@ -9900,7 +10318,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         };
                         globals_set(&mut eg.globals, var_name, val);
-                        eg.dirty_globals.insert(var_name.clone());
+                        eg.mark_global_dirty(var_name.clone());
                     }
                 }
                 if !op_array.static_vars.is_empty() {

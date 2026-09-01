@@ -714,6 +714,7 @@ mod inner {
             106 => Some("InitDynamicCall"),
             174 => Some("InitDynamicStaticCall"),
             175 => Some("CheckDefaultType"),
+            176 => Some("SnapshotDiagnosticWrite"),
             107 => Some("Instanceof"),
             108 => Some("FetchConst"),
             109 => Some("BindDefaultParam"),

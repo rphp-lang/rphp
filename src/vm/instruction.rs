@@ -372,6 +372,10 @@ pub const EVAL_FLAG_ERROR_SUPPRESS: u16 = 1;
 /// original evaluation without converting or reading a mutable source twice.
 pub const FETCH_DYNAMIC_RETAIN_NAME: u16 = 1 << 3;
 
+/// FetchGlobal is the read half of a compound assignment. A missing symbol
+/// reports PHP's dedicated global-variable warning before the operation.
+pub const FETCH_GLOBAL_WARN_UNDEFINED: u16 = 1 << 1;
+
 /// NewObj flag: a constructor-initialized object is assigned once, passed to
 /// an immediately scalar-consumed ObjectArray method, and otherwise does not
 /// escape. Runtime may represent its declared properties virtually for that
@@ -452,6 +456,11 @@ pub const ASSIGN_DIM_INCDEC_DECREMENT: u16 = 1 << 6;
 /// modified directly, while a by-value result must remain ineffective after
 /// PHP's indirect-modification notice. Neither form calls `offsetSet()`.
 pub const ASSIGN_DIM_INDIRECT_REBUILD: u16 = 1 << 7;
+/// This dimension write follows a compiler-emitted SnapshotDiagnosticWrite.
+/// `extended_value` stores that snapshot TMP plus one (zero remains the cheap
+/// no-guard marker). Runtime compares only after an error handler ran while
+/// evaluating or normalizing the key.
+pub const ASSIGN_DIM_DIAGNOSTIC_GUARD: u16 = 1 << 8;
 /// UnsetDim addresses the leaf of a multi-dimensional path. String parents use
 /// PHP's nested-offset diagnostic rather than the flat string-unset message.
 pub const UNSET_DIM_NESTED: u16 = 1;

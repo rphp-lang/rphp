@@ -643,9 +643,6 @@ pub struct ExecutorGlobals {
     /// `@` or the current reporting mask. Allocated strings stay on this cold
     /// observability path and do not enlarge call frames or values.
     pub(crate) last_error: Option<PhpErrorRecord>,
-    /// PHP never recursively invokes a user error handler for a diagnostic
-    /// raised while that handler is active.
-    pub(crate) handling_error: bool,
     pub(crate) exception_handler: Option<crate::value::Value>,
     pub(crate) exception_handler_stack: Vec<Option<crate::value::Value>>,
     /// Request-shutdown callbacks retain resolved callable state and supplied
@@ -708,7 +705,11 @@ pub struct ExecutorGlobals {
     /// Original public arguments of active user calls. Extra arguments occupy
     /// slots that compiled TMP operands may reuse, so argument-introspection
     /// functions need stable storage for the lifetime of the call frame.
-    pub(crate) function_arguments: HashMap<usize, Vec<crate::value::Value>>,
+    /// Sparse argument snapshots and their reusable buffers. This cold owner
+    /// intentionally retains the footprint of the preceding HashMap field so
+    /// the offsets of later request-hot fields do not depend on whether PHP
+    /// argument introspection is enabled for one call.
+    pub(crate) function_argument_state: FunctionArgumentState,
     /// Active generator being executed (set during resume, used by Yield opcode)
     pub active_generator: Option<crate::vm::generator::GeneratorRef>,
     /// PHP Fiber contexts allocate alternate VM stacks only after the first
@@ -740,6 +741,20 @@ pub struct ExecutorGlobals {
     detached_return_discarded: bool,
     /// Globals modified by the last callee Return (for selective re-read by caller)
     pub dirty_globals: std::collections::HashSet<String>,
+    /// Number of synchronous entries into a request-local PHP error handler.
+    /// Diagnostic dimension writes snapshot this cold epoch so ordinary key
+    /// side effects remain untouched while callback-driven root replacement
+    /// can suppress stale writeback.
+    pub(crate) error_handler_generation: u64,
+    /// Latest error-handler epoch that explicitly wrote each request-global
+    /// name. Lazily allocated because ordinary requests and handlers that only
+    /// inspect diagnostics need no map. This distinguishes `null = null` from
+    /// an untouched root, which PHP treats differently for stale writeback.
+    error_handler_dirty_globals: Option<Box<HashMap<String, u64>>>,
+    /// Non-zero only while the matching request error callback is executing.
+    /// Global write opcodes use it to retain a write event even when the value
+    /// itself and the eventual caller slot are bit-for-bit unchanged.
+    pub(crate) active_error_handler_generation: u64,
     /// Static variables — persisted across function calls: func_name → (var_name → value)
     pub static_vars: HashMap<String, HashMap<String, crate::value::Value>>,
     /// Closure-owned function-static cells for active or pending frames. The
@@ -868,6 +883,47 @@ pub struct ExecutorGlobals {
     json_runtime: Option<Box<JsonRuntimeState>>,
 }
 
+/// Stable storage for only the positional tail that no longer has a distinct
+/// compiler-owned parameter CV. Declared arguments remain readable from the
+/// live frame; keeping the first tail index avoids cloning them solely to
+/// preserve func_get_arg(s) and trace observability.
+pub(crate) struct FunctionArgumentSnapshot {
+    pub(crate) first: u32,
+    pub(crate) values: Vec<crate::value::Value>,
+}
+
+/// LIFO storage for the uncommon user-call tail that outlives its raw send
+/// slots. The reserve keeps `ExecutorGlobals` fields following the former
+/// 48-byte HashMap at their established offsets while replacing its hashing
+/// work with a stack lookup.
+#[repr(C)]
+pub(crate) struct FunctionArgumentState {
+    snapshots: Vec<(usize, FunctionArgumentSnapshot)>,
+    buffers: Option<Box<Vec<Vec<crate::value::Value>>>>,
+    _layout_reserve: [usize; 2],
+}
+
+const _: [(); std::mem::size_of::<HashMap<usize, Vec<crate::value::Value>>>()] =
+    [(); std::mem::size_of::<FunctionArgumentState>()];
+
+impl FunctionArgumentState {
+    pub(crate) const fn new() -> Self {
+        Self {
+            snapshots: Vec::new(),
+            buffers: None,
+            _layout_reserve: [0; 2],
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.snapshots.is_empty()
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.snapshots.clear();
+    }
+}
+
 pub(crate) enum ClassAliasRegistrationError {
     NameConflict,
     DelayedLink(String),
@@ -876,6 +932,101 @@ pub(crate) enum ClassAliasRegistrationError {
 const PHP_82_SUPPRESSED_ERROR_REPORTING: i64 = 1 | 4 | 16 | 64 | 256 | 4096;
 
 impl ExecutorGlobals {
+    pub(crate) fn publish_function_arguments(
+        &mut self,
+        frame: usize,
+        snapshot: FunctionArgumentSnapshot,
+    ) {
+        debug_assert!(
+            self.function_argument_state
+                .snapshots
+                .iter()
+                .all(|(candidate, _)| *candidate != frame),
+            "one live frame owns at most one argument snapshot"
+        );
+        self.function_argument_state
+            .snapshots
+            .push((frame, snapshot));
+    }
+
+    pub(crate) fn function_arguments_for(&self, frame: usize) -> Option<&FunctionArgumentSnapshot> {
+        self.function_argument_state
+            .snapshots
+            .iter()
+            .rev()
+            .find_map(|(candidate, snapshot)| (*candidate == frame).then_some(snapshot))
+    }
+
+    pub(crate) fn take_function_arguments(
+        &mut self,
+        frame: usize,
+    ) -> Option<FunctionArgumentSnapshot> {
+        if self
+            .function_argument_state
+            .snapshots
+            .last()
+            .is_some_and(|(candidate, _)| *candidate == frame)
+        {
+            return self
+                .function_argument_state
+                .snapshots
+                .pop()
+                .map(|(_, snapshot)| snapshot);
+        }
+        let index = self
+            .function_argument_state
+            .snapshots
+            .iter()
+            .rposition(|(candidate, _)| *candidate == frame)?;
+        Some(self.function_argument_state.snapshots.remove(index).1)
+    }
+
+    pub(crate) fn take_function_argument_buffer(
+        &mut self,
+        capacity: usize,
+    ) -> Vec<crate::value::Value> {
+        let mut buffer = self
+            .function_argument_state
+            .buffers
+            .as_deref_mut()
+            .and_then(Vec::pop)
+            .unwrap_or_default();
+        buffer.reserve(capacity.saturating_sub(buffer.capacity()));
+        buffer
+    }
+
+    pub(crate) fn recycle_function_argument_buffer(
+        &mut self,
+        mut buffer: Vec<crate::value::Value>,
+    ) {
+        buffer.clear();
+        let pool = self
+            .function_argument_state
+            .buffers
+            .get_or_insert_with(|| Box::new(Vec::new()));
+        if buffer.capacity() <= 64 && pool.len() < 8 {
+            pool.push(buffer);
+        }
+    }
+
+    pub(crate) fn mark_global_dirty(&mut self, name: String) {
+        if self.active_error_handler_generation != 0 {
+            let writes = self
+                .error_handler_dirty_globals
+                .get_or_insert_with(|| Box::new(HashMap::new()));
+            let recorded = writes.entry(name.clone()).or_insert(0);
+            *recorded = (*recorded).max(self.active_error_handler_generation);
+        }
+        self.dirty_globals.insert(name);
+    }
+
+    pub(crate) fn error_handler_wrote_global_since(&self, name: &str, generation: u64) -> bool {
+        self.error_handler_dirty_globals
+            .as_deref()
+            .and_then(|writes| writes.get(name))
+            .is_some_and(|written| *written > generation)
+    }
+
     pub(crate) fn json_last_error(&self) -> i64 {
         self.json_runtime
             .as_deref()
@@ -1560,7 +1711,6 @@ impl ExecutorGlobals {
             error_handler_levels: crate::PHP_E_ALL,
             error_handler_stack: Vec::new(),
             last_error: None,
-            handling_error: false,
             exception_handler: None,
             exception_handler_stack: Vec::new(),
             shutdown_functions: None,
@@ -1578,7 +1728,7 @@ impl ExecutorGlobals {
             output_handler_depth: Cell::new(0),
             pending_named_variadic: HashMap::new(),
             pending_closure_captures: HashMap::new(),
-            function_arguments: HashMap::new(),
+            function_argument_state: FunctionArgumentState::new(),
             active_generator: None,
             fiber_runtime: None,
             globals: HashMap::new(),
@@ -1588,6 +1738,9 @@ impl ExecutorGlobals {
             detached_trace_origins: None,
             detached_return_discarded: false,
             dirty_globals: std::collections::HashSet::new(),
+            error_handler_generation: 0,
+            error_handler_dirty_globals: None,
+            active_error_handler_generation: 0,
             static_vars: HashMap::new(),
             closure_static_frames: None,
             pending_invoke_this: None,
@@ -1686,7 +1839,6 @@ impl ExecutorGlobals {
             error_handler_levels: crate::PHP_E_ALL,
             error_handler_stack: Vec::new(),
             last_error: None,
-            handling_error: false,
             exception_handler: None,
             exception_handler_stack: Vec::new(),
             shutdown_functions: None,
@@ -1704,7 +1856,7 @@ impl ExecutorGlobals {
             output_handler_depth: Cell::new(0),
             pending_named_variadic: HashMap::new(),
             pending_closure_captures: HashMap::new(),
-            function_arguments: HashMap::new(),
+            function_argument_state: FunctionArgumentState::new(),
             active_generator: None,
             fiber_runtime: None,
             globals: HashMap::new(),
@@ -1714,6 +1866,9 @@ impl ExecutorGlobals {
             detached_trace_origins: None,
             detached_return_discarded: false,
             dirty_globals: std::collections::HashSet::new(),
+            error_handler_generation: 0,
+            error_handler_dirty_globals: None,
+            active_error_handler_generation: 0,
             static_vars: HashMap::new(),
             closure_static_frames: None,
             pending_invoke_this: None,

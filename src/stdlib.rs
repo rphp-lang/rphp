@@ -15903,9 +15903,10 @@ const E_USER_DEPRECATED: i64 = 16_384;
 
 /// Route a recoverable PHP diagnostic through the request-local user handler.
 /// Only a strict `false` result declines the diagnostic; null and every other
-/// return value count as handled, matching PHP 8.2. A handler is never entered
-/// recursively, while its own diagnostics remain eligible for the standard
-/// reporting path.
+/// return value count as handled. The active callback is temporarily removed
+/// while it runs: diagnostics raised by that callback use a replacement
+/// installed from inside it, while an unchanged empty slot restores the
+/// suspended callback afterward.
 pub(crate) fn dispatch_php_error(
     eg: &mut ExecutorGlobals,
     ed: *mut ExecuteData,
@@ -15914,17 +15915,22 @@ pub(crate) fn dispatch_php_error(
     file: &str,
     line: usize,
 ) -> Result<bool, VmError> {
-    if eg.handling_error || level & eg.error_handler_levels == 0 {
+    if level & eg.error_handler_levels == 0 {
         return Ok(false);
     }
-    let Some(callback) = eg.error_handler.clone() else {
+    let Some(suspended) = eg.error_handler.take() else {
         return Ok(false);
     };
-    let Some(resolved) = resolve_callback_at_callsite(&callback, eg, ed) else {
+    let Some(resolved) = resolve_callback_at_callsite(&suspended, eg, ed) else {
+        eg.error_handler = Some(suspended);
         return Ok(false);
     };
 
-    eg.handling_error = true;
+    let suspended_levels = eg.error_handler_levels;
+    eg.error_handler_generation = eg.error_handler_generation.wrapping_add(1);
+    let handler_generation = eg.error_handler_generation;
+    let previous_active_generation = eg.active_error_handler_generation;
+    eg.active_error_handler_generation = handler_generation;
     let result = call_resolved_with_values_from(
         eg,
         &resolved,
@@ -15939,7 +15945,11 @@ pub(crate) fn dispatch_php_error(
         line,
         false,
     );
-    eg.handling_error = false;
+    eg.active_error_handler_generation = previous_active_generation;
+    if eg.error_handler.is_none() {
+        eg.error_handler = Some(suspended);
+        eg.error_handler_levels = suspended_levels;
+    }
     // SAFETY: `ed` is the suspended active call frame supplied to this
     // synchronous internal handler and remains live across the callback.
     let frame = unsafe { &mut *ed };
@@ -16596,9 +16606,12 @@ fn caller_argument(ed: *mut ExecuteData, index: u32, eg: &ExecutorGlobals) -> Op
         }
         let function = &*(*caller).func;
         if index >= function.sig.public_arity()
-            && let Some(arguments) = eg.function_arguments.get(&(caller as usize))
+            && let Some(arguments) = eg.function_arguments_for(caller as usize)
         {
-            return arguments.get(index as usize).cloned();
+            return index
+                .checked_sub(arguments.first)
+                .and_then(|offset| arguments.values.get(offset as usize))
+                .cloned();
         }
         let value = if function.sig.is_variadic && index >= function.sig.public_arity() {
             let offset = index - function.sig.public_arity();
@@ -17193,17 +17206,20 @@ pub(crate) unsafe fn collect_debug_backtrace(
     // made before that writeback boundary.
     let mut eval_scope_frames = Vec::new();
     while !frame.is_null() && (limit == 0 || trace.len() < limit) {
+        let synthetic_frame = eg.detached_trace_function(frame as usize);
         // The top-level script is represented by an executable frame in RPHP,
-        // but PHP traces stop at the last function/method called from it.
+        // but PHP traces stop at the last function/method called from it. A
+        // diagnostic may temporarily project an engine operation such as
+        // include() onto that same frame; retain the synthetic entry before
+        // stopping at the physical main-script boundary.
         let caller = eg.trace_caller(frame as usize, (*frame).prev_execute_data);
-        if caller.is_null() {
+        if caller.is_null() && synthetic_frame.is_none() {
             break;
         }
         let function = Function::from_common_ptr((*frame).func);
         if function.fn_type() == FunctionType::Undef {
             break;
         }
-        let synthetic_frame = eg.detached_trace_function(frame as usize);
         if synthetic_frame == Some("eval") {
             eval_scope_frames.push(frame);
         }
@@ -17390,9 +17406,12 @@ pub(crate) unsafe fn collect_debug_backtrace(
                 let argument = if scoped_argument.is_some() {
                     scoped_argument
                 } else if index as usize >= common.sig.param_names.len()
-                    && let Some(saved) = eg.function_arguments.get(&(frame as usize))
+                    && let Some(saved) = eg.function_arguments_for(frame as usize)
                 {
-                    saved.get(index as usize).cloned()
+                    index
+                        .checked_sub(saved.first)
+                        .and_then(|offset| saved.values.get(offset as usize))
+                        .cloned()
                 } else if common.sig.is_variadic && index >= common.sig.public_arity() {
                     let offset = index - common.sig.public_arity();
                     (*frame)

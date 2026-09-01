@@ -1096,7 +1096,7 @@ fn caller_scope_operation(
                         };
                         globals_assign(&mut eg.globals, name, value);
                     }
-                    eg.dirty_globals.insert(name.to_string());
+                    eg.mark_global_dirty(name.to_string());
                 } else {
                     if rebind {
                         globals_set(
@@ -1375,7 +1375,7 @@ fn op_dynamic_variable<'a>(
                     }
                 };
                 globals_assign(&mut eg.globals, &name, value);
-                eg.dirty_globals.insert(name);
+                eg.mark_global_dirty(name);
             } else {
                 let constraints = eg
                     .dynamic_variables
@@ -1408,7 +1408,7 @@ fn op_dynamic_variable<'a>(
                 unsafe { frame_slot_set(owner, (*owner).cv_mut(cv), Value::undef()) };
             } else if global_scope {
                 globals_set(&mut eg.globals, &name, Value::undef());
-                eg.dirty_globals.insert(name);
+                eg.mark_global_dirty(name);
             } else if let Some(variables) = eg.dynamic_variables.get_mut(&(owner as usize)) {
                 variables.remove(&name);
             }
@@ -1482,7 +1482,7 @@ fn op_dynamic_variable<'a>(
                 unsafe { frame_slot_set(owner, (*owner).cv_mut(cv), binding.clone_owned_reference_alias()) };
             } else if global_scope {
                 globals_set(&mut eg.globals, &name, binding.clone_owned_reference_alias());
-                eg.dirty_globals.insert(name);
+                eg.mark_global_dirty(name);
             } else {
                 globals_set(
                     eg.dynamic_variables.entry(owner as usize).or_default(),
@@ -1506,7 +1506,7 @@ fn op_dynamic_variable<'a>(
             // The local binding can mutate the shared reference cell without
             // executing another global-table opcode. Publish it back into a
             // suspended request-scope CV when this function returns.
-            eg.dirty_globals.insert(name.clone());
+            eg.mark_global_dirty(name.clone());
             if let Some(cv) = direct_cv {
                 unsafe { frame_slot_set(owner, (*owner).cv_mut(cv), binding.clone_owned_reference_alias()) };
             } else if !global_scope {
@@ -5306,7 +5306,7 @@ fn op_bind_global(
     // Detached opcode/stdlib callbacks return across an execute boundary.
     // Publishing the newly-created reference identity lets that boundary
     // rebind the suspended caller even when no scalar write followed `global`.
-    eg.dirty_globals.insert(name.clone());
+    eg.mark_global_dirty(name.clone());
     // SAFETY: cv_ptr is the live BindGlobal destination derived above.
     unsafe { frame_slot_set(frame, cv_ptr, binding) };
 }
@@ -5429,6 +5429,28 @@ fn op_global_dimension<'a>(
                 let value = local
                     .or_else(|| eg.globals.get(&name).cloned())
                     .unwrap_or_else(Value::undef);
+                if value.value_type() == ValueType::Undef
+                    && opline._pad & FETCH_GLOBAL_WARN_UNDEFINED != 0
+                {
+                    report_php_warning(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        &format!("Undefined global variable ${name}"),
+                        false,
+                    )?;
+                    if let Some(exception) = eg.exception.take() {
+                        return Ok(match throw_in_frame(eg, frame, exception)? {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                ColdResult::NewFrame(new_frame, new_op_array)
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                ColdResult::Unhandled(exception)
+                            }
+                        });
+                    }
+                }
                 let value = if opline._pad & FETCH_DIM_ISSET != 0 {
                     Value::bool(!matches!(
                         value.value_type(),
@@ -5473,7 +5495,7 @@ fn op_global_dimension<'a>(
                     }
                 };
                 globals_assign(&mut eg.globals, &name, value.clone());
-                eg.dirty_globals.insert(name.clone());
+                eg.mark_global_dirty(name.clone());
                 if let Some(cv) = active_cv {
                     let is_reference = (*frame).cv(cv).is_reference();
                     let destination = (*frame).get_op_mut(cv, OpType::Cv);
@@ -5489,7 +5511,7 @@ fn op_global_dimension<'a>(
                     tracked_global_binding_is_active(eg, op_array, &name, (*frame).cv(*cv))
                 });
                 globals_set(&mut eg.globals, &name, Value::undef());
-                eg.dirty_globals.insert(name.clone());
+                eg.mark_global_dirty(name.clone());
                 if let Some(cv) = active_cv {
                     frame_slot_set(frame, (*frame).cv_mut(cv), Value::undef());
                 }
@@ -5526,7 +5548,7 @@ fn op_global_dimension<'a>(
                     &name,
                     binding.clone_owned_reference_alias(),
                 );
-                eg.dirty_globals.insert(name.clone());
+                eg.mark_global_dirty(name.clone());
                 frame_slot_set(
                     frame,
                     (*frame).cv_mut(opline.result as u32),
@@ -5551,7 +5573,7 @@ fn op_global_dimension<'a>(
                     &name,
                     binding.clone_owned_reference_alias(),
                 );
-                eg.dirty_globals.insert(name.clone());
+                eg.mark_global_dirty(name.clone());
                 if let Some(cv) = active_cv {
                     frame_slot_set(
                         frame,
@@ -5595,7 +5617,7 @@ fn op_check_static(
                 current.clone()
             };
             globals_set(&mut eg.globals, global_name, value);
-            eg.dirty_globals.insert(global_name.clone());
+            eg.mark_global_dirty(global_name.clone());
         }
         let binding = eg.with_function_static_vars_mut(
             frame as usize,
@@ -5663,7 +5685,7 @@ fn op_bind_static(
                 current.clone()
             };
             globals_set(&mut eg.globals, global_name, value);
-            eg.dirty_globals.insert(global_name.clone());
+            eg.mark_global_dirty(global_name.clone());
         }
         let initial = if opline.result_type != OpType::Unused {
             (&*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array)).clone()

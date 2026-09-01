@@ -565,7 +565,21 @@ fn fn_fopen(
         Ok(stream) => insert_stream(eg, stream),
         #[cfg(not(feature = "resource-lifetime"))]
         Ok(stream) => Value::resource(insert_stream(eg, stream)),
-        Err(_) => Value::bool(false),
+        Err(error) => {
+            let reason = match error.kind() {
+                std::io::ErrorKind::NotFound => "No such file or directory".to_string(),
+                std::io::ErrorKind::PermissionDenied => "Permission denied".to_string(),
+                _ => error.to_string(),
+            };
+            super::report_internal_diagnostic(
+                eg,
+                execute_data,
+                2,
+                "Warning",
+                &format!("fopen({path}): Failed to open stream: {reason}"),
+            )?;
+            Value::bool(false)
+        }
     };
     return_value(return_pointer, value)
 }

@@ -258,6 +258,11 @@ pub enum OpCode {
     /// Validate a non-eager typed parameter default after its constant
     /// expression has materialized. Explicit arguments jump over this op.
     CheckDefaultType = 175,
+    /// Snapshot a direct dimension-write root before a key expression that
+    /// may synchronously enter the request error handler. The paired
+    /// AssignDim can then suppress stale writeback when that callback replaced
+    /// or mutated the PHP-visible root.
+    SnapshotDiagnosticWrite = 176,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

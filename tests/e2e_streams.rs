@@ -982,20 +982,23 @@ fn seek_constants_and_append_mode_follow_stream_policy() {
 }
 
 #[test]
-fn unsupported_wrapper_and_invalid_mode_fail_without_a_resource() {
+fn unsupported_wrapper_memory_legacy_and_invalid_file_mode_stay_distinct() {
     assert_eq!(
         run_php(
             "<?php
-            $first = fopen('http://example.invalid', 'r');
-            $second = fopen('php://memory', 'r++');
+            $first = @fopen('http://example.invalid', 'r');
+            $second = @fopen('php://memory', 'r++');
+            $third = @fopen(__FILE__, '+r');
             if ($first === false) { echo 'wrapper'; }
             echo ':';
-            if ($second === false) { echo 'mode'; }
+            if (is_resource($second)) { echo 'memory'; }
+            echo ':';
+            if ($third === false) { echo 'mode'; }
             echo ':';
             if (is_resource($first)) { echo 'resource'; } else { echo 'scalar'; }
             "
         ),
-        "wrapper:mode:scalar"
+        "wrapper:memory:mode:scalar"
     );
 }
 
@@ -1102,7 +1105,7 @@ fn file_modes_cover_truncate_append_exclusive_and_non_truncating_create() {
         fseek($append, 0, SEEK_SET);
         fwrite($append, 'two'); rewind($append);
         echo fread($append, 6); fclose($append); echo ':';
-        $exclusive = fopen('{}', 'x');
+        $exclusive = @fopen('{}', 'x');
         if ($exclusive === false) {{ echo 'exclusive'; }}
         echo ':';
         $create = fopen('{}', 'c+');

@@ -93,6 +93,29 @@ impl StreamMode {
     }
 }
 
+/// `php://memory` and `php://temp` deliberately accept the legacy wrapper
+/// mode grammar rather than the filesystem parser. Any `+` enables update
+/// access, an initial `a` selects append, and every other non-update spelling
+/// is read-only. PHP applications historically rely on forms such as `+r`.
+fn php_memory_stream_mode(mode: &str) -> StreamMode {
+    if matches!(mode.as_bytes().first(), Some(b'r' | b'w' | b'a'))
+        && let Some(mode) = StreamMode::parse(mode)
+    {
+        return mode;
+    }
+    let update = mode.contains('+');
+    let append = mode.starts_with('a');
+    let write = update || append || mode.starts_with('w');
+    StreamMode {
+        read: update || !write,
+        write,
+        append,
+        create: write,
+        truncate: write && !append,
+        exclusive: false,
+    }
+}
+
 enum StreamBackend {
     File(File),
     Memory(Cursor<Vec<u8>>),
@@ -216,10 +239,9 @@ impl PhpStream {
 
     pub fn open(path: &str, mode: &str) -> io::Result<Self> {
         let requested_mode = mode;
-        let mode = StreamMode::parse(requested_mode)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid stream mode"))?;
 
         if path == "php://memory" {
+            let mode = php_memory_stream_mode(requested_mode);
             return Ok(Self {
                 backend: StreamBackend::Memory(Cursor::new(Vec::new())),
                 mode,
@@ -233,6 +255,7 @@ impl PhpStream {
             });
         }
         if let Some(max_memory) = temp_memory_limit(path) {
+            let mode = php_memory_stream_mode(requested_mode);
             return Ok(Self {
                 backend: StreamBackend::Temp(TempStream::new(max_memory)),
                 mode,
@@ -245,6 +268,9 @@ impl PhpStream {
                 context: None,
             });
         }
+
+        let mode = StreamMode::parse(requested_mode)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid stream mode"))?;
 
         let file_path = if let Some(path) = path.strip_prefix("file://") {
             path

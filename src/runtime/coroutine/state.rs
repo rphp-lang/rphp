@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::marker::PhantomPinned;
 
-use crate::runtime::ExecutorGlobals;
+use crate::runtime::{ExecutorGlobals, FunctionArgumentState};
 use crate::value::Value;
 use crate::vm::execute::{VmError, cleanup_frame_slots};
 use crate::vm::frame::ExecuteData;
@@ -81,7 +81,7 @@ pub(super) struct CoroutineExecutionState {
     pub(super) exception: Option<Value>,
     finally_exceptions: HashMap<usize, Vec<Value>>,
     pending_named_variadic: HashMap<usize, Vec<(String, Value)>>,
-    function_arguments: HashMap<usize, Vec<Value>>,
+    function_argument_state: FunctionArgumentState,
     active_generator: Option<crate::vm::generator::GeneratorRef>,
     pending_invoke_this: Option<Value>,
     error_reporting: i64,
@@ -96,7 +96,7 @@ impl CoroutineExecutionState {
             exception: None,
             finally_exceptions: HashMap::new(),
             pending_named_variadic: HashMap::new(),
-            function_arguments: HashMap::new(),
+            function_argument_state: FunctionArgumentState::new(),
             active_generator: None,
             pending_invoke_this: None,
             error_reporting: crate::PHP_E_ALL,
@@ -133,8 +133,11 @@ impl CoroutineExecutionState {
                 &mut eg.pending_named_variadic,
             );
         }
-        if !self.function_arguments.is_empty() || !eg.function_arguments.is_empty() {
-            std::mem::swap(&mut self.function_arguments, &mut eg.function_arguments);
+        if !self.function_argument_state.is_empty() || !eg.function_argument_state.is_empty() {
+            std::mem::swap(
+                &mut self.function_argument_state,
+                &mut eg.function_argument_state,
+            );
         }
         if self.active_generator.is_some() || eg.active_generator.is_some() {
             std::mem::swap(&mut self.active_generator, &mut eg.active_generator);
@@ -169,7 +172,7 @@ impl CoroutineExecutionState {
         self.exception = None;
         self.finally_exceptions.clear();
         self.pending_named_variadic.clear();
-        self.function_arguments.clear();
+        self.function_argument_state.clear();
         self.active_generator = None;
         self.pending_invoke_this = None;
         self.error_suppression_frames.clear();
