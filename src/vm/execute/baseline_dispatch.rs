@@ -1528,6 +1528,7 @@ enum StringOffsetKey {
     Exact(i64),
     Cast(i64),
     Illegal(String, i64),
+    InvalidString,
     Invalid,
 }
 
@@ -1540,14 +1541,14 @@ fn string_offset_key(value: &Value) -> StringOffsetKey {
         ValueType::Double => StringOffsetKey::Cast(php_float_to_long(value.as_double().unwrap())),
         ValueType::True => StringOffsetKey::Cast(1),
         ValueType::False | ValueType::Null | ValueType::Undef => StringOffsetKey::Cast(0),
-        ValueType::Resource => StringOffsetKey::Cast(value.as_resource_id().unwrap()),
+        ValueType::Resource => StringOffsetKey::Invalid,
         ValueType::String => {
             let text = value.as_str().unwrap_or("");
             let Some((parsed, complete)) = parse_php_numeric_prefix(text) else {
-                return StringOffsetKey::Invalid;
+                return StringOffsetKey::InvalidString;
             };
             let Some(integer) = parsed.integer else {
-                return StringOffsetKey::Invalid;
+                return StringOffsetKey::InvalidString;
             };
             if complete {
                 StringOffsetKey::Exact(integer)
@@ -1557,6 +1558,185 @@ fn string_offset_key(value: &Value) -> StringOffsetKey {
         }
         _ => StringOffsetKey::Invalid,
     }
+}
+
+enum StringOffsetResolution {
+    Index(i64),
+    Missing,
+    Error {
+        class_name: &'static str,
+        message: String,
+    },
+}
+
+#[inline]
+fn fetch_dim_terminal_empty(flags: u16) -> bool {
+    flags & FETCH_DIM_EMPTY != 0 && flags & FETCH_DIM_EMPTY_TERMINAL != 0
+}
+
+#[inline]
+fn fetch_dim_object_context(flags: u16) -> bool {
+    flags & FETCH_DIM_OBJECT != 0
+        && flags & (FETCH_DIM_EMPTY | FETCH_DIM_COMPOUND) == 0
+}
+
+#[inline]
+fn fetch_dim_incdec_context(flags: u16) -> bool {
+    flags & FETCH_DIM_INCDEC == FETCH_DIM_INCDEC && flags & FETCH_DIM_EMPTY == 0
+}
+
+#[inline]
+fn fetch_dim_has_write_context(flags: u16) -> bool {
+    flags & FETCH_DIM_REFERENCE_SOURCE != 0
+        || fetch_dim_object_context(flags)
+        || flags & FETCH_DIM_UNSET != 0
+        || fetch_dim_incdec_context(flags)
+        || flags & (FETCH_DIM_COMPOUND | FETCH_DIM_MUTABLE) != 0
+}
+
+#[cold]
+#[inline(never)]
+fn resolve_nonexact_string_offset_key(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    source: &Value,
+    key: StringOffsetKey,
+    direct_probe: bool,
+    silent: bool,
+    unset: bool,
+    suppressed: bool,
+) -> Result<StringOffsetResolution, VmError> {
+    let source = source.dereferenced();
+    let invalid = || StringOffsetResolution::Error {
+        class_name: "TypeError",
+        message: format!(
+            "Cannot access offset of type {} on string",
+            source.diagnostic_type_name()
+        ),
+    };
+    Ok(match key {
+        StringOffsetKey::Exact(_) => unreachable!("exact string keys stay on the inline lane"),
+        StringOffsetKey::Cast(index) if direct_probe && source.value_type() == ValueType::Double => {
+            let index = match value_to_array_key(source) {
+                Ok(ArrayKey::Int(index)) => index,
+                Ok(ArrayKey::String(_)) => {
+                    unreachable!("a float key normalizes to an integer")
+                }
+                Err(ArrayKeyError::DeprecatedFloat(index)) => {
+                    let rendered = source.echo_to_string_with_precision(-1);
+                    report_php_deprecation(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        &format!(
+                            "Implicit conversion from float {rendered} to int loses precision"
+                        ),
+                    )?;
+                    index
+                }
+                Err(ArrayKeyError::NonRepresentableFloat {
+                    integer,
+                    also_deprecated,
+                }) => {
+                    let rendered = source.echo_to_string_with_precision(-1);
+                    report_php_warning(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        &format!("The float {rendered} is not representable as an int, cast occurred"),
+                        suppressed,
+                    )?;
+                    if eg.exception.is_none() && also_deprecated {
+                        report_php_deprecation(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            &format!(
+                                "Implicit conversion from float {rendered} to int loses precision"
+                            ),
+                        )?;
+                    }
+                    integer
+                }
+                Err(
+                    ArrayKeyError::Resource(_)
+                    | ArrayKeyError::DeprecatedNull
+                    | ArrayKeyError::Illegal,
+                ) => unreachable!("prechecked float key error"),
+            };
+            StringOffsetResolution::Index(index)
+        }
+        StringOffsetKey::Cast(index) if direct_probe || silent => {
+            StringOffsetResolution::Index(index)
+        }
+        StringOffsetKey::Cast(index) => {
+            report_php_warning(
+                eg,
+                frame,
+                op_array,
+                opline,
+                "String offset cast occurred",
+                suppressed,
+            )?;
+            StringOffsetResolution::Index(index)
+        }
+        StringOffsetKey::Illegal(_, _) if direct_probe => StringOffsetResolution::Missing,
+        StringOffsetKey::Illegal(_, index) if unset => StringOffsetResolution::Index(index),
+        StringOffsetKey::Illegal(text, index) => {
+            report_php_warning(
+                eg,
+                frame,
+                op_array,
+                opline,
+                &format!("Illegal string offset \"{text}\""),
+                suppressed,
+            )?;
+            StringOffsetResolution::Index(index)
+        }
+        StringOffsetKey::InvalidString if unset => StringOffsetResolution::Error {
+            class_name: "Error",
+            message: "Cannot unset string offsets".to_string(),
+        },
+        StringOffsetKey::InvalidString if direct_probe || silent => {
+            StringOffsetResolution::Missing
+        }
+        StringOffsetKey::InvalidString => invalid(),
+        StringOffsetKey::Invalid if unset => StringOffsetResolution::Error {
+            class_name: "Error",
+            message: "Cannot unset string offsets".to_string(),
+        },
+        StringOffsetKey::Invalid if direct_probe => StringOffsetResolution::Missing,
+        StringOffsetKey::Invalid => invalid(),
+    })
+}
+
+#[cold]
+#[inline(never)]
+fn string_offset_write_context_error(flags: u16) -> (&'static str, &'static str) {
+    if flags & FETCH_DIM_REFERENCE_SOURCE != 0 {
+        return ("Error", "Cannot create references to/from string offsets");
+    }
+    if fetch_dim_object_context(flags) {
+        return ("Error", "Cannot use string offset as an object");
+    }
+    if flags & FETCH_DIM_UNSET != 0 {
+        return ("Error", "Cannot use string offset as an array");
+    }
+    if fetch_dim_incdec_context(flags) {
+        return ("Error", "Cannot increment/decrement string offsets");
+    }
+    if flags & FETCH_DIM_COMPOUND != 0 {
+        return (
+            "Error",
+            "Cannot use assign-op operators with string offsets",
+        );
+    }
+    ("Error", "Cannot use string offset as an array")
 }
 
 trait OperatorErrorMessage {
@@ -1790,7 +1970,8 @@ fn fetch_dim_after_array_key_diagnostic<'a>(
                 instruction_index,
                 &array_access_offset_error(
                     &source,
-                    opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_EMPTY) != 0,
+                    opline._pad & FETCH_DIM_ISSET != 0
+                        || fetch_dim_terminal_empty(opline._pad),
                 ),
             )? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
@@ -6996,43 +7177,38 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             };
                         }
                         let suppressed = opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0;
-                        let idx = match string_offset_key(idx_val) {
-                            StringOffsetKey::Exact(index) => Some(index),
-                            StringOffsetKey::Cast(index) => {
-                                if opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_SILENT) == 0 {
-                                    report_php_warning(
-                                        eg,
-                                        frame,
-                                        op_array,
-                                        opline,
-                                        "String offset cast occurred",
-                                        suppressed,
-                                    )?;
-                                    finish_string_offset_warning!();
-                                }
-                                Some(index)
+                        let direct_probe = opline._pad & FETCH_DIM_ISSET != 0
+                            || fetch_dim_terminal_empty(opline._pad);
+                        let resolution = match string_offset_key(idx_val) {
+                            StringOffsetKey::Exact(index) => {
+                                StringOffsetResolution::Index(index)
                             }
-                            StringOffsetKey::Illegal(text, index) => {
-                                if opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_SILENT) == 0 {
-                                    report_php_warning(
-                                        eg,
-                                        frame,
-                                        op_array,
-                                        opline,
-                                        &format!("Illegal string offset \"{text}\""),
-                                        suppressed,
-                                    )?;
-                                    finish_string_offset_warning!();
-                                }
-                                Some(index)
-                            }
-                            StringOffsetKey::Invalid => None,
+                            key => resolve_nonexact_string_offset_key(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                idx_val,
+                                key,
+                                direct_probe,
+                                opline._pad & FETCH_DIM_SILENT != 0,
+                                opline._pad & FETCH_DIM_UNSET != 0,
+                                suppressed,
+                            )?,
                         };
-                        if idx.is_some() && opline._pad & FETCH_DIM_REFERENCE_SOURCE != 0 {
-                            throw_operator!(
-                                "Error",
-                                "Cannot create references to/from string offsets"
-                            );
+                        let idx = match resolution {
+                            StringOffsetResolution::Index(index) => Some(index),
+                            StringOffsetResolution::Missing => None,
+                            StringOffsetResolution::Error {
+                                class_name,
+                                message,
+                            } => throw_operator!(class_name, &message),
+                        };
+                        finish_string_offset_warning!();
+                        if idx.is_some() && fetch_dim_has_write_context(opline._pad) {
+                            let (class_name, message) =
+                                string_offset_write_context_error(opline._pad);
+                            throw_operator!(class_name, message);
                         }
                         if let Some(idx) = idx {
                             let pos = if idx >= 0 {
@@ -7060,7 +7236,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     Value::string(String::from(char::from(byte)))
                                 }
                             } else if opline._pad & FETCH_DIM_SILENT != 0 {
-                                Value::string("")
+                                // A missing offset remains a null-like miss for
+                                // coalesce and nested silent probes. Returning an
+                                // empty string here would make `??` observe a
+                                // present value instead of selecting its fallback.
+                                Value::null()
                             } else {
                                 report_php_warning(
                                     eg,
@@ -7236,7 +7416,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         value
                     };
                     if opline._pad & FETCH_DIM_MUTABLE != 0
-                        && opline._pad & FETCH_DIM_COMPOUND == 0
+                        && (opline._pad & FETCH_DIM_COMPOUND == 0
+                            || fetch_dim_incdec_context(opline._pad))
                         && !value.is_reference()
                     {
                         let class_name = receiver
@@ -7287,6 +7468,22 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     };
                     write_fetch_dim_result(frame, result_ptr, value);
                 } else {
+                    if opline._pad & FETCH_DIM_MUTABLE != 0
+                        && matches!(
+                            arr_val.value_type(),
+                            ValueType::True
+                                | ValueType::Long
+                                | ValueType::Double
+                                | ValueType::Resource
+                        )
+                    {
+                        let message = if opline._pad & FETCH_DIM_UNSET != 0 {
+                            "Cannot unset offset in a non-array variable"
+                        } else {
+                            "Cannot use a scalar value as an array"
+                        };
+                        throw_operator!("Error", message);
+                    }
                     if matches!(arr_val.value_type(), ValueType::Null | ValueType::Undef)
                         && opline._pad & FETCH_DIM_MUTABLE != 0
                         && opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_SILENT) == 0
@@ -7360,7 +7557,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             opline,
                             &format!(
                                 "Trying to access array offset on {}",
-                                arr_val.type_name()
+                                match arr_val.value_type() {
+                                    ValueType::True => "true",
+                                    ValueType::False => "false",
+                                    _ => arr_val.type_name(),
+                                }
                             ),
                             opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
                         )?;
@@ -7551,6 +7752,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     }
                 }
+                let mut pending_false_conversion_exception = None;
                 if arr_type == ValueType::False {
                     let conversion = convert_false_array_location(
                         eg,
@@ -7563,19 +7765,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         },
                         None,
                     )?;
-                    if let Some(exception) = eg.exception.take() {
-                        match throw_in_frame(eg, frame, exception)? {
-                            ThrowResult::Handled(new_frame, new_op_array) => {
-                                frame = new_frame;
-                                op_array = new_op_array;
-                                continue 'vm;
-                            }
-                            ThrowResult::Unhandled(exception) => {
-                                eg.exception = Some(exception);
-                                return Ok(());
-                            }
-                        }
-                    }
+                    // PHP commits the dimension write even when the
+                    // false-to-array deprecation handler throws. Preserve the
+                    // throwable across key normalization and publish it only
+                    // after the converted array receives the value.
+                    pending_false_conversion_exception = eg.exception.take();
                     match conversion {
                         FalseArrayConversion::Survived(None) => {}
                         FalseArrayConversion::Clobbered => break 'assign_dim,
@@ -7620,6 +7814,59 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if opline._pad & ASSIGN_DIM_DIAGNOSTIC_GUARD != 0 {
                         refresh_diagnostic_write_guard_root(frame, op_array, opline);
                     }
+                }
+                macro_rules! finish_string_assignment_warning {
+                    () => {
+                        if let Some(exception) = eg.exception.take() {
+                            match throw_in_frame(eg, frame, exception)? {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    };
+                }
+                let suppressed = opline._pad & ASSIGN_DIM_ERROR_SUPPRESS != 0;
+                let mut string_assignment_index = None;
+                if arr_type == ValueType::String
+                    && opline._pad & crate::vm::instruction::ASSIGN_DIM_REFERENCE == 0
+                {
+                    let resolution = match string_offset_key(idx_val) {
+                        StringOffsetKey::Exact(index) => StringOffsetResolution::Index(index),
+                        key => resolve_nonexact_string_offset_key(
+                            eg, frame, op_array, opline, idx_val, key, false, false, false,
+                            suppressed,
+                        )?,
+                    };
+                    let index = match resolution {
+                        StringOffsetResolution::Index(index) => index,
+                        StringOffsetResolution::Missing => {
+                            unreachable!("ordinary string assignment never suppresses a key")
+                        }
+                        StringOffsetResolution::Error {
+                            class_name,
+                            message,
+                        } => throw_operator!(class_name, &message),
+                    };
+                    finish_string_assignment_warning!();
+                    if opline._pad & ASSIGN_DIM_DIAGNOSTIC_GUARD != 0
+                        && let Some((target, _, _)) =
+                            diagnostic_write_guard_target(eg, frame, op_array, opline)
+                    {
+                        diagnostic_frame_action(
+                            frame,
+                            op_array,
+                            DiagnosticFrameAction::Jump { target },
+                        );
+                        continue 'vm;
+                    }
+                    string_assignment_index = Some(index);
                 }
                 if arr_type == ValueType::String
                     && opline._pad & crate::vm::instruction::ASSIGN_DIM_REFERENCE == 0
@@ -7727,89 +7974,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if arr.value_type() == ValueType::String
                     && cloned_val.value_type() == ValueType::String
                     && opline._pad & crate::vm::instruction::ASSIGN_DIM_REFERENCE == 0
+                    && let Some(index) = string_assignment_index
                 {
-                    macro_rules! finish_string_assignment_warning {
-                        () => {
-                            if let Some(exception) = eg.exception.take() {
-                                match throw_in_frame(eg, frame, exception)? {
-                                    ThrowResult::Handled(new_frame, new_op_array) => {
-                                        frame = new_frame;
-                                        op_array = new_op_array;
-                                        continue 'vm;
-                                    }
-                                    ThrowResult::Unhandled(exception) => {
-                                        eg.exception = Some(exception);
-                                        return Ok(());
-                                    }
-                                }
-                            }
-                        };
-                    }
-                    let suppressed = opline._pad & ASSIGN_DIM_ERROR_SUPPRESS != 0;
-                    let index = match string_offset_key(idx_val) {
-                        StringOffsetKey::Exact(index) => index,
-                        StringOffsetKey::Cast(index) => {
-                            report_php_warning(
-                                eg,
-                                frame,
-                                op_array,
-                                opline,
-                                "String offset cast occurred",
-                                suppressed,
-                            )?;
-                            finish_string_assignment_warning!();
-                            index
-                        }
-                        StringOffsetKey::Illegal(text, index) => {
-                            report_php_warning(
-                                eg,
-                                frame,
-                                op_array,
-                                opline,
-                                &format!("Illegal string offset \"{text}\""),
-                                suppressed,
-                            )?;
-                            finish_string_assignment_warning!();
-                            index
-                        }
-                        StringOffsetKey::Invalid => {
-                            let instruction_index = (opline as *const Instruction as usize
-                                - op_array.instructions.as_ptr() as usize)
-                                / std::mem::size_of::<Instruction>();
-                            let message = format!(
-                                "Cannot access offset of type {} on string",
-                                idx_val.diagnostic_type_name()
-                            );
-                            match throw_illegal_offset_type(
-                                eg,
-                                frame,
-                                op_array,
-                                instruction_index,
-                                &message,
-                            )? {
-                                ThrowResult::Handled(new_frame, new_op_array) => {
-                                    frame = new_frame;
-                                    op_array = new_op_array;
-                                    continue 'vm;
-                                }
-                                ThrowResult::Unhandled(exception) => {
-                                    eg.exception = Some(exception);
-                                    return Ok(());
-                                }
-                            }
-                        }
-                    };
-                    if opline._pad & ASSIGN_DIM_DIAGNOSTIC_GUARD != 0
-                        && let Some((target, _, _)) =
-                            diagnostic_write_guard_target(eg, frame, op_array, opline)
-                    {
-                        diagnostic_frame_action(
-                            frame,
-                            op_array,
-                            DiagnosticFrameAction::Jump { target },
-                        );
-                        continue 'vm;
-                    }
                     let mut bytes = arr.php_string_bytes().unwrap_or_default().into_owned();
                     let replacement = cloned_val.php_string_bytes().unwrap_or_default();
                     if replacement.is_empty() {
@@ -7897,6 +8063,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     *arr = result;
                     break 'assign_dim;
                 }
+                if arr.value_type() != ValueType::Array {
+                    throw_operator!("Error", "Cannot use a scalar value as an array");
+                }
                 let mut key = array_key_owned_or_throw!(
                     idx_val,
                     &format!(
@@ -7920,9 +8089,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
                 if let Some(php_arr) = arr.as_array_mut() {
                     key = php_arr.prepare_string_key_for_write(key, idx_val);
-                    if let Some(element) =
-                        php_arr.get_key_mut_for_replacement(&key, &cloned_val)
-                    {
+                    if let Some(element) = php_arr.get_key_mut_for_replacement(&key, &cloned_val) {
                         if opline._pad & crate::vm::instruction::ASSIGN_DIM_REFERENCE != 0 {
                             // `=&` rebinds this array dimension itself. Writing
                             // through an existing reference would mutate its
@@ -7960,8 +8127,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                         php_arr.set(key, cloned_val);
                     }
-                } else {
-                    throw_operator!("Error", "Cannot use a scalar value as an array");
+                }
+                if let Some(exception) = pending_false_conversion_exception {
+                    match throw_in_frame(eg, frame, exception)? {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            frame = new_frame;
+                            op_array = new_op_array;
+                            continue 'vm;
+                        }
+                        ThrowResult::Unhandled(exception) => {
+                            eg.exception = Some(exception);
+                            return Ok(());
+                        }
+                    }
                 }
             }
 
@@ -8478,27 +8656,26 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 // SAFETY: `frame` is the active activation for `opline`; the
                 // compiler allocated op1 as a live operand slot for UnsetDim.
-                let array_reference = unsafe {
-                    match opline.op1_type {
+                let (array_reference, arr_ptr) = unsafe {
+                    let array_reference = match opline.op1_type {
                         OpType::Cv => (*frame).cv(opline.op1 as u32).reference_identity(),
                         OpType::Tmp | OpType::Var => {
                             (&*(*frame).get_op_mut(opline.op1 as u32, opline.op1_type))
                                 .reference_identity()
                         }
                         OpType::Const | OpType::Unused => None,
-                    }
+                    };
+                    let ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                    let arr_ptr = if (&*ptr).is_reference() {
+                        (&mut *ptr).as_ref_ptr()
+                    } else {
+                        ptr
+                    };
+                    (array_reference, arr_ptr)
                 };
                 // SAFETY: the same live UnsetDim operand remains owned by this
                 // frame; following its reference produces the mutable target
                 // consumed before the dispatch arm advances or calls userland.
-                let arr_ptr = unsafe {
-                    let ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
-                    if (&*ptr).is_reference() {
-                        (&mut *ptr).as_ref_ptr()
-                    } else {
-                        ptr
-                    }
-                };
                 let arr = unsafe { &mut *arr_ptr };
                 if matches!(arr.value_type(), ValueType::Object | ValueType::Closure) {
                     let receiver = arr.clone();
@@ -8548,33 +8725,59 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe { (*frame).opline = opline_ptr.add(1) };
                     continue 'vm;
                 }
-                // `unset($array[null])` silently selects the empty-string key,
-                // while float/resource conversions retain their ordinary
-                // diagnostics. ArrayObject's outer offsetUnset remains a
-                // distinct protocol operation and reports its own null use.
-                let report_conversion =
-                    !matches!(value_to_array_key(idx_val), Err(ArrayKeyError::DeprecatedNull));
-                let mut key = array_key_owned_or_throw!(
-                    idx_val,
-                    &format!(
-                        "Cannot unset offset of type {} on array",
-                        idx_val.diagnostic_type_name()
-                    ),
-                    false,
-                    report_conversion
-                );
                 match arr.value_type() {
                     ValueType::Array => {
-                        let array = arr.as_array_mut().unwrap();
-                        key = array.normalize_string_key(key, idx_val);
-                        if let Some(position) = array.remove_with_position(&key) {
-                            adjust_live_foreach_reference_positions_for_direct_splice(
-                                frame,
-                                array_reference,
-                                position,
-                                1,
-                                0,
-                            );
+                        // `unset($array[null])` silently selects the
+                        // empty-string key, while float/resource conversions
+                        // retain their ordinary diagnostics. Validate the
+                        // container first: a scalar/string failure must not
+                        // inspect or diagnose its key.
+                        let original_array_identity = arr
+                            .array_identity()
+                            .expect("validated unset target remains an array before diagnostics");
+                        let report_conversion = !matches!(
+                            value_to_array_key(idx_val),
+                            Err(ArrayKeyError::DeprecatedNull)
+                        );
+                        let mut key = array_key_owned_or_throw!(
+                            idx_val,
+                            &format!(
+                                "Cannot unset offset of type {} on array",
+                                idx_val.diagnostic_type_name()
+                            ),
+                            false,
+                            report_conversion
+                        );
+                        // Key normalization can invoke a synchronous error
+                        // handler. PHP abandons this unset when that callback
+                        // replaces the destination, regardless of the new
+                        // value's type. Reacquire the live frame operand before
+                        // touching it: the former CV/reference cell may no
+                        // longer own the original array.
+                        let live_arr = unsafe {
+                            let ptr =
+                                (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                            let live_arr_ptr = if (&*ptr).is_reference() {
+                                (&mut *ptr).as_ref_ptr()
+                            } else {
+                                ptr
+                            };
+                            &mut *live_arr_ptr
+                        };
+                        if live_arr.array_identity() == Some(original_array_identity) {
+                            let array = live_arr
+                                .as_array_mut()
+                                .expect("matching array identity retains array storage");
+                            key = array.normalize_string_key(key, idx_val);
+                            if let Some(position) = array.remove_with_position(&key) {
+                                adjust_live_foreach_reference_positions_for_direct_splice(
+                                    frame,
+                                    array_reference,
+                                    position,
+                                    1,
+                                    0,
+                                );
+                            }
                         }
                     }
                     ValueType::Undef | ValueType::Null => {

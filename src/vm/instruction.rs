@@ -348,6 +348,22 @@ pub const FETCH_DIM_COMPOUND: u16 = 1 << 10;
 /// Intermediate dimension of a nested unset. Internal ArrayObject handlers
 /// retain Zend's notice-before-invalid-unset ordering for this context.
 pub const FETCH_DIM_UNSET: u16 = 1 << 11;
+/// Sparse context marker shared by mutually-exclusive dimension consumers.
+/// Bits 13..=15 belong to the post-compile known-result-type projection, so
+/// semantic flags must stay below that compact metadata field.
+const FETCH_DIM_CONTEXT: u16 = 1 << 12;
+/// `FetchDimR` is the terminal dimension directly tested by `empty()`. The
+/// ordinary `FETCH_DIM_EMPTY` bit is also present on intermediate probes and
+/// on the value-producing half of `??`, whose key diagnostics are different.
+pub const FETCH_DIM_EMPTY_TERMINAL: u16 = FETCH_DIM_CONTEXT;
+/// The fetched dimension is immediately used as a mutable object receiver.
+/// This is distinguished from terminal empty by the absence of
+/// `FETCH_DIM_EMPTY`.
+pub const FETCH_DIM_OBJECT: u16 = FETCH_DIM_CONTEXT;
+/// A direct inc/dec dimension reuses the context marker plus the otherwise
+/// compatible compound-read bit. The pair remains distinct from ordinary
+/// compound assignment and survives known-result-type specialization.
+pub const FETCH_DIM_INCDEC: u16 = FETCH_DIM_CONTEXT | FETCH_DIM_COMPOUND;
 
 /// `FetchDynamicVar` reads the symbol-table entry without reporting an
 /// undefined-variable diagnostic. Unlike `FETCH_DIM_ISSET`, the fetched value

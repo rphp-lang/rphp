@@ -3753,6 +3753,8 @@ fn op_bind_obj_prop_ref<'a>(
     Ok(ColdResult::Done)
 }
 
+#[cold]
+#[inline(never)]
 fn op_bind_array_dim_ref<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -3773,62 +3775,32 @@ fn op_bind_array_dim_ref<'a>(
         let array_ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
         let raw_type = (*array_ptr).dereferenced().value_type();
         if raw_type == ValueType::String {
-            let (class_name, message) = match string_offset_key(index) {
-                StringOffsetKey::Cast(_) => {
-                    report_php_warning(
-                        eg,
-                        frame,
-                        op_array,
-                        opline,
-                        "String offset cast occurred",
-                        false,
-                    )?;
-                    if let Some(exception) = eg.exception.take() {
-                        return Ok(match throw_in_frame(eg, frame, exception)? {
-                            ThrowResult::Handled(new_frame, new_op_array) => {
-                                ColdResult::NewFrame(new_frame, new_op_array)
-                            }
-                            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-                        });
+            let resolution = match string_offset_key(index) {
+                StringOffsetKey::Exact(index) => StringOffsetResolution::Index(index),
+                key => resolve_nonexact_string_offset_key(
+                    eg, frame, op_array, opline, index, key, false, false, false, false,
+                )?,
+            };
+            if let Some(exception) = eg.exception.take() {
+                return Ok(match throw_in_frame(eg, frame, exception)? {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
                     }
-                    (
-                        "Error",
-                        "Cannot create references to/from string offsets".to_string(),
-                    )
-                }
-                StringOffsetKey::Illegal(text, _) => {
-                    report_php_warning(
-                        eg,
-                        frame,
-                        op_array,
-                        opline,
-                        &format!("Illegal string offset \"{text}\""),
-                        false,
-                    )?;
-                    if let Some(exception) = eg.exception.take() {
-                        return Ok(match throw_in_frame(eg, frame, exception)? {
-                            ThrowResult::Handled(new_frame, new_op_array) => {
-                                ColdResult::NewFrame(new_frame, new_op_array)
-                            }
-                            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-                        });
-                    }
-                    (
-                        "Error",
-                        "Cannot create references to/from string offsets".to_string(),
-                    )
-                }
-                StringOffsetKey::Invalid => (
-                    "TypeError",
-                    format!(
-                        "Cannot access offset of type {} on string",
-                        index.diagnostic_type_name()
-                    ),
-                ),
-                StringOffsetKey::Exact(_) => (
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
+            let (class_name, message) = match resolution {
+                StringOffsetResolution::Index(_) => (
                     "Error",
                     "Cannot create references to/from string offsets".to_string(),
                 ),
+                StringOffsetResolution::Missing => {
+                    unreachable!("ordinary reference binding never suppresses a string key")
+                }
+                StringOffsetResolution::Error {
+                    class_name,
+                    message,
+                } => (class_name, message),
             };
             let error = make_error_value(class_name, &message);
             let instruction_index = (opline as *const Instruction)
@@ -3903,6 +3875,49 @@ fn op_bind_array_dim_ref<'a>(
             let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
             frame_slot_set(frame, destination, binding);
             return Ok(ColdResult::Done);
+        }
+        if matches!(
+            raw_type,
+            ValueType::True | ValueType::Long | ValueType::Double | ValueType::Resource
+        ) {
+            let instruction_index = (opline as *const Instruction)
+                .offset_from(op_array.instructions.as_ptr()) as usize;
+            return Ok(match throw_array_dimension_error(
+                eg,
+                frame,
+                op_array,
+                instruction_index,
+                "Cannot use a scalar value as an array",
+            )? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+            });
+        }
+        if raw_type == ValueType::False {
+            let conversion = convert_false_array_location(
+                eg,
+                frame,
+                op_array,
+                opline,
+                FalseArrayLocation::Operand {
+                    operand: opline.op1,
+                    operand_type: opline.op1_type,
+                },
+                None,
+            )?;
+            if let Some(exception) = eg.exception.take() {
+                return Ok(match throw_in_frame(eg, frame, exception)? {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+                });
+            }
+            if matches!(conversion, FalseArrayConversion::Clobbered) {
+                return Ok(ColdResult::Done);
+            }
         }
         let key = match value_to_array_key(index) {
             Ok(key) => key,

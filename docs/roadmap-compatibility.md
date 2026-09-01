@@ -36,27 +36,25 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `filesystem-stat-introspection-contracts` train completes
-19 Core/standard filesystem globals, including nine newly present functions
-and exact Reflection metadata for ten retained implementations. Local and user
-wrapper stat projection, stat/lstat cache categories, symlink identity,
-permissions, diagnostics and mutation/I/O invalidation share one request-local
-contract. The focused upstream file packet advances by `+13/-0`; its five
-remaining attempted failures are blocked by the independent missing
-`fileowner()` prerequisite. The stable 7,174-case PHP 8.5 Zend/lang plus
-strings/array core remains byte-identical at 6,376 exact passes, 404 supported
-failures, 182 skips and 212 unsupported cases, with no timeout or crash.
+The accepted AMD64 `dimension-container-access-contracts` train aligns array,
+string, null, false, scalar and ArrayAccess dimension contexts across reads,
+writes, compound/inc-dec operations, references and silent probes. One sparse
+context bit and one cold diagnostic transaction preserve container-before-key
+validation, reentrant warning order and stale-root abandonment without changing
+ordinary value, object or instruction layouts. Nine original differential E2E
+cases and the upstream projection produce 14 exact Zend/lang gains with no
+loss; strings/array remains byte-identical. The stable 7,174-case PHP 8.5 core
+is now 6,390 exact passes, 390 supported failures, 182 skips and 212 unsupported
+cases, with no timeout or crash.
 
 Five Cargo configurations, all-target, exact upstream no-loss,
 Composer/Symfony S0-S3, format and the unchanged 1,623/289 unsafe ratchet pass.
-The final fixed-parent CPU-2 32-pair packet keeps every regression median below
-the five-percent ceiling; cache and predicate lanes improve by 47.961% to
-89.655%, while the largest regression is `realpath` at +2.758%. Current work
-remains selected as a 10–30-case train around one shared root-cause hypothesis
-and one cumulative evidence packet. Smaller checkpoints require a crash,
-security issue, framework blocker or similarly explicit reason;
-Fiber/generator suspension additionally requires a pay-for-use performance
-design.
+The final fixed-parent CPU-2 32-pair packet keeps all seven common and pay-use
+paired medians between -0.053% and +0.697%. Current work remains selected as a
+10–30-case train around one shared root-cause hypothesis and one cumulative
+evidence packet. Smaller checkpoints require a crash, security issue, framework
+blocker or similarly explicit reason; Fiber/generator suspension additionally
+requires a pay-for-use performance design.
 
 ## Starting evidence
 

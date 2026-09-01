@@ -78,17 +78,18 @@ use crate::vm::instruction::{
     CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_CALL_OWNER,
     CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES,
     EVAL_FLAG_ERROR_SUPPRESS, FETCH_CV_LIVE_UNPACK_SOURCE, FETCH_DIM_COMPOUND,
-    FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_FUNC_ARG,
-    FETCH_DIM_FUNC_ARG_NAMED, FETCH_DIM_FUNC_ARG_ROOT_CV, FETCH_DIM_ISSET, FETCH_DIM_MUTABLE,
-    FETCH_DIM_REFERENCE_SOURCE, FETCH_DIM_SILENT, FETCH_DIM_UNSET, FETCH_DYNAMIC_ERROR_SUPPRESS,
-    FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT, FETCH_GLOBAL_WARN_UNDEFINED,
-    FETCH_OBJ_COMPOUND, FETCH_OBJ_COMPOUND_RECEIVER, FETCH_OBJ_CONSTANT_EXPRESSION,
-    FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE,
-    FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction,
-    JMP_NZ_RELEASE_TEMPS, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME,
-    NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS, NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE,
-    OBJ_PROP_FUNC_ARG, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OBJ_PROP_TEMPORARY_RECEIVER,
-    OpType, PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
+    FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_EMPTY_TERMINAL, FETCH_DIM_ERROR_SUPPRESS,
+    FETCH_DIM_FUNC_ARG, FETCH_DIM_FUNC_ARG_NAMED, FETCH_DIM_FUNC_ARG_ROOT_CV, FETCH_DIM_INCDEC,
+    FETCH_DIM_ISSET, FETCH_DIM_MUTABLE, FETCH_DIM_OBJECT, FETCH_DIM_REFERENCE_SOURCE,
+    FETCH_DIM_SILENT, FETCH_DIM_UNSET, FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME,
+    FETCH_DYNAMIC_SILENT, FETCH_GLOBAL_WARN_UNDEFINED, FETCH_OBJ_COMPOUND,
+    FETCH_OBJ_COMPOUND_RECEIVER, FETCH_OBJ_CONSTANT_EXPRESSION, FETCH_OBJ_ERROR_SUPPRESS,
+    FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT,
+    INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, JMP_NZ_RELEASE_TEMPS,
+    KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
+    NEW_FLAG_UNPACKED_ARGUMENTS, NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE, OBJ_PROP_FUNC_ARG,
+    OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OBJ_PROP_TEMPORARY_RECEIVER, OpType,
+    PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
     REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, RELEASE_TEMPS_NESTED_OBJECTS,
     RELEASE_TEMPS_ON_RETURN, RELEASE_TEMPS_RETURN_COMPLETION_SITE, SEND_FLAG_GLOBALS,
     SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_PREPARED_PROPERTY_ARGUMENT,
@@ -6363,13 +6364,42 @@ impl Compiler {
     }
 
     fn mark_trailing_compound_dimension_fetches(&mut self) {
-        for instruction in self
+        for (depth, instruction) in self
             .instructions
             .iter_mut()
             .rev()
             .take_while(|instruction| instruction.opcode == OpCode::FetchDimR)
+            .enumerate()
         {
-            instruction._pad |= FETCH_DIM_MUTABLE | FETCH_DIM_COMPOUND;
+            instruction._pad |= FETCH_DIM_MUTABLE;
+            if depth == 0 {
+                instruction._pad |= FETCH_DIM_COMPOUND;
+            }
+        }
+    }
+
+    fn mark_trailing_incdec_dimension_fetches(&mut self) {
+        for (depth, instruction) in self
+            .instructions
+            .iter_mut()
+            .rev()
+            .take_while(|instruction| instruction.opcode == OpCode::FetchDimR)
+            .enumerate()
+        {
+            instruction._pad |= FETCH_DIM_MUTABLE;
+            if depth == 0 {
+                instruction._pad |= FETCH_DIM_INCDEC;
+            }
+        }
+    }
+
+    fn mark_dimension_fetch_result(&mut self, result: u16, result_type: OpType, flag: u16) {
+        if let Some(fetch) = self.instructions.iter_mut().rev().find(|instruction| {
+            instruction.opcode == OpCode::FetchDimR
+                && instruction.result == result
+                && instruction.result_type == result_type
+        }) {
+            fetch._pad |= flag;
         }
     }
 
@@ -9933,7 +9963,13 @@ impl Compiler {
                 self.push_instruction_at_line(fetch, *line);
                 (result, OpType::Tmp)
             }
-            _ => self.compile_expr(expr),
+            _ => {
+                let result = self.compile_expr(expr);
+                if matches!(expr, Expr::ArrayAccess { .. }) {
+                    self.mark_dimension_fetch_result(result.0, result.1, FETCH_DIM_OBJECT);
+                }
+                result
+            }
         }
     }
 
@@ -9998,9 +10034,75 @@ impl Compiler {
             }
             _ => {
                 let (operand, operand_type) = self.compile_expr(expr);
+                if matches!(expr, Expr::ArrayAccess { .. }) {
+                    self.mark_dimension_fetch_result(operand, operand_type, FETCH_DIM_OBJECT);
+                }
                 (operand, operand_type, Vec::new())
             }
         }
+    }
+
+    /// Compile a complete dimension probe after all key expressions have been
+    /// evaluated. PHP separates key evaluation from container traversal for
+    /// nested isset/empty/coalesce, so an outer invalid key cannot suppress a
+    /// later key expression that already belongs to the same probe.
+    fn compile_dimension_probe_chain(
+        &mut self,
+        expression: &Expr,
+        terminal_flags: u16,
+    ) -> (u16, OpType) {
+        let mut root = expression;
+        let mut dimensions = Vec::new();
+        while let Expr::ArrayAccess { array, index, line } = root {
+            dimensions.push((index.as_ref(), *line));
+            root = array.as_ref();
+        }
+        dimensions.reverse();
+        let compiled_root =
+            (!matches!(root, Expr::Globals { .. })).then(|| self.compile_isset_object_base(root));
+        let keys: Vec<(u16, OpType, usize)> = dimensions
+            .iter()
+            .map(|(index, line)| {
+                let (key, key_type) = self.compile_expr(index);
+                (key, key_type, *line)
+            })
+            .collect();
+
+        let (mut current, mut current_type, start) = if matches!(root, Expr::Globals { .. }) {
+            let (key, key_type, line) = keys[0];
+            let result = self.alloc_tmp();
+            let mut fetch = Instruction::new(OpCode::FetchGlobal);
+            fetch.op1 = key;
+            fetch.op1_type = key_type;
+            fetch.result = result;
+            fetch.result_type = OpType::Tmp;
+            fetch._pad |= FETCH_DIM_ISSET;
+            self.push_instruction_at_line(fetch, line);
+            (result, OpType::Tmp, 1)
+        } else {
+            let (root, root_type) = compiled_root.expect("non-global probe root was compiled");
+            (root, root_type, 0)
+        };
+
+        for (position, &(key, key_type, line)) in keys.iter().enumerate().skip(start) {
+            let result = self.alloc_tmp();
+            let mut fetch = Instruction::new(OpCode::FetchDimR);
+            fetch.op1 = current;
+            fetch.op1_type = current_type;
+            fetch.op2 = key;
+            fetch.op2_type = key_type;
+            fetch.result = result;
+            fetch.result_type = OpType::Tmp;
+            fetch._pad |= if position + 1 == keys.len() {
+                terminal_flags
+            } else {
+                FETCH_DIM_SILENT | FETCH_DIM_EMPTY
+            };
+            self.push_instruction_at_line(fetch, line);
+            current = result;
+            current_type = OpType::Tmp;
+        }
+        (current, current_type)
     }
 
     /// Compile expression. Returns (operand_index, OpType).
@@ -10075,36 +10177,8 @@ impl Compiler {
                 self.push_instruction_at_line(fetch, line);
                 (result, OpType::Tmp)
             }
-            Expr::ArrayAccess { array, index, line } => {
-                if matches!(array.as_ref(), Expr::Globals { .. }) {
-                    let (key, key_type) = self.compile_expr(index);
-                    let result = self.alloc_tmp();
-                    let mut isset = Instruction::new(OpCode::FetchGlobal);
-                    isset.op1 = key;
-                    isset.op1_type = key_type;
-                    isset.result = result;
-                    isset.result_type = OpType::Tmp;
-                    isset._pad |= FETCH_DIM_ISSET;
-                    self.push_instruction_at_line(isset, *line);
-                    return (result, OpType::Tmp);
-                }
-                let (array_op, array_type) = self.compile_isset_object_base(array);
-                let (index_op, index_type) = self.compile_expr(index);
-                let result = self.alloc_tmp();
-                let mut fetch = Instruction::new(OpCode::FetchDimR);
-                fetch.op1 = array_op;
-                fetch.op1_type = array_type;
-                fetch.op2 = index_op;
-                fetch.op2_type = index_type;
-                fetch.result = result;
-                fetch.result_type = OpType::Tmp;
-                // An intermediate ArrayAccess dimension in isset/empty/?? is
-                // a two-stage probe: offsetExists() short-circuits a miss and
-                // offsetGet() runs only when the container must be traversed.
-                // Arrays retain the existing silent fetch behavior.
-                fetch._pad |= FETCH_DIM_SILENT | FETCH_DIM_EMPTY;
-                self.push_instruction_at_line(fetch, *line);
-                (result, OpType::Tmp)
+            Expr::ArrayAccess { .. } => {
+                self.compile_dimension_probe_chain(expr, FETCH_DIM_SILENT | FETCH_DIM_EMPTY)
             }
             _ => self.compile_expr(expr),
         }
@@ -10143,33 +10217,7 @@ impl Compiler {
                 self.push_instruction_at_line(isset, *line);
                 (result, OpType::Tmp)
             }
-            Expr::ArrayAccess { array, index, line } => {
-                if matches!(array.as_ref(), Expr::Globals { .. }) {
-                    let (key, key_type) = self.compile_expr(index);
-                    let result = self.alloc_tmp();
-                    let mut isset = Instruction::new(OpCode::FetchGlobal);
-                    isset.op1 = key;
-                    isset.op1_type = key_type;
-                    isset.result = result;
-                    isset.result_type = OpType::Tmp;
-                    isset._pad |= FETCH_DIM_ISSET;
-                    self.push_instruction_at_line(isset, *line);
-                    return (result, OpType::Tmp);
-                }
-                let (array_op, array_type) = self.compile_isset_object_base(array);
-                let (index_op, index_type) = self.compile_expr(index);
-                let result = self.alloc_tmp();
-                let mut isset = Instruction::new(OpCode::FetchDimR);
-                isset.op1 = array_op;
-                isset.op1_type = array_type;
-                isset.op2 = index_op;
-                isset.op2_type = index_type;
-                isset.result = result;
-                isset.result_type = OpType::Tmp;
-                isset._pad |= FETCH_DIM_ISSET;
-                self.push_instruction_at_line(isset, *line);
-                (result, OpType::Tmp)
-            }
+            Expr::ArrayAccess { .. } => self.compile_dimension_probe_chain(expr, FETCH_DIM_ISSET),
             _ => self.compile_isset_object_base(expr),
         }
     }
@@ -10653,143 +10701,111 @@ impl Compiler {
                 } else {
                     None
                 };
-                let (left, left_type, mut writeback, right, right_type) =
-                    if let Some(cv) = direct_cv {
-                        // PHP resolves a simple CV destination first, evaluates
-                        // the RHS, and only then consumes the current CV value.
-                        // A re-entrant call on the RHS may therefore unset or
-                        // replace a main-scope global before the read happens.
-                        let (right, right_type) = self.compile_expr(expr);
-                        let (left, left_type) = self.compile_expr(target);
-                        (
-                            left,
-                            left_type,
-                            ForeachArrayWriteback::Variable(cv),
-                            right,
-                            right_type,
-                        )
-                    } else {
-                        match target.as_ref() {
-                            Expr::PropertyAccess {
-                                object,
-                                property,
-                                nullsafe: false,
-                                line,
-                            } => {
-                                let (object, object_type, mut deferred) =
-                                    self.prepare_property_modify_base(object);
-                                for (fetch, _) in &mut deferred {
-                                    if fetch.opcode == OpCode::FetchObjR {
-                                        fetch._pad |= FETCH_OBJ_COMPOUND_RECEIVER;
-                                    }
+                let (left, left_type, mut writeback, right, right_type) = if let Some(cv) =
+                    direct_cv
+                {
+                    // PHP resolves a simple CV destination first, evaluates
+                    // the RHS, and only then consumes the current CV value.
+                    // A re-entrant call on the RHS may therefore unset or
+                    // replace a main-scope global before the read happens.
+                    let (right, right_type) = self.compile_expr(expr);
+                    let (left, left_type) = self.compile_expr(target);
+                    (
+                        left,
+                        left_type,
+                        ForeachArrayWriteback::Variable(cv),
+                        right,
+                        right_type,
+                    )
+                } else {
+                    match target.as_ref() {
+                        Expr::PropertyAccess {
+                            object,
+                            property,
+                            nullsafe: false,
+                            line,
+                        } => {
+                            let (object, object_type, mut deferred) =
+                                self.prepare_property_modify_base(object);
+                            for (fetch, _) in &mut deferred {
+                                if fetch.opcode == OpCode::FetchObjR {
+                                    fetch._pad |= FETCH_OBJ_COMPOUND_RECEIVER;
                                 }
-                                let property = self.add_literal(Value::string(property.clone()));
-                                let left = self.alloc_tmp();
-                                let mut fetch = Instruction::new(OpCode::FetchObjR);
-                                fetch.op1 = object;
-                                fetch.op1_type = object_type;
-                                fetch.op2 = property;
-                                fetch.op2_type = OpType::Const;
-                                fetch.result = left;
-                                fetch.result_type = OpType::Tmp;
-                                fetch._pad |= FETCH_OBJ_COMPOUND;
-                                deferred.push((fetch, *line));
-                                let (right, right_type) = self.compile_expr(expr);
-                                for (fetch, line) in deferred {
-                                    self.push_instruction_at_line(fetch, line);
-                                }
-                                (
-                                    left,
-                                    OpType::Tmp,
-                                    ForeachArrayWriteback::ObjectProperty {
-                                        object,
-                                        object_type,
-                                        property,
-                                        property_type: OpType::Const,
-                                        line: *line,
-                                    },
-                                    right,
-                                    right_type,
-                                )
                             }
-                            Expr::DynamicPropertyAccess {
-                                object,
-                                property,
-                                nullsafe: false,
-                                line,
-                            } => {
-                                let (object, object_type, mut deferred) =
-                                    self.prepare_property_modify_base(object);
-                                for (fetch, _) in &mut deferred {
-                                    if fetch.opcode == OpCode::FetchObjR {
-                                        fetch._pad |= FETCH_OBJ_COMPOUND_RECEIVER;
-                                    }
-                                }
-                                let (property, property_type) = self.compile_expr(property);
-                                let left = self.alloc_tmp();
-                                let mut fetch = Instruction::new(OpCode::FetchObjR);
-                                fetch.op1 = object;
-                                fetch.op1_type = object_type;
-                                fetch.op2 = property;
-                                fetch.op2_type = property_type;
-                                fetch.result = left;
-                                fetch.result_type = OpType::Tmp;
-                                fetch._pad |= FETCH_OBJ_COMPOUND;
-                                deferred.push((fetch, *line));
-                                let (right, right_type) = self.compile_expr(expr);
-                                for (fetch, line) in deferred {
-                                    self.push_instruction_at_line(fetch, line);
-                                }
-                                (
-                                    left,
-                                    OpType::Tmp,
-                                    ForeachArrayWriteback::ObjectProperty {
-                                        object,
-                                        object_type,
-                                        property,
-                                        property_type,
-                                        line: *line,
-                                    },
-                                    right,
-                                    right_type,
-                                )
+                            let property = self.add_literal(Value::string(property.clone()));
+                            let left = self.alloc_tmp();
+                            let mut fetch = Instruction::new(OpCode::FetchObjR);
+                            fetch.op1 = object;
+                            fetch.op1_type = object_type;
+                            fetch.op2 = property;
+                            fetch.op2_type = OpType::Const;
+                            fetch.result = left;
+                            fetch.result_type = OpType::Tmp;
+                            fetch._pad |= FETCH_OBJ_COMPOUND;
+                            deferred.push((fetch, *line));
+                            let (right, right_type) = self.compile_expr(expr);
+                            for (fetch, line) in deferred {
+                                self.push_instruction_at_line(fetch, line);
                             }
-                            Expr::ArrayAppendArgument { target, line } => {
-                                let (array, array_type, append_writeback) =
-                                    match self.compile_array_append_source(target, true, false) {
-                                        Ok(source) => source,
-                                        Err(error) => {
-                                            self.deferred_error = Some(error);
-                                            let null = self.add_literal(Value::null());
-                                            return (null, OpType::Const);
-                                        }
-                                    };
-                                let (right, right_type) = self.compile_expr(expr);
-                                let (left, left_type) = self
-                                    .emit_prepared_array_append_argument_reference(
-                                        array,
-                                        array_type,
-                                        append_writeback,
-                                        Vec::new(),
-                                        true,
-                                        *line,
-                                    );
-                                (
-                                    left,
-                                    left_type,
-                                    ForeachArrayWriteback::AnonymousDimension {
-                                        container: array,
-                                        container_type: array_type,
-                                        binding: left,
-                                    },
-                                    right,
-                                    right_type,
-                                )
+                            (
+                                left,
+                                OpType::Tmp,
+                                ForeachArrayWriteback::ObjectProperty {
+                                    object,
+                                    object_type,
+                                    property,
+                                    property_type: OpType::Const,
+                                    line: *line,
+                                },
+                                right,
+                                right_type,
+                            )
+                        }
+                        Expr::DynamicPropertyAccess {
+                            object,
+                            property,
+                            nullsafe: false,
+                            line,
+                        } => {
+                            let (object, object_type, mut deferred) =
+                                self.prepare_property_modify_base(object);
+                            for (fetch, _) in &mut deferred {
+                                if fetch.opcode == OpCode::FetchObjR {
+                                    fetch._pad |= FETCH_OBJ_COMPOUND_RECEIVER;
+                                }
                             }
-                            _ => {
-                                let (left, left_type, writeback) = match self
-                                    .compile_foreach_reference_source(target, false, true, false)
-                                {
+                            let (property, property_type) = self.compile_expr(property);
+                            let left = self.alloc_tmp();
+                            let mut fetch = Instruction::new(OpCode::FetchObjR);
+                            fetch.op1 = object;
+                            fetch.op1_type = object_type;
+                            fetch.op2 = property;
+                            fetch.op2_type = property_type;
+                            fetch.result = left;
+                            fetch.result_type = OpType::Tmp;
+                            fetch._pad |= FETCH_OBJ_COMPOUND;
+                            deferred.push((fetch, *line));
+                            let (right, right_type) = self.compile_expr(expr);
+                            for (fetch, line) in deferred {
+                                self.push_instruction_at_line(fetch, line);
+                            }
+                            (
+                                left,
+                                OpType::Tmp,
+                                ForeachArrayWriteback::ObjectProperty {
+                                    object,
+                                    object_type,
+                                    property,
+                                    property_type,
+                                    line: *line,
+                                },
+                                right,
+                                right_type,
+                            )
+                        }
+                        Expr::ArrayAppendArgument { target, line } => {
+                            let (array, array_type, append_writeback) =
+                                match self.compile_array_append_source(target, true, false) {
                                     Ok(source) => source,
                                     Err(error) => {
                                         self.deferred_error = Some(error);
@@ -10797,34 +10813,83 @@ impl Compiler {
                                         return (null, OpType::Const);
                                     }
                                 };
-                                if matches!(&writeback, ForeachArrayWriteback::Array(_)) {
-                                    self.mark_trailing_compound_dimension_fetches();
-                                }
-                                let mut deferred_fetches = Vec::new();
-                                if matches!(&writeback, ForeachArrayWriteback::Array(_)) {
-                                    while self.instructions.last().is_some_and(|instruction| {
-                                        instruction.opcode == OpCode::FetchDimR
-                                    }) {
-                                        deferred_fetches.push(
-                                            self.instructions
-                                                .pop()
-                                                .expect("checked trailing dimension fetch"),
-                                        );
-                                    }
-                                    deferred_fetches.reverse();
-                                }
-                                let (right, right_type) = self.compile_expr(expr);
-                                let deferred_dimension = !deferred_fetches.is_empty();
-                                self.instructions.extend(deferred_fetches);
-                                if deferred_dimension {
-                                    self.record_last_instruction_source_line(
-                                        incdec_target_source_line(target),
-                                    );
-                                }
-                                (left, left_type, writeback, right, right_type)
-                            }
+                            let (right, right_type) = self.compile_expr(expr);
+                            let (left, left_type) = self
+                                .emit_prepared_array_append_argument_reference(
+                                    array,
+                                    array_type,
+                                    append_writeback,
+                                    Vec::new(),
+                                    true,
+                                    *line,
+                                );
+                            (
+                                left,
+                                left_type,
+                                ForeachArrayWriteback::AnonymousDimension {
+                                    container: array,
+                                    container_type: array_type,
+                                    binding: left,
+                                },
+                                right,
+                                right_type,
+                            )
                         }
-                    };
+                        _ => {
+                            let prepared =
+                                match self.prepare_deferred_dimension_source(target, false, true) {
+                                    Ok(prepared) => prepared,
+                                    Err(error) => {
+                                        self.deferred_error = Some(error);
+                                        let null = self.add_literal(Value::null());
+                                        return (null, OpType::Const);
+                                    }
+                                };
+                            let (left, left_type, writeback, right, right_type) =
+                                if let Some(prepared) = prepared {
+                                    let (right, right_type) = self.compile_expr(expr);
+                                    let (left, left_type, writeback) =
+                                        self.emit_deferred_dimension_source(prepared);
+                                    (left, left_type, writeback, right, right_type)
+                                } else {
+                                    let (left, left_type, writeback) = match self
+                                        .compile_foreach_reference_source(
+                                            target, false, true, false,
+                                        ) {
+                                        Ok(source) => source,
+                                        Err(error) => {
+                                            self.deferred_error = Some(error);
+                                            let null = self.add_literal(Value::null());
+                                            return (null, OpType::Const);
+                                        }
+                                    };
+                                    let mut deferred_fetches = Vec::new();
+                                    if matches!(&writeback, ForeachArrayWriteback::Array(_)) {
+                                        while self.instructions.last().is_some_and(|instruction| {
+                                            instruction.opcode == OpCode::FetchDimR
+                                        }) {
+                                            deferred_fetches.push(
+                                                self.instructions
+                                                    .pop()
+                                                    .expect("checked trailing dimension fetch"),
+                                            );
+                                        }
+                                        deferred_fetches.reverse();
+                                    }
+                                    let (right, right_type) = self.compile_expr(expr);
+                                    self.instructions.extend(deferred_fetches);
+                                    (left, left_type, writeback, right, right_type)
+                                };
+                            if matches!(&writeback, ForeachArrayWriteback::Array(_)) {
+                                self.mark_trailing_compound_dimension_fetches();
+                                self.record_last_instruction_source_line(
+                                    incdec_target_source_line(target),
+                                );
+                            }
+                            (left, left_type, writeback, right, right_type)
+                        }
+                    }
+                };
                 self.mark_compound_dimension_abort(&mut writeback, left, left_type);
                 let opcode = match op {
                     BinOp::Add => OpCode::Add,
@@ -10901,7 +10966,17 @@ impl Compiler {
             }
             Expr::PostIncTarget(target) | Expr::PostDecTarget(target) => {
                 let source_line = incdec_target_source_line(target);
-                let (current, current_type, writeback) =
+                let prepared = match self.prepare_deferred_dimension_source(target, false, true) {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        self.deferred_error = Some(error);
+                        let null = self.add_literal(Value::null());
+                        return (null, OpType::Const);
+                    }
+                };
+                let (current, current_type, writeback) = if let Some(prepared) = prepared {
+                    self.emit_deferred_dimension_source(prepared)
+                } else {
                     match self.compile_foreach_reference_source(target, false, true, false) {
                         Ok(source) => source,
                         Err(error) => {
@@ -10909,7 +10984,8 @@ impl Compiler {
                             let null = self.add_literal(Value::null());
                             return (null, OpType::Const);
                         }
-                    };
+                    }
+                };
                 if matches!(&writeback, ForeachArrayWriteback::ObjectProperty { .. })
                     && let Some(fetch) = self.instructions.iter_mut().rev().find(|instruction| {
                         instruction.opcode == OpCode::FetchObjR
@@ -10920,7 +10996,7 @@ impl Compiler {
                     fetch._pad |= FETCH_OBJ_INCDEC;
                 }
                 if matches!(&writeback, ForeachArrayWriteback::Array(_)) {
-                    self.mark_trailing_mutable_dimension_fetches();
+                    self.mark_trailing_incdec_dimension_fetches();
                     self.record_last_instruction_source_line(source_line);
                 }
                 let property_writeback = matches!(
@@ -11008,7 +11084,17 @@ impl Compiler {
             }
             Expr::PreIncTarget(target) | Expr::PreDecTarget(target) => {
                 let source_line = incdec_target_source_line(target);
-                let (left, left_type, writeback) =
+                let prepared = match self.prepare_deferred_dimension_source(target, false, true) {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        self.deferred_error = Some(error);
+                        let null = self.add_literal(Value::null());
+                        return (null, OpType::Const);
+                    }
+                };
+                let (left, left_type, writeback) = if let Some(prepared) = prepared {
+                    self.emit_deferred_dimension_source(prepared)
+                } else {
                     match self.compile_foreach_reference_source(target, false, true, false) {
                         Ok(source) => source,
                         Err(error) => {
@@ -11016,7 +11102,8 @@ impl Compiler {
                             let null = self.add_literal(Value::null());
                             return (null, OpType::Const);
                         }
-                    };
+                    }
+                };
                 if matches!(&writeback, ForeachArrayWriteback::ObjectProperty { .. })
                     && let Some(fetch) = self.instructions.iter_mut().rev().find(|instruction| {
                         instruction.opcode == OpCode::FetchObjR
@@ -11027,7 +11114,7 @@ impl Compiler {
                     fetch._pad |= FETCH_OBJ_INCDEC;
                 }
                 if matches!(&writeback, ForeachArrayWriteback::Array(_)) {
-                    self.mark_trailing_mutable_dimension_fetches();
+                    self.mark_trailing_incdec_dimension_fetches();
                     self.record_last_instruction_source_line(source_line);
                 }
                 let property_writeback = matches!(
@@ -12253,6 +12340,7 @@ impl Compiler {
                         instruction._pad |= FETCH_DIM_EMPTY;
                     }
                 }
+                self.mark_dimension_fetch_result(op, op_type, FETCH_DIM_EMPTY_TERMINAL);
                 let tmp = self.alloc_tmp();
                 let mut instr = Instruction::new(OpCode::BoolNot);
                 instr.op1 = op;
@@ -15743,7 +15831,7 @@ impl Compiler {
                 assign.result = value;
                 assign.result_type = OpType::Tmp;
                 self.guard_diagnostic_dimension_assignment(&path, &mut assign);
-                self.instructions.push(assign);
+                self.push_instruction_at_line(assign, path.source_line);
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
                 if let Expr::Variable { name, .. } = root {

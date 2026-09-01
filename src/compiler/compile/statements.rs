@@ -32,10 +32,19 @@ pub(super) struct MutableArrayPath {
     containers: Vec<(u16, OpType)>,
     keys: Vec<(u16, OpType)>,
     writeback: ArrayRootWriteback,
+    source_line: usize,
     mutable_fetches: Vec<usize>,
+    deferred_mutable_fetches: Vec<Instruction>,
+    deferred_key_fetches: Vec<Option<(Instruction, usize)>>,
     /// `(result TMP, instruction index)` for a direct-root snapshot emitted
     /// only when a key is expected to enter the PHP error handler.
     diagnostic_snapshot: Option<(u16, usize)>,
+}
+
+pub(super) struct DeferredDimensionSource {
+    path: MutableArrayPath,
+    terminal: Instruction,
+    source_line: usize,
 }
 
 enum CoalesceWrite {
@@ -1088,7 +1097,7 @@ impl Compiler {
                 assign.result_type = array_type;
                 assign._pad |= ASSIGN_DIM_KEY_ALREADY_NORMALIZED;
                 self.guard_diagnostic_dimension_assignment(&path, &mut assign);
-                self.instructions.push(assign);
+                self.push_instruction_at_line(assign, path.source_line);
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
             }
@@ -1462,7 +1471,7 @@ impl Compiler {
                 assign.result_type = value_type;
                 assign._pad |= ASSIGN_DIM_KEY_ALREADY_NORMALIZED;
                 self.guard_diagnostic_dimension_assignment(&path, &mut assign);
-                self.instructions.push(assign);
+                self.push_instruction_at_line(assign, path.source_line);
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
             }
@@ -1620,7 +1629,7 @@ impl Compiler {
                     root = array.as_ref();
                 }
                 reversed_indices.reverse();
-                WriteTarget::Array(self.compile_mutable_array_path(
+                WriteTarget::Array(self.compile_deferred_mutable_array_path(
                     root,
                     &reversed_indices,
                     true,
@@ -1768,7 +1777,8 @@ impl Compiler {
                 }
                 self.push_instruction_at_line(assign, line);
             }
-            WriteTarget::Array(path) => {
+            WriteTarget::Array(mut path) => {
+                self.emit_deferred_mutable_fetches(&mut path);
                 let &(container, container_type) = path.containers.last().unwrap();
                 let &(key, key_type) = path.keys.last().unwrap();
                 let mut assign = Instruction::new(OpCode::AssignDim);
@@ -1780,7 +1790,7 @@ impl Compiler {
                 assign.result_type = OpType::Tmp;
                 assign._pad |= ASSIGN_DIM_RESULT_VALUE;
                 self.guard_diagnostic_dimension_assignment(&path, &mut assign);
-                self.instructions.push(assign);
+                self.push_instruction_at_line(assign, path.source_line);
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
             }
@@ -2002,7 +2012,7 @@ impl Compiler {
                 assign.result_type = OpType::Cv;
                 assign._pad |= ASSIGN_DIM_REFERENCE;
                 self.guard_diagnostic_dimension_assignment(&path, &mut assign);
-                self.instructions.push(assign);
+                self.push_instruction_at_line(assign, path.source_line);
 
                 let mut bind = Instruction::new(OpCode::BindArrayDimRef);
                 bind.op1 = container;
@@ -2014,7 +2024,7 @@ impl Compiler {
                 if source_is_internal {
                     bind._pad |= REFERENCE_RESULT_INTERNAL;
                 }
-                self.instructions.push(bind);
+                self.push_instruction_at_line(bind, path.source_line);
 
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
@@ -2081,7 +2091,7 @@ impl Compiler {
                 nullsafe: false,
                 line: _,
             } => {
-                let (object, object_type) = self.compile_expr(object);
+                let (object, object_type) = self.compile_property_modify_base(object);
                 let property = self.add_literal(Value::string(property.clone()));
                 Ok(CoalesceWrite::ObjectProperty {
                     object,
@@ -2164,7 +2174,108 @@ impl Compiler {
             silent_root_fetch,
             warn_undefined_root,
             false,
+            false,
             root_source_line,
+        )
+    }
+
+    fn compile_deferred_mutable_array_path(
+        &mut self,
+        root: &Expr,
+        indices: &[Expr],
+        silent_root_fetch: bool,
+        warn_undefined_root: bool,
+        root_source_line: usize,
+    ) -> Result<MutableArrayPath, String> {
+        self.compile_mutable_array_path_with_unset_order(
+            root,
+            indices,
+            silent_root_fetch,
+            warn_undefined_root,
+            false,
+            true,
+            root_source_line,
+        )
+    }
+
+    pub(super) fn prepare_deferred_dimension_source(
+        &mut self,
+        source: &Expr,
+        silent_fetch: bool,
+        warn_undefined_root: bool,
+    ) -> Result<Option<DeferredDimensionSource>, String> {
+        if !matches!(source, Expr::ArrayAccess { .. }) {
+            return Ok(None);
+        }
+        let mut root = source;
+        let mut reversed_indices = Vec::new();
+        while let Expr::ArrayAccess { array, index, .. } = root {
+            reversed_indices.push(index.as_ref().clone());
+            root = array.as_ref();
+        }
+        reversed_indices.reverse();
+        if matches!(root, Expr::Globals { .. } | Expr::ArrayAppendArgument { .. }) {
+            return Ok(None);
+        }
+        let source_line = expression_source_line(source);
+        // Every nested read/modify/write dimension can report a missing-key
+        // diagnostic even when each key expression is otherwise inert. Keep
+        // a sparse root snapshot for that case so callbacks may replace the
+        // destination while traversal continues on detached temporaries; the
+        // final root rebuild is then abandoned in PHP order.
+        let forced_diagnostic_snapshot = if reversed_indices.len() > 1
+            && !reversed_indices
+                .iter()
+                .any(|index| self.dimension_index_may_invoke_error_handler(index))
+            && let Expr::Variable { name, line } = root
+        {
+            let cv = self.resolve_cv(name);
+            Some(self.emit_diagnostic_write_snapshot_for_cv(cv, name, *line))
+        } else {
+            None
+        };
+        let mut path = self.compile_deferred_mutable_array_path(
+            root,
+            &reversed_indices,
+            silent_fetch,
+            warn_undefined_root,
+            source_line,
+        )?;
+        if path.diagnostic_snapshot.is_none() {
+            path.diagnostic_snapshot = forced_diagnostic_snapshot;
+        }
+        let &(container, container_type) = path.containers.last().unwrap();
+        let &(key, key_type) = path.keys.last().unwrap();
+        let current = self.alloc_tmp();
+        let mut terminal = Instruction::new(OpCode::FetchDimR);
+        terminal.op1 = container;
+        terminal.op1_type = container_type;
+        terminal.op2 = key;
+        terminal.op2_type = key_type;
+        terminal.result = current;
+        terminal.result_type = OpType::Tmp;
+        if silent_fetch {
+            terminal._pad |= FETCH_DIM_SILENT;
+        }
+        Ok(Some(DeferredDimensionSource {
+            path,
+            terminal,
+            source_line,
+        }))
+    }
+
+    pub(super) fn emit_deferred_dimension_source(
+        &mut self,
+        mut source: DeferredDimensionSource,
+    ) -> (u16, OpType, ForeachArrayWriteback) {
+        self.emit_deferred_mutable_fetches(&mut source.path);
+        let current = source.terminal.result;
+        let current_type = source.terminal.result_type;
+        self.push_instruction_at_line(source.terminal, source.source_line);
+        (
+            current,
+            current_type,
+            ForeachArrayWriteback::Array(source.path),
         )
     }
 
@@ -2177,6 +2288,34 @@ impl Compiler {
                             !self.definitely_defined_cvs.contains(&(*cv as u16))
                         })
             )
+    }
+
+    fn compile_deferred_dimension_key(
+        &mut self,
+        index: &Expr,
+    ) -> ((u16, OpType), Option<(Instruction, usize)>) {
+        if let Expr::Variable { name, line } = index
+            && *line != 0
+            && name != "this"
+        {
+            let cv = self.resolve_cv(name);
+            if !self.definitely_defined_cvs.contains(&cv) {
+                let name_literal = self.add_literal(Value::string(name.clone()));
+                let result = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchCvR);
+                fetch.op1 = cv;
+                fetch.op1_type = OpType::Cv;
+                fetch.op2 = name_literal;
+                fetch.op2_type = OpType::Const;
+                fetch.result = result;
+                fetch.result_type = OpType::Tmp;
+                // The eventual warning callback is re-entrant even though its
+                // instruction is emitted only at the matching traversal step.
+                self.invalidate_reentrant_definitions();
+                return ((result, OpType::Tmp), Some((fetch, *line)));
+            }
+        }
+        (self.compile_expr(index), None)
     }
 
     fn emit_diagnostic_write_snapshot(
@@ -2234,6 +2373,7 @@ impl Compiler {
         silent_root_fetch: bool,
         warn_undefined_root: bool,
         defer_unset_fetches: bool,
+        defer_mutable_fetches: bool,
         root_source_line: usize,
     ) -> Result<MutableArrayPath, String> {
         if indices.is_empty() {
@@ -2456,18 +2596,30 @@ impl Compiler {
             ),
             _ => return Err("Unsupported array mutation target".into()),
         };
-        let mut keys = Vec::with_capacity(path_indices.len());
+        // Ordinary nested assignment evaluates all key expressions and its
+        // RHS before PHP materializes the mutable traversal. Unset retains its
+        // separately deferred property-fetch ordering below.
+        let (mut keys, deferred_key_fetches) = if defer_mutable_fetches {
+            let mut keys = Vec::with_capacity(path_indices.len());
+            let mut deferred = Vec::with_capacity(path_indices.len());
+            for index in path_indices {
+                let (key, materialize) = self.compile_deferred_dimension_key(index);
+                keys.push(key);
+                deferred.push(materialize);
+            }
+            (keys, deferred)
+        } else {
+            (Vec::with_capacity(path_indices.len()), Vec::new())
+        };
         let mut containers = Vec::with_capacity(indices.len());
         let mut mutable_fetches = Vec::with_capacity(indices.len().saturating_sub(1));
+        let mut deferred_mutable_fetches =
+            Vec::with_capacity(indices.len().saturating_sub(1));
         containers.push(root);
         if defer_unset_fetches {
             // PHP commits every dynamic name/index side effect before an
             // unset-through-property fetch may report a capability error.
-            keys.extend(
-                path_indices
-                    .iter()
-                    .map(|index| self.compile_expr(index)),
-            );
+            keys.extend(path_indices.iter().map(|index| self.compile_expr(index)));
             for (mut fetch, line) in deferred_object_fetches {
                 if fetch.opcode == OpCode::FetchObjR
                     && fetch._pad & FETCH_OBJ_MODIFY != 0
@@ -2478,7 +2630,7 @@ impl Compiler {
             }
         }
         for (position, index) in path_indices.iter().enumerate() {
-            let (key, key_type) = if defer_unset_fetches {
+            let (key, key_type) = if defer_unset_fetches || defer_mutable_fetches {
                 keys[position]
             } else {
                 let key = self.compile_expr(index);
@@ -2501,8 +2653,12 @@ impl Compiler {
                 fetch._pad |= FETCH_DIM_SILENT;
             }
             fetch._pad |= FETCH_DIM_MUTABLE;
-            mutable_fetches.push(self.instructions.len());
-            self.instructions.push(fetch);
+            if defer_mutable_fetches {
+                deferred_mutable_fetches.push(fetch);
+            } else {
+                mutable_fetches.push(self.instructions.len());
+                self.push_instruction_at_line(fetch, root_source_line);
+            }
             containers.push((child, OpType::Tmp));
         }
         Ok(MutableArrayPath {
@@ -2510,9 +2666,27 @@ impl Compiler {
             containers,
             keys,
             writeback,
+            source_line: root_source_line,
             mutable_fetches,
+            deferred_mutable_fetches,
+            deferred_key_fetches,
             diagnostic_snapshot,
         })
+    }
+
+    fn emit_deferred_mutable_fetches(&mut self, path: &mut MutableArrayPath) {
+        let mut next_key = 0;
+        for fetch in path.deferred_mutable_fetches.drain(..) {
+            if let Some((materialize, line)) = path.deferred_key_fetches[next_key].take() {
+                self.push_instruction_at_line(materialize, line);
+            }
+            path.mutable_fetches.push(self.instructions.len());
+            self.push_instruction_at_line(fetch, path.source_line);
+            next_key += 1;
+        }
+        if let Some((materialize, line)) = path.deferred_key_fetches[next_key].take() {
+            self.push_instruction_at_line(materialize, line);
+        }
     }
 
     fn patch_mutable_fetch_abort_targets(&mut self, path: &MutableArrayPath) {
@@ -2539,7 +2713,10 @@ impl Compiler {
             rebuild.result_type = child_type;
             rebuild._pad |=
                 ASSIGN_DIM_KEY_ALREADY_NORMALIZED | ASSIGN_DIM_INDIRECT_REBUILD;
-            self.instructions.push(rebuild);
+            if parent_index == 0 {
+                self.guard_diagnostic_dimension_assignment(path, &mut rebuild);
+            }
+            self.push_instruction_at_line(rebuild, path.source_line);
         }
     }
 
@@ -2562,6 +2739,9 @@ impl Compiler {
             rebuild._pad |= ASSIGN_DIM_UNSET_REBUILD
                 | ASSIGN_DIM_KEY_ALREADY_NORMALIZED
                 | ASSIGN_DIM_INDIRECT_REBUILD;
+            if parent_index == 0 {
+                self.guard_diagnostic_dimension_assignment(path, &mut rebuild);
+            }
             self.push_instruction_at_line(rebuild, source_line);
         }
     }
@@ -2592,7 +2772,7 @@ impl Compiler {
                 instruction.op1_type = key_type;
                 instruction.op2 = path.root.0;
                 instruction.op2_type = path.root.1;
-                self.instructions.push(instruction);
+                self.push_instruction_at_line(instruction, path.source_line);
                 self.patch_mutable_fetch_abort_targets(path);
                 return;
             }
@@ -2644,7 +2824,7 @@ impl Compiler {
         };
         writeback.result = path.root.0;
         writeback.result_type = path.root.1;
-        self.instructions.push(writeback);
+        self.push_instruction_at_line(writeback, path.source_line);
         self.patch_mutable_fetch_abort_targets(path);
     }
 
@@ -3733,11 +3913,12 @@ impl Compiler {
                 expr,
                 line,
             } => {
-                let path = self.compile_mutable_array_path(
+                let mut path = self.compile_deferred_mutable_array_path(
                     root, indices, true, false, *line,
                 )?;
 
                 let (value, value_type) = self.compile_expr(expr);
+                self.emit_deferred_mutable_fetches(&mut path);
                 let &(leaf, leaf_type) = path.containers.last().unwrap();
                 let &(leaf_key, leaf_key_type) = path.keys.last().unwrap();
                 let mut assign = Instruction::new(OpCode::AssignDim);
@@ -4227,6 +4408,7 @@ impl Compiler {
                                 true,
                                 true,
                                 true,
+                                false,
                                 *line,
                             )?;
                             for &fetch in &path.mutable_fetches {
