@@ -3150,12 +3150,105 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("usleep", fn_usleep, 1, 1, "microseconds");
 
     // --- ctype ---
-    reg!("ctype_alpha", fn_ctype_alpha, 1, 1, "text");
-    reg!("ctype_digit", fn_ctype_digit, 1, 1, "text");
-    reg!("ctype_alnum", fn_ctype_alnum, 1, 1, "text");
-    reg!("ctype_space", fn_ctype_space, 1, 1, "text");
-    reg!("ctype_upper", fn_ctype_upper, 1, 1, "text");
-    reg!("ctype_lower", fn_ctype_lower, 1, 1, "text");
+    reg_typed!(
+        "ctype_alnum",
+        fn_ctype_alnum,
+        1,
+        1,
+        ["text"],
+        [ParamTypeHint::Mixed],
+        ParamTypeHint::Bool
+    );
+    reg_typed!(
+        "ctype_alpha",
+        fn_ctype_alpha,
+        1,
+        1,
+        ["text"],
+        [ParamTypeHint::Mixed],
+        ParamTypeHint::Bool
+    );
+    reg_typed!(
+        "ctype_cntrl",
+        fn_ctype_cntrl,
+        1,
+        1,
+        ["text"],
+        [ParamTypeHint::Mixed],
+        ParamTypeHint::Bool
+    );
+    reg_typed!(
+        "ctype_digit",
+        fn_ctype_digit,
+        1,
+        1,
+        ["text"],
+        [ParamTypeHint::Mixed],
+        ParamTypeHint::Bool
+    );
+    reg_typed!(
+        "ctype_graph",
+        fn_ctype_graph,
+        1,
+        1,
+        ["text"],
+        [ParamTypeHint::Mixed],
+        ParamTypeHint::Bool
+    );
+    reg_typed!(
+        "ctype_lower",
+        fn_ctype_lower,
+        1,
+        1,
+        ["text"],
+        [ParamTypeHint::Mixed],
+        ParamTypeHint::Bool
+    );
+    reg_typed!(
+        "ctype_print",
+        fn_ctype_print,
+        1,
+        1,
+        ["text"],
+        [ParamTypeHint::Mixed],
+        ParamTypeHint::Bool
+    );
+    reg_typed!(
+        "ctype_punct",
+        fn_ctype_punct,
+        1,
+        1,
+        ["text"],
+        [ParamTypeHint::Mixed],
+        ParamTypeHint::Bool
+    );
+    reg_typed!(
+        "ctype_space",
+        fn_ctype_space,
+        1,
+        1,
+        ["text"],
+        [ParamTypeHint::Mixed],
+        ParamTypeHint::Bool
+    );
+    reg_typed!(
+        "ctype_upper",
+        fn_ctype_upper,
+        1,
+        1,
+        ["text"],
+        [ParamTypeHint::Mixed],
+        ParamTypeHint::Bool
+    );
+    reg_typed!(
+        "ctype_xdigit",
+        fn_ctype_xdigit,
+        1,
+        1,
+        ["text"],
+        [ParamTypeHint::Mixed],
+        ParamTypeHint::Bool
+    );
 
     // See streams::register_extensions: this append-only Apple path keeps the
     // admitted hot-code layout stable as new cold stream handlers are added.

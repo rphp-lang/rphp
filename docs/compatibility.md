@@ -8,6 +8,83 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 standard-library checkpoint is
+`ctype-complete-builtin-surface`, based on `035da4d7`, pinned to php-src commit
+`fcc29c8` and validated against PHP 8.5.10. All eleven Ctype globals are now
+present with the reflected PHP 8.5 `(mixed $text): bool` contract:
+`ctype_alnum`, `ctype_alpha`, `ctype_cntrl`, `ctype_digit`, `ctype_graph`,
+`ctype_lower`, `ctype_print`, `ctype_punct`, `ctype_space`, `ctype_upper` and
+`ctype_xdigit`. Their byte predicates share one C/POSIX implementation across
+ordinary, named, dynamic, first-class and callback dispatch. Empty strings,
+all 256 byte values, lossless binary storage, multibyte rejection and the
+legacy integer-byte boundary follow the reference. Every non-string argument
+first emits PHP 8.5's function-specific deprecation, including under a
+reentrant or throwing error handler, without converting Stringable objects or
+mutating referenced inputs.
+
+Twelve original E2E regressions cover signatures, all byte sets, integer
+boundaries, every non-string family, diagnostic names and control flow,
+strict types, arity, names, dispatch variants, namespace fallback and
+references. A task-scoped 48-case `ext/ctype` projection mechanically removes
+only the `--EXTENSIONS-- ctype` loader section while preserving PHP source and
+expectations byte-for-byte; the separate locale-only case remains excluded.
+It advances from 16 pass and 32 fail to 48 pass and zero fail, exact delta
+`+32/-0`. The candidate manifest hashes to
+`a67a8a77fdd43ff14fe78d334cf98b5b6cb60d6d69f46a722ba6c84828766886`,
+its sorted exact pass set to
+`7ce2157fa47d89542d51c4c8fd5dca00238cde5fc9b887d07f3b76d423d6661e`,
+the parent manifest to
+`fe930ba74e9236ad9362bfd867498478bd5b61612882c8ace3aadb86243c51fb`,
+and the preparation manifest to
+`426a2204c40e7e8d9322d7d99e0d08ba6b46cd7454caec99d626d6df52783164`.
+
+The 5,599-case Zend/lang projection remains 4,891 pass, 412 fail, 115 skip and
+181 unsupported with manifest hash
+`ab4a844ff611a3a83b66297b0d8d447ba32ca7569ac4898625fe7e5674e604e9`
+and sorted pass-set hash
+`06af68a6b40dd623eb6191d02639170f79dc4c4cd6a76ff5dfd9d7dd38b80dc8`.
+The adjacent 1,575-case strings/array projection remains 1,458 pass, 19 fail,
+67 skip and 31 unsupported with manifest hash
+`226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`
+and pass-set hash
+`0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+Both pass sets are byte-identical to the fixed parent, so the stable 7,174-case
+core remains 6,349 pass, 431 fail, 182 skip and 212 unsupported, exact delta
+`+0/-0`, without timeout or crash.
+
+The on-demand builtin inventory reports 1,201 reference globals: 474 are
+present, 727 are missing, zero present functions have a call-shape mismatch,
+376 retain a metadata mismatch and 98 are exact. The Symfony-base projection
+contains 472 present and 261 missing functions, zero call-shape mismatches, 375
+metadata mismatches and 97 exact functions. All eleven Ctype globals are
+present, call-shape exact and metadata exact. The inventory CSV, summary and
+report hash to
+`0070e262adc4fc9ea66fd7fbbf964f924decb2f270f7dfbd2791fd3e3dd545e9`,
+`0649d2a394063bc397d49568be9f535458213b35a4d796e0fd89541f961e5c59`
+and `f75683272ed6985814714acbf2f38cf7e546138cc113d144356ca111de09f6a7`.
+
+All five Cargo configurations, all-feature/all-target checking, formatting,
+PHPT-runner, entity-data and unsafe-policy gates pass; production remains at
+1,623 unsafe blocks and 289 unsafe functions. Composer 2.8.12 S0, all four
+Symfony S1 gates and FrameworkBundle 7.4.16 warmed S2 and cold S3 pass. The
+release candidate hashes to
+`d5115ab252754cf22c0add61da4b098cabaf1645425533f0f38e13d0aaabbb85`
+and the exact fixed parent to
+`33ca5a2429bd7fce9393c938ffa4969c057168d14854479ad1dd28e11b9d5aa7`;
+the candidate executable is 15,912 bytes larger.
+
+The CPU-2 release packet uses 32 balanced randomized pairs per lane after five
+warmups, byte-exact output/status/stderr checks and no outlier removal. Sample-
+median deltas are startup +0.639%, ordinary calls +0.103%, short alphanumeric
+-0.864%, digits -0.553%, long alphanumeric -3.526%, spaces -0.592% and binary
+rejection +0.228%. Raw observations hash to
+`62cebbf215dc37b5b10b8f4329910eaba3a173b45d7ef7c6c0aa816dbfe3ca68`.
+
+Locale-dependent `LC_CTYPE` behavior, extension loading and
+`extension_loaded('ctype')`, 32-bit integer boundaries and allocation-limit/
+OOM equivalence remain separate boundaries. The implementation is the commit
+containing this status.
+
+The preceding measured AMD64 PHP 8.5 standard-library checkpoint is
 `json-encode-output-policy`, based on `5262e7fa`, pinned to php-src commit
 `fcc29c8` and validated against PHP 8.5.10. `json_encode()` now exposes and
 applies `JSON_HEX_TAG`, `JSON_HEX_AMP`, `JSON_HEX_APOS`, `JSON_HEX_QUOT`,

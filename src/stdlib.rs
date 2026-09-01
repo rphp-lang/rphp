@@ -29538,82 +29538,253 @@ fn fn_array_key_last(
     ret!(rv, Value::null());
 }
 
-/// ctype_alpha($text): bool
-fn fn_ctype_alpha(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    ret!(
-        rv,
-        Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_alphabetic()))
-    );
+#[inline(always)]
+fn ctype_bytes_match(bytes: &[u8], predicate: &impl Fn(u8) -> bool) -> bool {
+    !bytes.is_empty() && bytes.iter().copied().all(predicate)
 }
 
-/// ctype_digit($text): bool
-fn fn_ctype_digit(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    ret!(
-        rv,
-        Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
-    );
+#[inline(always)]
+fn ctype_string_matches(value: &Value, predicate: &impl Fn(u8) -> bool) -> Option<bool> {
+    let storage = value.as_str()?;
+    Some(if value.is_binary_string() {
+        // Lossless byte strings store one logical PHP byte per scalar. Avoid
+        // materializing the general byte bridge for this read-only predicate.
+        !storage.is_empty() && storage.chars().all(|character| predicate(character as u8))
+    } else {
+        ctype_bytes_match(storage.as_bytes(), predicate)
+    })
 }
 
-/// ctype_alnum($text): bool
+#[cold]
+#[inline(never)]
+fn ctype_fallback(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    type_name: String,
+    matches: bool,
+) -> Result<(), VmError> {
+    report_internal_deprecation(
+        eg,
+        ed,
+        &format!(
+            "{function}(): Argument of type {type_name} will be interpreted as string in the future"
+        ),
+    )?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    ret!(rv, Value::bool(matches));
+}
+
+#[inline(always)]
+fn ctype_apply(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    predicate: impl Fn(u8) -> bool,
+    positive_large_matches: bool,
+    negative_large_matches: bool,
+) -> Result<(), VmError> {
+    if let Some(matches) = ctype_string_matches(arg!(ed, 0), &predicate) {
+        ret!(rv, Value::bool(matches));
+    }
+
+    // PHP 8.5 still preserves the historical integer byte/decimal mapping,
+    // but diagnoses every non-string argument before observing the result.
+    // Snapshot both fields before dispatching a reentrant user error handler.
+    let (matches, type_name) = {
+        let argument = arg!(ed, 0);
+        let matches = argument.as_long().is_some_and(|integer| {
+            if (-128..=255).contains(&integer) {
+                predicate(integer as u8)
+            } else if integer >= 0 {
+                positive_large_matches
+            } else {
+                negative_large_matches
+            }
+        });
+        (matches, argument.diagnostic_type_name().into_owned())
+    };
+    ctype_fallback(ed, rv, eg, function, type_name, matches)
+}
+
 fn fn_ctype_alnum(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    ret!(
+    ctype_apply(
+        ed,
         rv,
-        Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric()))
-    );
+        eg,
+        "ctype_alnum",
+        |byte| byte.is_ascii_alphanumeric(),
+        true,
+        false,
+    )
 }
 
-/// ctype_space($text): bool
-fn fn_ctype_space(
+fn fn_ctype_alpha(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    ret!(
+    ctype_apply(
+        ed,
         rv,
-        Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_whitespace()))
-    );
+        eg,
+        "ctype_alpha",
+        |byte| byte.is_ascii_alphabetic(),
+        false,
+        false,
+    )
 }
 
-/// ctype_upper($text): bool
-fn fn_ctype_upper(
+fn fn_ctype_cntrl(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    ret!(
+    ctype_apply(
+        ed,
         rv,
-        Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_uppercase()))
-    );
+        eg,
+        "ctype_cntrl",
+        |byte| byte <= 0x1f || byte == 0x7f,
+        false,
+        false,
+    )
 }
 
-/// ctype_lower($text): bool
+fn fn_ctype_digit(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ctype_apply(
+        ed,
+        rv,
+        eg,
+        "ctype_digit",
+        |byte| byte.is_ascii_digit(),
+        true,
+        false,
+    )
+}
+
+fn fn_ctype_graph(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ctype_apply(
+        ed,
+        rv,
+        eg,
+        "ctype_graph",
+        |byte| (0x21..=0x7e).contains(&byte),
+        true,
+        true,
+    )
+}
+
 fn fn_ctype_lower(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    ret!(
+    ctype_apply(
+        ed,
         rv,
-        Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase()))
-    );
+        eg,
+        "ctype_lower",
+        |byte| byte.is_ascii_lowercase(),
+        false,
+        false,
+    )
+}
+
+fn fn_ctype_print(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ctype_apply(
+        ed,
+        rv,
+        eg,
+        "ctype_print",
+        |byte| (0x20..=0x7e).contains(&byte),
+        true,
+        true,
+    )
+}
+
+fn fn_ctype_punct(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ctype_apply(
+        ed,
+        rv,
+        eg,
+        "ctype_punct",
+        |byte| (0x21..=0x7e).contains(&byte) && !byte.is_ascii_alphanumeric(),
+        false,
+        false,
+    )
+}
+
+fn fn_ctype_space(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ctype_apply(
+        ed,
+        rv,
+        eg,
+        "ctype_space",
+        |byte| (0x09..=0x0d).contains(&byte) || byte == b' ',
+        false,
+        false,
+    )
+}
+
+fn fn_ctype_upper(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ctype_apply(
+        ed,
+        rv,
+        eg,
+        "ctype_upper",
+        |byte| byte.is_ascii_uppercase(),
+        false,
+        false,
+    )
+}
+
+fn fn_ctype_xdigit(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ctype_apply(
+        ed,
+        rv,
+        eg,
+        "ctype_xdigit",
+        |byte| byte.is_ascii_hexdigit(),
+        true,
+        false,
+    )
 }
 
 // ============================================================================
