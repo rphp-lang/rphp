@@ -2138,8 +2138,13 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ("file_exists", fn_file_exists, ParamTypeHint::Bool),
         ("fileatime", fn_fileatime, or_false(ParamTypeHint::Int)),
         ("filectime", fn_filectime, or_false(ParamTypeHint::Int)),
+        ("filegroup", fn_filegroup, or_false(ParamTypeHint::Int)),
+        ("fileinode", fn_fileinode, or_false(ParamTypeHint::Int)),
         ("filemtime", fn_filemtime, or_false(ParamTypeHint::Int)),
+        ("fileowner", fn_fileowner, or_false(ParamTypeHint::Int)),
+        ("fileperms", fn_fileperms, or_false(ParamTypeHint::Int)),
         ("filesize", fn_filesize, or_false(ParamTypeHint::Int)),
+        ("filetype", fn_filetype, or_false(ParamTypeHint::String)),
         ("is_dir", fn_is_dir, ParamTypeHint::Bool),
         ("is_executable", fn_is_executable, ParamTypeHint::Bool),
         ("is_file", fn_is_file, ParamTypeHint::Bool),
@@ -2147,11 +2152,12 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ("is_writable", fn_is_writable, ParamTypeHint::Bool),
         ("is_writeable", fn_is_writeable, ParamTypeHint::Bool),
         ("lstat", fn_lstat, or_false(ParamTypeHint::Array)),
+        ("linkinfo", fn_linkinfo, or_false(ParamTypeHint::Int)),
         ("realpath", fn_realpath, or_false(ParamTypeHint::String)),
         ("stat", fn_stat, or_false(ParamTypeHint::Array)),
     ] {
         let mut function = Box::new(make_internal_function(handler, 1, 1, pn!["filename"]));
-        if name == "realpath" {
+        if matches!(name, "realpath" | "linkinfo") {
             function.common.sig.param_names[0] = "path".to_string();
         } else if matches!(
             name,
@@ -2169,7 +2175,6 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     }
     reg!("is_link", fn_is_link, 1, 1, "filename");
     reg!("chmod", fn_chmod, 2, 2, "filename", "permissions");
-    reg!("fileperms", fn_fileperms, 1, 1, "filename");
     reg!("umask", fn_umask, 1, 0, "mask");
     reg_typed!(
         "dirname",

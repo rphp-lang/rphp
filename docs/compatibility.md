@@ -7,7 +7,65 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 PHP 8.5 language checkpoint is
+The latest measured AMD64 PHP 8.5 standard-library checkpoint is
+`filesystem-metadata-scalar-projections`, based on `80b0f965`, pinned to
+php-src commit `fcc29c8` and validated against PHP 8.5.10. The complete
+Reflection-exact surface now includes `filegroup`, `fileinode`, `fileowner`,
+`fileperms`, `filetype`, `fstat` and `linkinfo`. Scalar path projections share
+the admitted stat/lstat cache and user-wrapper flag policy, preserve PHP's
+warning, silence, null-byte and reference boundaries, and distinguish every
+portable file kind. `linkinfo()` remains local and observes symlink metadata.
+`fstat()` publishes PHP's 26 numeric-and-named fields for native files,
+standard streams, memory and temporary streams, including spilled temporary
+files, and dispatches user-wrapper `stream_stat()` only for file resources.
+
+Eleven original differential E2E cases cover signatures and extension
+identity, local and wrapper metadata, cache behavior, file kinds, failure and
+strict-type boundaries, named/dynamic/first-class/callback dispatch, closed and
+directory resources, standard streams, virtual memory/temp streams and user
+wrapper normalization. The focused 27-case upstream packet moves from zero to
+23 exact passes; its four extension-loader cases remain explicitly
+unsupported, for exact delta `+23/-0`. The fixed-parent Zend/lang projection
+remains byte-identical at 4,932/371/115/181 with manifest hash
+`74c0e5e8e4a8e61d85a9990a59de27bb500bf89bb513198a9801efdf9f88b9f5`.
+Strings/array also remains byte-identical at 1,458/19/67/31 with manifest hash
+`226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`.
+The stable 7,174-case core therefore remains 6,390 pass, 390 fail, 182 skip and
+212 unsupported, with no timeout, crash or lost exact pass.
+
+The on-demand builtin inventory reports 1,201 globals exposed by the reference
+PHP installation: 489 are present, 712 are missing, zero present functions
+have a call-shape mismatch, 350 retain a metadata mismatch and 139 are exact.
+The Symfony-base projection, restricted to Core, Ctype, Date, Filter, Hash,
+JSON, PCRE, Random, SPL and Standard, contains 487 present and 246 missing
+functions, zero call-shape mismatches, 349 metadata mismatches and 138 exact
+functions. All seven functions in this checkpoint are present, call-shape
+exact and metadata exact. The summary and report hash to
+`9ee98d1fdd9a98b7dfb2ae4d8b25e395d52ab3be25803a0ba6db4552f17b3108`
+and `f9086d65bb5bac053cdbc63c19f0d2dfd1dfb66eecc1c2e1ec3c00ebcac0dab3`.
+
+All five Cargo test configurations, all-feature/all-target checking,
+formatting, entity-data, PHPT-runner and the unchanged 1,623/289 unsafe ratchet
+pass. Composer 2.8.12 S0, all four Symfony S1 gates and FrameworkBundle 7.4.16
+warmed S2 and cold S3 pass. The release candidate at
+`/tmp/rphp-candidate-filesystem-metadata-scalar-projections/release/rphp`
+hashes to
+`439fc24c57a0150ef8bba7b9c0f5018f05c552b8ad6ae5415fd7af08f1f40225`.
+
+The final fixed-parent CPU-2 gate uses 32 order-balanced pairs per lane after
+four warmups, exact checksums and no outlier removal. Paired-median changes are
+-6.430% for cached `filemtime`, -3.409% for cached `stat`, -1.532% for file
+predicates, +0.943% for file-stream reads, -0.913% for file-stream writes,
+-82.265% for the changed `fileperms` pay-use lane, -0.621% for memory-stream
+reads, -1.090% for ordinary calls, -0.761% for `realpath` and -2.664% for
+startup. The raw results and summary hash to
+`cfc810e3217aae4ffc07763d383fee370879842bc033dc190f9887b3e653a876`
+and `e44c8b18bb6b3364f7e6778a3c2fde9b7a7366c1cba1ff078c242a300b79f209`.
+Link creation/lifecycle, broader wrapper metadata, non-Unix descriptor
+projection, 32-bit boundaries and allocation-limit/OOM equivalence remain
+separate contracts.
+
+The preceding measured AMD64 PHP 8.5 language checkpoint is
 `dimension-container-access-contracts`, based on `8b1b285a`, pinned to php-src
 commit `fcc29c8` and validated against PHP 8.5.10. Array, string, null, false,
 scalar and `ArrayAccess` dimensions now share PHP's read, write, compound,

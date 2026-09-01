@@ -1,4 +1,4 @@
-use std::fs::{File, OpenOptions};
+use std::fs::{File, Metadata, OpenOptions};
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 #[cfg(test)]
 use std::path::Path;
@@ -121,6 +121,11 @@ enum StreamBackend {
     Memory(Cursor<Vec<u8>>),
     Temp(TempStream),
     Standard(StandardStream),
+}
+
+pub(crate) enum StreamStat {
+    Filesystem(Metadata),
+    Memory { size: u64, writable: bool },
 }
 
 #[derive(Clone, Copy)]
@@ -699,6 +704,35 @@ impl PhpStream {
             unread_bytes: 0,
             seekable: !matches!(self.backend, StreamBackend::Standard(_)),
             uri: &self.uri,
+        }
+    }
+
+    pub(crate) fn stat(&self) -> io::Result<Option<StreamStat>> {
+        match &self.backend {
+            StreamBackend::File(file) => file.metadata().map(StreamStat::Filesystem).map(Some),
+            StreamBackend::Memory(memory) => Ok(Some(StreamStat::Memory {
+                size: u64::try_from(memory.get_ref().len()).unwrap_or(u64::MAX),
+                writable: self.mode.write,
+            })),
+            StreamBackend::Temp(temp) => temp.stat(self.mode.write).map(Some),
+            StreamBackend::Standard(stream) => {
+                #[cfg(unix)]
+                {
+                    let path = match stream {
+                        StandardStream::Input => "/dev/stdin",
+                        StandardStream::Output => "/dev/stdout",
+                        StandardStream::Error => "/dev/stderr",
+                    };
+                    return std::fs::metadata(path)
+                        .map(StreamStat::Filesystem)
+                        .map(Some);
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = stream;
+                    Ok(None)
+                }
+            }
         }
     }
 

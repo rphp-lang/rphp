@@ -64,6 +64,11 @@ impl TemporaryFile {
         self.file.as_mut().expect("temporary stream file is open")
     }
 
+    #[inline]
+    fn file(&self) -> &File {
+        self.file.as_ref().expect("temporary stream file is open")
+    }
+
     #[cfg(test)]
     fn path(&self) -> &Path {
         &self.path
@@ -147,6 +152,16 @@ impl TempStream {
         match &mut self.storage {
             Storage::Memory(memory) => memory.flush(),
             Storage::File(file) => file.file_mut().flush(),
+        }
+    }
+
+    pub(super) fn stat(&self, writable: bool) -> io::Result<super::StreamStat> {
+        match &self.storage {
+            Storage::Memory(memory) => Ok(super::StreamStat::Memory {
+                size: u64::try_from(memory.get_ref().len()).unwrap_or(u64::MAX),
+                writable,
+            }),
+            Storage::File(file) => file.file().metadata().map(super::StreamStat::Filesystem),
         }
     }
 

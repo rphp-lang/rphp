@@ -307,7 +307,7 @@ impl FilesystemStatQuery {
     }
 }
 
-fn metadata_stat_fields(metadata: &std::fs::Metadata) -> [i64; 13] {
+pub(super) fn metadata_stat_fields(metadata: &std::fs::Metadata) -> [i64; 13] {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -369,7 +369,7 @@ fn metadata_stat_fields(metadata: &std::fs::Metadata) -> [i64; 13] {
     }
 }
 
-fn stat_array_value(fields: [i64; 13]) -> Value {
+pub(super) fn stat_array_value(fields: [i64; 13]) -> Value {
     let mut result = PhpArray::with_hash_capacity(fields.len() * 2);
     for value in fields {
         result.push(Value::long(value));
@@ -381,7 +381,7 @@ fn stat_array_value(fields: [i64; 13]) -> Value {
 }
 
 #[cfg(feature = "stream-registry")]
-fn normalize_wrapper_stat(value: Value) -> Value {
+pub(super) fn normalize_wrapper_stat(value: Value) -> Value {
     let Some(array) = value.as_array() else {
         return Value::bool(false);
     };
@@ -927,6 +927,117 @@ pub(super) fn fn_filectime(
     stat_field_result(ed, rv, eg, "filectime", "ctime")
 }
 
+#[cold]
+pub(super) fn fn_fileowner(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    stat_field_result(ed, rv, eg, "fileowner", "uid")
+}
+
+#[cold]
+pub(super) fn fn_filegroup(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    stat_field_result(ed, rv, eg, "filegroup", "gid")
+}
+
+#[cold]
+pub(super) fn fn_fileinode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    stat_field_result(ed, rv, eg, "fileinode", "ino")
+}
+
+fn file_type_name(mode: i64) -> Option<&'static str> {
+    match mode & 0o170000 {
+        0o010000 => Some("fifo"),
+        0o020000 => Some("char"),
+        0o040000 => Some("dir"),
+        0o060000 => Some("block"),
+        0o100000 => Some("file"),
+        0o120000 => Some("link"),
+        0o140000 => Some("socket"),
+        _ => None,
+    }
+}
+
+#[cold]
+pub(super) fn fn_filetype(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(path) = stat_filename_argument(ed, eg, "filetype", false)? else {
+        return Ok(());
+    };
+    let StatFilenameArgument::Path(path) = path else {
+        ret!(rv, Value::bool(false));
+    };
+    let path = path.as_str().unwrap_or_default();
+    let value = filesystem_stat_value(eg, path, FilesystemStatQuery::LinkReport)?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    let Some(mode) = stat_mode(&value) else {
+        report_stat_failure(ed, eg, "filetype", "Lstat", path)?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        ret!(rv, Value::bool(false));
+    };
+    let Some(kind) = file_type_name(mode) else {
+        super::report_internal_diagnostic(
+            eg,
+            ed,
+            8,
+            "Notice",
+            &format!("filetype(): Unknown file type ({})", mode & 0o170000),
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        ret!(rv, Value::string("unknown"));
+    };
+    ret!(rv, Value::string(kind));
+}
+
+#[cold]
+pub(super) fn fn_linkinfo(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(path) = filesystem_string_argument(ed, eg, "linkinfo", 0, "path")? else {
+        return Ok(());
+    };
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => ret!(rv, Value::long(metadata_stat_fields(&metadata)[0])),
+        Err(error) => {
+            let message = error
+                .to_string()
+                .split_once(" (os error ")
+                .map_or_else(|| error.to_string(), |(message, _)| message.to_string());
+            super::report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("linkinfo(): {message}"),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            ret!(rv, Value::long(-1));
+        }
+    }
+}
+
 fn file_mode_predicate(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -1053,19 +1164,9 @@ pub(super) fn fn_chmod(
 pub(super) fn fn_fileperms(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let path = arg_str!(ed, 0);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        match std::fs::metadata(path.as_ref()) {
-            Ok(metadata) => ret!(rv, Value::long(i64::from(metadata.permissions().mode()))),
-            Err(_) => ret!(rv, Value::bool(false)),
-        }
-    }
-    #[cfg(not(unix))]
-    ret!(rv, Value::bool(false));
+    stat_field_result(ed, rv, eg, "fileperms", "mode")
 }
 
 pub(super) fn fn_umask(

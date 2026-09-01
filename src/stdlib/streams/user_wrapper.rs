@@ -569,6 +569,35 @@ pub(crate) fn metadata(eg: &mut ExecutorGlobals, resource: i64) -> Result<Option
     Ok(Some(Value::array(result)))
 }
 
+pub(crate) fn stat(
+    eg: &mut ExecutorGlobals,
+    execute_data: *mut ExecuteData,
+    resource: i64,
+) -> Result<Option<Value>, VmError> {
+    let Some(stream) = shared_stream(eg, resource) else {
+        return Ok(None);
+    };
+    if stream.borrow().kind != UserStreamKind::File {
+        return Ok(None);
+    }
+    let object = stream.borrow().object.clone();
+    let class = object.as_object().map_or_else(
+        || "Unknown".to_string(),
+        |object| object.class_name.to_string(),
+    );
+    let value = invoke_on_stream(eg, resource, "stream_stat", vec![])?;
+    if value.is_none() && eg.exception.is_none() {
+        crate::stdlib::report_internal_diagnostic(
+            eg,
+            execute_data,
+            2,
+            "Warning",
+            &format!("fstat(): {class}::stream_stat is not implemented!"),
+        )?;
+    }
+    Ok(value)
+}
+
 fn discard_resource(eg: &mut ExecutorGlobals, resource: i64) {
     forget_open_resource(eg, resource);
     let _ = super::super::resource::close_for_request::<SharedUserStream>(eg, resource);

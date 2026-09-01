@@ -9,7 +9,7 @@ use crate::vm::frame::ExecuteData;
 use crate::vm::function::ParamTypeHint;
 use crate::vm::function::{FunctionCommon, InternalFunction, InternalFunctionHandler};
 
-use super::stream::PhpStream;
+use super::stream::{PhpStream, StreamStat};
 
 // Linking either extended CSV path into the default ARM64 binary changes
 // unrelated hot-code placement enough to fail the runtime admission gate. Keep
@@ -58,6 +58,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             2,
             &["filename", "mode", "use_include_path", "context"][..],
         ),
+        ("fstat", fn_fstat, 1, 1, &["stream"]),
         #[cfg(feature = "stream-context")]
         (
             "stream_context_create",
@@ -261,6 +262,13 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             // SendRef/SendVal enforce the optional output slot, so ordinary
             // two-argument calls retain the compact fixed-arity ABI.
             function.common.plan.call = crate::vm::function::CallStrategy::Fast;
+        } else if name == "fstat" {
+            function.common.sig.param_type_hints = vec![ParamTypeHint::None];
+            function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
+                ParamTypeHint::Array,
+                ParamTypeHint::ClassName("false".to_string()),
+            ]);
+            function.handler_validates_types = true;
         } else if name == "is_resource" {
             function.common.sig.param_type_hints = vec![ParamTypeHint::Mixed];
             function.common.sig.return_type_hint = ParamTypeHint::Bool;
@@ -274,6 +282,8 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
                 vec![None, None, Some(Value::null())],
                 "standard",
             );
+        } else if name == "fstat" {
+            eg.register_internal_function_reflection_metadata(pointer, vec![None], "standard");
         } else if name == "is_resource" {
             eg.register_internal_function_extension(pointer, "standard");
         }
@@ -916,6 +926,75 @@ fn fn_flock(
         Err(_) => false,
     };
     return_value(return_pointer, Value::bool(locked))
+}
+
+fn virtual_stream_stat_fields(size: u64, writable: bool) -> [i64; 13] {
+    [
+        12,
+        0,
+        if writable { 0o100666 } else { 0o100444 },
+        1,
+        0,
+        0,
+        -1,
+        i64::try_from(size).unwrap_or(i64::MAX),
+        0,
+        0,
+        0,
+        -1,
+        -1,
+    ]
+}
+
+#[cold]
+fn fn_fstat(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let stream = argument(execute_data, 0);
+    let Some(resource) = stream.as_resource_id() else {
+        super::typed_internal_argument_error(eg, "fstat", stream, 1, "stream", "resource");
+        return Ok(());
+    };
+    if !super::resource::is_open_for_request(eg, resource)
+        || super::resource::type_for_request(eg, resource) != "stream"
+    {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            "fstat(): Argument #1 ($stream) must be an open stream resource",
+        ));
+        return Ok(());
+    }
+
+    if let Some(stat) = with_stream(eg, resource, |stream| stream.stat()) {
+        let value = match stat {
+            Ok(Some(StreamStat::Filesystem(metadata))) => super::filesystem::stat_array_value(
+                super::filesystem::metadata_stat_fields(&metadata),
+            ),
+            Ok(Some(StreamStat::Memory { size, writable })) => {
+                super::filesystem::stat_array_value(virtual_stream_stat_fields(size, writable))
+            }
+            Ok(None) | Err(_) => Value::bool(false),
+        };
+        return return_value(return_pointer, value);
+    }
+
+    #[cfg(feature = "stream-registry")]
+    let value = user_wrapper::stat(eg, execute_data, resource)?;
+    #[cfg(feature = "stream-registry")]
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    #[cfg(feature = "stream-registry")]
+    if let Some(value) = value {
+        return return_value(
+            return_pointer,
+            super::filesystem::normalize_wrapper_stat(value),
+        );
+    }
+
+    return_value(return_pointer, Value::bool(false))
 }
 
 #[cold]
