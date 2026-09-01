@@ -421,6 +421,40 @@ fn include_parse_error_value(
     }
 }
 
+fn eval_compile_error(
+    eg: &mut ExecutorGlobals,
+    caller_present: bool,
+    message: &str,
+    source_file: &str,
+) -> IncludeFileOutcome {
+    let location = format!(" in {source_file} on line ");
+    let (message, line) = message
+        .rsplit_once(&location)
+        .and_then(|(message, line)| line.parse::<usize>().ok().map(|line| (message, line)))
+        .unwrap_or((message, 1));
+    let error = make_error_value("CompileError", message);
+    if let Some(mut object) = error.as_object_mut() {
+        object.set_property("file", Value::string(source_file));
+        object.set_property("line", Value::long(line as i64));
+    }
+    include_parse_error_value(eg, caller_present, error)
+}
+
+fn eval_parser_compile_error_is_catchable(statement: &crate::parser::Stmt) -> bool {
+    let crate::parser::Stmt::ExprStmt(crate::parser::Expr::CompileError { message, .. }) = statement
+    else {
+        return false;
+    };
+    matches!(
+        message.as_str(),
+        "Multiple final modifiers are not allowed"
+            | "Multiple access type modifiers are not allowed"
+            | "Cannot use the final modifier on an abstract class"
+            | "__HALT_COMPILER() can only be used from the outermost scope"
+            | "Encoding must be a literal"
+    )
+}
+
 fn imported_class_name(statements: &[crate::parser::Stmt], alias: &str) -> Option<String> {
     for statement in statements {
         match statement {
@@ -523,11 +557,123 @@ fn execute_source_unit(
     caller: Option<(*mut ExecuteData, &crate::compiler::OpArray)>,
     synthetic_trace_origin: Option<(String, usize)>,
 ) -> Result<IncludeFileOutcome, VmError> {
+    // An eval/include reached while a destructor or generator finally is
+    // unwinding must execute independently of the already-pending Throwable.
+    // Restore it after successful source-unit execution, or append it behind
+    // a newly escaping exception using the ordinary replacement contract.
+    let displaced = caller.and_then(|(frame, _)| {
+        take_source_unit_displaced_exception(eg, frame)
+    });
+    let result = execute_source_unit_inner(
+        eg,
+        source,
+        resolved_path,
+        canonical,
+        implicit_return,
+        record_included,
+        caller,
+        synthetic_trace_origin,
+    );
+    let Some((owner, displaced)) = displaced else {
+        return result;
+    };
+    match result {
+        Ok(IncludeFileOutcome::Thrown(replacement)) => {
+            append_replaced_exception(&replacement, &displaced, eg);
+            Ok(IncludeFileOutcome::Thrown(replacement))
+        }
+        Ok(outcome) => {
+            if let Some(replacement) = eg.exception.take() {
+                append_replaced_exception(&replacement, &displaced, eg);
+                eg.exception = Some(replacement);
+            } else {
+                restore_source_unit_displaced_exception(eg, owner, displaced);
+            }
+            Ok(outcome)
+        }
+        Err(error) => {
+            if let Some(replacement) = eg.exception.take() {
+                append_replaced_exception(&replacement, &displaced, eg);
+                eg.exception = Some(replacement);
+            }
+            Err(error)
+        }
+    }
+}
+
+fn take_source_unit_displaced_exception(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+) -> Option<(Option<usize>, Value)> {
+    if let Some(exception) = eg.exception.take() {
+        return Some((None, exception));
+    }
+    let mut current = frame;
+    for _ in 0..16 {
+        let owner = current as usize;
+        let exception = eg
+            .finally_exceptions
+            .get_mut(&owner)
+            .and_then(Vec::pop);
+        let empty = eg
+            .finally_exceptions
+            .get(&owner)
+            .is_some_and(Vec::is_empty);
+        if empty {
+            eg.finally_exceptions.remove(&owner);
+        }
+        if let Some(exception) = exception {
+            return Some((Some(owner), exception));
+        }
+        // SAFETY: a synchronous eval/include retains its complete live caller
+        // chain. Detached destructor/generator frames publish the same logical
+        // caller relation used by backtrace collection.
+        let physical = unsafe { (*current).prev_execute_data };
+        let caller = eg.trace_caller(owner, physical);
+        if caller.is_null() || caller == current {
+            break;
+        }
+        current = caller;
+    }
+    None
+}
+
+fn restore_source_unit_displaced_exception(
+    eg: &mut ExecutorGlobals,
+    owner: Option<usize>,
+    exception: Value,
+) {
+    if let Some(owner) = owner {
+        eg.finally_exceptions
+            .entry(owner)
+            .or_default()
+            .push(exception);
+    } else {
+        eg.exception = Some(exception);
+    }
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn execute_source_unit_inner(
+    eg: &mut ExecutorGlobals,
+    source: String,
+    resolved_path: &str,
+    canonical: String,
+    implicit_return: Value,
+    record_included: bool,
+    caller: Option<(*mut ExecuteData, &crate::compiler::OpArray)>,
+    synthetic_trace_origin: Option<(String, usize)>,
+) -> Result<IncludeFileOutcome, VmError> {
     let source_offset_base = if synthetic_trace_origin.is_some() { 6 } else { 0 };
-    let tokens = match crate::lexer::Lexer::new(&source)
-        .with_source_offset_base(source_offset_base)
-        .tokenize()
-    {
+    let mut lexer = crate::lexer::Lexer::new(&source).with_source_offset_base(source_offset_base);
+    let tokenized = if synthetic_trace_origin.is_some() {
+        lexer.tokenize()
+    } else {
+        lexer.tokenize_included_source()
+    };
+    let tokens = match tokenized {
         Ok(tokens) => tokens,
         Err(error) => {
             return Ok(include_parse_error(
@@ -550,6 +696,13 @@ fn execute_source_unit(
     {
         Ok(statements) => statements,
         Err(error) => {
+            let error = if synthetic_trace_origin.is_some()
+                && error == "Expected expression, got Eof"
+            {
+                format!("syntax error, unexpected end of file in {canonical} on line 1")
+            } else {
+                error
+            };
             if error.starts_with("syntax error,")
                 || error.starts_with("Invalid indentation")
                 || error.starts_with("Invalid body indentation")
@@ -581,6 +734,11 @@ fn execute_source_unit(
             ));
         }
     };
+    // Parser-origin compile diagnostics raised from eval are catchable
+    // CompileError objects. Semantic compiler fatals (for example a reserved
+    // class name) remain uncatchable, exactly like the same primary source.
+    let catchable_eval_compile_error = synthetic_trace_origin.is_some()
+        && stmts.iter().any(eval_parser_compile_error_is_catchable);
     let mut compile_attempts = 0usize;
     let mut compile_result = loop {
         let compiler = crate::compiler::compile::Compiler::new()
@@ -599,6 +757,14 @@ fn execute_source_unit(
                     {
                         return Ok(outcome);
                     }
+                    if catchable_eval_compile_error {
+                        return Ok(eval_compile_error(
+                            eg,
+                            caller.is_some(),
+                            &error.message,
+                            &canonical,
+                        ));
+                    }
                     return Err(VmError::CompileFatal(error.message));
                 };
                 let class_name = imported_class_name(&stmts, owner)
@@ -611,6 +777,14 @@ fn execute_source_unit(
                     {
                         return Ok(outcome);
                     }
+                    if catchable_eval_compile_error {
+                        return Ok(eval_compile_error(
+                            eg,
+                            caller.is_some(),
+                            &error.message,
+                            &canonical,
+                        ));
+                    }
                     return Err(VmError::CompileFatal(error.message));
                 }
                 compile_attempts += 1;
@@ -620,6 +794,14 @@ fn execute_source_unit(
                     emit_source_unit_compile_deprecations(eg, caller, &error.deprecations)?
                 {
                     return Ok(outcome);
+                }
+                if catchable_eval_compile_error {
+                    return Ok(eval_compile_error(
+                        eg,
+                        caller.is_some(),
+                        &error.message,
+                        &canonical,
+                    ));
                 }
                 return Err(VmError::CompileFatal(error.message));
             }
@@ -858,31 +1040,60 @@ fn execute_source_unit(
         std::ptr::null_mut(),
         std::ptr::null_mut(),
     );
-    unsafe {
+    let include_trace_origin = unsafe {
         (*inc_frame).return_value = &mut inc_return_value;
         (*inc_frame).opline = main_func.op_array.instructions.as_ptr();
-    }
+        // SAFETY: source-unit execution is synchronous and the caller remains
+        // parked on its live Include instruction until this helper returns.
+        caller.and_then(|(caller_frame, caller_op_array)| {
+            if synthetic_trace_origin.is_some() {
+                return None;
+            }
+            let caller_opline = &*(*caller_frame).opline;
+            (caller_opline.opcode == OpCode::Include).then(|| {
+                let (file, line) = include_source_origin(caller_op_array, caller_opline);
+                let is_require = caller_opline.extended_value & 1 != 0;
+                let is_once = caller_opline.extended_value & 2 != 0;
+                (file, line, is_require, is_once)
+            })
+        })
+    };
     if let Some((caller_frame, _)) = caller {
         eg.alias_dynamic_scope(inc_frame as usize, caller_frame as usize);
         let called_class_id = called_class_id_for_frame(eg, caller_frame, 0);
         if called_class_id != 0 {
             publish_late_static_call_class_id(eg, inc_frame, called_class_id);
         }
+        eg.publish_detached_trace_caller(inc_frame as usize, caller_frame as usize);
         if let Some((file, line)) = synthetic_trace_origin.as_ref() {
-            eg.publish_detached_trace_caller(inc_frame as usize, caller_frame as usize);
             eg.publish_synthetic_trace_frame(
                 inc_frame as usize,
                 file.clone(),
                 *line,
                 "eval".to_string(),
             );
+        } else if let Some((file, line, is_require, is_once)) = include_trace_origin {
+            eg.publish_synthetic_trace_frame(
+                inc_frame as usize,
+                file,
+                line,
+                include_call_name(is_require, is_once).to_string(),
+            );
         }
+    }
+    if !main_func.op_array.static_vars.is_empty() {
+        eg.publish_closure_static_vars(
+            inc_frame as usize,
+            std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
+        );
     }
     if caller.is_some() {
         for (cv_idx, var_name) in &main_func.op_array.main_scope_vars {
             if let Some(val) = eg.globals.get(var_name) {
-                let cv_ptr = unsafe { (*inc_frame).cv_mut(*cv_idx) as *mut Value };
-                unsafe { frame_slot_set(inc_frame, cv_ptr, clone_scope_binding(val)) };
+                unsafe {
+                    let cv_ptr = (*inc_frame).cv_mut(*cv_idx) as *mut Value;
+                    frame_slot_set(inc_frame, cv_ptr, clone_scope_binding(val));
+                }
             }
         }
     }
@@ -906,7 +1117,7 @@ fn execute_source_unit(
     }
 
     eg.current_execute_data.set(prev_ed);
-    if synthetic_trace_origin.is_some() {
+    if caller.is_some() {
         eg.discard_detached_trace_caller(inc_frame as usize);
     }
     unsafe { cleanup_frame_slots(inc_frame) };
@@ -915,8 +1126,10 @@ fn execute_source_unit(
     if let Some((frame, _)) = caller {
         for (cv_idx, var_name) in &scope_vars {
             if let Some(val) = eg.globals.get(var_name) {
-                let cv_ptr = unsafe { (*frame).cv_mut(*cv_idx) as *mut Value };
-                unsafe { frame_slot_set(frame, cv_ptr, clone_scope_binding(val)) };
+                unsafe {
+                    let cv_ptr = (*frame).cv_mut(*cv_idx) as *mut Value;
+                    frame_slot_set(frame, cv_ptr, clone_scope_binding(val));
+                }
             }
         }
     }
@@ -1134,6 +1347,59 @@ fn include_source_origin(
     };
     let ip = include_origin_index(op_array, opline);
     (file, op_array.source_line(ip).unwrap_or(0))
+}
+
+fn source_unit_filesystem_directory(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+) -> std::path::PathBuf {
+    fn op_array_directory(op_array: &crate::compiler::OpArray) -> Option<std::path::PathBuf> {
+        let source = if !op_array.source_file.is_empty() {
+            op_array.source_file.as_str()
+        } else {
+            op_array.name.as_str()
+        };
+        if source.is_empty()
+            || source == "<main>"
+            || source.contains(" : eval()'d code")
+            || source.contains("://")
+        {
+            return None;
+        }
+        let path = std::path::Path::new(source);
+        if op_array.source_file.is_empty()
+            && !path.is_absolute()
+            && path.components().count() == 1
+            && !path.is_file()
+        {
+            return None;
+        }
+        path.parent().map(std::path::Path::to_path_buf)
+    }
+
+    if let Some(directory) = op_array_directory(op_array) {
+        return directory;
+    }
+    let mut current = frame;
+    for _ in 0..16 {
+        // SAFETY: include resolution walks only the live physical/detached
+        // caller chain. Each returned caller owns a live user op array until
+        // synchronous source-unit execution returns to this frame.
+        let (caller, caller_op_array) = unsafe {
+            let physical = (*current).prev_execute_data;
+            let caller = eg.trace_caller(current as usize, physical);
+            if caller.is_null() || caller == current {
+                break;
+            }
+            (caller, (*caller).op_array())
+        };
+        if let Some(directory) = op_array_directory(caller_op_array) {
+            return directory;
+        }
+        current = caller;
+    }
+    std::env::current_dir().unwrap_or_default()
 }
 
 fn report_include_warning(
@@ -1406,12 +1672,7 @@ fn op_include<'a>(
     let resolved_path = if std::path::Path::new(&path_str).is_absolute() {
         path_str.clone()
     } else {
-        let base_dir = {
-            let op_name = &op_array.name;
-            let path = std::path::Path::new(op_name);
-            path.is_file().then(|| path.parent()).flatten().map(std::path::Path::to_path_buf)
-        }
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        let base_dir = source_unit_filesystem_directory(eg, frame, op_array);
         base_dir.join(&path_str).to_string_lossy().into_owned()
     };
     #[cfg(feature = "include-path")]
@@ -1420,12 +1681,7 @@ fn op_include<'a>(
     } else if std::path::Path::new(&path_str).is_absolute() {
         path_str.clone()
     } else {
-        let base_dir = {
-            let op_name = &op_array.name;
-            let path = std::path::Path::new(op_name);
-            path.is_file().then(|| path.parent()).flatten().map(std::path::Path::to_path_buf)
-        }
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        let base_dir = source_unit_filesystem_directory(eg, frame, op_array);
         base_dir.join(&path_str).to_string_lossy().into_owned()
     };
 

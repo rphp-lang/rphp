@@ -1318,6 +1318,7 @@ impl Parser {
                 Ok(Expr::Print(Box::new(expr)))
             }
             Token::Include | Token::IncludeOnce | Token::Require | Token::RequireOnce => {
+                let line = self.closest_token_source_line();
                 let token = self.advance();
                 let (is_require, is_once) = match token {
                     Token::Include => (false, false),
@@ -1331,6 +1332,7 @@ impl Parser {
                     path: Box::new(path),
                     is_require,
                     is_once,
+                    line,
                 })
             }
             Token::LParen(_) => {

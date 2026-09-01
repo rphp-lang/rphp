@@ -7,7 +7,59 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 PHP 8.5 standard-library checkpoint is
+The latest measured AMD64 PHP 8.5 language checkpoint is
+`dynamic-source-unit-context`, based on `d57b6287`, pinned to php-src commit
+`fcc29c8` and validated against PHP 8.5.10. Filesystem includes now tokenize
+leading or all-file inline text without weakening the primary CLI long-tag
+boundary, retain their Include instruction's file/line origin, resolve nested
+and eval-mediated relative paths through the live source-unit chain, and use a
+fresh per-compilation static store while preserving caller-scope bindings.
+Eval accepts EOF-terminated input and turns the PHP-defined parser-stage
+modifier, nested halt-compiler and nonliteral encoding failures into catchable
+`CompileError`; semantic compiler fatals remain uncatchable. Invalid ASCII
+control bytes use PHP's parse-error token, and include/eval execution preserves
+or correctly chains an exception displaced by destructor/finally unwinding.
+
+Eleven original differential E2E cases cover plain and mixed include content,
+relative include through functions and eval, source-unit statics and scope
+writeback, strict trace origin, displaced and replacement exceptions,
+catchable versus fatal eval compilation, control-byte diagnostics, EOF and
+include-warning line attribution. The focused upstream set adds exact passes
+for ten selected cases plus adjacent repeated mixed/plain include coverage.
+The 5,599-case Zend/lang projection is now 4,918 pass, 385 fail, 115 skip and
+181 unsupported, exact delta `+11/-0`, with manifest hash
+`bbce81ed2cfaf206dd62f6bd17c90ff9b9da77c4dc813773539d2ffee21513f7`
+and sorted pass-set hash
+`d9cc854d35ba258795b6803c7b5f6273a45728c9cc0d37277a980d5cf3c7ca32`.
+The adjacent strings/array projection remains 1,458/19/67/31 with manifest
+hash `226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`
+and unchanged pass-set hash
+`0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+The stable 7,174-case core is therefore 6,376 pass, 404 fail, 182 skip and 212
+unsupported, with no timeout, crash or lost exact pass.
+
+All five Cargo test configurations, all-feature/all-target checking,
+formatting, PHPT-runner, entity-data and the unchanged 1,623/289 unsafe ratchet
+pass. A final default full run and all feature compile projections were
+repeated after the common lexer-layout optimization. Composer 2.8.12 S0, all
+four Symfony S1 gates and FrameworkBundle 7.4.16 warmed S2 and cold S3 pass.
+The release candidate at
+`/tmp/rphp-candidate-dynamic-source-unit-context.91DRxv/release/rphp` hashes to
+`214e4fec499cfbd4a7fc4df26c0e40e4b5ab3d556cb8be6452fd834a10088843`.
+
+The final fixed-parent CPU-2 gate uses 32 balanced pairs per lane after five
+warmups, exact checksums and no outlier removal. Paired-median changes are
+-2.431% for 100 startups, +0.379% for ordinary calls, -0.107% for the array
+control, -0.403% for eval, +0.167% for direct include, +0.377% for include from
+a function and +0.101% for include-once. The raw observations and summary hash
+to `4bc65ff7f3a31ae572dd22ecc246a511c43c2bba2cfb51b7ee39a365a7f3bb72`
+and `a816f567a3be672ad5c636f6a0a713981636620faabad12021bc65dcccf5f2d5`.
+Heredoc-sensitive eval trace line projection, the independent static-property
+LHS evaluation order in GH-20183, and the extra declaration site in strict
+include `TypeError` text remain explicit holdouts; stream-wrapper policy,
+32-bit boundaries and allocation-limit/OOM equivalence are separate work.
+
+The preceding measured AMD64 PHP 8.5 standard-library checkpoint is
 `core-type-predicate-call-contracts`, based on `e976a2fd`, pinned to php-src
 commit `fcc29c8` and validated against PHP 8.5.10. The global functions
 `is_array`, `is_string`, `is_int`, `is_integer`, `is_long`, `is_float`,

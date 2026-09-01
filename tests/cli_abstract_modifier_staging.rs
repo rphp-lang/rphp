@@ -251,35 +251,45 @@ fn include_modifier_fatals_are_uncatchable_and_preserve_prior_state() {
 }
 
 #[test]
-fn eval_modifier_fatals_are_uncatchable_and_preserve_prior_state() {
+fn eval_modifier_errors_preserve_their_parser_or_semantic_compile_stage() {
     let cases = [
         (
             "class",
             "namespace Evaluated;\nfinal abstract class Broken {}",
             "Cannot use the final modifier on an abstract class",
             2,
+            true,
         ),
         (
             "method",
             "namespace Evaluated;\nabstract class Broken {\n    private abstract function hidden();\n}",
             "Abstract function Evaluated\\Broken::hidden() cannot be declared private",
             3,
+            false,
         ),
     ];
 
-    for (label, evaluated, message, line) in cases {
+    for (label, evaluated, message, line, catchable) in cases {
         let source = format!(
             "<?php\nregister_shutdown_function(function () {{ echo \"shutdown\\n\"; }});\necho \"before\\n\";\ntry {{\n    eval({evaluated:?});\n}} catch (Throwable $error) {{\n    echo \"caught\\n\";\n}}\necho \"after\\n\";\n"
         );
         let (status, stdout, stderr) = run_stdin(&source);
-        assert_eq!(status, 255, "{label}: {stderr:?}");
-        assert_eq!(stdout, "before\nshutdown\n", "{label}");
-        assert_eq!(
-            stderr,
-            format!(
-                "Fatal error: {message} in Standard input code(5) : eval()'d code on line {line}\n"
-            ),
-            "{label}"
-        );
+        if catchable {
+            assert_eq!(
+                (status, stdout, stderr),
+                (0, "before\ncaught\nafter\nshutdown\n".into(), String::new()),
+                "{label}"
+            );
+        } else {
+            assert_eq!(status, 255, "{label}: {stderr:?}");
+            assert_eq!(stdout, "before\nshutdown\n", "{label}");
+            assert_eq!(
+                stderr,
+                format!(
+                    "Fatal error: {message} in Standard input code(5) : eval()'d code on line {line}\n"
+                ),
+                "{label}"
+            );
+        }
     }
 }

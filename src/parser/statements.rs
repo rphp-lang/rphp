@@ -300,15 +300,30 @@ impl Parser {
                     );
                 }
                 self.expect(&Token::Assign)?;
-                let value = match self.advance() {
-                    Token::Integer(n) => n,
-                    Token::True => 1,
-                    Token::False => 0,
-                    other => {
-                        return Err(format!(
-                            "Expected integer value in declare(), got {:?}",
-                            other
-                        ));
+                let value = if directive.eq_ignore_ascii_case("encoding") {
+                    match self.peek() {
+                        Token::StringLiteral(_) | Token::BinaryStringLiteral(_) => {
+                            self.advance();
+                            0
+                        }
+                        _ => {
+                            let line = self.closest_token_source_line();
+                            let _ = self.compile_error("Encoding must be a literal", line);
+                            let _ = self.parse_expr()?;
+                            0
+                        }
+                    }
+                } else {
+                    match self.advance() {
+                        Token::Integer(n) => n,
+                        Token::True => 1,
+                        Token::False => 0,
+                        other => {
+                            return Err(format!(
+                                "Expected integer value in declare(), got {:?}",
+                                other
+                            ));
+                        }
                     }
                 };
                 self.expect(&Token::RParen)?;

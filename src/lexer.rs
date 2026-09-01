@@ -368,6 +368,29 @@ impl<'a> Lexer<'a> {
         self
     }
 
+    /// Tokenize a filesystem or stream-backed source unit. Unlike a primary
+    /// CLI source, an included file may begin with inline HTML or consist only
+    /// of text; PHP emits those bytes before entering the first long PHP tag.
+    pub(crate) fn tokenize_included_source(&mut self) -> Result<Vec<Token>, String> {
+        let Some(open) = self.src.windows(5).position(|window| window == b"<?php") else {
+            let mut tokens = vec![Token::OpenTag];
+            self.emit_inline_html(&mut tokens, 0, self.src.len());
+            tokens.push(Token::Eof);
+            self.pos = self.src.len();
+            return Ok(tokens);
+        };
+        if open == 0 {
+            return self.tokenize();
+        }
+
+        let mut tokens = vec![Token::OpenTag];
+        self.emit_inline_html(&mut tokens, 0, open);
+        self.pos = open;
+        let php_tokens = self.tokenize()?;
+        tokens.extend(php_tokens.into_iter().skip(1));
+        Ok(tokens)
+    }
+
     pub fn tokenize(&mut self) -> Result<Vec<Token>, String> {
         let mut tokens = Vec::new();
 
@@ -1005,6 +1028,14 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                 }
                 _ => {
+                    if ch.is_ascii_control() {
+                        tokens.push(Token::ParseError(
+                            format!("syntax error, unexpected character 0x{ch:02X}"),
+                            self.source_line_at(self.pos),
+                        ));
+                        self.pos = self.src.len();
+                        continue;
+                    }
                     return Err(format!(
                         "Unexpected character '{}' at position {}",
                         ch as char, self.pos
@@ -1407,6 +1438,15 @@ impl<'a> Lexer<'a> {
             .position(|window| window == b"<?php")
             .map(|offset| inline_start + offset);
         let inline_end = next_open.unwrap_or(self.src.len());
+        self.emit_inline_html(tokens, inline_start, inline_end);
+        self.pos = match next_open {
+            Some(open) => open + 5,
+            None => self.src.len(),
+        };
+        Ok(())
+    }
+
+    fn emit_inline_html(&self, tokens: &mut Vec<Token>, inline_start: usize, inline_end: usize) {
         if inline_end > inline_start {
             let inline = &self.src[inline_start..inline_end];
             let line = 1 + self.src[..inline_start]
@@ -1424,11 +1464,6 @@ impl<'a> Lexer<'a> {
                 self.source_line_at(inline_end.saturating_sub(1)),
             ));
         }
-        self.pos = match next_open {
-            Some(open) => open + 5,
-            None => self.src.len(),
-        };
-        Ok(())
     }
 }
 
@@ -1649,6 +1684,52 @@ mod tests {
                 Token::Eof,
             ]
         );
+    }
+
+    #[test]
+    fn included_source_emits_initial_inline_html_without_weakening_primary_sources() {
+        let tokens = Lexer::new("leading\n<?php echo 1; ?>\ntrailing\n")
+            .tokenize_included_source()
+            .unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                echo(1),
+                Token::StringLiteral("leading\n".into()),
+                Token::Semicolon(1),
+                echo(2),
+                Token::Integer(1),
+                Token::Semicolon(2),
+                echo(3),
+                Token::StringLiteral("trailing\n".into()),
+                Token::Semicolon(3),
+                Token::Eof,
+            ]
+        );
+        assert_eq!(
+            Lexer::new("plain text").tokenize_included_source().unwrap(),
+            vec![
+                Token::OpenTag,
+                echo(1),
+                Token::StringLiteral("plain text".into()),
+                Token::Semicolon(1),
+                Token::Eof,
+            ]
+        );
+        assert_eq!(
+            Lexer::new("plain text").tokenize().unwrap_err(),
+            "Expected <?php opening tag"
+        );
+    }
+
+    #[test]
+    fn ascii_control_bytes_use_the_php_parse_error_token() {
+        let tokens = Lexer::new("<?php\n$a\x7fb = 3;").tokenize().unwrap();
+        assert!(tokens.contains(&Token::ParseError(
+            "syntax error, unexpected character 0x7F".into(),
+            2,
+        )));
     }
 
     #[test]

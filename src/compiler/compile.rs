@@ -192,7 +192,9 @@ fn expression_source_line(expression: &Expr) -> usize {
         | Expr::Print(inner) => expression_source_line(inner),
         Expr::BitwiseNot { line, .. } if *line != 0 => *line,
         Expr::BitwiseNot { expr, .. } => expression_source_line(expr),
-        Expr::Include { path, .. } => expression_source_line(path),
+        Expr::Include { path, line, .. } => (*line != 0)
+            .then_some(*line)
+            .unwrap_or_else(|| expression_source_line(path)),
         _ => 0,
     }
 }
@@ -11195,6 +11197,7 @@ impl Compiler {
                 path,
                 is_require,
                 is_once,
+                line,
             } => {
                 let (path_op, path_type) = self.compile_expr(path);
                 let result = self.alloc_tmp();
@@ -11204,7 +11207,7 @@ impl Compiler {
                 include.result = result;
                 include.result_type = OpType::Tmp;
                 include.extended_value = u32::from(*is_require) | (u32::from(*is_once) << 1);
-                self.instructions.push(include);
+                self.push_instruction_at_line(include, *line);
                 (result, OpType::Tmp)
             }
             Expr::Eval { source, line } => {

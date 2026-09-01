@@ -413,6 +413,7 @@ pub enum Expr {
         path: Box<Expr>,
         is_require: bool,
         is_once: bool,
+        line: usize,
     },
     Assign {
         // $var = expr (used in expressions like $a = $b ?? $c)
