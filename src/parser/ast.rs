@@ -1288,6 +1288,10 @@ pub struct ClassMethod {
     pub name: String,
     pub params: Vec<Param>,
     pub body: Vec<Stmt>,
+    /// Whether the declaration used a body rather than a terminating `;`.
+    /// An empty body and a missing body are observably different declaration
+    /// shapes even though both contain zero statements.
+    pub has_body: bool,
     pub is_static: bool,
     pub is_final: bool,
     pub is_abstract: bool,

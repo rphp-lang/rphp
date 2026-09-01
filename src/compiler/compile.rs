@@ -3238,6 +3238,7 @@ fn relative_static_expression_line(expression: &Expr) -> Option<usize> {
 }
 
 fn forbidden_static_constant_expression(expression: &Expr) -> Option<(&'static str, usize)> {
+    let recurse = forbidden_static_constant_expression;
     match expression {
         Expr::FirstClassCallable { callable, .. } => relative_static_expression_line(callable)
             .map(|line| ("\"static\" is not allowed in compile-time constants", line)),
@@ -3261,6 +3262,38 @@ fn forbidden_static_constant_expression(expression: &Expr) -> Option<(&'static s
             "\"static::\" is not allowed in compile-time constants",
             *line,
         )),
+        Expr::BinaryOp { left, right, .. }
+        | Expr::NullCoalesce { left, right }
+        | Expr::Elvis { left, right } => recurse(left).or_else(|| recurse(right)),
+        Expr::Not(inner)
+        | Expr::UnaryPlus(inner)
+        | Expr::UnaryMinus(inner)
+        | Expr::BitwiseNot { expr: inner, .. }
+        | Expr::ErrorSuppress(inner)
+        | Expr::Cast { expr: inner, .. } => recurse(inner),
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => recurse(condition)
+            .or_else(|| recurse(then_expr))
+            .or_else(|| recurse(else_expr)),
+        Expr::ArrayLiteral(elements) => elements.iter().find_map(|element| {
+            element
+                .key
+                .as_ref()
+                .and_then(recurse)
+                .or_else(|| recurse(&element.value))
+        }),
+        Expr::ArrayAccess { array, index, .. } => recurse(array).or_else(|| recurse(index)),
+        Expr::PropertyAccess { object, .. } => recurse(object),
+        Expr::DynamicPropertyAccess {
+            object, property, ..
+        } => recurse(object).or_else(|| recurse(property)),
+        Expr::DynamicNamedClassConstant { constant, .. } => recurse(constant),
+        Expr::DynamicClassConstant {
+            class, constant, ..
+        } => recurse(class).or_else(|| recurse(constant)),
         _ => None,
     }
 }
@@ -5519,6 +5552,119 @@ impl Compiler {
         Ok(())
     }
 
+    fn validate_reserved_ancestor_name(
+        &self,
+        ancestor: &GenericAncestor,
+        role: &str,
+        line: usize,
+    ) -> Result<(), String> {
+        if ancestor.name.eq_ignore_ascii_case("self")
+            || ancestor.name.eq_ignore_ascii_case("parent")
+        {
+            return Err(self.goto_error(
+                &format!(
+                    "Cannot use \"{}\" as {role} name, as it is reserved",
+                    ancestor.name
+                ),
+                line,
+            ));
+        }
+        Ok(())
+    }
+
+    fn class_declaration_nesting_is_forbidden(&self) -> bool {
+        // Includes and evals are independent source units even when they
+        // inherit the caller's self/parent resolution scope. Only an op array
+        // compiled from an actual method or class-bound closure is a nested
+        // class declaration context.
+        self.lexical_static_class.is_some() && !self.current_function_name.is_empty()
+    }
+
+    /// Validate source-shape facts that are lost once methods and properties
+    /// enter runtime hash tables. Keep this declaration-only and cold: valid
+    /// classes pay no new VM or object-layout cost.
+    fn validate_class_declaration_members(
+        &self,
+        owner: &str,
+        has_parent: bool,
+        allow_unbound_parent_constant: bool,
+        properties: &[ClassProperty],
+        constants: &[ClassConstant],
+        methods: &[ClassMethod],
+    ) -> Result<(), String> {
+        let mut errors = Vec::<(usize, String)>::new();
+
+        let mut property_names = HashSet::new();
+        for property in properties {
+            // PHP keeps static and instance properties in distinct storage
+            // namespaces, while spelling within either namespace remains
+            // case-sensitive.
+            if !property_names.insert((property.name.as_str(), property.is_static)) {
+                errors.push((
+                    property.line,
+                    format!("Cannot redeclare {owner}::${}", property.name),
+                ));
+            }
+        }
+
+        if !has_parent && !allow_unbound_parent_constant {
+            for constant in constants {
+                if let Some(line) =
+                    local_class_constant_reference_line(&constant.value, "parent", "class", owner)
+                {
+                    errors.push((
+                        line,
+                        "Cannot use \"parent\" when current class scope has no parent".to_string(),
+                    ));
+                }
+            }
+        }
+
+        let mut method_names = HashSet::new();
+        for method in methods {
+            if !method.name.starts_with('$') {
+                let normalized = method.name.to_ascii_lowercase();
+                if !method_names.insert(normalized) {
+                    errors.push((
+                        method.line,
+                        format!("Cannot redeclare {owner}::{}()", method.name),
+                    ));
+                }
+            }
+
+            if method.is_abstract && method.has_body {
+                errors.push((
+                    method.line,
+                    format!(
+                        "Abstract function {owner}::{}() cannot contain body",
+                        method.name
+                    ),
+                ));
+            } else if !method.is_abstract && !method.has_body {
+                errors.push((
+                    method.line,
+                    format!(
+                        "Non-abstract method {owner}::{}() must contain body",
+                        method.name
+                    ),
+                ));
+            }
+
+            for parameter in &method.params {
+                if let Some(default) = &parameter.default
+                    && let Some((message, line)) = forbidden_static_constant_expression(default)
+                {
+                    errors.push((line, message.to_string()));
+                }
+            }
+        }
+
+        if let Some((line, message)) = errors.into_iter().min_by_key(|(line, _)| *line) {
+            return Err(self.goto_error(&message, line));
+        }
+        Ok(())
+    }
+
     fn validate_enum_abstract_methods(
         &self,
         resolved_enum: &str,
@@ -5636,21 +5782,31 @@ impl Compiler {
             })
     }
 
-    /// Validate declaration-stage constraints that PHP applies even when an
-    /// optimizer can prove that the containing source region never executes.
-    /// Ordinary class declarations nested in functions and control-flow
-    /// bodies are still compiled, so a concrete class cannot hide a directly
-    /// declared abstract method behind a constant branch or an earlier
-    /// return. Keep this targeted: runtime inheritance/link checks remain
-    /// attached to the declaration marker.
+    /// Validate declaration-stage constraints even in source regions removed
+    /// by constant folding or an earlier return.
     fn validate_elided_abstract_methods(&self, statements: &[Stmt]) -> Result<(), String> {
+        self.validate_elided_class_declarations(
+            statements,
+            self.class_declaration_nesting_is_forbidden(),
+        )
+    }
+
+    fn validate_elided_class_declarations(
+        &self,
+        statements: &[Stmt],
+        class_nesting_forbidden: bool,
+    ) -> Result<(), String> {
         for statement in statements {
             match statement {
                 Stmt::Class {
                     line,
                     attributes,
                     name,
+                    parent,
+                    implements,
                     is_abstract,
+                    properties,
+                    constants,
                     methods,
                     ..
                 } => {
@@ -5659,6 +5815,9 @@ impl Compiler {
                     self.validate_elided_attribute_constant_expressions(attributes, *line)?;
                     self.validate_class_like_name(name, "class", *line)?;
                     let resolved_class = self.resolve_declaration_name(name);
+                    if class_nesting_forbidden && !resolved_class.starts_with("class@anonymous#") {
+                        return Err(self.goto_error("Class declarations may not be nested", *line));
+                    }
                     if !resolved_class.starts_with("class@anonymous#") {
                         self.validate_declaration_import(
                             UseKind::Class,
@@ -5667,13 +5826,27 @@ impl Compiler {
                             *line,
                         )?;
                     }
+                    if let Some(parent) = parent {
+                        self.validate_reserved_ancestor_name(parent, "class", *line)?;
+                    }
+                    for interface in implements {
+                        self.validate_reserved_ancestor_name(interface, "interface", *line)?;
+                    }
                     self.validate_ordinary_class_abstract_methods(
                         &resolved_class,
                         *is_abstract,
                         methods,
                     )?;
+                    self.validate_class_declaration_members(
+                        &resolved_class,
+                        parent.is_some(),
+                        false,
+                        properties,
+                        constants,
+                        methods,
+                    )?;
                     for method in methods {
-                        self.validate_elided_abstract_methods(&method.body)?;
+                        self.validate_elided_class_declarations(&method.body, true)?;
                     }
                     if let Some(line) = invalid_case_line {
                         return Err(self.goto_error(NON_ENUM_CASE_ERROR, line));
@@ -5686,16 +5859,19 @@ impl Compiler {
                     ..
                 } => {
                     self.validate_elided_attribute_constant_expressions(attributes, *line)?;
-                    self.validate_elided_abstract_methods(body)?;
+                    // Named functions declared from class code do not inherit
+                    // that class's lexical self/parent scope.
+                    self.validate_elided_class_declarations(body, false)?;
                 }
                 Stmt::Block(body) => {
-                    self.validate_elided_abstract_methods(body)?;
+                    self.validate_elided_class_declarations(body, class_nesting_forbidden)?;
                 }
                 Stmt::Enum {
                     line,
                     attributes,
                     name,
                     backing_type,
+                    implements,
                     cases,
                     properties,
                     constants,
@@ -5706,6 +5882,9 @@ impl Compiler {
                     self.validate_class_like_name(name, "enum", *line)?;
                     let resolved_enum = self.resolve_declaration_name(name);
                     self.validate_declaration_import(UseKind::Class, name, &resolved_enum, *line)?;
+                    for interface in implements {
+                        self.validate_reserved_ancestor_name(interface, "interface", *line)?;
+                    }
                     self.validate_enum_declaration_shape(
                         &resolved_enum,
                         *line,
@@ -5715,28 +5894,83 @@ impl Compiler {
                         constants,
                     )?;
                     self.validate_enum_abstract_methods(&resolved_enum, methods)?;
+                    self.validate_class_declaration_members(
+                        &resolved_enum,
+                        false,
+                        false,
+                        properties,
+                        constants,
+                        methods,
+                    )?;
                     self.validate_enum_case_constant_operations(cases)?;
                     for method in methods {
-                        self.validate_elided_abstract_methods(&method.body)?;
+                        self.validate_elided_class_declarations(&method.body, true)?;
                     }
                 }
                 Stmt::Interface {
                     line,
                     attributes,
-                    methods,
-                    ..
-                }
-                | Stmt::Trait {
-                    line,
-                    attributes,
+                    name,
+                    extends,
+                    properties,
+                    constants,
                     methods,
                     ..
                 } => {
                     let invalid_case_line = Attribute::non_enum_case_line(attributes);
                     let _non_enum_case_scope = invalid_case_line.map(NonEnumCaseErrorScope::enter);
                     self.validate_elided_attribute_constant_expressions(attributes, *line)?;
+                    self.validate_class_like_name(name, "interface", *line)?;
+                    let resolved_interface = self.resolve_declaration_name(name);
+                    self.validate_declaration_import(
+                        UseKind::Class,
+                        name,
+                        &resolved_interface,
+                        *line,
+                    )?;
+                    for parent in extends {
+                        self.validate_reserved_ancestor_name(parent, "interface", *line)?;
+                    }
+                    self.validate_class_declaration_members(
+                        &resolved_interface,
+                        false,
+                        false,
+                        properties,
+                        constants,
+                        methods,
+                    )?;
                     for method in methods {
-                        self.validate_elided_abstract_methods(&method.body)?;
+                        self.validate_elided_class_declarations(&method.body, true)?;
+                    }
+                    if let Some(line) = invalid_case_line {
+                        return Err(self.goto_error(NON_ENUM_CASE_ERROR, line));
+                    }
+                }
+                Stmt::Trait {
+                    line,
+                    attributes,
+                    name,
+                    properties,
+                    constants,
+                    methods,
+                    ..
+                } => {
+                    let invalid_case_line = Attribute::non_enum_case_line(attributes);
+                    let _non_enum_case_scope = invalid_case_line.map(NonEnumCaseErrorScope::enter);
+                    self.validate_elided_attribute_constant_expressions(attributes, *line)?;
+                    self.validate_class_like_name(name, "trait", *line)?;
+                    let resolved_trait = self.resolve_declaration_name(name);
+                    self.validate_declaration_import(UseKind::Class, name, &resolved_trait, *line)?;
+                    self.validate_class_declaration_members(
+                        &resolved_trait,
+                        false,
+                        true,
+                        properties,
+                        constants,
+                        methods,
+                    )?;
+                    for method in methods {
+                        self.validate_elided_class_declarations(&method.body, true)?;
                     }
                     if let Some(line) = invalid_case_line {
                         return Err(self.goto_error(NON_ENUM_CASE_ERROR, line));
@@ -5747,18 +5981,21 @@ impl Compiler {
                     else_body,
                     ..
                 } => {
-                    self.validate_elided_abstract_methods(then_body)?;
-                    self.validate_elided_abstract_methods(else_body)?;
+                    self.validate_elided_class_declarations(then_body, class_nesting_forbidden)?;
+                    self.validate_elided_class_declarations(else_body, class_nesting_forbidden)?;
                 }
                 Stmt::While { body, .. }
                 | Stmt::DoWhile { body, .. }
                 | Stmt::For { body, .. }
                 | Stmt::Foreach { body, .. } => {
-                    self.validate_elided_abstract_methods(body)?;
+                    self.validate_elided_class_declarations(body, class_nesting_forbidden)?;
                 }
                 Stmt::Switch { cases, .. } => {
                     for case in cases {
-                        self.validate_elided_abstract_methods(&case.body)?;
+                        self.validate_elided_class_declarations(
+                            &case.body,
+                            class_nesting_forbidden,
+                        )?;
                     }
                 }
                 Stmt::TryCatch {
@@ -5766,16 +6003,22 @@ impl Compiler {
                     catches,
                     finally_body,
                 } => {
-                    self.validate_elided_abstract_methods(try_body)?;
+                    self.validate_elided_class_declarations(try_body, class_nesting_forbidden)?;
                     for catch in catches {
-                        self.validate_elided_abstract_methods(&catch.body)?;
+                        self.validate_elided_class_declarations(
+                            &catch.body,
+                            class_nesting_forbidden,
+                        )?;
                     }
                     if let Some(finally_body) = finally_body {
-                        self.validate_elided_abstract_methods(finally_body)?;
+                        self.validate_elided_class_declarations(
+                            finally_body,
+                            class_nesting_forbidden,
+                        )?;
                     }
                 }
                 Stmt::Namespace { body, .. } => {
-                    self.validate_elided_abstract_methods(body)?;
+                    self.validate_elided_class_declarations(body, class_nesting_forbidden)?;
                 }
                 _ => {}
             }

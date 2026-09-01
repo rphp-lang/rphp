@@ -85,6 +85,57 @@ OOM equivalence remain separate boundaries. The implementation is the commit
 containing this status.
 
 The latest measured AMD64 PHP 8.5 language checkpoint is
+`early-class-declaration-validation`, based on `b3d9d549`, pinned to php-src
+commit `fcc29c8` and validated against PHP 8.5.10. Class, interface, trait and
+enum declarations now retain enough source shape to emit PHP's declaration-
+stage fatal diagnostics before execution, including body/semicolon mismatches,
+case-insensitive duplicate methods, duplicate static or instance properties,
+reserved `self`/`parent` ancestors, rootless `parent::class`, recursively
+nested `static::class` parameter defaults and class declarations nested in a
+method or class-bound closure. Validation also covers declarations elided by
+constant folding or an earlier return, while include/eval source units and
+named functions retain their independent declaration scope and PHP diagnostic
+priority.
+
+Six original E2E regressions cover invalid and adjacent class-like forms,
+first-error ordering, valid abstract/relative/function-local forms, recursive
+constant expressions and the include-from-method boundary. The ten targeted
+PHP 8.5 cases become exact and no prior pass changes. The final 5,599-case
+Zend/lang manifest is 4,891 pass, 412 fail, 115 skip and 181 unsupported,
+exact delta `+10/-0`; it hashes to
+`ab4a844ff611a3a83b66297b0d8d447ba32ca7569ac4898625fe7e5674e604e9`
+and its sorted exact pass set hashes to
+`06af68a6b40dd623eb6191d02639170f79dc4c4cd6a76ff5dfd9d7dd38b80dc8`.
+The adjacent strings/array projection remains 1,458 pass, 19 fail, 67 skip and
+31 unsupported, with manifest hash
+`226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`
+and unchanged pass-set hash
+`0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+The stable 7,174-case core is therefore 6,349 pass, 431 fail, 182 skip and 212
+unsupported, with no timeout or crash.
+
+All five Cargo configurations, all-feature/all-target checking, formatting,
+PHPT-runner and unsafe-policy gates pass; production remains at 1,623 unsafe
+blocks and 289 unsafe functions. Composer 2.8.12 S0, all four Symfony S1 gates
+and FrameworkBundle 7.4.16 warmed S2 and cold S3 pass. The release candidate
+hashes to
+`33ca5a2429bd7fce9393c938ffa4969c057168d14854479ad1dd28e11b9d5aa7`
+and the fixed parent to
+`84e3aefe7f1819cff3195dc92409d8c697d15563bcee138910b6f1da95b61633`.
+
+Two independent CPU-2 release packets each use 32 balanced randomized pairs
+per lane after five warmups with byte-exact output/status checks and no outlier
+removal. Their raw observations hash to
+`d57525b29d0934c3bcf2c9a4b58f2ad0ae446dac1e1eee18a38a53495828b242`
+and `bf240d12265214eb106d48555457a65d2e79a403c453dc45b1a960a72d913231`.
+Across both packets ordinary class declarations are -0.107% to -0.293%,
+interface/abstract declarations -0.006% to -0.092%, and function-local classes
+-0.174% to -0.180%; startup and ordinary `strlen()` controls also improve.
+Runtime inheritance/link behavior, 32-bit and allocation-limit/OOM equivalence
+remain separate boundaries. The implementation is the commit containing this
+status.
+
+The preceding measured AMD64 PHP 8.5 language checkpoint is
 `error-handler-reentrancy-and-write-rollback`, based on `9748ba40`, pinned to
 php-src commit `fcc29c8` and validated against PHP 8.5.10. Request-local user
 error handlers now follow PHP's reentrant stack contract: the active handler is

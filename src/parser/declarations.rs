@@ -277,6 +277,7 @@ impl Parser {
                 name: format!("${}::{}", property.name, hook.to_ascii_lowercase()),
                 params,
                 body,
+                has_body: !hook_is_abstract,
                 is_static: false,
                 is_final: hook_is_final,
                 is_abstract: hook_is_abstract,
@@ -495,6 +496,7 @@ impl Parser {
                     name: format!("${}::{}", property.name, hook.to_ascii_lowercase()),
                     params,
                     body,
+                    has_body: !hook_is_abstract,
                     is_static: false,
                     is_final: hook_is_final,
                     is_abstract: hook_is_abstract,
@@ -619,7 +621,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type(line, false)?;
-                let body = self.parse_method_body(&modifiers, line, false, false)?;
+                let (body, has_body) = self.parse_method_body(&modifiers, line)?;
                 if modifiers.is_abstract {
                     self.compile_error(
                         format!("Anonymous class method {method_name}() must not be abstract"),
@@ -634,6 +636,7 @@ impl Parser {
                     name: method_name,
                     params,
                     body,
+                    has_body,
                     is_static: modifiers.is_static,
                     is_final: modifiers.is_final,
                     is_abstract: modifiers.is_abstract,
@@ -998,7 +1001,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type(line, false)?;
-                let body = self.parse_method_body(&modifiers, line, false, false)?;
+                let (body, has_body) = self.parse_method_body(&modifiers, line)?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
@@ -1008,6 +1011,7 @@ impl Parser {
                     name: method_name,
                     params,
                     body,
+                    has_body,
                     is_static: modifiers.is_static,
                     is_final: modifiers.is_final,
                     is_abstract: modifiers.is_abstract,
@@ -1176,7 +1180,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type(line, false)?;
-                let body = self.parse_method_body(&modifiers, line, true, false)?;
+                let (body, has_body) = self.parse_method_body(&modifiers, line)?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
@@ -1186,6 +1190,7 @@ impl Parser {
                     name: method_name,
                     params,
                     body,
+                    has_body,
                     is_static: modifiers.is_static,
                     is_final: modifiers.is_final,
                     is_abstract: modifiers.is_abstract,
@@ -1401,6 +1406,7 @@ impl Parser {
                     name: method_name,
                     params,
                     body: vec![],
+                    has_body: false,
                     is_static: modifiers.is_static,
                     is_final: false,
                     is_abstract: true,
@@ -1552,7 +1558,7 @@ impl Parser {
                     let params = self.parse_param_list()?;
                     self.expect(&Token::RParen)?;
                     let return_type = self.parse_return_type(line, false)?;
-                    let body = self.parse_method_body(&modifiers, line, true, true)?;
+                    let (body, has_body) = self.parse_method_body(&modifiers, line)?;
                     self.pop_generic_scope();
                     self.class_scope_active = previous_class_scope;
                     methods.push(ClassMethod {
@@ -1562,6 +1568,7 @@ impl Parser {
                         name: method_name,
                         params,
                         body,
+                        has_body,
                         is_static: modifiers.is_static,
                         is_final: modifiers.is_final,
                         is_abstract: modifiers.is_abstract,
@@ -1825,13 +1832,11 @@ impl Parser {
         &mut self,
         modifiers: &MemberModifiers,
         method_line: usize,
-        allow_private_abstract: bool,
-        defer_all_abstract_bodies: bool,
-    ) -> Result<Vec<Stmt>, String> {
+    ) -> Result<(Vec<Stmt>, bool), String> {
         if modifiers.duplicate.is_some() {
             if matches!(self.peek(), Token::Semicolon(_)) {
                 self.advance();
-                return Ok(Vec::new());
+                return Ok((Vec::new(), false));
             }
             self.expect(&Token::LBrace(0))?;
             let mut body = Vec::new();
@@ -1839,7 +1844,7 @@ impl Parser {
                 body.push(self.parse_stmt_in_scope(false)?);
             }
             self.expect(&Token::RBrace)?;
-            return Ok(body);
+            return Ok((body, true));
         }
         if modifiers.is_abstract {
             if modifiers.is_final {
@@ -1848,23 +1853,21 @@ impl Parser {
                     method_line,
                 );
             }
-            if defer_all_abstract_bodies
-                || modifiers.visibility == Visibility::Private && !allow_private_abstract
-            {
-                if matches!(self.peek(), Token::Semicolon(_)) {
-                    self.advance();
-                    return Ok(Vec::new());
-                }
-                self.expect(&Token::LBrace(0))?;
-                let mut body = Vec::new();
-                while self.peek() != Token::RBrace && !self.at_eof() {
-                    body.push(self.parse_stmt_in_scope(false)?);
-                }
-                self.expect(&Token::RBrace)?;
-                return Ok(body);
+            if matches!(self.peek(), Token::Semicolon(_)) {
+                self.advance();
+                return Ok((Vec::new(), false));
             }
-            self.expect(&Token::Semicolon(0))?;
-            return Ok(Vec::new());
+            self.expect(&Token::LBrace(0))?;
+            let mut body = Vec::new();
+            while self.peek() != Token::RBrace && !self.at_eof() {
+                body.push(self.parse_stmt_in_scope(false)?);
+            }
+            self.expect(&Token::RBrace)?;
+            return Ok((body, true));
+        }
+        if matches!(self.peek(), Token::Semicolon(_)) {
+            self.advance();
+            return Ok((Vec::new(), false));
         }
         self.expect(&Token::LBrace(0))?;
         let mut body = Vec::new();
@@ -1872,7 +1875,7 @@ impl Parser {
             body.push(self.parse_stmt_in_scope(false)?);
         }
         self.expect(&Token::RBrace)?;
-        Ok(body)
+        Ok((body, true))
     }
 
     /// Parse match expression

@@ -4973,6 +4973,11 @@ impl Compiler {
                 let _non_enum_case_scope = invalid_case_line.map(NonEnumCaseErrorScope::enter);
                 self.validate_class_like_name(name, "class", *class_line)?;
                 let resolved_class = self.resolve_declaration_name(name);
+                if self.class_declaration_nesting_is_forbidden()
+                    && !resolved_class.starts_with("class@anonymous#")
+                {
+                    return Err(self.goto_error("Class declarations may not be nested", *class_line));
+                }
                 if !resolved_class.starts_with("class@anonymous#") {
                     self.validate_declaration_import(
                         UseKind::Class,
@@ -4981,9 +4986,23 @@ impl Compiler {
                         *class_line,
                     )?;
                 }
+                if let Some(parent) = parent {
+                    self.validate_reserved_ancestor_name(parent, "class", *class_line)?;
+                }
+                for interface in implements {
+                    self.validate_reserved_ancestor_name(interface, "interface", *class_line)?;
+                }
                 self.validate_ordinary_class_abstract_methods(
                     &resolved_class,
                     *is_abstract,
+                    methods,
+                )?;
+                self.validate_class_declaration_members(
+                    &resolved_class,
+                    parent.is_some(),
+                    false,
+                    properties,
+                    constants,
                     methods,
                 )?;
                 self.validate_attribute_target(attributes, "class", *class_line)?;
@@ -5102,6 +5121,7 @@ impl Compiler {
                             }),
                             line: property.line,
                         }],
+                        has_body: true,
                         is_static: false,
                         is_final: false,
                         is_abstract: false,
@@ -5147,6 +5167,7 @@ impl Compiler {
                                 line: property.line,
                             },
                         ],
+                        has_body: true,
                         is_static: false,
                         is_final: false,
                         is_abstract: false,
@@ -6072,6 +6093,17 @@ impl Compiler {
                     &resolved_iface,
                     *interface_line,
                 )?;
+                for parent in extends {
+                    self.validate_reserved_ancestor_name(parent, "interface", *interface_line)?;
+                }
+                self.validate_class_declaration_members(
+                    &resolved_iface,
+                    false,
+                    false,
+                    properties,
+                    constants,
+                    methods,
+                )?;
                 self.validate_attribute_target(attributes, "class", *interface_line)?;
                 self.validate_attribute_class_form(
                     attributes,
@@ -6434,6 +6466,14 @@ impl Compiler {
                     name,
                     &resolved_trait,
                     *trait_line,
+                )?;
+                self.validate_class_declaration_members(
+                    &resolved_trait,
+                    false,
+                    true,
+                    properties,
+                    constants,
+                    methods,
                 )?;
                 self.validate_attribute_target(attributes, "class", *trait_line)?;
                 self.validate_attribute_class_form(
@@ -7024,6 +7064,9 @@ impl Compiler {
                     &resolved_enum,
                     *enum_line,
                 )?;
+                for interface in implements {
+                    self.validate_reserved_ancestor_name(interface, "interface", *enum_line)?;
+                }
                 self.validate_attribute_target(attributes, "class", *enum_line)?;
                 self.validate_attribute_class_form(
                     attributes,
@@ -7048,6 +7091,14 @@ impl Compiler {
                 )?;
 
                 self.validate_enum_abstract_methods(&resolved_enum, methods)?;
+                self.validate_class_declaration_members(
+                    &resolved_enum,
+                    false,
+                    false,
+                    properties,
+                    constants,
+                    methods,
+                )?;
                 self.validate_enum_case_constant_operations(cases)?;
 
                 // PHP installs the engine-owned enum methods in a fixed order.
@@ -7272,6 +7323,7 @@ impl Compiler {
                         )),
                         line: 0,
                     }],
+                    has_body: true,
                     is_static: true,
                     is_final: false,
                     is_abstract: false,
@@ -7347,6 +7399,7 @@ impl Compiler {
                             expr: Some(Expr::Null),
                             line: 0,
                         }),
+                        has_body: true,
                         is_static: true,
                         is_final: false,
                         is_abstract: false,
@@ -7400,6 +7453,7 @@ impl Compiler {
                             },
                             line: 0,
                         }),
+                        has_body: true,
                         is_static: true,
                         is_final: false,
                         is_abstract: false,
