@@ -1768,7 +1768,7 @@ foreach ($object as $name => $value) {
         ),
         concat!(
             "initialize\n",
-            "{\"backed\":2,\"base\":1,\"dynamic\":4,\"virtual\":3}\n",
+            "{\"base\":1,\"backed\":2,\"virtual\":3,\"dynamic\":4}\n",
             "base:1\nbacked:2\nvirtual:3\ndynamic:4\n"
         )
     );

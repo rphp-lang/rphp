@@ -36,26 +36,30 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted AMD64 `error-handler-reentrancy-and-write-rollback` train reaches
-6,339 exact passes across the stable 7,174-case PHP 8.5 Zend/lang plus
-strings/array core, with 441 supported failures, 182 skips, 212 unsupported
-cases and no timeout or crash. Twenty upstream error-handler/write-boundary
-cases become exact and the broader Zend/lang projection is precisely `+26/-0`.
-Request-local handler replacement, false/throwing callbacks, logical traces and
-surplus arguments now share one reentrant contract; diagnostic writes preserve
-PHP evaluation order, references and COW while preventing stale publication
-after the callback replaces a target root.
+The accepted AMD64 `json-encode-output-policy` train retains 6,339 exact passes
+across the stable 7,174-case PHP 8.5 Zend/lang plus strings/array core, with 441
+supported failures, 182 skips, 212 unsupported cases and no timeout or crash.
+The full 88-case `ext/json` projection advances from 57 to 79 exact passes with
+no lost pass: 79 pass, six fail, two skip and one unsupported, exact delta
+`+22/-0`. `json_encode()` now applies PHP's default slash and UTF-16 escaping,
+HTML hex flags, Unicode and line-terminator policy, malformed-UTF-8 repair,
+numeric-string projection, recursive force-object behavior, four-space pretty
+printing and declared/dynamic property order through a request-local,
+reentrant-safe formatter.
 
 Five Cargo configurations, all-target, exact upstream no-loss,
 Composer/Symfony S0-S3, format and the unchanged 1,623/289 unsafe ratchet pass.
-The fixed-parent CPU-2 32-pair holdout keeps ordinary calls at -1.025%, array
-writes at +1.146% and the surplus-argument handler at +4.787%; the LIFO cold
-argument owner is compile-time size-checked against the former request-state
-field so later hot offsets stay stable. Current work remains selected as a
-10–30-case train around one shared root-cause hypothesis and one cumulative
-evidence packet. Smaller checkpoints require a crash, security issue,
-framework blocker or similarly explicit reason; Fiber/generator suspension
-additionally requires a pay-for-use performance design.
+Two independent fixed-parent CPU-2 32-pair packets keep startup, ordinary
+calls, `json_decode()` and compact arrays within one percent, while ordinary
+objects improve. A flag-aware serializer fast path makes the newly correct
+Unicode/slash lane 11–12% faster than the parent. The remaining pay-use lanes
+cost 66–67% for numeric-string classification and 14–15% for pretty printing
+against a parent that ignored those flags; exact output is checked on every
+pair. Current work remains selected as a 10–30-case train around one shared
+root-cause hypothesis and one cumulative evidence packet. Smaller checkpoints
+require a crash, security issue, framework blocker or similarly explicit
+reason; Fiber/generator suspension additionally requires a pay-for-use
+performance design.
 
 ## Starting evidence
 

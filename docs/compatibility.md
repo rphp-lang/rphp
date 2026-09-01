@@ -7,6 +7,83 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The latest measured AMD64 PHP 8.5 standard-library checkpoint is
+`json-encode-output-policy`, based on `5262e7fa`, pinned to php-src commit
+`fcc29c8` and validated against PHP 8.5.10. `json_encode()` now exposes and
+applies `JSON_HEX_TAG`, `JSON_HEX_AMP`, `JSON_HEX_APOS`, `JSON_HEX_QUOT`,
+`JSON_FORCE_OBJECT`, `JSON_PRETTY_PRINT` and
+`JSON_UNESCAPED_LINE_TERMINATORS`. PHP's default slash and lowercase UTF-16
+escaping, surrogate pairs, Unicode and line-terminator combinations,
+malformed-UTF-8 ignore/substitute boundaries, complete finite numeric-string
+classification and preserved zero fractions share one encoder policy.
+
+Recursive `JSON_FORCE_OBJECT` conversion, four-space pretty printing and
+declared-then-dynamic property order are preserved for arrays, ordinary user
+objects, `stdClass` and reflected properties. Structural/error-only flag paths
+retain the compact serializer; only text, number or layout flags pay for the
+custom formatter. Formatter indentation and value state are invocation-local,
+so nested `JsonSerializable` callbacks and a failed encode cannot contaminate
+the next call. Thirteen original E2E cases cover constants, escaping, every
+output flag family, malformed bytes, numeric edge cases, recursive objects,
+property order, recursion/partial output, nested calls, failures and direct,
+named, dynamic, first-class and callback dispatch.
+
+The full 88-case `ext/json` projection advances from 57 pass, 28 fail, two
+skip and one unsupported to 79 pass, six fail, two skip and one unsupported,
+exact delta `+22/-0`. Its candidate manifest hashes to
+`a7f30ecf11fd6f4382dfabcd9fef8af3be5559c2aa1d8b9fb7c38a2a36c8504c`;
+its sorted exact pass set hashes to
+`fb00b59e152f577605e4aaa22fefe5b40503477f4c3ed7c68c8b3c075429f82f`;
+the exact parent manifest hashes to
+`a2c6bc67225ce011403ed8b759e3da210315fdf408e549835f3b7e6bc8284779`.
+The 5,599-case Zend/lang projection remains 4,881 pass, 422 fail, 115 skip and
+181 unsupported and hashes to
+`3d22462297151868902c6f1c7496d460cc08d828bf7993ffe1372d8b1ef5201`.
+The adjacent 1,575-case strings/array projection remains 1,458 pass, 19 fail,
+67 skip and 31 unsupported and hashes to
+`e698faeeefe12439d856bd7b949099236ff28da312700711c69d094bc5f4a5b5`.
+Both sorted pass sets are byte-identical to the parent, so the stable
+7,174-case core remains 6,339 pass, 441 fail, 182 skip and 212 unsupported,
+exact delta `+0/-0`, with no timeout or crash.
+
+The on-demand builtin inventory reports 1,201 reference globals: 469 are
+present, 732 are missing, zero present functions have a call-shape mismatch,
+382 retain a metadata mismatch and 87 are exact. The Symfony-base projection
+contains 467 present and 266 missing functions, zero call-shape mismatches, 381
+metadata mismatches and 86 exact functions. All five JSON globals are present
+and exact. The audit summary and report hash to
+`859ddfe3bdde066a519719d5b47cc0469237955e716dcde0ad3f632cc7610774`
+and `b07fd250c9f96fc7155c639a15b3704ea7b3e8be04a893efc503c180815f7b7f`.
+
+All five Cargo configurations, all-feature/all-target checking, formatting,
+PHPT and unsafe-policy gates pass; production remains at 1,623 unsafe blocks
+and 289 unsafe functions. Composer 2.8.12 S0, all four Symfony S1 gates and
+FrameworkBundle 7.4.16 warmed-kernel S2 and cold-build S3 pass. The release
+candidate hashes to
+`84e3aefe7f1819cff3195dc92409d8c697d15563bcee138910b6f1da95b61633`
+and the exact fixed parent to
+`142cf091437689ae57c3f69705c1e51f1c0462ee16453ed14bd91926434de1fb`.
+
+Two independent CPU-2 release packets each use 32 balanced randomized pairs
+per lane after five warmups, exact output/status/diagnostic checks and no
+outlier removal. Their raw observations hash to
+`ffb5884cf34a068040a6851083098a3e686f145848bbeaa6cec554fdd3b63fe2`
+and `deab120d9fd6c232d0a83d056d4fe91161beddf656d49dceda9dfbabf69c7267`.
+Across both packets startup, ordinary calls, unchanged `json_decode()` and
+compact arrays stay within one percent, while ordinary objects improve by
+1.350–3.151%. A flag-aware serializer path makes Unicode/slash output
+11.096–11.770% faster than the parent. The remaining newly correct pay-use
+lanes cost 66.304–67.037% for numeric-string classification and
+14.519–14.888% for pretty printing against a parent that ignored or did not
+implement those output policies. The candidate executable is 8,928 bytes
+larger.
+
+Binary provenance for malformed dynamic object-property names, true insertion
+order for legacy internal objects still backed by unordered maps, the six
+remaining ordinary `ext/json` failures, 32-bit behavior and allocation-limit/
+OOM equivalence remain separate boundaries. The implementation is the commit
+containing this status.
+
 The latest measured AMD64 PHP 8.5 language checkpoint is
 `error-handler-reentrancy-and-write-rollback`, based on `9748ba40`, pinned to
 php-src commit `fcc29c8` and validated against PHP 8.5.10. Request-local user
@@ -112,7 +189,7 @@ General SPL, Fiber/generator suspension, 32-bit and allocation-limit/OOM
 equivalence remain separate boundaries. The implementation is the commit
 containing this status.
 
-The latest measured AMD64 PHP 8.5 standard-library checkpoint is
+The preceding measured AMD64 PHP 8.5 standard-library checkpoint is
 `json-validate-contract`, based on `309f7aa8`, pinned to php-src commit
 `fcc29c8` and validated against PHP 8.5.10. `json_validate()` now exposes the
 exact `json`, `depth` and `flags` parameter contract, reflected defaults and

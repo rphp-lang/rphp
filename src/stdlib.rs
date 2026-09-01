@@ -15409,8 +15409,18 @@ fn fn_constant(
 // JSON functions
 // ============================================================================
 
+const JSON_HEX_TAG_FLAG: i64 = 1;
+const JSON_HEX_AMP_FLAG: i64 = 2;
+const JSON_HEX_APOS_FLAG: i64 = 4;
+const JSON_HEX_QUOT_FLAG: i64 = 8;
+const JSON_FORCE_OBJECT_FLAG: i64 = 16;
+const JSON_NUMERIC_CHECK_FLAG: i64 = 32;
+const JSON_UNESCAPED_SLASHES_FLAG: i64 = 64;
+const JSON_PRETTY_PRINT_FLAG: i64 = 128;
+const JSON_UNESCAPED_UNICODE_FLAG: i64 = 256;
 const JSON_PARTIAL_OUTPUT_ON_ERROR_FLAG: i64 = 512;
 const JSON_PRESERVE_ZERO_FRACTION_FLAG: i64 = 1024;
+const JSON_UNESCAPED_LINE_TERMINATORS_FLAG: i64 = 2048;
 const JSON_INVALID_UTF8_IGNORE_FLAG: i64 = 1_048_576;
 const JSON_INVALID_UTF8_SUBSTITUTE_FLAG: i64 = 2_097_152;
 const JSON_THROW_ON_ERROR_FLAG: i64 = 4_194_304;
@@ -20408,6 +20418,33 @@ fn json_stopped_container(
     true
 }
 
+#[inline]
+fn php_invalid_utf8_sequence_len(bytes: &[u8]) -> usize {
+    let Some(&lead) = bytes.first() else {
+        return 0;
+    };
+    // Consume one maximal malformed subpart, but leave an ASCII byte or a
+    // potentially valid UTF-8 lead for the next character. Invalid standalone
+    // leads such as C0/C1 and F5-FF therefore remain one-byte errors.
+    let expected = match lead {
+        0xc2..=0xdf => 2,
+        0xe0..=0xef => 3,
+        0xf0..=0xf4 => 4,
+        _ => return 1,
+    };
+    let mut consumed = 1usize;
+    while consumed < expected {
+        let Some(next) = bytes.get(consumed).copied() else {
+            break;
+        };
+        if next < 0x80 || matches!(next, 0xc2..=0xf4) {
+            break;
+        }
+        consumed += 1;
+    }
+    consumed
+}
+
 fn repair_json_utf8(bytes: &[u8], substitute: bool) -> String {
     let mut output = String::new();
     let mut remaining = bytes;
@@ -20426,7 +20463,7 @@ fn repair_json_utf8(bytes: &[u8], substitute: bool) -> String {
                 if substitute {
                     output.push('\u{fffd}');
                 }
-                let skipped = error.error_len().unwrap_or(remaining.len() - valid);
+                let skipped = php_invalid_utf8_sequence_len(&remaining[valid..]);
                 remaining = &remaining[valid + skipped..];
             }
         }
@@ -20452,6 +20489,9 @@ fn json_utf8_string(bytes: &[u8], state: &mut PhpJsonEncodeState) -> Option<Stri
 
 #[inline]
 fn json_php_string(value: &Value, state: &mut PhpJsonEncodeState) -> Option<String> {
+    if !value.is_binary_string() {
+        return value.as_str().map(str::to_owned);
+    }
     let bytes = value.php_string_bytes().unwrap_or_default();
     json_utf8_string(&bytes, state)
 }
@@ -20462,6 +20502,86 @@ fn json_php_array_key(key: String, external: bool, state: &mut PhpJsonEncodeStat
         return key;
     }
     json_utf8_string(&php_string_to_bytes(&key), state).unwrap_or_default()
+}
+
+#[inline]
+fn json_compact_string_is_compatible(value: &str, flags: i64) -> bool {
+    let string_flags = flags
+        & (JSON_HEX_TAG_FLAG
+            | JSON_HEX_AMP_FLAG
+            | JSON_HEX_APOS_FLAG
+            | JSON_HEX_QUOT_FLAG
+            | JSON_UNESCAPED_SLASHES_FLAG
+            | JSON_UNESCAPED_UNICODE_FLAG
+            | JSON_UNESCAPED_LINE_TERMINATORS_FLAG);
+    if string_flags == 0 {
+        return !value
+            .as_bytes()
+            .iter()
+            .any(|byte| *byte >= 0x80 || *byte == b'/');
+    }
+    if string_flags
+        == (JSON_UNESCAPED_SLASHES_FLAG
+            | JSON_UNESCAPED_UNICODE_FLAG
+            | JSON_UNESCAPED_LINE_TERMINATORS_FLAG)
+    {
+        return true;
+    }
+    for &byte in value.as_bytes() {
+        let incompatible = match byte {
+            b'/' => flags & JSON_UNESCAPED_SLASHES_FLAG == 0,
+            b'<' | b'>' => flags & JSON_HEX_TAG_FLAG != 0,
+            b'&' => flags & JSON_HEX_AMP_FLAG != 0,
+            b'\'' => flags & JSON_HEX_APOS_FLAG != 0,
+            b'"' => flags & JSON_HEX_QUOT_FLAG != 0,
+            0x80..=0xff => flags & JSON_UNESCAPED_UNICODE_FLAG == 0,
+            _ => false,
+        };
+        if incompatible {
+            return false;
+        }
+    }
+    flags & JSON_UNESCAPED_UNICODE_FLAG == 0
+        || flags & JSON_UNESCAPED_LINE_TERMINATORS_FLAG != 0
+        || (!value.contains('\u{2028}') && !value.contains('\u{2029}'))
+}
+
+#[inline(always)]
+fn mark_json_compact_string(value: &str, flags: i64, compact_formatter_compatible: &mut bool) {
+    if *compact_formatter_compatible && !json_compact_string_is_compatible(value, flags) {
+        *compact_formatter_compatible = false;
+    }
+}
+
+fn json_numeric_string_number(
+    value: &str,
+    preserve_zero_fraction: bool,
+) -> Option<serde_json::Number> {
+    let trimmed = value.trim_matches(|character| {
+        matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}')
+    });
+    let integer = trimmed.strip_prefix('+').unwrap_or(trimmed);
+    if !trimmed
+        .bytes()
+        .any(|byte| matches!(byte, b'.' | b'e' | b'E'))
+        && let Ok(integer) = integer.parse::<i64>()
+    {
+        return Some(serde_json::Number::from(integer));
+    }
+    let number = php_numeric_string_to_float(value)?;
+    if !number.is_finite() {
+        return None;
+    }
+    let magnitude = number.abs();
+    if !preserve_zero_fraction
+        && (number != 0.0 || !number.is_sign_negative())
+        && number.fract() == 0.0
+        && (magnitude == 0.0 || (1e-4..1e17).contains(&magnitude))
+        && let Ok(integer) = i64::try_from(number as i128)
+    {
+        return Some(serde_json::Number::from(integer));
+    }
+    serde_json::Number::from_f64(number)
 }
 
 fn json_container_is_recursive(mut container: Option<&PhpJsonContainer<'_>>, key: usize) -> bool {
@@ -20544,6 +20664,7 @@ fn project_ordinary_json_object(
             if json_stopped_container(val, state, eg) {
                 return Ok(PhpJsonValue::Null);
             }
+            mark_json_compact_string(&definition.name, state.flags, compact_formatter_compatible);
             entries.push((definition.name, encoded));
         }
     }
@@ -20557,6 +20678,7 @@ fn project_ordinary_json_object(
     }
     entries.reserve(dynamic.len());
     for (key, value) in dynamic {
+        mark_json_compact_string(&key, state.flags, compact_formatter_compatible);
         let encoded = value_to_json(
             &value,
             eg,
@@ -20569,14 +20691,19 @@ fn project_ordinary_json_object(
         }
         entries.push((key, encoded));
     }
-    // ReflectionProperty's two engine-declared public slots have a canonical
-    // PHP order (`name`, then `class`). Other objects retain the established
-    // deterministic projection until general property insertion order is a
-    // separately admitted runtime contract.
-    if val
-        .as_object()
-        .is_none_or(|object| object.class_name.as_ref() != "ReflectionProperty")
-    {
+    // Declared slots already arrive in PHP object-iteration order and dynamic
+    // properties follow in insertion order. Some legacy class-id-zero internal
+    // objects are still seeded from HashMap and have already lost that order;
+    // keep their established deterministic projection until those constructors
+    // move to ordered storage. stdClass and ReflectionProperty are ordered.
+    let sort_legacy_internal = class_id == 0
+        && val.as_object().is_some_and(|object| {
+            !matches!(
+                object.class_name.as_ref(),
+                "stdClass" | "ReflectionProperty"
+            )
+        });
+    if sort_legacy_internal {
         entries.sort_by(|left, right| left.0.cmp(&right.0));
     }
     state.finish_container(container.depth);
@@ -20676,8 +20803,14 @@ fn try_project_default_json_array_tree(
             PhpJsonDefaultValue::Number(serde_json::Number::from_f64(value)?)
         }
         ValueType::String => {
-            let bytes = val.php_string_bytes()?;
-            PhpJsonDefaultValue::String(std::str::from_utf8(&bytes).ok()?.to_owned())
+            let value = if val.is_binary_string() {
+                let bytes = val.php_string_bytes()?;
+                std::str::from_utf8(&bytes).ok()?.to_owned()
+            } else {
+                val.as_str()?.to_owned()
+            };
+            mark_json_compact_string(&value, 0, compact_formatter_compatible);
+            PhpJsonDefaultValue::String(value)
         }
         ValueType::Array => {
             let depth = parent.map_or(1, |container| container.depth.saturating_add(1));
@@ -20723,6 +20856,7 @@ fn try_project_default_json_array_tree(
                         }
                         ArrayKey::String(key) => key,
                     };
+                    mark_json_compact_string(&key, 0, compact_formatter_compatible);
                     entries.push((
                         key,
                         try_project_default_json_array_tree(
@@ -20770,9 +20904,41 @@ fn project_json_scalar(
                 PhpJsonValue::Number(serde_json::Number::from(0))
             }
         }
-        ValueType::String => json_php_string(val, state)
-            .map(PhpJsonValue::String)
-            .unwrap_or(PhpJsonValue::Null),
+        ValueType::String => {
+            // NUMERIC_CHECK classifies the original byte string. UTF-8 repair
+            // happens only afterwards, so ignoring a malformed suffix must
+            // not turn a non-numeric input into a number.
+            let numeric = if state.flags & JSON_NUMERIC_CHECK_FLAG != 0 {
+                let preserve_zero_fraction = state.flags & JSON_PRESERVE_ZERO_FRACTION_FLAG != 0;
+                if val.is_binary_string() {
+                    val.php_string_bytes().and_then(|bytes| {
+                        std::str::from_utf8(&bytes).ok().and_then(|value| {
+                            json_numeric_string_number(value, preserve_zero_fraction)
+                        })
+                    })
+                } else {
+                    val.as_str()
+                        .and_then(|value| json_numeric_string_number(value, preserve_zero_fraction))
+                }
+            } else {
+                None
+            };
+            if let Some(number) = numeric {
+                if *compact_formatter_compatible && number.is_f64() {
+                    let value = number.as_f64().unwrap_or_default();
+                    let magnitude = value.abs();
+                    *compact_formatter_compatible =
+                        value.fract() != 0.0 && (1e-4..1e17).contains(&magnitude);
+                }
+                PhpJsonValue::Number(number)
+            } else {
+                let Some(value) = json_php_string(val, state) else {
+                    return Some(PhpJsonValue::Null);
+                };
+                mark_json_compact_string(&value, state.flags, compact_formatter_compatible);
+                PhpJsonValue::String(value)
+            }
+        }
         ValueType::Array
         | ValueType::Object
         | ValueType::Resource
@@ -20868,10 +21034,11 @@ fn value_to_json_inner(
                 return Ok(PhpJsonValue::Null);
             }
             let arr = val.as_array().unwrap();
-            let is_list = arr
-                .iter()
-                .enumerate()
-                .all(|(i, (k, _))| matches!(k, ArrayKey::Int(n) if n == i as i64));
+            let is_list = state.flags & JSON_FORCE_OBJECT_FLAG == 0
+                && arr
+                    .iter()
+                    .enumerate()
+                    .all(|(i, (k, _))| matches!(k, ArrayKey::Int(n) if n == i as i64));
             let projection = if is_list {
                 let mut values = PhpJsonArrayBuilder::with_capacity(arr.len());
                 for value in arr.values() {
@@ -20898,6 +21065,7 @@ fn value_to_json_inner(
                             json_php_array_key(string, external_byte_keys, state)
                         }
                     };
+                    mark_json_compact_string(&key, state.flags, compact_formatter_compatible);
                     if json_stopped_container(val, state, eg) {
                         return Ok(PhpJsonValue::Null);
                     }
@@ -21062,6 +21230,37 @@ fn value_to_json_inner(
 struct PhpJsonFormatter {
     serialize_precision: i32,
     preserve_zero_fraction: bool,
+    flags: i64,
+    pretty_print: bool,
+    current_indent: usize,
+    has_value: bool,
+}
+
+#[inline(always)]
+fn write_json_utf16_escape<W>(writer: &mut W, code_unit: u16) -> std::io::Result<()>
+where
+    W: ?Sized + std::io::Write,
+{
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    writer.write_all(&[
+        b'\\',
+        b'u',
+        HEX[((code_unit >> 12) & 0x0f) as usize],
+        HEX[((code_unit >> 8) & 0x0f) as usize],
+        HEX[((code_unit >> 4) & 0x0f) as usize],
+        HEX[(code_unit & 0x0f) as usize],
+    ])
+}
+
+#[inline]
+fn write_php_json_indent<W>(writer: &mut W, depth: usize) -> std::io::Result<()>
+where
+    W: ?Sized + std::io::Write,
+{
+    for _ in 0..depth {
+        writer.write_all(b"    ")?;
+    }
+    Ok(())
 }
 
 impl serde_json::ser::Formatter for PhpJsonFormatter {
@@ -21096,6 +21295,165 @@ impl serde_json::ser::Formatter for PhpJsonFormatter {
         output.make_ascii_lowercase();
         writer.write_all(output.as_bytes())
     }
+
+    fn write_string_fragment<W>(&mut self, writer: &mut W, fragment: &str) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        let mut copied_until = 0usize;
+        for (index, character) in fragment.char_indices() {
+            let ascii_escape: Option<&'static [u8]> = match character {
+                '/' if self.flags & JSON_UNESCAPED_SLASHES_FLAG == 0 => Some(b"\\/"),
+                '<' if self.flags & JSON_HEX_TAG_FLAG != 0 => Some(b"\\u003C"),
+                '>' if self.flags & JSON_HEX_TAG_FLAG != 0 => Some(b"\\u003E"),
+                '&' if self.flags & JSON_HEX_AMP_FLAG != 0 => Some(b"\\u0026"),
+                '\'' if self.flags & JSON_HEX_APOS_FLAG != 0 => Some(b"\\u0027"),
+                _ => None,
+            };
+            let unicode_escape = !character.is_ascii()
+                && (self.flags & JSON_UNESCAPED_UNICODE_FLAG == 0
+                    || (matches!(character, '\u{2028}' | '\u{2029}')
+                        && self.flags & JSON_UNESCAPED_LINE_TERMINATORS_FLAG == 0));
+            if ascii_escape.is_none() && !unicode_escape {
+                continue;
+            }
+            writer.write_all(fragment[copied_until..index].as_bytes())?;
+            if let Some(escape) = ascii_escape {
+                writer.write_all(escape)?;
+            } else {
+                let mut units = [0u16; 2];
+                for code_unit in character.encode_utf16(&mut units) {
+                    write_json_utf16_escape(writer, *code_unit)?;
+                }
+            }
+            copied_until = index + character.len_utf8();
+        }
+        writer.write_all(fragment[copied_until..].as_bytes())
+    }
+
+    fn write_char_escape<W>(
+        &mut self,
+        writer: &mut W,
+        escape: serde_json::ser::CharEscape,
+    ) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        if matches!(&escape, serde_json::ser::CharEscape::Quote)
+            && self.flags & JSON_HEX_QUOT_FLAG != 0
+        {
+            return writer.write_all(b"\\u0022");
+        }
+        let mut compact = serde_json::ser::CompactFormatter;
+        serde_json::ser::Formatter::write_char_escape(&mut compact, writer, escape)
+    }
+
+    fn begin_array<W>(&mut self, writer: &mut W) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        if self.pretty_print {
+            self.current_indent += 1;
+            self.has_value = false;
+        }
+        writer.write_all(b"[")
+    }
+
+    fn end_array<W>(&mut self, writer: &mut W) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        if self.pretty_print {
+            self.current_indent -= 1;
+            if self.has_value {
+                writer.write_all(b"\n")?;
+                write_php_json_indent(writer, self.current_indent)?;
+            }
+        }
+        writer.write_all(b"]")
+    }
+
+    fn begin_array_value<W>(&mut self, writer: &mut W, first: bool) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        if !self.pretty_print {
+            return if first {
+                Ok(())
+            } else {
+                writer.write_all(b",")
+            };
+        }
+        writer.write_all(if first { b"\n" } else { b",\n" })?;
+        write_php_json_indent(writer, self.current_indent)
+    }
+
+    fn end_array_value<W>(&mut self, _writer: &mut W) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        if self.pretty_print {
+            self.has_value = true;
+        }
+        Ok(())
+    }
+
+    fn begin_object<W>(&mut self, writer: &mut W) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        if self.pretty_print {
+            self.current_indent += 1;
+            self.has_value = false;
+        }
+        writer.write_all(b"{")
+    }
+
+    fn end_object<W>(&mut self, writer: &mut W) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        if self.pretty_print {
+            self.current_indent -= 1;
+            if self.has_value {
+                writer.write_all(b"\n")?;
+                write_php_json_indent(writer, self.current_indent)?;
+            }
+        }
+        writer.write_all(b"}")
+    }
+
+    fn begin_object_key<W>(&mut self, writer: &mut W, first: bool) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        if !self.pretty_print {
+            return if first {
+                Ok(())
+            } else {
+                writer.write_all(b",")
+            };
+        }
+        writer.write_all(if first { b"\n" } else { b",\n" })?;
+        write_php_json_indent(writer, self.current_indent)
+    }
+
+    fn begin_object_value<W>(&mut self, writer: &mut W) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        writer.write_all(if self.pretty_print { b": " } else { b":" })
+    }
+
+    fn end_object_value<W>(&mut self, _writer: &mut W) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        if self.pretty_print {
+            self.has_value = true;
+        }
+        Ok(())
+    }
 }
 
 struct PhpJsonEncodeResult {
@@ -21108,16 +21466,21 @@ fn serialize_json_projection<T: serde::Serialize>(
     compact_formatter_compatible: bool,
     serialize_precision: i32,
     preserve_zero_fraction: bool,
+    flags: i64,
     error_code: i64,
 ) -> PhpJsonEncodeResult {
     let output = if compact_formatter_compatible {
         serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string())
     } else {
-        let mut output = Vec::new();
+        let mut output = Vec::with_capacity(128);
         let result = {
             let formatter = PhpJsonFormatter {
                 serialize_precision,
                 preserve_zero_fraction,
+                flags,
+                pretty_print: flags & JSON_PRETTY_PRINT_FLAG != 0,
+                current_indent: 0,
+                has_value: false,
             };
             let mut serializer = serde_json::Serializer::with_formatter(&mut output, formatter);
             value.serialize(&mut serializer)
@@ -21138,7 +21501,13 @@ fn json_encode_value(
     eg: &mut ExecutorGlobals,
 ) -> Result<PhpJsonEncodeResult, VmError> {
     let preserve_zero_fraction = flags & JSON_PRESERVE_ZERO_FRACTION_FLAG != 0;
-    let mut compact_formatter_compatible = eg.serialize_precision == -1 && !preserve_zero_fraction;
+    // Error policy, structural flags and numeric-string conversion are fully
+    // resolved while building the projection. Text flags keep the compact
+    // serializer until a string actually needs PHP-specific escaping; pretty
+    // layout and non-default float policy use the PHP formatter.
+    let mut compact_formatter_compatible = eg.serialize_precision == -1
+        && !preserve_zero_fraction
+        && flags & JSON_PRETTY_PRINT_FLAG == 0;
     if flags == 0
         && maximum_depth == 512
         && let Some(value) =
@@ -21149,6 +21518,7 @@ fn json_encode_value(
             compact_formatter_compatible,
             eg.serialize_precision,
             false,
+            flags,
             JSON_ERROR_NONE,
         ));
     }
@@ -21175,6 +21545,7 @@ fn json_encode_value(
             compact_formatter_compatible,
             serialize_precision,
             preserve_zero_fraction,
+            flags,
             error_code,
         )
     };
