@@ -108,6 +108,24 @@ pub enum Token {
     /// The frontend keeps its Latin-1 bridge separate from ordinary Unicode
     /// source text until the compiler can attach runtime byte provenance.
     BinaryStringLiteral(String),
+    /// Lossless payload of PHP's backtick shell-execution syntax. Execution
+    /// remains a separate runtime concern; retaining the bytes here lets cold
+    /// source-rendering paths describe an unreachable expression faithfully.
+    BacktickLiteral {
+        source: String,
+        line: usize,
+    },
+    /// Delimiters around the ordinary runtime token expansion of an
+    /// interpolated double-quoted string. They carry only cold source
+    /// provenance and never reach the executor directly.
+    InterpolatedStringStart {
+        /// Complex spellings retain their raw source. `None` denotes the
+        /// allocation-free literal/variable subset that the AST can reproduce
+        /// exactly from its already materialized expression tree.
+        source: Option<String>,
+        line: usize,
+    },
+    InterpolatedStringEnd,
     /// One indirect-variable sigil. Ordinary `$name` remains a single
     /// `Variable` token; `$$name` and `${expr}` retain the leading sigil so
     /// the parser can build PHP's right-associated variable-variable tree.
@@ -344,6 +362,71 @@ fn overflowing_radix_literal_to_float(digits: &[u8], radix: u32) -> f64 {
     })
 }
 
+const INLINE_ASSERTION_DELIMITER_DEPTH: usize = 16;
+
+/// Delimiter state is needed only while deciding whether an interpolated
+/// string belongs to assert's first argument. Typical source fits entirely in
+/// the inline storage, avoiding a second heap allocation beside the token
+/// vector. Pathological nesting remains unbounded through the cold overflow.
+struct AssertionDelimiterStack {
+    inline: [u8; INLINE_ASSERTION_DELIMITER_DEPTH],
+    inline_len: usize,
+    overflow: Vec<u8>,
+}
+
+impl Default for AssertionDelimiterStack {
+    fn default() -> Self {
+        Self {
+            inline: [0; INLINE_ASSERTION_DELIMITER_DEPTH],
+            inline_len: 0,
+            overflow: Vec::new(),
+        }
+    }
+}
+
+impl AssertionDelimiterStack {
+    #[inline]
+    fn push(&mut self, state: u8) {
+        if self.inline_len < self.inline.len() && self.overflow.is_empty() {
+            self.inline[self.inline_len] = state;
+            self.inline_len += 1;
+        } else {
+            self.overflow.push(state);
+        }
+    }
+
+    #[inline]
+    fn pop(&mut self) {
+        if self.overflow.pop().is_none() && self.inline_len != 0 {
+            self.inline_len -= 1;
+        }
+    }
+
+    #[inline]
+    fn last_mut(&mut self) -> Option<&mut u8> {
+        if !self.overflow.is_empty() {
+            self.overflow.last_mut()
+        } else {
+            self.inline[..self.inline_len].last_mut()
+        }
+    }
+
+    #[inline]
+    fn in_first_assert_argument(&self) -> bool {
+        for state in self.overflow.iter().rev() {
+            if *state != 0 {
+                return *state == 1;
+            }
+        }
+        for state in self.inline[..self.inline_len].iter().rev() {
+            if *state != 0 {
+                return *state == 1;
+            }
+        }
+        false
+    }
+}
+
 impl<'a> Lexer<'a> {
     pub fn new(source: &'a str) -> Self {
         Self::new_bytes(source.as_bytes())
@@ -393,6 +476,8 @@ impl<'a> Lexer<'a> {
 
     pub fn tokenize(&mut self) -> Result<Vec<Token>, String> {
         let mut tokens = Vec::new();
+        let mut assertion_scan_position = 0;
+        let mut assertion_delimiters = AssertionDelimiterStack::default();
 
         let _ = self.skip_whitespace().map_err(|error| error.message)?;
 
@@ -666,17 +751,50 @@ impl<'a> Lexer<'a> {
                         Token::StringLiteral(string)
                     });
                 }
-                b'"' => match self.read_double_quoted_string() {
-                    Ok(interpolated) => {
-                        self.deferred_compile_diagnostics
-                            .extend(interpolated.diagnostics);
-                        Self::emit_string_parts(&mut tokens, &interpolated.parts);
+                b'"' => {
+                    let line = self.source_line_at(self.pos);
+                    let retain_assertion_source = Self::in_first_assert_argument(
+                        &tokens,
+                        &mut assertion_scan_position,
+                        &mut assertion_delimiters,
+                    );
+                    if retain_assertion_source {
+                        match self.read_assertion_double_quoted_string() {
+                            Ok((interpolated, source)) => {
+                                for diagnostic in interpolated.diagnostics {
+                                    if !Self::is_legacy_interpolation_deprecation(&diagnostic) {
+                                        self.deferred_compile_diagnostics.push(diagnostic);
+                                    }
+                                }
+                                Self::emit_assertion_string_parts(
+                                    &mut tokens,
+                                    &interpolated.parts,
+                                    source,
+                                    line,
+                                );
+                            }
+                            Err(error) => {
+                                tokens.push(Token::ParseError(error.message, error.line));
+                                self.pos = self.src.len();
+                            }
+                        }
+                    } else {
+                        match self.read_double_quoted_string() {
+                            Ok(interpolated) => {
+                                self.deferred_compile_diagnostics
+                                    .extend(interpolated.diagnostics);
+                                Self::emit_string_parts(&mut tokens, &interpolated.parts);
+                            }
+                            Err(error) => {
+                                tokens.push(Token::ParseError(error.message, error.line));
+                                self.pos = self.src.len();
+                            }
+                        }
                     }
-                    Err(error) => {
-                        tokens.push(Token::ParseError(error.message, error.line));
-                        self.pos = self.src.len();
-                    }
-                },
+                }
+                b'`' => {
+                    tokens.push(self.read_backtick_literal());
+                }
                 b'-' => {
                     if self.peek_next() == Some(b'>') {
                         tokens.push(Token::Arrow);
@@ -1371,6 +1489,8 @@ impl<'a> Lexer<'a> {
                     | Token::This(_)
                     | Token::StringLiteral(_)
                     | Token::BinaryStringLiteral(_)
+                    | Token::BacktickLiteral { .. }
+                    | Token::InterpolatedStringEnd
                     | Token::RParen
                     | Token::RBracket
                     | Token::Identifier(_, _)
@@ -1380,6 +1500,91 @@ impl<'a> Lexer<'a> {
                     | Token::Null
             )
         )
+    }
+
+    /// PHP retains the first argument of assert() as syntax for its generated
+    /// description. Legacy interpolation diagnostics within that retained AST
+    /// are not emitted, while an explicit second description is compiled in
+    /// the ordinary way. Reconstruct just enough delimiter state to make that
+    /// distinction without putting source-rendering state on runtime values.
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zassertion"))]
+    fn in_first_assert_argument(
+        tokens: &[Token],
+        scan_position: &mut usize,
+        delimiters: &mut AssertionDelimiterStack,
+    ) -> bool {
+        for (index, token) in tokens.iter().enumerate().skip(*scan_position) {
+            match token {
+                Token::LParen(_) => {
+                    let assert_call = matches!(
+                        tokens.get(index.wrapping_sub(1)),
+                        Some(Token::Identifier(name, _)) if name.eq_ignore_ascii_case("assert")
+                    ) && !matches!(
+                        tokens.get(index.wrapping_sub(2)),
+                        Some(Token::Arrow | Token::NullSafe | Token::DoubleColon)
+                    );
+                    delimiters.push(if assert_call { 1 } else { 0 });
+                }
+                Token::LBracket(_) | Token::LBrace(_) | Token::AttributeStart(_) => {
+                    delimiters.push(0);
+                }
+                Token::RParen | Token::RBracket | Token::RBrace => {
+                    delimiters.pop();
+                }
+                Token::Comma(_) => {
+                    if let Some(first_argument) = delimiters.last_mut()
+                        && *first_argument == 1
+                    {
+                        *first_argument = 2;
+                    }
+                }
+                _ => {}
+            }
+        }
+        *scan_position = tokens.len();
+
+        delimiters.in_first_assert_argument()
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zassertion"))]
+    fn is_legacy_interpolation_deprecation(diagnostic: &DeferredCompileDiagnostic) -> bool {
+        matches!(diagnostic.kind, DeferredCompileDiagnosticKind::Deprecation)
+            && (diagnostic.message.starts_with("Using ${var} in strings")
+                || diagnostic
+                    .message
+                    .starts_with("Using ${expr} (variable variables) in strings"))
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zassertion"))]
+    fn read_backtick_literal(&mut self) -> Token {
+        let line = self.source_line_at(self.pos);
+        self.pos += 1;
+        let start = self.pos;
+        let mut escaped = false;
+        while self.pos < self.src.len() {
+            let byte = self.src[self.pos];
+            if byte == b'`' && !escaped {
+                break;
+            }
+            if byte == b'\\' && !escaped {
+                escaped = true;
+            } else {
+                escaped = false;
+            }
+            self.pos += 1;
+        }
+        if self.pos == self.src.len() {
+            return Token::ParseError("Unterminated shell execution operator".to_string(), line);
+        }
+        let source = decode_php_source(&self.src[start..self.pos]);
+        self.pos += 1;
+        Token::BacktickLiteral { source, line }
     }
 
     /// A sign is part of the historical break/continue operand grammar, not
@@ -2674,6 +2879,49 @@ mod tests {
             !tokens
                 .iter()
                 .any(|token| matches!(token, Token::HaltCompiler { .. }))
+        );
+    }
+
+    #[test]
+    fn assertion_source_tracking_spills_deep_delimiters_without_losing_argument_state() {
+        let source = format!(
+            "<?php assert({}\"left $value\"{}, \"explicit $value\");",
+            "(".repeat(INLINE_ASSERTION_DELIMITER_DEPTH + 4),
+            ")".repeat(INLINE_ASSERTION_DELIMITER_DEPTH + 4),
+        );
+        let tokens = Lexer::new(&source).tokenize().unwrap();
+        let retained = tokens
+            .iter()
+            .filter_map(|token| match token {
+                Token::InterpolatedStringStart { source, .. } => Some(source.as_deref()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(retained, [None]);
+    }
+
+    #[test]
+    fn assertion_interpolation_retains_raw_source_only_when_spelling_requires_it() {
+        let tokens = Lexer::new(
+            r#"<?php
+assert("other {$value}");
+assert("${value}");
+assert("\$literal $value");"#,
+        )
+        .tokenize()
+        .unwrap();
+        let retained = tokens
+            .iter()
+            .filter_map(|token| match token {
+                Token::InterpolatedStringStart { source, .. } => Some(source.as_deref()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            retained,
+            [None, Some("${value}"), Some("\\$literal $value")]
         );
     }
 }

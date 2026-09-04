@@ -126,6 +126,8 @@ fn expression_source_line(expression: &Expr) -> usize {
         | Expr::CompileError { line, .. }
         | Expr::CompileWarning { line, .. }
         | Expr::CompileDeprecation { line, .. }
+        | Expr::BacktickLiteral { line, .. }
+        | Expr::InterpolatedString { line, .. }
         | Expr::Pipe { line, .. }
         | Expr::FunctionCall { line, .. }
         | Expr::FirstClassFunctionCallable { line, .. }
@@ -200,716 +202,8 @@ fn expression_source_line(expression: &Expr) -> usize {
     }
 }
 
-pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
-    fn quote_string(value: &str) -> String {
-        format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
-    }
-
-    fn quote_binary_string(value: &str) -> String {
-        let mut quoted = String::from("\"");
-        for byte in value.chars().map(|character| character as u8) {
-            quoted.push_str(&format!("\\x{byte:02X}"));
-        }
-        quoted.push('"');
-        quoted
-    }
-
-    fn render_float(value: f64) -> String {
-        let rendered = value.to_string();
-        if value.is_finite()
-            && !rendered.contains('.')
-            && !rendered.contains('e')
-            && !rendered.contains('E')
-        {
-            format!("{rendered}.0")
-        } else {
-            rendered
-        }
-    }
-
-    fn render_type_hint(hint: &TypeHint) -> Option<String> {
-        Some(match hint {
-            TypeHint::Int => "int".to_string(),
-            TypeHint::Float => "float".to_string(),
-            TypeHint::String => "string".to_string(),
-            TypeHint::Bool => "bool".to_string(),
-            TypeHint::Array => "array".to_string(),
-            TypeHint::Callable => "callable".to_string(),
-            TypeHint::Null => "null".to_string(),
-            TypeHint::Void => "void".to_string(),
-            TypeHint::Mixed => "mixed".to_string(),
-            TypeHint::Never => "never".to_string(),
-            TypeHint::ClassName(name) => name.clone(),
-            TypeHint::Nullable(inner) => format!("?{}", render_type_hint(inner)?),
-            TypeHint::Union(members) => members
-                .iter()
-                .map(render_type_hint)
-                .collect::<Option<Vec<_>>>()?
-                .join("|"),
-            TypeHint::Intersection(members) => members
-                .iter()
-                .map(render_type_hint)
-                .collect::<Option<Vec<_>>>()?
-                .join("&"),
-            TypeHint::GenericParameter { .. } | TypeHint::GenericApplication { .. } => return None,
-        })
-    }
-
-    fn render_arguments(arguments: &[CallArg]) -> Option<String> {
-        arguments
-            .iter()
-            .map(|argument| match argument {
-                CallArg::Positional(value) => render(value, 0, false),
-                CallArg::Named { name, value } => {
-                    render(value, 0, false).map(|value| format!("{name}: {value}"))
-                }
-                CallArg::Unpack(value) => {
-                    render(value, 0, false).map(|value| format!("...{value}"))
-                }
-            })
-            .collect::<Option<Vec<_>>>()
-            .map(|arguments| arguments.join(", "))
-    }
-
-    fn render_parameter(parameter: &Param) -> Option<String> {
-        // Attribute grouping and constructor-promotion spelling are not
-        // retained in enough detail to synthesize a faithful parameter.
-        if !parameter.attributes.is_empty()
-            || parameter.promotion.is_some()
-            || parameter.promoted_property.is_some()
-            || !parameter.promotion_hooks.is_empty()
-        {
-            return None;
-        }
-        let mut output = String::new();
-        if let Some(hint) = &parameter.type_hint {
-            output.push_str(&render_type_hint(hint)?);
-            output.push(' ');
-        }
-        if parameter.is_ref {
-            output.push('&');
-        }
-        if parameter.is_variadic {
-            output.push_str("...");
-        }
-        output.push('$');
-        output.push_str(&parameter.name);
-        if let Some(default) = &parameter.default {
-            output.push_str(" = ");
-            output.push_str(&render(default, 0, false)?);
-        }
-        Some(output)
-    }
-
-    fn render_attributes(attributes: &[Attribute]) -> Option<String> {
-        // The parser currently flattens attribute groups. A single attribute
-        // is unambiguous; with several, declining the description is safer
-        // than changing `#[A, B]` into two source groups or vice versa.
-        if attributes.len() > 1 || attributes.iter().any(Attribute::is_non_enum_case_marker) {
-            return None;
-        }
-        match attributes.first() {
-            Some(attribute) => {
-                let arguments = if attribute.args.is_empty() {
-                    String::new()
-                } else {
-                    format!("({})", render_arguments(&attribute.args)?)
-                };
-                Some(format!("#[{}{arguments}]", attribute.name))
-            }
-            None => Some(String::new()),
-        }
-    }
-
-    fn visibility_source(visibility: Visibility) -> &'static str {
-        match visibility {
-            Visibility::Public => "public",
-            Visibility::Protected => "protected",
-            Visibility::Private => "private",
-        }
-    }
-
-    fn render_property(property: &ClassProperty) -> Option<String> {
-        if property.is_abstract
-            || property.has_get_hook
-            || property.has_abstract_get_hook
-            || property.has_set_hook
-            || property.has_abstract_set_hook
-        {
-            return None;
-        }
-        let mut parts = Vec::new();
-        if property.is_final {
-            parts.push("final".to_string());
-        }
-        parts.push(visibility_source(property.visibility).to_string());
-        if let Some(set_visibility) = property.set_visibility {
-            parts.push(format!("{}(set)", visibility_source(set_visibility)));
-        }
-        if property.is_static {
-            parts.push("static".to_string());
-        }
-        if property.is_readonly {
-            parts.push("readonly".to_string());
-        }
-        if let Some(hint) = &property.type_hint {
-            parts.push(render_type_hint(hint)?);
-        }
-        let mut declaration = format!("{} ${}", parts.join(" "), property.name);
-        if let Some(default) = &property.default {
-            declaration.push_str(" = ");
-            declaration.push_str(&render(default, 0, false)?);
-        }
-        declaration.push(';');
-        Some(declaration)
-    }
-
-    fn render_class_constant(constant: &ClassConstant) -> Option<String> {
-        if !constant.attributes.is_empty() {
-            return None;
-        }
-        let mut declaration = format!("{} const", visibility_source(constant.visibility));
-        if let Some(hint) = &constant.type_hint {
-            declaration.push(' ');
-            declaration.push_str(&render_type_hint(hint)?);
-        }
-        declaration.push(' ');
-        declaration.push_str(&constant.name);
-        declaration.push_str(" = ");
-        declaration.push_str(&render(&constant.value, 0, false)?);
-        declaration.push(';');
-        // PHP's assertion AST printer does not retain the final class-constant
-        // flag even though ordinary declaration metadata does.
-        Some(declaration)
-    }
-
-    fn render_enum_case(case: &EnumCase) -> Option<String> {
-        let attributes = render_attributes(&case.attributes)?;
-        let mut declaration = format!("case {}", case.name);
-        if let Some(value) = &case.value {
-            declaration.push_str(" = ");
-            declaration.push_str(&render(value, 0, false)?);
-        }
-        declaration.push(';');
-        Some(if attributes.is_empty() {
-            declaration
-        } else {
-            format!("{attributes}\n{declaration}")
-        })
-    }
-
-    fn render_enum_method(method: &ClassMethod) -> Option<String> {
-        if method.is_abstract || !method.generic_params.is_empty() {
-            return None;
-        }
-        let attributes = render_attributes(&method.attributes)?;
-        let params = method
-            .params
-            .iter()
-            .map(render_parameter)
-            .collect::<Option<Vec<_>>>()?
-            .join(", ");
-        let mut modifiers = vec![visibility_source(method.visibility)];
-        if method.is_static {
-            modifiers.push("static");
-        }
-        if method.is_final {
-            modifiers.push("final");
-        }
-        let reference = if method.returns_by_ref { "&" } else { "" };
-        let return_type = match &method.return_type {
-            Some(hint) => format!(": {}", render_type_hint(hint)?),
-            None => String::new(),
-        };
-        let declaration = format!(
-            "{} function {reference}{}({params}){return_type} {{\n{}}}",
-            modifiers.join(" "),
-            method.name,
-            render_block(&method.body)?,
-        );
-        Some(if attributes.is_empty() {
-            declaration
-        } else {
-            format!("{attributes}\n{declaration}")
-        })
-    }
-
-    fn render_enum_body(cases: &[EnumCase], methods: &[ClassMethod]) -> Option<String> {
-        if cases
-            .iter()
-            .map(|case| case.line)
-            .max()
-            .zip(methods.iter().map(|method| method.line).min())
-            .is_some_and(|(last_case, first_method)| first_method < last_case)
-        {
-            // Separate AST vectors cannot reproduce an interleaved member
-            // order. The supported form keeps cases before methods.
-            return None;
-        }
-        let mut members = cases
-            .iter()
-            .map(render_enum_case)
-            .collect::<Option<Vec<_>>>()?;
-        members.extend(
-            methods
-                .iter()
-                .map(render_enum_method)
-                .collect::<Option<Vec<_>>>()?,
-        );
-        let body = members
-            .iter()
-            .map(|member| indent_source(member, 4))
-            .collect::<Vec<_>>()
-            .join("\n");
-        Some(if body.is_empty() {
-            "{\n}".to_string()
-        } else if methods.is_empty() {
-            format!("{{\n{body}\n}}")
-        } else {
-            // PHP's assertion AST formatter separates a method body from the
-            // enum's closing brace with one empty line.
-            format!("{{\n{body}\n\n}}")
-        })
-    }
-
-    fn render_class_body(
-        properties: &[ClassProperty],
-        constants: &[ClassConstant],
-    ) -> Option<String> {
-        // Separate AST vectors do not retain mixed declaration ordering, so
-        // decline synthesis instead of publishing a reordered description.
-        if !properties.is_empty() && !constants.is_empty() {
-            return None;
-        }
-        if constants
-            .windows(2)
-            .any(|pair| pair[0].line == pair[1].line)
-        {
-            // One declaration may contain several comma-separated constants,
-            // but the current AST no longer retains that grouping.
-            return None;
-        }
-        let members = if constants.is_empty() {
-            properties
-                .iter()
-                .map(render_property)
-                .collect::<Option<Vec<_>>>()?
-        } else {
-            constants
-                .iter()
-                .map(render_class_constant)
-                .collect::<Option<Vec<_>>>()?
-        };
-        let body = members
-            .iter()
-            .map(|member| indent_source(member, 4))
-            .collect::<Vec<_>>()
-            .join("\n");
-        Some(if body.is_empty() {
-            "{\n}".to_string()
-        } else {
-            format!("{{\n{body}\n}}")
-        })
-    }
-
-    fn indent_source(source: &str, spaces: usize) -> String {
-        let indent = " ".repeat(spaces);
-        source
-            .split_inclusive('\n')
-            .map(|line| {
-                if line == "\n" {
-                    line.to_string()
-                } else {
-                    format!("{indent}{line}")
-                }
-            })
-            .collect()
-    }
-
-    fn render_statement(statement: &Stmt) -> Option<String> {
-        match statement {
-            Stmt::Noop => Some(String::new()),
-            Stmt::Block(body) => {
-                let body = body
-                    .iter()
-                    .map(render_statement)
-                    .collect::<Option<Vec<_>>>()?
-                    .join("\n");
-                Some(format!("{{\n{}\n}}", indent_source(&body, 4)))
-            }
-            Stmt::Return { expr, .. } => Some(match expr {
-                Some(expr) => format!("return {};", render(expr, 0, false)?),
-                None => "return;".to_string(),
-            }),
-            Stmt::ExprStmt(expr) => Some(format!("{};", render(expr, 0, false)?)),
-            Stmt::Assign { var, expr } => Some(format!("${var} = {};", render(expr, 0, false)?)),
-            Stmt::Class {
-                name,
-                parent,
-                implements,
-                is_abstract,
-                is_final,
-                is_readonly,
-                allow_dynamic_properties,
-                properties,
-                constants,
-                methods,
-                uses,
-                trait_aliases,
-                generic_params,
-                ..
-            } if parent.is_none()
-                && implements.is_empty()
-                && !*is_abstract
-                && !*is_final
-                && !*is_readonly
-                && !*allow_dynamic_properties
-                && methods.is_empty()
-                && uses.is_empty()
-                && trait_aliases.is_empty()
-                && generic_params.is_empty() =>
-            {
-                let body = render_class_body(properties, constants)?;
-                Some(format!("class {name} {body}"))
-            }
-            Stmt::Enum {
-                attributes,
-                name,
-                backing_type,
-                implements,
-                uses,
-                trait_aliases,
-                cases,
-                properties,
-                constants,
-                methods,
-                ..
-            } if implements.is_empty()
-                && uses.is_empty()
-                && trait_aliases.is_empty()
-                && properties.is_empty()
-                && constants.is_empty() =>
-            {
-                let attributes = render_attributes(attributes)?;
-                let backing_type = match backing_type {
-                    Some(hint) => format!(": {}", render_type_hint(hint)?),
-                    None => String::new(),
-                };
-                let body = render_enum_body(cases, methods)?;
-                let declaration = format!("enum {name}{backing_type} {body}");
-                Some(if attributes.is_empty() {
-                    declaration
-                } else {
-                    format!("{attributes}\n{declaration}")
-                })
-            }
-            _ => None,
-        }
-    }
-
-    fn render_block(statements: &[Stmt]) -> Option<String> {
-        let mut output = String::new();
-        for statement in statements {
-            let rendered = render_statement(statement)?;
-            if rendered.is_empty() {
-                continue;
-            }
-            output.push_str(&indent_source(&rendered, 4));
-            output.push('\n');
-            if matches!(statement, Stmt::Class { .. } | Stmt::Enum { .. }) {
-                output.push('\n');
-            }
-        }
-        Some(output)
-    }
-
-    fn render(expr: &Expr, parent_precedence: u8, right_child: bool) -> Option<String> {
-        let (text, precedence) = match expr {
-            Expr::Integer(value) => (value.to_string(), 100),
-            Expr::Float(value) => (render_float(*value), 100),
-            Expr::StringLiteral(value) => (quote_string(value), 100),
-            Expr::BinaryStringLiteral(value) => (quote_binary_string(value), 100),
-            Expr::Bool(value) => (value.to_string(), 100),
-            Expr::Null => ("null".to_string(), 100),
-            Expr::Variable { name, .. } => (format!("${name}"), 100),
-            Expr::Constant { name, .. }
-                if name.eq_ignore_ascii_case("exit") || name.eq_ignore_ascii_case("die") =>
-            {
-                ("\\exit()".to_string(), 100)
-            }
-            Expr::Constant { name, .. } => (name.clone(), 100),
-            Expr::CompilerHaltOffsetConstant { name, .. } => (name.clone(), 100),
-            Expr::Not(value) => (format!("!{}", render(value, 80, false)?), 80),
-            Expr::Cast {
-                cast_type: CastType::Void,
-                expr,
-                ..
-            } => (format!("(void){}", render(expr, 80, false)?), 80),
-            Expr::FirstClassCallable { callable, .. } => {
-                let callable = render(callable, 100, false)?;
-                (format!("{callable}(...)"), 100)
-            }
-            Expr::FirstClassFunctionCallable { name, .. } => (format!("{name}(...)"), 100),
-            Expr::FunctionCall { name, args, .. } => {
-                let name = if name.eq_ignore_ascii_case("exit") || name.eq_ignore_ascii_case("die")
-                {
-                    "\\exit"
-                } else {
-                    name
-                };
-                (format!("{name}({})", render_arguments(args)?), 100)
-            }
-            Expr::New {
-                class_name, args, ..
-            } => (
-                format!("new {class_name}({})", render_arguments(args)?),
-                100,
-            ),
-            Expr::AnonymousNew {
-                attributes,
-                args,
-                is_readonly,
-                allow_dynamic_properties,
-                parent,
-                implements,
-                properties,
-                constants,
-                methods,
-                uses,
-                trait_aliases,
-                ..
-            } if !*allow_dynamic_properties
-                && methods.is_empty()
-                && uses.is_empty()
-                && trait_aliases.is_empty()
-                && parent
-                    .as_ref()
-                    .is_none_or(|ancestor| ancestor.arguments.is_empty())
-                && implements
-                    .iter()
-                    .all(|ancestor| ancestor.arguments.is_empty()) =>
-            {
-                let attributes = render_attributes(attributes)?;
-                let attributes = if attributes.is_empty() {
-                    String::new()
-                } else {
-                    format!("{attributes} ")
-                };
-                let arguments = render_arguments(args)?;
-                let arguments = (!args.is_empty()).then(|| format!("({arguments})"));
-                let parent = parent
-                    .as_ref()
-                    .map(|parent| format!(" extends {}", parent.name))
-                    .unwrap_or_default();
-                let implements = if implements.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        " implements {}",
-                        implements
-                            .iter()
-                            .map(|ancestor| ancestor.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                };
-                let body = render_class_body(properties, constants)?;
-                let readonly = if *is_readonly { "readonly " } else { "" };
-                (
-                    format!(
-                        "new {attributes}{readonly}class{}{}{} {body}",
-                        arguments.as_deref().unwrap_or_default(),
-                        parent,
-                        implements,
-                    ),
-                    100,
-                )
-            }
-            Expr::Instanceof { expr, class_name } => {
-                let expr = render(expr, 30, false)?;
-                (format!("{expr} instanceof {class_name}"), 30)
-            }
-            Expr::DynamicInstanceof { expr, class } => {
-                let expr = render(expr, 30, false)?;
-                let class = render(class, 30, true)?;
-                (format!("{expr} instanceof {class}"), 30)
-            }
-            Expr::ArrayAccess { array, index, .. } => {
-                let array = render(array, 100, false)?;
-                let index = render(index, 0, false)?;
-                (format!("{array}[{index}]"), 100)
-            }
-            Expr::DynamicCall { callable, args, .. } => {
-                let callable = if matches!(callable.as_ref(), Expr::Closure { .. }) {
-                    format!("({})", render(callable, 0, false)?)
-                } else {
-                    render(callable, 100, false)?
-                };
-                (format!("{callable}({})", render_arguments(args)?), 100)
-            }
-            Expr::Closure {
-                attributes,
-                is_static,
-                returns_by_ref,
-                params,
-                use_vars,
-                body,
-                return_type,
-                generic_params,
-                ..
-            } if generic_params.is_empty() => {
-                let attributes = render_attributes(attributes)?;
-                let attributes = if attributes.is_empty() {
-                    String::new()
-                } else {
-                    format!("{attributes} ")
-                };
-                let params = params
-                    .iter()
-                    .map(render_parameter)
-                    .collect::<Option<Vec<_>>>()?
-                    .join(", ");
-                let return_type = match return_type {
-                    Some(hint) => format!(": {}", render_type_hint(hint)?),
-                    None => String::new(),
-                };
-                if body.len() == 1
-                    && let Stmt::Return {
-                        expr: Some(value),
-                        line: 0,
-                    } = &body[0]
-                {
-                    let static_prefix = if *is_static { "static " } else { "" };
-                    let reference = if *returns_by_ref { "&" } else { "" };
-                    (
-                        format!(
-                            "{attributes}{static_prefix}fn{reference}({params}){return_type} => {}",
-                            render(value, 0, false)?
-                        ),
-                        100,
-                    )
-                } else {
-                    let static_prefix = if *is_static { "static " } else { "" };
-                    let reference = if *returns_by_ref { " &" } else { "" };
-                    let captures = if use_vars.is_empty() {
-                        String::new()
-                    } else {
-                        format!(
-                            " use ({})",
-                            use_vars
-                                .iter()
-                                .map(|(name, by_reference, _)| format!(
-                                    "{}${name}",
-                                    if *by_reference { "&" } else { "" }
-                                ))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
-                    };
-                    (
-                        format!(
-                            "{attributes}{static_prefix}function{reference} ({params}){captures}{return_type} {{\n{}}}",
-                            render_block(body)?
-                        ),
-                        100,
-                    )
-                }
-            }
-            Expr::Assign { var, expr } => (format!("${var} = {}", render(expr, 5, true)?), 5),
-            Expr::CompoundAssignExpression { target, op, expr } => {
-                let operator = match op {
-                    BinOp::Add => "+=",
-                    BinOp::Sub => "-=",
-                    BinOp::Mul => "*=",
-                    BinOp::Div => "/=",
-                    BinOp::Mod => "%=",
-                    BinOp::Concat => ".=",
-                    BinOp::Pow => "**=",
-                    BinOp::BitwiseAnd => "&=",
-                    BinOp::BitwiseOr => "|=",
-                    BinOp::BitwiseXor => "^=",
-                    BinOp::ShiftLeft => "<<=",
-                    BinOp::ShiftRight => ">>=",
-                    _ => return None,
-                };
-                let target = render(target, 5, false)?;
-                let expr = render(expr, 5, true)?;
-                (format!("{target} {operator} {expr}"), 5)
-            }
-            Expr::Match { expr, arms, .. } => {
-                let mut output = format!("match ({}) {{\n", render(expr, 0, false)?);
-                for arm in arms {
-                    let conditions = match &arm.conditions {
-                        Some(conditions) => conditions
-                            .iter()
-                            .map(|condition| render(condition, 0, false))
-                            .collect::<Option<Vec<_>>>()?
-                            .join(", "),
-                        None => "default".to_string(),
-                    };
-                    output.push_str(&format!(
-                        "    {conditions} => {},\n",
-                        render(&arm.body, 0, false)?
-                    ));
-                }
-                output.push('}');
-                (output, 100)
-            }
-            Expr::BinaryOp {
-                op, left, right, ..
-            } => {
-                let (operator, precedence) = match op {
-                    BinOp::Or => ("||", 10),
-                    BinOp::And => ("&&", 20),
-                    BinOp::BitwiseOr => ("|", 25),
-                    BinOp::BitwiseXor => ("^", 26),
-                    BinOp::BitwiseAnd => ("&", 27),
-                    BinOp::Equal => ("==", 30),
-                    BinOp::NotEqual => ("!=", 30),
-                    BinOp::Identical => ("===", 30),
-                    BinOp::NotIdentical => ("!==", 30),
-                    BinOp::Less => ("<", 30),
-                    BinOp::LessEqual => ("<=", 30),
-                    BinOp::Greater => (">", 30),
-                    BinOp::GreaterEqual => (">=", 30),
-                    BinOp::Concat => (".", 50),
-                    BinOp::ShiftLeft => ("<<", 55),
-                    BinOp::ShiftRight => (">>", 55),
-                    BinOp::Add => ("+", 60),
-                    BinOp::Sub => ("-", 60),
-                    BinOp::Mul => ("*", 70),
-                    BinOp::Div => ("/", 70),
-                    BinOp::Mod => ("%", 70),
-                    BinOp::Pow => ("**", 80),
-                    _ => return None,
-                };
-                let right_associative = matches!(op, BinOp::Pow);
-                let left = render(left, precedence, right_associative)?;
-                let right = render(right, precedence, !right_associative)?;
-                (format!("{left} {operator} {right}"), precedence)
-            }
-            Expr::Pipe {
-                input, callable, ..
-            } => {
-                let precedence = 40;
-                let input = render(input, precedence, false)?;
-                let callable = if matches!(callable.as_ref(), Expr::Closure { .. }) {
-                    format!("({})", render(callable, 0, false)?)
-                } else {
-                    render(callable, precedence, true)?
-                };
-                (format!("{input} |> {callable}"), precedence)
-            }
-            _ => return None,
-        };
-        if precedence < parent_precedence || (right_child && precedence == parent_precedence) {
-            Some(format!("({text})"))
-        } else {
-            Some(text)
-        }
-    }
-    render(expr, 0, false).map(|expression| format!("assert({expression})"))
-}
+pub(crate) use super::assertion_source::assertion_expression_source;
+use super::assertion_source::simple_assertion_expression_source;
 
 use super::{
     finalize_user_method, make_user_function_full,
@@ -6686,6 +5980,7 @@ impl Compiler {
                 condition,
                 then_body,
                 else_body,
+                ..
             } => self
                 .eval_const_expr_in_source(condition, &self.known_constants)
                 .ok()
@@ -7568,7 +6863,7 @@ impl Compiler {
         let mut definitions = Vec::with_capacity(attributes.len());
         for attribute in attributes
             .iter()
-            .filter(|attribute| !attribute.is_non_enum_case_marker())
+            .filter(|attribute| !attribute.is_parser_marker())
         {
             let mut arguments = Vec::with_capacity(attribute.args.len());
             for argument in &attribute.args {
@@ -10352,6 +9647,113 @@ impl Compiler {
         accumulated
     }
 
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zassertion"))]
+    fn compile_synthesized_assert_call(
+        &mut self,
+        name: &str,
+        first: &CallArg,
+        description: String,
+        elided_expression: Option<&Expr>,
+        line: usize,
+        assertion_check: usize,
+    ) -> (u16, OpType) {
+        debug_assert!(matches!(
+            first,
+            CallArg::Positional(_) | CallArg::Named { .. }
+        ));
+
+        let resolved = self.resolve_function_name(name);
+        let name_idx = self.add_literal(Value::string(resolved));
+        let fallback_idx = if self.current_namespace.is_some()
+            && !name.contains('\\')
+            && !self.has_function_import(name)
+        {
+            self.add_literal(Value::string(name.to_string()))
+        } else {
+            0
+        };
+
+        // A yielding first argument must finish before InitFcall creates a
+        // runtime frame. The ordinary argument helper already preserves its
+        // CV snapshot and named-argument metadata without cloning the AST.
+        let first_slice = std::slice::from_ref(first);
+        let compiled_first = if elided_expression.is_none() && first.contains_yield() {
+            Some(self.compile_call_args(first_slice, 0, None, false))
+        } else {
+            None
+        };
+
+        let mut init = Instruction::new(OpCode::InitFcall);
+        init.op1 = 2;
+        init.op2_type = OpType::Const;
+        init.op2 = name_idx;
+        init.extended_value = fallback_idx as u32;
+        self.push_instruction_at_line(init, line);
+
+        if let Some(expression) = elided_expression {
+            let (operand, operand_type) = self.compile_expr(expression);
+            let mut send = Instruction::new(if matches!(first, CallArg::Named { .. }) {
+                OpCode::SendNamed
+            } else {
+                OpCode::SendVal
+            });
+            send.op1 = operand;
+            send.op1_type = operand_type;
+            if let CallArg::Named { name, .. } = first {
+                send.op2 = self.add_literal(Value::string(name.clone()));
+                send.op2_type = OpType::Const;
+                send.extended_value = 0;
+            } else {
+                send.op2 = 0;
+            }
+            self.instructions.push(send);
+        } else if let Some(compiled_first) = compiled_first.as_deref() {
+            self.emit_precompiled_runtime_call_args(
+                first_slice,
+                compiled_first,
+                0,
+                0,
+                None,
+                false,
+                false,
+            );
+        } else {
+            self.emit_call_args(first_slice, 0, 0, None, false, false);
+        }
+
+        let description_operand = self.add_literal(Value::interned_string(description));
+        let mut send_description = Instruction::new(if matches!(first, CallArg::Named { .. }) {
+            OpCode::SendNamed
+        } else {
+            OpCode::SendVal
+        });
+        send_description.op1 = description_operand;
+        send_description.op1_type = OpType::Const;
+        if matches!(first, CallArg::Named { .. }) {
+            send_description.op2 = self.add_literal(Value::string("description"));
+            send_description.op2_type = OpType::Const;
+            send_description.extended_value = 1;
+        } else {
+            send_description.op2 = 1;
+        }
+        self.instructions.push(send_description);
+
+        let result = self.alloc_tmp();
+        let mut call = Instruction::new(OpCode::DoFcall);
+        call.result = result;
+        call.result_type = OpType::Tmp;
+        self.push_instruction_at_line(call, line);
+
+        let target = u16::try_from(self.instructions.len()).unwrap_or(u16::MAX);
+        let guard = &mut self.instructions[assertion_check];
+        guard.op1 = target;
+        guard.result = result;
+        guard.result_type = OpType::Tmp;
+        (result, OpType::Tmp)
+    }
+
     fn compile_expr(&mut self, expr: &Expr) -> (u16, OpType) {
         self.defer_unscoped_relative_access(expr);
         match expr {
@@ -10371,6 +9773,26 @@ impl Compiler {
                 let idx = self.add_literal(Value::interned_binary_string_from_storage(s.clone()));
                 (idx, OpType::Const)
             }
+            Expr::BacktickLiteral { source: _, line } => {
+                // The frontend retains backtick syntax for cold AST rendering,
+                // but this checkpoint does not claim shell execution. Lower an
+                // actually reached expression to a normal catchable Error while
+                // unreachable short-circuit branches remain side-effect free.
+                let unsupported = Expr::Throw {
+                    expr: Box::new(Expr::New {
+                        class_name: "Error".to_string(),
+                        args: vec![CallArg::Positional(Expr::StringLiteral(
+                            "Backtick shell execution is not supported".to_string(),
+                        ))],
+                        generic_args: Vec::new(),
+                        line: *line,
+                        call_line: *line,
+                    }),
+                    line: *line,
+                };
+                self.compile_expr(&unsupported)
+            }
+            Expr::InterpolatedString { value, .. } => self.compile_expr(value),
             Expr::Null => {
                 let idx = self.add_literal(Value::null());
                 (idx, OpType::Const)
@@ -11344,27 +10766,40 @@ impl Compiler {
                 });
 
                 // PHP's assert construct supplies canonical source text when
-                // the caller omitted an explicit description.
-                let synthesized_assert_args = if assertion_construct && args.len() == 1 {
-                    assertion_expression_source(args[0].expr()).map(|mut source| {
-                        if let CallArg::Named { name, .. } = &args[0] {
-                            source.insert_str("assert(".len(), &format!("{name}: "));
-                        }
-                        let mut synthesized = args.clone();
-                        if matches!(args[0], CallArg::Named { .. }) {
-                            synthesized.push(CallArg::Named {
-                                name: "description".to_string(),
-                                value: Expr::StringLiteral(source),
-                            });
-                        } else {
-                            synthesized.push(CallArg::Positional(Expr::StringLiteral(source)));
-                        }
-                        synthesized
-                    })
-                } else {
-                    None
-                };
-                let args = synthesized_assert_args.as_deref().unwrap_or(args);
+                // the caller omitted an explicit description. Keep the
+                // original argument borrowed: cloning its complete syntax tree
+                // on every eval is observable pay-use overhead for assertions.
+                if assertion_construct
+                    && let [first @ (CallArg::Positional(_) | CallArg::Named { .. })] =
+                        args.as_slice()
+                    && let Some(mut source) = simple_assertion_expression_source(first.expr())
+                        .or_else(|| assertion_expression_source(first.expr()))
+                {
+                    if let CallArg::Named { name, .. } = first {
+                        source.insert_str("assert(".len(), &format!("{name}: "));
+                    }
+                    let elided = if let Expr::BinaryOp {
+                        op: BinOp::And,
+                        left,
+                        ..
+                    } = first.expr()
+                        && self
+                            .eval_const_expr_in_source(left, &self.known_constants)
+                            .is_ok_and(|value| !value.is_truthy())
+                    {
+                        Some(left.as_ref())
+                    } else {
+                        None
+                    };
+                    return self.compile_synthesized_assert_call(
+                        name,
+                        first,
+                        source,
+                        elided,
+                        *line,
+                        assertion_check.expect("assert construct must emit a guard"),
+                    );
+                }
 
                 if generic_args.is_empty()
                     && args
@@ -11407,7 +10842,7 @@ impl Compiler {
                 }
 
                 if generic_args.is_empty() {
-                    if let [CallArg::Positional(argument)] = args {
+                    if let [CallArg::Positional(argument)] = args.as_slice() {
                         let direct_kind = (!self.strict_types)
                             .then(|| self.unambiguous_global_function_name(name))
                             .flatten()
@@ -11462,7 +10897,9 @@ impl Compiler {
                         }
                     }
 
-                    if let [CallArg::Positional(first), CallArg::Positional(second)] = args {
+                    if let [CallArg::Positional(first), CallArg::Positional(second)] =
+                        args.as_slice()
+                    {
                         let direct_kind = self
                             .unambiguous_global_function_name(name)
                             .and_then(crate::builtin_metadata::direct_internal_spec)
@@ -11521,7 +10958,9 @@ impl Compiler {
                     }
 
                     if self.is_global_builtin_call(name, "call_user_func_array") {
-                        if let [CallArg::Positional(callback), CallArg::Positional(array)] = args {
+                        if let [CallArg::Positional(callback), CallArg::Positional(array)] =
+                            args.as_slice()
+                        {
                             if let Expr::ArrayLiteral(elements) = array {
                                 if elements.iter().all(|element| {
                                     element.key.is_none()
@@ -14327,6 +13766,7 @@ impl Compiler {
                 expr: inner,
                 with_properties,
                 line,
+                ..
             } => {
                 let (src_op, src_type) = self.compile_expr(inner);
                 let properties = with_properties

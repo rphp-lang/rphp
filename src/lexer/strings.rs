@@ -105,9 +105,63 @@ impl<'a> Lexer<'a> {
             ));
         }
         let content = &self.src[start..self.pos];
-        let parts = Self::interpolate_string_content(content, opener_line, 0)?;
+        let interpolated = Self::interpolate_string_content(content, opener_line, 0, None)?;
         self.pos += 1;
-        Ok(parts)
+        Ok(interpolated)
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zassertion"))]
+    pub(super) fn read_assertion_double_quoted_string(
+        &mut self,
+    ) -> Result<(InterpolatedString, Option<String>), StringLexError> {
+        let opener = self.pos;
+        let opener_line = self.source_line_at(opener);
+        self.pos += 1;
+        let start = self.pos;
+        let mut reconstructible = true;
+        while self.pos < self.src.len() {
+            match self.src[self.pos] {
+                b'"' => break,
+                b'\\' if self.pos + 1 < self.src.len() => {
+                    reconstructible = false;
+                    self.pos += 2;
+                }
+                b'$' if self.src.get(self.pos + 1) == Some(&b'{') => {
+                    reconstructible = false;
+                    self.pos = Self::complex_interpolation_end(self.src, self.pos + 2)
+                        .map_err(|message| StringLexError::new(message, opener_line))?
+                        + 1;
+                }
+                b'{' if self.src.get(self.pos + 1) == Some(&b'$') => {
+                    self.pos = Self::complex_interpolation_end(self.src, self.pos + 2)
+                        .map_err(|message| StringLexError::new(message, opener_line))?
+                        + 1;
+                }
+                b'[' => {
+                    reconstructible = false;
+                    self.pos += 1;
+                }
+                _ => self.pos += 1,
+            }
+        }
+        if self.pos >= self.src.len() {
+            return Err(StringLexError::new(
+                "Unterminated string literal",
+                opener_line,
+            ));
+        }
+        let content = &self.src[start..self.pos];
+        let interpolated =
+            Self::interpolate_string_content(content, opener_line, 0, Some(&mut reconstructible))?;
+        self.pos += 1;
+        let source = if reconstructible {
+            None
+        } else {
+            Some(decode_php_source(content))
+        };
+        Ok((interpolated, source))
     }
 
     pub(super) fn read_document_string(&mut self) -> Result<InterpolatedString, StringLexError> {
@@ -220,7 +274,7 @@ impl<'a> Lexer<'a> {
                 diagnostics: Vec::new(),
             });
         }
-        Self::interpolate_string_content(&content, content_start_line, 1)
+        Self::interpolate_string_content(&content, content_start_line, 1, None)
     }
 
     fn find_document_string_end(
@@ -520,10 +574,18 @@ impl<'a> Lexer<'a> {
         decode_php_source(&self.src[start..cursor])
     }
 
+    #[inline]
+    fn mark_assertion_source_complex(reconstructible: &mut Option<&mut bool>) {
+        if let Some(reconstructible) = reconstructible.as_mut() {
+            **reconstructible = false;
+        }
+    }
+
     fn interpolate_string_content(
         content: &[u8],
         source_line: usize,
         heredoc_line_adjustment: usize,
+        mut assertion_reconstructible: Option<&mut bool>,
     ) -> Result<InterpolatedString, StringLexError> {
         let mut parts = Vec::new();
         let mut diagnostics = Vec::new();
@@ -741,6 +803,7 @@ impl<'a> Lexer<'a> {
                         let (tokens, nested_diagnostics) =
                             Self::tokenize_interpolation_expression(expression, expression_line)
                                 .map_err(|message| StringLexError::new(message, expression_line))?;
+                        Self::mark_assertion_source_complex(&mut assertion_reconstructible);
                         parts.push(StringPart::DynamicVariable(tokens, expression_line));
                         diagnostics.extend(nested_diagnostics);
                         diagnostics.push(DeferredCompileDiagnostic {
@@ -831,12 +894,14 @@ impl<'a> Lexer<'a> {
                         }
                         pos += 1;
                         if index.0 {
+                            Self::mark_assertion_source_complex(&mut assertion_reconstructible);
                             parts.push(StringPart::DynamicArrayAccess(
                                 name,
                                 index.1,
                                 interpolation_line,
                             ));
                         } else {
+                            Self::mark_assertion_source_complex(&mut assertion_reconstructible);
                             parts.push(StringPart::ArrayAccess(name, index.1, interpolation_line));
                         }
                         continue;
@@ -856,6 +921,7 @@ impl<'a> Lexer<'a> {
                         pos += operator_len;
                         let property = Self::read_content_identifier(content, &mut pos)
                             .map_err(|message| StringLexError::new(message, interpolation_line))?;
+                        Self::mark_assertion_source_complex(&mut assertion_reconstructible);
                         parts.push(StringPart::PropertyAccess(
                             name,
                             property,
@@ -902,6 +968,7 @@ impl<'a> Lexer<'a> {
                     if content.get(pos) == Some(&b'}') {
                         pos += 1;
                     }
+                    Self::mark_assertion_source_complex(&mut assertion_reconstructible);
                     parts.push(StringPart::ArrayAccess(name, index, expression_line));
                 } else if content.get(pos) == Some(&b'}') {
                     pos += 1;
@@ -916,14 +983,19 @@ impl<'a> Lexer<'a> {
                     .map_err(|message| StringLexError::new(message, expression_line))?;
                     diagnostics.extend(nested_diagnostics);
                     pos = expression_end + 1;
+                    Self::mark_assertion_source_complex(&mut assertion_reconstructible);
                     parts.push(StringPart::Expression(tokens));
                 }
             } else {
                 let character_offset = pos;
-                current_is_binary |= Self::push_utf8_bytes(content, &mut pos, &mut current)
-                    .map_err(|message| {
+                let binary =
+                    Self::push_utf8_bytes(content, &mut pos, &mut current).map_err(|message| {
                         Self::string_lex_error_at(content, character_offset, source_line, message)
                     })?;
+                current_is_binary |= binary;
+                if binary {
+                    Self::mark_assertion_source_complex(&mut assertion_reconstructible);
+                }
             }
         }
 
@@ -1198,6 +1270,31 @@ impl<'a> Lexer<'a> {
             }
         }
         tokens.push(Token::RParen);
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zassertion"))]
+    pub(super) fn emit_assertion_string_parts(
+        tokens: &mut Vec<Token>,
+        parts: &[StringPart],
+        source: Option<String>,
+        line: usize,
+    ) {
+        let mut retain_source = false;
+        for part in parts {
+            if !matches!(part, StringPart::Literal(_, _)) {
+                retain_source = true;
+                break;
+            }
+        }
+        if !retain_source {
+            Self::emit_string_parts(tokens, parts);
+            return;
+        }
+        tokens.push(Token::InterpolatedStringStart { source, line });
+        Self::emit_string_parts(tokens, parts);
+        tokens.push(Token::InterpolatedStringEnd);
     }
 
     fn emit_property_access_tokens(

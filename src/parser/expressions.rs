@@ -1168,6 +1168,25 @@ impl Parser {
                 };
                 Ok(Expr::StringLiteral(val))
             }
+            Token::BacktickLiteral { .. } => match self.advance() {
+                Token::BacktickLiteral { source, line } => {
+                    Ok(Expr::BacktickLiteral { source, line })
+                }
+                _ => unreachable!(),
+            },
+            Token::InterpolatedStringStart { .. } => {
+                let (source, line) = match self.advance() {
+                    Token::InterpolatedStringStart { source, line } => (source, line),
+                    _ => unreachable!(),
+                };
+                let value = self.parse_expr()?;
+                self.expect(&Token::InterpolatedStringEnd)?;
+                Ok(Expr::InterpolatedString {
+                    value: Box::new(value),
+                    source,
+                    line,
+                })
+            }
             Token::BinaryStringLiteral(_) => {
                 let val = match self.advance() {
                     Token::BinaryStringLiteral(s) => s,
@@ -1400,7 +1419,14 @@ impl Parser {
                         return Err("Generic first-class function callables are not supported yet"
                             .into());
                     }
-                    let args = self.parse_call_args()?;
+                    let args = if name
+                        .trim_start_matches('\\')
+                        .eq_ignore_ascii_case("assert")
+                    {
+                        self.parse_assertion_call_args()?
+                    } else {
+                        self.parse_call_args()?
+                    };
                     return Ok(Expr::FunctionCall {
                         name,
                         args,
@@ -1421,7 +1447,14 @@ impl Parser {
                         self.advance();
                         return Ok(Expr::FirstClassFunctionCallable { name, line });
                     }
-                    let args = self.parse_call_args()?;
+                    let args = if name
+                        .trim_start_matches('\\')
+                        .eq_ignore_ascii_case("assert")
+                    {
+                        self.parse_assertion_call_args()?
+                    } else {
+                        self.parse_call_args()?
+                    };
                     Ok(Expr::FunctionCall {
                         name,
                         args,
@@ -1462,7 +1495,11 @@ impl Parser {
                     if self.consume_first_class_callable_placeholder() {
                         return Ok(Expr::FirstClassFunctionCallable { name, line });
                     }
-                    let args = self.parse_call_args()?;
+                    let args = if name.eq_ignore_ascii_case("assert") {
+                        self.parse_assertion_call_args()?
+                    } else {
+                        self.parse_call_args()?
+                    };
                     Ok(Expr::FunctionCall {
                         name,
                         args,
@@ -1585,7 +1622,11 @@ impl Parser {
                         self.advance();
                         return Ok(Expr::FirstClassFunctionCallable { name, line });
                     }
-                    let args = self.parse_call_args()?;
+                    let args = if name.eq_ignore_ascii_case("assert") {
+                        self.parse_assertion_call_args()?
+                    } else {
+                        self.parse_call_args()?
+                    };
                     if name.eq_ignore_ascii_case("eval") {
                         let mut args = args.into_iter();
                         let source = match (args.next(), args.next()) {

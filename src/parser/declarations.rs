@@ -2216,6 +2216,9 @@ impl Parser {
             Expr::ArrayAppendArgument { target, .. } => {
                 Self::collect_free_vars(target, bound, out);
             }
+            Expr::InterpolatedString { value, .. } => {
+                Self::collect_free_vars(value, bound, out);
+            }
             Expr::DynamicClassConstant {
                 class, constant, ..
             } => {
@@ -2230,6 +2233,7 @@ impl Parser {
             | Expr::Float(_)
             | Expr::StringLiteral(_)
             | Expr::BinaryStringLiteral(_)
+            | Expr::BacktickLiteral { .. }
             | Expr::Bool(_)
             | Expr::Null
             | Expr::Globals { .. }

@@ -1,3 +1,4 @@
+pub(crate) mod assertion_source;
 pub mod compile;
 #[cfg(feature = "vm-stats")]
 mod jit_coverage;

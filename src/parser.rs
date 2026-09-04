@@ -57,6 +57,9 @@ pub struct Parser {
     /// Whether the current statement is parsed in the source unit's outermost
     /// scope, the only context where __halt_compiler() is legal.
     outermost_scope: bool,
+    /// Preserve otherwise reflection-flattened attribute group boundaries
+    /// only while parsing assert()'s retained first-argument syntax.
+    assertion_source_capture: bool,
     /// A recognized halt directive intentionally removes every following
     /// token. Nested grammar may therefore unwind through synthetic closers
     /// while the deferred compile error remains authoritative.

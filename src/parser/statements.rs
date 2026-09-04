@@ -56,6 +56,7 @@ impl Parser {
             new_postfix_error_suffix: None,
             last_primary_line: None,
             outermost_scope: true,
+            assertion_source_capture: false,
             halted: false,
         }
     }
@@ -282,77 +283,90 @@ impl Parser {
             Token::Declare => {
                 self.advance(); // consume 'declare'
                 self.expect_lparen()?;
-                let (directive, directive_line) = match self.advance() {
-                    Token::Identifier(n, line) => (n, line),
-                    other => {
-                        return Err(format!(
-                            "Expected directive name in declare(), got {:?}",
-                            other
-                        ));
-                    }
-                };
-                let invalid_strict_placement = directive.eq_ignore_ascii_case("strict_types")
-                    && !strict_types_allowed;
-                if invalid_strict_placement {
-                    let _ = self.compile_error(
-                        "strict_types declaration must be the very first statement in the script",
-                        directive_line,
-                    );
-                }
-                self.expect(&Token::Assign)?;
-                let value = if directive.eq_ignore_ascii_case("encoding") {
-                    match self.peek() {
-                        Token::StringLiteral(_) | Token::BinaryStringLiteral(_) => {
-                            self.advance();
-                            0
-                        }
-                        _ => {
-                            let line = self.closest_token_source_line();
-                            let _ = self.compile_error("Encoding must be a literal", line);
-                            let _ = self.parse_expr()?;
-                            0
-                        }
-                    }
-                } else {
-                    match self.advance() {
-                        Token::Integer(n) => n,
-                        Token::True => 1,
-                        Token::False => 0,
+                let mut directives = Vec::new();
+                let mut invalid_strict_placement = false;
+                let mut strict_line = None;
+                loop {
+                    let (directive, directive_line) = match self.advance() {
+                        Token::Identifier(n, line) => (n, line),
                         other => {
                             return Err(format!(
-                                "Expected integer value in declare(), got {:?}",
+                                "Expected directive name in declare(), got {:?}",
                                 other
                             ));
                         }
+                    };
+                    if directive.eq_ignore_ascii_case("strict_types") {
+                        strict_line = Some(directive_line);
+                        invalid_strict_placement |= !strict_types_allowed;
+                        if invalid_strict_placement {
+                            let _ = self.compile_error(
+                                "strict_types declaration must be the very first statement in the script",
+                                directive_line,
+                            );
+                        }
                     }
-                };
+                    self.expect(&Token::Assign)?;
+                    let value = if directive.eq_ignore_ascii_case("encoding") {
+                        match self.peek() {
+                            Token::StringLiteral(_) | Token::BinaryStringLiteral(_) => {
+                                self.advance();
+                                0
+                            }
+                            _ => {
+                                let line = self.closest_token_source_line();
+                                let _ = self.compile_error("Encoding must be a literal", line);
+                                let _ = self.parse_expr()?;
+                                0
+                            }
+                        }
+                    } else {
+                        match self.advance() {
+                            Token::Integer(n) => n,
+                            Token::True => 1,
+                            Token::False => 0,
+                            other => {
+                                return Err(format!(
+                                    "Expected integer value in declare(), got {:?}",
+                                    other
+                                ));
+                            }
+                        }
+                    };
+                    directives.push((directive, value));
+                    if !matches!(self.peek(), Token::Comma(_)) {
+                        break;
+                    }
+                    self.advance();
+                }
                 self.expect(&Token::RParen)?;
-                let invalid_strict_block = directive.eq_ignore_ascii_case("strict_types")
+                let invalid_strict_block = strict_line.is_some()
                     && matches!(self.peek(), Token::LBrace(_));
                 if invalid_strict_block {
                     let _ = self.compile_error(
                         "strict_types declaration must not use block mode",
-                        directive_line,
+                        strict_line.unwrap_or(1),
                     );
                 }
-                if (invalid_strict_placement || invalid_strict_block)
-                    && matches!(self.peek(), Token::LBrace(_))
-                {
+                let body = if matches!(self.peek(), Token::LBrace(_)) {
                     self.advance();
+                    let mut body = Vec::new();
                     while self.peek() != Token::RBrace && !self.at_eof() {
-                        let _ = self.parse_stmt_in_scope(false)?;
+                        body.push(self.parse_stmt_in_scope(false)?);
                     }
                     self.expect(&Token::RBrace)?;
-                    return Ok(Stmt::Noop);
-                }
-                self.expect(&Token::Semicolon(0))?;
+                    Some(body)
+                } else {
+                    self.expect(&Token::Semicolon(0))?;
+                    None
+                };
                 if invalid_strict_placement || invalid_strict_block {
                     Ok(Stmt::Noop)
                 } else {
-                    Ok(Stmt::Declare { directive, value })
+                    Ok(Stmt::Declare { directives, body })
                 }
             }
-            Token::Namespace => {
+            Token::Namespace if self.peek_at(1) != Token::Backslash => {
                 self.advance(); // consume 'namespace'
                 // The bracketed global namespace has no name: `namespace { ... }`.
                 // Keep the empty spelling in the AST so compilation can restore
@@ -1438,6 +1452,8 @@ impl Parser {
             | Token::Float(_)
             | Token::StringLiteral(_)
             | Token::BinaryStringLiteral(_)
+            | Token::BacktickLiteral { .. }
+            | Token::InterpolatedStringStart { .. }
             | Token::MagicConstant { .. }
             | Token::Dollar(_)
             | Token::This(_)
@@ -1452,7 +1468,7 @@ impl Parser {
             | Token::PlusPlus
             | Token::MinusMinus
             | Token::ArrayKw => self.parse_expression_statement(),
-            Token::Identifier(_, _) | Token::Backslash | Token::From => {
+            Token::Identifier(_, _) | Token::Backslash | Token::Namespace | Token::From => {
                 // Check for list() destructuring: list($a, $b) = expr;
                 if let Token::Identifier(ref name, _) = self.peek() {
                     if name.eq_ignore_ascii_case("list")
@@ -1776,6 +1792,7 @@ impl Parser {
 
     /// Parse if / elseif / else chain.
     fn parse_if(&mut self) -> Result<Stmt, String> {
+        let elseif = self.peek() == Token::ElseIf;
         self.advance(); // consume 'if' or 'elseif'
         self.expect_lparen()?;
         let condition = self.parse_expr()?;
@@ -1802,6 +1819,7 @@ impl Parser {
             condition,
             then_body,
             else_body,
+            elseif,
         })
     }
 
@@ -1837,6 +1855,7 @@ impl Parser {
             condition,
             then_body,
             else_body,
+            elseif: true,
         })
     }
 

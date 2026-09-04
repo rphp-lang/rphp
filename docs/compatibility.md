@@ -7,6 +7,40 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The latest measured AMD64 PHP 8.5 language checkpoint is
+`assertion-ast-source-rendering`, based on `2589e756`. Assertion-only source
+capture and a separate cold renderer preserve interpolation spelling and
+brace adjacency, attributes, closures, property hooks and declaration bodies.
+Ordinary parsing stays on its original path; inactive assertions return true
+without executing their expression. Generalized declaration bodies also close
+the adjacent `jump/jump12.phpt` case. Seven original E2E cases, two lexer units
+and one parser regression pass. PHP 8.5 clone named/unpacked-call syntax and
+backtick execution remain explicit non-claims.
+
+The pinned php-src `fcc29c8` ten-case packet improves from 0 to 10 exact
+passes. The complete 7,174-case projection is now 6,400 pass, 380 fail,
+182 skip and 212 unsupported, exact `+10/-0`, without timeout or crash.
+Zend/lang is 4,942/361/115/181; its manifest hashes to
+`65c70b4722372f52c4528d55a3640828d868c253191e021b34653cba6670fc6c`
+and its sorted pass set to
+`96a399abc419d5ddabd50e81161ecfd3d4e851ade0f11370d50b70276f5d266d`.
+Strings/array remains 1,458/19/67/31, with unchanged manifest
+`226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`.
+
+Fresh default/no-default/erased/reified/all-features Cargo matrices pass
+(4,594/4,357/4,665/4,687/4,743 tests), as do all-target checking, format,
+the unchanged unsafe ratchet and Composer/Symfony S0-S3. The recovered
+release is byte-identical to the accepted fixed-parent 32-pair performance
+candidate, SHA-256
+`781e1c43eb17d8945159b53bac41f38266db4c29c5c3872564e21605ae6baf06`;
+the parent remains
+`439fc24c57a0150ef8bba7b9c0f5018f05c552b8ad6ae5415fd7af08f1f40225`.
+That earlier performance gate is retained, not claimed as a fresh run.
+Assertion-only code is isolated after hot custom sections, and object-handle
+helper inlining preserves the measured common object path. The verification
+record hashes to
+`976b0e26f5ebffbc266a4657913b5838db06c930d0b39887f4ef3096560b0963`.
+
 The latest measured AMD64 PHP 8.5 standard-library checkpoint is
 `filesystem-metadata-scalar-projections`, based on `80b0f965`, pinned to
 php-src commit `fcc29c8` and validated against PHP 8.5.10. The complete

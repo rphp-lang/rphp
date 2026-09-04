@@ -36,6 +36,22 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `assertion-ast-source-rendering` train adds ten exact PHP 8.5
+passes over `2589e756`, with no lost pass, timeout or crash. The 7,174-case
+core is now 6,400 pass / 380 fail / 182 skip / 212 unsupported. Assertion-only
+source capture and cold AST rendering preserve PHP diagnostics without
+executing dead expressions; clone named/unpacked-call syntax remains outside
+this checkpoint. Five Cargo configurations, exact upstream no-loss,
+Composer/Symfony S0-S3 and static/unsafe gates pass. The rebuilt release is
+byte-identical to the accepted performance candidate; detailed hashes and
+non-claims are in `compatibility.md`.
+
+Next work first improves build/test throughput without reducing coverage,
+then admits a 10–30-case shared-root-cause train from the current manifest.
+The first candidate is the 14-case `crypt`/`CRYPT_*` missing-function surface;
+backend and exact oracle feasibility must be established before implementation.
+Generator/Fiber work still requires a separate pay-for-use design.
+
 The accepted AMD64 `filesystem-metadata-scalar-projections` train completes the
 PHP 8.5 call and metadata contracts for `filegroup`, `fileinode`, `fileowner`,
 `fileperms`, `filetype`, `fstat` and `linkinfo`. Scalar projections share the

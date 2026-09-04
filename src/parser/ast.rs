@@ -132,6 +132,7 @@ pub struct Attribute {
 
 impl Attribute {
     const NON_ENUM_CASE_MARKER: &'static str = "\0rphp_non_enum_case";
+    const ASSERTION_GROUP_MARKER: &'static str = "\0rphp_assertion_attribute_group";
 
     pub(crate) fn non_enum_case_marker(line: usize) -> Self {
         Self {
@@ -141,8 +142,24 @@ impl Attribute {
         }
     }
 
+    pub(crate) fn assertion_group_marker(line: usize) -> Self {
+        Self {
+            name: Self::ASSERTION_GROUP_MARKER.to_string(),
+            args: Vec::new(),
+            line,
+        }
+    }
+
     pub(crate) fn is_non_enum_case_marker(&self) -> bool {
         self.name == Self::NON_ENUM_CASE_MARKER
+    }
+
+    pub(crate) fn is_assertion_group_marker(&self) -> bool {
+        self.name == Self::ASSERTION_GROUP_MARKER
+    }
+
+    pub(crate) fn is_parser_marker(&self) -> bool {
+        self.is_non_enum_case_marker() || self.is_assertion_group_marker()
     }
 
     pub(crate) fn non_enum_case_line(attributes: &[Self]) -> Option<usize> {
@@ -175,6 +192,15 @@ pub enum Expr {
     /// Lossless Latin-1 storage for PHP bytes introduced by byte escapes or
     /// preserved document-string content.
     BinaryStringLiteral(String),
+    /// PHP backtick syntax retained losslessly for cold assertion/reflection
+    /// source rendering. The ordinary executor deliberately does not claim
+    /// shell-execution compatibility through this syntax yet.
+    BacktickLiteral { source: String, line: usize },
+    InterpolatedString {
+        value: Box<Expr>,
+        source: Option<String>,
+        line: usize,
+    },
     Null,
     Bool(bool),
     Variable {
@@ -547,6 +573,7 @@ impl Expr {
             | Expr::Eval { source: inner, .. }
             | Expr::BitwiseNot { expr: inner, .. }
             | Expr::DynamicVariable { name: inner, .. } => inner.contains_yield(),
+            Expr::InterpolatedString { value, .. } => value.contains_yield(),
             Expr::Clone {
                 expr,
                 with_properties,
@@ -664,6 +691,7 @@ impl Expr {
             | Expr::Float(_)
             | Expr::StringLiteral(_)
             | Expr::BinaryStringLiteral(_)
+            | Expr::BacktickLiteral { .. }
             | Expr::Null
             | Expr::Bool(_)
             | Expr::Variable { .. }
@@ -870,6 +898,9 @@ pub enum Stmt {
         condition: Expr,
         then_body: Vec<Stmt>,
         else_body: Vec<Stmt>,
+        /// True when this node originated from the compact `elseif` token;
+        /// assertion AST formatting distinguishes it from `else if`.
+        elseif: bool,
     },
     While {
         condition: Expr,
@@ -1023,9 +1054,9 @@ pub enum Stmt {
         line: usize,
     },
     Declare {
-        // declare(strict_types=1);
-        directive: String,
-        value: i64,
+        // declare(strict_types=1, ticks=1); / declare(...) { ... }
+        directives: Vec<(String, i64)>,
+        body: Option<Vec<Stmt>>,
     },
     Namespace {
         // namespace App\Models;
@@ -1113,6 +1144,7 @@ impl Stmt {
                 condition,
                 then_body,
                 else_body,
+                ..
             } => {
                 condition.contains_yield()
                     || then_body.iter().any(Stmt::contains_yield)
@@ -1210,9 +1242,11 @@ impl Stmt {
             | Stmt::Class { .. }
             | Stmt::Interface { .. }
             | Stmt::Trait { .. }
-            | Stmt::Declare { .. }
             | Stmt::UseDecl { .. }
             | Stmt::Enum { .. } => false,
+            Stmt::Declare { body, .. } => body
+                .as_deref()
+                .is_some_and(|body| body.iter().any(Stmt::contains_yield)),
         }
     }
 }

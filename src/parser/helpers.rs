@@ -43,6 +43,8 @@ impl Parser {
             | Token::Match(line)
             | Token::Yield(line)
             | Token::Clone(line)
+            | Token::BacktickLiteral { line, .. }
+            | Token::InterpolatedStringStart { line, .. }
             | Token::AttributeStart(line)
             | Token::Ampersand(line)
             | Token::ParseError(_, line)
@@ -88,6 +90,8 @@ impl Parser {
                 | Token::Match(line)
                 | Token::Yield(line)
                 | Token::Clone(line)
+                | Token::BacktickLiteral { line, .. }
+                | Token::InterpolatedStringStart { line, .. }
                 | Token::AttributeStart(line)
                 | Token::Ampersand(line)
                 | Token::ParseError(_, line)
@@ -431,10 +435,179 @@ impl Parser {
         Ok(args)
     }
 
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zassertion"))]
+    fn parse_assertion_call_args(&mut self) -> Result<Vec<CallArg>, String> {
+        let mut args: Vec<CallArg> = Vec::new();
+        let mut seen_named = false;
+        let mut seen_unpack = false;
+        let call_line = self.last_primary_line.unwrap_or(1);
+        if matches!(self.peek(), Token::Comma(_)) {
+            return Err(self.comma_list_error(call_line, false));
+        }
+        if self.peek() != Token::RParen {
+            loop {
+                // Check for named argument: identifier-like token followed by Colon
+                if let Some(_label) = Self::token_as_named_arg_label(&self.peek()) {
+                    if self.peek_at(1) == Token::Colon {
+                        let name = Self::token_as_named_arg_label(&self.advance()).unwrap();
+                        self.advance(); // consume ':'
+                        let diagnostic_checkpoint =
+                            self.assertion_diagnostic_checkpoint(args.is_empty());
+                        let capture_attributes = args.is_empty();
+                        let previous_capture = self.assertion_source_capture;
+                        self.assertion_source_capture = capture_attributes;
+                        let parsed = self.with_new_postfix_error_suffix(
+                            Some(", expecting \")\""),
+                            |parser| parser.parse_expr(),
+                        );
+                        self.assertion_source_capture = previous_capture;
+                        let value = parsed?;
+                        self.restore_elided_assertion_diagnostics(
+                            diagnostic_checkpoint,
+                            &value,
+                        );
+                        if let Expr::FunctionCall { name, line, .. } = &value
+                            && name.eq_ignore_ascii_case("list")
+                        {
+                            return Err(self.source_error(
+                                "syntax error, unexpected token \")\", expecting \"=\"",
+                                *line,
+                            ));
+                        }
+                        args.push(CallArg::Named { name, value });
+                        seen_named = true;
+                        if self.comma_list_has_next(call_line)? {
+                            continue;
+                        }
+                        break;
+                    }
+                }
+                // Argument unpacking has its own ordering rule. It must be
+                // checked before the generic positional-after-named branch.
+                if matches!(self.peek(), Token::DotDotDot(_)) {
+                    if seen_named {
+                        return Err(
+                            "Cannot use argument unpacking after named arguments".to_string()
+                        );
+                    }
+                    self.advance();
+                    let diagnostic_checkpoint =
+                        self.assertion_diagnostic_checkpoint(args.is_empty());
+                    let capture_attributes = args.is_empty();
+                    let previous_capture = self.assertion_source_capture;
+                    self.assertion_source_capture = capture_attributes;
+                    let parsed = self.with_new_postfix_error_suffix(
+                        Some(", expecting \")\""),
+                        |parser| parser.parse_expr(),
+                    );
+                    self.assertion_source_capture = previous_capture;
+                    let expr = parsed?;
+                    self.restore_elided_assertion_diagnostics(
+                        diagnostic_checkpoint,
+                        &expr,
+                    );
+                    if let Expr::FunctionCall { name, line, .. } = &expr
+                        && name.eq_ignore_ascii_case("list")
+                    {
+                        return Err(self.source_error(
+                            "syntax error, unexpected token \")\", expecting \"=\"",
+                            *line,
+                        ));
+                    }
+                    args.push(CallArg::Unpack(expr));
+                    seen_unpack = true;
+                    if self.comma_list_has_next(call_line)? {
+                        continue;
+                    }
+                    break;
+                }
+                // Positional argument
+                if seen_named {
+                    self.compile_error(
+                        "Cannot use positional argument after named argument",
+                        call_line,
+                    );
+                }
+                if seen_unpack {
+                    return Err(
+                        "Cannot use positional argument after argument unpacking".to_string()
+                    );
+                }
+                let diagnostic_checkpoint = self.assertion_diagnostic_checkpoint(args.is_empty());
+                let capture_attributes = args.is_empty();
+                let previous_capture = self.assertion_source_capture;
+                self.assertion_source_capture = capture_attributes;
+                let parsed = self.with_new_postfix_error_suffix(
+                    Some(", expecting \")\""),
+                    |parser| parser.parse_positional_call_argument(),
+                );
+                self.assertion_source_capture = previous_capture;
+                let expr = parsed?;
+                self.restore_elided_assertion_diagnostics(diagnostic_checkpoint, &expr);
+                if let Expr::FunctionCall { name, line, .. } = &expr
+                    && name.eq_ignore_ascii_case("list")
+                {
+                    return Err(self.source_error(
+                        "syntax error, unexpected token \")\", expecting \"=\"",
+                        *line,
+                    ));
+                }
+                args.push(CallArg::Positional(expr));
+                if self.comma_list_has_next(call_line)? {
+                    continue;
+                }
+                break;
+            }
+        }
+        self.expect(&Token::RParen)?;
+        Ok(args)
+    }
+
+    fn assertion_diagnostic_checkpoint(
+        &self,
+        enabled: bool,
+    ) -> Option<(Option<(String, usize)>, usize)> {
+        enabled.then(|| {
+            (
+                self.deferred_compile_error.clone(),
+                self.deferred_compile_deprecations.len(),
+            )
+        })
+    }
+
+    fn restore_elided_assertion_diagnostics(
+        &mut self,
+        checkpoint: Option<(Option<(String, usize)>, usize)>,
+        expression: &Expr,
+    ) {
+        let Some((compile_error, deprecation_count)) = checkpoint else {
+            return;
+        };
+        let constant_false_short_circuit = matches!(
+            expression,
+            Expr::BinaryOp {
+                op: BinOp::And,
+                left,
+                ..
+            } if matches!(left.as_ref(), Expr::Bool(false) | Expr::Integer(0))
+        );
+        if constant_false_short_circuit {
+            self.deferred_compile_error = compile_error;
+            self.deferred_compile_deprecations
+                .truncate(deprecation_count);
+        }
+    }
+
     fn parse_attribute_groups(&mut self) -> Result<Vec<Attribute>, String> {
         let mut attributes = Vec::new();
+        let mut first_group = true;
         while let Token::AttributeStart(line) = self.peek() {
             self.advance();
+            if self.assertion_source_capture && !first_group {
+                attributes.push(Attribute::assertion_group_marker(line));
+            }
             loop {
                 let name = self.parse_attribute_name()?;
                 let args = if matches!(self.peek(), Token::LParen(_)) {
@@ -458,7 +631,11 @@ impl Parser {
                         line,
                     );
                 }
-                attributes.push(Attribute { name, args, line });
+                attributes.push(Attribute {
+                    name,
+                    args,
+                    line,
+                });
                 if !matches!(self.peek(), Token::Comma(_)) {
                     break;
                 }
@@ -468,6 +645,7 @@ impl Parser {
                 }
             }
             self.expect(&Token::RBracket)?;
+            first_group = false;
         }
         Ok(attributes)
     }

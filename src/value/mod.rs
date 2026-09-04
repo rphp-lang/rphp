@@ -1312,6 +1312,7 @@ const OBJECT_DEEP_DROP_STACK_CHECKPOINT: u32 = 1 << 30;
 const OBJECT_STATE_MASK: u32 = OBJECT_DESTRUCTOR_RAN | OBJECT_DEEP_DROP_STACK_CHECKPOINT;
 const OBJECT_HANDLE_MASK: u32 = !OBJECT_STATE_MASK;
 
+#[inline(always)]
 fn with_object_handles<T>(callback: impl FnOnce(&mut ObjectHandleState) -> T) -> T {
     OBJECT_HANDLES.with(|state| {
         // This state is thread-local, and none of its operations invokes PHP
@@ -1320,10 +1321,12 @@ fn with_object_handles<T>(callback: impl FnOnce(&mut ObjectHandleState) -> T) ->
     })
 }
 
+#[inline(never)]
 fn allocate_object_handle() -> (u32, bool) {
     with_object_handles(|state| (state.allocate(), state.in_request))
 }
 
+#[inline(always)]
 fn register_object_identity(identity: usize) {
     with_object_handles(|state| state.register_identity(identity));
 }

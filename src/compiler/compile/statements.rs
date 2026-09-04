@@ -3074,6 +3074,7 @@ impl Compiler {
                 condition,
                 then_body,
                 else_body,
+                ..
             } => {
                 // A source-level constant condition has no runtime side
                 // effects. Compile only its live branch so mutually exclusive
@@ -4814,13 +4815,15 @@ impl Compiler {
                 // or unset any local known to this op array.
                 self.definitely_defined_cvs.clear();
             }
-            Stmt::Declare { directive, value } => {
-                match directive.as_str() {
-                    "strict_types" => {
+            Stmt::Declare { directives, body } => {
+                for (directive, value) in directives {
+                    if directive == "strict_types" {
                         self.strict_types = *value != 0;
                     }
-                    _ => {
-                        // Ignore unknown directives (encoding, ticks)
+                }
+                if let Some(body) = body {
+                    for statement in body {
+                        self.compile_stmt(statement)?;
                     }
                 }
             }
@@ -7553,6 +7556,7 @@ impl Compiler {
                                         line: 0,
                                     }],
                                     else_body: vec![],
+                                    elseif: false,
                                 })
                             })
                             .collect::<Vec<_>>());

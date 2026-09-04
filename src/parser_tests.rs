@@ -1075,10 +1075,13 @@ fn readonly_method_modifiers_are_located_deferred_compile_errors() {
 #[test]
 fn source_aware_punctuation_keeps_internal_fallbacks_and_trait_diagnostics() {
     let tokens = Lexer::new("<?php declare(ticks=1) {}").tokenize().unwrap();
-    assert_eq!(
-        Parser::new(tokens).parse().unwrap_err(),
-        "Expected Semicolon, got LBrace"
-    );
+    assert!(matches!(
+        Parser::new(tokens).parse().unwrap().as_slice(),
+        [Stmt::Declare {
+            directives,
+            body: Some(body),
+        }] if directives == &[("ticks".to_string(), 1)] && body.is_empty()
+    ));
 
     let tokens = Lexer::new("<?php trait Example extends Base {}")
         .tokenize()
@@ -1891,6 +1894,7 @@ fn test_parse_if() {
             condition: Expr::Integer(1),
             then_body: vec![echo(vec![Expr::Integer(42)])],
             else_body: vec![],
+            elseif: false,
         }]
     );
 }
@@ -1907,6 +1911,7 @@ fn test_parse_if_else() {
             condition: Expr::Integer(0),
             then_body: vec![echo(vec![Expr::Integer(1)])],
             else_body: vec![echo(vec![Expr::Integer(2)])],
+            elseif: false,
         }]
     );
 }
