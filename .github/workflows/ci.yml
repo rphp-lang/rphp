@@ -35,6 +35,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Unsafe policy self-test
         run: scripts/test-unsafe-policy.sh
+      - name: Matrix evidence self-test
+        run: python3 scripts/test-test-matrix.py
       - name: Unsafe policy ratchet
         if: github.event_name == 'pull_request'
         env:
@@ -55,15 +57,15 @@ jobs:
       matrix:
         include:
           - name: default + Linux x86-64 JIT
-            command: cargo test --locked
+            command: cargo test --locked --profile test-fast
           - name: no default features
-            command: cargo test --locked --no-default-features
+            command: cargo test --locked --profile test-fast --no-default-features
           - name: erased generics
-            command: cargo test --locked --features php-generics-erased
+            command: cargo test --locked --profile test-fast --features php-generics-erased
           - name: reified generics
-            command: cargo test --locked --features php-generics-reified
+            command: cargo test --locked --profile test-fast --features php-generics-reified
           - name: all features
-            command: cargo test --locked --all-features
+            command: cargo test --locked --profile test-fast --all-features
     steps:
       - uses: actions/checkout@v5
       - name: Run test configuration

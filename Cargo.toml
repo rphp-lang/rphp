@@ -58,6 +58,20 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [dev-dependencies]
 
+# Opt-in fast edit/build/test loop; ordinary dev/test retain full debug info.
+[profile.dev-fast]
+inherits = "dev"
+debug = 0
+debug-assertions = true
+overflow-checks = true
+
+# Full correctness suites spend most time interpreting deep inputs. Level one
+# amortizes its extra compile work across those tests without weakening checks.
+# Neither this profile nor dev-fast changes release/max-perf artifacts.
+[profile.test-fast]
+inherits = "dev-fast"
+opt-level = 1
+
 # Benchmark/production ceiling build. Keep the ordinary release profile fast
 # enough for day-to-day development; this profile deliberately trades build
 # time for whole-program optimization.

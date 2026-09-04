@@ -1,4 +1,6 @@
 /target
+/.local-evidence/
+__pycache__/
 /tests/fixtures/*/vendor/
 .DS_Store
 .claude/

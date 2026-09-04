@@ -46,8 +46,11 @@ Composer/Symfony S0-S3 and static/unsafe gates pass. The rebuilt release is
 byte-identical to the accepted performance candidate; detailed hashes and
 non-claims are in `compatibility.md`.
 
-Next work first improves build/test throughput without reducing coverage,
-then admits a 10–30-case shared-root-cause train from the current manifest.
+Build/test throughput now uses opt-in checked `dev-fast`/`test-fast` profiles
+and a resumable fingerprinted matrix runner. All five configurations retain
+their pass/fail/ignored totals; a clean default build/test falls from 281 to
+99 seconds locally, without runtime changes or reduced stress-test depths.
+Next work admits a 10–30-case shared-root-cause train from the current manifest.
 The first candidate is the 14-case `crypt`/`CRYPT_*` missing-function surface;
 backend and exact oracle feasibility must be established before implementation.
 Generator/Fiber work still requires a separate pay-for-use design.

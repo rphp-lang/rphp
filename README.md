@@ -61,6 +61,44 @@ printf '<?php echo 6 * 7;' | ./target/max-perf/rphp
 ./target/max-perf/rphp --version
 ```
 
+## Fast development and complete tests
+
+The opt-in `dev-fast` profile skips debug symbols for short edit/build/test
+cycles. `test-fast` also uses level-one optimization to accelerate interpreter
+stress tests. Both retain debug assertions and integer overflow checks;
+ordinary `cargo test`, `dev`, `release` and `max-perf` settings are unchanged.
+Use the ordinary debug profile when inspecting types/locals in a debugger.
+
+```sh
+cargo build --profile dev-fast
+cargo test --profile dev-fast --test e2e_array_construction
+cargo test --locked --profile test-fast
+
+# All five feature configurations plus all-feature/all-target checking:
+python3 scripts/test-matrix.py --output .local-evidence/matrix-current
+# Resume only successful gates with identical source/toolchain/profile inputs:
+python3 scripts/test-matrix.py --output .local-evidence/matrix-current --resume
+```
+
+The matrix command keeps complete logs and checksums outside build targets,
+retains failures and ignored tests, rejects filtered runs, and applies the
+mandatory cleanup hook before, between and after configurations. It serializes
+configurations to avoid multiplying memory/disk pressure; `--jobs` controls
+Cargo compilation parallelism (default: at most 16). `--offline` is available
+when dependencies are cached. A changed build/test fingerprint requires a new
+evidence directory. Do not run a matrix during someone else's benchmark window.
+PHPT and framework/performance gates remain separate required evidence; the
+matrix does not pretend to replace them. Upstream PHPT supports explicit shard
+counts, for example 16 on a sufficiently provisioned, otherwise idle host.
+
+On the measured Linux x86-64 / Rust 1.93.1 checkpoint, a clean `test-fast`
+default build plus all 4,594 tests took 99 seconds with incremental compilation
+disabled, versus 281 seconds in the preceding ordinary-profile run. The same
+24-case deep JSON suite took 19.8 seconds instead of 207 seconds in a focused
+no-debug-symbols comparison. These are local measurements, not CI guarantees.
+All five configurations retained their exact pass/fail/ignored totals and the
+20,000/25,000-level stress inputs; no test expectation or runtime code changed.
+
 ## Builtin compatibility audit
 
 After a debug build, the on-demand audit compares every builtin exposed by the
