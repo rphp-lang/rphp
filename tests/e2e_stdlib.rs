@@ -1787,10 +1787,16 @@ echo 'success';
 #[test]
 fn output_buffer_get_clean_returns_contents_when_flags_prevent_removal() {
     assert_eq!(
-        run_php(
-            "<?php ob_start(); ob_start(null, 0, 0); echo 'x'; $value = ob_get_clean(); echo '|', $value, '|', ob_get_level();"
+        run_php_with_source_context(
+            "<?php ob_start(); ob_start(null, 0, 0); echo 'x'; $value = ob_get_clean(); echo '|', $value, '|', ob_get_level();",
+            "/spec/buffer-notices.php",
+            "/spec",
         ),
-        "x|x|2"
+        concat!(
+            "x\nNotice: ob_get_clean(): Failed to discard buffer of default output handler (1) in /spec/buffer-notices.php on line 1\n",
+            "\nNotice: ob_get_clean(): Failed to delete buffer of default output handler (1) in /spec/buffer-notices.php on line 1\n",
+            "|x|2",
+        )
     );
 }
 

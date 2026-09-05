@@ -7,7 +7,44 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 PHP 8.5 language checkpoint is
+The latest measured AMD64 PHP 8.5 checkpoint is
+`output-buffer-operation-permissions`, based on `3cffd892`. Clean, flush and
+removal capabilities are independent. Rejected operations restore the buffer
+before notices run user code; getters retain their original binary snapshot
+and stop before publishing a result if either notice throws. Display callbacks
+cannot mutate the buffer stack. Explicit stderr fatal presentation reuses the
+existing CLI policy without changing default framing. No VM/value layout,
+common output path, dependency or unsafe operation was added.
+
+Thirteen new E2E/CLI tests, including a 48-combination capability matrix,
+pass within 214 focused/adjacent checks. All 63 original PHP 8.5.10 comparisons
+match stdout, stderr and exit status byte-for-byte. The unmodified 22-case
+php-src `fcc29c8` packet improves from 4/17/1 to 14/7/1
+(pass/fail/unsupported): exactly **ten adjacent gains, no loss**. The complete
+7,174-case core remains **6,418 pass / 362 fail / 182 skip / 212 unsupported**,
+with identical pass sets and no timeout or crash. `gc/bug64960` now reaches
+PHP's expected fatal exit through the missing-buffer notice; its remaining
+internal-callback trace-origin mismatch stays a failure. Zend/lang manifest:
+`31100ca25bef951ac233a6b8453d9309a42ba37e089081d90442ca91d8f53492`;
+strings/array remains byte-identical to the preceding checkpoint.
+
+All five checked Cargo configurations pass (4,650/4,413/4,721/4,743/4,799;
+unchanged ignored counts), together with all-target, Composer/Symfony S0-S3,
+runner self-tests, entity data, format and the unchanged 1,621/289 unsafe
+inventory. A background-service activity marker during untimed correctness is
+retained; those wall times are not performance evidence. The separate guarded
+fixed-parent CPU-2 32-pair packet is clean: startup -0.167%, ordinary call
++0.258%, object lifecycle -0.225%, ordinary output -1.754%, and permitted
+get-clean/clean-callback/flush-callback -4.463%/-3.783%/-2.131%, with identical
+checksums. Release SHA-256:
+`255bf83528085b8adb3b470978455ef1b1152757b2d3e39dc91f863a99306812`;
+complete verification record:
+`6c06d86d77d2b90a4dca0b00c65b1c6581149c19ad9c5ded2556d26e21240e9e`.
+Callback-output policy, invalid-callback validation, trace projection,
+automatic chunking, broader shutdown/SAPI behavior and allocation/OOM
+equivalence remain separate contracts. No private benchmark host was configured.
+
+The preceding measured AMD64 PHP 8.5 language checkpoint is
 `closure-origin-and-binding-contracts`, based on `e18a6110`. Anonymous code
 retains distinct lexical scope, called class and receiver through binding,
 nested creation and Reflection. Named callable origins remain immutable;
@@ -128,7 +165,7 @@ helper inlining preserves the measured common object path. The verification
 record hashes to
 `976b0e26f5ebffbc266a4657913b5838db06c930d0b39887f4ef3096560b0963`.
 
-The latest measured AMD64 PHP 8.5 standard-library checkpoint is
+The preceding measured AMD64 PHP 8.5 standard-library checkpoint is
 `filesystem-metadata-scalar-projections`, based on `80b0f965`, pinned to
 php-src commit `fcc29c8` and validated against PHP 8.5.10. The complete
 Reflection-exact surface now includes `filegroup`, `fileinode`, `fileowner`,

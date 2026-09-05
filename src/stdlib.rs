@@ -16360,6 +16360,7 @@ fn fn_ob_start(
         ));
         return Ok(());
     }
+    reject_output_buffer_reentry(eg, ed, "ob_start")?;
     // Keep accepting PHP's chunk-size argument. Automatic chunk flushing is
     // deliberately deferred; explicit operations and request teardown are exact.
     let _chunk_size = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
@@ -16442,55 +16443,182 @@ fn transform_output_buffer(
     }
 }
 
-fn clean_output_buffer(
-    eg: &mut ExecutorGlobals,
+#[cold]
+#[inline(never)]
+fn reject_output_buffer_reentry(
+    eg: &ExecutorGlobals,
     ed: *mut ExecuteData,
-    remove: bool,
-) -> Result<Option<Vec<u8>>, VmError> {
-    let Some(mut buffer) = eg.pop_output_buffer() else {
-        return Ok(None);
-    };
-    let required = OUTPUT_HANDLER_CLEANABLE | if remove { OUTPUT_HANDLER_REMOVABLE } else { 0 };
-    if buffer.flags & required != required {
-        eg.restore_output_buffer(buffer);
-        return Ok(None);
+    function: &str,
+) -> Result<(), VmError> {
+    if !eg.is_output_handler_active() {
+        return Ok(());
     }
-    let raw = buffer.data.clone();
-    let operation = OUTPUT_HANDLER_CLEAN | if remove { OUTPUT_HANDLER_FINAL } else { 0 };
-    let result = transform_output_buffer(eg, &mut buffer, operation, Some(ed));
-    if !remove {
-        eg.restore_output_buffer(buffer);
-    }
-    result.map(|_| Some(raw))
+    let (file, line) = internal_call_source(ed);
+    Err(VmError::Fatal(format!(
+        "{function}(): Cannot use output buffering in output buffering display handlers in {file} on line {line}"
+    )))
 }
 
-fn flush_output_buffer(
+#[derive(Clone, Copy)]
+enum OutputBufferOperation {
+    Clean,
+    Flush,
+    EndClean,
+    EndFlush,
+    GetClean,
+    GetFlush,
+}
+
+impl OutputBufferOperation {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Clean => "ob_clean",
+            Self::Flush => "ob_flush",
+            Self::EndClean => "ob_end_clean",
+            Self::EndFlush => "ob_end_flush",
+            Self::GetClean => "ob_get_clean",
+            Self::GetFlush => "ob_get_flush",
+        }
+    }
+
+    fn capability(self) -> i64 {
+        match self {
+            Self::Clean => OUTPUT_HANDLER_CLEANABLE,
+            Self::Flush => OUTPUT_HANDLER_FLUSHABLE,
+            _ => OUTPUT_HANDLER_REMOVABLE,
+        }
+    }
+
+    fn phase(self) -> i64 {
+        match self {
+            Self::Clean => OUTPUT_HANDLER_CLEAN,
+            Self::Flush => OUTPUT_HANDLER_FLUSH,
+            Self::EndClean | Self::GetClean => OUTPUT_HANDLER_CLEAN | OUTPUT_HANDLER_FINAL,
+            Self::EndFlush | Self::GetFlush => OUTPUT_HANDLER_FINAL,
+        }
+    }
+
+    fn returns_contents(self) -> bool {
+        matches!(self, Self::GetClean | Self::GetFlush)
+    }
+
+    fn denied_action(self) -> &'static str {
+        match self {
+            Self::Clean => "delete",
+            Self::Flush => "flush",
+            Self::EndClean | Self::GetClean => "discard",
+            Self::EndFlush | Self::GetFlush => "send",
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn report_output_buffer_denial(
     eg: &mut ExecutorGlobals,
     ed: *mut ExecuteData,
-    remove: bool,
-) -> Result<Option<Vec<u8>>, VmError> {
+    function: &str,
+    action: &str,
+) -> Result<(), VmError> {
+    let Some(buffer) = eg.pop_output_buffer() else {
+        return Ok(());
+    };
+    let name = buffer.handler.as_ref().map_or_else(
+        || "default output handler".to_string(),
+        |handler| callable_display_name(handler, eg),
+    );
+    let level = eg.output_buffer_level();
+    // No user code runs until the complete buffer has been restored. A notice
+    // handler may read it, append bytes, or push another buffer. Each notice
+    // therefore observes the current top, without retaining a borrowed slot.
+    eg.restore_output_buffer(buffer);
+    report_internal_diagnostic(
+        eg,
+        ed,
+        8,
+        "Notice",
+        &format!("{function}(): Failed to {action} buffer of {name} ({level})"),
+    )?;
+    Ok(())
+}
+
+#[cold]
+#[inline(never)]
+fn apply_output_buffer_operation(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    operation: OutputBufferOperation,
+) -> Result<(), VmError> {
+    reject_output_buffer_reentry(eg, ed, operation.name())?;
     let Some(mut buffer) = eg.pop_output_buffer() else {
-        return Ok(None);
+        if !matches!(operation, OutputBufferOperation::GetClean) {
+            let action = match operation {
+                OutputBufferOperation::Flush => "flush",
+                OutputBufferOperation::EndFlush | OutputBufferOperation::GetFlush => {
+                    "delete and flush"
+                }
+                _ => "delete",
+            };
+            let missing = if action == "delete and flush" {
+                "delete or flush"
+            } else {
+                action
+            };
+            report_internal_diagnostic(
+                eg,
+                ed,
+                8,
+                "Notice",
+                &format!(
+                    "{}(): Failed to {action} buffer. No buffer to {missing}",
+                    operation.name()
+                ),
+            )?;
+        }
+        // Reporting a missing buffer may have created a new one. The original
+        // operation is still rejected; it must never consume that replacement.
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        ret!(rv, Value::bool(false));
     };
-    let required = OUTPUT_HANDLER_FLUSHABLE | if remove { OUTPUT_HANDLER_REMOVABLE } else { 0 };
-    if buffer.flags & required != required {
+    let raw = operation.returns_contents().then(|| buffer.data.clone());
+    if buffer.flags & operation.capability() == 0 {
         eg.restore_output_buffer(buffer);
-        return Ok(None);
+        report_output_buffer_denial(eg, ed, operation.name(), operation.denied_action())?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        if raw.is_some() {
+            report_output_buffer_denial(eg, ed, operation.name(), "delete")?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+        }
+        ret!(
+            rv,
+            raw.map_or_else(|| Value::bool(false), |bytes| php_byte_result(bytes, false))
+        );
     }
-    let raw = buffer.data.clone();
-    let operation = if remove {
-        OUTPUT_HANDLER_FINAL
-    } else {
-        OUTPUT_HANDLER_FLUSH
-    };
-    let transformed = transform_output_buffer(eg, &mut buffer, operation, Some(ed));
+    let phase = operation.phase();
+    let remove = phase & OUTPUT_HANDLER_FINAL != 0;
+    let transformed = transform_output_buffer(eg, &mut buffer, phase, Some(ed));
     match transformed {
         Ok(output) => {
-            eg.write_output(&output);
+            if phase & OUTPUT_HANDLER_CLEAN == 0 {
+                eg.write_output(&output);
+            }
             if !remove {
                 eg.restore_output_buffer(buffer);
             }
-            Ok(Some(raw))
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            ret!(
+                rv,
+                raw.map_or_else(|| Value::bool(true), |bytes| php_byte_result(bytes, false))
+            );
         }
         Err(error) => {
             if !remove {
@@ -16506,11 +16634,7 @@ fn fn_ob_get_clean(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(raw) = eg.output_buffer_contents() else {
-        ret!(rv, Value::bool(false));
-    };
-    let _ = clean_output_buffer(eg, ed, true)?;
-    ret!(rv, php_byte_result(raw, false));
+    apply_output_buffer_operation(ed, rv, eg, OutputBufferOperation::GetClean)
 }
 
 fn fn_ob_get_flush(
@@ -16518,11 +16642,7 @@ fn fn_ob_get_flush(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(raw) = eg.output_buffer_contents() else {
-        ret!(rv, Value::bool(false));
-    };
-    let _ = flush_output_buffer(eg, ed, true)?;
-    ret!(rv, php_byte_result(raw, false));
+    apply_output_buffer_operation(ed, rv, eg, OutputBufferOperation::GetFlush)
 }
 
 fn fn_ob_clean(
@@ -16530,10 +16650,7 @@ fn fn_ob_clean(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(
-        rv,
-        Value::bool(clean_output_buffer(eg, ed, false)?.is_some())
-    );
+    apply_output_buffer_operation(ed, rv, eg, OutputBufferOperation::Clean)
 }
 
 fn fn_ob_flush(
@@ -16541,10 +16658,7 @@ fn fn_ob_flush(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(
-        rv,
-        Value::bool(flush_output_buffer(eg, ed, false)?.is_some())
-    );
+    apply_output_buffer_operation(ed, rv, eg, OutputBufferOperation::Flush)
 }
 
 fn fn_ob_end_clean(
@@ -16552,10 +16666,7 @@ fn fn_ob_end_clean(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(
-        rv,
-        Value::bool(clean_output_buffer(eg, ed, true)?.is_some())
-    );
+    apply_output_buffer_operation(ed, rv, eg, OutputBufferOperation::EndClean)
 }
 
 fn fn_ob_end_flush(
@@ -16563,10 +16674,7 @@ fn fn_ob_end_flush(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(
-        rv,
-        Value::bool(flush_output_buffer(eg, ed, true)?.is_some())
-    );
+    apply_output_buffer_operation(ed, rv, eg, OutputBufferOperation::EndFlush)
 }
 
 pub(crate) fn flush_all_output_buffers(eg: &mut ExecutorGlobals) -> Result<(), VmError> {

@@ -36,17 +36,18 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `closure-origin-and-binding-contracts` train adds eleven exact
-PHP 8.5 passes over `e18a6110`: six core and five adjacent Reflection cases,
-with no lost pass, timeout or crash. The 7,174-case core is now 6,418 pass /
-362 fail / 182 skip / 212 unsupported. Closure lexical scope, called class,
-receiver and immutable named origins remain distinct through binding and
-Reflection projection. Twenty-seven original oracle cases, five checked Cargo
+The accepted `output-buffer-operation-permissions` train adds ten exact
+adjacent PHP 8.5 output-buffer passes over `3cffd892`, without losing any
+previous pass. Independent operation permissions, immutable getter snapshots
+and ordered reentrant notices share one cold stdlib boundary. The 7,174-case
+core remains 6,418 pass / 362 fail / 182 skip / 212 unsupported; one existing
+failure now reaches the expected fatal exit but retains a trace-origin mismatch.
+The 63 original byte-exact oracles, 214 focused checks, five checked Cargo
 configurations, all-target, exact no-loss, Composer/Symfony S0-S3 and static/
-unsafe gates pass. Guarded fixed-parent performance preserves common controls
-(the short callback control has a retained 96-pair confirmation) and keeps all
-closure pay-use medians below 2%. Exact hashes and non-claims are in
-`compatibility.md`.
+unsafe gates pass. The independent guarded fixed-parent performance packet
+keeps common controls within one percent and improves all three permitted
+buffer-operation lanes. Exact hashes, the untimed correctness activity marker
+and explicit callback/shutdown non-claims are in `compatibility.md`.
 
 Build/test throughput now uses opt-in checked `dev-fast`/`test-fast` profiles
 and a resumable fingerprinted matrix runner. All five configurations retain
@@ -54,6 +55,9 @@ their pass/fail/ignored totals; a clean default build/test falls from 281 to
 99 seconds locally, without runtime changes or reduced stress-test depths.
 Next work admits a 10–30-case shared-root-cause train from the current manifest;
 remaining SPL prerequisites and declaration boundaries need separate admission.
+Prefer higher-yield groups and one shared final packet. After two unsuccessful
+performance iterations, stop for an explicit disposition instead of extending
+an implementation experiment indefinitely.
 The 14-case `crypt`/`CRYPT_*` admission stopped before implementation: no exact
 maintained backend was admitted without a new dependency/FFI decision.
 Generator/Fiber work still requires a separate pay-for-use design.

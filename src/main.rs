@@ -366,12 +366,15 @@ fn main() {
             exit_after_pending_shutdown(&mut eg, 255);
         }
         Err(e) => {
-            // PHP's displayed runtime fatal begins on a fresh diagnostic line.
-            // The leading boundary is trimmed by PHPT when no program output
-            // precedes it and remains observable as the required blank line
-            // after output that was already emitted.
+            // Explicit stderr diagnostics have no display separator, just as
+            // in the compile-fatal branch above. Preserve the default display
+            // boundary when no stderr policy was requested.
             eg.flush_output();
-            eprintln!("\nFatal error: {e}");
+            if startup_display_errors_uses_stderr(&ini_settings) {
+                eprintln!("Fatal error: {e}");
+            } else {
+                eprintln!("\nFatal error: {e}");
+            }
             exit_after_pending_shutdown(&mut eg, 255);
         }
     }
