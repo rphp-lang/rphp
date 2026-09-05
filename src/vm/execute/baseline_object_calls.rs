@@ -1114,6 +1114,7 @@ fn op_new_obj_resolved<'a>(
                 prepend_args: vec![object.clone()],
                 use_vars: Vec::new(),
                 called_scope_class_id: class_id,
+                closure_scope_class_id: None,
                 bound_this: None,
                 closure_static_vars: None,
                 is_magic_call: false,
@@ -6720,6 +6721,23 @@ fn init_resolved_user_call(
     init_resolved_user_call_mode(eg, frame, explicit_args, resolved, false);
 }
 
+/// Keep the complete callback descriptor and its move/drop temporaries out of
+/// execute_ex. A closure's additional binding metadata must not enlarge the
+/// warmed dispatcher's stack frame when no callback is being initialized.
+#[inline(never)]
+fn try_init_resolved_callback_at_opline(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> bool {
+    let Some(resolved) = resolve_user_call_at_opline(eg, frame, op_array, opline) else {
+        return false;
+    };
+    init_resolved_user_call(eg, frame, opline.extended_value, resolved);
+    true
+}
+
 #[inline]
 fn init_resolved_user_call_mode(
     eg: &mut ExecutorGlobals,
@@ -6759,7 +6777,7 @@ fn init_resolved_user_call_mode(
         None
     };
     let called_scope_class_id = resolved.called_scope_class_id;
-    let bound_this = resolved.bound_this;
+    let mut bound_this = resolved.bound_this;
     let closure_static_vars = resolved.closure_static_vars;
     let signature = unsafe { &(*resolved.func_ptr).sig };
     let public_end = signature.this_offset + explicit_args;
@@ -6818,15 +6836,19 @@ fn init_resolved_user_call_mode(
         }
     }
 
-    if !resolved.use_vars.is_empty()
+    if (!resolved.use_vars.is_empty()
+        || (resolved.closure_scope_class_id.is_some() && bound_this.is_some()))
         && (signature.is_variadic || explicit_args > signature.public_arity())
     {
         // Variadic storage and tolerated extra user arguments can occupy the
-        // CV range where a closure body expects its lexical captures. Keep
-        // captures pending until DoFcall has snapshotted the supplied argument
-        // list, then restore them at the declared parameter boundary.
+        // CV range where a closure body expects its captures and bound $this.
+        // Keep both pending until DoFcall has snapshotted the supplied argument
+        // list, then restore each at its compiler-declared destination.
         eg.pending_closure_captures
-            .insert(call as usize, resolved.use_vars);
+            .insert(call as usize, crate::runtime::PendingClosureBindings {
+                captures: resolved.use_vars,
+                bound_this: bound_this.take(),
+            });
     } else {
         for (index, value) in resolved.use_vars.into_iter().enumerate() {
             // SAFETY: call frame sizing included all non-variadic captures
@@ -6836,7 +6858,7 @@ fn init_resolved_user_call_mode(
             unsafe { frame_slot_init(call, destination, value) };
         }
     }
-    initialize_bound_this_frame(call, resolved.func_ptr, bound_this);
+    initialize_bound_this_frame(call, resolved.func_ptr, bound_this, resolved.closure_scope_class_id);
     initialize_trait_class_scope(eg, call, resolved.func_ptr, trait_scope_class_id);
 }
 
@@ -7138,6 +7160,7 @@ fn init_closure_dynamic_call(
         prepend_args: vec![],
         use_vars: closure.clone_captures(),
         called_scope_class_id: closure.called_scope_class_id,
+        closure_scope_class_id: closure.is_anonymous().then_some(closure.lexical_scope_class_id),
         bound_this: closure.bound_this.clone(),
         closure_static_vars: closure.static_vars.clone(),
         is_magic_call: crate::stdlib::closure_is_magic_call(closure, eg),

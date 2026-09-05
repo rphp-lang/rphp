@@ -708,6 +708,7 @@ where
         args.cloned(),
         0,
         None,
+        None,
         0,
         None,
         None,
@@ -742,6 +743,7 @@ where
         args.cloned(),
         0,
         None,
+        None,
         0,
         None,
         None,
@@ -773,6 +775,7 @@ where
         num_args,
         args.cloned(),
         0,
+        None,
         None,
         0,
         None,
@@ -806,6 +809,7 @@ where
         args.cloned(),
         0,
         None,
+        None,
         0,
         None,
         None,
@@ -826,6 +830,7 @@ pub(crate) fn call_function_iter_with_context<'a, I>(
     num_args: usize,
     args: I,
     called_scope_class_id: u32,
+    closure_scope_class_id: Option<u32>,
     bound_this: Option<&Value>,
     capture_count: usize,
     closure_static_vars: Option<crate::value::ClosureStaticVars>,
@@ -846,6 +851,7 @@ where
             }
         }),
         called_scope_class_id,
+        closure_scope_class_id,
         bound_this.cloned(),
         capture_count,
         closure_static_vars,
@@ -878,6 +884,7 @@ where
             args,
             0,
             None,
+            None,
             0,
             None,
             None,
@@ -896,6 +903,7 @@ pub(crate) fn call_function_owned_iter_with_context<I>(
     num_args: usize,
     args: I,
     called_scope_class_id: u32,
+    closure_scope_class_id: Option<u32>,
     bound_this: Option<Value>,
     capture_count: usize,
     closure_static_vars: Option<crate::value::ClosureStaticVars>,
@@ -909,6 +917,7 @@ where
         num_args,
         args,
         called_scope_class_id,
+        closure_scope_class_id,
         bound_this,
         capture_count,
         closure_static_vars,
@@ -932,6 +941,7 @@ pub(crate) fn call_function_owned_iter_with_context_from<I>(
     num_args: usize,
     args: I,
     called_scope_class_id: u32,
+    closure_scope_class_id: Option<u32>,
     bound_this: Option<Value>,
     capture_count: usize,
     closure_static_vars: Option<crate::value::ClosureStaticVars>,
@@ -945,6 +955,7 @@ where
         num_args,
         args,
         called_scope_class_id,
+        closure_scope_class_id,
         bound_this,
         capture_count,
         closure_static_vars,
@@ -967,6 +978,7 @@ pub(crate) fn call_function_owned_iter_with_context_from_mode<I>(
     num_args: usize,
     args: I,
     called_scope_class_id: u32,
+    closure_scope_class_id: Option<u32>,
     bound_this: Option<Value>,
     capture_count: usize,
     closure_static_vars: Option<crate::value::ClosureStaticVars>,
@@ -981,6 +993,7 @@ where
         num_args,
         args,
         called_scope_class_id,
+        closure_scope_class_id,
         bound_this,
         capture_count,
         closure_static_vars,
@@ -999,6 +1012,7 @@ pub(crate) fn call_function_owned_iter_with_context_and_named<I>(
     num_args: usize,
     args: I,
     called_scope_class_id: u32,
+    closure_scope_class_id: Option<u32>,
     bound_this: Option<Value>,
     capture_count: usize,
     closure_static_vars: Option<crate::value::ClosureStaticVars>,
@@ -1014,6 +1028,7 @@ where
         num_args,
         args,
         called_scope_class_id,
+        closure_scope_class_id,
         bound_this,
         capture_count,
         closure_static_vars,
@@ -1033,6 +1048,7 @@ pub(crate) fn call_function_owned_iter_with_context_and_named_from<I>(
     num_args: usize,
     args: I,
     called_scope_class_id: u32,
+    closure_scope_class_id: Option<u32>,
     bound_this: Option<Value>,
     capture_count: usize,
     closure_static_vars: Option<crate::value::ClosureStaticVars>,
@@ -1051,6 +1067,7 @@ where
         num_args,
         args,
         called_scope_class_id,
+        closure_scope_class_id,
         bound_this,
         capture_count,
         closure_static_vars,
@@ -1089,6 +1106,7 @@ where
             args,
             0,
             None,
+            None,
             0,
             None,
             None,
@@ -1107,6 +1125,7 @@ pub(crate) fn call_function_owned_iter_readback_arg0_with_context<I>(
     num_args: usize,
     args: I,
     called_scope_class_id: u32,
+    closure_scope_class_id: Option<u32>,
     bound_this: Option<Value>,
     capture_count: usize,
     closure_static_vars: Option<crate::value::ClosureStaticVars>,
@@ -1120,6 +1139,7 @@ where
         num_args,
         args,
         called_scope_class_id,
+        closure_scope_class_id,
         bound_this,
         capture_count,
         closure_static_vars,
@@ -1140,6 +1160,7 @@ fn call_function_value_iter<I, const READBACK_ARG0: bool>(
     num_args: usize,
     mut args: I,
     called_scope_class_id: u32,
+    closure_scope_class_id: Option<u32>,
     bound_this: Option<Value>,
     capture_count: usize,
     closure_static_vars: Option<crate::value::ClosureStaticVars>,
@@ -1477,7 +1498,7 @@ where
         if let Some(storage) = closure_static_vars.clone() {
             eg.publish_closure_static_vars(frame as usize, storage);
         }
-        initialize_bound_this_frame(frame, func_ptr, bound_this);
+        initialize_bound_this_frame(frame, func_ptr, bound_this, closure_scope_class_id);
 
         // Detached callback entry bypasses DoFcall, whose full path normally
         // materializes the variadic bucket. Internal handlers use the same ABI in
@@ -1601,6 +1622,10 @@ where
             );
             generator.trace_num_args = Value::long(public_num_args as i64);
             generator.called_scope_class_id = called_scope_class_id;
+            if let Some(scope) = closure_scope_class_id {
+                *generator.tmp_values.last_mut().expect("anonymous scope TMP") =
+                    Value::long(i64::from(scope));
+            }
             generator.closure_static_vars = closure_static_vars.clone();
             let generator_ref = new_generator_ref(generator);
             let mut object = PhpObject::dynamic("Generator".to_string(), 0, HashMap::new());
@@ -1830,6 +1855,7 @@ where
         args,
         0,
         None,
+        None,
         0,
         None,
         None,
@@ -1874,6 +1900,7 @@ where
         num_args,
         args.cloned(),
         0,
+        None,
         None,
         0,
         None,
@@ -2550,6 +2577,11 @@ fn materialize_generator_frame(
             let slot = (*frame).tmp_mut(i as u32);
             frame_restore_slot(frame, slot as *mut Value, value.clone_closure_capture());
         }
+        if user.op_array.is_anonymous()
+            && gen_data.tmp_values.last().is_some_and(|value| value.as_long().is_some())
+        {
+            (*frame).set_closure_scope();
+        }
         (*frame).opline = user
             .op_array
             .instructions
@@ -3099,7 +3131,9 @@ pub(crate) fn initialize_suspended_callback_frame(
                 value.clone_closure_capture(),
             );
         }
-        initialize_bound_this_frame(frame, callback.func_ptr, callback.bound_this.clone());
+        initialize_bound_this_frame(
+            frame, callback.func_ptr, callback.bound_this.clone(), callback.closure_scope_class_id,
+        );
     }
     if callback.called_scope_class_id != 0 {
         publish_late_static_call_class_id(eg, frame, callback.called_scope_class_id);

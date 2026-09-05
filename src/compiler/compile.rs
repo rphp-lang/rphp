@@ -3217,8 +3217,8 @@ pub struct Compiler {
     /// Trait method op arrays are shared by every consuming class, so their
     /// self/parent targets must remain dynamically keyed.
     dynamic_static_scope: bool,
-    /// Closures declared without a lexical class may acquire one through
-    /// bindTo()/call(). Keep their self/parent accesses late-bound without
+    /// Anonymous closures can change lexical class through bindTo()/call().
+    /// Keep their self/parent accesses resolved at activation time without
     /// changing lexical magic constants such as `__CLASS__`.
     bindable_closure_scope: bool,
     /// A direct compact() call in a non-static closure can observe a receiver
@@ -12049,8 +12049,11 @@ impl Compiler {
                 // Compile closure body into a separate function
                 let mut func_compiler = self.child_compiler();
                 func_compiler.static_method_context = *is_static;
-                func_compiler.bindable_closure_scope =
-                    self.lexical_static_class.is_none() || self.bindable_closure_scope;
+                // Every anonymous function can be rebound, including one
+                // declared inside a class. Its self/parent operations must
+                // resolve the closure's live lexical scope instead of folding
+                // the enclosing class into constants or static-property sites.
+                func_compiler.bindable_closure_scope = true;
                 func_compiler.known_ref_args = self.build_known_ref_args();
                 func_compiler.known_param_names = self.build_known_param_names();
                 func_compiler.current_function_name = closure_name.clone();
@@ -12127,15 +12130,11 @@ impl Compiler {
                 if let Err(error) = func_compiler.finalize_gotos() {
                     self.deferred_error = Some(error);
                 }
-                // Direct compact()/debug_backtrace() calls can observe a bound
-                // receiver even when the body never otherwise spells `$this`.
-                // Relative late-static type contracts need the same ordinary
-                // named CV after body analysis.
-                if !*is_static
-                    && (func_compiler.needs_compact_receiver
-                        || cp.return_type_hint.uses_late_static()
-                        || cp.type_hints.iter().any(|hint| hint.uses_late_static()))
-                {
+                // Non-static closures can receive `$this` later through
+                // binding even if the body never spells it. A nested closure,
+                // Reflection or a Throwable trace must retain that receiver;
+                // it is an ordinary hidden carrier, not a public parameter.
+                if !*is_static {
                     func_compiler.resolve_cv("this");
                 }
                 let null_idx = func_compiler.add_literal(Value::null());
@@ -12149,6 +12148,10 @@ impl Compiler {
                     && closure_all_cvs
                         .iter()
                         .any(|(_, name)| name.as_str() == "this");
+                // Keep per-activation lexical scope outside the public
+                // parameter/capture envelope. Allocating this last means no
+                // statement-temporary release range can overwrite the carrier.
+                func_compiler.alloc_tmp();
                 let cache = (0..func_compiler.instructions.len())
                     .map(|_| InlineCache::empty())
                     .collect();

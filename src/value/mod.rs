@@ -4973,6 +4973,7 @@ mod closure_ownership_tests {
             object_handle: 0,
             func: std::ptr::null(),
             called_scope_class_id: 0,
+            lexical_scope_class_id: 0,
             trait_scope_class_id: 0,
             is_static: true,
             bound_this: None,
@@ -5036,6 +5037,9 @@ pub struct PhpClosure {
     /// Late-called class captured when a class-scoped closure is created.
     /// Zero keeps ordinary closures on the existing path.
     pub called_scope_class_id: u32,
+    /// Lexical visibility scope, independent of the late-called class.
+    /// Zero is an explicit unscoped closure, including after bindTo(null, null).
+    pub(crate) lexical_scope_class_id: u32,
     /// Final consuming class captured for trait-bound `__CLASS__`. This is
     /// separate from late-static scope because inherited calls can observe a
     /// child through `static::` while `__CLASS__` remains bound to its parent.
@@ -5113,6 +5117,7 @@ impl Clone for PhpClosure {
             object_handle: 0,
             func: self.func,
             called_scope_class_id: self.called_scope_class_id,
+            lexical_scope_class_id: self.lexical_scope_class_id,
             trait_scope_class_id: self.trait_scope_class_id,
             is_static: self.is_static,
             bound_this: self.bound_this.clone(),
@@ -5155,6 +5160,7 @@ impl PhpClosure {
             || !other.supports_callable_signature_comparison()
             || !std::ptr::eq(self.func, other.func)
             || self.called_scope_class_id != other.called_scope_class_id
+            || self.lexical_scope_class_id != other.lexical_scope_class_id
             || self.trait_scope_class_id != other.trait_scope_class_id
             || self.is_static != other.is_static
             || self.scope_is_dummy != other.scope_is_dummy
@@ -5197,20 +5203,15 @@ impl PhpClosure {
 
     #[inline]
     fn supports_callable_signature_comparison(&self) -> bool {
-        let Some(common) = self.common() else {
-            return false;
-        };
-        if common.fn_type == FunctionType::Internal {
-            return true;
-        }
-        self.user_function().is_some_and(|function| {
-            let name = function.op_array.name.as_str();
-            !name.starts_with("__closure_")
-                && !name
-                    .rsplit_once("::")
-                    .map_or(name, |(_, method)| method)
-                    .starts_with("__closure_")
-        })
+        self.common().is_some() && !self.is_anonymous()
+    }
+
+    /// Anonymous code can change lexical scope through Closure binding;
+    /// closures created from named functions or methods retain their origin.
+    #[inline]
+    pub(crate) fn is_anonymous(&self) -> bool {
+        self.user_function()
+            .is_some_and(|function| function.op_array.is_anonymous())
     }
 
     /// Recover the common header retained by every live Closure function.

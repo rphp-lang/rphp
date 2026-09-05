@@ -82,11 +82,26 @@ fn object_value(
     class_name: &str,
     properties: impl IntoIterator<Item = (&'static str, Value)>,
 ) -> Value {
-    let properties = properties
-        .into_iter()
-        .map(|(name, value)| (name.to_string(), value))
-        .collect::<HashMap<_, _>>();
-    Value::object(PhpObject::dynamic(class_name.to_string(), 0, properties))
+    Value::object(object_record(class_name, properties))
+}
+
+fn object_record(
+    class_name: &str,
+    properties: impl IntoIterator<Item = (&'static str, Value)>,
+) -> PhpObject {
+    let properties = properties.into_iter();
+    let mut record = PhpObject::dynamic(class_name.to_string(), 0, HashMap::new());
+    let mut slots = DynamicPropertyMap::with_capacity(properties.size_hint().0);
+    // Reflection owns these metadata slots already. Materialize them once
+    // instead of hashing every name into a temporary map and then rehashing
+    // the same entries into the object's ordered property storage.
+    for (name, value) in properties {
+        slots.insert_owned(name.to_string(), value);
+    }
+    if !slots.is_empty() {
+        record.dynamic_properties = Some(Box::new(slots));
+    }
+    record
 }
 
 fn named_reflected_type(name: &str) -> Value {
@@ -244,7 +259,27 @@ fn function_construct(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let target = with_argument(ed, 1, Clone::clone);
-    let (kind, owner) = reflection_function_target(&target)?;
+    with_argument(ed, 0, |value| {
+        if let Some(mut object) = value.as_object_mut() {
+            populate_function_reflection_record(&target, eg, &mut object)
+        } else {
+            Ok(())
+        }
+    })
+}
+
+fn function_reflection_record(target: &Value, eg: &ExecutorGlobals) -> Result<PhpObject, VmError> {
+    let mut object = object_record("ReflectionFunction", []);
+    populate_function_reflection_record(target, eg, &mut object)?;
+    Ok(object)
+}
+
+fn populate_function_reflection_record(
+    target: &Value,
+    eg: &ExecutorGlobals,
+    object: &mut PhpObject,
+) -> Result<(), VmError> {
+    let (kind, owner) = reflection_function_target(target)?;
     let function = target
         .as_closure()
         .map(|closure| closure.func)
@@ -263,10 +298,7 @@ fn function_construct(
                 },
             )
         });
-    let is_anonymous = target
-        .as_closure()
-        .and_then(PhpClosure::user_function)
-        .is_some_and(|function| function.op_array.name.starts_with("__closure_"));
+    let is_anonymous = target.as_closure().is_some_and(PhpClosure::is_anonymous);
     let closure_this = target
         .as_closure()
         .and_then(|closure| closure.bound_this.clone())
@@ -287,39 +319,36 @@ fn function_construct(
     let closure_scope_class = target.as_closure().and_then(|closure| {
         if closure.scope_is_dummy {
             Some("Closure".to_string())
-        } else if closure.called_scope_class_id != 0 {
-            eg.class_by_id(closure.called_scope_class_id)
+        } else if closure.lexical_scope_class_id != 0 {
+            eg.class_by_id(closure.lexical_scope_class_id)
                 .map(|class| class.name.clone())
         } else {
             None
         }
     });
-    set_target(ed, kind, owner.clone());
-    with_argument(ed, 0, |value| {
-        if let Some(mut object) = value.as_object_mut() {
-            object.set_property("name", Value::string(public_name));
-            object.set_property("__reflection_is_anonymous", Value::bool(is_anonymous));
-            object.set_property("__reflection_closure_this", closure_this);
-            object.set_property(
-                "__reflection_closure",
-                target
-                    .as_closure()
-                    .map_or_else(Value::null, |_| target.clone()),
-            );
-            object.set_property(
-                "__reflection_closure_called_class",
-                called_class.map_or_else(Value::null, Value::string),
-            );
-            object.set_property(
-                "__reflection_closure_scope_class",
-                closure_scope_class.map_or_else(Value::null, Value::string),
-            );
-            object.set_property(
-                "__reflection_function_pointer",
-                Value::long(function.map_or(0, |function| function as usize as i64)),
-            );
-        }
-    });
+    object.set_property("__generic_kind", Value::string(kind));
+    object.set_property("__generic_owner", Value::string(owner));
+    object.set_property("name", Value::string(public_name));
+    object.set_property("__reflection_is_anonymous", Value::bool(is_anonymous));
+    object.set_property("__reflection_closure_this", closure_this);
+    object.set_property(
+        "__reflection_closure",
+        target
+            .as_closure()
+            .map_or_else(Value::null, |_| target.clone()),
+    );
+    object.set_property(
+        "__reflection_closure_called_class",
+        called_class.map_or_else(Value::null, Value::string),
+    );
+    object.set_property(
+        "__reflection_closure_scope_class",
+        closure_scope_class.map_or_else(Value::null, Value::string),
+    );
+    object.set_property(
+        "__reflection_function_pointer",
+        Value::long(function.map_or(0, |function| function as usize as i64)),
+    );
     Ok(())
 }
 
@@ -610,6 +639,7 @@ fn evaluate_runtime_callable_constant_factory(
         0,
         std::iter::empty::<&Value>(),
         called_scope_class_id,
+        None,
         None,
         0,
         None,
@@ -3135,6 +3165,7 @@ fn instantiate_attribute_definition_at_use(
         std::iter::once(object.clone()).chain(normalized),
         class_id,
         None,
+        None,
         0,
         None,
         named_variadic,
@@ -3169,6 +3200,7 @@ fn function_get_closure(
             object_handle: 0,
             func: function as *const FunctionCommon,
             called_scope_class_id: 0,
+            lexical_scope_class_id: 0,
             trait_scope_class_id: 0,
             is_static: false,
             bound_this: None,
@@ -3195,6 +3227,7 @@ fn reflected_function_callback(
         prepend_args: Vec::new(),
         use_vars: Vec::new(),
         called_scope_class_id: 0,
+        closure_scope_class_id: None,
         bound_this: None,
         closure_static_vars: None,
         is_magic_call: false,
@@ -3324,9 +3357,16 @@ fn function_get_parameters(
     let Some(function) = reflected_function(ed) else {
         return return_value(rv, Value::array(PhpArray::new()));
     };
+    let origin = with_argument(ed, 0, |value| {
+        value
+            .as_object()
+            .map(|object| parameter_callable_origin(&object))
+    });
     if reflected_magic_call_trampoline(ed, eg) {
         let mut parameters = PhpArray::with_packed_capacity(1);
-        parameters.push(magic_call_trampoline_parameter(function));
+        let parameter = magic_call_trampoline_parameter(function);
+        retain_parameter_callable_origin(&parameter, origin.as_ref());
+        parameters.push(parameter);
         return return_value(rv, Value::array(parameters));
     }
     let fixed = function.sig.public_arity();
@@ -3384,6 +3424,10 @@ fn function_get_parameters(
                         .as_deref()
                         .map_or_else(Value::null, Value::string),
                 ),
+                (
+                    "__reflection_callable_origin",
+                    origin.clone().unwrap_or_else(Value::null),
+                ),
             ],
         );
         if let Some(attribute_scope_class) = &attribute_scope_class {
@@ -3392,6 +3436,89 @@ fn function_get_parameters(
         parameters.push(parameter);
     }
     return_value(rv, Value::array(parameters))
+}
+
+/// Retain callable metadata, not the Reflection object itself. Parameters keep
+/// the closure's captures and binding alive without manufacturing an extra
+/// PHP object handle, and each getDeclaringFunction() creates a fresh view.
+fn parameter_callable_origin(source: &PhpObject) -> Value {
+    if source.class_name.as_ref() == "ReflectionFunction"
+        && let Some(closure) = source
+            .get_property("__reflection_closure")
+            .filter(|value| value.as_closure().is_some())
+    {
+        // The immutable closure payload already owns its callable identity,
+        // binding, captures and static cells. Retain it directly; a parameter
+        // name/type query must not copy an entire Reflection property table.
+        return closure.clone();
+    }
+    let mut metadata = PhpArray::new();
+    source.for_each_property(|name, value| {
+        if matches!(name, "name" | "class")
+            || name.starts_with("__generic_")
+            || name.starts_with("__reflection_")
+        {
+            metadata.set_str(name, value.clone());
+        }
+    });
+    metadata.set_str("__origin_class", Value::string(source.class_name.as_ref()));
+    Value::array(metadata)
+}
+
+fn retain_parameter_callable_origin(parameter: &Value, origin: Option<&Value>) {
+    if let Some(origin) = origin
+        && let Some(mut object) = parameter.as_object_mut()
+    {
+        object.set_property("__reflection_callable_origin", origin.clone());
+    }
+}
+
+fn parameter_get_declaring_function(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let origin = reflected_property(ed, "__reflection_callable_origin");
+    if let Some(target) = origin.as_ref().filter(|value| value.as_closure().is_some()) {
+        let mut record = function_reflection_record(target, eg)?;
+        if let Some(scope) = record
+            .get_property("__reflection_closure_scope_class")
+            .filter(|value| value.as_str().is_some())
+            .cloned()
+        {
+            record.class_name = "ReflectionMethod".into();
+            record.set_property("class", scope.clone());
+            record.set_property("__reflection_method_class", scope.clone());
+            record.set_property("__reflection_declaring_class", scope);
+            record.set_property("__reflection_method_visibility", Value::long(1));
+            record.set_property("__reflection_method_final", Value::bool(false));
+            record.set_property(
+                "__reflection_method_static",
+                Value::bool(target.as_closure().is_some_and(|closure| closure.is_static)),
+            );
+        }
+        return return_value(rv, Value::object(record));
+    }
+    let Some(metadata) = origin.as_ref().and_then(Value::as_array) else {
+        reflection_exception(eg, "ReflectionParameter has no declaring callable");
+        return Ok(());
+    };
+    let Some(class) = metadata.get_str("__origin_class").and_then(Value::as_str) else {
+        reflection_exception(eg, "ReflectionParameter has no declaring callable");
+        return Ok(());
+    };
+    let mut properties = HashMap::new();
+    for (key, value) in metadata.iter() {
+        if let ArrayKey::String(name) = key
+            && name.as_str() != "__origin_class"
+        {
+            properties.insert(name.as_str().to_string(), value.clone());
+        }
+    }
+    return_value(
+        rv,
+        Value::object(PhpObject::dynamic(class.to_string(), 0, properties)),
+    )
 }
 
 fn function_get_number_of_parameters(
@@ -3725,7 +3852,21 @@ fn parameter_construct(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let target = with_argument(ed, 1, Clone::clone);
-    if let Some(closure) = target.as_closure()
+    let invoke_closure = target
+        .as_array()
+        .filter(|array| array.len() == 2)
+        .and_then(|array| {
+            let method = array.get_int(1)?.dereferenced().as_str()?;
+            let receiver = array.get_int(0)?.dereferenced();
+            (method.eq_ignore_ascii_case("__invoke") && receiver.as_closure().is_some())
+                .then(|| receiver.clone())
+        });
+    let closure_target = if target.as_closure().is_some() {
+        Some(&target)
+    } else {
+        invoke_closure.as_ref()
+    };
+    if let Some(closure) = closure_target.and_then(Value::as_closure)
         && super::closure_is_magic_call(closure, eg)
     {
         let selector = with_argument(ed, 2, Clone::clone);
@@ -3755,13 +3896,23 @@ fn parameter_construct(
             return Ok(());
         };
         populate_magic_call_trampoline_parameter(&receiver, function);
+        let metadata = if invoke_closure.is_some() {
+            closure_invoke_method_record(closure_target.unwrap(), eg).unwrap()
+        } else {
+            function_reflection_record(&target, eg)?
+        };
+        retain_parameter_callable_origin(&receiver, Some(&parameter_callable_origin(&metadata)));
         return Ok(());
     }
     let mut declaring_class = None;
     let mut type_scope_class = None;
-    let function = if let Some(closure) = target.as_closure() {
-        type_scope_class = (closure.called_scope_class_id != 0)
-            .then(|| eg.class_by_id(closure.called_scope_class_id))
+    let mut method_origin = None;
+    let function = if let Some(closure) = closure_target.and_then(Value::as_closure) {
+        if invoke_closure.is_some() {
+            declaring_class = Some("Closure".to_string());
+        }
+        type_scope_class = (closure.lexical_scope_class_id != 0)
+            .then(|| eg.class_by_id(closure.lexical_scope_class_id))
             .flatten()
             .map(|class| class.name.clone())
             .or_else(|| eg.declaring_class_of(closure.func).map(str::to_owned));
@@ -3808,13 +3959,17 @@ fn parameter_construct(
                 reflection_exception(eg, format!("Class \"{class}\" does not exist"));
                 return Ok(());
             }
-            let Some((_, _, _, _, function, declared)) = find_reflected_method(eg, &class, &method)
+            let Some((name, visibility, is_static, is_final, function, declared)) =
+                find_reflected_method(eg, &class, &method)
             else {
                 reflection_exception(eg, format!("Method {class}::{method}() does not exist"));
                 return Ok(());
             };
             declaring_class = Some(declared.clone());
-            type_scope_class = Some(declared);
+            type_scope_class = Some(declared.clone());
+            method_origin = Some(reflected_method_record(
+                name, visibility, is_static, is_final, function, declared,
+            ));
             function
         } else {
             let Some(name) = target.as_str().map(str::to_owned) else {
@@ -3841,8 +3996,8 @@ fn parameter_construct(
         reflection_exception(eg, "ReflectionParameter has no resolved function");
         return Ok(());
     }
-    let common = target
-        .as_closure()
+    let common = closure_target
+        .and_then(Value::as_closure)
         .and_then(crate::value::PhpClosure::common)
         .or_else(|| eg.registered_function_common(function));
     let Some(common) = common else {
@@ -3887,6 +4042,14 @@ fn parameter_construct(
     if let Some(scope) = type_scope_class {
         eg.register_reflection_parameter_scope(&receiver, scope);
     }
+    let metadata = if let Some(closure) = invoke_closure.as_ref() {
+        closure_invoke_method_record(closure, eg).unwrap()
+    } else if let Some(method) = method_origin {
+        method
+    } else {
+        function_reflection_record(&target, eg)?
+    };
+    retain_parameter_callable_origin(&receiver, Some(&parameter_callable_origin(&metadata)));
     Ok(())
 }
 
@@ -6515,7 +6678,25 @@ fn reflected_method_value(
     function: *const FunctionCommon,
     declaring_class: String,
 ) -> Value {
-    object_value(
+    Value::object(reflected_method_record(
+        name,
+        visibility,
+        is_static,
+        is_final,
+        function,
+        declaring_class,
+    ))
+}
+
+fn reflected_method_record(
+    name: String,
+    visibility: Visibility,
+    is_static: bool,
+    is_final: bool,
+    function: *const FunctionCommon,
+    declaring_class: String,
+) -> PhpObject {
+    object_record(
         "ReflectionMethod",
         [
             ("name", Value::string(name)),
@@ -6541,6 +6722,35 @@ fn reflected_method_value(
             ),
         ],
     )
+}
+
+fn closure_invoke_method_record(target: &Value, eg: &ExecutorGlobals) -> Option<PhpObject> {
+    let closure = target.as_closure()?;
+    if closure.func.is_null() {
+        return None;
+    }
+    let mut metadata = reflected_method_record(
+        "__invoke".to_string(),
+        Visibility::Public,
+        false,
+        false,
+        closure.func,
+        "Closure".to_string(),
+    );
+    metadata.set_property("__generic_kind", Value::string("method"));
+    metadata.set_property("__generic_owner", Value::string("Closure::__invoke"));
+    metadata.set_property("__reflection_closure", target.clone());
+    metadata.set_property("__reflection_closure_method", Value::bool(true));
+    let called_class = (closure.called_scope_class_id != 0)
+        .then(|| eg.class_by_id(closure.called_scope_class_id))
+        .flatten()
+        .map(|class| class.name.clone())
+        .or_else(|| eg.declaring_class_of(closure.func).map(str::to_owned));
+    metadata.set_property(
+        "__reflection_closure_called_class",
+        called_class.map_or_else(Value::null, Value::string),
+    );
+    Some(metadata)
 }
 
 fn class_get_constructor(
@@ -6651,6 +6861,12 @@ fn class_get_method(
         return Ok(());
     }
     let method_name = argument_string(ed, 1);
+    if method_name.eq_ignore_ascii_case("__invoke")
+        && let Some(target) = reflected_property(ed, "__generic_object")
+        && let Some(method) = closure_invoke_method_record(&target, eg)
+    {
+        return return_value(rv, Value::object(method));
+    }
     let Some((name, visibility, is_static, is_final, function, declaring_class)) =
         find_reflected_method(eg, &owner, &method_name)
     else {
@@ -6757,10 +6973,15 @@ fn class_get_methods(
         return return_value(rv, Value::array(PhpArray::new()));
     }
     let filter = with_argument(ed, 1, Value::as_long);
+    let closure_method = reflected_property(ed, "__generic_object")
+        .and_then(|target| closure_invoke_method_record(&target, eg));
     let mut methods = Vec::new();
     collect_reflected_methods(eg, &owner, &mut methods, &mut HashSet::new());
     let mut result = PhpArray::with_packed_capacity(methods.len());
     for (name, visibility, is_static, is_final, function, declaring_class) in methods {
+        if closure_method.is_some() && name.eq_ignore_ascii_case("__invoke") {
+            continue;
+        }
         let modifiers = method_modifiers(visibility, is_static, is_final);
         if filter.is_some_and(|filter| modifiers & filter == 0) {
             continue;
@@ -6773,6 +6994,11 @@ fn class_get_methods(
             function,
             declaring_class,
         ));
+    }
+    if let Some(method) = closure_method
+        && filter.is_none_or(|filter| filter & 1 != 0)
+    {
+        result.push(Value::object(method));
     }
     return_value(rv, Value::array(result))
 }
@@ -7155,6 +7381,7 @@ fn invoke_reflected_method(
             num_args,
             prepended.into_iter().chain(argument),
             called_scope_class_id,
+            None,
             (!is_static).then_some(receiver),
             0,
             None,
@@ -7188,6 +7415,7 @@ fn invoke_reflected_method(
                 prepended.iter().count() + arguments.len(),
                 prepended.into_iter().chain(arguments.values()),
                 called_scope_class_id,
+                None,
                 (!is_static).then_some(&receiver),
                 0,
                 None,
@@ -7210,6 +7438,7 @@ fn invoke_reflected_method(
             .collect(),
         use_vars: Vec::new(),
         called_scope_class_id,
+        closure_scope_class_id: None,
         bound_this: (!is_static).then_some(receiver),
         closure_static_vars: None,
         is_magic_call: false,
@@ -8975,33 +9204,13 @@ fn method_construct(
     let target = with_argument(ed, 1, Clone::clone);
     let method_name = argument_string(ed, 2);
     if method_name.eq_ignore_ascii_case("__invoke")
-        && let Some(closure) = target.as_closure()
-        && !closure.func.is_null()
+        && let Some(metadata) = closure_invoke_method_record(&target, eg)
     {
-        let function = closure.func;
-        let called_class = (closure.called_scope_class_id != 0)
-            .then(|| eg.class_by_id(closure.called_scope_class_id))
-            .flatten()
-            .map(|class| class.name.clone())
-            .or_else(|| eg.declaring_class_of(function).map(str::to_owned));
-        set_target(ed, "method", "Closure::__invoke".to_string());
         with_argument(ed, 0, |value| {
             if let Some(mut object) = value.as_object_mut() {
-                object.set_property(
-                    "__reflection_function_pointer",
-                    Value::long(function as usize as i64),
-                );
-                object.set_property("__reflection_method_static", Value::bool(false));
-                object.set_property("__reflection_method_final", Value::bool(false));
-                object.set_property("__reflection_method_visibility", Value::long(1));
-                object.set_property("__reflection_method_class", Value::string("Closure"));
-                object.set_property("__reflection_declaring_class", Value::string("Closure"));
-                object.set_property("__reflection_closure_method", Value::bool(true));
-                object.set_property(
-                    "__reflection_closure_called_class",
-                    called_class.map_or_else(Value::null, Value::string),
-                );
-                object.set_property("name", Value::string("__invoke"));
+                metadata.for_each_property(|name, value| {
+                    object.set_property(name, value.clone());
+                });
             }
         });
         return Ok(());
@@ -9125,6 +9334,13 @@ fn method_get_closure(
     let object = with_argument(ed, 1, |value| {
         (!matches!(value.value_type(), ValueType::Undef | ValueType::Null)).then(|| value.clone())
     });
+    // Closure::__invoke is an instance-specific method. Reflection returns the
+    // supplied closure itself, including its captures and shared static state.
+    if parameter_property_bool(ed, "__reflection_closure_method")
+        && let Some(closure) = object.as_ref().filter(|value| value.as_closure().is_some())
+    {
+        return return_value(rv, closure.clone());
+    }
     if !is_static {
         let Some(instance) = object.as_ref().and_then(Value::as_object) else {
             eg.exception = Some(make_error_value(
@@ -9147,12 +9363,25 @@ fn method_get_closure(
         .map(|object| object.class_id)
         .or_else(|| eg.find_class(&reflected_class).map(|class| class.class_id))
         .unwrap_or(0);
+    if let Some(origin) = reflected_property(ed, "__reflection_closure")
+        && let Some(source) = origin.as_closure()
+    {
+        // A declaring-method view of anonymous code still owns that exact
+        // closure's captures and static cells. This factory returns a distinct
+        // closure, but unlike bindTo it shares the original static storage.
+        let mut closure = source.clone();
+        closure.static_vars = source.static_vars.clone();
+        closure.bound_this = (!is_static).then_some(object).flatten();
+        closure.called_scope_class_id = called_scope_class_id;
+        return return_value(rv, Value::closure(closure));
+    }
     return_value(
         rv,
         Value::closure(PhpClosure {
             object_handle: 0,
             func: function as *const FunctionCommon,
             called_scope_class_id,
+            lexical_scope_class_id: eg.class_id_of(&reflected_class),
             trait_scope_class_id: 0,
             is_static,
             bound_this: (!is_static).then_some(object).flatten(),

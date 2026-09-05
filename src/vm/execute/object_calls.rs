@@ -381,7 +381,9 @@ pub(crate) unsafe fn try_execute_direct_object_long_call(
         return None;
     }
 
-    let declaring_class = eg.declaring_class_of(&callee.common as *const FunctionCommon);
+    // Untyped and mixed arguments do not consult declaration scope. Resolve
+    // it at most once, only if a real argument contract needs validation.
+    let mut declaring_class = None;
     let mut slots = [const { std::mem::MaybeUninit::<i64>::uninit() }; 64];
     let mut initialized = 0u64;
     let mut object_arguments = [ObjectLongArgument::None; 8];
@@ -448,14 +450,12 @@ pub(crate) unsafe fn try_execute_direct_object_long_call(
             .param_type_hints
             .get(index)
             .unwrap_or(&ParamTypeHint::None);
-        if !check_type_hint(
-            value,
-            hint,
-            eg,
-            caller_op_array.strict_types,
-            declaring_class,
-        ) {
-            return None;
+        if !matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed) {
+            let scope = *declaring_class
+                .get_or_insert_with(|| eg.declaring_class_of(&callee.common as *const FunctionCommon));
+            if !check_type_hint(value, hint, eg, caller_op_array.strict_types, scope) {
+                return None;
+            }
         }
 
         let bit = 1u8 << index;

@@ -273,6 +273,7 @@ fn instantiate_wrapper(
             prepend_args: vec![object.clone()],
             use_vars: vec![],
             called_scope_class_id: class_id,
+            closure_scope_class_id: None,
             bound_this: Some(object.clone()),
             closure_static_vars: None,
             is_magic_call: false,

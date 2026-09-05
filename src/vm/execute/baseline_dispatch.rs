@@ -4947,15 +4947,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // Loop-bottom advance adds one more instruction.
                         opline_ptr = unsafe { opline_ptr.add(2) };
                         initialized = true;
-                    } else if let Some(resolved) =
-                        resolve_user_call_at_opline(eg, frame, op_array, opline)
-                    {
-                        init_resolved_user_call(
-                            eg,
-                            frame,
-                            opline.extended_value,
-                            resolved,
-                        );
+                    } else if try_init_resolved_callback_at_opline(eg, frame, op_array, opline) {
                         initialized = true;
                     }
                 }

@@ -301,6 +301,7 @@ pub(crate) struct AutoloadEntry {
     pub(crate) prepend_args: Vec<Value>,
     pub(crate) use_vars: Vec<Value>,
     pub(crate) called_scope_class_id: u32,
+    pub(crate) closure_scope_class_id: Option<u32>,
     pub(crate) bound_this: Option<Value>,
     pub(crate) closure_static_vars: Option<ClosureStaticVars>,
     pub(crate) is_magic_call: bool,
@@ -561,6 +562,11 @@ impl ExecutionTimer {
     }
 }
 
+pub(crate) struct PendingClosureBindings {
+    pub(crate) captures: Vec<Value>,
+    pub(crate) bound_this: Option<Value>,
+}
+
 pub struct ExecutorGlobals {
     pub vm_stack: VmStack,
     /// Compact argument-only activations for deferred pure-scalar calls.
@@ -715,9 +721,9 @@ pub struct ExecutorGlobals {
     /// Populated by SendNamed when target function is variadic and name isn't a declared param.
     /// Consumed by DoFcall during variadic packing.
     pub pending_named_variadic: HashMap<usize, Vec<(String, crate::value::Value)>>,
-    /// Captures belonging to a variadic closure cannot enter their final CVs
-    /// until DoFcall has packed the overlapping raw argument prefix.
-    pub(crate) pending_closure_captures: HashMap<usize, Vec<crate::value::Value>>,
+    /// Closure captures and bound receivers cannot enter overlapping CVs
+    /// until DoFcall has snapshotted/packed extra or variadic arguments.
+    pub(crate) pending_closure_captures: HashMap<usize, PendingClosureBindings>,
     /// Original public arguments of active user calls. Extra arguments occupy
     /// slots that compiled TMP operands may reuse, so argument-introspection
     /// functions need stable storage for the lifetime of the call frame.

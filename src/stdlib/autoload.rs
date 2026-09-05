@@ -316,6 +316,7 @@ fn resolved_entry(callback: Value, resolved: ResolvedCallback) -> AutoloadEntry 
         prepend_args: resolved.prepend_args,
         use_vars: resolved.use_vars,
         called_scope_class_id: resolved.called_scope_class_id,
+        closure_scope_class_id: resolved.closure_scope_class_id,
         bound_this: resolved.bound_this,
         closure_static_vars: resolved.closure_static_vars,
         is_magic_call: resolved.is_magic_call,
@@ -339,6 +340,7 @@ fn invoke_entry(
             .map(Value::clone_closure_capture)
             .collect(),
         called_scope_class_id: entry.called_scope_class_id,
+        closure_scope_class_id: entry.closure_scope_class_id,
         bound_this: entry.bound_this.clone(),
         closure_static_vars: entry.closure_static_vars.clone(),
         is_magic_call: entry.is_magic_call,

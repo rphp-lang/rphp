@@ -8,6 +8,51 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 language checkpoint is
+`closure-origin-and-binding-contracts`, based on `e18a6110`. Anonymous code
+retains distinct lexical scope, called class and receiver through binding,
+nested creation and Reflection. Named callable origins remain immutable;
+failed binding warns before entry and preserves captures, references and
+static state. `ReflectionParameter::getDeclaringFunction()` retains the
+specific callable, and reflected `Closure::__invoke` uses its instance's
+signature. Binding-dependent private access never publishes a shared proof.
+An existing frame flag and closure-only temporary carry lexical scope without
+enlarging the ordinary frame. Callback descriptor construction stays out of
+the warmed dispatcher; guarded method argument validation resolves declaration
+metadata only for actual type contracts, not untyped or `mixed` parameters.
+
+All 543 focused/adjacent checks pass, including 27 original byte-exact PHP
+8.5.10 oracle cases. All eleven admitted php-src `fcc29c8` cases pass:
+six core and five Reflection gains, exactly `+11/-0`. The complete core
+projection is **6,418 pass / 362 fail / 182 skip / 212 unsupported**,
+with no lost pass, missing case, timeout or crash. Zend/lang is
+4,960/343/115/181, manifest
+`6e777a97ea867c464cd57168de013734ad69d70a2e5b291492af71afe55b65f7`,
+sorted pass set
+`c4b0d3326ba4e18b14d9322463476fe2a33daa80daf74ee76af57c32156e9066`.
+Strings/array remains byte-identical to the preceding checkpoint. The adjacent
+Reflection packet is 16 pass / 2 explicit missing-API holdouts.
+
+Fresh checked default/no-default/erased/reified/all-features matrices pass
+(4,637/4,400/4,708/4,730/4,786 tests; unchanged ignored counts), as do
+all-target, Composer/Symfony S0-S3, HTML data, runner, format and unsafe gates
+(1,621 blocks, 289 functions; no raised ceiling). A sandbox-only resolver
+timeout was rejected; the complete unchanged matrix passed outside that
+restriction. Release SHA-256:
+`1490707d56df4b56ec1ee28ee23578920d7496d68f1da18ad0848ac41c3249de`.
+Against the fixed preceding release, guarded 32-pair CPU-2 common medians
+are neutral or faster, except the short private-callback control's +1.421%:
+its predeclared 64-pair holdout is +0.198%, and all 96 retained pairs give
++0.680%. Ordinary call is +0.164%, method -25.180%, object lifecycle -3.730%;
+the five closure pay-use lanes range from -0.284% to +1.953%. All checksums
+match. Symmetric executable preparation and every established control remain
+unchanged. Complete verification record:
+`2d0968489b5cef1b13f4d4ec822c47a47ae5b682be37d7fa8b5dd2576ab59948`.
+Missing SPL/DateTime methods, object-handle-only differences,
+`ReflectionFunction::isStatic()`/`getClosureUsedVariables()`, new suspension
+behavior, 32-bit and allocation-limit/OOM equivalence remain non-claims.
+No private benchmark host was configured.
+
+The preceding measured AMD64 PHP 8.5 language checkpoint is
 `method-resolution-context`, based on `65019627`. Direct, dynamic and callback
 method resolution now consistently distinguishes lexical visibility, the
 declaring prototype and the live receiver. Static calls through objects do
@@ -46,7 +91,7 @@ complete verification record:
 `4026d573618a95dd078da91be679446dac4de04359d9625fbdf4231222952927`.
 The initial 14-case crypt admission was rejected before production edits:
 an exact maintained byte-preserving backend was not admitted without a new
-dependency/FFI decision. Those failures, broader closure rebinding, 32-bit
+dependency/FFI decision. Those failures, then-unadmitted closure rebinding, 32-bit
 and allocation-limit/OOM equivalence remain separate contracts.
 
 The preceding measured AMD64 PHP 8.5 language checkpoint is

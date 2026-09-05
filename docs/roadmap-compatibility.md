@@ -36,23 +36,24 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `method-resolution-context` train adds twelve exact PHP 8.5
-passes over `65019627`, with no lost pass, timeout or crash. The 7,174-case
-core is now 6,412 pass / 368 fail / 182 skip / 212 unsupported. Lexical private
-selection, protected prototypes, receiver/late-static forwarding and early
-constructor-access errors share canonical resolution. The warmed method
-dispatcher is unchanged; static-object cache proofs remain cold. Five checked
-Cargo configurations, all-target, exact upstream no-loss, Composer/Symfony
-S0-S3 and static/unsafe gates pass. A guarded fixed-parent 32-pair performance
-packet keeps all common controls neutral or faster. Exact hashes, executable
-preparation controls and non-claims are in `compatibility.md`.
+The accepted `closure-origin-and-binding-contracts` train adds eleven exact
+PHP 8.5 passes over `e18a6110`: six core and five adjacent Reflection cases,
+with no lost pass, timeout or crash. The 7,174-case core is now 6,418 pass /
+362 fail / 182 skip / 212 unsupported. Closure lexical scope, called class,
+receiver and immutable named origins remain distinct through binding and
+Reflection projection. Twenty-seven original oracle cases, five checked Cargo
+configurations, all-target, exact no-loss, Composer/Symfony S0-S3 and static/
+unsafe gates pass. Guarded fixed-parent performance preserves common controls
+(the short callback control has a retained 96-pair confirmation) and keeps all
+closure pay-use medians below 2%. Exact hashes and non-claims are in
+`compatibility.md`.
 
 Build/test throughput now uses opt-in checked `dev-fast`/`test-fast` profiles
 and a resumable fingerprinted matrix runner. All five configurations retain
 their pass/fail/ignored totals; a clean default build/test falls from 281 to
 99 seconds locally, without runtime changes or reduced stress-test depths.
-Next work admits a 10–30-case shared-root-cause train from the current manifest,
-starting with closure-origin/binding metadata and its Reflection projection.
+Next work admits a 10–30-case shared-root-cause train from the current manifest;
+remaining SPL prerequisites and declaration boundaries need separate admission.
 The 14-case `crypt`/`CRYPT_*` admission stopped before implementation: no exact
 maintained backend was admitted without a new dependency/FFI decision.
 Generator/Fiber work still requires a separate pay-for-use design.

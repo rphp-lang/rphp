@@ -22409,6 +22409,7 @@ pub(crate) fn resolve_object_public_method(
         prepend_args: vec![receiver.clone()],
         use_vars: vec![],
         called_scope_class_id: class_id,
+        closure_scope_class_id: None,
         bound_this: None,
         closure_static_vars: None,
         is_magic_call: false,
@@ -22449,8 +22450,11 @@ pub(crate) struct ResolvedCallback {
     pub(crate) prepend_args: Vec<Value>,
     /// Captured use_vars for closures (appended after all params).
     pub(crate) use_vars: Vec<Value>,
-    /// Lexical visibility/late-static scope carried by a bound closure.
+    /// Late-static class carried by the selected callable.
     pub(crate) called_scope_class_id: u32,
+    /// Anonymous code's explicit lexical scope, including `Some(0)` for no
+    /// scope. Named functions/methods use their immutable declaration instead.
+    pub(crate) closure_scope_class_id: Option<u32>,
     /// Object bound as `$this`; it is frame metadata, not a public argument.
     pub(crate) bound_this: Option<Value>,
     /// Per-object function-static cells when this descriptor came from an
@@ -22493,6 +22497,7 @@ impl Clone for ResolvedCallback {
                 .map(Value::clone_closure_capture)
                 .collect(),
             called_scope_class_id: self.called_scope_class_id,
+            closure_scope_class_id: self.closure_scope_class_id,
             bound_this: self.bound_this.clone(),
             closure_static_vars: self.closure_static_vars.clone(),
             is_magic_call: self.is_magic_call,
@@ -22521,6 +22526,7 @@ impl ResolvedCallback {
             prepend_args: vec![],
             use_vars: vec![],
             called_scope_class_id: 0,
+            closure_scope_class_id: None,
             bound_this: None,
             closure_static_vars: None,
             is_magic_call: false,
@@ -22529,7 +22535,9 @@ impl ResolvedCallback {
 
     #[inline]
     pub(crate) fn has_context(&self) -> bool {
-        self.called_scope_class_id != 0 || self.bound_this.is_some()
+        self.called_scope_class_id != 0
+            || self.closure_scope_class_id.is_some()
+            || self.bound_this.is_some()
     }
 
     /// Recover the immutable common header retained by the request for this
@@ -22611,7 +22619,11 @@ pub(crate) fn resolved_callback_into_closure(
     resolved: ResolvedCallback,
     eg: &ExecutorGlobals,
 ) -> Value {
-    let trait_scope_class_id = if resolved.common().plan.needs_trait_class_scope() {
+    let trait_scope_class_id = if eg
+        .declaring_class_of(resolved.func_ptr)
+        .and_then(|class| eg.find_class(class))
+        .is_some_and(|class| class.is_trait)
+    {
         let dispatch_class = resolved
             .bound_this
             .as_ref()
@@ -22639,6 +22651,14 @@ pub(crate) fn resolved_callback_into_closure(
         0
     };
     let is_method = resolved.is_method();
+    let lexical_scope_class_id = resolved.closure_scope_class_id.unwrap_or_else(|| {
+        if trait_scope_class_id != 0 {
+            trait_scope_class_id
+        } else {
+            eg.declaring_class_of(resolved.func_ptr)
+                .map_or(0, |class| eg.class_id_of(class))
+        }
+    });
     let bound_this = resolved.bound_this.or_else(|| {
         resolved
             .prepend_args
@@ -22654,6 +22674,7 @@ pub(crate) fn resolved_callback_into_closure(
         object_handle: 0,
         func: resolved.func_ptr,
         called_scope_class_id: resolved.called_scope_class_id,
+        lexical_scope_class_id,
         trait_scope_class_id,
         is_static,
         bound_this,
@@ -22766,6 +22787,7 @@ fn resolve_magic_callback(
         prepend_args: vec![receiver.cloned().unwrap_or_else(Value::null)],
         use_vars: vec![Value::string(requested_method)],
         called_scope_class_id: eg.find_class(class_name)?.class_id,
+        closure_scope_class_id: None,
         bound_this: None,
         closure_static_vars: None,
         is_magic_call: true,
@@ -22854,6 +22876,7 @@ fn resolve_legacy_scoped_method(
             prepend_args: vec![Value::null()],
             use_vars: vec![],
             called_scope_class_id: legacy_called_scope_id(eg, owner, called_class),
+            closure_scope_class_id: None,
             bound_this: None,
             closure_static_vars: None,
             is_magic_call: false,
@@ -22872,6 +22895,7 @@ fn resolve_legacy_scoped_method(
         prepend_args: vec![receiver.clone()],
         use_vars: vec![],
         called_scope_class_id,
+        closure_scope_class_id: None,
         bound_this: Some(receiver),
         closure_static_vars: None,
         is_magic_call: false,
@@ -23215,6 +23239,9 @@ fn resolve_callback(
                 prepend_args: vec![],
                 use_vars: closure.clone_captures(),
                 called_scope_class_id: closure.called_scope_class_id,
+                closure_scope_class_id: closure
+                    .is_anonymous()
+                    .then_some(closure.lexical_scope_class_id),
                 bound_this: closure.bound_this.clone(),
                 closure_static_vars: closure.static_vars.clone(),
                 is_magic_call: closure_is_magic_call(closure, eg),
@@ -23271,6 +23298,7 @@ fn resolve_callback(
                     prepend_args: vec![Value::null()],
                     use_vars: vec![],
                     called_scope_class_id: eg.find_class(class_name)?.class_id,
+                    closure_scope_class_id: None,
                     bound_this: None,
                     closure_static_vars: None,
                     is_magic_call: false,
@@ -23282,6 +23310,7 @@ fn resolve_callback(
                     prepend_args: vec![],
                     use_vars: vec![],
                     called_scope_class_id: 0,
+                    closure_scope_class_id: None,
                     bound_this: None,
                     closure_static_vars: None,
                     is_magic_call: false,
@@ -23303,6 +23332,7 @@ fn resolve_callback(
                         prepend_args: vec![],
                         use_vars,
                         called_scope_class_id: 0,
+                        closure_scope_class_id: None,
                         bound_this: None,
                         closure_static_vars: None,
                         is_magic_call: false,
@@ -23387,6 +23417,7 @@ fn resolve_callback(
                     }],
                     use_vars: vec![],
                     called_scope_class_id,
+                    closure_scope_class_id: None,
                     bound_this: None,
                     closure_static_vars: None,
                     is_magic_call: false,
@@ -23446,6 +23477,7 @@ fn resolve_callback(
                     prepend_args: vec![Value::null()],
                     use_vars: vec![],
                     called_scope_class_id: eg.find_class(class_str)?.class_id,
+                    closure_scope_class_id: None,
                     bound_this: None,
                     closure_static_vars: None,
                     is_magic_call: false,
@@ -23464,6 +23496,7 @@ fn resolve_callback(
                 prepend_args: vec![val.clone()],
                 use_vars: vec![],
                 called_scope_class_id: 0,
+                closure_scope_class_id: None,
                 bound_this: None,
                 closure_static_vars: None,
                 is_magic_call: false,
@@ -23828,6 +23861,7 @@ pub(crate) fn resolve_live_scoped_instance_callback(
         prepend_args: vec![receiver.clone()],
         use_vars: vec![],
         called_scope_class_id,
+        closure_scope_class_id: None,
         bound_this: Some(receiver.clone()),
         closure_static_vars: None,
         is_magic_call: false,
@@ -24001,6 +24035,7 @@ where
             num_args,
             args,
             resolved.called_scope_class_id,
+            resolved.closure_scope_class_id,
             resolved.bound_this.as_ref(),
             resolved.use_vars.len(),
             resolved.closure_static_vars.clone(),
@@ -24051,6 +24086,7 @@ where
             num_args,
             args,
             resolved.called_scope_class_id,
+            resolved.closure_scope_class_id,
             resolved.bound_this.clone(),
             resolved.use_vars.len(),
             resolved.closure_static_vars.clone(),
@@ -24090,6 +24126,7 @@ where
         num_args,
         args,
         resolved.called_scope_class_id,
+        resolved.closure_scope_class_id,
         resolved.bound_this.clone(),
         resolved.use_vars.len(),
         resolved.closure_static_vars.clone(),
@@ -24145,6 +24182,7 @@ where
         num_args,
         args,
         resolved.called_scope_class_id,
+        resolved.closure_scope_class_id,
         resolved.bound_this.clone(),
         resolved.use_vars.len(),
         resolved.closure_static_vars.clone(),
@@ -24185,6 +24223,7 @@ where
         num_args,
         args,
         resolved.called_scope_class_id,
+        resolved.closure_scope_class_id,
         resolved.bound_this.clone(),
         resolved.use_vars.len(),
         resolved.closure_static_vars.clone(),
@@ -24247,6 +24286,7 @@ where
         num_args,
         args,
         resolved.called_scope_class_id,
+        resolved.closure_scope_class_id,
         resolved.bound_this.clone(),
         resolved.use_vars.len(),
         resolved.closure_static_vars.clone(),
@@ -24357,6 +24397,7 @@ fn call_resolved_with_values_from_internal(
             .chain(args.iter().cloned())
             .chain(resolved.use_vars.iter().map(Value::clone_closure_capture)),
         resolved.called_scope_class_id,
+        resolved.closure_scope_class_id,
         resolved.bound_this.clone(),
         resolved.use_vars.len(),
         resolved.closure_static_vars.clone(),
@@ -24416,6 +24457,7 @@ fn call_resolved_with_values_from(
                 .chain(args.iter().cloned())
                 .chain(resolved.use_vars.iter().map(Value::clone_closure_capture)),
             resolved.called_scope_class_id,
+            resolved.closure_scope_class_id,
             resolved.bound_this.clone(),
             resolved.use_vars.len(),
             resolved.closure_static_vars.clone(),
@@ -24445,6 +24487,7 @@ fn call_resolved_with_values_from(
             .chain(args.iter().cloned())
             .chain(resolved.use_vars.iter().map(Value::clone_closure_capture)),
         resolved.called_scope_class_id,
+        resolved.closure_scope_class_id,
         resolved.bound_this.clone(),
         resolved.use_vars.len(),
         resolved.closure_static_vars.clone(),

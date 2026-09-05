@@ -1128,6 +1128,12 @@ fn caller_scope_operation(
                 let mut result = PhpArray::new();
                 let op_array = (*owner).op_array();
                 for (cv, name) in &op_array.all_cvs {
+                    // `$this` is activation context, not a symbol-table entry.
+                    // compact() may explicitly read it, but get_defined_vars()
+                    // must not expose either a method or closure carrier CV.
+                    if name == "this" {
+                        continue;
+                    }
                     let value = &*(*owner).get_op_ptr(*cv, OpType::Cv, op_array);
                     if !value.is_undef() {
                         result.set_str(name, value.clone());
@@ -1140,7 +1146,7 @@ fn caller_scope_operation(
                 };
                 if let Some(extra) = extra {
                     for (name, value) in extra {
-                        if !value.is_undef() && result.get_str(name).is_none() {
+                        if name != "this" && !value.is_undef() && result.get_str(name).is_none() {
                             result.set_str(name, value.clone());
                         }
                     }
@@ -3723,7 +3729,9 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     }
     if !definition.requires_deprecated_use_check() {
         let value = definition.value.clone();
-        cache.set_property(class_id, constant_index, 1);
+        if definition.visibility == Visibility::Public || !op_array.is_anonymous() {
+            cache.set_property(class_id, constant_index, 1);
+        }
         set_published_result(value);
         return Ok(ColdResult::Done);
     }
@@ -3775,7 +3783,9 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     } else {
         definition.value.clone()
     };
-    cache.set_property(class_id, constant_index, 3);
+    if definition.visibility == Visibility::Public || !op_array.is_anonymous() {
+        cache.set_property(class_id, constant_index, 3);
+    }
     set_published_result(value);
     Ok(ColdResult::Done)
 }
@@ -4392,7 +4402,8 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
     if let Some(result) = take_magic_exception(eg, frame)? {
         return Ok(result);
     }
-    if definition
+    if (definition.visibility == Visibility::Public || !op_array.is_anonymous())
+        && definition
         .set_visibility
         .is_none_or(|visibility| visibility == Visibility::Public)
     {
@@ -4648,7 +4659,8 @@ fn assign_static_property_cache_miss<'a>(
     if let Some(assignment_result) = assignment_result.as_ref() {
         publish_property_assignment_result(frame, opline, assignment_result);
     }
-    let cacheable_write = definition
+    let cacheable_write = (definition.visibility == Visibility::Public || !op_array.is_anonymous())
+        && definition
         .set_visibility
         .is_none_or(|visibility| visibility == Visibility::Public);
     #[cfg(feature = "php-generics-reified")]
@@ -4739,10 +4751,13 @@ fn resolve_static_property_read_cache_miss<'a>(
         )?);
     }
     let value = clone_published_static_property_value(eg, resolved.storage_slot);
-    if !indirect
-        || definition
+    // A closure's bytecode cache is shared with its bind()/bindTo() copies.
+    // Private/protected access must be validated for each lexical binding;
+    // public accesses and fixed-scope named functions retain the hot cache.
+    if (definition.visibility == Visibility::Public || !op_array.is_anonymous())
+        && (!indirect || definition
             .set_visibility
-            .is_none_or(|visibility| visibility == Visibility::Public)
+            .is_none_or(|visibility| visibility == Visibility::Public))
     {
         cache.set_property(class_id, resolved.storage_slot, 1);
     }
@@ -4842,7 +4857,8 @@ fn resolve_static_property_reference_fetch<'a>(
             type_hint: definition.type_hint.clone(),
         });
     }
-    if definition
+    if (definition.visibility == Visibility::Public || !op_array.is_anonymous())
+        && definition
         .set_visibility
         .is_none_or(|visibility| visibility == Visibility::Public)
     {
@@ -5746,7 +5762,6 @@ fn op_create_closure(
         }
         ptr
     };
-    let common = unsafe { &*func_ptr };
     let trait_scope_class_id = if opline._pad
         & crate::vm::instruction::CLOSURE_FLAG_TRAIT_LEXICAL_SCOPE
         != 0
@@ -5759,21 +5774,38 @@ fn op_create_closure(
     } else {
         0
     };
-    let called_scope_class_id = if common.plan.needs_late_static_scope() {
-        late_static_call_class_id(eg, frame)
-    } else if trait_scope_class_id != 0 {
+    let lexical_scope_class_id = if trait_scope_class_id != 0 {
         trait_scope_class_id
     } else if opline.op2_type == OpType::Const {
         op_array.literals[opline.op2 as usize]
             .as_str()
             .map_or(0, |class| eg.class_id_of(class))
     } else {
-        get_caller_class(frame, eg)
-            .as_deref()
-            .map_or(0, |class| eg.class_id_of(class))
+        caller_class_id(frame, eg)
     };
     let is_static = (opline._pad & crate::vm::instruction::CLOSURE_FLAG_STATIC) != 0;
     let bound_this = closure_bound_this(frame, op_array, is_static);
+    let called_scope_class_id = bound_this
+        .as_ref()
+        .and_then(Value::as_object)
+        .map(|object| object.class_id)
+        .unwrap_or_else(|| {
+            // An explicitly unscoped activation cannot inherit a class from
+            // an unrelated caller. It may still carry a bound receiver's
+            // called class (including dummy-scope bindings), so retain that
+            // published state without walking declaration/call-site metadata.
+            let called = if lexical_scope_class_id == 0 {
+                let embedded = frame_embedded_late_static_class_id(frame);
+                if embedded != 0 {
+                    embedded
+                } else {
+                    eg.late_static_scope_class_id(frame as usize)
+                }
+            } else {
+                late_static_call_class_id(eg, frame)
+            };
+            if called != 0 { called } else { lexical_scope_class_id }
+        });
     let static_vars = ((opline._pad & crate::vm::instruction::CLOSURE_FLAG_HAS_STATICS) != 0)
         .then(|| {
             std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()))
@@ -5782,6 +5814,7 @@ fn op_create_closure(
         object_handle: 0,
         func: func_ptr,
         called_scope_class_id,
+        lexical_scope_class_id,
         trait_scope_class_id,
         is_static,
         bound_this,

@@ -82,6 +82,20 @@ impl ExecuteData {
     const ORIGINAL_CONSTRUCTOR_CALL: u8 = 1 << 1;
     const DETACHED_STRICT_CALL: u8 = 1 << 2;
     const MAGIC_CALL: u8 = 1 << 3;
+    const CLOSURE_SCOPE: u8 = 1 << 4;
+
+    /// The final compiler-reserved TMP contains this anonymous activation's
+    /// lexical class ID. A separate flag distinguishes scope zero from a frame
+    /// whose scope must come from an immutable named declaration.
+    #[inline(always)]
+    pub(crate) fn has_closure_scope(&self) -> bool {
+        self.call_kind_flags & Self::CLOSURE_SCOPE != 0
+    }
+
+    #[inline(always)]
+    pub(crate) fn set_closure_scope(&mut self) {
+        self.call_kind_flags |= Self::CLOSURE_SCOPE;
+    }
 
     #[inline(always)]
     pub fn is_deferred_scalar_call(&self) -> bool {

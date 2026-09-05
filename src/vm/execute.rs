@@ -232,6 +232,9 @@ fn caller_class_id(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> u32 {
         if func.is_null() {
             return 0;
         }
+        if (*frame).has_closure_scope() {
+            return (*frame).tmp((*frame).num_temps - 1).as_long().unwrap_or(0) as u32;
+        }
         if let Some(class) = eg.declaring_class_of(func) {
             let is_trait = eg
                 .class_table
@@ -310,6 +313,10 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
         if func.is_null() {
             return None;
         }
+        if (*frame).has_closure_scope() {
+            let id = (*frame).tmp((*frame).num_temps - 1).as_long().unwrap_or(0) as u32;
+            return eg.class_by_id(id).map(|class| class.name.clone());
+        }
         if let Some(class) = eg.declaring_class_of(func) {
             let is_trait = eg
                 .class_table
@@ -371,17 +378,12 @@ fn resolve_static_call_class(
     eg: &ExecutorGlobals,
     frame: *mut ExecuteData,
     class: &str,
-    dynamic_scope: bool,
+    _dynamic_scope: bool,
 ) -> Option<String> {
-    let lexical_or_dynamic_scope = || {
-        if dynamic_scope {
-            let class_id = called_class_id_for_frame(eg, frame, 0);
-            eg.class_by_id(class_id)
-                .map(|definition| definition.name.clone())
-        } else {
-            get_caller_class(frame, eg)
-        }
-    };
+    // Dynamic means the lexical owner cannot be folded at compile time, not
+    // that `self` is late-static. Trait composition and rebound closures both
+    // publish their exact lexical owner through the canonical scope resolver.
+    let lexical_or_dynamic_scope = || get_caller_class(frame, eg);
     if class.eq_ignore_ascii_case("self") {
         lexical_or_dynamic_scope()
     } else if class.eq_ignore_ascii_case("parent") {
@@ -512,23 +514,38 @@ fn frame_embedded_late_static_class_id(frame: *mut ExecuteData) -> u32 {
     unsafe { (*frame).embedded_late_static_class_id() }
 }
 
-#[inline]
+#[inline(always)]
 fn initialize_bound_this_frame(
     frame: *mut ExecuteData,
     func_ptr: *const FunctionCommon,
     bound_this: Option<Value>,
+    closure_scope_class_id: Option<u32>,
 ) {
-    let Some(bound_this) = bound_this else {
+    if bound_this.is_none() && closure_scope_class_id.is_none() {
         return;
-    };
+    }
     // SAFETY: func_ptr and frame come from the same live call-frame creation
     // boundary. User op-array CV metadata identifies an allocated frame slot,
-    // and frame_slot_init publishes exactly one previously uninitialized value.
+    // and the slot writer preserves cleanup when a detached argument envelope
+    // already initialized the receiver CV. The scope TMP is always fresh.
     unsafe {
         if (*func_ptr).fn_type != FunctionType::User {
             return;
         }
         let function = &*(func_ptr as *const UserFunction);
+        if let Some(scope) = closure_scope_class_id {
+            // Anonymous op arrays reserve their final TMP after body lowering,
+            // outside every emitted temporary-release range. Zero is an
+            // explicit unscoped closure, not a request to inherit its caller.
+            debug_assert!(function.op_array.is_anonymous());
+            debug_assert!((*frame).num_temps != 0);
+            let destination = (*frame).tmp_mut((*frame).num_temps - 1) as *mut Value;
+            frame_slot_init(frame, destination, Value::long(i64::from(scope)));
+            (*frame).set_closure_scope();
+        }
+        let Some(bound_this) = bound_this else {
+            return;
+        };
         if let Some((this_cv, _)) = function
             .op_array
             .all_cvs
@@ -536,7 +553,7 @@ fn initialize_bound_this_frame(
             .find(|(_, name)| name == "this")
         {
             let destination = (*frame).cv_mut(*this_cv) as *mut Value;
-            frame_slot_init(frame, destination, bound_this);
+            frame_slot_set(frame, destination, bound_this);
         }
     }
 }
@@ -3218,6 +3235,14 @@ fn called_class_id_for_frame(eg: &ExecutorGlobals, frame: *mut ExecuteData, dept
     // only backwards instruction lookup.
     unsafe {
         let common = &*(*frame).func;
+        if (*frame).has_closure_scope() {
+            let embedded = (*frame).embedded_late_static_class_id();
+            return if embedded != 0 {
+                embedded
+            } else {
+                eg.late_static_scope_class_id(frame as usize)
+            };
+        }
         if common.sig.this_offset == 1 {
             let receiver = &*(*frame).cv(0);
             if receiver.value_type() == ValueType::Object {
@@ -3703,8 +3728,11 @@ fn execute_full_call<'a>(
     if func_common.plan.needs_late_static_scope() {
         let receiver_is_object = func_common.sig.this_offset == 1
             && unsafe { (*call).cv(0) }.value_type() == ValueType::Object;
-        let scope_is_missing = unsafe { (*call).embedded_late_static_class_id() == 0 }
-            && eg.late_static_scope_class_id(call_key) == 0;
+        // SAFETY: `call` is the live callee allocated for this DoFcall. Reading
+        // its flags and compact scope does not dereference any optional slot.
+        let scope_is_missing =
+            unsafe { !(*call).has_closure_scope() && (*call).embedded_late_static_class_id() == 0 }
+                && eg.late_static_scope_class_id(call_key) == 0;
         if !receiver_is_object && scope_is_missing {
             let class_id = static_site_called_class_id(eg, frame, op_array, opline_ptr, 0);
             publish_late_static_call_class_id(eg, call, class_id);
@@ -4154,14 +4182,15 @@ fn execute_full_call<'a>(
         }
     }
 
-    if let Some(captures) = pending_closure_captures {
+    if let Some(bindings) = pending_closure_captures {
         let capture_offset = func_common.sig.parameter_cv_count();
-        for (index, value) in captures.into_iter().enumerate() {
+        for (index, value) in bindings.captures.into_iter().enumerate() {
             // SAFETY: closure frame sizing includes every capture after the
             // declared parameter CVs; each destination is initialized once.
             let destination = unsafe { (*call).cv_mut(capture_offset + index as u32) };
             unsafe { frame_slot_set(call, destination as *mut Value, value) };
         }
+        initialize_bound_this_frame(call, func_common, bindings.bound_this, None);
     }
 
     if let Some(arguments) = original_user_arguments {
@@ -4170,7 +4199,16 @@ fn execute_full_call<'a>(
 
     match unsafe { (*(*call).func).fn_type } {
         FunctionType::User => {
-            let user = unsafe { &*((*call).func as *const UserFunction) };
+            // SAFETY: the checked user discriminant selects this request-owned
+            // op array. The closure flag is set only after initialization of
+            // its compiler-reserved final TMP, copied before frame teardown.
+            let (user, closure_scope) = unsafe {
+                let user = &*((*call).func as *const UserFunction);
+                let scope = (*call)
+                    .has_closure_scope()
+                    .then(|| (*call).tmp((*call).num_temps - 1).clone());
+                (user, scope)
+            };
             if user.op_array.is_generator {
                 use crate::vm::generator::{Generator, new_generator_ref};
 
@@ -4193,6 +4231,12 @@ fn execute_full_call<'a>(
                 );
                 generator.trace_num_args = Value::long(i64::from(num_args));
                 generator.called_scope_class_id = late_static_call_class_id(eg, call);
+                if let Some(scope) = closure_scope {
+                    *generator
+                        .tmp_values
+                        .last_mut()
+                        .expect("anonymous scope TMP") = scope;
+                }
                 generator.closure_static_vars = eg.closure_static_vars(call as usize);
                 #[cfg(feature = "php-generics-reified")]
                 {

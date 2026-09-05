@@ -721,11 +721,20 @@ fn bind_closure_value(
 
     if new_this.value_type() == ValueType::Null && source.bound_this.is_some() {
         let uses_this = source.user_function().is_some_and(|function| {
-            function
+            let this_cv = function
                 .op_array
                 .all_cvs
                 .iter()
-                .any(|(_, name)| name == "this")
+                .find(|(_, name)| name == "this")
+                .map(|(slot, _)| *slot);
+            this_cv.is_some_and(|slot| {
+                function.common.sig.this_offset == 1
+                    || function.op_array.instructions.iter().any(|instruction| {
+                        (instruction.op1_type == OpType::Cv && u32::from(instruction.op1) == slot)
+                            || (instruction.op2_type == OpType::Cv
+                                && u32::from(instruction.op2) == slot)
+                    })
+            })
         });
         if uses_this {
             super::report_internal_diagnostic(
@@ -825,7 +834,7 @@ fn bind_closure_value(
     }
 
     if let Some(scope) = scope {
-        rebound.called_scope_class_id = match scope.value_type() {
+        rebound.lexical_scope_class_id = match scope.value_type() {
             ValueType::Null => {
                 rebound.scope_is_dummy = rebound.bound_this.is_some();
                 0
@@ -836,8 +845,8 @@ fn bind_closure_value(
                     .is_some_and(|scope| scope.eq_ignore_ascii_case("static")) =>
             {
                 rebound.scope_is_dummy = rebound.bound_this.is_some()
-                    && (source.scope_is_dummy || source.called_scope_class_id == 0);
-                source.called_scope_class_id
+                    && (source.scope_is_dummy || source.lexical_scope_class_id == 0);
+                source.lexical_scope_class_id
             }
             ValueType::String => {
                 let name = scope.as_str().unwrap_or_default();
@@ -905,7 +914,7 @@ fn bind_closure_value(
                 return Ok(());
             }
         };
-    } else if rebound.bound_this.is_some() && source.called_scope_class_id == 0 {
+    } else if rebound.bound_this.is_some() && source.lexical_scope_class_id == 0 {
         // An omitted scope preserves an existing lexical scope. An unscoped
         // closure bound to an object receives Closure's dummy lexical scope
         // rather than the receiver class's private visibility. The bound
@@ -913,6 +922,36 @@ fn bind_closure_value(
         rebound.scope_is_dummy = true;
     }
 
+    if !source.is_anonymous()
+        && eg.declaring_class_of(source.func).is_none()
+        && rebound.lexical_scope_class_id != 0
+    {
+        super::report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            "Cannot rebind scope of closure created from function, this will be an error in PHP 9",
+        )?;
+        ret!(rv, Value::null());
+    }
+
+    if source.is_anonymous() && rebound.scope_is_dummy {
+        // PHP's dummy scope is still a real lexical `Closure` scope: self
+        // and closures created inside this activation must inherit it, while
+        // the receiver's class remains only the separate called scope.
+        rebound.lexical_scope_class_id = eg.class_id_of("Closure");
+    }
+
+    rebound.called_scope_class_id =
+        rebound
+            .bound_this
+            .as_ref()
+            .map_or(rebound.lexical_scope_class_id, |receiver| {
+                receiver
+                    .as_object()
+                    .map_or_else(|| eg.class_id_of("Closure"), |object| object.class_id)
+            });
     ret!(rv, Value::closure(rebound));
 }
 
@@ -1074,6 +1113,16 @@ fn fn_closure_call(
     };
     let object_class_name = object.class_name.to_string();
     drop(object);
+    if !source.is_anonymous() && eg.declaring_class_of(source.func).is_none() {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            "Cannot rebind scope of closure created from function, this will be an error in PHP 9",
+        )?;
+        ret!(rv, Value::null());
+    }
     let Some(scope) = eg.find_class(&object_class_name) else {
         eg.exception = Some(crate::value::make_error_value(
             "Error",
@@ -1145,6 +1194,7 @@ fn fn_closure_call(
     };
     resolved.bound_this = Some(new_this.clone());
     resolved.called_scope_class_id = scope.class_id;
+    resolved.closure_scope_class_id = source.is_anonymous().then_some(scope.class_id);
     if resolved.signature().this_offset == 1 {
         resolved.prepend_args = vec![new_this.clone()];
     }

@@ -97,6 +97,27 @@ pub struct OpArray {
 }
 
 impl OpArray {
+    /// Anonymous code shares bytecode across differently bound Closure
+    /// objects, so visibility proven at one activation is not immutable.
+    #[inline]
+    pub(crate) fn is_anonymous(&self) -> bool {
+        // Generated names contain an `@` source-identity separator, which
+        // cannot occur in a PHP declaration identifier. A user may legally
+        // declare `__closure_123`; the prefix alone is not an origin proof.
+        let Some(suffix) = self.name.as_bytes().strip_prefix(b"__closure_") else {
+            return false;
+        };
+        let mut has_counter = false;
+        for byte in suffix {
+            match byte {
+                b'0'..=b'9' => has_counter = true,
+                b'@' => return has_counter,
+                _ => return false,
+            }
+        }
+        false
+    }
+
     pub fn instructions(&self) -> &[Instruction] {
         &self.instructions
     }
@@ -919,6 +940,7 @@ fn mark_embedded_late_static_properties(op_array: &mut OpArray, embedded: bool) 
     if !embedded {
         return;
     }
+    let anonymous = op_array.is_anonymous();
     for instruction in &mut op_array.instructions {
         if matches!(
             instruction.opcode,
@@ -932,7 +954,8 @@ fn mark_embedded_late_static_properties(op_array: &mut OpArray, embedded: bool) 
                 .get(instruction.op1 as usize)
                 .and_then(Value::as_str)
                 .is_some_and(|class| {
-                    class.eq_ignore_ascii_case("static") || class.eq_ignore_ascii_case("self")
+                    class.eq_ignore_ascii_case("static")
+                        || (!anonymous && class.eq_ignore_ascii_case("self"))
                 })
         {
             instruction._pad |= LATE_STATIC_PROP_EMBEDDED_SCOPE;
