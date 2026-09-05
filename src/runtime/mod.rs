@@ -8721,7 +8721,8 @@ impl ExecutorGlobals {
         method_name: &str,
     ) -> Option<(Visibility, bool, String)> {
         let method_lower = method_name.to_lowercase();
-        if let Some(class_def) = self.class_table.get(class_name) {
+        if let Some(class_def) = self.find_class(class_name) {
+            let class_name = class_def.name.as_str();
             // Check own methods
             for (name, vis, is_static, _is_final, _func) in &class_def.methods {
                 if name.to_lowercase() == method_lower && !class_def.method_is_abstract(name) {
@@ -8915,14 +8916,48 @@ impl ExecutorGlobals {
         })
     }
 
-    /// Check protected instance-method access against the oldest non-private
+    /// An object's private method is selected in the caller's declaring scope
+    /// before considering overrides on the actual receiver.
+    #[inline]
+    pub(crate) fn method_dispatch_class<'a>(
+        &self,
+        receiver: &'a str,
+        method: &str,
+        caller: Option<&'a str>,
+    ) -> &'a str {
+        let Some(caller) = caller else {
+            return receiver;
+        };
+        if caller == receiver || caller.eq_ignore_ascii_case(receiver) {
+            return receiver;
+        }
+        self.private_method_dispatch_class(receiver, method, caller)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn private_method_dispatch_class<'a>(
+        &self,
+        receiver: &'a str,
+        method: &str,
+        caller: &'a str,
+    ) -> &'a str {
+        if let Some((Visibility::Private, defining)) = self.find_method_visibility(caller, method)
+            && defining.eq_ignore_ascii_case(caller)
+            && self.class_is_a(receiver, caller)
+        {
+            return caller;
+        }
+        receiver
+    }
+
+    /// Check protected method access against the oldest non-private
     /// declaration in the receiver's override family. Trait implementations
     /// participate as declarations of their consumer, while an abstract trait
     /// requirement satisfied by a parent leaves that inherited prototype
     /// intact.
-    #[cold]
-    #[inline(never)]
-    pub(crate) fn check_instance_method_visibility(
+    #[inline(always)]
+    pub(crate) fn check_method_visibility(
         &self,
         caller_class: Option<&str>,
         receiver_class: &str,
@@ -8930,10 +8965,33 @@ impl ExecutorGlobals {
         defining_class: &str,
         visibility: Visibility,
     ) -> bool {
-        if self.check_visibility(caller_class, defining_class, visibility) {
+        match visibility {
+            Visibility::Public => true,
+            Visibility::Private => caller_class.is_some_and(|caller| {
+                caller == defining_class || caller.eq_ignore_ascii_case(defining_class)
+            }),
+            Visibility::Protected => self.check_protected_method_visibility(
+                caller_class,
+                receiver_class,
+                method_name,
+                defining_class,
+            ),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn check_protected_method_visibility(
+        &self,
+        caller_class: Option<&str>,
+        receiver_class: &str,
+        method_name: &str,
+        defining_class: &str,
+    ) -> bool {
+        if self.check_visibility(caller_class, defining_class, Visibility::Protected) {
             return true;
         }
-        if visibility != Visibility::Protected {
+        if method_name.eq_ignore_ascii_case("__construct") {
             return false;
         }
 

@@ -8,6 +8,48 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 language checkpoint is
+`method-resolution-context`, based on `65019627`. Direct, dynamic and callback
+method resolution now consistently distinguishes lexical visibility, the
+declaring prototype and the live receiver. Static calls through objects do
+not bind `$this`; compatible explicit-class instance calls retain their
+receiver and late-static class. Constructor access errors precede argument
+effects without allocating an object or retaining a pending call across yield.
+Public constructor proofs and a cold static-object cache preserve the original
+warmed method dispatcher; the inline-cache layout remains 16 bytes.
+
+All 478 focused/adjacent E2E checks pass, including fifteen original exact
+PHP oracle cases, as does one cache-invariant unit. All ten admitted php-src
+`fcc29c8` targets pass; two adjacent
+gains produce exact `+12/-0`. The complete 7,174-case projection is now
+**6,412 pass / 368 fail / 182 skip / 212 unsupported**, without lost passes,
+timeouts or crashes. Zend/lang is 4,954/349/115/181, manifest
+`115dd4d827b5dbacb614a7647437aee879de733deed3d060d27f79d702a098d0`,
+sorted pass set
+`651f994650f966896a23bf7071d7e7259b0c15e6e82d19334406a83a3bd9d498`.
+Strings/array remains byte-identical at 1,458/19/67/31, manifest
+`226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`.
+
+Fresh checked default/no-default/erased/reified/all-features matrices pass
+(4,610/4,373/4,681/4,703/4,759 tests; unchanged ignored counts), together with
+all-target checking, Composer/Symfony S0-S3, format and unsafe-policy checks
+(1,622 blocks, 289 functions; no raised ceiling). Release SHA-256 is
+`45b2a060dcc8ab179aacc888e17df03598c261fa864f93a4fa4abdb0dbc9282f`;
+the fixed accepted baseline is `781e1c43...6baf06` below. The guarded CPU-2
+32-pair packet preserves all output checksums: startup -0.536%, ordinary
+function -1.479%, instance method -0.070%, static method -15.180%, object
+lifecycle -0.739%, object-static -3.169%, dynamic constructor -2.368%, private
+callback -4.560%, forwarding +0.269%. A/A checks exposed executable-preparation
+bias; final timing uses symmetric fresh copies of both unchanged binaries,
+with no changed workloads, filtering or wider budget. Performance summary:
+`0fc0e99295820505c2f847b1a7d291e10a950b9e9518a5bbae97926c74366090`;
+complete verification record:
+`4026d573618a95dd078da91be679446dac4de04359d9625fbdf4231222952927`.
+The initial 14-case crypt admission was rejected before production edits:
+an exact maintained byte-preserving backend was not admitted without a new
+dependency/FFI decision. Those failures, broader closure rebinding, 32-bit
+and allocation-limit/OOM equivalence remain separate contracts.
+
+The preceding measured AMD64 PHP 8.5 language checkpoint is
 `assertion-ast-source-rendering`, based on `2589e756`. Assertion-only source
 capture and a separate cold renderer preserve interpolation spelling and
 brace adjacency, attributes, closures, property hooks and declaration bodies.

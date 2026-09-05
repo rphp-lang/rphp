@@ -87,9 +87,9 @@ use crate::vm::instruction::{
     FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT,
     INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, JMP_NZ_RELEASE_TEMPS,
     KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
-    NEW_FLAG_UNPACKED_ARGUMENTS, NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE, OBJ_PROP_FUNC_ARG,
-    OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OBJ_PROP_TEMPORARY_RECEIVER, OpType,
-    PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
+    NEW_FLAG_UNPACKED_ARGUMENTS, NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE, NEW_FLAG_VALIDATE_ONLY,
+    OBJ_PROP_FUNC_ARG, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OBJ_PROP_TEMPORARY_RECEIVER,
+    OpType, PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
     REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, RELEASE_TEMPS_NESTED_OBJECTS,
     RELEASE_TEMPS_ON_RETURN, RELEASE_TEMPS_RETURN_COMPLETION_SITE, SEND_FLAG_GLOBALS,
     SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_PREPARED_PROPERTY_ARGUMENT,
@@ -1297,6 +1297,7 @@ fn propagate_declared_scalar_types(
                     arguments_proven: true,
                 });
             }
+            OpCode::NewObj if instruction._pad & NEW_FLAG_VALIDATE_ONLY != 0 => {}
             OpCode::InitStaticCall
             | OpCode::InitLateStaticCall
             | OpCode::InitDynamicCall
@@ -1423,7 +1424,8 @@ fn propagate_declared_scalar_types(
             }
         }
         let mut result = KnownScalarType::Unknown;
-        let mut result_receiver_class = (instruction.opcode == OpCode::NewObj)
+        let mut result_receiver_class = (instruction.opcode == OpCode::NewObj
+            && instruction._pad & NEW_FLAG_VALIDATE_ONLY == 0)
             .then(|| {
                 op_array
                     .literals
@@ -3160,10 +3162,14 @@ pub struct Compiler {
     /// by child compilers). The repeated-tail boundary is compiler-only data
     /// for call positions beyond the ordinary 64-bit runtime mask.
     known_ref_args: HashMap<String, KnownRefArgs>,
-    /// Source-linked classes whose effective constructor has no by-reference
-    /// parameters. Child op arrays retain only this positive proof; unknown
-    /// and reference-bearing constructors keep the runtime signature path.
+    /// Source-linked constructors with no by-reference parameters. Keep this
+    /// proof independent of access: private by-value constructors still need
+    /// validation before argument evaluation.
     known_value_constructors: HashSet<String>,
+    /// Source-linked constructors whose public access is immutable. Allocate
+    /// this inherited proof only when a child compiler needs a known class;
+    /// source units without class declarations carry no additional hash state.
+    known_public_constructors: Option<Box<HashSet<String>>>,
     /// Parameter names for functions whose declarations are visible throughout
     /// the compilation unit. Together with `known_ref_args`, this lets named
     /// arguments select the same FUNC_ARG l-value context before or after the
@@ -3542,6 +3548,7 @@ impl Compiler {
             deferred_error: None,
             known_ref_args: HashMap::new(),
             known_value_constructors: HashSet::new(),
+            known_public_constructors: None,
             known_param_names: HashMap::new(),
             strict_types: false,
             zend_assertions: 1,
@@ -3788,10 +3795,17 @@ impl Compiler {
         child.known_constants = self.known_constants.clone();
         child.known_enum_classes = Rc::clone(&self.known_enum_classes);
         child.known_value_constructors = self.known_value_constructors.clone();
+        child.known_public_constructors = self.known_public_constructors.clone();
         for class in &self.class_defs {
             if self.known_constructor_is_by_value(&class.name) == Some(true) {
                 child
                     .known_value_constructors
+                    .insert(class.name.trim_start_matches('\\').to_ascii_lowercase());
+            }
+            if self.known_constructor_is_public(&class.name) {
+                child
+                    .known_public_constructors
+                    .get_or_insert_with(|| Box::new(HashSet::new()))
                     .insert(class.name.trim_start_matches('\\').to_ascii_lowercase());
             }
         }
@@ -9481,7 +9495,11 @@ impl Compiler {
 
     fn compile_isset_operand(&mut self, expr: &Expr) -> (u16, OpType) {
         match expr {
+            Expr::Variable { name, .. } if name == "this" && self.static_method_context => {
+                (self.add_literal(Value::null()), OpType::Const)
+            }
             Expr::DynamicVariable { name, line } => {
+                self.needs_compact_receiver = true;
                 let (name, name_type) = self.compile_expr(name);
                 let result = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchDynamicVar);
@@ -9803,6 +9821,7 @@ impl Compiler {
             }
             Expr::Variable { name, line } => self.compile_variable_read(name, *line),
             Expr::DynamicVariable { name, line } => {
+                self.needs_compact_receiver = true;
                 let (name, name_type) = self.compile_expr(name);
                 let result = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchDynamicVar);
@@ -10739,9 +10758,16 @@ impl Compiler {
                 line,
             } => {
                 if generic_args.is_empty()
-                    && ["compact", "debug_backtrace"]
-                        .iter()
-                        .any(|builtin| self.is_global_builtin_call(name, builtin))
+                    && [
+                        "compact",
+                        "debug_backtrace",
+                        "call_user_func",
+                        "call_user_func_array",
+                        "forward_static_call",
+                        "forward_static_call_array",
+                    ]
+                    .iter()
+                    .any(|builtin| self.is_global_builtin_call(name, builtin))
                 {
                     self.needs_compact_receiver = true;
                 }
@@ -11768,6 +11794,11 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::Empty(inner) => {
+                if self.static_method_context
+                    && matches!(inner.as_ref(), Expr::Variable { name, .. } if name == "this")
+                {
+                    return (self.add_literal(Value::bool(true)), OpType::Const);
+                }
                 // `empty()` reads variables, properties, and dimensions in a
                 // silent probe context. In particular, an uninitialized typed
                 // property behaves as unset instead of throwing before the
@@ -11790,6 +11821,12 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::NullCoalesce { left, right } => {
+                if self.static_method_context
+                    && let Expr::Variable { name, line } = left.as_ref()
+                    && name == "this"
+                {
+                    return self.compile_variable_read(name, *line);
+                }
                 // $a ?? $b → isset($a) ? $a : $b
                 // Property reads in a coalescing probe are silent: an
                 // uninitialized typed property behaves like an unset value.
@@ -12011,6 +12048,7 @@ impl Compiler {
                 );
                 // Compile closure body into a separate function
                 let mut func_compiler = self.child_compiler();
+                func_compiler.static_method_context = *is_static;
                 func_compiler.bindable_closure_scope =
                     self.lexical_static_class.is_none() || self.bindable_closure_scope;
                 func_compiler.known_ref_args = self.build_known_ref_args();
@@ -12297,6 +12335,28 @@ impl Compiler {
                 call_line,
             } => {
                 let unresolved_lexical_scope = self.unresolved_lexical_new_scope(class_name);
+                let (resolved_class, dynamic_static_scope) = if unresolved_lexical_scope {
+                    (class_name.clone(), false)
+                } else {
+                    self.resolve_static_member_owner(class_name)
+                };
+                let owner = self.add_literal(Value::string(resolved_class.clone()));
+                let owner_flags = if dynamic_static_scope {
+                    NEW_FLAG_DYNAMIC_STATIC_SCOPE
+                } else {
+                    0
+                } | if unresolved_lexical_scope {
+                    NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE
+                } else {
+                    0
+                };
+                let (owner, owner_type, owner_flags) = if !args.is_empty()
+                    && (owner_flags != 0 || !self.known_constructor_is_public(&resolved_class))
+                {
+                    self.emit_constructor_access_check(owner, OpType::Const, owner_flags, *line)
+                } else {
+                    (owner, OpType::Const, owner_flags)
+                };
                 if generic_args.is_empty()
                     && args
                         .iter()
@@ -12304,35 +12364,18 @@ impl Compiler {
                 {
                     let (arguments, arguments_type) =
                         self.compile_mixed_unpacked_call_arguments(args, 0, None);
-                    let (resolved_class, dynamic_static_scope) = if unresolved_lexical_scope {
-                        (class_name.clone(), false)
-                    } else {
-                        self.resolve_static_member_owner(class_name)
-                    };
-                    let name_idx = self.add_literal(Value::string(resolved_class));
                     let tmp = self.alloc_tmp();
                     let mut new_obj = Instruction::new(OpCode::NewObj);
-                    new_obj.op1 = name_idx;
-                    new_obj.op1_type = OpType::Const;
+                    new_obj.op1 = owner;
+                    new_obj.op1_type = owner_type;
                     new_obj.op2 = arguments;
                     new_obj.op2_type = arguments_type;
                     new_obj.result = tmp;
                     new_obj.result_type = OpType::Tmp;
-                    new_obj._pad |= NEW_FLAG_UNPACKED_ARGUMENTS;
-                    if dynamic_static_scope {
-                        new_obj._pad |= NEW_FLAG_DYNAMIC_STATIC_SCOPE;
-                    }
-                    if unresolved_lexical_scope {
-                        new_obj._pad |= NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE;
-                    }
+                    new_obj._pad = owner_flags | NEW_FLAG_UNPACKED_ARGUMENTS;
                     self.push_instruction_at_line(new_obj, *line);
                     return (tmp, OpType::Tmp);
                 }
-                let (resolved_class, dynamic_static_scope) = if unresolved_lexical_scope {
-                    (class_name.clone(), false)
-                } else {
-                    self.resolve_static_member_owner(class_name)
-                };
                 // A linked source constructor with no by-reference parameters
                 // cannot change argument selection at runtime. Keep its plain
                 // CV operands compact so the existing object-pipeline region
@@ -12345,7 +12388,6 @@ impl Compiler {
                 } else {
                     self.compile_call_args(args, 0, None, true)
                 };
-                let name_idx = self.add_literal(Value::string(resolved_class.clone()));
                 let runtime_generic_check = self.emit_generic_check(
                     if dynamic_static_scope {
                         OpCode::CheckLateStaticGenericArgs
@@ -12355,24 +12397,19 @@ impl Compiler {
                     GenericDeclarationKind::Class,
                     generic_args,
                     Some(&resolved_class),
-                    name_idx,
-                    OpType::Const,
+                    owner,
+                    owner_type,
                     0,
                     OpType::Unused,
                 );
                 let tmp = self.alloc_tmp();
                 let mut new_obj = Instruction::new(OpCode::NewObj);
-                new_obj.op1 = name_idx;
-                new_obj.op1_type = OpType::Const;
+                new_obj.op1 = owner;
+                new_obj.op1_type = owner_type;
                 new_obj.result = tmp;
                 new_obj.result_type = OpType::Tmp;
                 new_obj.extended_value = args.len() as u32;
-                if dynamic_static_scope {
-                    new_obj._pad |= NEW_FLAG_DYNAMIC_STATIC_SCOPE;
-                }
-                if unresolved_lexical_scope {
-                    new_obj._pad |= NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE;
-                }
+                new_obj._pad = owner_flags;
                 self.push_instruction_at_line(new_obj, *line);
 
                 // Send constructor args — offset by 1 because CV 0 is $this
@@ -12400,6 +12437,16 @@ impl Compiler {
                 // argument suspension/unpacking so neither side effect can be
                 // repeated or observed in the opposite order.
                 let (class_operand, class_type) = self.compile_expr(class);
+                let (class_operand, class_type, class_flags) = if args.is_empty() {
+                    (class_operand, class_type, NEW_FLAG_DYNAMIC_CLASS_NAME)
+                } else {
+                    self.emit_constructor_access_check(
+                        class_operand,
+                        class_type,
+                        NEW_FLAG_DYNAMIC_CLASS_NAME,
+                        *line,
+                    )
+                };
                 if args
                     .iter()
                     .any(|argument| matches!(argument, CallArg::Unpack(_)))
@@ -12414,7 +12461,7 @@ impl Compiler {
                     new_obj.op2_type = arguments_type;
                     new_obj.result = tmp;
                     new_obj.result_type = OpType::Tmp;
-                    new_obj._pad |= NEW_FLAG_DYNAMIC_CLASS_NAME | NEW_FLAG_UNPACKED_ARGUMENTS;
+                    new_obj._pad = class_flags | NEW_FLAG_UNPACKED_ARGUMENTS;
                     self.push_instruction_at_line(new_obj, *line);
                     return (tmp, OpType::Tmp);
                 }
@@ -12426,7 +12473,7 @@ impl Compiler {
                 new_obj.result = tmp;
                 new_obj.result_type = OpType::Tmp;
                 new_obj.extended_value = args.len() as u32;
-                new_obj._pad |= NEW_FLAG_DYNAMIC_CLASS_NAME;
+                new_obj._pad = class_flags;
                 self.push_instruction_at_line(new_obj, *line);
 
                 self.emit_precompiled_call_args(&compiled_args, 1);
@@ -12797,6 +12844,9 @@ impl Compiler {
                 generic_args,
                 line,
             } => {
+                // Static syntax can forward a compatible instance receiver.
+                // A closure needs its carrier CV even without spelling $this.
+                self.needs_compact_receiver = true;
                 // Pseudo-class names are runtime call-scope tokens, not names
                 // that can be namespace-qualified. Their spelling is also
                 // needed later to recover forwarding late-static scope.
@@ -13076,6 +13126,7 @@ impl Compiler {
                 generic_args,
                 line,
             } => {
+                self.needs_compact_receiver = true;
                 let parent_property = match class.as_ref() {
                     Expr::StaticProperty {
                         class_name,
@@ -14683,6 +14734,63 @@ impl Compiler {
                 }
             })
             .collect()
+    }
+
+    fn emit_constructor_access_check(
+        &mut self,
+        owner: u16,
+        owner_type: OpType,
+        flags: u16,
+        line: usize,
+    ) -> (u16, OpType, u16) {
+        let (owner, owner_type) = self.snapshot_yield_rvalue_operand(owner, owner_type, "class", 0);
+        let mut check = Instruction::new(OpCode::NewObj);
+        check.op1 = owner;
+        check.op1_type = owner_type;
+        check.result_type = OpType::Unused;
+        check._pad = flags | NEW_FLAG_VALIDATE_ONLY;
+        self.push_instruction_at_line(check, line);
+        (owner, owner_type, flags)
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn known_constructor_is_public(&self, class_name: &str) -> bool {
+        let mut current = class_name.trim_start_matches('\\');
+        // Every in-unit ancestor resolves to one immutable class definition.
+        // A longer chain must repeat a definition, so no allocated visited
+        // set is needed; one final lookup permits an inherited external proof.
+        for _ in 0..=self.class_defs.len() {
+            let Some(class) = self
+                .class_defs
+                .iter()
+                .find(|class| class.name.eq_ignore_ascii_case(current))
+            else {
+                return self
+                    .known_public_constructors
+                    .as_ref()
+                    .is_some_and(|known| known.contains(&current.to_ascii_lowercase()));
+            };
+            if class.is_abstract || class.is_interface || class.is_trait || class.is_enum {
+                return false;
+            }
+            if let Some((_, visibility, _, _, _)) = class
+                .methods
+                .iter()
+                .find(|method| method.0.eq_ignore_ascii_case("__construct"))
+            {
+                return *visibility == Visibility::Public;
+            }
+            if !class.uses.is_empty() {
+                return false;
+            }
+            let Some(parent) = class.parent.as_deref() else {
+                return true;
+            };
+            current = parent;
+        }
+        false
     }
 
     fn known_constructor_is_by_value(&self, class_name: &str) -> Option<bool> {

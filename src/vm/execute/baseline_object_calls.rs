@@ -189,7 +189,11 @@ fn op_new_obj<'a>(
         (
             &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
             (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
-            (*frame).get_op_mut(opline.result as u32, opline.result_type),
+            if opline._pad & NEW_FLAG_VALIDATE_ONLY != 0 {
+                std::ptr::null_mut()
+            } else {
+                (*frame).get_op_mut(opline.result as u32, opline.result_type)
+            },
         )
     };
     let raw_name = class_operand.as_str().unwrap_or("");
@@ -197,6 +201,26 @@ fn op_new_obj<'a>(
     let dynamic_static_scope = opline._pad & NEW_FLAG_DYNAMIC_STATIC_SCOPE != 0;
     let dynamic_class_name = opline._pad & NEW_FLAG_DYNAMIC_CLASS_NAME != 0;
     let unresolved_relative_scope = opline._pad & NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE != 0;
+    // Only public/no-constructor proofs enter this cache. A matching stable
+    // class may skip validation regardless of the caller's visibility scope.
+    // Aliases and relative names retain canonical resolution on a mismatch.
+    if opline._pad & NEW_FLAG_VALIDATE_ONLY != 0
+        && !dynamic_static_scope
+        && !unresolved_relative_scope
+        && ic.class_id != 0
+    {
+        let same_class = if dynamic_class_name && class_operand.value_type() == ValueType::Object {
+            class_operand.as_object().is_some_and(|object| object.class_id == ic.class_id)
+        } else {
+            class_operand.value_type() == ValueType::String
+                && eg.class_by_id(ic.class_id).is_some_and(|class| {
+                    class.name.eq_ignore_ascii_case(raw_name.strip_prefix('\\').unwrap_or(raw_name))
+                })
+        };
+        if same_class {
+            return Ok(ColdResult::Done);
+        }
+    }
     let literal_cache_hit = !dynamic_static_scope
         && !dynamic_class_name
         && !unresolved_relative_scope
@@ -207,6 +231,18 @@ fn op_new_obj<'a>(
     } else if !dynamic_static_scope && !dynamic_class_name && opline.op1_type == OpType::Const {
         stats::inc_newobj_literal_cache_miss();
     }
+    // A runtime string can reuse the linked public constructor's class ID
+    // after an exact canonical-name guard. Keep aliases/relative names cold,
+    // and still own the dynamic spelling before defaults can re-enter PHP.
+    let class_cache_hit = literal_cache_hit
+        || (dynamic_class_name
+            && !dynamic_static_scope
+            && !unresolved_relative_scope
+            && ic.class_id != 0
+            && class_operand.value_type() == ValueType::String
+            && eg.class_by_id(ic.class_id).is_some_and(|class| {
+                class.name.eq_ignore_ascii_case(raw_name.strip_prefix('\\').unwrap_or(raw_name))
+            }));
 
     let owned_name: String;
     let name = if literal_cache_hit {
@@ -266,10 +302,10 @@ fn op_new_obj<'a>(
         owned_name.as_str()
     };
 
-    if !literal_cache_hit {
+    if !class_cache_hit {
         stats::inc_newobj_class_hash_lookup();
     }
-    if (dynamic_static_scope || dynamic_class_name || ic.class_id == 0)
+    if !class_cache_hit
         && eg.find_public_class(&name).is_none()
         && let Some(class_def) = eg.take_pending_anonymous_class(&name)
     {
@@ -356,7 +392,7 @@ fn op_new_obj<'a>(
         }
     }
 
-    if !literal_cache_hit
+    if !class_cache_hit
         && {
             stats::inc_newobj_class_hash_lookup();
             eg.find_public_class(&name).is_none()
@@ -371,7 +407,11 @@ fn op_new_obj<'a>(
                 ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
             });
         }
-        if !loaded {
+        // Autoload completion is not a class identity proof: the original
+        // runtime spelling must resolve before either validation or allocation.
+        // In particular, repeated leading separators must not fall through to
+        // an unlinked dynamic object after a normalized existence probe.
+        if !loaded || eg.find_public_class(name).is_none() {
             return Ok(new_object_validation_error(
                 eg,
                 frame,
@@ -381,15 +421,26 @@ fn op_new_obj<'a>(
             )?);
         }
     }
-    // Literal object creation is monomorphic in ordinary PHP code. After the
-    // first canonical name lookup, use the stable numeric class index instead
-    // of hashing the same class name on every allocation.
-    let class_def = if literal_cache_hit {
+    // Literal sites and guarded canonical runtime strings can reuse the
+    // stable numeric class index instead of hashing the name on allocation.
+    let class_def = if class_cache_hit {
         eg.class_by_id(ic.class_id)
     } else {
         stats::inc_newobj_class_hash_lookup();
         eg.find_public_class(&name)
     };
+    let class_id = class_def.map(|class| class.class_id);
+    if opline._pad & NEW_FLAG_VALIDATE_ONLY != 0
+        || !class_id.is_some_and(|id| id != 0 && ic.class_id == id)
+    {
+        match validate_new_object_site(eg, frame, op_array, opline, ip, name, class_id)? {
+            ColdResult::Done => {}
+            outcome => return Ok(outcome),
+        }
+    }
+    if opline._pad & NEW_FLAG_VALIDATE_ONLY != 0 {
+        return Ok(ColdResult::Done);
+    }
     op_new_obj_resolved(
         eg,
         frame,
@@ -398,7 +449,7 @@ fn op_new_obj<'a>(
         ip,
         result_ptr,
         name,
-        class_def.map(|class| class.class_id),
+        class_id,
     )
 }
 
@@ -722,20 +773,65 @@ fn materialize_deferred_instance_defaults(
     evaluated
 }
 
+/// Non-public constructors are checked for each invocation: the same closure
+/// body can be rebound to another visibility scope. Public constructors keep
+/// the class-ID-only allocation cache.
+#[cold]
 #[inline(never)]
-#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_newobj"))]
-#[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_newobj"))]
-fn op_new_obj_resolved<'a>(
+fn constructor_visibility_for_new(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    class: &str,
+) -> Result<bool, String> {
+    let Some((visibility, _, defining)) = eg.find_method_info(class, "__construct") else {
+        return Ok(true);
+    };
+    if visibility == Visibility::Public {
+        return Ok(true);
+    }
+    let caller = get_caller_class(frame, eg);
+    if eg.check_visibility(caller.as_deref(), &defining, visibility) {
+        return Ok(false);
+    }
+    let visibility = if visibility == Visibility::Private { "private" } else { "protected" };
+    let scope = caller.map_or_else(|| "global scope".to_string(), |caller| format!("scope {caller}"));
+    Err(format!("Call to {visibility} {defining}::__construct() from {scope}"))
+}
+
+#[inline]
+fn cache_new_constructor(
+    op_array: &crate::compiler::OpArray,
+    ip: usize,
+    function: *const FunctionCommon,
+    class_id: u32,
+    has_destructor: bool,
+    is_throwable: bool,
+) {
+    // SAFETY: NewObj supplies an in-bounds cache slot in request-owned stable
+    // storage. Only public constructor contracts are cached, and class IDs
+    // identify immutable linked definitions. Validation-only sites have their
+    // own slot and never consume its function pointer as an allocation plan.
+    let cache = unsafe {
+        &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache)
+    };
+    cache.set_constructor(function, class_id, has_destructor, is_throwable);
+}
+
+/// Only immutable, instantiable classes with public constructors populate a
+/// scope-independent NewObj cache. Re-check non-public access on every call,
+/// but keep these resolution rules outside the warmed allocation body.
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn validate_new_object_site<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
     ip: usize,
-    result_ptr: *mut Value,
     name: &str,
     class_id: Option<u32>,
 ) -> Result<ColdResult<'a>, VmError> {
-    let ic = &op_array.cache[ip];
     let class_def = class_id.and_then(|class_id| eg.class_by_id(class_id));
 
     // Reject instantiation through ordinary catchable Error objects. These
@@ -799,6 +895,33 @@ fn op_new_obj_resolved<'a>(
         }
     }
 
+    match constructor_visibility_for_new(eg, frame, name) {
+        Ok(cacheable) => {
+            if cacheable && opline._pad & NEW_FLAG_VALIDATE_ONLY != 0
+                && let Some(id) = class_id.filter(|id| *id != 0)
+            {
+                cache_new_constructor(op_array, ip, std::ptr::null(), id, false, false);
+            }
+            Ok(ColdResult::Done)
+        }
+        Err(message) => new_object_validation_error(eg, frame, op_array, ip, &message),
+    }
+}
+
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_newobj"))]
+#[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_newobj"))]
+fn op_new_obj_resolved<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    ip: usize,
+    result_ptr: *mut Value,
+    name: &str,
+    class_id: Option<u32>,
+) -> Result<ColdResult<'a>, VmError> {
+    let ic = &op_array.cache[ip];
     if let Some(class_id) = class_id
         && eg.deferred_class_constants_require_activation(class_id)
         && !crate::stdlib::reflection::activate_deferred_class_constants(class_id, eg)?
@@ -947,12 +1070,11 @@ fn op_new_obj_resolved<'a>(
         let resolved = eg.find_function(&construct_name).unwrap_or(std::ptr::null());
         let has_destructor = !resolved.is_null()
             && eg.find_method_info(name, "__destruct").is_some();
-        if class_id != 0 {
-            let ic_mut = unsafe {
-                &mut *(op_array.cache.as_ptr().add(ip)
-                    as *mut crate::vm::instruction::InlineCache)
-            };
-            ic_mut.set_constructor(resolved, class_id, has_destructor, is_throwable);
+        if class_id != 0
+            && eg.find_method_info(name, "__construct")
+                .is_none_or(|(visibility, _, _)| visibility == Visibility::Public)
+        {
+            cache_new_constructor(op_array, ip, resolved, class_id, has_destructor, is_throwable);
         }
         (resolved, has_destructor)
     };
@@ -5010,6 +5132,9 @@ fn op_init_method_call<'a>(
                 None,
                 ic.method_trait_scope_class_id(),
             )
+        } else if ic.static_object_method_matches(obj_class_id) {
+            drop(obj);
+            (ic.func, false, None, 0)
         } else {
             let target_class_name = obj.class_name.clone();
             drop(obj); // release borrow before lookup
@@ -5017,28 +5142,14 @@ fn op_init_method_call<'a>(
             let method = method_name.as_str().unwrap_or("");
             let caller_class = get_caller_class(frame, eg);
 
-            let dispatch_class = if let Some(ref cc) = caller_class {
-                if let Some((Visibility::Private, ref defining)) = eg.find_method_visibility(cc, method) {
-                    if defining.eq_ignore_ascii_case(cc)
-                        && eg.class_is_a(&target_class_name, cc)
-                    {
-                        cc.clone()
-                    } else {
-                        target_class_name.to_string()
-                    }
-                } else {
-                    target_class_name.to_string()
-                }
-            } else {
-                target_class_name.to_string()
-            };
+            let dispatch_class = eg.method_dispatch_class(&target_class_name, method, caller_class.as_deref());
 
             let full_name = format!("{}::{}", dispatch_class, method);
             let method_info = eg.find_method_info(&dispatch_class, method);
             let inaccessible = method_info.as_ref().is_some_and(
                 |(visibility, _, defining_class)| {
                     *visibility != Visibility::Public
-                        && !eg.check_instance_method_visibility(
+                        && !eg.check_method_visibility(
                             caller_class.as_deref(),
                             &target_class_name,
                             method,
@@ -5132,30 +5243,38 @@ fn op_init_method_call<'a>(
 
             // Cache the resolution (don't cache if class_id is 0 = unknown)
             if obj_class_id != 0 && magic_method.is_none() {
+                // SAFETY: this instruction owns its request-local cache slot;
+                // the resolved descriptor and class ID stay live for the request.
                 let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
-                let (fusion_eligible, long_property_plan, property_getter_plan) = if common.fn_type == FunctionType::User
-                    && common.supports_scalar_long_plan()
-                {
-                    let user = unsafe { &*(resolved as *const UserFunction) };
-                    (
-                        user.op_array.instructions.len() <= FAST_SCALAR_METHOD_FUSION_MAX_OPS,
-                        user.long_property_plan.is_some(),
-                        user.property_getter_plan.is_some(),
-                    )
+                if common.plan.is_static_method() {
+                    if !resolved_has_generic_contract && trait_scope_class_id == 0 {
+                        ic_mut.set_static_object_method(resolved, obj_class_id);
+                    }
                 } else {
-                    (false, false, false)
-                };
-                ic_mut.set_method(
-                    resolved,
-                    obj_class_id,
-                    fusion_eligible,
-                    long_property_plan,
-                    property_getter_plan,
-                    resolved_has_generic_contract,
-                    linked_generic_long_contract,
-                );
-                if trait_scope_class_id != 0 {
-                    ic_mut.set_method_trait_scope_class_id(trait_scope_class_id);
+                    let (fusion_eligible, long_property_plan, property_getter_plan) = if common.fn_type == FunctionType::User
+                        && common.supports_scalar_long_plan()
+                    {
+                        let user = unsafe { &*(resolved as *const UserFunction) };
+                        (
+                            user.op_array.instructions.len() <= FAST_SCALAR_METHOD_FUSION_MAX_OPS,
+                            user.long_property_plan.is_some(),
+                            user.property_getter_plan.is_some(),
+                        )
+                    } else {
+                        (false, false, false)
+                    };
+                    ic_mut.set_method(
+                        resolved,
+                        obj_class_id,
+                        fusion_eligible,
+                        long_property_plan,
+                        property_getter_plan,
+                        resolved_has_generic_contract,
+                        linked_generic_long_contract,
+                    );
+                    if trait_scope_class_id != 0 {
+                        ic_mut.set_method_trait_scope_class_id(trait_scope_class_id);
+                    }
                 }
             }
             (
@@ -5232,11 +5351,16 @@ fn op_init_method_call<'a>(
             if magic_method.is_some() {
                 (*call).set_magic_call(true);
             }
-            if common.plan.borrow_this() {
+            if common.plan.is_static_method() {
+                frame_slot_init(call, (*call).cv_mut(0) as *mut Value, Value::undef());
+            } else if common.plan.borrow_this() {
                 frame_set_borrowed_this(call, obj_val as *const Value);
             } else {
                 frame_set_this(call, obj_val.clone());
             }
+        }
+        if common.plan.is_static_method() {
+            publish_late_static_call_class_id(eg, call, obj_class_id);
         }
         initialize_trait_class_scope(eg, call, func_ptr, trait_scope_class_id);
         if let Some(method) = magic_method {
@@ -5396,6 +5520,7 @@ fn call_site_instruction_index(
         .skip(initializer_index.saturating_add(1))
     {
         match instruction.opcode {
+            OpCode::NewObj if instruction._pad & NEW_FLAG_VALIDATE_ONLY != 0 => {}
             OpCode::InitFcall
             | OpCode::InitUserCall
             | OpCode::InitMethodCall
@@ -5486,7 +5611,7 @@ fn resolve_static_call_target<'a>(
     let inaccessible = method_info.as_ref().is_some_and(
         |(visibility, _, defining_class)| {
             *visibility != Visibility::Public
-                && !eg.check_visibility(caller_class.as_deref(), defining_class, *visibility)
+                && !eg.check_method_visibility(caller_class.as_deref(), class, method, defining_class, *visibility)
         },
     );
     let direct = eg.find_function(&format!("{class}::{method}"));
@@ -5859,19 +5984,37 @@ fn op_init_static_call<'a>(
         )
     };
 
-    let common = unsafe { &*func_ptr };
-    let target_is_instance = method_is_non_static
-        || (common.sig.this_offset == 1
-            && matches!(raw_class.to_ascii_lowercase().as_str(), "self" | "parent"));
-    if method_is_non_static {
-        let compatible_this = unsafe {
-            get_caller_class(frame, eg).is_some()
-                && (*frame).num_cvs != 0
-                && (*frame)
-                    .cv(0)
-                    .as_object()
-                    .is_some_and(|receiver| eg.class_is_a(&receiver.class_name, &class))
+    // Internal inherited methods can exist only in the function registry,
+    // without a ClassDef method entry. Preserve their established receiver
+    // ABI for forwarding self/parent calls; declared static user methods do
+    // not acquire a receiver merely because they reserve CV 0.
+    // SAFETY: both descriptors and the caller's receiver CV belong to live
+    // frames. A direct borrowed receiver stays in the caller until this
+    // synchronous callee completes; closure recovery remains owned below.
+    let (common, target_is_instance, direct_receiver) = unsafe {
+        let common = &*func_ptr;
+        let target_is_instance = method_is_non_static
+            || (common.fn_type == FunctionType::Internal
+                && common.sig.this_offset == 1
+                && (raw_class.eq_ignore_ascii_case("self")
+                    || raw_class.eq_ignore_ascii_case("parent")));
+        let direct_receiver = if target_is_instance && (*(*frame).func).sig.this_offset == 1 {
+            let value = &*(*frame).get_op_ptr(0, OpType::Cv, op_array);
+            (value.value_type() == ValueType::Object).then_some(value)
+        } else {
+            None
         };
+        (common, target_is_instance, direct_receiver)
+    };
+    let closure_receiver = (target_is_instance && direct_receiver.is_none())
+        .then(|| closure_bound_this(frame, op_array, false))
+        .flatten();
+    let live_receiver = direct_receiver.or(closure_receiver.as_ref());
+    if method_is_non_static {
+        let compatible_this = get_caller_class(frame, eg).is_some()
+            && live_receiver
+                .and_then(Value::as_object)
+                .is_some_and(|receiver| eg.class_is_a(&receiver.class_name, &class));
         if !compatible_this {
             let call_site_ip = call_site_instruction_index(op_array, ip);
             return Ok(throw_non_static_callback_error(
@@ -5930,19 +6073,13 @@ fn op_init_static_call<'a>(
         if magic_method.is_some() {
             (*call).set_magic_call(true);
         }
-        let mut initialized_receiver = false;
-        if target_is_instance && (*frame).num_cvs != 0 {
-            let receiver = (*frame).cv(0);
-            if receiver.value_type() == ValueType::Object {
-                if common.plan.borrow_this() {
-                    frame_set_borrowed_this(call, receiver as *const Value);
-                } else {
-                    frame_set_this(call, receiver.clone());
-                }
-                initialized_receiver = true;
+        if let Some(receiver) = live_receiver {
+            if direct_receiver.is_some() && common.plan.borrow_this() {
+                frame_set_borrowed_this(call, receiver as *const Value);
+            } else {
+                frame_set_this(call, receiver.clone());
             }
-        }
-        if !initialized_receiver {
+        } else {
             // Static method frames retain the class-method CV layout, whose
             // first slot is reserved for `$this`. No receiver is written for
             // a genuine static call, but wide-frame cleanup scans every CV
@@ -5951,7 +6088,9 @@ fn op_init_static_call<'a>(
             frame_slot_init(call, (*call).cv_mut(0) as *mut Value, Value::undef());
         }
     }
-    let called_scope_class_id = if raw_class.eq_ignore_ascii_case("self")
+    let called_scope_class_id = if let Some(receiver) = live_receiver.and_then(Value::as_object) {
+        receiver.class_id
+    } else if raw_class.eq_ignore_ascii_case("self")
         || raw_class.eq_ignore_ascii_case("parent")
     {
         let forwarding = late_static_call_class_id(eg, frame);
@@ -6044,8 +6183,10 @@ fn op_init_late_static_call<'a>(
         let inaccessible = method_info.as_ref().is_some_and(
             |(visibility, _, defining_class)| {
                 *visibility != Visibility::Public
-                    && !eg.check_visibility(
+                    && !eg.check_method_visibility(
                         caller_class.as_deref(),
+                        &class,
+                        method,
                         defining_class,
                         *visibility,
                     )

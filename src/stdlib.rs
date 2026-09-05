@@ -13498,7 +13498,17 @@ fn fn_method_exists(
 
     // method_exists() includes abstract and non-public declarations; callback
     // resolution deliberately uses the stricter callable-only helper below.
-    let found = method_declared_in_class_hierarchy(eg, &class_name, &method_name)
+    let canonical_class = eg
+        .find_class(&class_name)
+        .map_or(class_name.as_str(), |class| class.name.as_str());
+    let inherited_private = needs_autoload
+        && eg
+            .find_method_visibility(&class_name, &method_name)
+            .is_some_and(|(visibility, defining)| {
+                visibility == Visibility::Private && !defining.eq_ignore_ascii_case(canonical_class)
+            });
+    let found = !inherited_private
+        && method_declared_in_class_hierarchy(eg, &class_name, &method_name)
         || (class_name.eq_ignore_ascii_case("Closure")
             && eg
                 .function_table
@@ -23223,7 +23233,7 @@ fn resolve_callback(
             let name = val.as_str().unwrap();
             if let Some((class_name, method_name)) = name.rsplit_once("::") {
                 let class_name = class_name.trim_start_matches('\\');
-                let Some((visibility, is_static, func_ptr, _)) =
+                let Some((visibility, is_static, func_ptr, declaring)) =
                     find_method_in_class_hierarchy(eg, class_name, method_name)
                 else {
                     if find_abstract_method_in_class_hierarchy(eg, class_name, method_name)
@@ -23239,7 +23249,15 @@ fn resolve_callback(
                         None,
                     );
                 };
-                if visibility != Visibility::Public || !is_static {
+                if !is_static
+                    || !eg.check_method_visibility(
+                        caller_class,
+                        class_name,
+                        method_name,
+                        declaring,
+                        visibility,
+                    )
+                {
                     return resolve_magic_callback(
                         eg,
                         class_name,
@@ -23327,8 +23345,10 @@ fn resolve_callback(
                         Some(obj_val),
                     );
                 }
-                let Some((visibility, _, func_ptr, declaring)) =
-                    find_method_in_class_hierarchy(eg, &class_name, method_name)
+                let dispatch_class =
+                    eg.method_dispatch_class(&class_name, method_name, caller_class);
+                let Some((visibility, is_static, func_ptr, declaring)) =
+                    find_method_in_class_hierarchy(eg, dispatch_class, method_name)
                 else {
                     if find_abstract_method_in_class_hierarchy(eg, &class_name, method_name)
                         .is_some()
@@ -23343,41 +23363,28 @@ fn resolve_callback(
                         Some(obj_val),
                     );
                 };
-                match visibility {
-                    Visibility::Public => {}
-                    Visibility::Protected => {
-                        // Protected: caller must be in the same hierarchy
-                        let allowed = caller_class.map_or(false, |cc| {
-                            eg.class_is_a(&class_name, cc) || eg.class_is_a(cc, &class_name)
-                        });
-                        if !allowed {
-                            return resolve_magic_callback(
-                                eg,
-                                &class_name,
-                                method_name,
-                                "__call",
-                                Some(obj_val),
-                            );
-                        }
-                    }
-                    Visibility::Private => {
-                        // Private: caller must be exactly the declaring class
-                        let allowed =
-                            caller_class.map_or(false, |cc| cc.eq_ignore_ascii_case(declaring));
-                        if !allowed {
-                            return resolve_magic_callback(
-                                eg,
-                                &class_name,
-                                method_name,
-                                "__call",
-                                Some(obj_val),
-                            );
-                        }
-                    }
+                if !eg.check_method_visibility(
+                    caller_class,
+                    &class_name,
+                    method_name,
+                    declaring,
+                    visibility,
+                ) {
+                    return resolve_magic_callback(
+                        eg,
+                        &class_name,
+                        method_name,
+                        "__call",
+                        Some(obj_val),
+                    );
                 }
                 Some(ResolvedCallback {
                     func_ptr,
-                    prepend_args: vec![obj_val.clone()],
+                    prepend_args: vec![if is_static {
+                        Value::null()
+                    } else {
+                        obj_val.clone()
+                    }],
                     use_vars: vec![],
                     called_scope_class_id,
                     bound_this: None,
@@ -23419,35 +23426,20 @@ fn resolve_callback(
                         None,
                     );
                 }
-                match visibility {
-                    Visibility::Public => {}
-                    Visibility::Protected => {
-                        let allowed = caller_class.map_or(false, |cc| {
-                            eg.class_is_a(class_str, cc) || eg.class_is_a(cc, class_str)
-                        });
-                        if !allowed {
-                            return resolve_magic_callback(
-                                eg,
-                                class_str,
-                                method_name,
-                                "__callStatic",
-                                None,
-                            );
-                        }
-                    }
-                    Visibility::Private => {
-                        let allowed =
-                            caller_class.map_or(false, |cc| cc.eq_ignore_ascii_case(declaring));
-                        if !allowed {
-                            return resolve_magic_callback(
-                                eg,
-                                class_str,
-                                method_name,
-                                "__callStatic",
-                                None,
-                            );
-                        }
-                    }
+                if !eg.check_method_visibility(
+                    caller_class,
+                    class_str,
+                    method_name,
+                    declaring,
+                    visibility,
+                ) {
+                    return resolve_magic_callback(
+                        eg,
+                        class_str,
+                        method_name,
+                        "__callStatic",
+                        None,
+                    );
                 }
                 Some(ResolvedCallback {
                     func_ptr,
@@ -23769,12 +23761,7 @@ pub(crate) fn resolve_callback_with_cache(
         }
     }
 
-    let resolution_scope = if val.value_type() == ValueType::Array {
-        caller_class
-    } else {
-        None
-    };
-    let resolved = resolve_callback(val, eg, resolution_scope);
+    let resolved = resolve_callback(val, eg, caller_class);
 
     if let (Some(slot), Some(resolved)) = (cache_slot, resolved.as_ref()) {
         cache_resolved_string_callback(val, resolved, slot);
@@ -23782,8 +23769,8 @@ pub(crate) fn resolve_callback_with_cache(
     resolved
 }
 
-/// Resolve a callback from the legacy stdlib wrapper. Only array callbacks
-/// need the caller's lexical class for visibility checks.
+/// Recover a compatible live receiver for class-qualified string or array
+/// callbacks whose non-static target is visible from the lexical caller.
 pub(crate) fn resolve_live_scoped_instance_callback(
     val: &Value,
     eg: &ExecutorGlobals,
@@ -23825,7 +23812,15 @@ pub(crate) fn resolve_live_scoped_instance_callback(
         resolved.bound_this = Some(receiver.clone());
         return Some(resolved);
     };
-    if is_static || !eg.check_visibility(lexical_class, declaring, visibility) {
+    if is_static
+        || !eg.check_method_visibility(
+            lexical_class,
+            class_name,
+            method_name,
+            declaring,
+            visibility,
+        )
+    {
         return None;
     }
     Some(ResolvedCallback {
@@ -23857,10 +23852,8 @@ pub(super) fn resolve_callback_at_callsite(
         return resolve_callback_with_cache(val, eg, None, callback_cache_slot(ed));
     }
     let lexical_class = crate::vm::execute::lexical_class_name_for_internal_call(eg, ed);
-    let visibility_scope = (val.value_type() == ValueType::Array)
-        .then_some(lexical_class.as_deref())
-        .flatten();
-    let ordinary = resolve_callback_with_cache(val, eg, visibility_scope, callback_cache_slot(ed));
+    let ordinary =
+        resolve_callback_with_cache(val, eg, lexical_class.as_deref(), callback_cache_slot(ed));
     if ordinary
         .as_ref()
         .is_some_and(|resolved| !resolved.is_magic_call)

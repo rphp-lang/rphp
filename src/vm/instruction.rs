@@ -411,6 +411,10 @@ pub const NEW_FLAG_UNPACKED_ARGUMENTS: u16 = 1 << 4;
 /// NewObj can raise the runtime Error required by a deferred constant
 /// expression. Ordinary resolved class literals never pay a string check.
 pub const NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE: u16 = 1 << 5;
+/// Resolve and validate construction before evaluating an argument list that
+/// is materialized separately. Do not publish an object or pending frame, so
+/// argument suspension and constructorless calls remain safe.
+pub const NEW_FLAG_VALIDATE_ONLY: u16 = 1 << 6;
 
 /// CallUserFuncArray was emitted for PHP source-level `...` syntax. Its op2 is
 /// an internal argument list whose array aliases and Traversable value markers
@@ -1091,6 +1095,23 @@ impl InlineCache {
         });
     }
 
+    /// Static methods invoked through an object must bypass the instance-only
+    /// warmed dispatcher. Keep class_id zero and store the receiver ID in the
+    /// otherwise unused flags word. Only the cold InitMethodCall resolver reads
+    /// this format; generic/trait-scope contracts retain full resolution.
+    #[inline]
+    pub fn set_static_object_method(&mut self, func: *const FunctionCommon, class_id: u32) {
+        debug_assert_ne!(class_id, 0);
+        self.func = func;
+        self.class_id = 0;
+        self.prop_info = class_id;
+    }
+
+    #[inline]
+    pub fn static_object_method_matches(&self, class_id: u32) -> bool {
+        !self.func.is_null() && self.class_id == 0 && class_id != 0 && self.prop_info == class_id
+    }
+
     /// Trait-scope methods use the method-cache flags word for the exact
     /// composition class selected by this monomorphic receiver site.
     #[inline(always)]
@@ -1328,5 +1349,23 @@ mod inline_cache_tests {
         cache.set_method(std::ptr::null(), 7, false, false, false, false, false);
         assert!(!cache.method_has_generic_contract());
         assert!(!cache.method_has_linked_generic_long_contract());
+    }
+
+    #[test]
+    fn static_object_method_cache_cannot_enter_the_instance_dispatcher() {
+        let mut cache = InlineCache::empty();
+        // This test only compares the pointer; it never dereferences it.
+        let function =
+            std::ptr::NonNull::<crate::vm::function::FunctionCommon>::dangling().as_ptr();
+        cache.set_static_object_method(function, u32::MAX);
+        assert!(cache.static_object_method_matches(u32::MAX));
+        assert!(!cache.static_object_method_matches(0));
+        assert!(!cache.static_object_method_matches(7));
+        assert_eq!(cache.class_id, 0);
+        assert_eq!(cache.func, function);
+        assert_eq!(std::mem::size_of::<InlineCache>(), 16);
+        cache.set_method(function, 7, false, false, false, false, false);
+        assert!(!cache.static_object_method_matches(7));
+        assert_eq!(cache.class_id, 7);
     }
 }
