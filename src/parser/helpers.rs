@@ -138,14 +138,14 @@ impl Parser {
     fn expect_lbracket(&mut self) -> Result<usize, String> {
         match self.advance() {
             Token::LBracket(line) => Ok(line),
-            token => Err(format!("Expected LBracket, got {token:?}")),
+            token => Err(self.expected_token_error(&token, &Token::LBracket(0), self.closest_token_source_line())),
         }
     }
 
     fn expect_lparen(&mut self) -> Result<usize, String> {
         match self.advance() {
             Token::LParen(line) => Ok(line),
-            token => Err(format!("Expected LParen, got {token:?}")),
+            token => Err(self.expected_token_error(&token, &Token::LParen(0), self.closest_token_source_line())),
         }
     }
 
@@ -190,6 +190,14 @@ impl Parser {
     }
 
     fn parse_positional_call_argument(&mut self) -> Result<Expr, String> {
+        // A reserved word may instead name an argument. If `new` cannot begin
+        // an expression here, that alternative still expects its colon.
+        if let Some(Token::New(line)) = self.tokens.get(self.pos)
+            && self.tokens.get(self.pos + 1) == Some(&Token::Namespace)
+            && self.tokens.get(self.pos + 2) != Some(&Token::Backslash)
+        {
+            return Err(self.unexpected_token_error(&Token::Namespace, "\":\"", *line as usize));
+        }
         let target = self.parse_empty_dimension_target_prefix()?;
         if !self.is_empty_array_dimension_suffix() {
             return Ok(target);
@@ -840,33 +848,19 @@ impl Parser {
             Ok(())
         } else if self.halted && tok == Token::Eof {
             Ok(())
-        } else if let Token::ParseError(message, line) = &tok {
-            Err(self.source_error(message, *line))
-        } else if let Token::LBrace(line) = tok
-            && matches!(expected, Token::RParen)
-        {
-            Err(self.source_error(
-                "syntax error, unexpected token \"{\", expecting \")\"",
-                line,
-            ))
         } else if let Token::Identifier(name, line) = &tok
             && self.source_name.is_some()
+            && !matches!(expected, Token::RParen)
         {
+            // Other expression continuations have a larger alternative set,
+            // for which PHP omits an expected-token list. Closing argument and
+            // parameter lists have the single-closer contract handled below.
             Err(self.source_error(
                 &format!("syntax error, unexpected identifier \"{name}\""),
                 *line,
             ))
         } else {
-            let expected = match expected {
-                Token::Semicolon(_) => "Semicolon".to_string(),
-                Token::LBrace(_) => "LBrace".to_string(),
-                token => format!("{token:?}"),
-            };
-            let actual = match tok {
-                Token::LBrace(_) => "LBrace".to_string(),
-                token => format!("{token:?}"),
-            };
-            Err(format!("Expected {expected}, got {actual}"))
+            Err(self.expected_token_error(&tok, expected, self.closest_token_source_line()))
         }
     }
 

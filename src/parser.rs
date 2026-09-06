@@ -2,6 +2,8 @@ use crate::generics::GenericRuntimeCapabilities;
 /// Minimal PHP parser — produces AST from token stream.
 use crate::lexer::Token;
 
+mod diagnostics;
+
 include!("parser/ast.rs");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

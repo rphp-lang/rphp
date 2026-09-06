@@ -8,6 +8,43 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
+`contextual-token-contracts`, based on `6a2766eb`. Reserved member names retain
+their spelling without becoming valid global declarations or statement-valued
+array elements. Grammar-specific errors retain the offending token and source
+line; malformed variable sigils retain raw quoted previews. Cold diagnostic
+helpers reuse the existing token representation and preserve the source-less
+expected-token API. No compiler, VM, value or AST representation changed.
+
+All 174 focused checks pass, including nine original E2E regressions. Twenty-one
+external PHP 8.5.10 specimens match stdout, stderr and exit exactly; the existing
+indirect-variable eval synchronization issue remains an unchanged holdout.
+The ten supplying php-src `fcc29c8` cases and one adjacent case now pass:
+**+11/-0**. The complete 7,174-case core is **6,429 pass / 351 fail / 182 skip /
+212 unsupported**, with no missing case, timeout or crash. Zend/lang manifest:
+`2579fb29b60bb5f034fdaaa3a19265ae0bd97bf744886194dc7b3379352f5939`;
+pass set: `c83d2c8d0e4b66822365bc839c78b7bb526597ddc1ab80a6c08d020a5c2d1f2b`.
+Strings/array is byte-identical to the preceding checkpoint. Five checked Cargo
+configurations pass (4,659/4,422/4,730/4,752/4,808, unchanged ignored counts),
+along with all-target, Composer/Symfony S0-S3, format and the unchanged
+1,621/289 unsafe inventory. Verification record:
+`df25b681a54390335006cc0b4296d6db9ad6cd334d0ec005e6b81e06e2734577`.
+
+The fixed-parent 32-pair performance record retains an explicitly accepted,
+checkpoint-only **+2.151% object-lifecycle tradeoff**, not a general relaxation
+of the one-percent common-path budget. Other common controls stay within
+0.201% and all four pay-use lanes below 3.136%, with identical output checksums.
+After temporary artifacts were lost at reboot, both releases were rebuilt
+byte-identically; the historical measurements were not rerun or relabeled.
+The raw timing files were lost, while their recorded results/hashes remain in
+the task history. Fresh correctness artifacts are retained persistently. A
+background-service tick during untimed correctness is recorded separately and
+is not performance evidence. Release SHA-256:
+`2510c01fa922440627647a996e95da871f5c6fed94d804ad394978151fbec2dd`.
+Broader diagnostic coverage, ticks, clone-function syntax, eval synchronization
+and allocation/OOM equivalence remain separate contracts. No private benchmark
+host was configured.
+
+The preceding measured AMD64 PHP 8.5 checkpoint is
 `output-buffer-operation-permissions`, based on `3cffd892`. Clean, flush and
 removal capabilities are independent. Rejected operations restore the buffer
 before notices run user code; getters retain their original binary snapshot

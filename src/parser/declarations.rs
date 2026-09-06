@@ -1773,8 +1773,17 @@ impl Parser {
                 | Token::MagicConstant { name, line }
                 | Token::Goto { name, line } => (name, line),
                 Token::Exit { name, line } => (name, line),
-                other => return Err(format!("Expected class constant name, got {:?}", other)),
+                other => {
+                    let line = self.closest_token_source_line();
+                    match Self::token_as_named_arg_label(&other) {
+                        Some(name) => (name, line),
+                        None => return Err(self.unexpected_token_error(&other, "identifier", line)),
+                    }
+                },
             };
+            if name.eq_ignore_ascii_case("class") {
+                self.compile_error("A class constant must not be called 'class'; it is reserved for class name fetching", line);
+            }
             self.expect(&Token::Assign)?;
             let value = self.parse_expr()?;
             constants.push(ClassConstant {
@@ -1797,11 +1806,11 @@ impl Parser {
     }
 
     fn try_parse_class_constant_type(&mut self) -> Result<Option<TypeHint>, String> {
-        if matches!(
-            self.peek(),
-            Token::Identifier(_, _) | Token::Enum { .. } | Token::Goto { .. }
-        )
-            && self.peek_at(1) == Token::Assign
+        if self.peek_at(1) == Token::Assign
+            && self.tokens.get(self.pos).is_some_and(|token| {
+                matches!(token, Token::Identifier(..) | Token::Enum { .. } | Token::Goto { .. })
+                    || Self::token_as_named_arg_label(token).is_some()
+            })
         {
             return Ok(None);
         }

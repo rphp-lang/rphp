@@ -36,18 +36,18 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `output-buffer-operation-permissions` train adds ten exact
-adjacent PHP 8.5 output-buffer passes over `3cffd892`, without losing any
-previous pass. Independent operation permissions, immutable getter snapshots
-and ordered reentrant notices share one cold stdlib boundary. The 7,174-case
-core remains 6,418 pass / 362 fail / 182 skip / 212 unsupported; one existing
-failure now reaches the expected fatal exit but retains a trace-origin mismatch.
-The 63 original byte-exact oracles, 214 focused checks, five checked Cargo
-configurations, all-target, exact no-loss, Composer/Symfony S0-S3 and static/
-unsafe gates pass. The independent guarded fixed-parent performance packet
-keeps common controls within one percent and improves all three permitted
-buffer-operation lanes. Exact hashes, the untimed correctness activity marker
-and explicit callback/shutdown non-claims are in `compatibility.md`.
+The accepted `contextual-token-contracts` train adds eleven exact PHP 8.5
+passes over `6a2766eb`, without losing a previous pass. Context-specific member
+names, grammar expectations and raw malformed-sigil diagnostics share one
+lexer/parser boundary, without changing VM/value/AST representation. The
+7,174-case core is 6,429 pass / 351 fail / 182 skip / 212 unsupported.
+All 174 focused checks, the exact supplying/no-loss packets, five checked Cargo
+configurations, all-target, Composer/Symfony S0-S3 and static/unsafe gates pass.
+After two performance attempts, the measured +2.151% object-lifecycle cost was
+explicitly accepted for this checkpoint only; other budgets stay unchanged.
+The releases were rebuilt byte-identically after temporary-artifact loss and
+fresh correctness evidence is now persistent. Exact hashes, the historical
+performance limitation and explicit non-claims are in `compatibility.md`.
 
 Build/test throughput now uses opt-in checked `dev-fast`/`test-fast` profiles
 and a resumable fingerprinted matrix runner. All five configurations retain

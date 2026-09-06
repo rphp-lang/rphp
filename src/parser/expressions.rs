@@ -1914,6 +1914,9 @@ impl Parser {
                     | Token::Enum { .. }
                     | Token::Namespace => {
                         let class_name = if self.peek() == Token::Namespace {
+                            if self.peek_at(1) != Token::Backslash {
+                                return Err(self.unexpected_token_error(&self.peek(), "\"class\"", self.current_token_source_line()));
+                            }
                             self.parse_namespace_relative_name()?
                         } else {
                             self.parse_qualified_name()?
@@ -2044,6 +2047,9 @@ impl Parser {
                     by_reference: false,
                 });
             } else {
+                if self.tokens.get(self.pos).is_some_and(Self::is_statement_only_keyword) {
+                    return Err(self.expected_token_error(&self.peek(), &end_token, self.current_token_source_line()));
+                }
                 let leading_reference = if matches!(self.peek(), Token::Ampersand(_)) {
                     self.advance();
                     true

@@ -595,6 +595,9 @@ impl Parser {
                 let mut const_line = 0;
                 loop {
                     let (name, line) = match self.advance() {
+                        Token::Identifier(ref name, line) if Self::reserved_identifier(name).is_some() => {
+                            return Err(self.unexpected_token_error(&self.tokens[self.pos - 1], "identifier", line));
+                        }
                         Token::Identifier(name, line)
                         | Token::Enum { name, line }
                         | Token::MagicConstant { name, line }
@@ -622,10 +625,7 @@ impl Parser {
                             (name.to_string(), line)
                         }
                         other => {
-                            return Err(format!(
-                                "Expected constant name after 'const', got {:?}",
-                                other
-                            ));
+                            return Err(self.unexpected_token_error(&other, "identifier", self.closest_token_source_line()));
                         }
                     };
                     if const_line == 0 {
@@ -1231,6 +1231,9 @@ impl Parser {
                 let returns_by_ref = matches!(self.peek(), Token::Ampersand(_));
                 self.consume_reference_return_marker();
                 let name = match self.advance() {
+                    Token::Identifier(ref name, line) if Self::reserved_identifier(name).is_some() => {
+                        return Err(self.unexpected_token_error(&self.tokens[self.pos - 1], "\"(\"", line));
+                    }
                     Token::Identifier(n, _) | Token::Enum { name: n, .. } => n,
                     Token::From => "from".to_string(),
                     Token::Exit { .. } => {
@@ -1529,6 +1532,9 @@ impl Parser {
                     } else {
                         break;
                     }
+                }
+                if !matches!(self.peek(), Token::Semicolon(_)) {
+                    return Err(self.unexpected_token_error(&self.peek(), "\",\" or \";\"", self.current_token_source_line()));
                 }
                 self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::Global(vars))

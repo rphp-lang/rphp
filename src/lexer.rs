@@ -1,3 +1,4 @@
+mod diagnostics;
 /// Minimal PHP lexer — just enough tokens for the vertical slice.
 mod strings;
 
@@ -920,10 +921,14 @@ impl<'a> Lexer<'a> {
                         tokens.push(Token::Dollar(line));
                         continue;
                     }
-                    let name = self.read_identifier();
-                    if name.is_empty() {
-                        return Err("Expected variable name after $".into());
+                    if !self.src.get(self.pos).is_some_and(|byte| {
+                        byte.is_ascii_alphabetic() || *byte == b'_' || *byte >= 0x80
+                    }) {
+                        tokens.push(self.invalid_variable_token());
+                        self.pos = self.src.len();
+                        continue;
                     }
+                    let name = self.read_identifier();
                     if name == "this" {
                         tokens.push(Token::This(line));
                     } else {
