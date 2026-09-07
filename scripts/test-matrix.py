@@ -127,7 +127,10 @@ def main():
     try:
         cargo = ["cargo"]
         common = ["--locked", "--profile", "test-fast"] + (["--offline"] if args.offline else [])
-        commands = [(name, cargo + ["test"] + common + flags)
+        # Finish the already-built test executables in a configuration even
+        # when one fails. A single packet then reports all independent losses;
+        # Cargo still returns nonzero and the configuration cannot be accepted.
+        commands = [(name, cargo + ["test", "--no-fail-fast"] + common + flags)
                     for name, flags in CONFIGURATIONS.items()]
         commands.append(("all-targets", cargo + ["check"] + common + ["--all-features", "--all-targets"]))
         for name, command in commands:
