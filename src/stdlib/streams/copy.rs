@@ -71,8 +71,17 @@ pub(super) fn fn_stream_copy_to_stream(
     };
 
     if let Some(offset) = offset {
-        let seek = super::with_stream(eg, source, |stream| stream.seek(SeekFrom::Start(offset)));
-        if !matches!(seek, Some(Ok(_))) {
+        let seek = super::with_stream_io(eg, source, |stream| stream.seek(SeekFrom::Start(offset)));
+        let success = matches!(seek, Some(Ok(_)));
+        #[cfg(feature = "stream-registry")]
+        let success = if seek.is_none() {
+            super::filters::with_source(eg, execute_data, |eg| {
+                super::filters::seek(eg, source, SeekFrom::Start(offset))
+            })? == Some(true)
+        } else {
+            success
+        };
+        if !success {
             return super::return_value(return_pointer, Value::bool(false));
         }
     }
@@ -91,7 +100,24 @@ pub(super) fn fn_stream_copy_to_stream(
         let read = super::with_stream_io(eg, source, |stream| stream.read(&mut chunk[..requested]));
         let read = match read {
             Some(Ok(read)) => read,
-            _ => return super::return_value(return_pointer, Value::bool(false)),
+            None => {
+                #[cfg(feature = "stream-registry")]
+                {
+                    let Some(bytes) = super::filters::with_source(eg, execute_data, |eg| {
+                        super::filters::read(eg, source, requested)
+                    })?
+                    else {
+                        return super::return_value(return_pointer, Value::bool(false));
+                    };
+                    chunk[..bytes.len()].copy_from_slice(&bytes);
+                    bytes.len()
+                }
+                #[cfg(not(feature = "stream-registry"))]
+                {
+                    return super::return_value(return_pointer, Value::bool(false));
+                }
+            }
+            Some(Err(_)) => return super::return_value(return_pointer, Value::bool(false)),
         };
         if read == 0 {
             break;
@@ -99,9 +125,8 @@ pub(super) fn fn_stream_copy_to_stream(
 
         let mut written = 0;
         while written < read {
-            let write = super::with_stream_io(eg, destination, |stream| {
-                stream.write(&chunk[written..read])
-            });
+            let write =
+                super::write_stream_bytes(eg, execute_data, destination, &chunk[written..read])?;
             match write {
                 Some(Ok(0)) | Some(Err(_)) | None => {
                     return super::return_value(return_pointer, Value::bool(false));

@@ -1,0 +1,12 @@
+stored:1
+close:plain
+after-plain
+copy:1
+close:expression
+reference:1
+reference-kept
+close:reference
+type-rejected
+typed:4:4
+typed-write:7
+copy-on-write:9:2:3

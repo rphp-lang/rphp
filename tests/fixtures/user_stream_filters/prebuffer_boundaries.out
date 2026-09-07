@@ -1,0 +1,20 @@
+append:2:19:second(first(abcd))
+close:first
+close:second
+prepend:2:11:first(abcd)
+close:second
+close:first
+buffer callback
+throw:2:abcd
+buffer warning
+reject:2:abcd
+hold:2:ABCD
+close:hold
+4:0:def
+610a5859646566
+4:0:def
+610a5859646566
+cross:9000:9002:0
+tail:11000:1
+cross:9000:9002:7382
+tail:11000:1

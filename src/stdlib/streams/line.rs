@@ -69,7 +69,15 @@ pub(super) fn fn_stream_get_line(
             debug_assert_eq!(read, bytes.len());
             return_value(return_pointer, super::super::php_byte_result(bytes, false))
         }
-        _ => return_value(return_pointer, Value::bool(false)),
+        _ => {
+            #[cfg(feature = "stream-registry")]
+            if let Some(bytes) = super::filters::with_source(eg, execute_data, |eg| {
+                super::filters::read_record(eg, resource, maximum, &ending)
+            })? {
+                return return_value(return_pointer, super::super::php_byte_result(bytes, false));
+            }
+            return_value(return_pointer, Value::bool(false))
+        }
     }
 }
 

@@ -1,0 +1,12 @@
+native:abc:1
+finally:1
+alias:1
+close:ignored:NULL
+after-ignored
+close:throw:NULL
+caught:temporary-close
+after-throw
+finally:1
+filtered-alias:1
+close:kept:NULL
+done

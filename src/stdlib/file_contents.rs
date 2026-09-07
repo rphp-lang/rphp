@@ -161,6 +161,13 @@ pub(super) fn fn_file_get_contents(
         return Ok(());
     }
 
+    #[cfg(feature = "stream-registry")]
+    if super::streams::filters::uri::recognizes(&filename) {
+        let value =
+            super::streams::filters::uri::contents(eg, execute_data, &filename, offset, length)?;
+        return return_value(return_pointer, value);
+    }
+
     if let Some(data) = super::filesystem::decode_data_uri(&filename) {
         let bytes = match data {
             Ok(bytes) => bytes,
@@ -230,6 +237,98 @@ pub(super) fn fn_file_get_contents(
             return_value(return_pointer, super::php_byte_result(bytes, false))
         }
         Err(_) => return_value(return_pointer, Value::bool(false)),
+    }
+}
+
+#[cold]
+#[cfg(feature = "file-contents")]
+pub(super) fn fn_readfile(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(filename) = super::typed_internal_string_argument(ed, eg, "readfile", 0, "filename")?
+    else {
+        return Ok(());
+    };
+    let use_include_path = if optional_argument(ed, 1).is_some() {
+        let Some(value) =
+            super::typed_internal_bool_argument(ed, eg, "readfile", 1, "use_include_path")?
+        else {
+            return Ok(());
+        };
+        value
+    } else {
+        false
+    };
+    #[cfg(feature = "stream-context")]
+    {
+        let id = match super::streams::context::optional_context_resource(ed, 2, eg, "readfile", 3)
+        {
+            Ok(id) => id,
+            Err(()) => return Ok(()),
+        };
+        if let Some(id) = id
+            && super::streams::context::context_snapshot(eg, id).is_none()
+        {
+            super::streams::context::invalid_context_error(eg, "readfile");
+            return Ok(());
+        }
+    }
+    #[cfg(not(feature = "stream-context"))]
+    if let Some(context) = optional_argument(ed, 2)
+        && context.value_type() != ValueType::Null
+    {
+        argument_error(
+            eg,
+            "TypeError",
+            format!(
+                "readfile(): Argument #3 ($context) must be of type resource or null, {} given",
+                given_type_name(context)
+            ),
+        );
+        return Ok(());
+    }
+    if filename.is_empty() || filename.contains('\0') {
+        argument_error(
+            eg,
+            "ValueError",
+            if filename.is_empty() {
+                "Path must not be empty".into()
+            } else {
+                "readfile(): Argument #1 ($filename) must not contain any null bytes".into()
+            },
+        );
+        return Ok(());
+    }
+    #[cfg(feature = "include-path")]
+    let filename = super::include_path::resolve_for_open(eg, &filename, use_include_path);
+    #[cfg(not(feature = "include-path"))]
+    let _ = use_include_path;
+    #[cfg(feature = "stream-registry")]
+    {
+        let value = super::streams::filters::uri::output(eg, ed, &filename)?;
+        return return_value(rv, value);
+    }
+    #[cfg(not(feature = "stream-registry"))]
+    {
+        // Feature-minimal builds keep a native streaming implementation too.
+        let Ok(mut stream) = PhpStream::open(&filename, "rb") else {
+            return return_value(rv, Value::bool(false));
+        };
+        let mut count = 0i64;
+        let mut bytes = [0; 8192];
+        loop {
+            let Ok(read) = stream.read(&mut bytes) else {
+                return return_value(rv, Value::bool(false));
+            };
+            if read == 0 {
+                break;
+            }
+            eg.write_output(&bytes[..read]);
+            count += read as i64;
+        }
+        return_value(rv, Value::long(count))
     }
 }
 

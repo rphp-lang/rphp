@@ -314,6 +314,24 @@ pub(crate) const BUILTIN_CONSTANT_NAMES: &[&str] = &[
     "STREAM_URL_STAT_QUIET",
     #[cfg(feature = "stream-registry")]
     "STREAM_IS_URL",
+    #[cfg(feature = "stream-registry")]
+    "STREAM_FILTER_READ",
+    #[cfg(feature = "stream-registry")]
+    "STREAM_FILTER_WRITE",
+    #[cfg(feature = "stream-registry")]
+    "STREAM_FILTER_ALL",
+    #[cfg(feature = "stream-registry")]
+    "PSFS_ERR_FATAL",
+    #[cfg(feature = "stream-registry")]
+    "PSFS_FEED_ME",
+    #[cfg(feature = "stream-registry")]
+    "PSFS_PASS_ON",
+    #[cfg(feature = "stream-registry")]
+    "PSFS_FLAG_NORMAL",
+    #[cfg(feature = "stream-registry")]
+    "PSFS_FLAG_FLUSH_INC",
+    #[cfg(feature = "stream-registry")]
+    "PSFS_FLAG_FLUSH_CLOSE",
     "FILE_USE_INCLUDE_PATH",
     "FILE_APPEND",
     "FILE_IGNORE_NEW_LINES",
@@ -608,6 +626,18 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "STREAM_URL_STAT_QUIET" => Some(value::Value::long(2)),
         #[cfg(feature = "stream-registry")]
         "STREAM_IS_URL" => Some(value::Value::long(1)),
+        #[cfg(feature = "stream-registry")]
+        "STREAM_FILTER_READ" | "PSFS_FEED_ME" | "PSFS_FLAG_FLUSH_INC" => {
+            Some(value::Value::long(1))
+        }
+        #[cfg(feature = "stream-registry")]
+        "STREAM_FILTER_WRITE" | "PSFS_PASS_ON" | "PSFS_FLAG_FLUSH_CLOSE" => {
+            Some(value::Value::long(2))
+        }
+        #[cfg(feature = "stream-registry")]
+        "STREAM_FILTER_ALL" => Some(value::Value::long(3)),
+        #[cfg(feature = "stream-registry")]
+        "PSFS_ERR_FATAL" | "PSFS_FLAG_NORMAL" => Some(value::Value::long(0)),
         #[cfg(any(feature = "file-write", feature = "file-lines"))]
         "FILE_USE_INCLUDE_PATH" => Some(value::Value::long(1)),
         "FILE_APPEND" => Some(value::Value::long(8)),

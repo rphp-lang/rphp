@@ -1893,6 +1893,10 @@ mod declared_property_storage_tests {
 #[path = "object_tests.rs"]
 mod object_tests;
 
+#[cfg(test)]
+#[path = "cleanup_tests.rs"]
+mod cleanup_tests;
+
 /// PHP array — ordered hash map with integer and string keys.
 /// Preserves insertion order, supports auto-incrementing integer keys.
 ///
@@ -2815,6 +2819,7 @@ impl PhpArray {
                 .as_array()
                 .is_none_or(PhpArray::may_require_nested_release),
             ValueType::Object | ValueType::Reference | ValueType::Closure => true,
+            ValueType::Resource => value.needs_cleanup(),
             _ => false,
         }
     }
@@ -6153,6 +6158,85 @@ impl Value {
         }
     }
 
+    /// Release planning also admits callback-capable resources. Keep these
+    /// identities separate from the object-only WeakReference/GC APIs.
+    #[inline]
+    pub(crate) fn vm_release_identity(&self) -> Option<usize> {
+        self.weak_object_identity().or_else(|| {
+            #[cfg(feature = "resource-lifetime")]
+            {
+                self.with_resource_handle(|owner| {
+                    owner.needs_vm_release().then(|| Rc::as_ptr(owner) as usize)
+                })
+                .flatten()
+            }
+            #[cfg(not(feature = "resource-lifetime"))]
+            {
+                None
+            }
+        })
+    }
+
+    #[inline]
+    pub(crate) fn vm_release_strong_count(&self) -> Option<usize> {
+        self.weak_object_strong_count().or_else(|| {
+            #[cfg(feature = "resource-lifetime")]
+            {
+                self.with_resource_handle(Rc::strong_count)
+            }
+            #[cfg(not(feature = "resource-lifetime"))]
+            {
+                None
+            }
+        })
+    }
+
+    #[inline]
+    pub(crate) fn needs_vm_resource_release(&self) -> bool {
+        #[cfg(feature = "resource-lifetime")]
+        {
+            self.with_resource_handle(|owner| owner.needs_vm_release())
+                .unwrap_or(false)
+        }
+        #[cfg(not(feature = "resource-lifetime"))]
+        {
+            false
+        }
+    }
+
+    #[cfg(feature = "resource-lifetime")]
+    #[cold]
+    pub(crate) fn set_vm_resource_release(
+        &self,
+        callback: crate::resource_handle::VmResourceRelease,
+    ) {
+        self.with_resource_handle(|owner| owner.set_vm_release(callback));
+    }
+
+    /// Retire the hook before entering PHP, so reentrant close and exception
+    /// unwinding cannot invoke it twice. The caller has proved final ownership.
+    #[cold]
+    pub(crate) fn run_vm_resource_release(
+        &self,
+        eg: &mut crate::runtime::ExecutorGlobals,
+    ) -> Result<bool, crate::vm::execute::VmError> {
+        #[cfg(feature = "resource-lifetime")]
+        if crate::resource_handle::php_release_is_deferred() {
+            return Ok(false);
+        }
+        #[cfg(feature = "resource-lifetime")]
+        if let Some((id, Some(callback))) =
+            self.with_resource_handle(|owner| (owner.id(), owner.take_vm_release()))
+        {
+            if eg.exception.is_none() && !crate::resource_handle::php_release_is_suppressed() {
+                callback(eg, id)?;
+            }
+            return Ok(true);
+        }
+        let _ = eg;
+        Ok(false)
+    }
+
     /// Stable identity and kind for allocations that can participate in a
     /// PHP reference cycle. Borrowed references are roots into live frame
     /// storage and deliberately do not become graph nodes.
@@ -7358,27 +7442,23 @@ impl Value {
     }
 
     #[inline]
-    #[cfg(not(feature = "resource-lifetime"))]
     pub fn needs_cleanup(&self) -> bool {
-        self.is_owned_reference()
-            || matches!(
-                self.value_type(),
-                ValueType::String | ValueType::Array | ValueType::Object | ValueType::Closure
-            )
+        Self::type_info_needs_cleanup(self.type_info)
     }
 
-    #[inline]
-    #[cfg(feature = "resource-lifetime")]
-    pub fn needs_cleanup(&self) -> bool {
-        self.is_owned_reference()
-            || matches!(
-                self.value_type(),
-                ValueType::String
-                    | ValueType::Array
-                    | ValueType::Object
-                    | ValueType::Resource
-                    | ValueType::Closure
-            )
+    #[inline(always)]
+    fn type_info_needs_cleanup(type_info: u32) -> bool {
+        let kind = type_info & 0xff;
+        // Primitive scalars own no storage, regardless of provenance bits.
+        // Reject them before testing the owned-reference exception. The heap
+        // tags are contiguous; resources are counted only in lifetime builds.
+        if !(ValueType::String as u32..=ValueType::Closure as u32).contains(&kind) {
+            return false;
+        }
+        if kind == ValueType::Reference as u32 {
+            return type_info & Self::OWNED_REFERENCE_FLAG != 0;
+        }
+        cfg!(feature = "resource-lifetime") || kind != ValueType::Resource as u32
     }
 
     /// Get the target pointer of a reference value.
@@ -7431,8 +7511,8 @@ impl Value {
     /// entry that was not closed explicitly.
     #[inline]
     #[cfg(feature = "resource-lifetime")]
-    pub(crate) fn resource(handle: ResourceHandle) -> Self {
-        let handle = Rc::into_raw(Rc::new(handle));
+    pub(crate) fn resource_owner(handle: Rc<ResourceHandle>) -> Self {
+        let handle = Rc::into_raw(handle);
         Self {
             data: ValueData {
                 ptr: handle as *mut u8,
@@ -7440,6 +7520,14 @@ impl Value {
             type_info: ValueType::Resource as u32,
             _not_send: PhantomData,
         }
+    }
+
+    /// Protocol owners may temporarily expose the original live resource in
+    /// a callback, without keeping its final PHP alias alive between calls.
+    #[cold]
+    #[cfg(feature = "resource-lifetime")]
+    pub(crate) fn weak_resource(&self) -> Option<WeakResourceValue> {
+        self.with_resource_handle(|owner| WeakResourceValue(Rc::downgrade(owner)))
     }
 
     /// Create the default scalar handle for one request-owned registry entry.
@@ -7458,8 +7546,7 @@ impl Value {
         if self.value_type() == ValueType::Resource {
             #[cfg(feature = "resource-lifetime")]
             {
-                let handle = unsafe { &*(self.data.ptr as *const ResourceHandle) };
-                Some(handle.id())
+                self.with_resource_handle(|owner| owner.id())
             }
             #[cfg(not(feature = "resource-lifetime"))]
             {
@@ -7468,6 +7555,35 @@ impl Value {
         } else {
             None
         }
+    }
+
+    #[cfg(feature = "resource-lifetime")]
+    #[inline]
+    fn with_resource_handle<R>(
+        &self,
+        operation: impl FnOnce(&Rc<ResourceHandle>) -> R,
+    ) -> Option<R> {
+        if self.value_type() != ValueType::Resource {
+            return None;
+        }
+        // SAFETY: the Resource tag denotes Rc<ResourceHandle>::into_raw from
+        // Value::resource_owner. This borrow never changes the strong count
+        // or drops the allocation; self retains the real owner throughout.
+        let owner = std::mem::ManuallyDrop::new(unsafe {
+            Rc::from_raw(self.data.ptr as *const ResourceHandle)
+        });
+        Some(operation(&owner))
+    }
+}
+
+#[cfg(feature = "resource-lifetime")]
+pub(crate) struct WeakResourceValue(std::rc::Weak<ResourceHandle>);
+
+#[cfg(feature = "resource-lifetime")]
+impl WeakResourceValue {
+    #[cold]
+    pub(crate) fn upgrade(&self) -> Option<Value> {
+        self.0.upgrade().map(Value::resource_owner)
     }
 }
 

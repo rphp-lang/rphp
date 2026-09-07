@@ -438,6 +438,7 @@ fn format_output(
 
 #[cold]
 fn write_formatted(
+    execute_data: *mut ExecuteData,
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
     function: &str,
@@ -450,7 +451,7 @@ fn write_formatted(
         return Ok(());
     };
     let bytes = super::php_string_to_bytes(&rendered);
-    let result = super::streams::with_stream_io(eg, resource, |stream| stream.write(&bytes));
+    let result = super::streams::write_stream_bytes(eg, execute_data, resource, &bytes)?;
     let value = match result {
         Some(Ok(written)) => Value::long(written as i64),
         _ => Value::bool(false),
@@ -475,6 +476,7 @@ pub(super) fn fn_fprintf(
         return Ok(());
     }
     write_formatted(
+        execute_data,
         return_pointer,
         eg,
         "fprintf",
@@ -500,6 +502,7 @@ pub(super) fn fn_vfprintf(
         return Ok(());
     };
     write_formatted(
+        execute_data,
         return_pointer,
         eg,
         "vfprintf",
@@ -1100,13 +1103,11 @@ fn scan_stream_call(
     let Some(format) = typed_string_argument(execute_data, eg, "fscanf", 1, "format") else {
         return Ok(());
     };
-    let mut input = Vec::new();
-    let read =
-        super::streams::with_stream_io(eg, resource, |stream| stream.read_line(&mut input, None));
-    if !matches!(read, Some(Ok(Some(_)))) {
+    let Some(mut input) = super::streams::read_stream_line(eg, execute_data, resource, None)?
+    else {
         super::write_return_value(return_pointer, Value::bool(false));
         return Ok(());
-    }
+    };
     let nul_terminated = input.iter().position(|byte| *byte == 0);
     if let Some(nul) = nul_terminated {
         input.truncate(nul);

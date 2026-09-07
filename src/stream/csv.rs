@@ -14,7 +14,7 @@ enum CsvState {
 /// Physical reads stay in the stream owner so cursor and EOF handling remain
 /// shared with `fgets()`. This parser only retains the current record and can
 /// therefore continue a quoted field across any number of physical lines.
-pub(super) struct CsvParser {
+pub(crate) struct CsvParser {
     separator: u8,
     enclosure: u8,
     escape: Option<u8>,
@@ -31,7 +31,7 @@ impl CsvParser {
     #[cfg_attr(target_vendor = "apple", cold)]
     #[cfg_attr(target_vendor = "apple", inline(never))]
     #[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_csv"))]
-    pub(super) fn new(separator: u8, enclosure: u8, escape: Option<u8>) -> Self {
+    pub(crate) fn new(separator: u8, enclosure: u8, escape: Option<u8>) -> Self {
         Self {
             separator,
             enclosure,
@@ -63,7 +63,7 @@ impl CsvParser {
     #[cold]
     #[inline(never)]
     #[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_csv"))]
-    pub(super) fn push_segment(&mut self, segment: &[u8]) -> io::Result<()> {
+    pub(crate) fn push_segment(&mut self, segment: &[u8]) -> io::Result<()> {
         debug_assert!(!self.record_done);
         let mut index = 0;
         while index < segment.len() {
@@ -154,14 +154,14 @@ impl CsvParser {
     #[cfg_attr(target_vendor = "apple", cold)]
     #[cfg_attr(target_vendor = "apple", inline(never))]
     #[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_csv"))]
-    pub(super) fn needs_continuation(&self) -> bool {
+    pub(crate) fn needs_continuation(&self) -> bool {
         !self.record_done && self.state == CsvState::Quoted
     }
 
     #[cold]
     #[inline(never)]
     #[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_csv"))]
-    pub(super) fn finish(
+    pub(crate) fn finish(
         mut self,
         strip_final_carriage_return: bool,
     ) -> io::Result<Vec<Option<Vec<u8>>>> {

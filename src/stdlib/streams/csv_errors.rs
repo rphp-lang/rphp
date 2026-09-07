@@ -76,11 +76,17 @@ pub(super) fn fn_fgetcsv(
         }
     }
 
-    let result = super::with_stream_io(eg, resource, |stream| {
-        stream.read_csv_record(length, separator, enclosure, escape)
-    });
+    let result = super::read_stream_csv(
+        eg,
+        execute_data,
+        resource,
+        length,
+        separator,
+        enclosure,
+        escape,
+    )?;
     match result {
-        Some(Ok(Some(fields))) => {
+        Some(fields) => {
             let mut record = PhpArray::with_packed_capacity(fields.len());
             for field in fields {
                 record.push(match field {

@@ -36,9 +36,9 @@ pub(super) fn fn_stream_get_transports(
 pub(super) fn fn_stream_get_filters(
     _execute_data: *mut ExecuteData,
     return_pointer: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    return_value(return_pointer, Value::array(PhpArray::new()))
+    return_value(return_pointer, super::filters::registered_names(eg))
 }
 
 #[cold]

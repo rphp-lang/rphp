@@ -136,6 +136,14 @@ pub(super) fn fn_fputcsv(
         }
         Ok(record_length)
     });
+    #[cfg(feature = "stream-registry")]
+    let result = if result.is_none() {
+        super::filters::with_source(eg, execute_data, |eg| {
+            super::filters::write(eg, resource, &record)
+        })?
+    } else {
+        result
+    };
     match result {
         Some(Ok(written)) if written <= i64::MAX as usize => {
             super::return_value(return_pointer, Value::long(written as i64))

@@ -36,18 +36,24 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `contextual-token-contracts` train adds eleven exact PHP 8.5
-passes over `6a2766eb`, without losing a previous pass. Context-specific member
-names, grammar expectations and raw malformed-sigil diagnostics share one
-lexer/parser boundary, without changing VM/value/AST representation. The
-7,174-case core is 6,429 pass / 351 fail / 182 skip / 212 unsupported.
-All 174 focused checks, the exact supplying/no-loss packets, five checked Cargo
-configurations, all-target, Composer/Symfony S0-S3 and static/unsafe gates pass.
-After two performance attempts, the measured +2.151% object-lifecycle cost was
-explicitly accepted for this checkpoint only; other budgets stay unchanged.
-The releases were rebuilt byte-identically after temporary-artifact loss and
-fresh correctness evidence is now persistent. Exact hashes, the historical
-performance limitation and explicit non-claims are in `compatibility.md`.
+The accepted `user-stream-filter-lifecycle` train adds 24 exact PHP 8.5 passes
+over runtime parent `fcbe89ca`, without losing a previous pass. One resource
+ownership boundary covers user filters, bucket I/O, aliases, reentrant errors,
+native/data filter-URI consumers and shutdown. The 7,174-case core is now
+6,432 pass / 348 fail / 182 skip / 212 unsupported; its three gains are included
+in the supplying 24. One supplying reference-version discrepancy remains
+explicitly failed. Focused/oracle, five checked Cargo configurations, all-target,
+exact no-loss, Composer/Symfony S0-S3 and static/unsafe gates pass.
+
+The user explicitly directed performance validation on the available shared
+host without stopping other workloads. Background activity remains recorded;
+this is not exclusive-host evidence. The unchanged final binary's longer-batch
+32-pair fixed-parent measurements meet the unchanged numeric budgets: all
+seven medians are below +1%, with resource aliases highest at +0.944%.
+The preceding contextual-token checkpoint's +2.151% object-lifecycle exception
+was checkpoint-specific, not a general budget relaxation. Exact release,
+matrix, manifest/pass-set and performance hashes, plus non-claims, are in
+`compatibility.md`.
 
 Build/test throughput now uses opt-in checked `dev-fast`/`test-fast` profiles
 and a resumable fingerprinted matrix runner. All five configurations retain

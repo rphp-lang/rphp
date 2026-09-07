@@ -1,0 +1,54 @@
+php://memory:"w":w+b:int(2)
+read:0:string(2) "ok"
+closed
+php://memory:"rw":w+b:int(2)
+read:0:string(2) "ok"
+closed
+php://memory:"a":a+b:int(2)
+read:0:string(2) "ok"
+closed
+php://memory:"r+":w+b:int(2)
+read:0:string(2) "ok"
+closed
+php://memory:"+r":w+b:int(2)
+read:0:string(2) "ok"
+closed
+php://memory:"za":a+b:int(2)
+read:0:string(2) "ok"
+closed
+php://memory:"x":rb:bool(false)
+read:1:string(0) ""
+closed
+php://memory:"r":rb:bool(false)
+read:1:string(0) ""
+closed
+php://memory:"r\u0000w":rb:bool(false)
+read:1:string(0) ""
+closed
+php://temp:"w":w+b:int(2)
+read:1:string(2) "ok"
+closed
+php://temp:"rw":w+b:int(2)
+read:1:string(2) "ok"
+closed
+php://temp:"a":a+b:int(2)
+read:1:string(2) "ok"
+closed
+php://temp:"r+":w+b:int(2)
+read:1:string(2) "ok"
+closed
+php://temp:"+r":w+b:int(2)
+read:1:string(2) "ok"
+closed
+php://temp:"za":a+b:int(2)
+read:1:string(2) "ok"
+closed
+php://temp:"x":rb:bool(false)
+read:1:string(0) ""
+closed
+php://temp:"r":rb:bool(false)
+read:1:string(0) ""
+closed
+php://temp:"r\u0000w":rb:bool(false)
+read:1:string(0) ""
+closed

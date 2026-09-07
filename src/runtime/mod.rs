@@ -572,6 +572,10 @@ pub struct ExecutorGlobals {
     /// Compact argument-only activations for deferred pure-scalar calls.
     pub pending_call_stack: VmStack,
     pub current_execute_data: Cell<*mut ExecuteData>,
+    /// Private resource-registry identity. Zero means that this request has
+    /// never created a resource; allocating a scope must not publish a PHP
+    /// constant or make ordinary resource I/O hash a public symbol name.
+    pub(crate) resource_scope: u32,
     pub vm_interrupt: Arc<AtomicBool>,
     pub timed_out: Arc<AtomicBool>,
     execution_timer: Option<ExecutionTimer>,
@@ -1661,8 +1665,11 @@ impl ExecutorGlobals {
         // fixed class/interface inventory above the prior 80-entry vector
         // envelope. Keep modest headroom so registration remains allocation-
         // free without relying on Vec's growth doubling at the boundary.
-        self.class_by_id.reserve(96);
-        self.static_property_slots_by_class.reserve(96);
+        // php_user_filter and StreamBucket add two entries only when the
+        // stream registry is installed; do not double these vectors at startup.
+        let class_capacity = 96 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        self.class_by_id.reserve(class_capacity);
+        self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;
         // retain the one-shot registration invariant without relying on Vec's
         // growth policy at the former 16-value boundary.
@@ -1717,6 +1724,7 @@ impl ExecutorGlobals {
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             generic_property_contract_cache: std::cell::RefCell::new(None),
             constant_table: std::cell::RefCell::new(HashMap::new()),
+            resource_scope: 0,
             constant_definition_order: std::cell::RefCell::new(Vec::new()),
             compiler_halt_offsets: None,
             constant_attributes: HashMap::new(),
@@ -1845,6 +1853,7 @@ impl ExecutorGlobals {
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             generic_property_contract_cache: std::cell::RefCell::new(None),
             constant_table: std::cell::RefCell::new(HashMap::new()),
+            resource_scope: 0,
             constant_definition_order: std::cell::RefCell::new(Vec::new()),
             compiler_halt_offsets: None,
             constant_attributes: HashMap::new(),
@@ -2271,6 +2280,30 @@ impl ExecutorGlobals {
             .entry(owner.to_string())
             .or_default()
             .push(contract);
+    }
+
+    /// Add the public by-reference parameter mask to an internal declaration.
+    /// Kept in the existing sparse metadata owner, without changing frame or
+    /// executor layouts. The callable's own signature is registered separately.
+    #[cold]
+    #[cfg(feature = "stream-registry")]
+    pub(crate) fn register_internal_method_reference_arguments(
+        &mut self,
+        owner: &str,
+        name: &str,
+        ref_args: u64,
+    ) {
+        let contract = self
+            .internal_callable_metadata
+            .as_mut()
+            .and_then(|metadata| metadata.methods.get_mut(owner))
+            .and_then(|methods| {
+                methods
+                    .iter_mut()
+                    .find(|method| method.name.as_ref() == name)
+            })
+            .expect("internal method declaration precedes its reference mask");
+        contract.signature.ref_args = ref_args;
     }
 
     #[inline]

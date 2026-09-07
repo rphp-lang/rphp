@@ -52,7 +52,7 @@ fn memory_stream_round_trip_preserves_position_and_eof() {
             if (feof($stream)) { echo 'eof'; } else { echo 'open'; }
             "
         ),
-        "resource:stream:4:4:1:abc:3:open:d:not-yet::eof"
+        "resource:stream:4:4:1:abc:3:open:d:eof::eof"
     );
 }
 
@@ -246,7 +246,7 @@ fn stream_registry_reports_only_integrated_wrappers_transports_and_filters() {
             echo $fresh[0];
             "
         ),
-        "php,file:0:0:php"
+        "php,file:0:1:php"
     );
 }
 
@@ -703,9 +703,10 @@ fn stream_context_default_surface_deprecation_and_callback_diagnostics_match_php
 #[test]
 #[cfg(feature = "stream-contents")]
 fn stream_contents_preserves_length_offset_cursor_and_eof() {
+    let write_only_path = TemporaryPath::unique("contents-write-only");
     assert_eq!(
         run_php(
-            "<?php
+            &"<?php
             $stream = fopen('php://memory', 'w+');
             fwrite($stream, 'abcdef'); rewind($stream);
             echo '['; echo stream_get_contents($stream, 2); echo ']';
@@ -732,12 +733,21 @@ fn stream_contents_preserves_length_offset_cursor_and_eof() {
             echo ':['; echo stream_get_contents($exact, 3); echo ']';
             echo ':'; if (feof($exact)) { echo 'eof'; } else { echo 'exact-open'; }
 
-            $write_only = fopen('php://memory', 'w');
+            $memory = fopen('php://memory', 'w');
             echo ':';
-            if (stream_get_contents($write_only) === false) { echo 'unreadable'; }
+            if (stream_get_contents($memory) === '') { echo 'memory-empty'; }
+            fwrite($memory, 'fresh'); rewind($memory);
+            echo ':'; echo stream_get_contents($memory);
+            fclose($memory);
+
+            $write_only = fopen('__WRITE_ONLY_PATH__', 'w');
+            echo ':';
+            if (@fread($write_only, 1) === false) { echo 'unreadable'; }
+            fclose($write_only);
             "
+            .replace("__WRITE_ONLY_PATH__", &write_only_path.php_literal())
         ),
-        "[ab]:2:open:[cdef]:6:eof:[]:3:open:[bcdef]:[]:10:eof:[defgh]:8:[xyz]:exact-open:unreadable"
+        "[ab]:2:open:[cdef]:6:eof:[]:3:open:[bcdef]:[]:10:eof:[defgh]:8:[xyz]:exact-open:memory-empty:fresh:unreadable"
     );
 }
 

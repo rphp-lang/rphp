@@ -1,0 +1,18 @@
+create:alias:NULL
+call:alias:0:resource
+after-write:NULL
+one-alias-left
+call:alias:1:NULL
+close:alias:NULL
+no-aliases:0
+no-filter-handle
+create:container:NULL
+container-held
+call:container:1:NULL
+close:container:NULL
+container-released
+create:explicit:NULL
+call:explicit:1:resource
+close:explicit:NULL
+explicit:resource (closed):0
+end

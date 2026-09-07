@@ -1,0 +1,13 @@
+int(0)
+diagnostic:8:fread(): Read of 8192 bytes failed with errno=9 Bad file descriptor
+bool(false)
+diagnostic:8:fread(): Read of 8192 bytes failed with errno=9 Bad file descriptor
+bool(false)
+diagnostic:2:include(): Unprocessed filter buckets remaining on input brigade
+diagnostic:2:include(): Failed opening '<filtered>' for inclusion (include_path='<path>')
+closed
+bool(false)
+diagnostic:2:require(): Unprocessed filter buckets remaining on input brigade
+error:Failed opening required '<filtered>' (include_path='<path>')
+exception:warning-stop
+alive

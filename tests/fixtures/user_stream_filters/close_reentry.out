@@ -1,0 +1,7 @@
+filter:0:resource
+diag:2:fclose(): cannot close the provided stream, as it must not be manually closed
+bool(false)
+filter:1:resource
+diag:2:fclose(): cannot close the provided stream, as it must not be manually closed
+bool(false)
+close:NULL

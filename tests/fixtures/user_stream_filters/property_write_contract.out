@@ -1,0 +1,43 @@
+class:FrozenProjection
+Error:Cannot modify readonly property FrozenProjection::$stream
+Error:Cannot modify readonly property FrozenProjection::$stream
+class:UninitializedProjection
+initialized:0
+body:0
+int(1)
+initialized:0
+body:1
+retired
+bool(true)
+class:AliasProjection
+TypeError:Cannot assign resource to reference held by property AliasProjection::$held of type ?string
+TypeError:Cannot assign resource to reference held by property AliasProjection::$held of type ?string
+class:ScopedProjection
+body:0
+int(1)
+body:1
+retired
+bool(true)
+class:BackedProjection
+set:resource
+body:0
+set:NULL
+int(1)
+set:resource
+body:1
+set:NULL
+retired
+bool(true)
+class:VirtualProjection
+virtual:resource
+body:0
+virtual:NULL
+int(1)
+virtual:resource
+body:1
+virtual:NULL
+retired
+bool(true)
+class:ReadOnlyHookProjection
+Error:Property ReadOnlyHookProjection::$stream is read-only
+Error:Property ReadOnlyHookProjection::$stream is read-only

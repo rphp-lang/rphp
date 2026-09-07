@@ -1465,6 +1465,20 @@ fn include_failure<'a>(
         });
     }
 
+    include_open_failure(eg, frame, op_array, opline, path, is_require, is_once, None)
+}
+
+fn include_open_failure<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &crate::vm::instruction::Instruction,
+    path: &str,
+    is_require: bool,
+    is_once: bool,
+    failed_stream: Option<Value>,
+) -> Result<ColdResult<'a>, VmError> {
+    let function = include_call_name(is_require, is_once);
     #[cfg(feature = "include-path")]
     let include_path = crate::stdlib::include_path::current(eg);
     #[cfg(not(feature = "include-path"))]
@@ -1479,7 +1493,14 @@ fn include_failure<'a>(
         )
     };
     if !is_require {
-        report_include_warning(eg, frame, op_array, opline, function, &second)?;
+        let warning = report_include_warning(eg, frame, op_array, opline, function, &second);
+        #[cfg(feature = "stream-registry")]
+        let cleanup = if let Some(stream) = failed_stream.as_ref() {
+            crate::stdlib::user_wrapper::close_filter_include(eg, stream)
+        } else { Ok(()) };
+        warning?;
+        #[cfg(feature = "stream-registry")]
+        cleanup?;
         if let Some(exception) = eg.exception.take() {
             return Ok(match throw_in_frame(eg, frame, exception)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
@@ -1498,6 +1519,15 @@ fn include_failure<'a>(
     }
 
     let exception = make_error_value("Error", &second);
+    #[cfg(feature = "stream-registry")]
+    if let Some(stream) = failed_stream.as_ref() {
+        eg.exception = Some(exception.clone());
+        let cleanup = crate::stdlib::user_wrapper::close_filter_include(eg, stream);
+        eg.exception.take();
+        cleanup?;
+    }
+    #[cfg(not(feature = "stream-registry"))]
+    let _ = failed_stream;
     attach_throwable_origin(
         &exception,
         eg,
@@ -1570,7 +1600,8 @@ fn op_include<'a>(
         eg,
         &path_str,
     )
-    .map(|_| path_str.clone());
+    .map(|_| path_str.clone())
+    .or_else(|| crate::stdlib::user_wrapper::is_filter_url(&path_str).then(|| path_str.clone()));
     #[cfg(feature = "stream-registry")]
     let mut searched_user_include_path = false;
 
@@ -1607,8 +1638,9 @@ fn op_include<'a>(
 
     #[cfg(feature = "stream-registry")]
     if let Some(candidate) = wrapper_candidate {
+        let factory = if op_array.is_main_script() { "main".to_string() } else { displayed_frame_function_name(eg, frame) };
         let opened =
-            crate::stdlib::user_wrapper::open_include_source(eg, &candidate)?;
+            crate::stdlib::user_wrapper::open_include_source(eg, &candidate, include_source_origin(op_array, opline), include_call_name(is_require, is_once), &factory)?;
         if let Some(exception) = eg.exception.take() {
             return Ok(match throw_in_frame(eg, frame, exception)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
@@ -1663,6 +1695,9 @@ fn op_include<'a>(
                     is_require,
                     is_once,
                 );
+            }
+            crate::stdlib::user_wrapper::IncludeOpenResult::ReadFailed { stream } => {
+                return include_open_failure(eg, frame, op_array, opline, &path_str, is_require, is_once, Some(stream));
             }
             crate::stdlib::user_wrapper::IncludeOpenResult::NotRegistered => {}
         }

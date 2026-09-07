@@ -1,0 +1,13 @@
+read:warning:file_get_contents(): Unable to locate filter "absent"
+warning:file_get_contents(): Unable to create filter (absent)
+body
+read:refused
+warning:file_get_contents(): Unable to create or locate filter "uri.refusal"
+warning:file_get_contents(): Unable to create filter (uri.refusal)
+body
+read:Exception:creation-stop
+Error:No URL resource specified
+ValueError:Path must not be empty
+Error:No URL resource specified
+ordinary:unchanged
+done

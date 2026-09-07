@@ -1,0 +1,11 @@
+field:0
+int(1)
+field:0
+bool(true)
+Cannot assign resource to property TypedStream::$stream of type int
+Cannot assign resource to property TypedStream::$stream of type int
+field:1
+int(1)
+field:1
+private:NULL
+bool(true)

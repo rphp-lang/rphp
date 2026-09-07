@@ -225,17 +225,18 @@ pub(super) fn owned_argument(ed: *mut ExecuteData, index: u32) -> Value {
 struct InternalUserCallerSnapshot {
     file: String,
     line: usize,
-    argument: Option<Value>,
+    has_direct_argument: bool,
 }
 
-/// Snapshot source metadata and, when requested, one direct caller CV from the
-/// user frame beneath a synchronous internal handler. Keeping both queries in
-/// one checked boundary avoids exposing frame pointers to otherwise safe
-/// internal-function code.
+/// Recover source metadata and identify a direct-CV static send. Never read
+/// the caller's operand here: a diagnostic may already have replaced it.
 fn internal_user_caller_snapshot(
     ed: *mut ExecuteData,
     argument_index: Option<u16>,
 ) -> Option<InternalUserCallerSnapshot> {
+    if ed.is_null() {
+        return None;
+    }
     // SAFETY: an internal handler runs beneath its live caller, whose opline
     // is one instruction past DoFcall. The immutable send sequence and caller
     // frame therefore remain valid until this handler returns.
@@ -261,10 +262,13 @@ fn internal_user_caller_snapshot(
         let argument = argument_index.and_then(|index| {
             for instruction in op_array.instructions[..next].iter().rev() {
                 match instruction.opcode {
-                    OpCode::SendVal | OpCode::SendVarEx
+                    OpCode::SendVal
                         if instruction.op2 == index && instruction.op1_type == OpType::Cv =>
                     {
-                        return Some((*caller).cv(instruction.op1 as u32).clone());
+                        return Some(());
+                    }
+                    OpCode::SendVarEx | OpCode::SendNamed if instruction.op2 == index => {
+                        return None;
                     }
                     OpCode::InitFcall
                     | OpCode::InitUserCall
@@ -285,18 +289,9 @@ fn internal_user_caller_snapshot(
                 op_array.source_file.to_string()
             },
             line,
-            argument,
+            has_direct_argument: argument.is_some(),
         })
     }
-}
-
-/// Recover a direct caller CV used for one synchronous internal argument.
-/// Most handlers correctly consume their call-frame snapshot. A small number
-/// of Zend APIs deliberately re-read an input after publishing a diagnostic;
-/// for those boundaries a variable argument remains observable through its
-/// original caller slot while temporaries and constants remain snapshots.
-fn live_internal_cv_argument(ed: *mut ExecuteData, index: u16) -> Option<Value> {
-    internal_user_caller_snapshot(ed, Some(index)).and_then(|snapshot| snapshot.argument)
 }
 
 pub(super) fn write_return_value(rv: *mut Value, value: Value) {
@@ -1316,18 +1311,24 @@ fn fn_array_key_exists_named(
             return Ok(());
         }
     };
-    // A referenced source argument remains an alias while the diagnostic
-    // handler runs. Re-read it afterwards: replacing that caller cell removes
-    // the probed array, while an ordinary by-value/COW argument still retains
-    // its original snapshot. The key itself was already converted above and
-    // therefore remains stable across the handler.
-    let live_source = live_internal_cv_argument(ed, 1);
-    let source = live_source
-        .as_ref()
-        .map_or_else(|| arg!(ed, 1), |source| source);
-    let Some(array) = source.dereferenced().as_array() else {
+    // Zend's direct array_key_exists opcode temporarily retains a mutable
+    // array across a float diagnostic, but returns false if its last PHP
+    // owner disappeared. Our internal frame is that temporary owner. Other
+    // call shapes own a real argument snapshot; immutable literals and COW
+    // aliases also retain the original array, not a replacement caller CV.
+    let source = arg!(ed, 1).dereferenced();
+    if function == "array_key_exists"
+        && key_value.as_double().is_some()
+        && !source.is_immutable_array_literal()
+        && source.cycle_strong_count() == Some(1)
+        && internal_user_caller_snapshot(ed, Some(1))
+            .is_some_and(|snapshot| snapshot.has_direct_argument)
+    {
         ret!(rv, Value::bool(false));
-    };
+    }
+    let array = source
+        .as_array()
+        .expect("validated array argument snapshot");
     let key = array.normalize_string_key(key, key_value);
     let exists = match key {
         ArrayKey::Int(key) => array.get_int(key).is_some(),
@@ -16068,7 +16069,7 @@ fn report_internal_deprecation(
     report_internal_diagnostic(eg, ed, 8192, "Deprecated", message).map(|_| ())
 }
 
-fn report_internal_diagnostic(
+pub(crate) fn report_internal_diagnostic(
     eg: &mut ExecutorGlobals,
     ed: *mut ExecuteData,
     level: i64,
@@ -16076,6 +16077,18 @@ fn report_internal_diagnostic(
     message: &str,
 ) -> Result<bool, VmError> {
     let (file, line) = internal_call_source(ed);
+    report_diagnostic_from(eg, ed, &file, line, level, label, message)
+}
+
+pub(crate) fn report_diagnostic_from(
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    file: &str,
+    line: usize,
+    level: i64,
+    label: &str,
+    message: &str,
+) -> Result<bool, VmError> {
     let handled = dispatch_php_error(eg, ed, level, message, &file, line)?;
     if !handled {
         eg.record_last_error(level, message, &file, line);

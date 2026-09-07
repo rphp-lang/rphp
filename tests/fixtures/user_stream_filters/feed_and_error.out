@@ -1,0 +1,13 @@
+status:2
+int(2)
+bool(true)
+string(2) "xy"
+status:1
+int(2)
+bool(true)
+string(0) ""
+status:0
+bool(false)
+diag:2:stream_filter_remove(): Unable to flush filter, not removing
+bool(false)
+string(0) ""

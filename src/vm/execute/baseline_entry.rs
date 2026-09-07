@@ -7,6 +7,9 @@ fn finish_request_shutdown(
     frame: *mut ExecuteData,
     shutdown_error: Option<VmError>,
 ) -> Result<(), VmError> {
+    #[cfg(feature = "resource-lifetime")]
+    let _resource_release_scope = eg.exception.as_ref()
+        .map(|_| crate::resource_handle::ResourceReleaseScope::defer());
     eg.current_execute_data
         .set(unsafe { (*frame).prev_execute_data });
     if let Err(error) = run_shutdown_frame_destructors(eg, frame) {

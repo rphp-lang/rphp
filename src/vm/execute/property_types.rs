@@ -2,6 +2,232 @@
 // opcodes can share one PHP-compatible type guard without widening Value,
 // object layouts or instruction operands.
 
+/// Commit a validated existing property without retaining an object borrow
+/// while a displaced value invokes PHP. The caller publishes its assignment
+/// result before running the returned destructor, just like an opcode write.
+#[inline]
+fn commit_existing_object_property(
+    eg: &mut ExecutorGlobals,
+    target: &Value,
+    key: &str,
+    assigned: Value,
+    dynamic_only: bool,
+) -> Option<PreparedValueDestructor> {
+    let destructor = {
+        let object = target.as_object().expect("property receiver");
+        let property = if dynamic_only {
+            object
+                .get_dynamic_property_with_position(key)
+                .map(|(value, _)| value)
+        } else {
+            object.get_property(key)
+        };
+        property.and_then(|value| prepare_replaced_value_destructor(eg, value))
+    };
+    {
+        let mut object = target.as_object_mut().expect("property receiver");
+        let property = if dynamic_only {
+            object.get_dynamic_property_mut(key)
+        } else {
+            object.get_property_mut(key)
+        }
+        .expect("validated existing property");
+        assignment_slot_set(property, assigned);
+    }
+    destructor
+}
+
+/// Native object protocols write in the receiver's own declaration scope.
+/// This admits private storage, but does not bypass readonly, hooks, type
+/// validation, shared-reference constraints, or displaced-value cleanup.
+#[cold]
+#[cfg(feature = "stream-registry")]
+pub(crate) fn assign_internal_object_property(
+    eg: &mut ExecutorGlobals,
+    target: &Value,
+    name: &str,
+    mut assigned: Value,
+    initialized_only: bool,
+    source: (&str, usize),
+) -> Result<bool, VmError> {
+    let (class_name, key, definition, exists, initialized) = {
+        let object = target.as_object().expect("protocol object");
+        let key = crate::runtime::resolve_property_key(
+            eg,
+            &object.class_name,
+            name,
+            Some(&object.class_name),
+        );
+        let definition = object
+            .property_slot(&key)
+            .and_then(|slot| eg.instance_property_definition(object.class_id, slot))
+            .cloned();
+        let stored = object.get_property(&key);
+        (
+            object.class_name.clone(),
+            key,
+            definition,
+            stored.is_some(),
+            stored.is_some_and(|value| !value.is_undef()),
+        )
+    };
+    let virtual_property = definition.as_ref().is_some_and(|property| {
+        (property.has_get_hook || property.has_set_hook)
+            && !property.get_hook_is_backed
+            && !property.set_hook_is_backed
+    });
+    if initialized_only && !initialized && !virtual_property {
+        return Ok(true);
+    }
+    if let Some(property) = definition.as_ref() {
+        if property.is_readonly && initialized {
+            eg.exception = Some(make_error_value(
+                "Error",
+                &format!(
+                    "Cannot modify readonly property {}::${name}",
+                    property_diagnostic_class_name(&property.declaring_class),
+                ),
+            ));
+            return Ok(false);
+        }
+        if property.has_set_hook {
+            let result = call_guarded_property_hook_method(
+                eg,
+                target,
+                name,
+                PROPERTY_GUARD_HOOK_SET,
+                &property.declaring_class,
+                &format!("${name}::set"),
+                std::slice::from_ref(&assigned),
+            )?;
+            if eg.exception.is_some() || result.is_some() {
+                return Ok(eg.exception.is_none());
+            }
+        }
+        if property.has_get_hook && !property.has_set_hook && !property.get_hook_is_backed {
+            eg.exception = Some(make_error_value(
+                "Error",
+                &format!("Property {class_name}::${name} is read-only"),
+            ));
+            return Ok(false);
+        }
+        #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+        if let Some(declaration) = property.generic_declaration
+            && let Err(message) =
+                eg.check_cached_generic_property_value(target, name, &assigned, declaration)
+        {
+            eg.exception = Some(make_error_value("TypeError", &message));
+            return Ok(false);
+        }
+        let source_value = assigned.clone();
+        let prepared = prepare_property_assignment_with_stringable(
+            assigned,
+            property,
+            eg,
+            false,
+            &class_name,
+            target,
+        )?;
+        if eg.exception.is_some() {
+            return Ok(false);
+        }
+        match prepared {
+            Ok((value, diagnostic)) => {
+                assigned = value;
+                if let Some(diagnostic) = diagnostic {
+                    let (level, label, message) = diagnostic.details(&source_value);
+                    crate::stdlib::report_diagnostic_from(
+                        eg,
+                        eg.current_execute_data.get(),
+                        source.0,
+                        source.1,
+                        level,
+                        label,
+                        &message,
+                    )?;
+                    if eg.exception.is_some() {
+                        return Ok(false);
+                    }
+                }
+            }
+            Err(message) => {
+                eg.exception = Some(make_error_value("TypeError", &message));
+                return Ok(false);
+            }
+        }
+    }
+    let constraints = target
+        .as_object()
+        .and_then(|object| {
+            object
+                .get_property(&key)
+                .map(Value::reference_property_constraints)
+        })
+        .unwrap_or_default();
+    assigned =
+        match prepare_reference_assignment_with_stringable(assigned, &constraints, eg, false)? {
+            Ok(value) => value,
+            Err(message) => {
+                eg.exception = Some(make_error_value("TypeError", &message));
+                return Ok(false);
+            }
+        };
+    if eg.exception.is_some() {
+        return Ok(false);
+    }
+    if exists {
+        let destructor = commit_existing_object_property(eg, target, &key, assigned, false);
+        run_prepared_value_destructor(eg, destructor)?;
+    } else {
+        let result = call_guarded_property_magic_method(
+            eg,
+            target,
+            name,
+            PROPERTY_GUARD_SET,
+            "__set",
+            &[Value::string(name), assigned.clone()],
+        )?;
+        if eg.exception.is_some() || result.is_some() {
+            return Ok(eg.exception.is_none());
+        }
+        if eg
+            .find_class(&class_name)
+            .is_some_and(|class| class.is_readonly)
+        {
+            eg.exception = Some(make_error_value(
+                "Error",
+                &format!("Cannot create dynamic property {class_name}::${name}"),
+            ));
+            return Ok(false);
+        }
+        let allows_dynamic = target
+            .as_object()
+            .is_some_and(|object| object.is_dynamic_std_class())
+            || eg
+                .find_class(&class_name)
+                .is_some_and(|class| class.allow_dynamic_properties);
+        if !allows_dynamic {
+            crate::stdlib::report_diagnostic_from(
+                eg,
+                eg.current_execute_data.get(),
+                source.0,
+                source.1,
+                8192,
+                "Deprecated",
+                &format!("Creation of dynamic property {class_name}::${name} is deprecated"),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(false);
+            }
+        }
+        target
+            .as_object_mut()
+            .expect("protocol object")
+            .set_property(&key, assigned);
+    }
+    Ok(eg.exception.is_none())
+}
+
 #[inline(always)]
 fn publish_property_assignment_result(
     frame: *mut ExecuteData,

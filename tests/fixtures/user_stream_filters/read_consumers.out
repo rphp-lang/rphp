@@ -1,0 +1,17 @@
+line:4142:2
+line:0a:3
+record:CD:7
+line:45460a:10
+rest:GH:1
+csv:["AB","CD\nEF","GH"]:14
+csv:[null]:15
+csv:["LAST","ROW"]:24
+long:0:0
+empty:false:0
+tail:8192:AAAAAA:0
+copy:3:4:3
+copy:2:1
+result:BCDEF
+scan:[17,4.5,"WORD"]
+print:6:4
+printed:ITEM:3-END

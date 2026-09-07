@@ -1,0 +1,36 @@
+case:0:0
+warning:fwrite(): Unprocessed filter buckets remaining on input brigade
+bool(false)
+case:0:1
+bool(false)
+case:0:2
+bool(false)
+case:1:0
+warning:fwrite(): Unprocessed filter buckets remaining on input brigade
+int(0)
+case:1:1
+int(5)
+case:1:2
+int(5)
+case:2:0
+warning:fwrite(): Unprocessed filter buckets remaining on input brigade
+int(0)
+case:2:1
+int(5)
+case:2:2
+int(5)
+case:7:0
+callback-stop
+case:7:1
+callback-stop
+case:7:2
+callback-stop
+TypeError:Cannot assign resource to property RejectedStreamSlot::$stream of type int
+TypeError:Cannot assign resource to property RejectedStreamSlot::$stream of type int
+pending:TypeError
+recorded:fwrite(): Unprocessed filter buckets remaining on input brigade
+pending:Exception
+recorded:fwrite(): Unprocessed filter buckets remaining on input brigade
+throws:fwrite(): Unprocessed filter buckets remaining on input brigade
+warning-stop
+finished

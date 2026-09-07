@@ -154,6 +154,11 @@ pub(super) fn fn_fopen(
     #[cfg(not(feature = "include-path"))]
     let open_path = path.as_ref();
     #[cfg(feature = "stream-registry")]
+    if super::filters::uri::recognizes(open_path) {
+        let value = super::filters::uri::open_internal(eg, execute_data, open_path, &mode)?;
+        return return_value(return_pointer, value);
+    }
+    #[cfg(feature = "stream-registry")]
     match super::user_wrapper::open_file(eg, open_path, mode.as_ref(), 0)? {
         super::user_wrapper::OpenResult::Opened(value) => {
             return return_value(return_pointer, value);

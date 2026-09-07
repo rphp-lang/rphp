@@ -61,6 +61,7 @@ pub(crate) enum IncludeOpenResult {
     NotRegistered,
     Declined { class: String },
     Opened { source: Vec<u8>, canonical: String },
+    ReadFailed { stream: Value },
 }
 
 fn custom_key(protocol: &str) -> String {
@@ -286,11 +287,19 @@ fn instantiate_wrapper(
 
 #[cfg(feature = "resource-lifetime")]
 fn insert_user_stream(eg: &mut ExecutorGlobals, state: UserStreamState) -> Value {
-    super::super::resource::insert_value_for_request(
+    let value = super::super::resource::insert_value_for_request(
         eg,
         "stream",
         Rc::new(RefCell::new(state)) as SharedUserStream,
-    )
+    );
+    value.set_vm_resource_release(release_user_stream);
+    value
+}
+
+#[cfg(feature = "resource-lifetime")]
+#[cold]
+fn release_user_stream(eg: &mut ExecutorGlobals, resource: i64) -> Result<(), VmError> {
+    close(eg, resource).map(|_| ())
 }
 
 #[cfg(not(feature = "resource-lifetime"))]
@@ -686,10 +695,21 @@ pub(crate) fn url_stat(
     Ok(url_stat_value(eg, path, flags)?.map(|value| value.is_truthy()))
 }
 
+#[inline]
+pub(crate) fn is_filter_url(path: &str) -> bool {
+    super::filters::uri::recognizes(path)
+}
+
 pub(crate) fn open_include_source(
     eg: &mut ExecutorGlobals,
     path: &str,
+    origin: (String, usize),
+    operation: &str,
+    factory: &str,
 ) -> Result<IncludeOpenResult, VmError> {
+    if is_filter_url(path) {
+        return super::filters::uri::include(eg, path, origin, operation, factory);
+    }
     let opened = open_file(eg, path, "rb", 65_665)?;
     let OpenResult::Opened(value) = opened else {
         return Ok(match opened {
@@ -748,7 +768,19 @@ pub(crate) fn open_include_source(
     Ok(IncludeOpenResult::Opened { source, canonical })
 }
 
+#[cold]
+pub(crate) fn close_filter_include(
+    eg: &mut ExecutorGlobals,
+    stream: &Value,
+) -> Result<(), VmError> {
+    if let Some(id) = stream.as_resource_id() {
+        super::filters::uri::close(eg, id)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn shutdown_open_streams(eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    super::filters::shutdown(eg)?;
     let mut resources = registry(eg)
         .map(|state| {
             state

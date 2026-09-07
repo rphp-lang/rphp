@@ -2,6 +2,49 @@ use super::{PhpStream, StreamMode, php_memory_stream_mode};
 use std::io::SeekFrom;
 
 #[test]
+fn native_prefetch_keeps_logical_seek_write_and_failed_seek_state() {
+    let mut stream = PhpStream::open("php://memory", "w+").unwrap();
+    stream.write(b"a\nbcdef").unwrap();
+    stream.seek(SeekFrom::Start(0)).unwrap();
+    let mut line = Vec::new();
+    stream.read_line(&mut line, None).unwrap();
+    assert_eq!(line, b"a\n");
+    assert_eq!(stream.metadata().unread_bytes, 5);
+    assert_eq!(stream.position().unwrap(), 2);
+    assert!(stream.seek(SeekFrom::Current(-3)).is_err());
+    assert_eq!(stream.metadata().unread_bytes, 5);
+    assert_eq!(stream.position().unwrap(), 2);
+    stream.seek(SeekFrom::Current(1)).unwrap();
+    assert_eq!(stream.position().unwrap(), 3);
+    stream.write(b"XY").unwrap();
+    let mut bytes = [0; 8];
+    assert_eq!(stream.read(&mut bytes).unwrap(), 2);
+    assert_eq!(&bytes[..2], b"ef");
+    stream.seek(SeekFrom::Start(0)).unwrap();
+    assert_eq!(stream.read(&mut bytes).unwrap(), 7);
+    assert_eq!(&bytes[..7], b"a\nbXYef");
+    assert_eq!(stream.metadata().unread_bytes, 0);
+}
+
+#[test]
+fn line_prefetch_crosses_chunks_without_reordering_or_rereading() {
+    let payload = [vec![b'x'; 8200], b"\ny\nlast".to_vec()].concat();
+    let mut stream = PhpStream::open("php://memory", "w+").unwrap();
+    stream.write(&payload).unwrap();
+    stream.seek(SeekFrom::Start(0)).unwrap();
+    let mut line = Vec::new();
+    assert_eq!(stream.read_line(&mut line, Some(3)).unwrap(), Some(2));
+    assert_eq!(stream.metadata().unread_bytes, 8190);
+    assert_eq!(stream.read_line(&mut line, None).unwrap(), Some(8199));
+    assert_eq!(&line, &payload[2..8201]);
+    assert_eq!(stream.position().unwrap(), 8201);
+    assert_eq!(stream.read_line(&mut line, None).unwrap(), Some(2));
+    assert_eq!(line, b"y\n");
+    assert_eq!(stream.read_line(&mut line, None).unwrap(), Some(4));
+    assert_eq!(line, b"last");
+}
+
+#[test]
 fn parses_php_file_modes_without_platform_dependencies() {
     assert_eq!(
         StreamMode::parse("rb"),
@@ -40,10 +83,12 @@ fn memory_wrappers_keep_their_permissive_legacy_mode_grammar() {
     assert!(PhpStream::open("php://memory", "+r").is_ok());
     assert!(PhpStream::open("php://temp", "not-a-file-mode").is_ok());
     assert!(PhpStream::open("/rphp/does-not-exist", "+r").is_err());
-    assert_eq!(
-        php_memory_stream_mode("r+"),
-        StreamMode::parse("r+").unwrap()
-    );
+    for spelling in ["r+", "w", "rw", "a", "za", "xw"] {
+        let mode = php_memory_stream_mode(spelling);
+        assert!(mode.read && mode.write, "{spelling}");
+        assert_eq!(mode.append, spelling.contains('a'));
+    }
+    assert!(!php_memory_stream_mode("r\0w").write);
     assert!(php_memory_stream_mode("x").read);
     assert!(!php_memory_stream_mode("x").write);
 }

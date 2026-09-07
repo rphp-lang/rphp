@@ -6,9 +6,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 #[cfg(feature = "resource-lifetime")]
 use crate::resource_handle::ResourceHandle;
 use crate::runtime::ExecutorGlobals;
+#[cfg(feature = "resource-lifetime")]
 use crate::value::Value;
-
-const RESOURCE_SCOPE_CONSTANT: &str = "\0rphp-resource-scope";
+#[cfg(feature = "resource-lifetime")]
+use std::rc::{Rc, Weak};
 
 static NEXT_RESOURCE_SCOPE: AtomicU32 = AtomicU32::new(1);
 
@@ -20,6 +21,18 @@ thread_local! {
 struct ResourceEntry {
     resource_type: &'static str,
     payload: Box<dyn Any>,
+    #[cfg(feature = "resource-lifetime")]
+    owner: Weak<ResourceHandle>,
+}
+
+impl ResourceEntry {
+    #[inline]
+    fn retire_owner(&self) {
+        #[cfg(feature = "resource-lifetime")]
+        if let Some(owner) = self.owner.upgrade() {
+            owner.retire();
+        }
+    }
 }
 
 /// Request-owned PHP resource registry.
@@ -41,21 +54,52 @@ impl ResourceRegistry {
     }
 
     #[cold]
+    #[cfg(any(not(feature = "resource-lifetime"), test))]
     pub fn insert<T: 'static>(&mut self, resource_type: &'static str, payload: T) -> i64 {
-        let id = self.next_id;
-        self.next_id = self
-            .next_id
-            .checked_add(1)
-            .expect("PHP resource id overflow");
+        let id = self.allocate_id();
         let replaced = self.entries.insert(
             id,
             ResourceEntry {
                 resource_type,
                 payload: Box::new(payload),
+                #[cfg(feature = "resource-lifetime")]
+                owner: Weak::new(),
             },
         );
         debug_assert!(replaced.is_none());
         id
+    }
+
+    #[inline]
+    fn allocate_id(&mut self) -> i64 {
+        let id = self.next_id;
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .expect("PHP resource id overflow");
+        id
+    }
+
+    #[cfg(feature = "resource-lifetime")]
+    #[cold]
+    fn insert_value<T: 'static>(
+        &mut self,
+        scope: u32,
+        resource_type: &'static str,
+        payload: T,
+    ) -> Value {
+        let id = self.allocate_id();
+        let owner = Rc::new(ResourceHandle::new(scope, id, close_any));
+        let replaced = self.entries.insert(
+            id,
+            ResourceEntry {
+                resource_type,
+                payload: Box::new(payload),
+                owner: Rc::downgrade(&owner),
+            },
+        );
+        debug_assert!(replaced.is_none());
+        Value::resource_owner(owner)
     }
 
     #[inline]
@@ -98,7 +142,9 @@ impl ResourceRegistry {
         {
             return false;
         }
-        self.entries.remove(&id);
+        if let Some(entry) = self.entries.remove(&id) {
+            entry.retire_owner();
+        }
         true
     }
 
@@ -112,13 +158,27 @@ impl ResourceRegistry {
         {
             return None;
         }
-        self.entries.remove(&id)
+        let entry = self.entries.remove(&id)?;
+        entry.retire_owner();
+        Some(entry)
     }
 
     #[cfg(feature = "resource-lifetime")]
     #[cold]
     fn remove_any(&mut self, id: i64) -> Option<ResourceEntry> {
-        self.entries.remove(&id)
+        let entry = self.entries.remove(&id)?;
+        entry.retire_owner();
+        Some(entry)
+    }
+}
+
+impl Drop for ResourceRegistry {
+    fn drop(&mut self) {
+        // Retire all handles before dropping any backend: backend teardown
+        // may itself release another resource from this same registry.
+        for entry in self.entries.values() {
+            entry.retire_owner();
+        }
     }
 }
 
@@ -138,6 +198,7 @@ pub(crate) fn allocate_scope() -> u32 {
 }
 
 #[cold]
+#[cfg(any(not(feature = "resource-lifetime"), test))]
 pub(crate) fn insert<T: 'static>(scope: u32, resource_type: &'static str, payload: T) -> i64 {
     debug_assert_ne!(scope, 0);
     REQUEST_RESOURCES.with(|registries| {
@@ -256,28 +317,29 @@ pub(crate) fn close_scope(scope: u32) {
     }
 }
 
+#[inline]
 fn request_scope(eg: &ExecutorGlobals) -> u32 {
-    eg.constant_table
-        .borrow()
-        .get(RESOURCE_SCOPE_CONSTANT)
-        .and_then(crate::value::Value::as_long)
-        .unwrap_or(0) as u32
+    eg.resource_scope
+}
+
+#[inline]
+fn ensure_request_scope(eg: &mut ExecutorGlobals) -> u32 {
+    let mut scope = request_scope(eg);
+    if scope == 0 {
+        scope = allocate_scope();
+        eg.resource_scope = scope;
+    }
+    scope
 }
 
 #[cold]
+#[cfg(any(not(feature = "resource-lifetime"), test))]
 pub(crate) fn insert_for_request<T: 'static>(
     eg: &mut ExecutorGlobals,
     resource_type: &'static str,
     payload: T,
 ) -> i64 {
-    let mut scope = request_scope(eg);
-    if scope == 0 {
-        scope = allocate_scope();
-        eg.constant_table
-            .borrow_mut()
-            .insert(RESOURCE_SCOPE_CONSTANT.into(), Value::long(scope as i64));
-    }
-    insert(scope, resource_type, payload)
+    insert(ensure_request_scope(eg), resource_type, payload)
 }
 
 #[cfg(feature = "resource-lifetime")]
@@ -287,10 +349,17 @@ pub(crate) fn insert_value_for_request<T: 'static>(
     resource_type: &'static str,
     payload: T,
 ) -> Value {
-    let id = insert_for_request(eg, resource_type, payload);
-    let scope = request_scope(eg);
+    // Resolve the request once. The owner and registry entry must refer to the
+    // same scope; a second constant-table lookup provides no new information.
+    let scope = ensure_request_scope(eg);
     debug_assert_ne!(scope, 0);
-    Value::resource(ResourceHandle::new(scope, id, close_any))
+    REQUEST_RESOURCES.with(|registries| {
+        registries
+            .borrow_mut()
+            .entry(scope)
+            .or_default()
+            .insert_value(scope, resource_type, payload)
+    })
 }
 
 #[cold]
@@ -300,6 +369,50 @@ pub(crate) fn with_request_payload_mut<T: 'static, R>(
     operation: impl FnOnce(&mut T) -> R,
 ) -> Option<R> {
     with_payload_mut(request_scope(eg), id, operation)
+}
+
+/// Install a protocol owner without changing the PHP resource identity. The
+/// transformation is native-only: it must not execute PHP or reenter this
+/// registry. Failed type checks leave the original entry untouched.
+#[cold]
+#[cfg(feature = "stream-registry")]
+pub(crate) fn wrap_request_payload<T: 'static, U: 'static>(
+    eg: &mut ExecutorGlobals,
+    id: i64,
+    wrap: impl FnOnce(T) -> U,
+) -> bool {
+    let scope = request_scope(eg);
+    REQUEST_RESOURCES.with(|registries| {
+        let mut registries = registries.borrow_mut();
+        let Some(registry) = registries.get_mut(&scope) else {
+            return false;
+        };
+        if !registry
+            .entries
+            .get(&id)
+            .is_some_and(|entry| entry.payload.is::<T>())
+        {
+            return false;
+        }
+        let entry = registry
+            .entries
+            .remove(&id)
+            .expect("checked resource entry");
+        let payload = *entry
+            .payload
+            .downcast::<T>()
+            .expect("checked resource payload");
+        registry.entries.insert(
+            id,
+            ResourceEntry {
+                resource_type: entry.resource_type,
+                payload: Box::new(wrap(payload)),
+                #[cfg(feature = "resource-lifetime")]
+                owner: entry.owner,
+            },
+        );
+        true
+    })
 }
 
 #[cold]
@@ -404,6 +517,34 @@ mod tests {
     }
 
     #[test]
+    fn public_constants_cannot_select_or_invalidate_resource_scope() {
+        let drops = Rc::new(Cell::new(0));
+        let mut first = ExecutorGlobals::with_output(Box::new(std::io::sink()));
+        let mut second = ExecutorGlobals::with_output(Box::new(std::io::sink()));
+        let key = "\0rphp-resource-scope";
+        assert_eq!(first.resource_scope, 0);
+        assert_eq!(second.resource_scope, 0);
+        let first_id = insert_for_request(&mut first, "probe", DropProbe(drops.clone()));
+        assert!(!first.constant_table.borrow().contains_key(key));
+        second.constant_table.borrow_mut().insert(
+            key.into(),
+            crate::value::Value::long(first.resource_scope as i64),
+        );
+        let second_id = insert_for_request(&mut second, "probe", DropProbe(drops.clone()));
+        assert_ne!(first.resource_scope, second.resource_scope);
+        assert_eq!(first_id, second_id, "ids are local to their request");
+        first.constant_table.borrow_mut().clear();
+        second.constant_table.borrow_mut().clear();
+        assert!(is_open_for_request(&first, first_id));
+        assert!(is_open_for_request(&second, second_id));
+        drop(first);
+        assert_eq!(drops.get(), 1);
+        assert!(is_open_for_request(&second, second_id));
+        drop(second);
+        assert_eq!(drops.get(), 2);
+    }
+
+    #[test]
     #[cfg(feature = "resource-lifetime")]
     fn final_value_alias_closes_backend_before_request_shutdown() {
         let drops = Rc::new(Cell::new(0));
@@ -425,6 +566,88 @@ mod tests {
     #[cfg(feature = "resource-lifetime")]
     fn resource_handle_keeps_value_layout_compact() {
         assert_eq!(std::mem::size_of::<crate::value::Value>(), 16);
+    }
+
+    #[test]
+    #[cfg(feature = "resource-lifetime")]
+    fn rust_unwind_keeps_unconsumed_callback_backend_request_owned() {
+        let drops = Rc::new(Cell::new(0));
+        let mut executor = ExecutorGlobals::with_output(Box::new(std::io::sink()));
+        let value = insert_value_for_request(&mut executor, "probe", DropProbe(drops.clone()));
+        let id = value.as_resource_id().unwrap();
+        value.set_vm_resource_release(|_, _| panic!("Rust drop must not enter PHP"));
+        drop(value);
+        assert!(is_open_for_request(&executor, id));
+        assert_eq!(drops.get(), 0);
+        assert!(close_for_request::<DropProbe>(&mut executor, id));
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    #[cfg(feature = "resource-lifetime")]
+    fn deferred_release_and_caught_exception_suppression_are_distinct() {
+        let drops = Rc::new(Cell::new(0));
+        let mut executor = ExecutorGlobals::with_output(Box::new(std::io::sink()));
+        let value = insert_value_for_request(&mut executor, "probe", DropProbe(drops.clone()));
+        let id = value.as_resource_id().unwrap();
+        value.set_vm_resource_release(|_, _| panic!("callback is not eligible"));
+        {
+            let _defer = crate::resource_handle::ResourceReleaseScope::defer();
+            assert!(!value.run_vm_resource_release(&mut executor).unwrap());
+            assert!(value.needs_vm_resource_release());
+            {
+                let _suppress = crate::resource_handle::ResourceReleaseScope::new(true);
+                assert!(value.run_vm_resource_release(&mut executor).unwrap());
+                assert!(!value.needs_vm_resource_release());
+            }
+            assert!(crate::resource_handle::php_release_is_deferred());
+        }
+        assert!(!crate::resource_handle::php_release_is_deferred());
+        drop(value);
+        assert!(!is_open_for_request(&executor, id));
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    #[cfg(feature = "resource-lifetime")]
+    fn explicit_close_retires_lifetime_work_without_changing_alias_identity() {
+        let drops = Rc::new(Cell::new(0));
+        let mut executor = ExecutorGlobals::with_output(Box::new(std::io::sink()));
+        let value = insert_value_for_request(&mut executor, "probe", DropProbe(drops.clone()));
+        let id = value.as_resource_id().unwrap();
+        let alias = value.clone();
+        value.set_vm_resource_release(|_, _| panic!("retired callback must never execute"));
+        assert!(alias.needs_vm_resource_release());
+        assert!(!close_for_request::<String>(&mut executor, id));
+        assert!(
+            alias.needs_vm_resource_release(),
+            "wrong type cannot retire owner"
+        );
+        assert!(close_for_request::<DropProbe>(&mut executor, id));
+        assert_eq!(drops.get(), 1);
+        assert_eq!(alias.as_resource_id(), Some(id));
+        assert!(!alias.needs_vm_resource_release());
+        assert!(!alias.run_vm_resource_release(&mut executor).unwrap());
+        assert!(!close_for_request::<DropProbe>(&mut executor, id));
+        drop(value);
+        drop(alias);
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    #[cfg(feature = "resource-lifetime")]
+    fn request_shutdown_retires_surviving_resource_aliases() {
+        let drops = Rc::new(Cell::new(0));
+        let alias;
+        {
+            let mut executor = ExecutorGlobals::with_output(Box::new(std::io::sink()));
+            alias = insert_value_for_request(&mut executor, "probe", DropProbe(drops.clone()));
+            alias.set_vm_resource_release(|_, _| panic!("request ended"));
+        }
+        assert_eq!(drops.get(), 1);
+        assert!(!alias.needs_vm_resource_release());
+        drop(alias);
+        assert_eq!(drops.get(), 1);
     }
 
     #[test]

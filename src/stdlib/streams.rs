@@ -39,6 +39,8 @@ mod csv_errors;
 #[cfg(feature = "csv-write")]
 mod csv_write;
 #[cfg(feature = "stream-registry")]
+pub(in crate::stdlib) mod filters;
+#[cfg(feature = "stream-registry")]
 mod info;
 #[cfg(feature = "stream-line")]
 mod line;
@@ -50,6 +52,8 @@ pub(crate) mod user_wrapper;
 #[cold]
 pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<InternalFunction>>) {
     register_standard_streams(eg);
+    #[cfg(feature = "stream-registry")]
+    filters::register_functions(eg, functions);
     for (name, handler, maximum, required, parameter_names) in [
         (
             "fopen",
@@ -536,7 +540,15 @@ pub(super) fn with_stream<R>(
     id: i64,
     operation: impl FnOnce(&mut PhpStream) -> R,
 ) -> Option<R> {
-    super::resource::with_request_payload_mut::<PhpStream, _>(eg, id, operation)
+    let mut operation = Some(operation);
+    let result = super::resource::with_request_payload_mut::<PhpStream, _>(eg, id, |stream| {
+        operation.take().expect("backend operation")(stream)
+    });
+    #[cfg(feature = "stream-registry")]
+    if result.is_none() {
+        return filters::with_backend(eg, id, operation.expect("unconsumed backend operation"));
+    }
+    result
 }
 
 #[inline(always)]
@@ -562,15 +574,84 @@ fn with_stream_io_maybe_cached<R>(
     if !super::filesystem::filesystem_stat_cache_is_populated(eg) {
         return super::resource::with_request_payload_mut::<PhpStream, _>(eg, id, operation);
     }
-    let mut plain_file = false;
+    let mut plain_file_io = false;
     let result = super::resource::with_request_payload_mut::<PhpStream, _>(eg, id, |stream| {
-        plain_file = stream.is_plain_file();
-        operation(stream)
+        stream.take_plain_file_io();
+        let result = operation(stream);
+        plain_file_io = stream.take_plain_file_io();
+        result
     })?;
-    if plain_file {
+    if plain_file_io {
         super::filesystem::clear_filesystem_stat_cache(eg);
     }
     Some(result)
+}
+
+#[inline(always)]
+pub(super) fn write_stream_bytes(
+    eg: &mut ExecutorGlobals,
+    _frame: *mut ExecuteData,
+    id: i64,
+    bytes: &[u8],
+) -> Result<Option<std::io::Result<usize>>, VmError> {
+    let native = with_stream_io(eg, id, |stream| stream.write(bytes));
+    #[cfg(feature = "stream-registry")]
+    if native.is_none() {
+        return filters::with_source(eg, _frame, |eg| filters::write(eg, id, bytes));
+    }
+    Ok(native)
+}
+
+#[inline]
+pub(super) fn read_stream_line(
+    eg: &mut ExecutorGlobals,
+    _frame: *mut ExecuteData,
+    id: i64,
+    length: Option<usize>,
+) -> Result<Option<Vec<u8>>, VmError> {
+    let mut bytes = Vec::new();
+    match with_stream_io(eg, id, |stream| stream.read_line(&mut bytes, length)) {
+        Some(Ok(Some(_))) => return Ok(Some(bytes)),
+        Some(_) => return Ok(None),
+        None => {}
+    }
+    #[cfg(feature = "stream-registry")]
+    {
+        let maximum = match length {
+            Some(length) => length.saturating_sub(1),
+            None => usize::MAX,
+        };
+        return filters::with_source(eg, _frame, |eg| filters::read_line(eg, id, maximum));
+    }
+    #[cfg(not(feature = "stream-registry"))]
+    Ok(None)
+}
+
+#[cold]
+fn read_stream_csv(
+    eg: &mut ExecutorGlobals,
+    _frame: *mut ExecuteData,
+    id: i64,
+    length: Option<usize>,
+    separator: u8,
+    enclosure: u8,
+    escape: Option<u8>,
+) -> Result<Option<Vec<Option<Vec<u8>>>>, VmError> {
+    match with_stream_io(eg, id, |stream| {
+        stream.read_csv_record(length, separator, enclosure, escape)
+    }) {
+        Some(Ok(fields)) => return Ok(fields),
+        Some(Err(_)) => return Ok(None),
+        None => {}
+    }
+    #[cfg(feature = "stream-registry")]
+    {
+        return filters::with_source(eg, _frame, |eg| {
+            filters::read_csv(eg, id, length, separator, enclosure, escape)
+        });
+    }
+    #[cfg(not(feature = "stream-registry"))]
+    Ok(None)
 }
 
 #[cold]
@@ -585,11 +666,25 @@ fn fn_fopen(
         return context::fn_fopen(execute_data, return_pointer, eg);
     }
 
-    let path: Cow<'static, str> = match path_argument.as_str() {
-        Some(value) => Cow::Owned(value.to_string()),
+    // Keep the argument's string owner, not a borrowed reference cell: a
+    // wrapper/filter callback may replace that cell while opening. String
+    // snapshots share immutable storage instead of allocating two byte copies
+    // for every native fopen; coercions retain their existing owned result.
+    let path_snapshot = path_argument.dereferenced().clone();
+    let mode_snapshot = argument(execute_data, 1).dereferenced().clone();
+    let path: Cow<'_, str> = match path_snapshot.as_str() {
+        Some(value) => Cow::Borrowed(value),
         None => Cow::Owned(path_argument.echo_to_string()),
     };
-    let mode = argument_string(execute_data, 1);
+    let mode: Cow<'_, str> = match mode_snapshot.as_str() {
+        Some(value) => Cow::Borrowed(value),
+        None => Cow::Owned(mode_snapshot.echo_to_string()),
+    };
+    #[cfg(feature = "stream-registry")]
+    if filters::uri::recognizes(&path) {
+        let value = filters::uri::open_internal(eg, execute_data, &path, &mode)?;
+        return return_value(return_pointer, value);
+    }
     #[cfg(feature = "stream-registry")]
     match user_wrapper::open_file(eg, path.as_ref(), mode.as_ref(), 0)? {
         user_wrapper::OpenResult::Opened(value) => return return_value(return_pointer, value),
@@ -641,6 +736,17 @@ fn fn_fopen(
 }
 
 #[cold]
+fn read_error_message(function: &str, error: &std::io::Error) -> Option<String> {
+    let errno = error.raw_os_error()?;
+    let reason = error.to_string();
+    let suffix = format!(" (os error {errno})");
+    let reason = reason.strip_suffix(&suffix).unwrap_or(&reason);
+    Some(format!(
+        "{function}(): Read of 8192 bytes failed with errno={errno} {reason}"
+    ))
+}
+
+#[cold]
 fn fn_fread(
     execute_data: *mut ExecuteData,
     return_pointer: *mut Value,
@@ -667,7 +773,21 @@ fn fn_fread(
             bytes.truncate(read);
             return_value(return_pointer, super::php_byte_result(bytes, false))
         }
+        Some(Err(error)) => {
+            if let Some(message) = read_error_message("fread", &error) {
+                super::report_internal_diagnostic(eg, execute_data, 8, "Notice", &message)?;
+            }
+            return_value(return_pointer, Value::bool(false))
+        }
         _ => {
+            #[cfg(feature = "stream-registry")]
+            if let Some(resource) = resource
+                && let Some(bytes) = filters::with_source(eg, execute_data, |eg| {
+                    filters::read(eg, resource, length)
+                })?
+            {
+                return return_value(return_pointer, super::php_byte_result(bytes, false));
+            }
             #[cfg(feature = "stream-registry")]
             if let Some(resource) = resource
                 && let Some(bytes) = user_wrapper::read(eg, resource, length)?
@@ -693,15 +813,13 @@ fn fn_fgets(
         },
         None => None,
     };
-    let mut bytes = Vec::new();
-    let result = resource.and_then(|resource| {
-        with_stream_io(eg, resource, |stream| stream.read_line(&mut bytes, length))
-    });
+    let result = if let Some(resource) = resource {
+        read_stream_line(eg, execute_data, resource, length)?
+    } else {
+        None
+    };
     match result {
-        Some(Ok(Some(read))) => {
-            debug_assert_eq!(read, bytes.len());
-            return_value(return_pointer, super::php_byte_result(bytes, false))
-        }
+        Some(bytes) => return_value(return_pointer, super::php_byte_result(bytes, false)),
         _ => return_value(return_pointer, Value::bool(false)),
     }
 }
@@ -736,13 +854,21 @@ fn fn_fgetcsv(
         return return_value(return_pointer, Value::bool(false));
     };
 
-    let result = resource.and_then(|resource| {
-        with_stream_io(eg, resource, |stream| {
-            stream.read_csv_record(length, separator, enclosure, escape)
-        })
-    });
+    let result = if let Some(resource) = resource {
+        read_stream_csv(
+            eg,
+            execute_data,
+            resource,
+            length,
+            separator,
+            enclosure,
+            escape,
+        )?
+    } else {
+        None
+    };
     match result {
-        Some(Ok(Some(fields))) => {
+        Some(fields) => {
             let mut record = PhpArray::with_packed_capacity(fields.len());
             for field in fields {
                 record.push(match field {
@@ -808,8 +934,11 @@ fn fn_fwrite(
         };
         bytes.truncate(length);
     }
-    let result =
-        resource.and_then(|resource| with_stream_io(eg, resource, |stream| stream.write(&bytes)));
+    let result = if let Some(resource) = resource {
+        write_stream_bytes(eg, execute_data, resource, &bytes)?
+    } else {
+        None
+    };
     match result {
         Some(Ok(written)) => return_value(return_pointer, Value::long(written as i64)),
         _ => return_value(return_pointer, Value::bool(false)),
@@ -830,6 +959,13 @@ fn fn_fclose(
     }
     #[cfg(feature = "stream-registry")]
     if let Some(resource) = resource
+        && let Some(closed) =
+            filters::with_source(eg, execute_data, |eg| filters::close(eg, resource, false))?
+    {
+        return return_value(return_pointer, Value::bool(closed));
+    }
+    #[cfg(feature = "stream-registry")]
+    if let Some(resource) = resource
         && let Some(closed) = user_wrapper::close(eg, resource)?
     {
         return return_value(return_pointer, Value::bool(closed));
@@ -847,6 +983,14 @@ fn fn_fflush(
     let flushed = resource
         .and_then(|resource| with_stream_io(eg, resource, |stream| stream.flush().is_ok()))
         .unwrap_or(false);
+    #[cfg(feature = "stream-registry")]
+    if !flushed
+        && let Some(resource) = resource
+        && let Some(flushed) =
+            filters::with_source(eg, execute_data, |eg| filters::flush(eg, resource))?
+    {
+        return return_value(return_pointer, Value::bool(flushed));
+    }
     #[cfg(feature = "stream-registry")]
     if !flushed
         && let Some(resource) = resource
@@ -1004,8 +1148,16 @@ fn fn_feof(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let resource = argument(execute_data, 0).as_resource_id();
-    if let Some(eof) =
-        resource.and_then(|resource| with_stream(eg, resource, |stream| stream.is_eof()))
+    if let Some(eof) = resource.and_then(|resource| {
+        super::resource::with_request_payload_mut::<PhpStream, _>(eg, resource, |stream| {
+            stream.is_eof()
+        })
+    }) {
+        return return_value(return_pointer, Value::bool(eof));
+    }
+    #[cfg(feature = "stream-registry")]
+    if let Some(resource) = resource
+        && let Some(eof) = filters::eof(eg, resource)
     {
         return return_value(return_pointer, Value::bool(eof));
     }
@@ -1027,12 +1179,18 @@ fn fn_ftell(
 ) -> Result<(), VmError> {
     let position = argument(execute_data, 0)
         .as_resource_id()
-        .and_then(|resource| with_stream(eg, resource, |stream| stream.position()));
+        .and_then(|resource| with_stream_io(eg, resource, |stream| stream.position()));
     match position {
         Some(Ok(position)) if position <= i64::MAX as u64 => {
             return_value(return_pointer, Value::long(position as i64))
         }
         _ => {
+            #[cfg(feature = "stream-registry")]
+            if let Some(resource) = argument(execute_data, 0).as_resource_id()
+                && let Some(position) = filters::position(eg, resource)
+            {
+                return return_value(return_pointer, Value::long(position as i64));
+            }
             #[cfg(feature = "stream-registry")]
             if let Some(resource) = argument(execute_data, 0).as_resource_id()
                 && let Some(position) = user_wrapper::position(eg, resource)
@@ -1063,10 +1221,20 @@ fn fn_fseek(
         2 => SeekFrom::End(offset),
         _ => return return_value(return_pointer, Value::long(-1)),
     };
-    let succeeded = argument(execute_data, 0)
-        .as_resource_id()
-        .and_then(|resource| with_stream(eg, resource, |stream| stream.seek(seek_from).is_ok()))
-        .unwrap_or(false);
+    let resource = argument(execute_data, 0).as_resource_id();
+    let succeeded = resource.and_then(|resource| {
+        super::resource::with_request_payload_mut::<PhpStream, _>(eg, resource, |stream| {
+            stream.seek(seek_from).is_ok()
+        })
+    });
+    #[cfg(feature = "stream-registry")]
+    let succeeded = match (succeeded, resource) {
+        (None, Some(id)) => {
+            filters::with_source(eg, execute_data, |eg| filters::seek(eg, id, seek_from))?
+        }
+        (value, _) => value,
+    };
+    let succeeded = succeeded.unwrap_or(false);
     return_value(return_pointer, Value::long(if succeeded { 0 } else { -1 }))
 }
 
@@ -1076,14 +1244,20 @@ fn fn_rewind(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let succeeded = argument(execute_data, 0)
-        .as_resource_id()
-        .and_then(|resource| {
-            with_stream(eg, resource, |stream| {
-                stream.seek(SeekFrom::Start(0)).is_ok()
-            })
+    let resource = argument(execute_data, 0).as_resource_id();
+    let succeeded = resource.and_then(|resource| {
+        super::resource::with_request_payload_mut::<PhpStream, _>(eg, resource, |stream| {
+            stream.seek(SeekFrom::Start(0)).is_ok()
         })
-        .unwrap_or(false);
+    });
+    #[cfg(feature = "stream-registry")]
+    let succeeded = match (succeeded, resource) {
+        (None, Some(id)) => filters::with_source(eg, execute_data, |eg| {
+            filters::seek(eg, id, SeekFrom::Start(0))
+        })?,
+        (value, _) => value,
+    };
+    let succeeded = succeeded.unwrap_or(false);
     return_value(return_pointer, Value::bool(succeeded))
 }
 
@@ -1133,6 +1307,8 @@ fn fn_stream_get_meta_data(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let resource = argument(execute_data, 0).as_resource_id();
+    #[cfg(feature = "stream-registry")]
+    let filtered_unread = resource.and_then(|id| filters::unread_bytes(eg, id));
     let value = resource.and_then(|resource| {
         with_stream(eg, resource, |stream| {
             let metadata = stream.metadata();
@@ -1152,7 +1328,10 @@ fn fn_stream_get_meta_data(
             result.set_str("wrapper_type", Value::string(metadata.wrapper_type));
             result.set_str("stream_type", Value::string(metadata.stream_type));
             result.set_str("mode", Value::string(metadata.mode));
-            result.set_str("unread_bytes", Value::long(metadata.unread_bytes as i64));
+            let unread = metadata.unread_bytes;
+            #[cfg(feature = "stream-registry")]
+            let unread = filtered_unread.unwrap_or(unread);
+            result.set_str("unread_bytes", Value::long(unread as i64));
             result.set_str("seekable", Value::bool(metadata.seekable));
             result.set_str("uri", Value::string(metadata.uri));
             Value::array(result)

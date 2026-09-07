@@ -1,0 +1,6 @@
+stream_filter_append(): Unable to locate filter "missing.inner":file=1:line=1
+stream_filter_append(): Unable to create or locate filter "nested.reject":file=1:line=1
+bool(false)
+stream_filter_append(): Unable to locate filter "missing.outer":file=1:line=1
+handler-stop
+ordinary-after-filter:file=1:line=1

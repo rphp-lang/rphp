@@ -1,0 +1,8 @@
+direct:1:0
+dynamic:1:0
+named:1:0
+float-direct:0:0:NULL
+float-direct:1:1:NULL
+float-dynamic:0:1:NULL
+float-named:0:1:NULL
+float-alias:0:1:NULL

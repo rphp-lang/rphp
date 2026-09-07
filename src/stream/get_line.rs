@@ -1,6 +1,6 @@
 //! Bounded stream reads terminated by an arbitrary byte sequence.
 
-use std::io::{self, SeekFrom};
+use std::io;
 
 use super::PhpStream;
 
@@ -10,8 +10,7 @@ impl PhpStream {
     /// only when EOF is reached before any byte is read.
     ///
     /// The KMP prefix table keeps matching linear for long or self-overlapping
-    /// endings. Bytes read beyond the match are returned to the seekable
-    /// backend so subsequent operations observe the exact PHP cursor.
+    /// endings. Bytes beyond the match remain in the native read buffer.
     pub fn read_until(
         &mut self,
         buffer: &mut Vec<u8>,
@@ -33,7 +32,7 @@ impl PhpStream {
 
         while buffer.len() < maximum {
             let requested = chunk.len().min(maximum - buffer.len());
-            let read = self.read_backend(&mut chunk[..requested])?;
+            let read = self.read_prefetched(&mut chunk[..requested])?;
             if read == 0 {
                 self.eof = true;
                 return Ok((!buffer.is_empty()).then_some(buffer.len()));
@@ -47,7 +46,7 @@ impl PhpStream {
             };
             let consumed = ending_at.unwrap_or(read);
             if buffer.try_reserve(consumed).is_err() {
-                rewind(self, read)?;
+                self.put_back(&chunk[..read]);
                 return Err(io::Error::new(
                     io::ErrorKind::OutOfMemory,
                     "stream line buffer allocation failed",
@@ -56,7 +55,7 @@ impl PhpStream {
             buffer.extend_from_slice(&chunk[..consumed]);
 
             if consumed < read {
-                rewind(self, read - consumed)?;
+                self.put_back(&chunk[consumed..read]);
             }
             if ending_at.is_some() {
                 buffer.truncate(buffer.len() - ending.len());
@@ -108,9 +107,4 @@ fn find_ending(
         }
     }
     None
-}
-
-fn rewind(stream: &mut PhpStream, bytes: usize) -> io::Result<()> {
-    let bytes = i64::try_from(bytes).expect("stream line chunk fits in i64");
-    stream.seek_backend(SeekFrom::Current(-bytes)).map(|_| ())
 }

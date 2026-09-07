@@ -7,7 +7,56 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 PHP 8.5 checkpoint is
+The latest measured AMD64 PHP 8.5 checkpoint is `user-stream-filter-lifecycle`,
+against runtime parent `fcbe89ca` (the intervening `fd3fd8af` only improves the
+test runner). User filters share bucket, read/write, removal, alias, exception
+and shutdown ownership rules with native streams. Cold `php://filter` opening
+also serves native/data file consumers and includes. By-reference callback
+arguments and canonical property writes preserve binary data, diagnostic
+priority and caller snapshots. Optional read-ahead preserves logical cursor,
+EOF, prebuffer and stat-cache behavior. Shared resource handles keep `Value`
+at 16 bytes; native-only cleanup does not enter PHP.
+
+The unmodified 25-case php-src `fcc29c8` supplying packet improves from 0/25
+to 24/1: **+24/-0**. `filters/bug54350.phpt` remains a visible failure and also
+disagrees with the PHP 8.5.10 reference; it is not counted as a pass. The three
+core gains are included in those 24, not additional gains. The exact 7,174-case
+core is **6,432 pass / 348 fail / 182 skip / 212 unsupported**, without a lost
+pass, missing case, timeout or crash. Zend/lang manifest and sorted pass set:
+`bf3e6c6a698e97e5858ca4f5e173f7509772cf2fc818dfbdf30dc74cc93f4c9b` /
+`6a3311618b0071b4d9ce366d4427c13bbe81d93ff353ba946a7132cdb2441c80`.
+Strings/array remains byte-identical: manifest
+`226fe156d12e05ebe8f9d6d89d47aa08b437df360a702b3f81c35386e85b57ef`,
+pass set `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+
+Original filter E2E 37/37, stream E2E 41/41, CLI shutdown 2/2, resource units
+14/14 and cleanup classifier 1/1 pass, with byte-exact reference process
+oracles. Five checked Cargo configurations pass (4,711/4,426/4,782/4,804/4,855;
+13/13/13/13/16 ignored), as do all-target, Composer/Symfony S0-S3, formatting,
+public hygiene and the unchanged 1,621/289 unsafe inventory. Matrix/log hashes
+and input fingerprint validate reuse without rerunning unchanged configurations.
+Matrix record: `bba97fb1806078c931e8cd9c41528a842c592fcf48ae4dbf450e0105ad3ae0ae`.
+No-loss record: `93673e0545e39f41f77fcbf20b92dfa99266763450862e3d4b14e566139aa5ed`.
+
+At the user's explicit direction, performance was measured on the existing
+shared host without stopping other workloads, **not in an exclusive window**.
+The guard retains two background-workload events; its isolation verdict is
+false. Numeric acceptance is separate, with unchanged common/pay-use budgets.
+An initial short-sample array result of +2.098% was not accepted. The unchanged
+binary and seven checksum-identical workloads were then measured in longer
+batches, 32 alternating fixed-parent pairs: startup -0.074%, ordinary call
+-0.969%, object lifecycle -3.509%, array -0.197%, memory I/O -14.372%, file I/O
+-0.354%, resource aliases +0.944%. These are shared-host paired medians, not
+an isolated-host guarantee. Results/summary SHA-256:
+`3e4ae335b08d10762576e6475dc7939020832a5650f3097de2a445982677577e` /
+`f84595f1b6c4ad857180b76860edc4454ee34002104bb3cbbd8787fb2c1d9790`.
+Exact release SHA-256:
+`79d8ffe454169143b513c91db57ae8601d16381ebdfb4f1473e178c5cc797594`.
+Arbitrary user-wrapper filter-URI backings, broader context propagation,
+general codecs/SAPI/SPL, extension availability and allocation/OOM equivalence
+remain non-claims. No private benchmark host was configured.
+
+The preceding measured AMD64 PHP 8.5 checkpoint is
 `contextual-token-contracts`, based on `6a2766eb`. Reserved member names retain
 their spelling without becoming valid global declarations or statement-valued
 array elements. Grammar-specific errors retain the offending token and source

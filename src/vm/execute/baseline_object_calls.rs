@@ -595,12 +595,27 @@ fn attach_constant_expression_origin(
     }
 }
 
+enum InstanceDefaultOrigin<'a> {
+    User(*mut ExecuteData, &'a crate::compiler::OpArray, usize),
+    #[cfg(feature = "stream-registry")]
+    Internal(*mut ExecuteData),
+}
+
+impl InstanceDefaultOrigin<'_> {
+    #[cold]
+    fn attach(&self, exception: &Value, definition: &crate::compiler::compile::DeferredPropertyDefault, eg: &ExecutorGlobals) {
+        match self {
+            Self::User(frame, op_array, ip) => attach_constant_expression_origin(exception, definition, eg, *frame, op_array, *ip),
+            #[cfg(feature = "stream-registry")]
+            Self::Internal(frame) => attach_internal_constant_expression_trace(exception, *frame, eg),
+        }
+    }
+}
+
 #[cold]
 fn materialize_deferred_static_defaults(
     eg: &mut ExecutorGlobals,
-    frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
-    ip: usize,
+    origin: &InstanceDefaultOrigin<'_>,
     class_id: u32,
 ) -> Result<bool, VmError> {
     let Some((entries, class_name)) = eg.class_by_id(class_id).and_then(|class| {
@@ -636,14 +651,7 @@ fn materialize_deferred_static_defaults(
                 .exception
                 .as_ref()
                 .expect("deferred static property default failure sets an exception");
-            attach_constant_expression_origin(
-                exception,
-                deferred,
-                eg,
-                frame,
-                op_array,
-                ip,
-            );
+            origin.attach(exception, deferred, eg);
             return Ok(false);
         };
         if eg.exception.is_some() {
@@ -653,14 +661,7 @@ fn materialize_deferred_static_defaults(
             Ok(value) => value,
             Err(message) => {
                 let exception = make_error_value("TypeError", &message);
-                attach_constant_expression_origin(
-                    &exception,
-                    deferred,
-                    eg,
-                    frame,
-                    op_array,
-                    ip,
-                );
+                origin.attach(&exception, deferred, eg);
                 eg.exception = Some(exception);
                 return Ok(false);
             }
@@ -677,9 +678,7 @@ fn materialize_deferred_static_defaults(
 #[cold]
 fn materialize_deferred_instance_defaults(
     eg: &mut ExecutorGlobals,
-    frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
-    ip: usize,
+    origin: &InstanceDefaultOrigin<'_>,
     class_id: u32,
 ) -> Result<Option<std::rc::Rc<[Value]>>, VmError> {
     let Some((entries, base_defaults, class_name)) = eg.class_by_id(class_id).and_then(|class| {
@@ -716,14 +715,7 @@ fn materialize_deferred_instance_defaults(
                     .exception
                     .as_ref()
                     .expect("deferred property default failure sets an exception");
-                attach_constant_expression_origin(
-                    exception,
-                    deferred,
-                    eg,
-                    frame,
-                    op_array,
-                    ip,
-                );
+                origin.attach(exception, deferred, eg);
                 return Ok(None);
             };
             if eg.exception.is_some() {
@@ -738,14 +730,7 @@ fn materialize_deferred_instance_defaults(
                 Ok(value) => value,
                 Err(message) => {
                     let exception = make_error_value("TypeError", &message);
-                    attach_constant_expression_origin(
-                        &exception,
-                        deferred,
-                        eg,
-                        frame,
-                        op_array,
-                        ip,
-                    );
+                    origin.attach(&exception, deferred, eg);
                     eg.exception = Some(exception);
                     return Ok(None);
                 }
@@ -771,6 +756,44 @@ fn materialize_deferred_instance_defaults(
         }
     }
     evaluated
+}
+
+/// Internal protocols construct a real instance without calling its user
+/// constructor. Defaults use the same request-local materialization and type
+/// checks as NewObj, including deferred constant-expression failures.
+#[cfg(feature = "stream-registry")]
+#[cold]
+pub(crate) fn instantiate_protocol_object(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    class_id: u32,
+) -> Result<Option<Value>, VmError> {
+    let class = eg.class_by_id(class_id).ok_or_else(|| VmError::Fatal("Invalid protocol class".into()))?;
+    let kind = if class.is_trait { Some("trait") } else if class.is_interface { Some("interface") }
+        else if class.is_abstract { Some("abstract class") } else if class.is_enum { Some("enum") } else { None };
+    if let Some(kind) = kind {
+        eg.exception = Some(make_error_value("Error", &format!("Cannot instantiate {kind} {}", class.name)));
+        return Ok(None);
+    }
+    if eg.deferred_class_constants_require_activation(class_id)
+        && !crate::stdlib::reflection::activate_deferred_class_constants(class_id, eg)? {
+        if let Some(exception) = &eg.exception { attach_internal_constant_expression_trace(exception, frame, eg); }
+        return Ok(None);
+    }
+    let origin = InstanceDefaultOrigin::Internal(frame);
+    if !materialize_deferred_static_defaults(eg, &origin, class_id)? { return Ok(None); }
+    let deferred = eg.class_by_id(class_id)
+        .and_then(|class| class.deferred_instance_defaults.as_ref())
+        .is_some_and(|defaults| defaults.has_runtime_entries());
+    let resolved = if deferred {
+        let Some(defaults) = materialize_deferred_instance_defaults(eg, &origin, class_id)? else { return Ok(None) };
+        Some(defaults)
+    } else { None };
+    let class = eg.class_by_id(class_id).expect("registered protocol class");
+    Ok(Some(Value::object(PhpObject::with_layout_from_defaults(
+        class_id, class.property_layout.clone(),
+        resolved.as_deref().unwrap_or(class.property_defaults.as_ref()),
+    ))))
 }
 
 /// Non-public constructors are checked for each invocation: the same closure
@@ -957,7 +980,7 @@ fn op_new_obj_resolved<'a>(
         });
     let class_def = if deferred_static_defaults {
         let class_id = class_def.expect("checked class definition").class_id;
-        if !materialize_deferred_static_defaults(eg, frame, op_array, ip, class_id)? {
+        if !materialize_deferred_static_defaults(eg, &InstanceDefaultOrigin::User(frame, op_array, ip), class_id)? {
             let exception = eg
                 .exception
                 .take()
@@ -975,7 +998,7 @@ fn op_new_obj_resolved<'a>(
     };
     let deferred_defaults = if deferred_defaults {
         let class_id = class_def.expect("checked class definition").class_id;
-        match materialize_deferred_instance_defaults(eg, frame, op_array, ip, class_id)? {
+        match materialize_deferred_instance_defaults(eg, &InstanceDefaultOrigin::User(frame, op_array, ip), class_id)? {
             Some(defaults) => Some(defaults),
             None => {
                 let exception = eg
@@ -3093,6 +3116,14 @@ fn op_unset_obj<'a>(
             && object_ref.contains_property(&key)
             && !explicitly_unset_declared
     };
+    let release = removed.then(|| {
+        let previous = if hidden_parent_private {
+            object_ref.get_dynamic_property_with_position(&key).map(|(value, _)| value)
+        } else {
+            object_ref.get_property(&key)
+        };
+        previous.and_then(|value| prepare_replaced_value_release(eg, value))
+    }).flatten();
     drop(object_ref);
 
     if removed {
@@ -3101,6 +3132,10 @@ fn op_unset_obj<'a>(
         } else {
             object.as_object_mut().unwrap().unset_property(&key);
             eg.mark_initializing_lazy_property_written(object, &key);
+        }
+        run_prepared_value_destructor(eg, release)?;
+        if let Some(result) = take_magic_exception(eg, frame)? {
+            return Ok(result);
         }
         return Ok(ColdResult::Done);
     }
@@ -4945,28 +4980,7 @@ fn op_assign_obj_prop_inner<'a>(
         if prop_exists {
             let assignment_result = (opline._pad & ASSIGN_PROP_RESULT_VALUE != 0)
                 .then(|| assigned.clone());
-            let destructor = {
-                let object = obj.as_object().unwrap();
-                let property = if force_dynamic {
-                    object
-                        .get_dynamic_property_with_position(&key)
-                        .map(|(value, _)| value)
-                } else {
-                    object.get_property(&key)
-                };
-                property.and_then(|value| prepare_replaced_value_destructor(eg, value))
-            };
-            if let Some(mut php_obj) = obj.as_object_mut() {
-                {
-                    let property = if force_dynamic {
-                        php_obj.get_dynamic_property_mut(&key)
-                    } else {
-                        php_obj.get_property_mut(&key)
-                    }
-                        .expect("existing property must remain addressable during assignment");
-                    assignment_slot_set(property, assigned);
-                }
-            }
+            let destructor = commit_existing_object_property(eg, obj, &key, assigned, force_dynamic);
             if let Some(assignment_result) = assignment_result.as_ref() {
                 publish_property_assignment_result(frame, opline, assignment_result);
             }

@@ -79,6 +79,15 @@ pub(super) fn fn_stream_get_contents(
         }
         _ => {
             #[cfg(feature = "stream-registry")]
+            if let Some(bytes) = super::filters::with_source(eg, execute_data, |eg| {
+                super::filters::read_contents(eg, resource, length, offset)
+            })? {
+                return super::return_value(
+                    return_pointer,
+                    super::super::php_byte_result(bytes, false),
+                );
+            }
+            #[cfg(feature = "stream-registry")]
             if super::user_wrapper::is_user_stream(eg, resource) {
                 if offset.is_some() {
                     return super::return_value(return_pointer, Value::bool(false));

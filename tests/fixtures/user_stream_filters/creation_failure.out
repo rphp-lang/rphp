@@ -1,0 +1,14 @@
+reject
+diag:2:stream_filter_append(): Unable to create or locate filter "reject"
+bool(false)
+live:1
+Exception:creation
+live:1
+diag:2:stream_filter_append(): User-filter "absent" requires class "UnregisteredClass", but that class is not defined
+diag:2:stream_filter_append(): Unable to create or locate filter "absent"
+bool(false)
+live:1
+diag:2:stream_filter_append(): Unable to locate filter "unknown"
+bool(false)
+live:1
+throw-close

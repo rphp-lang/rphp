@@ -2063,6 +2063,31 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "filename"
     );
     streams::register(eg, &mut funcs);
+    #[cfg(feature = "file-contents")]
+    {
+        reg_typed!(
+            "readfile",
+            file_contents::fn_readfile,
+            3,
+            1,
+            ["filename", "use_include_path", "context"],
+            [
+                ParamTypeHint::String,
+                ParamTypeHint::Bool,
+                ParamTypeHint::None
+            ],
+            ParamTypeHint::Union(vec![
+                ParamTypeHint::Int,
+                ParamTypeHint::ClassName("false".into())
+            ])
+        );
+        let pointer = &funcs.last().expect("registered readfile").common as *const FunctionCommon;
+        eg.register_internal_function_reflection_metadata(
+            pointer,
+            vec![None, Some(Value::bool(false)), Some(Value::null())],
+            "standard",
+        );
+    }
     #[cfg(not(feature = "file-contents"))]
     reg!("file_get_contents", fn_file_get_contents, 1, 1, "filename");
     #[cfg(feature = "file-contents")]

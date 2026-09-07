@@ -14357,15 +14357,25 @@ impl Compiler {
                     }
                     self.instructions.push(send);
                 }
-                CallArg::Positional(Expr::Variable { name, line }) if use_var_ex => {
+                CallArg::Positional(Expr::Variable { name, line })
+                    if use_var_ex
+                        || (*line != 0
+                            && name != "this"
+                            && self.cv_table.get(name).is_none_or(|cv| {
+                                !self.definitely_defined_cvs.contains(&(*cv as u16))
+                            })) =>
+                {
+                    // Fetch an uncertain variable directly into its argument
+                    // slot. A separate FetchCvR TMP would retain an extra heap
+                    // owner in the caller after the call has finished. The
+                    // existing runtime send preserves the warning/null
+                    // snapshot and reference-parameter rules without it.
                     let cv = self.resolve_cv(name);
                     let mut send = Instruction::new(OpCode::SendVarEx);
                     send.op1 = cv;
                     send.op1_type = OpType::Cv;
                     send.op2 = (i as u32 + cv_offset) as u16;
-                    if set_extended_value {
-                        send.extended_value = i as u32;
-                    }
+                    send.extended_value = i as u32;
                     if *line != 0 {
                         send.result = self.add_literal(Value::string(name.clone()));
                         send.result_type = OpType::Const;
@@ -14373,6 +14383,11 @@ impl Compiler {
                         self.push_instruction_at_line(send, *line);
                     } else {
                         self.instructions.push(send);
+                    }
+                    if !use_var_ex {
+                        // Like FetchCvR, an undefined-read handler may mutate
+                        // the globals used by subsequent arguments.
+                        self.invalidate_reentrant_definitions();
                     }
                 }
                 CallArg::Positional(expr)

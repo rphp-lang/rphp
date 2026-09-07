@@ -25,7 +25,7 @@ mod temp;
 mod truncate;
 
 #[cfg(not(target_vendor = "apple"))]
-use csv::CsvParser;
+pub(crate) use csv::CsvParser;
 use temp::{TempStream, memory_limit as temp_memory_limit};
 
 /// Parse the complete byte string supplied to `str_getcsv()`. This shares the
@@ -94,20 +94,18 @@ impl StreamMode {
 }
 
 /// `php://memory` and `php://temp` deliberately accept the legacy wrapper
-/// mode grammar rather than the filesystem parser. Any `+` enables update
-/// access, an initial `a` selects append, and every other non-update spelling
-/// is read-only. PHP applications historically rely on forms such as `+r`.
+/// mode grammar rather than the filesystem parser. A `w`, `a` or `+` anywhere
+/// before the C-string terminator enables both reading and writing; `a` also
+/// selects append. Other spellings remain read-only, including `x` and `c`.
 fn php_memory_stream_mode(mode: &str) -> StreamMode {
-    if matches!(mode.as_bytes().first(), Some(b'r' | b'w' | b'a'))
-        && let Some(mode) = StreamMode::parse(mode)
-    {
-        return mode;
+    let mut write = false;
+    let mut append = false;
+    for byte in mode.bytes().take_while(|byte| *byte != 0) {
+        write |= matches!(byte, b'w' | b'a' | b'+');
+        append |= byte == b'a';
     }
-    let update = mode.contains('+');
-    let append = mode.starts_with('a');
-    let write = update || append || mode.starts_with('w');
     StreamMode {
-        read: update || !write,
+        read: true,
         write,
         append,
         create: write,
@@ -155,10 +153,18 @@ pub struct PhpStream {
     reported_mode: String,
     uri: String,
     eof: bool,
+    read_buffer: Option<Box<ReadBuffer>>,
+    plain_file_io: bool,
     #[cfg(feature = "stream-truncate")]
     memory_append_after_truncate: bool,
     #[cfg(feature = "stream-context")]
     context: Option<Box<StreamContext>>,
+}
+
+#[derive(Default)]
+struct ReadBuffer {
+    bytes: Vec<u8>,
+    start: usize,
 }
 
 /// Stable metadata exposed by the currently admitted seekable backends.
@@ -235,6 +241,8 @@ impl PhpStream {
             reported_mode: reported_mode.to_string(),
             uri: uri.to_string(),
             eof: false,
+            read_buffer: None,
+            plain_file_io: false,
             #[cfg(feature = "stream-truncate")]
             memory_append_after_truncate: false,
             #[cfg(feature = "stream-context")]
@@ -253,6 +261,8 @@ impl PhpStream {
                 reported_mode: php_memory_mode(mode).to_string(),
                 uri: path.to_string(),
                 eof: false,
+                read_buffer: None,
+                plain_file_io: false,
                 #[cfg(feature = "stream-truncate")]
                 memory_append_after_truncate: false,
                 #[cfg(feature = "stream-context")]
@@ -267,6 +277,8 @@ impl PhpStream {
                 reported_mode: php_memory_mode(mode).to_string(),
                 uri: path.to_string(),
                 eof: false,
+                read_buffer: None,
+                plain_file_io: false,
                 #[cfg(feature = "stream-truncate")]
                 memory_append_after_truncate: false,
                 #[cfg(feature = "stream-context")]
@@ -303,11 +315,33 @@ impl PhpStream {
             reported_mode: requested_mode.to_string(),
             uri: path.to_string(),
             eof: false,
+            read_buffer: None,
+            plain_file_io: false,
             #[cfg(feature = "stream-truncate")]
             memory_append_after_truncate: false,
             #[cfg(feature = "stream-context")]
             context: None,
         })
+    }
+
+    /// A decoded data wrapper owns immutable input with the same seek/read
+    /// backend as memory streams, without a temporary write or extra copy.
+    #[cold]
+    #[cfg(feature = "stream-registry")]
+    pub(crate) fn decoded_input(bytes: Vec<u8>, uri: &str) -> Self {
+        Self {
+            backend: StreamBackend::Memory(Cursor::new(bytes)),
+            mode: StreamMode::parse("rb").expect("constant stream mode"),
+            reported_mode: "rb".into(),
+            uri: uri.into(),
+            eof: false,
+            read_buffer: None,
+            plain_file_io: false,
+            #[cfg(feature = "stream-truncate")]
+            memory_append_after_truncate: false,
+            #[cfg(feature = "stream-context")]
+            context: None,
+        }
     }
 
     #[cfg(feature = "stream-context")]
@@ -343,6 +377,11 @@ impl PhpStream {
     }
 
     #[inline]
+    pub(crate) fn take_plain_file_io(&mut self) -> bool {
+        std::mem::take(&mut self.plain_file_io)
+    }
+
+    #[inline]
     pub fn is_eof(&self) -> bool {
         self.eof
     }
@@ -350,7 +389,10 @@ impl PhpStream {
     fn read_backend(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         loop {
             let result = match &mut self.backend {
-                StreamBackend::File(file) => file.read(buffer),
+                StreamBackend::File(file) => {
+                    self.plain_file_io = true;
+                    file.read(buffer)
+                }
                 StreamBackend::Memory(memory) => memory.read(buffer),
                 StreamBackend::Temp(temp) => temp.read(buffer),
                 StreamBackend::Standard(StandardStream::Input) => io::stdin().lock().read(buffer),
@@ -379,21 +421,113 @@ impl PhpStream {
     }
 
     pub fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        if !self.is_readable() {
+        if !self.is_readable() && !self.is_plain_file() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "stream is not readable",
             ));
         }
-        let read = self.read_backend(buffer)?;
-        self.eof = read == 0;
-        Ok(read)
+        let mut total = 0;
+        while total < buffer.len() {
+            let read = self.read_once(&mut buffer[total..])?;
+            self.eof = read == 0;
+            total += read;
+            if read == 0 || matches!(self.backend, StreamBackend::Standard(_)) {
+                break;
+            }
+        }
+        Ok(total)
     }
 
-    /// Read one line without retaining a hidden userspace buffer. A stack
-    /// chunk amortizes file reads; bytes beyond the first newline are returned
-    /// to the seekable backend so `ftell`, writes and later reads observe the
-    /// exact PHP cursor. `length` includes PHP's reserved terminator byte.
+    fn read_once(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.unread_len() != 0 || self.is_plain_file() {
+            self.read_prefetched(buffer)
+        } else {
+            self.read_backend(buffer)
+        }
+    }
+
+    #[inline]
+    fn unread_len(&self) -> usize {
+        self.read_buffer
+            .as_ref()
+            .map_or(0, |b| b.bytes.len() - b.start)
+    }
+
+    /// Only actual readahead allocates. Memory fread remains a direct cursor
+    /// read; lines and small plain-file reads retain a stable byte snapshot.
+    fn read_prefetched(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+        if self.unread_len() == 0 {
+            if output.len() >= 8192 {
+                return self.read_backend(output);
+            }
+            let mut buffer = self.read_buffer.take().unwrap_or_default();
+            buffer.start = 0;
+            buffer.bytes.resize(8192, 0);
+            let result = self.read_backend(&mut buffer.bytes);
+            buffer.bytes.truncate(result.as_ref().copied().unwrap_or(0));
+            self.read_buffer = Some(buffer);
+            result?;
+        }
+        let buffer = self.read_buffer.as_mut().expect("prefetch buffer");
+        let count = output.len().min(buffer.bytes.len() - buffer.start);
+        output[..count].copy_from_slice(&buffer.bytes[buffer.start..buffer.start + count]);
+        buffer.start += count;
+        Ok(count)
+    }
+
+    /// Return a scanned suffix to the logical stream, not to the underlying
+    /// file: another handle may have already changed its physical contents.
+    fn put_back(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        let buffer = self.read_buffer.get_or_insert_with(Default::default);
+        if buffer.start >= bytes.len() {
+            buffer.start -= bytes.len();
+            buffer.bytes[buffer.start..buffer.start + bytes.len()].copy_from_slice(bytes);
+        } else {
+            let remaining = buffer.bytes.len() - buffer.start;
+            buffer.bytes.copy_within(buffer.start.., 0);
+            buffer.bytes.resize(remaining + bytes.len(), 0);
+            buffer.bytes.copy_within(..remaining, bytes.len());
+            buffer.bytes[..bytes.len()].copy_from_slice(bytes);
+            buffer.start = 0;
+        }
+    }
+
+    #[cfg(feature = "stream-registry")]
+    pub(crate) fn prefetched_bytes(&self) -> &[u8] {
+        self.read_buffer
+            .as_ref()
+            .map_or(&[], |b| &b.bytes[b.start..])
+    }
+
+    pub(crate) fn discard_prefetched(&mut self) {
+        if let Some(buffer) = self.read_buffer.as_mut() {
+            buffer.bytes.clear();
+            buffer.start = 0;
+        }
+    }
+
+    /// Read one filter-input bucket. A temporary stream delegates through
+    /// another stream's buffered reader, so its short read already observes
+    /// EOF; direct memory/file backends observe EOF on the next empty read.
+    #[cfg(feature = "stream-registry")]
+    pub(crate) fn read_filter_input(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let count = self.read_once(buffer)?;
+        self.eof = count == 0;
+        if matches!(self.backend, StreamBackend::Temp(_)) && count < buffer.len() {
+            self.eof = true;
+        }
+        Ok(count)
+    }
+
+    /// Read one line, retaining readahead separately from the logical cursor.
+    /// `length` includes PHP's reserved terminator byte.
     pub fn read_line(
         &mut self,
         buffer: &mut Vec<u8>,
@@ -492,7 +626,7 @@ impl PhpStream {
 
         while buffer.len() < maximum {
             let requested = chunk.len().min(maximum - buffer.len());
-            let read = self.read_backend(&mut chunk[..requested])?;
+            let read = self.read_prefetched(&mut chunk[..requested])?;
             if read == 0 {
                 self.eof = true;
                 return Ok((!buffer.is_empty()).then_some(buffer.len()));
@@ -504,8 +638,7 @@ impl PhpStream {
                 .position(|byte| *byte == b'\n')
                 .map_or(read, |newline| newline + 1);
             if buffer.try_reserve(consumed).is_err() {
-                let rewind = i64::try_from(read).expect("line chunk fits in i64");
-                self.seek_backend(SeekFrom::Current(-rewind))?;
+                self.put_back(&chunk[..read]);
                 return Err(io::Error::new(
                     io::ErrorKind::OutOfMemory,
                     "line buffer allocation failed",
@@ -514,8 +647,7 @@ impl PhpStream {
             buffer.extend_from_slice(&chunk[..consumed]);
 
             if consumed < read {
-                let unread = i64::try_from(read - consumed).expect("line chunk fits in i64");
-                self.seek_backend(SeekFrom::Current(-unread))?;
+                self.put_back(&chunk[consumed..read]);
             }
             if consumed < read || chunk[consumed - 1] == b'\n' {
                 return Ok(Some(buffer.len()));
@@ -531,7 +663,7 @@ impl PhpStream {
         let Ok(consumed) = i64::try_from(consumed) else {
             return;
         };
-        if self.seek_backend(SeekFrom::Current(-consumed)).is_ok() {
+        if self.seek(SeekFrom::Current(-consumed)).is_ok() {
             self.eof = false;
         }
     }
@@ -543,10 +675,16 @@ impl PhpStream {
                 "stream is not writable",
             ));
         }
+        if self.unread_len() != 0 {
+            self.seek(SeekFrom::Current(0))?;
+        }
         self.eof = false;
         loop {
             let result = match &mut self.backend {
-                StreamBackend::File(file) => file.write(buffer),
+                StreamBackend::File(file) => {
+                    self.plain_file_io = true;
+                    file.write(buffer)
+                }
                 StreamBackend::Memory(memory) => {
                     if self.mode.append {
                         memory.seek(SeekFrom::End(0))?;
@@ -587,7 +725,10 @@ impl PhpStream {
 
     pub fn flush(&mut self) -> io::Result<()> {
         match &mut self.backend {
-            StreamBackend::File(file) => file.flush(),
+            StreamBackend::File(file) => {
+                self.plain_file_io = true;
+                file.flush()
+            }
             StreamBackend::Memory(memory) => memory.flush(),
             StreamBackend::Temp(temp) => temp.flush(),
             StreamBackend::Standard(StandardStream::Input) => Ok(()),
@@ -660,7 +801,16 @@ impl PhpStream {
     }
 
     pub fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        let position = match position {
+            SeekFrom::Current(offset) => {
+                SeekFrom::Current(offset.checked_sub(self.unread_len() as i64).ok_or_else(
+                    || io::Error::new(io::ErrorKind::InvalidInput, "stream seek overflow"),
+                )?)
+            }
+            position => position,
+        };
         let position = self.seek_backend(position)?;
+        self.discard_prefetched();
         self.eof = false;
         #[cfg(feature = "stream-truncate")]
         {
@@ -670,7 +820,7 @@ impl PhpStream {
     }
 
     pub fn position(&mut self) -> io::Result<u64> {
-        match &mut self.backend {
+        let position = match &mut self.backend {
             StreamBackend::File(file) => file.stream_position(),
             StreamBackend::Memory(memory) => Ok(memory.position()),
             StreamBackend::Temp(temp) => temp.position(),
@@ -678,7 +828,8 @@ impl PhpStream {
                 io::ErrorKind::Unsupported,
                 "standard stream does not expose a position",
             )),
-        }
+        }?;
+        Ok(position.saturating_sub(self.unread_len() as u64))
     }
 
     pub fn metadata(&self) -> StreamMetadata<'_> {
@@ -701,7 +852,7 @@ impl PhpStream {
             wrapper_type,
             stream_type,
             mode: &self.reported_mode,
-            unread_bytes: 0,
+            unread_bytes: self.unread_len(),
             seekable: !matches!(self.backend, StreamBackend::Standard(_)),
             uri: &self.uri,
         }

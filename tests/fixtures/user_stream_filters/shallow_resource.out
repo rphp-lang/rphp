@@ -1,0 +1,15 @@
+object-live
+close:object
+object-gone
+array-copy-live
+close:array
+array-copy-gone
+native:2:1
+close:temporary
+temporary-gone
+close:array-temporary
+array-temporary-gone
+shared-live
+close:shared
+shared-gone
+done

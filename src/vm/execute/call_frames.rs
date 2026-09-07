@@ -180,14 +180,14 @@ fn destructor_identity(eg: &ExecutorGlobals, value: &Value) -> Option<usize> {
         value
             .weak_object_identity()
             .filter(|identity| eg.has_weak_object_release_work(*identity))
-    })
+    }).or_else(|| value.needs_vm_resource_release().then(|| value.vm_release_identity()).flatten())
 }
 
 #[inline]
 fn value_requires_vm_release(eg: &ExecutorGlobals, value: &Value) -> bool {
     let value = value.dereferenced();
     let Some(identity) = value.weak_object_identity() else {
-        return false;
+        return value.needs_vm_resource_release();
     };
     eg.has_weak_object_release_work(identity)
         || eg.lazy_object_state(value).is_some()
@@ -201,6 +201,42 @@ fn value_requires_vm_release(eg: &ExecutorGlobals, value: &Value) -> bool {
         })
 }
 
+/// Native resource owners need only their ordinary Rc drop. Enter the PHP
+/// release planner for resources only after a protocol installs a callback.
+#[inline]
+fn value_may_require_direct_vm_release(value: &Value) -> bool {
+    match value.value_type() {
+        ValueType::Object | ValueType::Closure => true,
+        ValueType::Resource => value.needs_vm_resource_release(),
+        ValueType::Reference => referenced_value_may_require_direct_vm_release(value),
+        _ => false,
+    }
+}
+
+// The common scalar destination needs only its tag. Resolving a potential
+// reference before that test can make the compiler speculate reference
+// payload/address work into every scalar assignment.
+#[cold]
+#[inline(never)]
+fn referenced_value_may_require_direct_vm_release(value: &Value) -> bool {
+    let value = value.dereferenced();
+    match value.value_type() {
+        ValueType::Object | ValueType::Closure => true,
+        ValueType::Resource => value.needs_vm_resource_release(),
+        _ => false,
+    }
+}
+
+#[inline]
+fn property_prevents_shallow_drop(value: &Value) -> bool {
+    let value = value.dereferenced();
+    match value.value_type() {
+        ValueType::Array | ValueType::Object | ValueType::Closure => true,
+        ValueType::Resource => value.needs_vm_resource_release(),
+        _ => false,
+    }
+}
+
 /// Prove that a statement-owned value can be retired by its ordinary Rust
 /// drop without dispatching PHP cleanup. This deliberately recognizes only a
 /// shallow, acyclic shape: scalars, scalar arrays, and destructor-free objects
@@ -209,32 +245,17 @@ fn value_requires_vm_release(eg: &ExecutorGlobals, value: &Value) -> bool {
 #[inline]
 fn value_is_shallow_plain_drop(eg: &ExecutorGlobals, value: &Value) -> bool {
     let value = value.dereferenced();
-    if value_requires_vm_release(eg, value) {
-        return false;
-    }
     match value.value_type() {
-        ValueType::Array
-            if value
-                .as_array()
-                .is_some_and(|array| !array.may_require_nested_release()) =>
-        {
-            true
-        }
         ValueType::Array => value.as_array().is_some_and(|array| {
-            array.values().all(|nested| {
+            !array.may_require_nested_release() || array.values().all(|nested| {
                 let nested = nested.dereferenced();
-                if value_requires_vm_release(eg, nested) {
-                    return false;
-                }
                 match nested.value_type() {
                     ValueType::Array | ValueType::Closure => false,
-                    ValueType::Object => nested.as_object().is_some_and(|object| {
+                    ValueType::Resource => !nested.needs_vm_resource_release(),
+                    ValueType::Object => !value_requires_vm_release(eg, nested) && nested.as_object().is_some_and(|object| {
                         let mut plain = true;
                         object.for_each_property(|_, property| {
-                            plain &= !matches!(
-                                property.dereferenced().value_type(),
-                                ValueType::Array | ValueType::Object | ValueType::Closure
-                            );
+                            plain &= !property_prevents_shallow_drop(property);
                         });
                         plain
                     }),
@@ -242,17 +263,15 @@ fn value_is_shallow_plain_drop(eg: &ExecutorGlobals, value: &Value) -> bool {
                 }
             })
         }),
-        ValueType::Object => value.as_object().is_some_and(|object| {
+        ValueType::Object => !value_requires_vm_release(eg, value) && value.as_object().is_some_and(|object| {
             let mut plain = true;
             object.for_each_property(|_, property| {
-                plain &= !matches!(
-                    property.dereferenced().value_type(),
-                    ValueType::Array | ValueType::Object | ValueType::Closure
-                );
+                plain &= !property_prevents_shallow_drop(property);
             });
             plain
         }),
         ValueType::Closure => false,
+        ValueType::Resource => !value.needs_vm_resource_release(),
         _ => true,
     }
 }
@@ -270,6 +289,7 @@ fn value_tree_requires_vm_release(
         if let Some(value) = value
             .clone_cycle_handle()
             .or_else(|| value.dereferenced().clone_cycle_handle())
+            .or_else(|| value.dereferenced().needs_vm_resource_release().then(|| value.dereferenced().clone()))
         {
             pending.push((value, depth.saturating_add(1)));
         }
@@ -415,11 +435,13 @@ fn value_may_require_vm_release_tree(eg: &ExecutorGlobals, value: &Value) -> boo
                         .as_array()
                         .is_none_or(PhpArray::may_require_nested_release),
                     ValueType::Object | ValueType::Closure => true,
+                    ValueType::Resource => property.needs_vm_resource_release(),
                     _ => false,
                 }
             })
         }),
         ValueType::Closure => true,
+        ValueType::Resource => value.needs_vm_resource_release(),
         _ => false,
     }
 }
@@ -684,8 +706,12 @@ fn run_final_object_destructor_tree_inner(
     internal_trace_origin: bool,
     logical_caller_at_current_site: bool,
 ) -> Result<bool, VmError> {
-    if owner.weak_object_strong_count() != Some(expected_references) {
+    if owner.vm_release_strong_count() != Some(expected_references) {
         return Ok(false);
+    }
+
+    if owner.value_type() == ValueType::Resource {
+        return owner.run_vm_resource_release(eg);
     }
 
     // Once final ownership is proved, install monotonic stack checkpoints on
@@ -731,7 +757,7 @@ fn run_final_object_destructor_tree_inner(
         // One owner remains in the lazy sidecar and this local Value retains a
         // second handle while dispatch is in progress.
         let expected = released_elsewhere + 2;
-        if instance.weak_object_strong_count() == Some(expected) {
+        if instance.vm_release_strong_count() == Some(expected) {
             ran_destructor |= run_final_object_destructor_tree(
                 eg,
                 instance,
@@ -756,6 +782,8 @@ fn run_final_object_destructor_tree_inner(
             if eg.find_method_info(&class_name, "__destruct").is_some()
                 && owner.mark_object_destructed()
             {
+                #[cfg(feature = "resource-lifetime")]
+                let _resource_release_scope = crate::resource_handle::ResourceReleaseScope::new(false);
                 let _ = call_magic_method_from_logical_caller(
                     eg,
                     logical_caller,
@@ -778,7 +806,7 @@ fn run_final_object_destructor_tree_inner(
 
     // A destructor may resurrect its receiver. Its properties remain live in
     // that case and must not be retired by the original release operation.
-    if owner.weak_object_strong_count() != Some(expected_references) {
+    if owner.vm_release_strong_count() != Some(expected_references) {
         return Ok(ran_destructor);
     }
 
@@ -790,7 +818,7 @@ fn run_final_object_destructor_tree_inner(
         for value in released {
             let candidate = value.dereferenced().clone();
             drop(value);
-            if candidate.weak_object_strong_count() != Some(1) {
+            if candidate.vm_release_strong_count() != Some(1) {
                 continue;
             }
             ran_destructor |= run_final_object_destructor_tree(
@@ -893,12 +921,12 @@ fn run_final_object_destructor_tree_inner(
 
     for (_, property_references, child) in children {
         let released_elsewhere = child
-            .weak_object_identity()
+            .vm_release_identity()
             .and_then(|identity| release_references.and_then(|counts| counts.get(&identity)))
             .copied()
             .unwrap_or(0);
         let expected = property_references + released_elsewhere + 1;
-        if child.weak_object_strong_count() != Some(expected) {
+        if child.vm_release_strong_count() != Some(expected) {
             continue;
         }
         ran_destructor |= run_final_object_destructor_tree(
@@ -963,7 +991,7 @@ fn run_value_destructors_inner(
     }
     if canonical_direct_roots_retained {
         for root in roots {
-            let Some(identity) = root.object_identity() else {
+            let Some(identity) = root.vm_release_identity() else {
                 continue;
             };
             if let Some((_, references, _)) = candidates
@@ -1006,7 +1034,7 @@ fn run_collected_value_destructors(
         let mut deferred = Vec::new();
         let mut progressed = false;
         for (identity, references, owner) in pending {
-            if owner.weak_object_strong_count() != Some(references + 1) {
+            if owner.vm_release_strong_count() != Some(references + 1) {
                 deferred.push((identity, references, owner));
                 continue;
             }
@@ -1222,7 +1250,7 @@ fn run_frame_destructors(
                 let Some(representative) = representative else {
                     continue;
                 };
-                if representative.weak_object_strong_count() != Some(frame_references) {
+                if representative.vm_release_strong_count() != Some(frame_references) {
                     deferred.push(identity);
                     continue;
                 }
@@ -1299,6 +1327,8 @@ fn run_exception_unwind_destructors(
     if !frame_requires_vm_release(eg, frame, &pending) {
         return Ok(pending);
     }
+    #[cfg(feature = "resource-lifetime")]
+    let _resource_release_scope = crate::resource_handle::ResourceReleaseScope::new(true);
     loop {
         run_frame_destructors(eg, frame)?;
         let Some(replacement) = eg.exception.take() else {
@@ -1342,14 +1372,19 @@ pub(crate) fn prepare_replaced_value_destructor_with_references(
     value: &Value,
     replaced_references: usize,
 ) -> Option<PreparedValueDestructor> {
+    // Rebinding one PHP reference does not release the resource stored inside
+    // a still-shared cell. Writes through the cell pass the target itself.
+    if value.dereferenced().needs_vm_resource_release() && value.owned_reference_is_aliased() {
+        return None;
+    }
     let value = value.dereferenced();
-    if !value_may_require_vm_release_tree(eg, value) || value.weak_object_identity().is_none() {
+    if !value_may_require_vm_release_tree(eg, value) || value.vm_release_identity().is_none() {
         return None;
     }
     let fiber_owned_references = value
         .object_identity()
         .map_or(0, |identity| eg.fiber_owned_object_references(identity));
-    if value.weak_object_strong_count() != Some(replaced_references + fiber_owned_references) {
+    if value.vm_release_strong_count() != Some(replaced_references + fiber_owned_references) {
         return None;
     }
     let requires_vm_release = value_tree_requires_vm_release(
@@ -1383,6 +1418,10 @@ pub(crate) fn prepare_replaced_value_tree_destructor_with_references(
         || value
             .as_array()
             .is_none_or(|array| !array.may_require_nested_release())
+        // The monotonic array marker also covers resources that may acquire a
+        // callback later. If this release sees only plain/native owners, the
+        // existing shallow proof avoids allocating a graph traversal at all.
+        || value_is_shallow_plain_drop(eg, value)
         || !value_tree_requires_vm_release(
             eg,
             value,
@@ -1406,7 +1445,7 @@ fn prepare_replaced_value_release(
         ValueType::Array => {
             prepare_replaced_value_tree_destructor_with_references(eg, value, 1)
         }
-        ValueType::Object | ValueType::Closure => {
+        ValueType::Object | ValueType::Closure | ValueType::Resource => {
             prepare_replaced_value_destructor(eg, value)
         }
         _ => None,
@@ -1504,7 +1543,7 @@ fn run_prepared_value_destructor_with_trace_site(
             replaced_references,
             fiber_owned_references,
         } => {
-            let Some(references) = owner.weak_object_strong_count() else {
+            let Some(references) = owner.vm_release_strong_count() else {
                 return Ok(());
             };
             if references > replaced_references + fiber_owned_references + 1 {
@@ -1593,6 +1632,37 @@ const STATEMENT_TEMPS_ORDINARY: u8 = 0;
 const STATEMENT_TEMPS_FOREACH_OBJECT: u8 = 1;
 const STATEMENT_TEMPS_NESTED_OBJECTS: u8 = 2;
 
+/// A construction temporary can retain the same resource as its source TMP.
+/// Count only edges that are certain to disappear with this interval: unique
+/// arrays, reached without crossing a PHP reference or an object boundary.
+/// Shared arrays remain external owners and must prevent premature callbacks.
+#[cold]
+fn unique_temp_array_resources(value: &Value) -> Vec<&Value> {
+    if value.value_type() != ValueType::Array || value.cycle_strong_count() != Some(1) {
+        return Vec::new();
+    }
+    let mut resources = Vec::new();
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        let Some(array) = value.as_array() else { continue; };
+        if !array.may_require_nested_release() {
+            continue;
+        }
+        for child in array.values() {
+            match child.value_type() {
+                ValueType::Resource => {
+                    if child.needs_vm_resource_release() {
+                        resources.push(child);
+                    }
+                }
+                ValueType::Array if child.cycle_strong_count() == Some(1) => pending.push(child),
+                _ => {},
+            }
+        }
+    }
+    resources
+}
+
 #[cold]
 fn release_statement_temps(
     eg: &mut ExecutorGlobals,
@@ -1610,6 +1680,39 @@ fn release_statement_temps(
         let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
         let compact = total <= 64;
         let bitmap = compact.then(|| (*frame).owned_heap_bitmap());
+
+        // A range can contain many scalar slots but only one counted native
+        // handle. Find that owned slot without scanning the surrounding values
+        // or entering the PHP release graph. Callback-capable resources and
+        // marked return/foreach sources retain their ordinary planner below.
+        if release_mode != STATEMENT_TEMPS_FOREACH_OBJECT {
+            if let Some(bitmap) = bitmap {
+                let below_end = if end == 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << end) - 1
+                };
+                let below_first = if first == 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << first) - 1
+                };
+                let owned = bitmap & below_end & !below_first;
+                if owned.is_power_of_two() {
+                    let index = owned.trailing_zeros() as usize;
+                    let value = base.add(index);
+                    if (*value).value_type() == ValueType::Resource
+                        && !(*value).needs_vm_resource_release()
+                    {
+                        std::ptr::drop_in_place(value);
+                        std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
+                        (*frame).heap_bitmap &= !owned;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
         let is_owned = |index: usize| {
             bitmap.map_or_else(
                 || (*base.add(index)).needs_cleanup(),
@@ -1753,6 +1856,7 @@ fn release_statement_temps(
         }
 
         let mut object_counts = HashMap::<usize, usize>::new();
+        let mut identities = Vec::new();
         for index in first..end {
             if !is_owned(index) {
                 continue;
@@ -1760,17 +1864,17 @@ fn release_statement_temps(
             let value = &*base.add(index);
             if let Some(identity) = destructor_identity(eg, value) {
                 *object_counts.entry(identity).or_default() += 1;
-            }
-        }
-        let mut identities = Vec::with_capacity(object_counts.len());
-        for index in first..end {
-            if !is_owned(index) {
-                continue;
-            }
-            if let Some(identity) = destructor_identity(eg, &*base.add(index))
-                && !identities.contains(&identity)
-            {
-                identities.push(identity);
+                if !identities.contains(&identity) {
+                    identities.push(identity);
+                }
+            } else {
+                for resource in unique_temp_array_resources(value) {
+                    let identity = resource.vm_release_identity().expect("callback resource");
+                    *object_counts.entry(identity).or_default() += 1;
+                    if !identities.contains(&identity) {
+                        identities.push(identity);
+                    }
+                }
             }
         }
         let mut pending = identities;
@@ -1782,11 +1886,18 @@ fn release_statement_temps(
                 let representative = (first..end)
                     .filter(|index| is_owned(*index))
                     .map(|index| &*base.add(index))
-                    .find(|value| destructor_identity(eg, value) == Some(identity));
+                    .find(|value| destructor_identity(eg, value) == Some(identity))
+                    .or_else(|| {
+                        (first..end).filter(|index| is_owned(*index)).find_map(|index| {
+                            unique_temp_array_resources(&*base.add(index))
+                                .into_iter()
+                                .find(|resource| resource.vm_release_identity() == Some(identity))
+                        })
+                    });
                 let Some(representative) = representative else {
                     continue;
                 };
-                if representative.weak_object_strong_count() != Some(range_references) {
+                if representative.vm_release_strong_count() != Some(range_references) {
                     deferred.push(identity);
                     continue;
                 }

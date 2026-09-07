@@ -2617,10 +2617,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             binding.mark_internal_reference_alias();
                         }
                         let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
-                        let destructor = (matches!(
-                            (&*destination).dereferenced().value_type(),
-                            ValueType::Object | ValueType::Closure
-                        ))
+                        let destructor = value_may_require_direct_vm_release(&*destination)
                             .then(|| prepare_replaced_value_destructor(eg, &*destination))
                             .flatten();
                         let destructor_ran = destructor.is_some();
@@ -2666,7 +2663,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 value
                             } else if matches!(
                                 (&*source).value_type(),
-                                ValueType::Array | ValueType::Object | ValueType::Closure
+                                ValueType::Array | ValueType::Object | ValueType::Closure | ValueType::Resource
                             ) {
                                 std::mem::replace(&mut *source, Value::undef())
                             } else {
@@ -2692,11 +2689,22 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } else {
                             (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
                         };
+                        // A primitive CV owns no PHP release work or global
+                        // heap mirror. Keep the ordinary unused-result write
+                        // out of the destructor-plan path. A reference target
+                        // is deliberately excluded even when its inner value
+                        // is scalar: its property constraints still apply.
+                        if opline.op1_type == OpType::Cv
+                            && opline.result_type == OpType::Unused
+                            && !destination_is_reference
+                            && ((&*dest).value_type() as u8) <= ValueType::Double as u8
+                        {
+                            frame_slot_set(frame, dest, cloned);
+                            (*frame).opline = opline_ptr.add(1);
+                            continue;
+                        }
                         let replaced_object = opline.op1_type == OpType::Cv
-                            && matches!(
-                                (&*dest).dereferenced().value_type(),
-                                ValueType::Object | ValueType::Closure
-                            );
+                            && value_may_require_direct_vm_release(&*dest);
                         let mirrored_global_name = (replaced_object && !(&*dest).is_reference())
                             .then(|| {
                                 let root_frame = (*frame).prev_execute_data.is_null();
@@ -2714,8 +2722,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                             .get(name)
                                             .filter(|global| {
                                                 !global.is_reference()
-                                                    && global.weak_object_identity()
-                                                        == (&*dest).weak_object_identity()
+                                                    && global.vm_release_identity()
+                                                        == (&*dest).vm_release_identity()
                                             })
                                             .map(|_| name.as_str())
                                     })
