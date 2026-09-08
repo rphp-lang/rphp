@@ -8,71 +8,82 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
-`directory-object-resource-lifecycle`, against parent `006379ab`.
-Native `dir()` creates a typed readonly `Directory` view of the existing
-directory resource. Its read/rewind/close methods preserve aliases, reentrant
-wrapper callbacks and closed/uninitialized diagnostics. Real internal
-descriptors drive Reflection; construction, clone and serialization policy
-also applies through resolved class aliases. Native Unix path/name bytes are
-preserved. Registration and new handlers are cold and out of line.
+`array-object-backing-projection`, against parent `428436a1`.
+Cold native ArrayObject/ArrayIterator handlers share array or live object
+backing across construction, copy, exchange, public iteration, count and raw
+offset access. Raw object slots deliberately bypass visibility, readonly,
+types and property hooks, with PHP 8.5's deprecation before mutation.
+Reference cells, COW snapshots, retained iterator owners and reentrant
+destructor boundaries remain observable. Real internal descriptors publish
+the four added methods and their tentative return types.
 
-Fifteen supplying php-src `fcc29c8` cases move to exact pass: **+15/-0**.
-Fifteen original PHP 8.5.10 byte-exact CLI specimens, 202 focused integration
-tests, 21 resource units, five storage units and previous timestamp/link/stream
-packets pass. Optional-wrapper cases remain feature-gated; the core ordering
-and moved-resource cases also run without default features. The 7,174-case
-core remains byte-identical at **6,435 pass / 346 fail / 182 skip / 211
-unsupported**, without a missing case, lost pass, timeout or crash.
+Fifteen SPL cases plus the Directory readonly-bypass case move to exact pass:
+**+16/-0** against unmodified php-src `fcc29c8`. The broader 108-case ArrayObject
+set moves from 7 to 22 passes, with 79 remaining failures, six unsupported
+cases and one XFAIL retained. Twelve original PHP 8.5.10 byte-exact CLI
+specimens, 730 focused integration tests, three scalar units and the sparse
+frame-cleanup unit pass. The 7,174-case core remains byte-identical at
+**6,435 pass / 346 fail / 182 skip / 211 unsupported**, without lost passes,
+missing cases, timeouts or crashes.
 Zend/lang manifest/pass set:
 `51e25d959386e020ee7a17fc5abc32dbfb9c0566a34cad4e6c3072518287b349` /
 `b89857885e8fcf40bf3650374fdd0fecf0eb34f443b8eceb1c723fe79ed661ca`.
 Strings/array manifest/pass set:
 `9bf891c30b8763bbd23a62590ce7898e80c02f123682ec54139a8a277f1b46b2` /
 `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
-Supplying manifest:
-`c20260f069107d70e5a58ea093847ee9b77c6573086bb34e208ae882823fed3a`.
+Neighbor manifest:
+`3371bcf523ae1170e94926c129b6d391462d494e610e6e290ea62ca34ec342bf`.
 
 One checked five-configuration Cargo matrix passes
-(4,812/4,512/4,883/4,905/4,956; unchanged 13/13/13/13/16 ignored), alongside
-immutable-release no-loss and Composer/Symfony S0-S3. All-target, runner and
-unsafe-policy self-tests, formatting and public hygiene pass. Matrix record:
-`aa5b0dec6570f5083b148c194cefa4ffea78801a2d140bf3a866fbfb3478e957`.
-Automatic cleanup runs between feature configurations; source snapshots and
-active release baselines are retained.
+(4,826/4,526/4,897/4,919/4,970; 13/13/13/13/16 ignored), alongside all-target,
+exact no-loss, Composer/Symfony S0-S3, runner/unsafe self-tests and hygiene.
+Matrix record:
+`e358f53baf832962f44e602d17c8bd64b4530a8e80a4aaa8d640422df31bc9f1`.
+Automatic cleanup runs between configurations and after the packet.
 
-Rejected code-layout experiments are not retained. Profile-backed repairs
-retire the heap-bitmap edge with a moved temporary, avoid hashing payload IDs
-only while their historical count proves a tiny table, and reuse the existing
-bounded request-scope lookup for resource insertion. Large/sparse registries,
-type checks, owner retirement and destructor/callback boundaries are unchanged.
-Instruction simulation proves actual work removal; it is not hardware-counter
-evidence. No representation, dependency, new unsafe operation or JIT admission
-change is introduced. Unsafe inventory remains 1,622/289.
+Rejected scalar/code-placement experiments are not retained. Profiles instead
+prove removed empty-map cleanup work and skipped finally-state probes in
+frames with no try entries. Scalar instruction totals fall about 7.1% and
+resource-alias totals 16.5%; this is simulation, not hardware-counter evidence.
+No representation, dependency or JIT-admission change is introduced.
+Unsafe inventory is 1,623/289, within the unchanged ceilings.
 
-All sixteen fixed-parent 32-pair lanes and three calibrated holdouts pass
-unchanged common +1% / pay-use +5% budgets. Memory I/O is -9.433%, object
-lifecycle -1.169%, resource aliases -0.534%; the largest common median,
-including holdouts, is +0.897%. Output/result checks remain exact. Two new
-directory fixtures initially used an unavailable setup helper; only their
-temporary-path setup was repaired, retaining the fourteen already-valid lanes
-byte-for-byte and measuring the two previously unexecuted lanes. The complete
-1,024-row provenance and 192-row holdout packet records user-authorized shared
-host activity, not exclusive-host evidence. Results/summary:
-`f23916110d54e17fadcb336ab289c9e67797f1554ed81e7ef813a2a585e1b49f` /
-`84626036050913e3fa274c4d6aada1ca05e2e5527be6d1e868d1abe79a880568`.
+All seventeen fixed-parent 32-pair controls and three holdouts meet unchanged
+common +1% / pay-use +5% budgets on the user-authorized shared host, not an
+exclusive host. Largest common median is array +0.647%; ordinary calls are
+-3.783%, objects -4.726%, and resource aliases -11.854%. Outputs stay exact.
+Results/summary:
+`46ea3280fc7203390fb0ae2bfa8fb154bdc323b15396fd613fe47636233bbfb8` /
+`0d17f91cd47491683b198db11c1b9c9486cf0038a936d23d9dd8879581ef0ab4`.
 Holdout results:
-`f710d1567a0448a7f180ac1870b32f9a75bda9928b509781b41d3dd1f849c513`.
-Exact release:
-`03d006eb5a2653be8591c828692dbe9e318345bdd48fe5036b8997816fd7707f`.
-Complete technical record, including rejected approaches and setup repair:
-`e88e80de6a2d7357b4683f165d2db2ff34c9534b88a2eaadeb624e94c6b51aed`.
+`674e2560fcfd090150f3a3b2f6f2ebcf74ea7f0285a064b7d6cf20d95e680201`.
 
-Object-backed `ArrayObject`, native rewind after pathname rename/removal,
-extension-loaded claims, non-Linux byte-path/32-bit/ARM and allocation/OOM
-equivalence remain non-claims. No private benchmark host was configured.
-Next admission examines nineteen ArrayObject storage/projection candidates;
-require ten reachable shared-cause failures before implementation, excluding
-independent sorting, custom-iterator and extension-loader prerequisites.
+Final correctness release:
+`c61be9371257c96cd7410d6d8bc8147b00fe704685aea616949e0548f2fc6ec1`.
+Performance was measured on
+`114a3eaa2889953f13ca2d37eaf04a867e087fdcf24323bd9d04302abe750b11`.
+Adding the live-frame SAFETY comment changed the ELF build ID, section-table
+file offset and nonloaded symbol strings, but every executable/runtime-data
+byte, address and program header remained identical. Full loaded-segment
+comparison permits evidence reuse only for that metadata-only change; it
+does not claim whole-file identity or relax a numerical budget. Proof:
+`66171b86a0f73b60058d51f33c2b00bf64566efb01578736f145e9e73b5038fa`.
+Complete technical record:
+`edbe108fa6d84e2667113d1cdb8b1ebca7d30949c59b21757005450b6a8cdd32`.
+
+Flags/custom iterators, sorting, object-hash numeric append, self/enum backing,
+general SPL serialization/cursor semantics, constructor object-handle ordering,
+extension-loaded claims, other architectures and allocation/OOM equivalence
+remain non-claims. Preexisting generic reference-release and nested-finally
+continuation holdouts remain explicit. No private benchmark host was configured.
+Next admission examines native ArrayObject/ArrayIterator sorting; require ten
+reachable shared-cause failures before implementation and separate object
+property-order/flags/extension prerequisites.
+
+The preceding Directory checkpoint (`428436a1`) added **+15/-0**, with a
+checked five-configuration matrix, exact core no-loss, S0-S3 and all nineteen
+fixed-parent performance lanes green. Its complete technical record is
+`e88e80de6a2d7357b4683f165d2db2ff34c9534b88a2eaadeb624e94c6b51aed`.
 
 The preceding `native-filesystem-timestamp-lifecycle` checkpoint (`006379ab`)
 added **+19/-0** with all seventeen performance controls green. Its complete

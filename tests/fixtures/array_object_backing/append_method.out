@@ -1,0 +1,7 @@
+Cannot append properties to objects, use ArrayObject::offsetSet() instead
+1:17
+Cannot append properties to objects, use ArrayIterator::offsetSet() instead
+1:17
+29:2
+ArrayObject::exchangeArray() expects exactly 1 argument, 0 given
+29

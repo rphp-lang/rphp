@@ -2055,7 +2055,7 @@ unsafe fn pop_call_storage(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
     eg.discard_closure_static_vars(call as usize);
     eg.discard_dynamic_scope(call as usize);
     eg.end_error_suppression(call as usize);
-    eg.finally_exceptions.remove(&(call as usize));
+    eg.discard_finally_exceptions(call as usize);
     if (*call).is_deferred_scalar_call() {
         eg.pending_call_stack.pop_call_frame(call);
     } else {
@@ -2070,7 +2070,7 @@ fn pop_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
     eg.discard_closure_static_vars(call as usize);
     eg.discard_dynamic_scope(call as usize);
     eg.end_error_suppression(call as usize);
-    eg.finally_exceptions.remove(&(call as usize));
+    eg.discard_finally_exceptions(call as usize);
     if let Some(arguments) = eg.take_function_arguments(call as usize) {
         eg.recycle_function_argument_buffer(arguments.values);
     }

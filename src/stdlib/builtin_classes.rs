@@ -11,6 +11,8 @@ use crate::vm::instruction::{
     FETCH_DIM_COMPOUND, FETCH_DIM_EMPTY, FETCH_DIM_MUTABLE, FETCH_DIM_UNSET,
 };
 
+mod array_object;
+
 const ROUNDING_MODE_CLASS: &str = "RoundingMode";
 const ROUNDING_MODE_CASES: [&str; 8] = [
     "HalfAwayFromZero",
@@ -1313,41 +1315,44 @@ fn array_object_storage_key(object: &PhpObject) -> &'static str {
     }
 }
 
-pub(crate) fn array_object_iterable_values(receiver: &Value) -> Option<Value> {
-    receiver.as_object().and_then(|object| {
+pub(crate) fn array_object_iterable_values(
+    receiver: &Value,
+    eg: &ExecutorGlobals,
+) -> Option<Value> {
+    let values = receiver.as_object().and_then(|object| {
         let storage = array_object_storage_key(&object);
         object.get_property(storage).cloned()
-    })
+    })?;
+    if values.value_type() == ValueType::Array {
+        Some(values)
+    } else {
+        Some(Value::array(array_object::snapshot(receiver, eg, true)))
+    }
 }
 
 fn fn_array_iterator_construct(
     ed: *mut ExecuteData,
-    _rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let values = arg_opt!(ed, 1)
-        .filter(|value| value.value_type() == ValueType::Array)
-        .cloned()
-        .unwrap_or_else(|| Value::array(PhpArray::new()));
-    if let Some(mut object) = arg!(ed, 0).as_object_mut() {
-        let storage = array_object_storage_key(&object);
-        object.set_property(storage, values);
-    }
-    Ok(())
+    array_object::construct(ed, rv, eg)
 }
 
 fn fn_array_iterator_count(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let count = arg!(ed, 0).as_object().map_or(0, |object| {
-        let storage = array_object_storage_key(&object);
-        object
-            .get_property(storage)
-            .and_then(Value::as_array)
-            .map_or(0, PhpArray::len)
-    });
+    let count = arg!(ed, 0)
+        .as_object()
+        .and_then(|object| {
+            let storage = array_object_storage_key(&object);
+            object
+                .get_property(storage)
+                .and_then(Value::as_array)
+                .map(PhpArray::len)
+        })
+        .unwrap_or_else(|| array_object::count(arg!(ed, 0), eg));
     ret!(rv, Value::long(count as i64));
 }
 
@@ -1357,13 +1362,18 @@ fn fn_array_object_append(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let value = arg!(ed, 1).dereferenced().clone();
-    if let Some(mut object) = arg!(ed, 0).as_object_mut()
-        && let storage = array_object_storage_key(&object)
-        && let Some(values) = object
-            .get_property_mut(storage)
-            .and_then(Value::as_array_mut)
-        && !values.try_push(value)
-    {
+    let Some(mut object) = arg!(ed, 0).as_object_mut() else {
+        return Ok(());
+    };
+    let storage = array_object_storage_key(&object);
+    let Some(values) = object
+        .get_property_mut(storage)
+        .and_then(Value::as_array_mut)
+    else {
+        drop(object);
+        return array_object::append(ed, eg, value);
+    };
+    if !values.try_push(value) {
         eg.exception = Some(make_error_value(
             "Error",
             "Cannot add element to the array as the next element is already occupied",
@@ -1546,7 +1556,8 @@ fn fn_array_object_offset_get(
         .get_property_mut(storage)
         .and_then(Value::as_array_mut)
     else {
-        ret!(rv, Value::null());
+        drop(object);
+        return array_object::offset_get(ed, rv, eg, key, context);
     };
     let key = if context == ArrayObjectOffsetGetContext::Mutable {
         array.prepare_string_key_for_write(key, arg!(ed, 1).dereferenced())
@@ -1614,7 +1625,8 @@ fn fn_array_object_offset_set(
         .get_property_mut(storage)
         .and_then(Value::as_array_mut)
     else {
-        return Ok(());
+        drop(object);
+        return array_object::offset_set(ed, eg, key, value);
     };
     if let Some(key) = key {
         let key = array.prepare_string_key_for_write(key, arg!(ed, 1).dereferenced());
@@ -1638,17 +1650,16 @@ fn fn_array_object_offset_exists(
     else {
         return Ok(());
     };
-    let exists = arg!(ed, 0).as_object().is_some_and(|object| {
+    if let Some(object) = arg!(ed, 0).as_object() {
         let storage = array_object_storage_key(&object);
-        object
-            .get_property(storage)
-            .and_then(Value::as_array)
-            .and_then(|array| {
-                let key = array.normalize_string_key(key, arg!(ed, 1).dereferenced());
-                array_object_value(array, &key)
-            })
-            .is_some_and(|value| value.dereferenced().value_type() != ValueType::Null)
-    });
+        if let Some(array) = object.get_property(storage).and_then(Value::as_array) {
+            let key = array.normalize_string_key(key, arg!(ed, 1).dereferenced());
+            let exists = array_object_value(array, &key)
+                .is_some_and(|value| value.dereferenced().value_type() != ValueType::Null);
+            ret!(rv, Value::bool(exists));
+        }
+    }
+    let exists = array_object::offset_exists(arg!(ed, 0), &key, arg!(ed, 1), eg);
     ret!(rv, Value::bool(exists));
 }
 
@@ -1662,15 +1673,19 @@ fn fn_array_object_offset_unset(
     else {
         return Ok(());
     };
-    if let Some(mut object) = arg!(ed, 0).as_object_mut()
-        && let storage = array_object_storage_key(&object)
-        && let Some(array) = object
-            .get_property_mut(storage)
-            .and_then(Value::as_array_mut)
-    {
-        let key = array.normalize_string_key(key, arg!(ed, 1).dereferenced());
-        array.remove(&key);
-    }
+    let Some(mut object) = arg!(ed, 0).as_object_mut() else {
+        return Ok(());
+    };
+    let storage = array_object_storage_key(&object);
+    let Some(array) = object
+        .get_property_mut(storage)
+        .and_then(Value::as_array_mut)
+    else {
+        drop(object);
+        return array_object::offset_unset(ed, eg, key);
+    };
+    let key = array.normalize_string_key(key, arg!(ed, 1).dereferenced());
+    array.remove(&key);
     Ok(())
 }
 
@@ -3439,6 +3454,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             "key"
         );
     }
+    funcs.extend(array_object::register(eg));
     let mut spl_object_storage = empty_internal_type(
         "SplObjectStorage",
         vec![

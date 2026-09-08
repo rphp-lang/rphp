@@ -2087,8 +2087,21 @@ impl ExecutorGlobals {
     }
 
     pub(crate) fn discard_dynamic_scope(&mut self, frame: usize) {
-        self.dynamic_scope_owners.remove(&frame);
-        self.dynamic_variables.remove(&frame);
+        // HashMap::remove hashes even when the sparse table is empty. Most
+        // call frames never publish dynamic scope state.
+        if !self.dynamic_scope_owners.is_empty() {
+            self.dynamic_scope_owners.remove(&frame);
+        }
+        if !self.dynamic_variables.is_empty() {
+            self.dynamic_variables.remove(&frame);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn discard_finally_exceptions(&mut self, frame: usize) {
+        if !self.finally_exceptions.is_empty() {
+            self.finally_exceptions.remove(&frame);
+        }
     }
 
     #[cold]
@@ -2325,6 +2338,24 @@ impl ExecutorGlobals {
             names.push((contract.name.as_ref(), contract.is_static));
         }
         names
+    }
+
+    /// Publish the already enforced internal declaration to cold Reflection
+    /// queries without adding state or work to ordinary method dispatch.
+    #[cold]
+    pub(crate) fn internal_tentative_return_type(
+        &self,
+        function: *const FunctionCommon,
+    ) -> Option<&ParamTypeHint> {
+        let owner = self.declaring_class_of(function)?;
+        for contract in self.internal_method_contracts(owner) {
+            if contract.return_type_is_tentative
+                && self.find_function(&format!("{owner}::{}", contract.name)) == Some(function)
+            {
+                return Some(&contract.signature.return_type_hint);
+            }
+        }
+        None
     }
 
     #[cold]
@@ -10286,6 +10317,70 @@ fn class_is_a_in_table(
             .implements
             .iter()
             .any(|interface| class_is_a_in_table(class_table, interface, canonical_target))
+}
+
+#[cfg(test)]
+mod sparse_call_cleanup_tests {
+    use super::ExecutorGlobals;
+    use crate::value::Value;
+    use std::collections::HashMap;
+
+    #[test]
+    fn sparse_call_cleanup_preserves_other_frames_and_repopulated_tables() {
+        let mut eg = ExecutorGlobals::new();
+        eg.discard_dynamic_scope(1);
+        eg.discard_finally_exceptions(1);
+        assert_eq!(eg.dynamic_scope_owners.capacity(), 0);
+        assert_eq!(eg.dynamic_variables.capacity(), 0);
+        assert_eq!(eg.finally_exceptions.capacity(), 0);
+
+        // Exercise each independently populated table, then all of them,
+        // including allocated-but-empty tables after the first iteration.
+        for mask in 1..8 {
+            for frame in [1, 2] {
+                if mask & 1 != 0 {
+                    eg.dynamic_scope_owners.insert(frame, 3);
+                }
+                if mask & 2 != 0 {
+                    eg.dynamic_variables.insert(
+                        frame,
+                        HashMap::from([("slot".into(), Value::long(frame as i64))]),
+                    );
+                }
+                if mask & 4 != 0 {
+                    eg.finally_exceptions
+                        .insert(frame, vec![Value::long(frame as i64)]);
+                }
+            }
+            let capacities = (
+                eg.dynamic_scope_owners.capacity(),
+                eg.dynamic_variables.capacity(),
+                eg.finally_exceptions.capacity(),
+            );
+            eg.discard_dynamic_scope(99);
+            eg.discard_finally_exceptions(99);
+            for frame in [1, 2] {
+                assert_eq!(eg.dynamic_scope_owners.contains_key(&frame), mask & 1 != 0);
+                assert_eq!(eg.dynamic_variables.contains_key(&frame), mask & 2 != 0);
+                assert_eq!(eg.finally_exceptions.contains_key(&frame), mask & 4 != 0);
+                eg.discard_dynamic_scope(frame);
+                eg.discard_finally_exceptions(frame);
+                assert!(!eg.dynamic_scope_owners.contains_key(&frame));
+                assert!(!eg.dynamic_variables.contains_key(&frame));
+                assert!(!eg.finally_exceptions.contains_key(&frame));
+            }
+            eg.discard_dynamic_scope(1);
+            eg.discard_finally_exceptions(1);
+            assert_eq!(
+                capacities,
+                (
+                    eg.dynamic_scope_owners.capacity(),
+                    eg.dynamic_variables.capacity(),
+                    eg.finally_exceptions.capacity(),
+                )
+            );
+        }
+    }
 }
 
 #[cfg(test)]

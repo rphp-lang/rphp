@@ -1,0 +1,3 @@
+8192:ArrayObject::__construct(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants
+Internal directory stream has been altered
+Typed property Directory::$path must not be accessed before initialization

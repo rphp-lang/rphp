@@ -2458,11 +2458,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
         stats::inc_opcode(opline.opcode as usize);
 
         // Check for pending return or exception after finally block ends
-        let frame_pending = unsafe { (*frame).pending_return_after_finally };
-        let check_finally = frame_pending
-            || eg.exception.is_some()
-            || eg.finally_exceptions.contains_key(&(frame as usize));
+        // A frame with no try entries cannot reach a finally-end marker.
+        // SAFETY: frame remains the live activation. Neither pending-flag read
+        // crosses a callback or a mutation of that frame.
+        let check_finally = !op_array.try_entries.is_empty()
+            && (unsafe { (*frame).pending_return_after_finally }
+                || eg.exception.is_some()
+                || eg.finally_exceptions.contains_key(&(frame as usize)));
         if check_finally {
+            let frame_pending = unsafe { (*frame).pending_return_after_finally };
             let current_ip = unsafe {
                 (*frame).opline.offset_from(op_array.instructions.as_ptr()) as u32
             };

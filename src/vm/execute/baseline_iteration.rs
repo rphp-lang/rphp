@@ -1127,7 +1127,7 @@ fn builtin_iterator_values(value: &Value, eg: &ExecutorGlobals) -> Option<Value>
     let legacy_values = object.get_property("__rphp_iterator_values").cloned();
     drop(object);
     if eg.class_is_a(&class_name, "ArrayIterator") || eg.class_is_a(&class_name, "ArrayObject") {
-        crate::stdlib::array_object_iterable_values(value)
+        crate::stdlib::array_object_iterable_values(value, eg)
     } else if eg.class_is_a(&class_name, "SplObjectStorage")
         || eg.class_is_a(&class_name, "SplPriorityQueue")
     {

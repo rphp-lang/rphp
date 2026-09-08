@@ -3644,19 +3644,25 @@ fn function_get_return_type(
 }
 
 fn function_has_tentative_return_type(
-    _ed: *mut ExecuteData,
+    ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    return_value(rv, Value::bool(false))
+    let has_type = reflected_function(ed)
+        .and_then(|function| eg.internal_tentative_return_type(function))
+        .is_some();
+    return_value(rv, Value::bool(has_type))
 }
 
 fn function_get_tentative_return_type(
-    _ed: *mut ExecuteData,
+    ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    return_value(rv, Value::null())
+    let result = reflected_function(ed)
+        .and_then(|function| eg.internal_tentative_return_type(function))
+        .map_or_else(Value::null, reflected_signature_type);
+    return_value(rv, result)
 }
 
 fn function_is_anonymous(

@@ -1,0 +1,12 @@
+ArrayObject::exchangeArray(): Argument #1 ($array) must be of type array, null given
+41
+ArrayObject::exchangeArray(): Argument #1 ($array) must be of type array, false given
+41
+ArrayObject::exchangeArray(): Argument #1 ($array) must be of type array, int given
+41
+ArrayObject::exchangeArray(): Argument #1 ($array) must be of type array, string given
+41
+8192:ArrayObject::exchangeArray(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants
+diagnostic interrupt
+41
+47

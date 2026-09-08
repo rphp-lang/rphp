@@ -117,6 +117,34 @@ mod scalar_long_operation_range_tests {
     use super::*;
 
     #[test]
+    fn single_output_leaf_matches_general_temporary_evaluation() {
+        use crate::vm::function::ScalarLongProgram;
+        let kinds = [ScalarLongOpKind::Add, ScalarLongOpKind::Subtract,
+            ScalarLongOpKind::Multiply, ScalarLongOpKind::IntDivide, ScalarLongOpKind::Modulo,
+            ScalarLongOpKind::Compare, ScalarLongOpKind::BitwiseAnd,
+            ScalarLongOpKind::BitwiseOr, ScalarLongOpKind::BitwiseXor];
+        let values = [i64::MIN, -17, -1, 0, 1, 23, i64::MAX];
+        for kind in kinds {
+            for lhs in values {
+                for rhs in values {
+                    let mut arguments = [0; 8]; arguments[0] = lhs; arguments[7] = rhs;
+                    for source in [ScalarLongSource::Input(7), ScalarLongSource::Constant(rhs),
+                        ScalarLongSource::Input(8), ScalarLongSource::Temporary(0)] {
+                        let operations = vec![ScalarLongOp { kind, lhs: ScalarLongSource::Input(0), rhs: source }];
+                        let mut temporaries = [0; 8];
+                        let expected = evaluate_scalar_long_operation_range(&operations, &arguments, &mut temporaries, 0, 1)
+                            .map(|()| temporaries[0]);
+                        let plan = ScalarLongFunctionPlan::new(8, ScalarLongProgram {
+                            operations: operations.into_boxed_slice(), outputs: [ScalarLongSource::Temporary(0)], output_count: 1,
+                        }, None);
+                        assert_eq!(evaluate_scalar_long_plan(&plan, &arguments), expected, "{kind:?} {lhs} {rhs} {source:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn tiny_ranges_preserve_temporary_dependencies() {
         let operations = [
             ScalarLongOp {

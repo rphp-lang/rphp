@@ -1,0 +1,7 @@
+2:2:1
+8192:ArrayObject::exchangeArray(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants
+12:15:2:10
+12:30
+12:15:21
+array(0) {
+}

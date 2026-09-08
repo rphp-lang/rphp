@@ -36,28 +36,35 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `directory-object-resource-lifecycle` train adds fifteen exact
-PHP 8.5 passes over `006379ab`, without loss. Cold native `dir()`/`Directory`
-factory, method and descriptor paths share existing resource ownership,
-readonly properties, Reflection and construction/serialization policy. Original
-oracles retain byte paths, aliases, diagnostic ordering and reentrant callbacks.
+The accepted `array-object-backing-projection` train adds sixteen exact
+PHP 8.5 passes over `428436a1`, with no loss. Cold native storage selection
+covers object-backed copy/exchange, count, public iteration and raw offset
+mutation with PHP's deprecation and reference/lifetime boundaries.
 
 One checked five-configuration Cargo matrix, all-target, exact 7,174-case
-no-loss, Composer/Symfony S0-S3 and static/unsafe gates pass. Core counts remain
-6,435/346/182/211. All sixteen fixed-parent controls and three holdouts meet
+no-loss, Composer/Symfony S0-S3 and static/unsafe gates pass. Core counts stay
+6,435/346/182/211. All seventeen fixed-parent controls and three holdouts meet
 unchanged common +1% / pay-use +5% budgets on the user-authorized shared host.
-Rejected layout experiments were removed; instruction profiles instead prove
-moved-temporary bitmap cleanup and bounded resource-lookup work removal. No
-representation, dependency, new unsafe operation or JIT admission changes.
+Rejected scalar/layout experiments were removed; instruction profiles prove
+empty sparse-table cleanup and no-try-entry dispatch work removal instead.
+No representation, dependency or JIT admission change; unsafe ceilings unchanged.
 
-Object-backed ArrayObject, rewind after native pathname rename/removal,
-extension-loaded and other-platform/OOM equivalence remain non-claims.
-Next admission examines nineteen ArrayObject backing-storage/projection cases.
-Require ten reachable current failures of that boundary before implementation;
-do not count independent sorting, custom-iterator or extension-loader blockers.
-Keep ordinary object access unchanged and new handlers/registration cold from
-the outset. Retain one shared final evidence packet and the existing controls.
-Exact hashes and non-claims are in `compatibility.md`.
+A final SAFETY-comment rebuild differs only in ELF artifact metadata:
+program headers, executable code and runtime data are byte-identical to the
+measured binary. Full load-equivalence proof and both release hashes are
+explicit in `compatibility.md`; this is not whole-file identity or permission
+to reuse evidence after code/data/layout changes.
+
+Flags, custom iterators, sorting, object numeric append, self/enum storage,
+general SPL serialization/cursor behavior and unrelated handle-order/release
+holdouts remain non-claims. Next admission examines native ArrayObject and
+ArrayIterator sorting methods. Require ten reachable current failures before
+implementation; separate object property-order, flags and extension prerequisites.
+Reuse the established array comparison/callback semantics, keep registration
+and storage-specific work cold, and retain one shared final evidence packet.
+
+The preceding Directory train (`428436a1`) added fifteen exact passes and
+passed the same core/framework matrix with nineteen performance lanes green.
 
 ### Preceding data-wrapper checkpoint
 

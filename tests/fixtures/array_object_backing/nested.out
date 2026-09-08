@@ -1,0 +1,8 @@
+8192:ArrayObject::__construct(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants
+ArrayIterator:11:11
+18:1
+27:18
+last=27
+8192:ArrayIterator::__construct(): Using an object as a backing array for ArrayIterator is deprecated, as it allows violating class constraints and invariants
+8192:ArrayObject::__construct(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants
+00726177:safe

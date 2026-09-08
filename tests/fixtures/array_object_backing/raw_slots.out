@@ -1,0 +1,9 @@
+8192:ArrayObject::__construct(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants
+2:oak:OAK
+unchecked:FIR
+bool(true)
+bool(true)
+2:Undefined array key "summary"
+NULL
+Typed property StorageRecord::$stamp must not be accessed before initialization
+2
