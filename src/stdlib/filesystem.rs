@@ -304,7 +304,7 @@ fn url_open_allowed_configured(
         ),
     )?;
     if eg.exception.is_none() {
-        let kind = if function == "opendir" {
+        let kind = if matches!(function, "opendir" | "dir") {
             "directory"
         } else {
             "stream"
@@ -1652,7 +1652,7 @@ pub(super) fn fn_file(
     return_default_file_lines(path.as_ref(), rv, eg, ed)
 }
 
-fn filesystem_string_value_argument(
+pub(super) fn filesystem_string_value_argument(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
     function: &str,

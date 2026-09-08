@@ -8,21 +8,21 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
-`native-filesystem-timestamp-lifecycle`, against parent `6a2cb14d`.
-Cold `touch()` handling preserves create-without-truncate, signed/default/null
-timestamps, links and native path bytes, owner timestamp permissions, canonical
-weak/strict/named validation, diagnostic priority and stat-cache invalidation.
-Its descriptor initialization is also cold and out of line. No common VM,
-object representation or dependency changes are introduced.
+`directory-object-resource-lifecycle`, against parent `006379ab`.
+Native `dir()` creates a typed readonly `Directory` view of the existing
+directory resource. Its read/rewind/close methods preserve aliases, reentrant
+wrapper callbacks and closed/uninitialized diagnostics. Real internal
+descriptors drive Reflection; construction, clone and serialization policy
+also applies through resolved class aliases. Native Unix path/name bytes are
+preserved. Registration and new handlers are cold and out of line.
 
-Nineteen supplying php-src `fcc29c8` cases move from fail to exact pass:
-**+19/-0**. A twentieth admission case fails its reference-side atime
-precondition before its FILE body and is not counted. Thirteen original PHP
-8.5.10 byte-exact CLI specimens and the previous link/stream/data packets pass.
-An existing side-effect test's local helper was renamed to avoid redeclaring
-the newly available builtin; its output and assertions remain unchanged.
-The 7,174-case core remains byte-identical at **6,435 pass / 346 fail / 182 skip /
-211 unsupported**, without a missing case, lost pass, timeout or crash.
+Fifteen supplying php-src `fcc29c8` cases move to exact pass: **+15/-0**.
+Fifteen original PHP 8.5.10 byte-exact CLI specimens, 202 focused integration
+tests, 21 resource units, five storage units and previous timestamp/link/stream
+packets pass. Optional-wrapper cases remain feature-gated; the core ordering
+and moved-resource cases also run without default features. The 7,174-case
+core remains byte-identical at **6,435 pass / 346 fail / 182 skip / 211
+unsupported**, without a missing case, lost pass, timeout or crash.
 Zend/lang manifest/pass set:
 `51e25d959386e020ee7a17fc5abc32dbfb9c0566a34cad4e6c3072518287b349` /
 `b89857885e8fcf40bf3650374fdd0fecf0eb34f443b8eceb1c723fe79ed661ca`.
@@ -30,44 +30,54 @@ Strings/array manifest/pass set:
 `9bf891c30b8763bbd23a62590ce7898e80c02f123682ec54139a8a277f1b46b2` /
 `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
 Supplying manifest:
-`3bc04d4f5e47245e16f1ae2b99f385ee8a9a848a190b54399f8a19ffcfea0913`.
+`c20260f069107d70e5a58ea093847ee9b77c6573086bb34e208ae882823fed3a`.
 
 One checked five-configuration Cargo matrix passes
-(4,792/4,495/4,863/4,885/4,936; unchanged 13/13/13/13/16 ignored), alongside
+(4,812/4,512/4,883/4,905/4,956; unchanged 13/13/13/13/16 ignored), alongside
 immutable-release no-loss and Composer/Symfony S0-S3. All-target, runner and
 unsafe-policy self-tests, formatting and public hygiene pass. Matrix record:
-`b5fb0fa6a5200a4ce41681bfb1a323b77ce48a6950283104396714118e8cb8ba`.
-Automatic cleanup between configurations removed 18.2 GiB of rebuildable
-workspace output; source snapshots and active release baselines were retained.
+`aa5b0dec6570f5083b148c194cefa4ffea78801a2d140bf3a866fbfb3478e957`.
+Automatic cleanup runs between feature configurations; source snapshots and
+active release baselines are retained.
 
-The first candidate's +1.573% object-lifecycle result, independently +1.511%,
-was rejected. Instruction profiles showed unchanged common execution counts;
-cold timestamp descriptor construction was then outlined without VM changes.
-The second immutable release passes all fourteen unchanged 32-pair controls
-and three calibrated holdouts under common +1% / pay-use +5% budgets.
-Common medians range from -2.727% to +0.724%; the largest pay-use median is
-+0.224%. The unchanged 128-invocation closure holdout is -0.915%.
-Outputs match exactly. Two background events were logged on the user-authorized
-shared host; this is not exclusive-host evidence. Results/summary:
-`e7c0c462d2e529c153e5e722463596f9a45eb00b6d5e017c22ad123b12d89a88` /
-`427b50234e7d8d8280a6a5df2c4cb9fd2d191d37396179f5eb4348717a146b1b`.
-Independent holdout results:
-`188808334b9bae561a52a11ae868d99bd7558554937653127e60c709cd6cf83a`.
+Rejected code-layout experiments are not retained. Profile-backed repairs
+retire the heap-bitmap edge with a moved temporary, avoid hashing payload IDs
+only while their historical count proves a tiny table, and reuse the existing
+bounded request-scope lookup for resource insertion. Large/sparse registries,
+type checks, owner retirement and destructor/callback boundaries are unchanged.
+Instruction simulation proves actual work removal; it is not hardware-counter
+evidence. No representation, dependency, new unsafe operation or JIT admission
+change is introduced. Unsafe inventory remains 1,622/289.
+
+All sixteen fixed-parent 32-pair lanes and three calibrated holdouts pass
+unchanged common +1% / pay-use +5% budgets. Memory I/O is -9.433%, object
+lifecycle -1.169%, resource aliases -0.534%; the largest common median,
+including holdouts, is +0.897%. Output/result checks remain exact. Two new
+directory fixtures initially used an unavailable setup helper; only their
+temporary-path setup was repaired, retaining the fourteen already-valid lanes
+byte-for-byte and measuring the two previously unexecuted lanes. The complete
+1,024-row provenance and 192-row holdout packet records user-authorized shared
+host activity, not exclusive-host evidence. Results/summary:
+`f23916110d54e17fadcb336ab289c9e67797f1554ed81e7ef813a2a585e1b49f` /
+`84626036050913e3fa274c4d6aada1ca05e2e5527be6d1e868d1abe79a880568`.
+Holdout results:
+`f710d1567a0448a7f180ac1870b32f9a75bda9928b509781b41d3dd1f849c513`.
 Exact release:
-`ac240793cf167cbc9b8959909076cabc23565cd2047f4cfd962c91ca7730eab8`.
-Complete technical record, including rejected-candidate disposition:
-`2618bc0c9ff7e2a510a9702dd69f7c614e3e4b5a430193cbf1145ec7e13b33dc`.
+`03d006eb5a2653be8591c828692dbe9e318345bdd48fe5036b8997816fd7707f`.
+Complete technical record, including rejected approaches and setup repair:
+`e88e80de6a2d7357b4683f165d2db2ff34c9534b88a2eaadeb624e94c6b51aed`.
 
-Linux-64 uses one audited synchronous POSIX timestamp call: opening an existing
-file merely to change its timestamps incorrectly requires content permissions.
-The native two-field layout, pointer lifetimes and null/current-time behavior
-are verified. Unsafe inventory is 1,622/289 within unchanged 1,623/289 ceilings;
-no new dependency or shared RPHP ABI is added. Other-platform permission/time
-equivalence, user-wrapper metadata callbacks, broader URI policy, warm realpath
-cache compression, ARM performance and allocation/OOM equivalence remain
-non-claims. No private benchmark host was configured. Next admission examines
-the missing resource-backed `Directory` object boundary, requiring ten reachable
-shared-cause failures before implementation.
+Object-backed `ArrayObject`, native rewind after pathname rename/removal,
+extension-loaded claims, non-Linux byte-path/32-bit/ARM and allocation/OOM
+equivalence remain non-claims. No private benchmark host was configured.
+Next admission examines nineteen ArrayObject storage/projection candidates;
+require ten reachable shared-cause failures before implementation, excluding
+independent sorting, custom-iterator and extension-loader prerequisites.
+
+The preceding `native-filesystem-timestamp-lifecycle` checkpoint (`006379ab`)
+added **+19/-0** with all seventeen performance controls green. Its complete
+technical record is
+`2618bc0c9ff7e2a510a9702dd69f7c614e3e4b5a430193cbf1145ec7e13b33dc`.
 
 The preceding `native-filesystem-link-lifecycle` checkpoint (`6a2cb14d`) added
 **+19/-0** with all seventeen performance controls green. Its complete technical

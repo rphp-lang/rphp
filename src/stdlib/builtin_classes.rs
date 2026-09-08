@@ -3045,6 +3045,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         .return_type_hint = ParamTypeHint::Array;
 
     funcs.extend(register_value_error(eg));
+    funcs.extend(super::directory::object::register_class(eg));
     #[cfg(feature = "stream-registry")]
     funcs.extend(super::streams::filters::register_classes(eg));
 

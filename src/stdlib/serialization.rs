@@ -304,6 +304,7 @@ fn serialize_value(
                     | "internaliterator"
                     | "sensitiveparametervalue"
                     | "reflectionproperty"
+                    | "directory"
             ) {
                 Some(class_name.as_str())
             } else {
@@ -496,6 +497,26 @@ impl AllowedClasses {
 fn allocate_object(eg: &mut ExecutorGlobals, class_name: &str) -> Result<Value, ()> {
     if eg.find_class(class_name).is_none() {
         crate::stdlib::autoload::ensure_symbol_loaded(eg, class_name).map_err(|_| ())?;
+    }
+    // Apply the native capability to the resolved class, including aliases
+    // published by an autoloader, before allocating or initializing any slot.
+    let canonical_name = eg
+        .find_class(class_name)
+        .map_or(class_name, |class| class.name.as_str());
+    if matches!(
+        canonical_name.to_ascii_lowercase().as_str(),
+        "generator"
+            | "weakreference"
+            | "weakmap"
+            | "internaliterator"
+            | "reflectionproperty"
+            | "directory"
+    ) {
+        eg.exception = Some(crate::value::make_error_value(
+            "Exception",
+            &format!("Unserialization of '{canonical_name}' is not allowed"),
+        ));
+        return Err(());
     }
     let object = eg.find_class(class_name).map_or_else(
         || incomplete_object(class_name, &PhpArray::new()),
@@ -1146,22 +1167,6 @@ impl<'a> Parser<'a> {
                 self.expect(b'{')?;
                 let class_name = std::str::from_utf8(class_bytes).map_err(|_| ())?;
                 let allowed = allowed_classes.allows(class_name);
-                if allowed
-                    && matches!(
-                        class_name.to_ascii_lowercase().as_str(),
-                        "generator"
-                            | "weakreference"
-                            | "weakmap"
-                            | "internaliterator"
-                            | "reflectionproperty"
-                    )
-                {
-                    eg.exception = Some(crate::value::make_error_value(
-                        "Exception",
-                        &format!("Unserialization of '{class_name}' is not allowed"),
-                    ));
-                    return Err(());
-                }
                 let object = if allowed {
                     allocate_object(eg, class_name)?
                 } else {
@@ -1294,22 +1299,6 @@ impl<'a> Parser<'a> {
                 self.expect(b'}')?;
 
                 let allowed = allowed_classes.allows(class_name);
-                if allowed
-                    && matches!(
-                        class_name.to_ascii_lowercase().as_str(),
-                        "generator"
-                            | "weakreference"
-                            | "weakmap"
-                            | "internaliterator"
-                            | "reflectionproperty"
-                    )
-                {
-                    eg.exception = Some(crate::value::make_error_value(
-                        "Exception",
-                        &format!("Unserialization of '{class_name}' is not allowed"),
-                    ));
-                    return Err(());
-                }
                 let object = if allowed {
                     allocate_object(eg, class_name)?
                 } else {

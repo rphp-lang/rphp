@@ -1,0 +1,12 @@
+2/1:Directory|false
+directory:string:0:0
+context::1:0
+1:1:1
+path:string:2177:0
+handle:mixed:2177:0
+close:0:void:0
+rewind:0:void:0
+read:0:string|false:0
+bool(true)
+bool(true)
+bool(true)

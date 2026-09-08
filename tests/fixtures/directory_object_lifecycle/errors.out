@@ -1,0 +1,12 @@
+ArgumentCountError:dir() expects at least 1 argument, 0 given
+TypeError:dir(): Argument #1 ($directory) must be of type string, array given
+ValueError:dir(): Argument #1 ($directory) must not contain any null bytes
+TypeError:dir(): Argument #2 ($context) must be of type resource or null, int given
+bool(false)
+2:dir(absent): Failed to open directory: No such file or directory
+bool(false)
+8192:dir(): Passing null to parameter #1 ($directory) of type string is deprecated
+bool(false)
+ArgumentCountError:Directory::read() expects exactly 0 arguments, 1 given
+ArgumentCountError:Directory::rewind() expects exactly 0 arguments, 1 given
+ArgumentCountError:Directory::close() expects exactly 0 arguments, 1 given

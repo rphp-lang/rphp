@@ -2304,6 +2304,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("getcwd", fn_getcwd, 0, 0);
     reg!("chdir", fn_chdir, 1, 1, "directory");
     reg!("opendir", fn_opendir, 2, 1, "directory", "context");
+    funcs.push(super::directory::object::register_function(eg));
     reg!("readdir", fn_readdir, 1, 0, "dir_handle");
     reg!("rewinddir", fn_rewinddir, 1, 0, "dir_handle");
     reg!("closedir", fn_closedir, 1, 0, "dir_handle");

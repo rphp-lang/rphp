@@ -1,0 +1,9 @@
+Cannot indirectly modify readonly property ReadonlyReferenceForSpec::$implicit
+Cannot indirectly modify readonly property ReadonlyReferenceForSpec::$explicit
+Cannot access protected property ReadonlyReferenceForSpec::$hidden
+implicit:2177
+explicit:2177
+hidden:130
+narrow:4129
+int(1)
+bool(false)

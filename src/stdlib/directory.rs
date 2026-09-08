@@ -15,6 +15,8 @@ use crate::vm::frame::ExecuteData;
 const LAST_DIRECTORY_RESOURCE: &str = "\0rphp-last-directory-resource";
 const INITIAL_WORKING_DIRECTORY: &str = "\0rphp-initial-working-directory";
 
+pub(super) mod object;
+
 struct DirectoryStream {
     path: PathBuf,
     entries: std::fs::ReadDir,
@@ -142,11 +144,19 @@ fn validate_context(
 }
 
 #[cfg(feature = "resource-lifetime")]
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code; section placement does not change its ABI.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
 fn insert_directory(eg: &mut ExecutorGlobals, stream: DirectoryStream) -> Value {
     super::resource::insert_value_for_request(eg, "stream", stream)
 }
 
 #[cfg(not(feature = "resource-lifetime"))]
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code; section placement does not change its ABI.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
 fn insert_directory(eg: &mut ExecutorGlobals, stream: DirectoryStream) -> Value {
     Value::resource(super::resource::insert_for_request(eg, "stream", stream))
 }
@@ -173,6 +183,18 @@ fn clear_last_directory_if(eg: &mut ExecutorGlobals, id: i64) {
             .borrow_mut()
             .remove(LAST_DIRECTORY_RESOURCE);
     }
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code; section placement does not change its ABI.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn is_directory_resource(eg: &mut ExecutorGlobals, id: i64) -> bool {
+    let native =
+        super::resource::with_request_payload_mut::<DirectoryStream, _>(eg, id, |_| ()).is_some();
+    #[cfg(feature = "stream-registry")]
+    let native = native || super::streams::user_wrapper::is_user_directory(eg, id);
+    native
 }
 
 fn directory_argument(
@@ -239,11 +261,7 @@ fn directory_argument(
         ));
         return Ok(None);
     }
-    let is_directory =
-        super::resource::with_request_payload_mut::<DirectoryStream, _>(eg, id, |_| ()).is_some();
-    #[cfg(feature = "stream-registry")]
-    let is_directory = is_directory || super::streams::user_wrapper::is_user_directory(eg, id);
-    if !is_directory {
+    if !is_directory_resource(eg, id) {
         let message = if super::resource::type_for_request(eg, id) == "stream" {
             format!("{function}(): Argument #1 ($dir_handle) must be a valid Directory resource")
         } else {
@@ -292,28 +310,44 @@ pub(super) fn fn_opendir(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(directory) = super::typed_internal_string_argument(ed, eg, "opendir", 0, "directory")?
+    let value =
+        open_directory(ed, eg, "opendir")?.map_or_else(|| Value::bool(false), |(_, handle)| handle);
+    ret!(rv, value);
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code; section placement does not change its ABI.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn open_directory(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+) -> Result<Option<(Value, Value)>, VmError> {
+    let Some(path) =
+        super::filesystem::filesystem_string_value_argument(ed, eg, function, 0, "directory")?
     else {
-        return Ok(());
+        return Ok(None);
     };
-    if !validate_context(ed, eg, "opendir", 1, 2) {
-        return Ok(());
+    if !validate_context(ed, eg, function, 1, 2) {
+        return Ok(None);
     }
+    let directory = path.as_str().expect("validated directory string");
     if directory.is_empty() {
-        ret!(rv, Value::bool(false));
+        return Ok(None);
     }
-    if !super::filesystem::url_open_allowed(ed, eg, &directory, "opendir")? {
-        ret!(rv, Value::bool(false));
+    if !super::filesystem::url_open_allowed(ed, eg, directory, function)? {
+        return Ok(None);
     }
     #[cfg(feature = "stream-registry")]
-    match super::streams::user_wrapper::open_directory(eg, &directory, 0)? {
+    match super::streams::user_wrapper::open_directory(eg, directory, 0)? {
         super::streams::user_wrapper::OpenResult::Opened(value) => {
             remember_last_directory(eg, &value);
-            ret!(rv, value);
+            return Ok(Some((path, value)));
         }
         super::streams::user_wrapper::OpenResult::Declined { class } => {
             if eg.exception.is_some() {
-                return Ok(());
+                return Ok(None);
             }
             super::report_internal_diagnostic(
                 eg,
@@ -321,18 +355,26 @@ pub(super) fn fn_opendir(
                 2,
                 "Warning",
                 &format!(
-                    "opendir({directory}): Failed to open directory: \"{class}::dir_opendir\" call failed"
+                    "{function}({directory}): Failed to open directory: \"{class}::dir_opendir\" call failed"
                 ),
             )?;
-            ret!(rv, Value::bool(false));
+            return Ok(None);
         }
         super::streams::user_wrapper::OpenResult::NotRegistered => {}
     }
-    match DirectoryStream::open(Path::new(&directory)) {
+    #[cfg(unix)]
+    let native_path = {
+        use std::os::unix::ffi::OsStrExt;
+        let bytes = path.php_string_bytes().expect("validated directory string");
+        PathBuf::from(std::ffi::OsStr::from_bytes(&bytes))
+    };
+    #[cfg(not(unix))]
+    let native_path = PathBuf::from(directory);
+    match DirectoryStream::open(&native_path) {
         Ok(stream) => {
             let value = insert_directory(eg, stream);
             remember_last_directory(eg, &value);
-            ret!(rv, value);
+            Ok(Some((path, value)))
         }
         Err(error) => {
             super::report_internal_diagnostic(
@@ -341,14 +383,11 @@ pub(super) fn fn_opendir(
                 2,
                 "Warning",
                 &format!(
-                    "opendir({directory}): Failed to open directory: {}",
+                    "{function}({directory}): Failed to open directory: {}",
                     io_message(&error)
                 ),
             )?;
-            if eg.exception.is_some() {
-                return Ok(());
-            }
-            ret!(rv, Value::bool(false));
+            Ok(None)
         }
     }
 }
@@ -361,11 +400,20 @@ pub(super) fn fn_readdir(
     let Some(id) = directory_argument(ed, eg, "readdir")? else {
         return Ok(());
     };
+    let value = read_directory(eg, id)?;
+    ret!(rv, value);
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code; section placement does not change its ABI.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn read_directory(eg: &mut ExecutorGlobals, id: i64) -> Result<Value, VmError> {
     #[cfg(feature = "stream-registry")]
     if let Some(entry) = super::streams::user_wrapper::directory_read(eg, id)? {
         match entry {
-            Some(entry) => ret!(rv, Value::string(entry)),
-            None => ret!(rv, Value::bool(false)),
+            Some(entry) => return Ok(Value::string(entry)),
+            None => return Ok(Value::bool(false)),
         }
     }
     let result = super::resource::with_request_payload_mut::<DirectoryStream, _>(
@@ -375,8 +423,14 @@ pub(super) fn fn_readdir(
     )
     .expect("validated directory resource remains open during readdir");
     match result {
-        Ok(Some(entry)) => ret!(rv, Value::string(entry)),
-        Ok(None) | Err(_) => ret!(rv, Value::bool(false)),
+        Ok(Some(entry)) => {
+            #[cfg(unix)]
+            let value = Value::binary_string_from_storage(entry);
+            #[cfg(not(unix))]
+            let value = Value::string(entry);
+            Ok(value)
+        }
+        Ok(None) | Err(_) => Ok(Value::bool(false)),
     }
 }
 
@@ -388,16 +442,25 @@ pub(super) fn fn_rewinddir(
     let Some(id) = directory_argument(ed, eg, "rewinddir")? else {
         return Ok(());
     };
+    rewind_directory(eg, id)?;
+    ret!(rv, Value::null());
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code; section placement does not change its ABI.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn rewind_directory(eg: &mut ExecutorGlobals, id: i64) -> Result<(), VmError> {
     #[cfg(feature = "stream-registry")]
     if super::streams::user_wrapper::directory_rewind(eg, id)?.is_some() {
-        ret!(rv, Value::null());
+        return Ok(());
     }
     let _ = super::resource::with_request_payload_mut::<DirectoryStream, _>(
         eg,
         id,
         DirectoryStream::rewind,
     );
-    ret!(rv, Value::null());
+    Ok(())
 }
 
 pub(super) fn fn_closedir(
@@ -408,11 +471,20 @@ pub(super) fn fn_closedir(
     let Some(id) = directory_argument(ed, eg, "closedir")? else {
         return Ok(());
     };
+    close_directory(eg, id)?;
+    ret!(rv, Value::null());
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code; section placement does not change its ABI.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn close_directory(eg: &mut ExecutorGlobals, id: i64) -> Result<(), VmError> {
     #[cfg(feature = "stream-registry")]
     if super::streams::user_wrapper::is_user_directory(eg, id) {
         let _ = super::streams::user_wrapper::close(eg, id)?;
         clear_last_directory_if(eg, id);
-        ret!(rv, Value::null());
+        return Ok(());
     }
     let closed = super::resource::close_for_request::<DirectoryStream>(eg, id);
     debug_assert!(
@@ -420,7 +492,7 @@ pub(super) fn fn_closedir(
         "validated directory resource must close exactly once"
     );
     clear_last_directory_if(eg, id);
-    ret!(rv, Value::null());
+    Ok(())
 }
 
 pub(super) fn fn_scandir(

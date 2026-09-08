@@ -36,28 +36,28 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `native-filesystem-timestamp-lifecycle` train adds nineteen exact
-PHP 8.5 passes over `6a2cb14d`, with no loss. Cold native `touch()` handling
-preserves creation, existing bytes, timestamp/default/null validation, path
-provenance, diagnostic order, owner permissions and stat-cache invalidation.
-One documented Linux-64 POSIX boundary fits the unchanged unsafe ceiling;
-there is no new dependency, shared RPHP ABI or common VM change.
+The accepted `directory-object-resource-lifecycle` train adds fifteen exact
+PHP 8.5 passes over `006379ab`, without loss. Cold native `dir()`/`Directory`
+factory, method and descriptor paths share existing resource ownership,
+readonly properties, Reflection and construction/serialization policy. Original
+oracles retain byte paths, aliases, diagnostic ordering and reentrant callbacks.
 
-Thirteen original oracles and prior link/stream/data packets pass. One checked
-five-configuration Cargo matrix, all-target, exact 7,174-case no-loss,
-Composer/Symfony S0-S3 and static/unsafe gates pass. Core counts remain
-6,435/346/182/211. The first candidate's independently confirmed object control
-regression was rejected; after outlining only new cold registration, the second
-passes all fourteen fixed-parent controls and three calibrated holdouts under
+One checked five-configuration Cargo matrix, all-target, exact 7,174-case
+no-loss, Composer/Symfony S0-S3 and static/unsafe gates pass. Core counts remain
+6,435/346/182/211. All sixteen fixed-parent controls and three holdouts meet
 unchanged common +1% / pay-use +5% budgets on the user-authorized shared host.
+Rejected layout experiments were removed; instruction profiles instead prove
+moved-temporary bitmap cleanup and bounded resource-lookup work removal. No
+representation, dependency, new unsafe operation or JIT admission changes.
 
-User-wrapper metadata callbacks, broader URI policy, non-Linux-64 timestamp
-equivalence and the reference-side atime-precondition case remain non-claims.
-Next admission examines seventeen `dir()`/`Directory` factory, resource-lifecycle
-and property-capability candidates. Require ten reachable current failures
-sharing that boundary; do not count unrelated Reflection/ArrayObject blockers.
-Keep new registration and handlers cold from the outset and retain one shared
-final evidence packet. Exact hashes and non-claims are in `compatibility.md`.
+Object-backed ArrayObject, rewind after native pathname rename/removal,
+extension-loaded and other-platform/OOM equivalence remain non-claims.
+Next admission examines nineteen ArrayObject backing-storage/projection cases.
+Require ten reachable current failures of that boundary before implementation;
+do not count independent sorting, custom-iterator or extension-loader blockers.
+Keep ordinary object access unchanged and new handlers/registration cold from
+the outset. Retain one shared final evidence packet and the existing controls.
+Exact hashes and non-claims are in `compatibility.md`.
 
 ### Preceding data-wrapper checkpoint
 

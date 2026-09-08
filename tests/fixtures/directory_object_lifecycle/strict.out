@@ -1,0 +1,5 @@
+TypeError:dir(): Argument #1 ($directory) must be of type string, false given
+TypeError:dir(): Argument #1 ($directory) must be of type string, int given
+TypeError:dir(): Argument #1 ($directory) must be of type string, null given
+TypeError:dir(): Argument #1 ($directory) must be of type string, array given
+TypeError:dir(): Argument #1 ($directory) must be of type string, stdClass given

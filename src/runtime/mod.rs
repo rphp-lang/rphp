@@ -2315,6 +2315,18 @@ impl ExecutorGlobals {
             .unwrap_or_default()
     }
 
+    /// Reflection enumerates real internal descriptors in declaration order;
+    /// ordinary dispatch continues to use the already published function table.
+    #[cold]
+    pub(crate) fn internal_declared_method_names(&self, owner: &str) -> Vec<(&str, bool)> {
+        let contracts = self.internal_method_contracts(owner);
+        let mut names = Vec::with_capacity(contracts.len());
+        for contract in contracts {
+            names.push((contract.name.as_ref(), contract.is_static));
+        }
+        names
+    }
+
     #[cold]
     pub(crate) fn publish_detached_trace_caller(&mut self, frame: usize, caller: usize) {
         if caller != 0 {

@@ -1,0 +1,13 @@
+leaf:0:30
+drop:leaf
+r0
+before:after
+leaf:1:30
+drop:leaf
+r1
+before:after
+leaf:2:30
+drop:leaf
+r2
+before:after
+done

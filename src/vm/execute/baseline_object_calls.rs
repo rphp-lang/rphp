@@ -9,6 +9,7 @@ fn internal_class_forbids_dynamic_properties(class_name: &str) -> bool {
             | "WeakMap"
             | "InternalIterator"
             | "SensitiveParameterValue"
+            | "Directory"
     )
 }
 
@@ -879,6 +880,12 @@ fn validate_new_object_site<'a>(
         )?);
     }
     if let Some(class_def) = class_def {
+        if class_def.name == "Directory" {
+            return Ok(new_object_validation_error(
+                eg, frame, op_array, ip,
+                "Cannot directly construct Directory, use dir() instead",
+            )?);
+        }
         if class_def.is_trait {
             return Ok(new_object_validation_error(
                 eg,
@@ -3300,7 +3307,17 @@ fn op_bind_obj_prop_ref<'a>(
                         Visibility::Private => "private",
                         Visibility::Public => "public",
                     };
-                    let message = if eg.property_has_asymmetric_set_visibility(&class_name, &name) {
+                    let readonly_and_readable = eg.find_class(&class_name)
+                        .is_some_and(|class| class.readonly_props.contains(&name))
+                        && eg.find_property_visibility(&class_name, &name)
+                            .is_some_and(|(read_visibility, owner)| {
+                                eg.check_instance_property_visibility(
+                                    caller_class.as_deref(), &class_name, &name, &owner, read_visibility,
+                                )
+                            });
+                    let message = if readonly_and_readable {
+                        format!("Cannot indirectly modify readonly property {defining_class}::${name}")
+                    } else if eg.property_has_asymmetric_set_visibility(&class_name, &name) {
                         format!(
                             "Cannot indirectly modify {visibility}(set) property {defining_class}::${name} from {}",
                             caller_class

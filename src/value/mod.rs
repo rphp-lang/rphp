@@ -1820,6 +1820,57 @@ mod declared_property_storage_tests {
     use std::rc::Rc;
 
     #[test]
+    fn defaults_copy_order_survives_every_pool_boundary() {
+        for width in [0, 1, 5, 6, 8, 9, 17] {
+            let layout = Rc::new(ObjectLayout::new(
+                "DefaultCopyRow",
+                (0..width).map(|index| format!("p{index}")).collect(),
+            ));
+            let defaults: Vec<_> = (0..width)
+                .map(|index| Value::string(format!("value-{index}")))
+                .collect();
+            for _ in 0..3 {
+                let mut object =
+                    PhpObject::with_layout_from_defaults(1, Rc::clone(&layout), &defaults);
+                assert_eq!(object.property_values.len(), width);
+                for (index, value) in object.property_values.iter().enumerate() {
+                    assert_eq!(value.as_str(), Some(format!("value-{index}").as_str()));
+                }
+                if width != 0 {
+                    object.property_values[0] = Value::long(99);
+                    assert_eq!(defaults[0].as_str(), Some("value-0"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn defaults_preserve_uninitialized_and_scalar_tags() {
+        let defaults = [
+            Value::undef(),
+            Value::null(),
+            Value::bool(false),
+            Value::long(i64::MAX),
+            Value::double(-0.0),
+        ];
+        let layout = Rc::new(ObjectLayout::new(
+            "ScalarDefaultRow",
+            (0..defaults.len()).map(|i| format!("p{i}")).collect(),
+        ));
+        let object = PhpObject::with_layout_from_defaults(1, layout, &defaults);
+        for (source, copied) in defaults.iter().zip(&object.property_values) {
+            assert_eq!(source.type_info, copied.type_info);
+        }
+        assert_eq!(object.property_values[3].as_long(), Some(i64::MAX));
+        assert!(
+            object.property_values[4]
+                .as_double()
+                .unwrap()
+                .is_sign_negative()
+        );
+    }
+
+    #[test]
     fn pooled_declared_storage_is_cleared_before_reuse() {
         let layout = Rc::new(ObjectLayout::new(
             "PooledRow",

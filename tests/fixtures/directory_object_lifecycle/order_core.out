@@ -1,0 +1,6 @@
+stringify
+dir(): Argument #2 ($context) must be of type resource or null, false given
+diagnostic:dir(): Passing null to parameter #1 ($directory) of type string is deprecated
+stop
+stringify
+.

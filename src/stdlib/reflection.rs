@@ -5337,9 +5337,11 @@ fn render_reflection_method_details(
         modifiers.push_str("static ");
     }
     let provenance = if function.fn_type == FunctionType::User && !closure_method {
-        "user"
+        "user".to_string()
+    } else if !closure_method && let Some(extension) = eg.internal_function_extension(function) {
+        format!("internal:{extension}")
     } else {
-        "internal"
+        "internal".to_string()
     };
     let callable_kind = if name.eq_ignore_ascii_case("__construct") {
         format!("{provenance}, ctor")
@@ -5347,7 +5349,7 @@ fn render_reflection_method_details(
         provenance.to_string()
     };
     let mut rendered = format!("Method [ <{callable_kind}> {modifiers}method {name} ] {{\n");
-    if closure_method {
+    if closure_method || function.fn_type == FunctionType::Internal {
         rendered.push('\n');
     }
     if !closure_method
@@ -5538,9 +5540,21 @@ fn class_to_string(
         "class"
     };
     let provenance = if eg.class_is_internal(&owner) {
-        "internal"
+        let mut extension = None;
+        for (name, _) in eg.internal_declared_method_names(&class.name) {
+            if let Some(method) = eg.find_function(&format!("{}::{name}", class.name)) {
+                extension = eg.internal_function_extension(method);
+                if extension.is_some() {
+                    break;
+                }
+            }
+        }
+        extension.map_or_else(
+            || "internal".to_string(),
+            |extension| format!("internal:{extension}"),
+        )
     } else {
-        "user"
+        "user".to_string()
     };
     let title = if is_object {
         "Object of class"
@@ -5583,6 +5597,10 @@ fn class_to_string(
         "{title} [ <{provenance}>{iterateable} {modifiers}{kind} {}{backing_declaration}{implements_declaration} ] {{\n",
         class.name
     );
+    let internal_class = eg.class_is_internal(&owner);
+    if internal_class {
+        rendered.push('\n');
+    }
     if let Some(source_file) = &class.source_file {
         let member_end = class
             .methods
@@ -5681,7 +5699,7 @@ fn class_to_string(
         if !is_static {
             continue;
         }
-        if is_user_enum && rendered_static_method {
+        if (is_user_enum || internal_class) && rendered_static_method {
             rendered.push('\n');
         }
         if is_user_enum && let Some(method) = render_reflection_enum_builtin_method(name) {
@@ -5742,6 +5760,7 @@ fn class_to_string(
 
     let instance_method_count = methods.len() - static_method_count;
     rendered.push_str(&format!("  - Methods [{instance_method_count}] {{\n"));
+    let mut rendered_instance_method = false;
     for (name, visibility, is_static, is_final, function, declaring_class) in &methods {
         if *is_static {
             continue;
@@ -5749,6 +5768,9 @@ fn class_to_string(
         let Some(function) = eg.registered_function_common(*function) else {
             continue;
         };
+        if internal_class && rendered_instance_method {
+            rendered.push('\n');
+        }
         let method = render_reflection_method_details(
             function,
             reflected_user_function_from_common(function),
@@ -5770,6 +5792,7 @@ fn class_to_string(
                 rendered.push('\n');
             }
         }
+        rendered_instance_method = true;
     }
     rendered.push_str("  }\n}\n");
     return_value(rv, Value::string(rendered))
@@ -6649,6 +6672,21 @@ fn collect_reflected_methods(
             class.name.clone(),
         ));
     }
+    for (name, is_static) in eg.internal_declared_method_names(&class.name) {
+        let Some(function) = eg.find_function(&format!("{}::{name}", class.name)) else {
+            continue;
+        };
+        if seen.insert(name.to_ascii_lowercase()) {
+            methods.push((
+                name.to_string(),
+                Visibility::Public,
+                is_static,
+                false,
+                function,
+                class.name.clone(),
+            ));
+        }
+    }
     for method in eg.effective_composed_trait_methods(class) {
         if !seen.insert(method.target.to_ascii_lowercase()) {
             continue;
@@ -7456,9 +7494,24 @@ fn property_modifiers(property: &PropertyDefinition, is_static: bool) -> i64 {
         Visibility::Protected => 2,
         Visibility::Private => 4,
     };
+    let set_visibility = property.set_visibility.or_else(|| {
+        (property.is_readonly && property.visibility == Visibility::Public)
+            .then_some(Visibility::Protected)
+    });
+    let set_modifier = match set_visibility {
+        Some(Visibility::Protected) if property.visibility != Visibility::Protected => 2048,
+        Some(Visibility::Private) if property.visibility != Visibility::Private => 4096,
+        _ => 0,
+    };
     visibility
+        | set_modifier
         | if is_static { 16 } else { 0 }
-        | if property.is_final() { 32 } else { 0 }
+        | if property.is_final() || set_visibility == Some(Visibility::Private) && set_modifier != 0
+        {
+            32
+        } else {
+            0
+        }
         | if property.abstract_get_hook() || property.abstract_set_hook() {
             64
         } else {
@@ -8407,6 +8460,16 @@ fn construct_reflected_class_instance(
     let Some((owner, object)) = reflected_class_instance(ed, eg)? else {
         return return_value(rv, Value::null());
     };
+    if object
+        .as_object()
+        .is_some_and(|object| object.class_name.as_ref() == "Directory")
+    {
+        eg.exception = Some(make_error_value(
+            "Error",
+            "Cannot directly construct Directory, use dir() instead",
+        ));
+        return Ok(());
+    }
     let constructor_info = eg.find_method_info(&owner, "__construct");
     let Some((visibility, _, _)) = constructor_info else {
         if !arguments.is_empty() {

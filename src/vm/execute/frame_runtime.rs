@@ -176,6 +176,28 @@ macro_rules! frame_tmp_take {
     }};
 }
 
+/// Retire a moved assignment operand together with its compact-frame edge.
+/// Keep this heap-only bookkeeping out of the common dispatch body. The
+/// source is a disjoint slot after the frame header, not part of that header.
+#[cold]
+#[inline(never)]
+fn take_assignment_heap_source(
+    frame: &mut ExecuteData,
+    source: &mut Value,
+    index: u16,
+) -> Value {
+    debug_assert_eq!(
+        source as *const Value as usize,
+        frame as *const ExecuteData as usize
+            + (CALL_FRAME_SLOTS + usize::from(index)) * std::mem::size_of::<Value>(),
+    );
+    let value = std::mem::replace(source, Value::undef());
+    if frame.num_cvs + frame.num_temps <= 64 {
+        frame.heap_bitmap &= !(1u64 << index);
+    }
+    value
+}
+
 /// Write a Long value directly to a frame TMP slot. Zero overhead for scalar frames.
 #[inline(always)]
 pub(super) unsafe fn frame_tmp_set_long(frame: *mut ExecuteData, ptr: *mut Value, v: i64) {

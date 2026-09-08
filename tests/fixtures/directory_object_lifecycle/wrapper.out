@@ -1,0 +1,12 @@
+open:dirspec://folder
+next
+next
+rewind
+next
+close
+string(16) "dirspec://folder"
+string(3) "one"
+bool(false)
+NULL
+string(3) "one"
+NULL

@@ -1,0 +1,4 @@
+.:stream
+bool(true)
+Directory::read(): cannot use Directory resource after it has been closed
+bool(true)

@@ -1,0 +1,10 @@
+bool(false)
+Error:Typed property Directory::$path must not be accessed before initialization
+bool(false)
+Error:Typed property Directory::$handle must not be accessed before initialization
+Error:Internal directory stream has been altered
+Error:Internal directory stream has been altered
+Error:Internal directory stream has been altered
+Cannot directly construct Directory, use dir() instead
+Cannot directly construct Directory, use dir() instead
+Cannot directly construct Directory, use dir() instead

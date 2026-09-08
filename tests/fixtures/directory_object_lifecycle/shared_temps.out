@@ -1,0 +1,17 @@
+peek:shared
+peek:shared
+bool(true)
+end shared scope
+drop:shared
+after shared scope
+peek:last
+drop:last
+after last
+peek:nested
+drop:nested
+after nested
+before reenter
+reenter
+peek:inside
+drop:inside
+done

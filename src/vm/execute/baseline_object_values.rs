@@ -118,7 +118,7 @@ fn op_clone_obj<'a>(
             let obj = src_val.as_object().unwrap();
             let uncloneable = matches!(
                 obj.class_name.as_ref(),
-                "Generator" | "WeakReference" | "InternalIterator" | "ReflectionProperty"
+                "Generator" | "WeakReference" | "InternalIterator" | "ReflectionProperty" | "Directory"
             )
                 || eg
                     .class_table

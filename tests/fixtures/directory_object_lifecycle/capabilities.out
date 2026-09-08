@@ -1,0 +1,11 @@
+Error:Cannot modify readonly property Directory::$path
+Error:Cannot unset readonly property Directory::$handle
+Error:Cannot indirectly modify readonly property Directory::$path
+Error:Cannot modify readonly property Directory::$path
+Error:Cannot create dynamic property Directory::$extra
+Error:Trying to clone an uncloneable object of class Directory
+Exception:Serialization of 'Directory' is not allowed
+Exception:Unserialization of 'Directory' is not allowed
+Error:Cannot directly construct Directory, use dir() instead
+.
+bool(true)

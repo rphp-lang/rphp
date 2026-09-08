@@ -2665,7 +2665,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 (&*source).value_type(),
                                 ValueType::Array | ValueType::Object | ValueType::Closure | ValueType::Resource
                             ) {
-                                std::mem::replace(&mut *source, Value::undef())
+                                // Consume the bitmap edge with the value. A
+                                // stale edge would send the now-empty TMP
+                                // through statement release planning again.
+                                take_assignment_heap_source(&mut *frame, &mut *source, opline.op2)
                             } else {
                                 // Scalar scratch values are intentionally kept
                                 // populated: hot-loop activation may validate

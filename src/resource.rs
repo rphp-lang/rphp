@@ -122,6 +122,18 @@ impl ResourceRegistry {
         id: i64,
         operation: impl FnOnce(&mut T) -> R,
     ) -> Option<R> {
+        // Bound by all IDs ever issued, not the current live count: a sparse
+        // registry that grew large must never walk its retained table. A new
+        // tiny registry can compare integer IDs without repeatedly hashing
+        // them for native I/O. Type validation and the borrow stay identical.
+        if self.next_id <= 8 {
+            for (&key, entry) in &mut self.entries {
+                if key == id {
+                    return Some(operation(entry.payload.downcast_mut::<T>()?));
+                }
+            }
+            return None;
+        }
         let payload = self.entries.get_mut(&id)?.payload.downcast_mut::<T>()?;
         Some(operation(payload))
     }
@@ -202,8 +214,11 @@ pub(crate) fn allocate_scope() -> u32 {
 pub(crate) fn insert<T: 'static>(scope: u32, resource_type: &'static str, payload: T) -> i64 {
     debug_assert_ne!(scope, 0);
     REQUEST_RESOURCES.with(|registries| {
+        let mut registries = registries.borrow_mut();
+        if let Some(registry) = registry_for_scope_mut(&mut registries, scope) {
+            return registry.insert(resource_type, payload);
+        }
         registries
-            .borrow_mut()
             .entry(scope)
             .or_default()
             .insert(resource_type, payload)
@@ -365,8 +380,13 @@ pub(crate) fn insert_value_for_request<T: 'static>(
     let scope = ensure_request_scope(eg);
     debug_assert_ne!(scope, 0);
     REQUEST_RESOURCES.with(|registries| {
+        // Repeated opens belong to the same request as subsequent I/O. Reuse
+        // its bounded lookup; only the first insertion creates a registry.
+        let mut registries = registries.borrow_mut();
+        if let Some(registry) = registry_for_scope_mut(&mut registries, scope) {
+            return registry.insert_value(scope, resource_type, payload);
+        }
         registries
-            .borrow_mut()
             .entry(scope)
             .or_default()
             .insert_value(scope, resource_type, payload)
@@ -582,6 +602,79 @@ mod tests {
     }
 
     #[test]
+    fn payload_projection_preserves_id_type_and_mutation_across_small_tables() {
+        for width in [0, 1, 2, 4, 7, 8, 33] {
+            let mut registry = ResourceRegistry::new();
+            let ids: Vec<_> = (0..width)
+                .map(|value| registry.insert("number", value as u64))
+                .collect();
+            let calls = Cell::new(0);
+            for missing in [0, -1, i64::MAX] {
+                assert_eq!(
+                    registry.with_payload_mut::<u64, _>(missing, |_| calls.set(1)),
+                    None,
+                );
+            }
+            for (index, &id) in ids.iter().enumerate() {
+                assert_eq!(
+                    registry.with_payload_mut::<String, _>(id, |_| calls.set(1)),
+                    None,
+                );
+                assert_eq!(
+                    registry.with_payload_mut::<u64, _>(id, |value| {
+                        assert_eq!(*value, index as u64);
+                        *value += 100;
+                        *value
+                    }),
+                    Some(index as u64 + 100),
+                );
+            }
+            assert_eq!(calls.get(), 0, "misses must not invoke the operation");
+            for (index, &id) in ids.iter().enumerate() {
+                assert_eq!(
+                    registry.with_payload_mut::<u64, _>(id, |value| *value),
+                    Some(index as u64 + 100),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn payload_projection_preserves_retired_ids_and_large_sparse_registries() {
+        let mut registry = ResourceRegistry::new();
+        let ids: Vec<_> = (0..33)
+            .map(|value| registry.insert("number", value as u64))
+            .collect();
+        for &id in &ids[..31] {
+            assert!(registry.close::<u64>(id));
+        }
+        assert!(registry.next_id > 8);
+        assert!(registry.entries.capacity() > 8);
+        for &id in &ids[..31] {
+            assert_eq!(
+                registry.with_payload_mut::<u64, _>(id, |value| *value),
+                None
+            );
+        }
+        for (index, &id) in ids.iter().enumerate().skip(31) {
+            assert_eq!(
+                registry.with_payload_mut::<u64, _>(id, |value| *value),
+                Some(index as u64),
+            );
+        }
+        let next = registry.insert("number", 90u64);
+        assert!(next > ids[32]);
+        assert_eq!(
+            registry.with_payload_mut::<u64, _>(next, |value| *value),
+            Some(90)
+        );
+        assert_eq!(
+            registry.with_payload_mut::<u64, _>(ids[0], |value| *value),
+            None
+        );
+    }
+
+    #[test]
     fn sparse_retained_scope_table_preserves_projection() {
         let scopes: Vec<_> = (0..32)
             .map(|value| {
@@ -662,6 +755,40 @@ mod tests {
     #[cfg(feature = "resource-lifetime")]
     fn resource_handle_keeps_value_layout_compact() {
         assert_eq!(std::mem::size_of::<crate::value::Value>(), 16);
+    }
+
+    #[test]
+    #[cfg(feature = "resource-lifetime")]
+    fn repeated_registration_keeps_request_local_ids_and_alias_owners() {
+        let first_drops = Rc::new(Cell::new(0));
+        let second_drops = Rc::new(Cell::new(0));
+        let mut first = ExecutorGlobals::with_output(Box::new(std::io::sink()));
+        let mut second = ExecutorGlobals::with_output(Box::new(std::io::sink()));
+        for index in 1..=17 {
+            let a = insert_value_for_request(&mut first, "probe", DropProbe(first_drops.clone()));
+            let b = insert_value_for_request(&mut second, "probe", DropProbe(second_drops.clone()));
+            assert_eq!(a.as_resource_id(), Some(index));
+            assert_eq!(b.as_resource_id(), Some(index));
+            assert_ne!(first.resource_scope, second.resource_scope);
+            let alias = a.clone();
+            drop(a);
+            assert_eq!(first_drops.get(), index as usize - 1);
+            assert!(!close_for_request::<String>(&mut first, index));
+            assert!(is_open_for_request(&first, index));
+            assert!(is_open_for_request(&second, index));
+            assert!(close_for_request::<DropProbe>(&mut first, index));
+            assert_eq!(first_drops.get(), index as usize);
+            assert_eq!(second_drops.get(), index as usize - 1);
+            assert_eq!(alias.as_resource_id(), Some(index));
+            drop(alias);
+            assert_eq!(first_drops.get(), index as usize);
+            drop(b);
+            assert_eq!(second_drops.get(), index as usize);
+        }
+        drop(first);
+        drop(second);
+        assert_eq!(first_drops.get(), 17);
+        assert_eq!(second_drops.get(), 17);
     }
 
     #[test]

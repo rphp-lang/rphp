@@ -1,0 +1,10 @@
+Directory:.:stream
+.,..,apple,pear
+bool(false)
+NULL
+bool(true)
+NULL
+bool(false)
+TypeError:Directory::read(): cannot use Directory resource after it has been closed
+TypeError:Directory::rewind(): cannot use Directory resource after it has been closed
+TypeError:Directory::close(): cannot use Directory resource after it has been closed
