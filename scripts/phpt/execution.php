@@ -6,6 +6,7 @@ declare(strict_types=1);
 function unsupported_rphp_ini_directives(string $section): array
 {
     $supported = [
+        'allow_url_fopen' => true,
         'assert.exception' => true,
         'error_reporting' => true,
         'highlight.comment' => true,

@@ -1,0 +1,6 @@
+file_get_contents(): Argument #1 ($filename) must not contain any null bytes
+fopen(): Argument #1 ($filename) must not contain any null bytes
+file(): Argument #1 ($filename) must not contain any null bytes
+file_get_contents(): Argument #1 ($filename) must not contain any null bytes
+fopen(): Argument #1 ($filename) must not contain any null bytes
+file(): Argument #1 ($filename) must not contain any null bytes

@@ -1,6 +1,6 @@
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(feature = "resource-lifetime")]
@@ -135,30 +135,28 @@ impl ResourceRegistry {
     )]
     #[cold]
     pub fn close<T: 'static>(&mut self, id: i64) -> bool {
-        if !self
-            .entries
-            .get(&id)
-            .is_some_and(|entry| entry.payload.is::<T>())
-        {
+        let Entry::Occupied(entry) = self.entries.entry(id) else {
+            return false;
+        };
+        if !entry.get().payload.is::<T>() {
             return false;
         }
-        if let Some(entry) = self.entries.remove(&id) {
-            entry.retire_owner();
-        }
+        // Validate and remove through one lookup; a wrong type leaves the
+        // original entry and owner live.
+        entry.remove().retire_owner();
         true
     }
 
     #[cfg(feature = "resource-lifetime")]
     #[cold]
     fn remove<T: 'static>(&mut self, id: i64) -> Option<ResourceEntry> {
-        if !self
-            .entries
-            .get(&id)
-            .is_some_and(|entry| entry.payload.is::<T>())
-        {
+        let Entry::Occupied(entry) = self.entries.entry(id) else {
+            return None;
+        };
+        if !entry.get().payload.is::<T>() {
             return None;
         }
-        let entry = self.entries.remove(&id)?;
+        let entry = entry.remove();
         entry.retire_owner();
         Some(entry)
     }
@@ -471,6 +469,31 @@ mod tests {
         assert_eq!(registry.resource_type(id), "Unknown");
         assert!(!registry.close::<DropProbe>(id));
         assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn typed_close_misses_preserve_neighbors_and_monotonic_ids() {
+        let drops = Rc::new(Cell::new(0));
+        let mut registry = ResourceRegistry::new();
+        let first = registry.insert("probe", DropProbe(drops.clone()));
+        let second = registry.insert("text", String::from("neighbor"));
+        assert!(!registry.close::<String>(first));
+        assert!(!registry.close::<DropProbe>(second));
+        assert!(!registry.close::<DropProbe>(i64::MAX));
+        assert_eq!(drops.get(), 0);
+        assert!(registry.is_open(first));
+        assert_eq!(registry.resource_type(second), "text");
+        assert!(registry.close::<DropProbe>(first));
+        assert_eq!(drops.get(), 1);
+        assert!(!registry.close::<DropProbe>(first));
+        let third = registry.insert("probe", DropProbe(drops.clone()));
+        assert_eq!(third, second + 1);
+        assert_eq!(
+            registry.with_payload_mut::<String, _>(second, |text| text.clone()),
+            Some(String::from("neighbor"))
+        );
+        drop(registry);
+        assert_eq!(drops.get(), 2);
     }
 
     #[test]

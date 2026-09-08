@@ -7,7 +7,65 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 PHP 8.5 checkpoint is `user-stream-filter-lifecycle`,
+The latest measured AMD64 PHP 8.5 checkpoint is `data-wrapper-open-policy`,
+against parent `7e7b9734`. Data URI opens share header validation, binary decode,
+read-only cursor/EOF behavior and detached metadata. Startup-only
+`allow_url_fopen` is enforced before data/user-URL factories; local wrappers
+remain available. Diagnostic callbacks retain the original argument snapshot
+and throwing handlers suppress later warnings. Scalar-call admission also
+requires actual float storage, leaving integer widening to the canonical path.
+
+All ten supplying php-src `fcc29c8` cases and three adjacent stream cases pass;
+the additional core resource-diagnostic gain makes the deduplicated union
+**+14/-0**, not sixteen. The exact 7,174-case core is **6,435 pass / 346 fail /
+182 skip / 211 unsupported**, with no lost pass, missing case, timeout or crash.
+Zend/lang manifest and sorted pass set:
+`51e25d959386e020ee7a17fc5abc32dbfb9c0566a34cad4e6c3072518287b349` /
+`b89857885e8fcf40bf3650374fdd0fecf0eb34f443b8eceb1c723fe79ed661ca`.
+Strings/array retains its exact pass set and counts; manifest:
+`9bf891c30b8763bbd23a62590ce7898e80c02f123682ec54139a8a277f1b46b2`.
+The thirteen-case supplying/adjacent manifest is
+`e4b814db9b4a8758d69baeb80eda65dfc9bde3edf337bd16fbc5f61aa985d200`.
+
+Twenty original process specimens/configurations match PHP 8.5.10 stdout,
+stderr and exit (40 successful PHP/RPHP executions); 231 focused checks pass.
+Five fresh checked Cargo configurations pass
+(4,735/4,444/4,806/4,828/4,879; unchanged 13/13/13/13/16 ignored), together with
+all-target, exact no-loss, Composer/Symfony S0-S3, runner self-test, formatting,
+public hygiene and the unchanged 1,621/289 unsafe inventory. One matrix runs
+alongside immutable-release PHPT/framework checks, with automatic cleanup and
+fingerprint/log validation. Matrix record:
+`70669e18030a753b9d86650173ec382eccf7ff3d44a11c7aacf94690bcc65cc0`.
+Complete technical record:
+`a14a9ca6706a3f5ee345d243c46bab1e50ddf486ce9cd2c9c3f665a2e69f71d5`.
+
+Profile-backed cost repairs remove duplicate typed-close lookups and stream
+byte copies; short path validation uses bounded safe loads. Trivial scalar
+leaves retain the existing interpreter eligibility rule without entering the
+out-of-line native cache dispatcher. Object release stays out of common drop
+arms. No representation, dependency, unsafe operation or JIT admission changed.
+Rejected copy/dispatch experiments are not acceptance evidence. On the
+user-authorized shared host (two recorded background events, not exclusive),
+all ten fixed-parent 32-pair medians meet unchanged common +1% / pay-use +5%
+limits: startup -0.148%, ordinary call -6.166%, object lifecycle -1.118%, array
++0.236%, memory I/O -9.810%, file I/O -3.068%, resource aliases -3.744%, local
+open -2.612%, small data URI -16.100%, base64 data URI -21.693%. Checksums match.
+Independent 32-pair eligible-arithmetic, closure-service and held-resource
+controls pass at -0.147%, +0.861% and -4.099%; only the first two workloads'
+validated self-reported elapsed field is normalized. Results/summary SHA-256:
+`adf8939bfbc0ff2e0af4a1cdac7a133b65161cd958cf76eafbee65010f13d2ec` /
+`db629dbf08dffb9ace2c4122b2c5cfdf8d25440b6f01b340ea99aebc6028bffd`.
+Holdout results:
+`865eade55731324a70f8ce78fab39e0d2e86e6fa6942e1a12aa891fc8550e3b5`.
+Exact release:
+`1629feae9ba871a6ab80650d7cd47a0e542d4c6cda59d1b16cd2ddf9834273d6`.
+Broader HTTP/codecs, raw non-ASCII URI provenance, data-wrapper stat mode,
+`fgetc`/`stream_supports_lock`, arbitrary INI syntax, ARM performance and
+allocation/OOM equivalence remain non-claims. No private benchmark host was
+configured. Next admission targets native-stream argument validation as one
+shared-root-cause train, not individual error-message checkpoints.
+
+The preceding measured AMD64 PHP 8.5 checkpoint is `user-stream-filter-lifecycle`,
 against runtime parent `fcbe89ca` (the intervening `fd3fd8af` only improves the
 test runner). User filters share bucket, read/write, removal, alias, exception
 and shutdown ownership rules with native streams. Cold `php://filter` opening

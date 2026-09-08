@@ -1,0 +1,26 @@
+2:fopen(data:text/plain): Failed to open stream: rfc2397: no comma in URL
+bool(false)
+2:file_get_contents(data:text/plain): Failed to open stream: rfc2397: no comma in URL
+bool(false)
+2:fopen(data:plain,x): Failed to open stream: rfc2397: illegal media type
+bool(false)
+2:file_get_contents(data:plain,x): Failed to open stream: rfc2397: illegal media type
+bool(false)
+2:fopen(data:;charset=UTF-8,x): Failed to open stream: rfc2397: illegal media type
+bool(false)
+2:file_get_contents(data:;charset=UTF-8,x): Failed to open stream: rfc2397: illegal media type
+bool(false)
+2:fopen(data:text/plain;tag,x): Failed to open stream: rfc2397: illegal parameter
+bool(false)
+2:file_get_contents(data:text/plain;tag,x): Failed to open stream: rfc2397: illegal parameter
+bool(false)
+2:fopen(data:text/plain;BASE64,YQ==): Failed to open stream: rfc2397: illegal parameter
+bool(false)
+2:file_get_contents(data:text/plain;BASE64,YQ==): Failed to open stream: rfc2397: illegal parameter
+bool(false)
+2:fopen(data:text/plain;base64,YQ===): Failed to open stream: rfc2397: unable to decode
+bool(false)
+2:file_get_contents(data:text/plain;base64,YQ===): Failed to open stream: rfc2397: unable to decode
+bool(false)
+fopen(data:plain,bad): Failed to open stream: rfc2397: illegal media type
+data:,replacement

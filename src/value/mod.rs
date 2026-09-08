@@ -1331,6 +1331,9 @@ fn register_object_identity(identity: usize) {
     with_object_handles(|state| state.register_identity(identity));
 }
 
+// Keep TLS release out of the common Value-drop arms. Inlining this into
+// each arm increases register pressure even when no object is being released.
+#[inline(never)]
 fn release_object_handle(identity: usize, handle: u32) {
     if handle == 0 {
         return;

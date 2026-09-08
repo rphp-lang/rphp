@@ -1,0 +1,2 @@
+2:file_get_contents(php://filter/read=data.open/resource=data:,payload): Failed to open stream: operation failed
+bool(false)

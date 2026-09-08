@@ -3611,6 +3611,10 @@ impl ScalarLongJitCache {
         }
     }
 
+    // Trivial leaves already run directly in the typed interpreter. Keep this
+    // existing eligibility check visible to its caller instead of paying an
+    // out-of-line cache dispatch that can only return Interpret.
+    #[inline(always)]
     pub fn dispatch(
         &self,
         plan: &ScalarLongFunctionPlan,
@@ -3619,7 +3623,15 @@ impl ScalarLongJitCache {
         if plan.select.is_none() && plan.program.operations.len() < 2 {
             return ScalarLongJitDispatch::Interpret;
         }
+        self.dispatch_eligible(plan, arguments)
+    }
 
+    #[inline(never)]
+    fn dispatch_eligible(
+        &self,
+        plan: &ScalarLongFunctionPlan,
+        arguments: &[i64; MAX_SCALAR_LONG_INPUTS],
+    ) -> ScalarLongJitDispatch {
         if self.compiled.get().is_none() {
             let calls = self.calls.get().saturating_add(1);
             self.calls.set(calls);

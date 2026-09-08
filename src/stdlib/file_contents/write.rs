@@ -133,11 +133,19 @@ pub(in crate::stdlib) fn fn_file_put_contents(
     } else {
         "w"
     };
+    if !super::super::filesystem::url_open_allowed(
+        execute_data,
+        eg,
+        &filename,
+        "file_put_contents",
+    )? {
+        return return_value(return_pointer, Value::bool(false));
+    }
     let mut destination = match PhpStream::open(&filename, mode) {
         Ok(stream) => stream,
         Err(_) => return return_value(return_pointer, Value::bool(false)),
     };
-    if destination.metadata().wrapper_type == "plainfile" {
+    if destination.is_plain_file() {
         super::super::filesystem::clear_filesystem_stat_cache(eg);
     }
     if locked

@@ -1,0 +1,11 @@
+string(1) "1"
+bool(false)
+string(1) "1"
+bool(true)
+string(5) "hello"
+array(1) {
+  [0]=>
+  string(5) "line
+"
+}
+5:1:local

@@ -302,6 +302,9 @@ pub(super) fn fn_opendir(
     if directory.is_empty() {
         ret!(rv, Value::bool(false));
     }
+    if !super::filesystem::url_open_allowed(ed, eg, &directory, "opendir")? {
+        ret!(rv, Value::bool(false));
+    }
     #[cfg(feature = "stream-registry")]
     match super::streams::user_wrapper::open_directory(eg, &directory, 0)? {
         super::streams::user_wrapper::OpenResult::Opened(value) => {

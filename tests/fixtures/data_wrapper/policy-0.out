@@ -1,0 +1,13 @@
+string(1) "0"
+bool(false)
+string(1) "0"
+2:fopen(): data:// wrapper is disabled in the server configuration by allow_url_fopen=0
+2:fopen(data:,hello): Failed to open stream: no suitable wrapper could be found
+bool(false)
+2:file_get_contents(): data:// wrapper is disabled in the server configuration by allow_url_fopen=0
+2:file_get_contents(data:,hello): Failed to open stream: no suitable wrapper could be found
+bool(false)
+2:file(): data:// wrapper is disabled in the server configuration by allow_url_fopen=0
+2:file(data:,line%0A): Failed to open stream: no suitable wrapper could be found
+bool(false)
+5:1:local

@@ -654,6 +654,11 @@ fn read_stream_csv(
     Ok(None)
 }
 
+#[inline]
+fn retain_open_argument(value: &Value) -> Value {
+    value.clone()
+}
+
 #[cold]
 fn fn_fopen(
     execute_data: *mut ExecuteData,
@@ -670,16 +675,24 @@ fn fn_fopen(
     // wrapper/filter callback may replace that cell while opening. String
     // snapshots share immutable storage instead of allocating two byte copies
     // for every native fopen; coercions retain their existing owned result.
-    let path_snapshot = path_argument.dereferenced().clone();
-    let mode_snapshot = argument(execute_data, 1).dereferenced().clone();
+    // Value::clone already follows reference targets. Do not repeat that
+    // dispatch before retaining the same immutable argument snapshot.
+    let path_snapshot = retain_open_argument(path_argument);
+    let mode_snapshot = retain_open_argument(argument(execute_data, 1));
     let path: Cow<'_, str> = match path_snapshot.as_str() {
         Some(value) => Cow::Borrowed(value),
-        None => Cow::Owned(path_argument.echo_to_string()),
+        None => Cow::Owned(path_snapshot.echo_to_string()),
     };
     let mode: Cow<'_, str> = match mode_snapshot.as_str() {
         Some(value) => Cow::Borrowed(value),
         None => Cow::Owned(mode_snapshot.echo_to_string()),
     };
+    if !super::filesystem::validate_stream_path(eg, &path, "fopen") {
+        return Ok(());
+    }
+    if !super::filesystem::url_open_allowed(execute_data, eg, &path, "fopen")? {
+        return return_value(return_pointer, Value::bool(false));
+    }
     #[cfg(feature = "stream-registry")]
     if filters::uri::recognizes(&path) {
         let value = filters::uri::open_internal(eg, execute_data, &path, &mode)?;
@@ -707,7 +720,7 @@ fn fn_fopen(
     }
     let value = match PhpStream::open(path.as_ref(), mode.as_ref()) {
         Ok(stream) => {
-            if stream.metadata().wrapper_type == "plainfile" {
+            if stream.is_plain_file() {
                 super::filesystem::clear_filesystem_stat_cache(eg);
             }
             #[cfg(feature = "resource-lifetime")]
@@ -733,6 +746,40 @@ fn fn_fopen(
         }
     };
     return_value(return_pointer, value)
+}
+
+#[cfg(test)]
+mod open_argument_snapshot_tests {
+    use super::{PhpArray, Value, retain_open_argument};
+
+    #[test]
+    fn open_argument_snapshot_retains_binary_storage_after_reference_replacement() {
+        let bytes = [0, 127, 128, 255];
+        let mut reference = Value::owned_reference(Value::binary_string(&bytes));
+        let snapshot = retain_open_argument(&reference);
+        let second = retain_open_argument(&snapshot);
+        reference.assign_dereferenced(Value::string("replacement"));
+        assert!(snapshot.is_binary_string());
+        assert!(second.is_binary_string());
+        assert_eq!(snapshot.as_str(), Value::binary_string(&bytes).as_str());
+        assert_eq!(second.as_str(), snapshot.as_str());
+    }
+
+    #[test]
+    fn open_argument_snapshot_preserves_non_string_value_kinds() {
+        for value in [
+            Value::null(),
+            Value::bool(false),
+            Value::bool(true),
+            Value::long(-7),
+            Value::double(2.5),
+            Value::array(PhpArray::new()),
+        ] {
+            let snapshot = retain_open_argument(&value);
+            assert_eq!(snapshot.value_type(), value.value_type());
+            assert_eq!(snapshot.echo_to_string(), value.echo_to_string());
+        }
+    }
 }
 
 #[cold]
@@ -926,23 +973,59 @@ fn fn_fwrite(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let resource = argument(execute_data, 0).as_resource_id();
-    let data = argument_string(execute_data, 1);
-    let mut bytes = super::php_string_to_bytes(data.as_ref());
+    // Retain immutable string storage across a filter/error callback instead
+    // of copying it into a second String. Non-string coercion stays unchanged.
+    let supplied = argument(execute_data, 1);
+    let string_owner = supplied.as_str().map(|_| supplied.clone());
+    let data = match string_owner.as_ref().and_then(Value::as_str) {
+        Some(text) => Cow::Borrowed(text),
+        None => argument_string(execute_data, 1),
+    };
+    // ASCII (including NUL) already has the required byte representation.
+    // Non-ASCII lossless storage still uses the existing byte conversion.
+    let storage = if data.is_ascii() {
+        Cow::Borrowed(data.as_bytes())
+    } else {
+        Cow::Owned(super::php_string_to_bytes(data.as_ref()))
+    };
+    let mut bytes = storage.as_ref();
     if let Some(length) = optional_argument(execute_data, 2) {
         let Ok(length) = usize::try_from(length.to_long_val()) else {
             return return_value(return_pointer, Value::bool(false));
         };
-        bytes.truncate(length);
+        bytes = &bytes[..bytes.len().min(length)];
     }
     let result = if let Some(resource) = resource {
-        write_stream_bytes(eg, execute_data, resource, &bytes)?
+        write_stream_bytes(eg, execute_data, resource, bytes)?
     } else {
         None
     };
     match result {
         Some(Ok(written)) => return_value(return_pointer, Value::long(written as i64)),
+        Some(Err(error)) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            report_stream_not_writable(eg, execute_data)?;
+            return_value(return_pointer, Value::bool(false))
+        }
         _ => return_value(return_pointer, Value::bool(false)),
     }
+}
+
+// Keep the user-callback/error path out of the successful write body. In
+// particular it must not inflate ordinary native or memory I/O through LTO.
+#[cold]
+#[inline(never)]
+fn report_stream_not_writable(
+    eg: &mut ExecutorGlobals,
+    execute_data: *mut ExecuteData,
+) -> Result<(), VmError> {
+    super::report_internal_diagnostic(
+        eg,
+        execute_data,
+        8,
+        "Notice",
+        "fwrite(): Stream is not writable",
+    )?;
+    Ok(())
 }
 
 #[cold]
@@ -1315,7 +1398,11 @@ fn fn_stream_get_meta_data(
             let status_fields = usize::from(metadata.timed_out.is_some())
                 + usize::from(metadata.blocked.is_some())
                 + usize::from(metadata.eof.is_some());
-            let mut result = PhpArray::with_hash_capacity(6 + status_fields);
+            let mut result = if metadata.wrapper_type == "RFC2397" {
+                super::filesystem::data_uri_metadata(metadata.uri).unwrap_or_else(PhpArray::new)
+            } else {
+                PhpArray::with_hash_capacity(6 + status_fields)
+            };
             if let Some(timed_out) = metadata.timed_out {
                 result.set_str("timed_out", Value::bool(timed_out));
             }

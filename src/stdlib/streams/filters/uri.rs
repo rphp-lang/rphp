@@ -60,32 +60,38 @@ fn open(
         ));
         return Ok(None);
     }
-    let backend = if let Some(decoded) = stdlib::filesystem::decode_data_uri(underlying) {
-        match decoded {
-            Ok(bytes) => PhpStream::decoded_input(bytes, underlying),
-            Err(error) => {
-                stdlib::filesystem::report_data_uri_error(frame, eg, underlying, error)?;
-                return Ok(None);
-            }
+    let function = super::diagnostic_function(eg).to_string();
+    if layers.is_empty() {
+        if !stdlib::filesystem::url_open_allowed(frame, eg, underlying, &function)? {
+            return Ok(None);
         }
-    } else {
-        match PhpStream::open(underlying, mode) {
-            Ok(backend) => backend,
-            Err(error) => {
-                let reason = match error.kind() {
+    } else if underlying.starts_with("data:") && !stdlib::filesystem::url_fopen_enabled(eg) {
+        lifecycle::warn(
+            eg,
+            &format!("{function}({path}): Failed to open stream: operation failed"),
+        )?;
+        return Ok(None);
+    }
+    let backend = match PhpStream::open(underlying, mode) {
+        Ok(backend) => backend,
+        Err(error) => {
+            let reason = if !layers.is_empty() && underlying.starts_with("data:") {
+                "operation failed".to_string()
+            } else {
+                match error.kind() {
                     std::io::ErrorKind::NotFound => "No such file or directory".into(),
                     std::io::ErrorKind::PermissionDenied => "Permission denied".into(),
                     _ => error.to_string(),
-                };
-                lifecycle::warn(
-                    eg,
-                    &format!(
-                        "{}({path}): Failed to open stream: {reason}",
-                        super::diagnostic_function(eg)
-                    ),
-                )?;
-                return Ok(None);
-            }
+                }
+            };
+            lifecycle::warn(
+                eg,
+                &format!(
+                    "{}({path}): Failed to open stream: {reason}",
+                    super::diagnostic_function(eg)
+                ),
+            )?;
+            return Ok(None);
         }
     };
     if backend.is_plain_file() {

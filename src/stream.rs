@@ -286,6 +286,16 @@ impl PhpStream {
             });
         }
 
+        // Existing in-memory backends keep their original early return. Only
+        // remaining paths need the data-wrapper decoder and its diagnostics.
+        if path.starts_with("data:")
+            && let Some(bytes) = super::filesystem::decode_data_uri(path)
+        {
+            let bytes = bytes
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.reason()))?;
+            return Ok(Self::decoded_input(bytes, path, requested_mode));
+        }
+
         let mode = StreamMode::parse(requested_mode)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid stream mode"))?;
 
@@ -327,12 +337,13 @@ impl PhpStream {
     /// A decoded data wrapper owns immutable input with the same seek/read
     /// backend as memory streams, without a temporary write or extra copy.
     #[cold]
-    #[cfg(feature = "stream-registry")]
-    pub(crate) fn decoded_input(bytes: Vec<u8>, uri: &str) -> Self {
+    fn decoded_input(bytes: Vec<u8>, uri: &str, reported_mode: &str) -> Self {
         Self {
             backend: StreamBackend::Memory(Cursor::new(bytes)),
             mode: StreamMode::parse("rb").expect("constant stream mode"),
-            reported_mode: "rb".into(),
+            // The effective backend is always read-only; retain the requested
+            // mode separately without allocating an immediately replaced "rb".
+            reported_mode: reported_mode.split('\0').next().unwrap_or("").into(),
             uri: uri.into(),
             eof: false,
             read_buffer: None,
@@ -841,6 +852,9 @@ impl PhpStream {
                 "plainfile",
                 "STDIO",
             ),
+            StreamBackend::Memory(_) if self.uri.starts_with("data:") => {
+                (None, None, None, "RFC2397", "RFC2397")
+            }
             StreamBackend::Memory(_) => (Some(false), Some(true), Some(self.eof), "PHP", "MEMORY"),
             StreamBackend::Temp(_) => (None, None, None, "PHP", "TEMP"),
             StreamBackend::Standard(_) => (Some(false), Some(true), Some(self.eof), "PHP", "STDIO"),

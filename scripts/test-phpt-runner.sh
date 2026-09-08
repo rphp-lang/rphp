@@ -148,6 +148,8 @@ $binaryRecord = json_decode(
     flags: JSON_THROW_ON_ERROR,
 );
 if (unsupported_rphp_ini_directives($supported) !== []
+    || unsupported_rphp_ini_directives("allow_url_fopen=0\n") !== []
+    || unsupported_rphp_ini_directives("allow_url_include=1\n") !== ["allow_url_include"]
     || unsupported_rphp_ini_directives($highlightSupported) !== []
     || unsupported_rphp_ini_directives($unsupported) !== ["memory_limit"]
     || $binaryRecord !== ["actual_excerpt" => "\u{FFFD}"]

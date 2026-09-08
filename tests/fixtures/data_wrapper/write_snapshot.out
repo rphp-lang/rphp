@@ -1,0 +1,6 @@
+3:616c70:1
+3:007f80:1
+3:776f72:1
+8:fwrite(): Stream is not writable
+bool(false)
+string(7) "changed"

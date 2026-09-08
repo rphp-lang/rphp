@@ -153,6 +153,12 @@ pub(super) fn fn_fopen(
     let open_path = resolved_path.as_str();
     #[cfg(not(feature = "include-path"))]
     let open_path = path.as_ref();
+    if !super::super::filesystem::validate_stream_path(eg, open_path, "fopen") {
+        return Ok(());
+    }
+    if !super::super::filesystem::url_open_allowed(execute_data, eg, open_path, "fopen")? {
+        return return_value(return_pointer, Value::bool(false));
+    }
     #[cfg(feature = "stream-registry")]
     if super::filters::uri::recognizes(open_path) {
         let value = super::filters::uri::open_internal(eg, execute_data, open_path, &mode)?;
@@ -182,7 +188,7 @@ pub(super) fn fn_fopen(
     }
     let value = match PhpStream::open(open_path, mode.as_ref()) {
         Ok(stream) => {
-            if stream.metadata().wrapper_type == "plainfile" {
+            if stream.is_plain_file() {
                 super::super::filesystem::clear_filesystem_stat_cache(eg);
             }
             #[cfg(feature = "resource-lifetime")]
@@ -191,7 +197,21 @@ pub(super) fn fn_fopen(
             let value = Value::resource(insert_stream(eg, stream));
             value
         }
-        Err(_) => Value::bool(false),
+        Err(error) => {
+            let reason = match error.kind() {
+                std::io::ErrorKind::NotFound => "No such file or directory".to_string(),
+                std::io::ErrorKind::PermissionDenied => "Permission denied".to_string(),
+                _ => error.to_string(),
+            };
+            super::super::report_internal_diagnostic(
+                eg,
+                execute_data,
+                2,
+                "Warning",
+                &format!("fopen({open_path}): Failed to open stream: {reason}"),
+            )?;
+            Value::bool(false)
+        }
     };
     return_value(return_pointer, value)
 }

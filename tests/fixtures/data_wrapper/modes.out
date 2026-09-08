@@ -1,0 +1,42 @@
+mode:r
+AB:2:0
+8:fwrite(): Stream is not writable
+bool(false)
+0:E:1
+1:ABCDE
+mode:r+
+AB:2:0
+8:fwrite(): Stream is not writable
+bool(false)
+0:E:1
+1:ABCDE
+mode:w
+AB:2:0
+8:fwrite(): Stream is not writable
+bool(false)
+0:E:1
+1:ABCDE
+mode:a
+AB:2:0
+8:fwrite(): Stream is not writable
+bool(false)
+0:E:1
+1:ABCDE
+mode:nonsense
+AB:2:0
+8:fwrite(): Stream is not writable
+bool(false)
+0:E:1
+1:ABCDE
+mode:
+AB:2:0
+8:fwrite(): Stream is not writable
+bool(false)
+0:E:1
+1:ABCDE
+mode:r
+AB:2:0
+8:fwrite(): Stream is not writable
+bool(false)
+0:E:1
+1:ABCDE

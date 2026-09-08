@@ -107,7 +107,18 @@ pub(in crate::stdlib) fn fn_file(
         return Ok(());
     }
     if flags == 0 && optional_argument(execute_data, 2).is_none() {
-        return super::super::filesystem::return_default_file_lines(&filename, return_pointer, eg);
+        return super::super::filesystem::return_default_file_lines(
+            &filename,
+            return_pointer,
+            eg,
+            execute_data,
+        );
+    }
+    if !super::super::filesystem::validate_stream_path(eg, &filename, "file") {
+        return Ok(());
+    }
+    if !super::super::filesystem::url_open_allowed(execute_data, eg, &filename, "file")? {
+        return return_value(return_pointer, Value::bool(false));
     }
 
     #[cfg(feature = "include-path")]
@@ -120,7 +131,7 @@ pub(in crate::stdlib) fn fn_file(
         Ok(stream) => stream,
         Err(_) => return return_value(return_pointer, Value::bool(false)),
     };
-    if stream.metadata().wrapper_type == "plainfile" {
+    if stream.is_plain_file() {
         super::super::filesystem::clear_filesystem_stat_cache(eg);
     }
     let ignore_new_lines = flags & FILE_IGNORE_NEW_LINES != 0;

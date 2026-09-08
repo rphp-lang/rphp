@@ -1,0 +1,36 @@
+base64=bool(false)
+wrapper_type=string(7) "RFC2397"
+stream_type=string(7) "RFC2397"
+mode=string(2) "rb"
+unread_bytes=int(0)
+seekable=bool(true)
+uri=string(10) "data:,YQ=="
+detached:1
+base64=bool(true)
+wrapper_type=string(7) "RFC2397"
+stream_type=string(7) "RFC2397"
+mode=string(2) "rb"
+unread_bytes=int(0)
+seekable=bool(true)
+uri=string(17) "data:;base64,YQ=="
+detached:1
+mediatype=string(10) "text/plain"
+k=string(4) "last"
+x=string(5) "a%20b"
+base64=bool(false)
+wrapper_type=string(7) "RFC2397"
+stream_type=string(7) "RFC2397"
+mode=string(2) "rb"
+unread_bytes=int(0)
+seekable=bool(true)
+uri=string(43) "data:text/plain;k=first;k=last;x=a%20b,YQ=="
+detached:1
+mediatype=string(10) "text/plain"
+base64=bool(false)
+mode=string(2) "rb"
+seekable=bool(true)
+uri=string(78) "data:text/plain;mediatype=ignored;base64=no;mode=X;seekable=0;uri=changed,YQ=="
+wrapper_type=string(7) "RFC2397"
+stream_type=string(7) "RFC2397"
+unread_bytes=int(0)
+detached:1

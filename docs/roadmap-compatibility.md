@@ -36,6 +36,28 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `data-wrapper-open-policy` train adds fourteen deduplicated PHP
+8.5 passes over `7e7b9734`, including all ten admitted targets, with no loss.
+Data URI open/decode/metadata and startup URL policy share a cold boundary;
+canonical scalar widening fixes the two supplying language cases. The full
+7,174-case core is 6,435 pass / 346 fail / 182 skip / 211 unsupported, without
+timeout or crash. Original process/focused regressions, five checked Cargo
+configurations, all-target, exact pass-set checks, Composer/Symfony S0-S3 and
+static/unsafe gates pass. The fixed final release passes all ten 32-pair
+controls and three independent holdouts under unchanged common +1% / pay-use
++5% budgets on the user-authorized shared host. Profile-backed ownership/copy
+cost fixes retain representation, JIT admission and callback semantics.
+
+The next admitted cluster has ten native-stream argument-contract failures
+(`fclose`, `feof`, `fgets`, `fread`, seek/tell/rewind and `fwrite`). Revalidate
+them against this release, preserve argument-error priority and reuse existing
+checked argument helpers without adding a second successful resource lookup.
+Profile the common path before editing; use focused checks during development
+and one shared final matrix/no-loss/performance packet. Exact evidence hashes
+and bounded non-claims remain in `compatibility.md`.
+
+### Preceding filter checkpoint
+
 The accepted `user-stream-filter-lifecycle` train adds 24 exact PHP 8.5 passes
 over runtime parent `fcbe89ca`, without losing a previous pass. One resource
 ownership boundary covers user filters, bucket I/O, aliases, reentrant errors,

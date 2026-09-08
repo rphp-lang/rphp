@@ -1598,21 +1598,16 @@ fn check_return_type_hint(
     check_type_hint_in_scopes(value, hint, eg, strict, lexical_scope, called_scope)
 }
 
-/// Validate hints supported by the compact scalar call/return protocol.
+/// Validate exact argument storage for the compact scalar call protocol.
+/// Values that need coercion must resume the canonical call path, including
+/// integer-to-float widening at both weak and strict call sites.
 /// `None` means the hint needs the canonical class/union/callable checker.
 #[inline(always)]
-pub(crate) fn check_fast_scalar_type_hint(
-    value: &Value,
-    hint: &ParamTypeHint,
-    strict: bool,
-) -> Option<bool> {
+pub(crate) fn check_fast_scalar_type_hint(value: &Value, hint: &ParamTypeHint) -> Option<bool> {
     Some(match hint {
         ParamTypeHint::None | ParamTypeHint::Mixed => true,
         ParamTypeHint::Int => value.value_type() == ValueType::Long,
-        ParamTypeHint::Float => {
-            value.value_type() == ValueType::Double
-                || (!strict && value.value_type() == ValueType::Long)
-        }
+        ParamTypeHint::Float => value.value_type() == ValueType::Double,
         ParamTypeHint::String => value.value_type() == ValueType::String,
         ParamTypeHint::Bool => {
             matches!(value.value_type(), ValueType::True | ValueType::False)
@@ -1761,7 +1756,7 @@ pub(crate) unsafe fn compact_scalar_call_types_match(
             continue;
         }
         let value = &*(*call).cv(common.sig.param_cv_index(index as u32));
-        let matches = match check_fast_scalar_type_hint(value, hint, strict) {
+        let matches = match check_fast_scalar_type_hint(value, hint) {
             Some(matches) => matches,
             None if matches!(hint, ParamTypeHint::ClassName(_)) => {
                 class_guard_matches
@@ -1831,6 +1826,31 @@ mod vm_error_display_tests {
             "Uncaught Error: Call to undefined function missing_function()"
         );
         assert!(!error.to_string().contains("Fatal(\""));
+    }
+}
+
+#[cfg(test)]
+mod compact_argument_storage_tests {
+    use super::{ParamTypeHint, Value, check_fast_scalar_type_hint};
+
+    #[test]
+    fn compact_float_argument_guard_requires_canonical_storage() {
+        assert_eq!(
+            check_fast_scalar_type_hint(&Value::long(17), &ParamTypeHint::Float),
+            Some(false)
+        );
+        assert_eq!(
+            check_fast_scalar_type_hint(&Value::double(17.0), &ParamTypeHint::Float),
+            Some(true)
+        );
+        assert_eq!(
+            check_fast_scalar_type_hint(&Value::long(17), &ParamTypeHint::Int),
+            Some(true)
+        );
+        assert_eq!(
+            check_fast_scalar_type_hint(&Value::string("17"), &ParamTypeHint::Float),
+            Some(false)
+        );
     }
 }
 

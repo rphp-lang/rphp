@@ -268,9 +268,13 @@ pub(super) fn fn_get_meta_tags(
         filename.clone()
     };
 
+    if !super::filesystem::url_open_allowed(execute_data, eg, &resolved, "get_meta_tags")? {
+        super::write_return_value(return_pointer, Value::bool(false));
+        return Ok(());
+    }
     let bytes = match open_stream(&resolved) {
         Ok(stream) => {
-            if stream.metadata().wrapper_type == "plainfile" {
+            if stream.is_plain_file() {
                 super::filesystem::clear_filesystem_stat_cache(eg);
             }
             read_stream(stream)

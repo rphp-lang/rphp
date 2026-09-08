@@ -29110,7 +29110,7 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
                         .insert(normalized, "-1".to_string());
                 }
             }
-            "zend.exception_ignore_args" => {
+            "zend.exception_ignore_args" | "allow_url_fopen" => {
                 eg.ini_overrides
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
                     .insert(normalized, normalize_ini_boolean_value(value));
@@ -29205,6 +29205,9 @@ fn fn_ini_get(
     if option.eq_ignore_ascii_case("display_errors") {
         ret!(rv, Value::string("1"));
     }
+    if option.eq_ignore_ascii_case("allow_url_fopen") {
+        ret!(rv, Value::string("1"));
+    }
     if option.eq_ignore_ascii_case("zend.enable_gc") {
         ret!(rv, Value::string(if eg.gc_enabled { "1" } else { "0" }));
     }
@@ -29229,7 +29232,7 @@ pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> 
         return Some(value.clone());
     }
     Some(match option {
-        "display_errors" | "report_memleaks" => "1".to_string(),
+        "display_errors" | "report_memleaks" | "allow_url_fopen" => "1".to_string(),
         "zend.assertions" => eg.assertion_state.startup_mode.to_string(),
         "assert.exception" => if eg.assertion_state.exception {
             "1"
@@ -29279,6 +29282,9 @@ fn fn_ini_set(
     let Some(previous) = ini_default(eg, &option) else {
         ret!(rv, Value::bool(false));
     };
+    if option == "allow_url_fopen" {
+        ret!(rv, Value::bool(false));
+    }
 
     if option == "zend.assertions" {
         let Some(requested) = value

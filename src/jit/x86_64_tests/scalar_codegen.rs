@@ -169,6 +169,71 @@ fn standalone_scalar_cache_compiles_at_shared_hotness_threshold() {
 }
 
 #[test]
+fn trivial_scalar_cache_dispatch_keeps_interpretation_and_counters_untouched() {
+    for (operations, output) in [
+        (vec![], ScalarLongSource::Input(0)),
+        (
+            vec![ScalarLongOp {
+                kind: ScalarLongOpKind::Add,
+                lhs: ScalarLongSource::Input(0),
+                rhs: ScalarLongSource::Constant(7),
+            }],
+            ScalarLongSource::Temporary(0),
+        ),
+    ] {
+        let plan = scalar_plan(1, operations, output);
+        let mut arguments = [0; MAX_SCALAR_LONG_INPUTS];
+        arguments[0] = i64::MAX;
+        for _ in 0..SCALAR_LONG_JIT_HOT_THRESHOLD * 2 {
+            assert_eq!(
+                plan.native_jit().dispatch(&plan, &arguments),
+                ScalarLongJitDispatch::Interpret
+            );
+        }
+        assert_eq!(plan.native_jit().calls.get(), 0);
+        assert!(plan.native_jit().compiled.get().is_none());
+        assert_eq!(plan.native_jit().native_entries(), 0);
+        assert_eq!(plan.native_jit().side_exits(), 0);
+    }
+}
+
+#[test]
+fn conditional_scalar_cache_with_no_operations_keeps_native_admission() {
+    let plan = conditional_scalar_plan(
+        1,
+        vec![],
+        ScalarLongSelect {
+            kind: ScalarLongConditionKind::Equal,
+            lhs: ScalarLongConditionOperand::Source(ScalarLongSource::Input(0)),
+            rhs: ScalarLongConditionOperand::Source(ScalarLongSource::Constant(0)),
+            shared_operation_count: 0,
+            when_true_operation_count: 0,
+            when_true: ScalarLongSource::Constant(29),
+            when_false: ScalarLongSource::Input(0),
+        },
+    );
+    let mut arguments = [0; MAX_SCALAR_LONG_INPUTS];
+    for _ in 1..SCALAR_LONG_JIT_HOT_THRESHOLD {
+        assert_eq!(
+            plan.native_jit().dispatch(&plan, &arguments),
+            ScalarLongJitDispatch::Interpret
+        );
+    }
+    assert_eq!(
+        plan.native_jit().dispatch(&plan, &arguments),
+        ScalarLongJitDispatch::Value(29)
+    );
+    arguments[0] = -11;
+    assert_eq!(
+        plan.native_jit().dispatch(&plan, &arguments),
+        ScalarLongJitDispatch::Value(-11)
+    );
+    assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 2);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
 fn encoder_sets_rex_extensions_for_high_registers() {
     let mut assembler = X86_64Assembler::new();
     assembler.move_register(X86_64Register::R8, X86_64Register::R9);

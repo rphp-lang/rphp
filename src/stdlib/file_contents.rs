@@ -161,6 +161,9 @@ pub(super) fn fn_file_get_contents(
         return Ok(());
     }
 
+    if !super::filesystem::validate_stream_path(eg, &filename, "file_get_contents") {
+        return Ok(());
+    }
     #[cfg(feature = "stream-registry")]
     if super::streams::filters::uri::recognizes(&filename) {
         let value =
@@ -168,6 +171,9 @@ pub(super) fn fn_file_get_contents(
         return return_value(return_pointer, value);
     }
 
+    if !super::filesystem::url_open_allowed(execute_data, eg, &filename, "file_get_contents")? {
+        return return_value(return_pointer, Value::bool(false));
+    }
     if let Some(data) = super::filesystem::decode_data_uri(&filename) {
         let bytes = match data {
             Ok(bytes) => bytes,
@@ -213,12 +219,19 @@ pub(super) fn fn_file_get_contents(
     }
 
     #[cfg(feature = "include-path")]
-    let filename = super::include_path::resolve_for_open(eg, &filename, use_include_path);
-    let mut stream = match PhpStream::open(&filename, "r") {
+    let resolved_filename = super::include_path::resolve_for_open(eg, &filename, use_include_path);
+    #[cfg(feature = "include-path")]
+    let open_path = resolved_filename.as_str();
+    #[cfg(not(feature = "include-path"))]
+    let open_path = filename.as_str();
+    let mut stream = match PhpStream::open(open_path, "r") {
         Ok(stream) => stream,
-        Err(_) => return return_value(return_pointer, Value::bool(false)),
+        Err(error) => {
+            super::filesystem::report_contents_open_error(execute_data, eg, &filename, &error)?;
+            return return_value(return_pointer, Value::bool(false));
+        }
     };
-    if stream.metadata().wrapper_type == "plainfile" {
+    if stream.is_plain_file() {
         super::filesystem::clear_filesystem_stat_cache(eg);
     }
     let seek = if offset < 0 {
@@ -313,6 +326,9 @@ pub(super) fn fn_readfile(
     #[cfg(not(feature = "stream-registry"))]
     {
         // Feature-minimal builds keep a native streaming implementation too.
+        if !super::filesystem::url_open_allowed(ed, eg, &filename, "readfile")? {
+            return return_value(rv, Value::bool(false));
+        }
         let Ok(mut stream) = PhpStream::open(&filename, "rb") else {
             return return_value(rv, Value::bool(false));
         };

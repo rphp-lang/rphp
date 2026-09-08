@@ -1,0 +1,10 @@
+2:fopen(): policyremote:// wrapper is disabled in the server configuration by allow_url_fopen=0
+2:fopen(policyremote://item): Failed to open stream: no suitable wrapper could be found
+bool(false)
+2:opendir(): policyremote:// wrapper is disabled in the server configuration by allow_url_fopen=0
+2:opendir(policyremote://item): Failed to open directory: no suitable wrapper could be found
+bool(false)
+local-open
+stream
+local-directory
+stream

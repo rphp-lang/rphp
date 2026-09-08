@@ -1,0 +1,5 @@
+fopen(): data:// wrapper is disabled in the server configuration by allow_url_fopen=0
+1:php://memory
+later:file_get_contents(): data:// wrapper is disabled in the server configuration by allow_url_fopen=0
+later:file_get_contents(data:,later): Failed to open stream: no suitable wrapper could be found
+bool(false)

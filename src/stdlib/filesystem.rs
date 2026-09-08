@@ -50,6 +50,12 @@ pub(super) fn fn_file_get_contents(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
+    if !validate_stream_path(eg, &path, "file_get_contents") {
+        return Ok(());
+    }
+    if !url_open_allowed(ed, eg, &path, "file_get_contents")? {
+        ret!(rv, Value::bool(false));
+    }
     if let Some(data) = decode_data_uri(path.as_ref()) {
         match data {
             Ok(bytes) => ret!(rv, php_byte_result(bytes, false)),
@@ -71,7 +77,10 @@ pub(super) fn fn_file_get_contents(
                 Err(_) => ret!(rv, Value::bool(false)),
             }
         }
-        Err(_) => ret!(rv, Value::bool(false)),
+        Err(error) => {
+            report_contents_open_error(ed, eg, &path, &error)?;
+            ret!(rv, Value::bool(false));
+        }
     }
 }
 
@@ -89,14 +98,16 @@ pub(super) fn php_string_to_bytes(s: &str) -> Vec<u8> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DataUriError {
+    IllegalMediaType,
     IllegalParameter,
     UnableToDecode,
     MissingComma,
 }
 
 impl DataUriError {
-    fn reason(self) -> &'static str {
+    pub(super) fn reason(self) -> &'static str {
         match self {
+            Self::IllegalMediaType => "rfc2397: illegal media type",
             Self::IllegalParameter => "rfc2397: illegal parameter",
             Self::UnableToDecode => "rfc2397: unable to decode",
             Self::MissingComma => "rfc2397: no comma in URL",
@@ -108,26 +119,18 @@ impl DataUriError {
 /// The wrapper percent-decodes ordinary payloads but passes base64 payloads
 /// directly to the strict decoder. Invalid percent escapes remain literal.
 pub(super) fn decode_data_uri(uri: &str) -> Option<Result<Vec<u8>, DataUriError>> {
-    let encoded = uri.strip_prefix("data:")?;
-    let encoded = encoded.strip_prefix("//").unwrap_or(encoded);
-    let Some((metadata, payload)) = encoded.split_once(',') else {
-        return Some(Err(DataUriError::MissingComma));
+    let header = match data_uri_header(uri)? {
+        Ok(header) => header,
+        Err(error) => return Some(Err(error)),
     };
-
-    let mut fields = metadata.split(';');
-    let _media_type = fields.next();
-    let parameters: Vec<_> = fields.collect();
-    let mut base64 = false;
-    for (index, parameter) in parameters.iter().enumerate() {
-        if *parameter == "base64" && index + 1 == parameters.len() {
-            base64 = true;
-        } else if !parameter.contains('=') {
-            return Some(Err(DataUriError::IllegalParameter));
-        }
-    }
-
-    let bytes = php_string_to_bytes(payload);
-    if base64 {
+    // No user callback runs during decoding: the caller's URI owner keeps
+    // ASCII payload bytes live without a second allocation or byte conversion.
+    let bytes = if header.payload.is_ascii() {
+        Cow::Borrowed(header.payload.as_bytes())
+    } else {
+        Cow::Owned(php_string_to_bytes(header.payload))
+    };
+    if header.base64 {
         return Some(crate::base64::decode(&bytes, true).ok_or(DataUriError::UnableToDecode));
     }
 
@@ -151,6 +154,209 @@ pub(super) fn decode_data_uri(uri: &str) -> Option<Result<Vec<u8>, DataUriError>
         }
     }
     Some(Ok(decoded))
+}
+
+struct DataUriHeader<'a> {
+    media_type: &'a str,
+    parameters: &'a str,
+    payload: &'a str,
+    base64: bool,
+}
+
+// Header views borrow the already retained URI. Payload decoding is paid at
+// open only; metadata materialization never decodes/copies the payload and
+// does not add an owner or a conditional to any stream read/write loop.
+#[cold]
+#[inline(never)]
+fn data_uri_header(uri: &str) -> Option<Result<DataUriHeader<'_>, DataUriError>> {
+    let encoded = uri.strip_prefix("data:")?;
+    let encoded = encoded.strip_prefix("//").unwrap_or(encoded);
+    let Some((metadata, payload)) = encoded.split_once(',') else {
+        return Some(Err(DataUriError::MissingComma));
+    };
+    if metadata.is_empty() || metadata == ";base64" {
+        return Some(Ok(DataUriHeader {
+            media_type: "",
+            parameters: "",
+            payload,
+            base64: metadata == ";base64",
+        }));
+    }
+    // ASCII delimiters are UTF-8 boundaries. Locate the parameter start once;
+    // byte slices avoid repeated character-search state for each small field.
+    let separator = metadata.as_bytes().iter().position(|&byte| byte == b';');
+    let (media_type, parameters) = separator.map_or((metadata, ""), |index| {
+        (&metadata[..index], &metadata[index + 1..])
+    });
+    if !media_type.as_bytes().contains(&b'/') {
+        return Some(Err(DataUriError::IllegalMediaType));
+    }
+    let mut base64 = false;
+    if separator.is_some() {
+        let mut fields = parameters.as_bytes().split(|&byte| byte == b';').peekable();
+        while let Some(parameter) = fields.next() {
+            if parameter == b"base64" && fields.peek().is_none() {
+                base64 = true;
+            } else if !parameter.contains(&b'=') {
+                return Some(Err(DataUriError::IllegalParameter));
+            }
+        }
+    }
+    Some(Ok(DataUriHeader {
+        media_type,
+        parameters,
+        payload,
+        base64,
+    }))
+}
+
+#[cold]
+#[inline(never)]
+pub(super) fn data_uri_metadata(uri: &str) -> Option<PhpArray> {
+    let header = data_uri_header(uri)?.ok()?;
+    let mut result = PhpArray::new();
+    if !header.media_type.is_empty() {
+        result.set_str(
+            "mediatype",
+            php_byte_result(php_string_to_bytes(header.media_type), false),
+        );
+    }
+    for field in header.parameters.split(';') {
+        if let Some((name, value)) = field.split_once('=')
+            && name != "mediatype"
+        {
+            result.set_str(name, php_byte_result(php_string_to_bytes(value), false));
+        }
+    }
+    result.set_str("base64", Value::bool(header.base64));
+    Some(result)
+}
+
+/// Check only at wrapper lookup, before decoding, invoking a user factory or
+/// publishing a resource. A throwing first diagnostic suppresses the second.
+#[cold]
+#[inline(never)]
+pub(super) fn url_fopen_enabled(eg: &ExecutorGlobals) -> bool {
+    eg.ini_overrides
+        .as_deref()
+        .and_then(|values| values.get("allow_url_fopen"))
+        .is_none_or(|value| super::ini_boolean(value))
+}
+
+#[inline]
+pub(super) fn url_open_allowed(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    path: &str,
+    function: &str,
+) -> Result<bool, VmError> {
+    // The unset configuration has PHP's enabled default. Only configured
+    // requests need the sparse lookup and reentrant diagnostic machinery.
+    if eg.ini_overrides.is_none() {
+        return Ok(true);
+    }
+    url_open_allowed_configured(ed, eg, path, function)
+}
+
+#[cold]
+#[inline(never)]
+fn url_open_allowed_configured(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    path: &str,
+    function: &str,
+) -> Result<bool, VmError> {
+    if url_fopen_enabled(eg) {
+        return Ok(true);
+    }
+    let protocol = if path.starts_with("data:") {
+        Some("data")
+    } else {
+        #[cfg(feature = "stream-registry")]
+        {
+            super::streams::user_wrapper::definition_for_url(eg, path)
+                .filter(|definition| definition.flags & 1 != 0)
+                .and_then(|_| super::streams::user_wrapper::protocol_from_url(path))
+        }
+        #[cfg(not(feature = "stream-registry"))]
+        {
+            None
+        }
+    };
+    let Some(protocol) = protocol else {
+        return Ok(true);
+    };
+    // The first user diagnostic may replace an argument's reference cell.
+    // Retain the original URL for the subsequent open-failure diagnostic.
+    let denied_path = path.to_string();
+    super::report_internal_diagnostic(
+        eg,
+        ed,
+        2,
+        "Warning",
+        &format!(
+            "{function}(): {protocol}:// wrapper is disabled in the server configuration by allow_url_fopen=0"
+        ),
+    )?;
+    if eg.exception.is_none() {
+        let kind = if function == "opendir" {
+            "directory"
+        } else {
+            "stream"
+        };
+        super::report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!(
+                "{function}({denied_path}): Failed to open {kind}: no suitable wrapper could be found"
+            ),
+        )?;
+    }
+    Ok(false)
+}
+
+#[inline]
+pub(super) fn validate_stream_path(eg: &mut ExecutorGlobals, path: &str, function: &str) -> bool {
+    if stream_path_contains_null(path.as_bytes()) {
+        report_null_stream_path(eg, function);
+        return false;
+    }
+    true
+}
+
+#[inline]
+fn stream_path_contains_null(bytes: &[u8]) -> bool {
+    // U+0000 is exactly a zero UTF-8 byte. Long paths/payloads use the existing
+    // vectorized scanner; small paths avoid its dispatch and setup overhead.
+    if bytes.len() > 16 {
+        return memchr::memchr(0, bytes).is_some();
+    }
+    if bytes.len() < 8 {
+        return bytes.iter().any(|&byte| byte == 0);
+    }
+    // Both checked slices contain exactly eight bytes. Overlap for lengths
+    // 8..15 is harmless; together they cover the complete input, without
+    // reading beyond it or requiring aligned storage on any architecture.
+    let first = u64::from_ne_bytes(bytes[..8].try_into().expect("eight-byte prefix"));
+    let last = u64::from_ne_bytes(
+        bytes[bytes.len() - 8..]
+            .try_into()
+            .expect("eight-byte suffix"),
+    );
+    let has_zero =
+        |word: u64| word.wrapping_sub(0x0101_0101_0101_0101) & !word & 0x8080_8080_8080_8080 != 0;
+    has_zero(first) || has_zero(last)
+}
+
+#[cold]
+#[inline(never)]
+fn report_null_stream_path(eg: &mut ExecutorGlobals, function: &str) {
+    eg.exception = Some(crate::value::make_error_value(
+        "ValueError",
+        &format!("{function}(): Argument #1 ($filename) must not contain any null bytes"),
+    ));
 }
 
 fn hex_value(byte: u8) -> Option<u8> {
@@ -181,9 +387,44 @@ pub(super) fn report_data_uri_error(
     Ok(())
 }
 
+#[cold]
+#[inline(never)]
+pub(super) fn report_contents_open_error(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    path: &str,
+    error: &std::io::Error,
+) -> Result<(), VmError> {
+    // Build the complete message before entering a user handler, which may
+    // replace the original filename reference or throw an exception.
+    let message = format!(
+        "file_get_contents({path}): Failed to open stream: {}",
+        filesystem_error_reason(error)
+    );
+    report_filesystem_diagnostic(ed, eg, 2, "Warning", &message)
+}
+
 #[cfg(test)]
 mod data_uri_tests {
-    use super::{DataUriError, decode_data_uri};
+    use super::{DataUriError, decode_data_uri, stream_path_contains_null};
+
+    #[test]
+    fn short_and_long_null_scan_matches_byte_oracle_at_every_position() {
+        for fill in 0..=255 {
+            let mut bytes = [fill as u8; 64];
+            for length in 0..=bytes.len() {
+                assert_eq!(
+                    stream_path_contains_null(&bytes[..length]),
+                    bytes[..length].contains(&0)
+                );
+                for position in 0..length {
+                    bytes[position] = 0;
+                    assert!(stream_path_contains_null(&bytes[..length]));
+                    bytes[position] = fill as u8;
+                }
+            }
+        }
+    }
 
     #[test]
     fn decodes_plain_percent_and_base64_payloads() {
@@ -1340,7 +1581,34 @@ pub(in crate::stdlib) fn return_default_file_lines(
     path: &str,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
 ) -> Result<(), VmError> {
+    if !validate_stream_path(eg, path, "file") {
+        return Ok(());
+    }
+    if !url_open_allowed(ed, eg, path, "file")? {
+        ret!(rv, Value::bool(false));
+    }
+    if let Some(bytes) = decode_data_uri(path) {
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                super::report_internal_diagnostic(
+                    eg,
+                    ed,
+                    2,
+                    "Warning",
+                    &format!("file({path}): Failed to open stream: {}", error.reason()),
+                )?;
+                ret!(rv, Value::bool(false));
+            }
+        };
+        let mut result = PhpArray::new();
+        for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+            result.push(php_byte_result(line.to_vec(), false));
+        }
+        ret!(rv, Value::array(result));
+    }
     match std::fs::File::open(path) {
         Ok(mut file) => {
             clear_filesystem_stat_cache(eg);
@@ -1376,7 +1644,7 @@ pub(super) fn fn_file(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
-    return_default_file_lines(path.as_ref(), rv, eg)
+    return_default_file_lines(path.as_ref(), rv, eg, ed)
 }
 
 fn filesystem_string_value_argument(
