@@ -119,10 +119,11 @@ pub(in crate::stdlib) fn fn_file_put_contents(
     }
 
     #[cfg(feature = "include-path")]
-    let filename = super::super::include_path::resolve_for_open(
+    let filename = super::super::include_path::resolve_for_open_from(
         eg,
         &filename,
         flags & FILE_USE_INCLUDE_PATH != 0,
+        execute_data,
     );
     let append = flags & FILE_APPEND != 0;
     let locked = flags & LOCK_EX != 0;

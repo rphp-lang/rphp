@@ -1,0 +1,14 @@
+fgetc:1:1:string|false
+string(6) "stream"
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+fpassthru:1:1:int
+string(6) "stream"
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)

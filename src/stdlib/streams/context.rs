@@ -147,8 +147,12 @@ pub(super) fn fn_fopen(
     }
 
     #[cfg(feature = "include-path")]
-    let resolved_path =
-        super::super::include_path::resolve_for_open(eg, path.as_ref(), use_include_path);
+    let resolved_path = super::super::include_path::resolve_for_open_from(
+        eg,
+        path.as_ref(),
+        use_include_path,
+        execute_data,
+    );
     #[cfg(feature = "include-path")]
     let open_path = resolved_path.as_str();
     #[cfg(not(feature = "include-path"))]

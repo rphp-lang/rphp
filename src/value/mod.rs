@@ -1288,19 +1288,24 @@ impl ObjectHandleState {
     }
 
     fn release(&mut self, identity: usize, handle: u32) {
-        if let Some(position) = self
-            .stale
-            .iter()
-            .position(|candidate| *candidate == identity)
-        {
+        // New request objects normally miss these tracking sets. Membership
+        // can use the integer slice implementation; only a match needs its
+        // exact removal position. No identity order or handle policy changes.
+        if self.stale.contains(&identity) {
+            let position = self
+                .stale
+                .iter()
+                .position(|candidate| *candidate == identity)
+                .expect("tracked identity exists");
             self.stale.swap_remove(position);
             return;
         }
-        if let Some(position) = self
-            .before_request
-            .iter()
-            .position(|candidate| *candidate == identity)
-        {
+        if self.before_request.contains(&identity) {
+            let position = self
+                .before_request
+                .iter()
+                .position(|candidate| *candidate == identity)
+                .expect("pre-request identity exists");
             self.before_request.swap_remove(position);
         }
         self.released.push(handle);
@@ -6910,15 +6915,22 @@ impl Value {
     /// arithmetic. This preserves the result kind for null, booleans, and
     /// integer numeric strings while rejecting resources, whose IDs are
     /// available to explicit casts but are not legal arithmetic operands.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn to_arithmetic_long(&self) -> Option<i64> {
         match self.value_type() {
             ValueType::Long => Some(unsafe { self.data.long }),
             ValueType::True => Some(1),
             ValueType::False | ValueType::Null | ValueType::Undef => Some(0),
-            ValueType::String => self.as_str()?.trim().parse::<i64>().ok(),
+            ValueType::String => self.arithmetic_string_long(),
             _ => None,
         }
+    }
+
+    // Keep parsing out of the tagged scalar projection. The parser and its
+    // accepted integer range are shared unchanged by every arithmetic caller.
+    #[inline(never)]
+    fn arithmetic_string_long(&self) -> Option<i64> {
+        self.as_str()?.trim().parse::<i64>().ok()
     }
 
     /// Convert a complete PHP numeric operand to double without admitting a
@@ -7281,12 +7293,17 @@ impl Value {
         constraints.push(constraint);
     }
 
-    #[cold]
-    #[inline(never)]
+    #[inline(always)]
     pub(crate) fn remove_reference_property_constraint(&self, owner: usize) {
         if !self.is_owned_reference() {
             return;
         }
+        self.remove_owned_reference_property_constraint(owner);
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn remove_owned_reference_property_constraint(&self, owner: usize) {
         self.owned_reference_rc()
             .property_constraints
             .borrow_mut()
@@ -7891,6 +7908,134 @@ impl Drop for Value {
             }
             // Borrowed references do not own their frame-slot target.
             _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod arithmetic_projection_tests {
+    use super::{PhpArray, Value};
+
+    #[test]
+    fn tagged_integer_projection_retains_scalar_kinds() {
+        for (value, expected) in [
+            (Value::long(i64::MIN), i64::MIN),
+            (Value::long(i64::MAX), i64::MAX),
+            (Value::bool(true), 1),
+            (Value::bool(false), 0),
+            (Value::null(), 0),
+            (Value::undef(), 0),
+        ] {
+            assert_eq!(value.to_arithmetic_long(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn string_projection_retains_integer_range_and_fallbacks() {
+        for (source, expected) in [
+            (" -9223372036854775808\n", Some(i64::MIN)),
+            ("+9223372036854775807", Some(i64::MAX)),
+            ("00042", Some(42)),
+            ("9223372036854775808", None),
+            ("-9223372036854775809", None),
+            ("4.0", None),
+            ("4e0", None),
+            ("4tail", None),
+            ("", None),
+            ("\0", None),
+        ] {
+            assert_eq!(Value::string(source).to_arithmetic_long(), expected);
+        }
+    }
+
+    #[test]
+    fn other_kinds_do_not_become_integer_operands() {
+        #[cfg(feature = "resource-lifetime")]
+        let mut eg = crate::runtime::ExecutorGlobals::new();
+        #[cfg(feature = "resource-lifetime")]
+        let resource = crate::stdlib::resource::insert_value_for_request(&mut eg, "number", 123u64);
+        #[cfg(not(feature = "resource-lifetime"))]
+        let resource = Value::resource(123);
+        for value in [
+            Value::double(1.0),
+            Value::double(f64::NAN),
+            Value::array(PhpArray::new()),
+            resource,
+        ] {
+            assert_eq!(value.to_arithmetic_long(), None);
+        }
+    }
+}
+
+#[cfg(test)]
+mod object_handle_release_tests {
+    use super::ObjectHandleState;
+
+    #[test]
+    fn untracked_release_reuses_handles_in_lifo_order() {
+        let mut state = ObjectHandleState::default();
+        state.release(10, 3);
+        state.release(20, 7);
+        assert_eq!(state.allocate(), 7);
+        assert_eq!(state.allocate(), 3);
+    }
+
+    #[test]
+    fn stale_identity_never_recycles_a_previous_requests_handle() {
+        let mut state = ObjectHandleState {
+            stale: vec![10, 20],
+            ..Default::default()
+        };
+        state.release(10, 7);
+        assert_eq!(state.stale, vec![20]);
+        assert!(state.released.is_empty());
+        state.release(30, 9);
+        assert_eq!(state.allocate(), 9);
+    }
+
+    #[test]
+    fn pre_request_identity_is_removed_before_recycling() {
+        let mut state = ObjectHandleState {
+            before_request: vec![10, 20],
+            ..Default::default()
+        };
+        state.release(10, 5);
+        assert_eq!(state.before_request, vec![20]);
+        assert_eq!(state.allocate(), 5);
+        state.release(20, 6);
+        assert!(state.before_request.is_empty());
+        assert_eq!(state.allocate(), 6);
+    }
+
+    #[test]
+    fn membership_matches_scalar_removal_across_dense_lengths_and_misses() {
+        for length in 0..65 {
+            let identities: Vec<_> = (0..length).map(|index| index * 16 + 8).collect();
+            for identity in (0..=length).map(|index| index * 16 + 8) {
+                for stale in [false, true] {
+                    let mut expected = identities.clone();
+                    let found = expected.iter().position(|value| *value == identity);
+                    if let Some(position) = found {
+                        expected.swap_remove(position);
+                    }
+                    let mut state = ObjectHandleState::default();
+                    if stale {
+                        state.stale = identities.clone();
+                    } else {
+                        state.before_request = identities.clone();
+                    }
+                    state.release(identity, 7);
+                    assert_eq!(
+                        if stale {
+                            &state.stale
+                        } else {
+                            &state.before_request
+                        },
+                        &expected
+                    );
+                    assert_eq!(state.released.is_empty(), stale && found.is_some());
+                }
+            }
         }
     }
 }

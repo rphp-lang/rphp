@@ -1,0 +1,3 @@
+TypeError:fgetc(): Argument #1 ($stream) must be an open stream resource
+TypeError:fpassthru(): Argument #1 ($stream) must be an open stream resource
+stream-context

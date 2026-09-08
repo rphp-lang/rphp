@@ -1,0 +1,12 @@
+00:1:0
+7f:2:0
+80:3:0
+ff:4:0
+5a:5:0
+false:5:1
+false:5:1
+80:3
+00
+fgetc(): Argument #1 ($stream) must be an open stream resource
+616200ff
+bool(false)

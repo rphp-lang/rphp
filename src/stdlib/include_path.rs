@@ -130,6 +130,39 @@ pub(crate) fn resolve_for_open(
     }
 }
 
+/// Native opens search explicit include entries, then the executing source
+/// directory, and finally the working directory. An empty path entry is not
+/// an explicit `.`; it must not hide the source-directory fallback.
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated executable code; placement does not change ABI.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+pub(crate) fn resolve_for_open_from(
+    eg: &ExecutorGlobals,
+    requested: &str,
+    use_include_path: bool,
+    frame: *mut ExecuteData,
+) -> String {
+    if !use_include_path || bypasses_search(requested) {
+        return requested.to_string();
+    }
+    for candidate in search_candidates(eg, requested) {
+        if candidate == requested || candidate.contains("://") {
+            continue;
+        }
+        if let Ok(path) = std::fs::canonicalize(&candidate) {
+            return path.to_string_lossy().into_owned();
+        }
+    }
+    let (source, _) = super::internal_call_source(frame);
+    if let Some(directory) = Path::new(&source).parent()
+        && let Ok(path) = std::fs::canonicalize(directory.join(requested))
+    {
+        return path.to_string_lossy().into_owned();
+    }
+    requested.to_string()
+}
+
 pub(crate) fn current(eg: &ExecutorGlobals) -> &str {
     eg.static_vars
         .get(INCLUDE_PATH_STATE)

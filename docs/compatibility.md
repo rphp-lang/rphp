@@ -7,60 +7,68 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 PHP 8.5 checkpoint is `native-stream-argument-contracts`,
-against parent `5fbf9ce9`. Native read/write, close/flush, EOF and seek/tell/rewind
-share canonical argument diagnostics. An initially invalid or closed resource
-is rejected before a later argument diagnostic; weak/strict conversions and
-non-destructive callback snapshots retain PHP ordering. Successful native I/O
-uses its existing resource lookup, without a second validation lookup. Pure
-weak conversions avoid argument copies; cold diagnostics reuse their existing
-Linux section. No VM/value representation, dependency or unsafe operation changes.
+The latest measured AMD64 PHP 8.5 checkpoint is `native-stream-read-projections`,
+against parent `6509314e`. `fgetc()` and `fpassthru()` project the existing
+native/data/filter cursor into a byte or output/count result. A native byte
+read uses stack storage; output and diagnostics run outside resource borrows.
+Native include-path opens also share the executing-source-directory fallback
+after explicit search entries and before the working directory.
 
-All ten supplying php-src `fcc29c8` cases now pass: **+10/-0**. Eight original
-CLI specimens match PHP 8.5.10 stdout/stderr/exit, 93 focused checks pass, and the
-preceding 40-process/13-PHPT stream packet remains exact. The 7,174-case core is
-byte-identical to the parent: **6,435 pass / 346 fail / 182 skip / 211 unsupported**,
-without a lost pass, missing case, timeout or crash. Zend/lang manifest/pass set:
+All eleven admitted php-src `fcc29c8` cases pass: **+11/-0**. Thirteen original
+CLI regressions cover byte provenance, EOF/seek/prebuffer, aliases, metadata,
+read errors, callbacks/output order, source lookup and standard input. Twelve
+file specimens match PHP 8.5.10 stdout/stderr/exit; the preceding 40-process/
+13-PHPT stream packet remains exact. The 7,174-case core is byte-identical to
+its parent: **6,435 pass / 346 fail / 182 skip / 211 unsupported**, without a
+lost pass, missing case, timeout or crash. Zend/lang manifest/pass set:
 `51e25d959386e020ee7a17fc5abc32dbfb9c0566a34cad4e6c3072518287b349` /
 `b89857885e8fcf40bf3650374fdd0fecf0eb34f443b8eceb1c723fe79ed661ca`.
 Strings/array manifest/pass set:
 `9bf891c30b8763bbd23a62590ce7898e80c02f123682ec54139a8a277f1b46b2` /
 `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
 Supplying manifest:
-`ca40790d74c9979548c0dbb34c0fa16e2274dbce33d900cb75b4c255c781fa52`.
+`a3e137f16f2103c18b5ae1615022058d0a675ff8a9c4343964e3483abdcfd155`.
 
-Five checked Cargo configurations pass (4,743/4,451/4,814/4,836/4,887;
-unchanged 13/13/13/13/16 ignored), with all-target, exact no-loss,
-Composer/Symfony S0-S3, runner self-test, formatting/public hygiene and the
-unchanged 1,621/289 unsafe inventory. One matrix shares the final packet with
-immutable-release PHPT/framework checks and automatic cleanup. Matrix record:
-`a85de2a1e3b36ab1469d7a95b0bebca34775b699165d6a9634fface999008127`.
+Five checked Cargo configurations pass (4,768/4,472/4,839/4,861/4,912;
+unchanged 13/13/13/13/16 ignored), with all-target, Composer/Symfony S0-S3,
+runner self-test, formatting/public hygiene and the unchanged 1,621/289 unsafe
+inventory. One matrix shares its packet with immutable-release PHPT/framework
+checks and automatic cleanup. Matrix record:
+`f357e2d0ac700d1de08aec9771a4767976f98494e82fee73c3bfdf0b1fed79d0`.
 
-All twelve fixed-parent 32-pair controls meet unchanged common +1% / pay-use
-+5% budgets on the user-authorized shared host, not an exclusive host. The
-highest common median is object lifecycle +0.777%; native I/O is -1.685% and
-weak lengths -1.875%. Output checksums match. Results/summary:
-`30be2daf009770a54c141bdab6616ebab54870669e1a1aaa0f5cf3010aaa36db` /
-`1c0d42170983da2542ab0450a2d5b9bff554cf9e58da6f20881a965c3cedfcad`.
-An initial +1.681% closure holdout used underpowered 4ms observations and remains
-rejected. Identical-parent A/A calibration validates batching 128 unchanged
-closure invocations per observation, without changing binaries or thresholds.
-The three independent 32-pair holdouts pass at -0.175%/-0.274%/-0.273%; their
-results hash is `3ade9fd4cf881bc0a6a0fb2ee9404f641d14c4dfacb0ee34df24b20f1bf831cf`.
-Both final performance packets retain two background events each. Exact release:
-`8ea0a1dce183e0b7466e2774cd687cac997bcf892f0ab29da59a35d67724198b`.
-Complete technical record:
-`0da26da44170f018bde6b6a5a1535be2d42b9afef5230c0a206810a42c59bcc9`.
+Profile-backed repairs deduplicate native read code, avoid hashing a single
+tiny request scope, classify base64 bytes through the existing alphabet table,
+separate string parsing from scalar arithmetic guards, and avoid unnecessary
+reference/index work during object release. Numeric kinds, object identities,
+LIFO reuse, cross-request ownership, codecs and callback semantics are unchanged;
+there is no representation, ABI, dependency or unsafe-operation change.
+Original regressions cover each repaired boundary. Nine rejected performance
+candidates and the disproved empty-tracking hypothesis remain recorded, not
+accepted evidence.
 
-Destructive callbacks that close the callee's original stream during coercion
-remain a **failed adjacent holdout**, including later-argument error priority;
-the parent also fails. A related fractional-length case crashes PHP 8.5.10,
-which is not behavior to reproduce. Broader wrapper seek, missing read APIs,
-ARM performance and allocation/OOM equivalence remain non-claims. No private
-benchmark host was configured. Next admission examines the missing byte-read
-and pass-through stream projections as a shared-root-cause cluster.
+All fourteen fixed-parent 32-pair controls meet unchanged common +1% / pay-use
++5% budgets with exact outputs on the user-authorized shared host (two
+background events, not an exclusive-host claim). Every median is neutral or
+faster: ordinary calls -4.458%, objects -4.140%, memory I/O -6.994%, native I/O
+-4.173%, byte projection -4.187% and output projection -5.488%. Results/summary:
+`9605819e77db077282fa593757d6f1a0f7cf223fff17cd7c07b50ba93003b161` /
+`3745728cc90fe63df389a785817e336d567846d85269e4e8a0dac7409f58bc89`.
+Three independent 32-pair holdouts, retaining the calibrated 128-invocation
+closure batch, pass at -7.258%/-0.160%/-1.331%; results:
+`32e22884969fbdde7f857792975cc1dc77d6d2bddfbaab15aeb5bab263067052`.
+Exact release:
+`897d7ef5464cc2759af6aced11f4c9e7582956769cd6bb523cdcc91e7c98c690`.
+Complete technical record, including rejected dispositions and instruction profiles:
+`1397802a47db9ec2de594f8b3c5e19e83685d4cbcdc8b6d9663ea1f0f9ec52ed`.
 
-The preceding measured AMD64 PHP 8.5 checkpoint is `data-wrapper-open-policy`,
+Destructive close-during-coercion remains the preceding checkpoint's failed
+adjacent lifetime/order holdout. Missing process/link APIs, `tmpfile()`,
+additional filter codecs, broader wrapper seek, ARM performance and allocation/
+OOM equivalence remain non-claims. No private benchmark host was configured.
+Next admission examines native link lifecycle and its dependent filesystem
+cases, requiring at least ten reachable shared-cause failures before edits.
+
+An earlier measured AMD64 PHP 8.5 checkpoint is `data-wrapper-open-policy`,
 against parent `7e7b9734`. Data URI opens share header validation, binary decode,
 read-only cursor/EOF behavior and detached metadata. Startup-only
 `allow_url_fopen` is enforced before data/user-URL factories; local wrappers

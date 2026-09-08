@@ -36,22 +36,24 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `native-stream-argument-contracts` train adds ten exact PHP 8.5
-passes over `5fbf9ce9`, with no loss. Shared native argument diagnostics retain
-initial-resource error priority, strict/weak coercion and non-destructive
-callback snapshots without a second successful I/O resource lookup. The full
+The accepted `native-stream-read-projections` train adds eleven exact PHP 8.5
+passes over `6509314e`, with no loss. `fgetc`/`fpassthru` share the existing
+native/data/filter cursor and byte/output/error contracts; native include-path
+opens preserve source-directory fallback. Profile-backed read, resource,
+scalar and object-release cost repairs retain representation and semantics.
+The preceding native argument contract remains intact. The full
 7,174-case core remains byte-identical at 6,435/346/182/211. Original/focused
 checks, five checked Cargo configurations, all-target, exact no-loss,
-Composer/Symfony S0-S3 and static/unsafe gates pass. Twelve fixed-parent controls
+Composer/Symfony S0-S3 and static/unsafe gates pass. Fourteen fixed-parent controls
 and three independently calibrated holdouts satisfy unchanged common +1% /
 pay-use +5% budgets on the user-authorized shared host.
 
 Destructive closure of the original resource during coercion remains a failed
 adjacent lifetime/order holdout, not a claimed pass; related reference PHP
-behavior can crash. Next admission examines missing `fgetc`/`fpassthru` and
-dependent native/data/filter read cases. Require ten reachable shared-cause
-failures before implementation; separately missing link/process APIs are not
-counted. Start with bounded sampling intervals and profile-backed hot-path
+behavior can crash. Next admission examines native link lifecycle and dependent
+filesystem cases. Require ten reachable shared-cause failures before edits;
+separately missing `touch`/process APIs are not counted. Start with bounded
+sampling intervals and profile-backed hot-path
 design, then share one final matrix/no-loss/performance packet. Exact evidence
 hashes and non-claims remain in `compatibility.md`.
 

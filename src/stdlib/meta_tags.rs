@@ -261,7 +261,8 @@ pub(super) fn fn_get_meta_tags(
     }
 
     #[cfg(feature = "include-path")]
-    let resolved = super::include_path::resolve_for_open(eg, &filename, use_include_path);
+    let resolved =
+        super::include_path::resolve_for_open_from(eg, &filename, use_include_path, execute_data);
     #[cfg(not(feature = "include-path"))]
     let resolved = {
         let _ = use_include_path;

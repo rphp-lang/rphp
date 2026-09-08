@@ -1,0 +1,6 @@
+fgetc
+filter-stopped
+bool(true)
+fpassthru
+filter-stopped
+bool(true)

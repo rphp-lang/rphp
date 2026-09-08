@@ -32,6 +32,7 @@ pub(in crate::stdlib) mod filters;
 mod info;
 #[cfg(feature = "stream-line")]
 mod line;
+mod read_projections;
 #[cfg(feature = "stream-truncate")]
 mod truncate;
 #[cfg(feature = "stream-registry")]
@@ -281,6 +282,8 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
         }
         functions.push(function);
     }
+
+    read_projections::register(eg, functions);
 
     #[cfg(feature = "stream-registry")]
     for (name, handler, maximum, required, parameter_names, parameter_types) in [
@@ -815,7 +818,7 @@ fn fn_fread(
         return return_value(return_pointer, Value::bool(false));
     }
     bytes.resize(length, 0);
-    let result = with_stream_io(eg, resource, |stream| stream.read(&mut bytes));
+    let result = read_projections::read_native(eg, resource, &mut bytes);
     match result {
         Some(Ok(read)) => {
             bytes.truncate(read);

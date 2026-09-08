@@ -122,10 +122,11 @@ pub(in crate::stdlib) fn fn_file(
     }
 
     #[cfg(feature = "include-path")]
-    let filename = super::super::include_path::resolve_for_open(
+    let filename = super::super::include_path::resolve_for_open_from(
         eg,
         &filename,
         flags & FILE_USE_INCLUDE_PATH != 0,
+        execute_data,
     );
     let mut stream = match PhpStream::open(&filename, "r") {
         Ok(stream) => stream,

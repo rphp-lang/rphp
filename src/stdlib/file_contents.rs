@@ -219,7 +219,8 @@ pub(super) fn fn_file_get_contents(
     }
 
     #[cfg(feature = "include-path")]
-    let resolved_filename = super::include_path::resolve_for_open(eg, &filename, use_include_path);
+    let resolved_filename =
+        super::include_path::resolve_for_open_from(eg, &filename, use_include_path, execute_data);
     #[cfg(feature = "include-path")]
     let open_path = resolved_filename.as_str();
     #[cfg(not(feature = "include-path"))]
@@ -315,7 +316,7 @@ pub(super) fn fn_readfile(
         return Ok(());
     }
     #[cfg(feature = "include-path")]
-    let filename = super::include_path::resolve_for_open(eg, &filename, use_include_path);
+    let filename = super::include_path::resolve_for_open_from(eg, &filename, use_include_path, ed);
     #[cfg(not(feature = "include-path"))]
     let _ = use_include_path;
     #[cfg(feature = "stream-registry")]

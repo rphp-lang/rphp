@@ -1,0 +1,11 @@
+8:fgetc(): Read of 8192 bytes failed with errno=9 Bad file descriptor
+bool(false)
+int(4)
+8:fpassthru(): Read of 8192 bytes failed with errno=9 Bad file descriptor
+int(-1)
+int(4)
+caught:fgetc(): Read of 8192 bytes failed with errno=9 Bad file descriptor
+caught:fpassthru(): Read of 8192 bytes failed with errno=9 Bad file descriptor
+bool(true)
+int(4)
+kept

@@ -2,6 +2,18 @@
 
 const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+// Classify an input byte once. Padding, whitespace and invalid bytes retain
+// their separate strict/loose handling below; the decoding state is unchanged.
+const DECODE_TABLE: [u8; 256] = {
+    let mut values = [u8::MAX; 256];
+    let mut index = 0;
+    while index < TABLE.len() {
+        values[TABLE[index] as usize] = index as u8;
+        index += 1;
+    }
+    values
+};
+
 pub fn encode(data: &[u8]) -> String {
     let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
     for chunk in data.chunks(3) {
@@ -39,14 +51,10 @@ fn decode_loose(input: &[u8]) -> Vec<u8> {
     let mut bits: u32 = 0;
 
     for byte in input {
-        let val = match *byte {
-            b'A'..=b'Z' => *byte - b'A',
-            b'a'..=b'z' => *byte - b'a' + 26,
-            b'0'..=b'9' => *byte - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => continue,
-        };
+        let val = DECODE_TABLE[*byte as usize];
+        if val == u8::MAX {
+            continue;
+        }
         buf = (buf << 6) | val as u32;
         bits += 6;
         if bits >= 8 {
@@ -67,20 +75,18 @@ fn decode_strict(input: &[u8]) -> Option<Vec<u8>> {
     let mut saw_padding = false;
 
     for byte in input {
-        let val = match *byte {
-            b'A'..=b'Z' => *byte - b'A',
-            b'a'..=b'z' => *byte - b'a' + 26,
-            b'0'..=b'9' => *byte - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            b'\n' | b'\r' | b' ' | b'\t' => continue,
-            b'=' => {
-                saw_padding = true;
-                padding += 1;
-                continue;
+        let val = DECODE_TABLE[*byte as usize];
+        if val == u8::MAX {
+            match *byte {
+                b'\n' | b'\r' | b' ' | b'\t' => continue,
+                b'=' => {
+                    saw_padding = true;
+                    padding += 1;
+                    continue;
+                }
+                _ => return None,
             }
-            _ => return None,
-        };
+        }
         if saw_padding {
             return None;
         }
@@ -113,7 +119,31 @@ fn decode_strict(input: &[u8]) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::decode;
+    use super::{DECODE_TABLE, TABLE, decode, encode};
+
+    #[test]
+    fn classifier_covers_exactly_the_alphabet_for_every_byte() {
+        for (byte, value) in DECODE_TABLE.iter().copied().enumerate() {
+            let expected = TABLE.iter().position(|&letter| letter as usize == byte);
+            assert_eq!(value, expected.map_or(u8::MAX, |index| index as u8));
+        }
+    }
+
+    #[test]
+    fn byte_roundtrips_cover_each_padding_remainder() {
+        for byte in 0..=u8::MAX {
+            let payload = [byte, byte.rotate_left(1), !byte, 0, b' '];
+            for length in 1..=payload.len() {
+                let encoded = encode(&payload[..length]);
+                for strict in [false, true] {
+                    assert_eq!(
+                        decode(encoded.as_bytes(), strict),
+                        Some(payload[..length].to_vec())
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn loose_decode_ignores_every_non_alphabet_byte() {

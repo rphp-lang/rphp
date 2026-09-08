@@ -1,0 +1,29 @@
+TypeError:fgetc(): Argument #1 ($stream) must be of type resource, null given
+TypeError:fgetc(): Argument #1 ($stream) must be of type resource, false given
+TypeError:fgetc(): Argument #1 ($stream) must be of type resource, true given
+TypeError:fgetc(): Argument #1 ($stream) must be of type resource, int given
+TypeError:fgetc(): Argument #1 ($stream) must be of type resource, float given
+TypeError:fgetc(): Argument #1 ($stream) must be of type resource, string given
+TypeError:fgetc(): Argument #1 ($stream) must be of type resource, array given
+TypeError:fgetc(): Argument #1 ($stream) must be of type resource, stdClass given
+TypeError:fgetc(): Argument #1 ($stream) must be an open stream resource
+ArgumentCountError:fgetc() expects exactly 1 argument, 0 given
+ArgumentCountError:fgetc() expects exactly 1 argument, 2 given
+Error:Unknown named parameter $unknown
+TypeError:fpassthru(): Argument #1 ($stream) must be of type resource, null given
+TypeError:fpassthru(): Argument #1 ($stream) must be of type resource, false given
+TypeError:fpassthru(): Argument #1 ($stream) must be of type resource, true given
+TypeError:fpassthru(): Argument #1 ($stream) must be of type resource, int given
+TypeError:fpassthru(): Argument #1 ($stream) must be of type resource, float given
+TypeError:fpassthru(): Argument #1 ($stream) must be of type resource, string given
+TypeError:fpassthru(): Argument #1 ($stream) must be of type resource, array given
+TypeError:fpassthru(): Argument #1 ($stream) must be of type resource, stdClass given
+TypeError:fpassthru(): Argument #1 ($stream) must be an open stream resource
+ArgumentCountError:fpassthru() expects exactly 1 argument, 0 given
+ArgumentCountError:fpassthru() expects exactly 1 argument, 2 given
+Error:Unknown named parameter $unknown
+bool(false)
+bool(false)
+bool(false)
+int(-1)
+bool(true)

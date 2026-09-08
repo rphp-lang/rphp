@@ -114,7 +114,9 @@ impl ResourceRegistry {
             .map_or("Unknown", |entry| entry.resource_type)
     }
 
-    #[cold]
+    // Payload projection is the steady-state native I/O path, not a cold
+    // operation. Keep its type check next to the caller's backend operation.
+    #[inline(always)]
     pub fn with_payload_mut<T: 'static, R>(
         &mut self,
         id: i64,
@@ -208,7 +210,26 @@ pub(crate) fn insert<T: 'static>(scope: u32, resource_type: &'static str, payloa
     })
 }
 
-#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated executable code; placement does not change ABI.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn registry_for_scope_mut(
+    registries: &mut HashMap<u32, ResourceRegistry>,
+    scope: u32,
+) -> Option<&mut ResourceRegistry> {
+    // A thread commonly serves one request. In a tiny single-entry table
+    // compare that key directly instead of hashing the same scope for every
+    // I/O operation. Retained large tables and nested requests use the normal
+    // lookup: iteration must never scale with capacity.
+    if registries.len() == 1 && registries.capacity() <= 8 {
+        let (registered_scope, registry) = registries.iter_mut().next()?;
+        (*registered_scope == scope).then_some(registry)
+    } else {
+        registries.get_mut(&scope)
+    }
+}
+
+#[inline(always)]
 pub(crate) fn with_payload_mut<T: 'static, R>(
     scope: u32,
     id: i64,
@@ -218,9 +239,7 @@ pub(crate) fn with_payload_mut<T: 'static, R>(
         return None;
     }
     REQUEST_RESOURCES.with(|registries| {
-        registries
-            .borrow_mut()
-            .get_mut(&scope)?
+        registry_for_scope_mut(&mut registries.borrow_mut(), scope)?
             .with_payload_mut::<T, _>(id, operation)
     })
 }
@@ -232,9 +251,7 @@ pub(crate) fn close<T: 'static>(scope: u32, id: i64) -> bool {
         return false;
     }
     REQUEST_RESOURCES.with(|registries| {
-        registries
-            .borrow_mut()
-            .get_mut(&scope)
+        registry_for_scope_mut(&mut registries.borrow_mut(), scope)
             .is_some_and(|registry| registry.close::<T>(id))
     })
 }
@@ -246,9 +263,7 @@ pub(crate) fn close<T: 'static>(scope: u32, id: i64) -> bool {
         return false;
     }
     let entry = REQUEST_RESOURCES.with(|registries| {
-        registries
-            .borrow_mut()
-            .get_mut(&scope)
+        registry_for_scope_mut(&mut registries.borrow_mut(), scope)
             .and_then(|registry| registry.remove::<T>(id))
     });
     let closed = entry.is_some();
@@ -268,9 +283,7 @@ fn close_any(scope: u32, id: i64) {
             // shutdown remains the safety net for this exceptional re-entry.
             return None;
         };
-        registries
-            .get_mut(&scope)
-            .and_then(|registry| registry.remove_any(id))
+        registry_for_scope_mut(&mut registries, scope).and_then(|registry| registry.remove_any(id))
     }) else {
         // Thread-local teardown already owns the registry and will drop it.
         return;
@@ -360,7 +373,7 @@ pub(crate) fn insert_value_for_request<T: 'static>(
     })
 }
 
-#[cold]
+#[inline(always)]
 pub(crate) fn with_request_payload_mut<T: 'static, R>(
     eg: &mut ExecutorGlobals,
     id: i64,
@@ -382,7 +395,7 @@ pub(crate) fn wrap_request_payload<T: 'static, U: 'static>(
     let scope = request_scope(eg);
     REQUEST_RESOURCES.with(|registries| {
         let mut registries = registries.borrow_mut();
-        let Some(registry) = registries.get_mut(&scope) else {
+        let Some(registry) = registry_for_scope_mut(&mut registries, scope) else {
             return false;
         };
         if !registry
@@ -440,8 +453,8 @@ mod tests {
     #[cfg(feature = "resource-lifetime")]
     use super::insert_value_for_request;
     use super::{
-        ResourceRegistry, allocate_scope, close_for_request, close_scope, insert,
-        insert_for_request, is_open, is_open_for_request, resource_type,
+        REQUEST_RESOURCES, ResourceRegistry, allocate_scope, close_for_request, close_scope,
+        insert, insert_for_request, is_open, is_open_for_request, resource_type, with_payload_mut,
     };
     use crate::runtime::ExecutorGlobals;
     use std::cell::Cell;
@@ -525,6 +538,66 @@ mod tests {
         assert!(is_open(second_scope, second));
         close_scope(second_scope);
         assert_eq!(drops.get(), 2);
+    }
+
+    #[test]
+    fn single_scope_projection_checks_scope_resource_and_payload_type() {
+        let scope = allocate_scope();
+        let missing_scope = allocate_scope();
+        let id = insert(scope, "number", 7u64);
+        assert_eq!(with_payload_mut::<u64, _>(0, id, |_| ()), None);
+        assert_eq!(with_payload_mut::<u64, _>(missing_scope, id, |_| ()), None);
+        assert_eq!(with_payload_mut::<u64, _>(scope, id + 1, |_| ()), None);
+        assert_eq!(with_payload_mut::<String, _>(scope, id, |_| ()), None);
+        assert_eq!(
+            with_payload_mut::<u64, _>(scope, id, |value| {
+                *value += 5;
+                *value
+            }),
+            Some(12)
+        );
+        close_scope(scope);
+        assert_eq!(with_payload_mut::<u64, _>(scope, id, |_| ()), None);
+    }
+
+    #[test]
+    fn nested_scope_projection_never_selects_another_requests_local_id() {
+        let first = allocate_scope();
+        let second = allocate_scope();
+        let first_id = insert(first, "number", 3u64);
+        let second_id = insert(second, "number", 11u64);
+        assert_eq!(first_id, second_id);
+        assert_eq!(with_payload_mut::<u64, _>(first, first_id, |v| *v), Some(3));
+        assert_eq!(
+            with_payload_mut::<u64, _>(second, second_id, |v| *v),
+            Some(11)
+        );
+        close_scope(first);
+        assert_eq!(with_payload_mut::<u64, _>(first, first_id, |_| ()), None);
+        assert_eq!(
+            with_payload_mut::<u64, _>(second, second_id, |v| *v),
+            Some(11)
+        );
+        close_scope(second);
+    }
+
+    #[test]
+    fn sparse_retained_scope_table_preserves_projection() {
+        let scopes: Vec<_> = (0..32)
+            .map(|value| {
+                let scope = allocate_scope();
+                let id = insert(scope, "number", value as u64);
+                (scope, id)
+            })
+            .collect();
+        for &(scope, _) in &scopes[..31] {
+            close_scope(scope);
+        }
+        REQUEST_RESOURCES.with(|registries| assert!(registries.borrow().capacity() > 8));
+        let (scope, id) = scopes[31];
+        assert_eq!(with_payload_mut::<u64, _>(scope, id, |v| *v), Some(31));
+        assert_eq!(with_payload_mut::<u64, _>(scopes[0].0, id, |_| ()), None);
+        close_scope(scope);
     }
 
     #[test]
