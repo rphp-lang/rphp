@@ -1361,6 +1361,9 @@ fn fn_array_object_append(
     _rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if array_object::reject_mutation(arg!(ed, 0), eg) {
+        return Ok(());
+    }
     let value = arg!(ed, 1).dereferenced().clone();
     let Some(mut object) = arg!(ed, 0).as_object_mut() else {
         return Ok(());
@@ -1524,6 +1527,15 @@ fn fn_array_object_offset_get(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let context = array_object_offset_get_context(ed);
+    if matches!(
+        context,
+        ArrayObjectOffsetGetContext::Mutable
+            | ArrayObjectOffsetGetContext::Append
+            | ArrayObjectOffsetGetContext::Unset
+    ) && array_object::reject_mutation(arg!(ed, 0), eg)
+    {
+        return Ok(());
+    }
     if context == ArrayObjectOffsetGetContext::Append {
         ret!(rv, Value::null());
     }
@@ -1605,6 +1617,9 @@ fn fn_array_object_offset_set(
     _rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if array_object::reject_mutation(arg!(ed, 0), eg) {
+        return Ok(());
+    }
     let value = arg!(ed, 2).dereferenced().clone();
     let append = arg!(ed, 1).value_type() == ValueType::Null;
     let key = if append {
@@ -1668,6 +1683,9 @@ fn fn_array_object_offset_unset(
     _rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if array_object::reject_mutation(arg!(ed, 0), eg) {
+        return Ok(());
+    }
     let Some(key) =
         array_object_offset_key(ed, eg, arg!(ed, 1), ArrayObjectOffsetOperation::Unset)?
     else {

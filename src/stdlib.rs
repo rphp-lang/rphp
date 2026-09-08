@@ -18218,6 +18218,9 @@ fn sort_domain_has_total_order<T>(
 /// Match PHP 8.5's observable two-to-five-element user-callback schedule.
 /// Return `false` without another comparison when the callback asks the caller
 /// to preserve an already-published exception.
+// Keep each comparator specialization with its caller, including cold native
+// adapters, instead of emitting another out-of-line copy in ordinary text.
+#[inline(always)]
 fn stable_sort_small_optional_checked<T, E>(
     entries: &mut [T],
     mut compare: impl FnMut(&T, &T) -> Result<Option<std::cmp::Ordering>, E>,
@@ -18452,6 +18455,8 @@ fn observed_insertion_schedule<T, E>(
 /// Repository-owned scheduler whose PHP 8.5 contract is frozen by black-box
 /// comparison and warning transcripts. Original tests cover the 5/6, 16/17
 /// and 1023/1024 boundaries.
+// Native storage adapters place their specialization with the cold caller.
+#[inline(always)]
 fn php_observed_sort_schedule<T, E>(
     entries: &[T],
     order: &mut [usize],

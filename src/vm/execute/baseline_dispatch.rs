@@ -2440,6 +2440,59 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             };
         }
+        // A checked Long read with a raw, non-reference Long CV destination
+        // cannot emit a diagnostic or invoke a reference constraint. Consume
+        // an already-evaluated TMP snapshot rather than rereading its CV.
+        // Aliased destinations and overflowing updates use the full path.
+        macro_rules! complete_plain_long_update {
+            ($operation:ident, $postfix:expr) => {
+                let target_cv = if opline.op2_type == OpType::Cv {
+                    Some(opline.op2 as u32)
+                } else if opline.op1_type == OpType::Cv {
+                    Some(opline.op1 as u32)
+                } else {
+                    None
+                };
+                if let Some(target_cv) = target_cv
+                    && matches!(opline.op1_type, OpType::Cv | OpType::Tmp | OpType::Var)
+                    && (*frame).cv(target_cv).value_type() == ValueType::Long
+                {
+                    // Invoked inside each inc/dec arm's existing live-frame
+                    // safety boundary. The destination guard above deliberately
+                    // does not dereference; the source retains its read meaning.
+                    let source = (*frame).slot(opline.op1 as u32);
+                    if source.value_type() == ValueType::Long {
+                        let previous = source.raw_long();
+                        if let Some(updated) = previous.$operation(1) {
+                            if opline.result_type == OpType::Unused {
+                                // No result retirement or PHP callback can
+                                // invalidate the raw-Long destination proof.
+                                stats::inc_write_val();
+                                Value::write_long((*frame).cv_mut(target_cv), updated);
+                                (*frame).opline = opline_ptr.add(1);
+                                continue 'vm;
+                            }
+                            if opline.result_type != OpType::Unused {
+                                let result = if $postfix { previous } else { updated };
+                                let result_ptr = (*frame).get_op_mut(
+                                    opline.result as u32,
+                                    opline.result_type,
+                                );
+                                if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+                                    frame_tmp_set_long(frame, result_ptr, result);
+                                } else {
+                                    slot_set(result_ptr, Value::long(result));
+                                }
+                            }
+                            let target = (*frame).get_op_mut(target_cv, OpType::Cv);
+                            slot_set(target, Value::long(updated));
+                            (*frame).opline = opline_ptr.add(1);
+                            continue 'vm;
+                        }
+                    }
+                }
+            };
+        }
         macro_rules! report_array_to_string_conversion {
             ($value:expr) => {
                 if $value.dereferenced().value_type() == ValueType::Array {
@@ -6163,6 +6216,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // optional writeback CV into initialized slots of this active
                 // frame.
                 unsafe {
+                    complete_plain_long_update!(checked_add, false);
                     let source_ptr = (*frame).get_op_ptr(
                         opline.op1 as u32,
                         opline.op1_type,
@@ -6276,6 +6330,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // frame. TMP/VAR without an op2 CV is the value-only form used
                 // before property or dimension writeback.
                 unsafe {
+                    complete_plain_long_update!(checked_sub, false);
                     let source_ptr = (*frame).get_op_ptr(
                         opline.op1 as u32,
                         opline.op1_type,
@@ -6388,6 +6443,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // SAFETY: the compiler resolves the read, optional result and
                 // writeback CV into initialized slots of this active frame.
                 unsafe {
+                    complete_plain_long_update!(checked_add, true);
                     let old = &*(*frame).get_op_ptr(
                         opline.op1 as u32,
                         opline.op1_type,
@@ -6439,6 +6495,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // SAFETY: the compiler resolves the read, optional result and
                 // writeback CV into initialized slots of this active frame.
                 unsafe {
+                    complete_plain_long_update!(checked_sub, true);
                     let old = &*(*frame).get_op_ptr(
                         opline.op1 as u32,
                         opline.op1_type,

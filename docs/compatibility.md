@@ -8,77 +8,78 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
-`array-object-backing-projection`, against parent `428436a1`.
-Cold native ArrayObject/ArrayIterator handlers share array or live object
-backing across construction, copy, exchange, public iteration, count and raw
-offset access. Raw object slots deliberately bypass visibility, readonly,
-types and property hooks, with PHP 8.5's deprecation before mutation.
-Reference cells, COW snapshots, retained iterator owners and reentrant
-destructor boundaries remain observable. Real internal descriptors publish
-the four added methods and their tentative return types.
+`array-object-native-sort-contracts`, against parent `be94d082`.
+Six native sorting methods on ArrayObject and ArrayIterator reuse the ordinary
+comparison schedules and preserve keys, stable ordering, reference/COW edges,
+callback exceptions and partial sorted state. A sparse receiver-local guard
+rejects writes during comparisons without blocking reads or unrelated owners.
 
-Fifteen SPL cases plus the Directory readonly-bypass case move to exact pass:
-**+16/-0** against unmodified php-src `fcc29c8`. The broader 108-case ArrayObject
-set moves from 7 to 22 passes, with 79 remaining failures, six unsupported
-cases and one XFAIL retained. Twelve original PHP 8.5.10 byte-exact CLI
-specimens, 730 focused integration tests, three scalar units and the sparse
-frame-cleanup unit pass. The 7,174-case core remains byte-identical at
-**6,435 pass / 346 fail / 182 skip / 211 unsupported**, without lost passes,
-missing cases, timeouts or crashes.
-Zend/lang manifest/pass set:
-`51e25d959386e020ee7a17fc5abc32dbfb9c0566a34cad4e6c3072518287b349` /
-`b89857885e8fcf40bf3650374fdd0fecf0eb34f443b8eceb1c723fe79ed661ca`.
-Strings/array manifest/pass set:
-`9bf891c30b8763bbd23a62590ce7898e80c02f123682ec54139a8a277f1b46b2` /
-`0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
-Neighbor manifest:
-`3371bcf523ae1170e94926c129b6d391462d494e610e6e290ea62ca34ec342bf`.
+The 14-case supplying set is 11 pass / 3 explicit object-property-backed
+holdouts: **+11/-0** against unmodified php-src `fcc29c8`. The broader
+108-case set moves from 22 to 33 passes, retaining 68 failures, six unsupported
+cases and one XFAIL. Ten original byte-exact PHP 8.5.10 specimens, twelve prior
+backing regressions and 379 affected checked tests pass. Core 7,174-case
+manifests remain byte-identical at **6,435 pass / 346 fail / 182 skip /
+211 unsupported**, with no lost pass, missing case, timeout or crash.
 
-One checked five-configuration Cargo matrix passes
-(4,826/4,526/4,897/4,919/4,970; 13/13/13/13/16 ignored), alongside all-target,
-exact no-loss, Composer/Symfony S0-S3, runner/unsafe self-tests and hygiene.
-Matrix record:
-`e358f53baf832962f44e602d17c8bd64b4530a8e80a4aaa8d640422df31bc9f1`.
-Automatic cleanup runs between configurations and after the packet.
+One checked Cargo matrix passes (4,836/4,536/4,907/4,929/4,980;
+13/13/13/13/16 ignored), alongside all-target, Composer/Symfony S0-S3,
+runner/unsafe self-tests, format and public hygiene. Automatic cleanup runs
+between configurations and after the packet. Unsafe ceilings stay 1,623/289.
 
-Rejected scalar/code-placement experiments are not retained. Profiles instead
-prove removed empty-map cleanup work and skipped finally-state probes in
-frames with no try entries. Scalar instruction totals fall about 7.1% and
-resource-alias totals 16.5%; this is simulation, not hardware-counter evidence.
-No representation, dependency or JIT-admission change is introduced.
-Unsafe inventory is 1,623/289, within the unchanged ceilings.
+Two rejected code-placement attempts led to an explicit work-removal design.
+Baseline pre/post increment/decrement consumes an already-evaluated raw Long
+snapshot and checked non-overflowing update, retaining reference/diagnostic
+fallbacks and result-before-CV ordering. Unused results reuse the raw-slot proof
+without another reference/drop check. Three instruction simulations confirm
+less work than both parent and the rejected candidate; this is not hardware
+counter evidence. No representation, dependency, JIT admission or unsafe
+inventory change is introduced.
 
-All seventeen fixed-parent 32-pair controls and three holdouts meet unchanged
-common +1% / pay-use +5% budgets on the user-authorized shared host, not an
-exclusive host. Largest common median is array +0.647%; ordinary calls are
--3.783%, objects -4.726%, and resource aliases -11.854%. Outputs stay exact.
-Results/summary:
-`46ea3280fc7203390fb0ae2bfa8fb154bdc323b15396fd613fe47636233bbfb8` /
-`0d17f91cd47491683b198db11c1b9c9486cf0038a936d23d9dd8879581ef0ab4`.
-Holdout results:
-`674e2560fcfd090150f3a3b2f6f2ebcf74ea7f0285a064b7d6cf20d95e680201`.
+All seventeen fixed-parent 32-pair controls and three independent holdouts pass
+unchanged common +1% / pay-use +5% budgets. Ordinary calls are -11.165%,
+objects -4.090%, and the highest common median is native-cycle +0.916%.
+All outputs match. New sorting methods have an exact PHP-output workload,
+not a fabricated timing delta against missing parent methods. Measurements
+use the user-authorized shared host (two recorded background events), not an
+exclusive host; no private benchmark host was configured.
 
-Final correctness release:
-`c61be9371257c96cd7410d6d8bc8147b00fe704685aea616949e0548f2fc6ec1`.
-Performance was measured on
-`114a3eaa2889953f13ca2d37eaf04a867e087fdcf24323bd9d04302abe750b11`.
-Adding the live-frame SAFETY comment changed the ELF build ID, section-table
-file offset and nonloaded symbol strings, but every executable/runtime-data
-byte, address and program header remained identical. Full loaded-segment
-comparison permits evidence reuse only for that metadata-only change; it
-does not claim whole-file identity or relax a numerical budget. Proof:
+Machine-verifiable SHA-256 evidence:
+
+- Final correctness/performance release:
+  `83e9c939dab71523766956120201a2ce73ab9a57125a2ed9d6ba0ab6d8d28fe5`.
+- Supplying / neighbor manifests:
+  `1a14eb1cc9c40da3d4f6a80d5ec08b506afb27722028bbb39b5827b537d8b5dd` /
+  `64529f1a394e85e89ad26ab549c88231c995e45025c1832b4c37e22868ffe290`.
+- Zend/lang manifest / sorted pass set:
+  `51e25d959386e020ee7a17fc5abc32dbfb9c0566a34cad4e6c3072518287b349` /
+  `b89857885e8fcf40bf3650374fdd0fecf0eb34f443b8eceb1c723fe79ed661ca`.
+- Strings/array manifest / sorted pass set:
+  `9bf891c30b8763bbd23a62590ce7898e80c02f123682ec54139a8a277f1b46b2` /
+  `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+- Matrix / work-removal proof:
+  `33be98735d5ae57d85c773801cbb47076bb1a33ba8ce9646acd250bb16c719a2` /
+  `c13cc6b7f59b098f5f89bdf05767b1487528ef2c9c6564ebf040c8f0fb846924`.
+- Performance results / summary:
+  `c8aabd304fc64cf04d29a3b551a3e69fd1b4434eebb93be7a611972734171fb2` /
+  `acd9af3a27aff4f638425460f0089d6e1bf01c30ed0be1aff5a13ddb2a6fb7b0`.
+- Holdout results / complete technical record:
+  `d8b9c9e2a801ecc4c2b0cda86a761a6a48b81d23804139fe2f51527bd277950c` /
+  `6b3940eb0b76adb3ba43d9b7b4922e7fa998590b4597e70f5fdb17f94c68a041`.
+
+Object-property-backed sorting, flags/custom iterators, self/enum storage,
+general SPL serialization/cursor semantics, other architectures and OOM
+equivalence remain non-claims. Next admission examines sixteen failing
+ArrayObject constructor/flags/property-view cases; separate unrelated cursor,
+serialization and missing-class prerequisites before implementation.
+
+The preceding backing-projection checkpoint (`be94d082`) added **+16/-0**.
+Its accepted parent release is
+`c61be9371257c96cd7410d6d8bc8147b00fe704685aea616949e0548f2fc6ec1`;
+loaded-segment equivalence after a SAFETY-comment-only rebuild was proved by
 `66171b86a0f73b60058d51f33c2b00bf64566efb01578736f145e9e73b5038fa`.
-Complete technical record:
+Its complete technical record remains
 `edbe108fa6d84e2667113d1cdb8b1ebca7d30949c59b21757005450b6a8cdd32`.
-
-Flags/custom iterators, sorting, object-hash numeric append, self/enum backing,
-general SPL serialization/cursor semantics, constructor object-handle ordering,
-extension-loaded claims, other architectures and allocation/OOM equivalence
-remain non-claims. Preexisting generic reference-release and nested-finally
-continuation holdouts remain explicit. No private benchmark host was configured.
-Next admission examines native ArrayObject/ArrayIterator sorting; require ten
-reachable shared-cause failures before implementation and separate object
-property-order/flags/extension prerequisites.
 
 The preceding Directory checkpoint (`428436a1`) added **+15/-0**, with a
 checked five-configuration matrix, exact core no-loss, S0-S3 and all nineteen

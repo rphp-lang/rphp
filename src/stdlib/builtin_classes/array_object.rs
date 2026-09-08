@@ -10,6 +10,9 @@ use crate::vm::execute::{
 use crate::vm::function::InternalFunctionHandler;
 use std::rc::Rc;
 
+mod sorting;
+pub(super) use sorting::reject_mutation;
+
 enum Backing {
     Array(Value, &'static str),
     Object(Value),
@@ -269,6 +272,9 @@ pub(super) fn construct(
     if !validate(ed, eg, &value, "__construct", owner)? {
         return Ok(());
     }
+    if reject_mutation(arg!(ed, 0), eg) {
+        return Ok(());
+    }
     replace_storage(arg!(ed, 0), value, eg)
 }
 
@@ -279,6 +285,9 @@ pub(super) fn construct(
 fn exchange(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let value = arg!(ed, 1).dereferenced().clone();
     if !validate(ed, eg, &value, "exchangeArray", "ArrayObject")? {
+        return Ok(());
+    }
+    if reject_mutation(arg!(ed, 0), eg) {
         return Ok(());
     }
     let previous = Value::array(snapshot(arg!(ed, 0), eg, false));
@@ -385,6 +394,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         eg.register_internal_function_reflection_metadata(ptr, vec![None; names.len()], "SPL");
         functions.push(function);
     }
+    functions.extend(sorting::register(eg));
     functions
 }
 

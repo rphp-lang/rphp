@@ -36,35 +36,37 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `array-object-backing-projection` train adds sixteen exact
-PHP 8.5 passes over `428436a1`, with no loss. Cold native storage selection
-covers object-backed copy/exchange, count, public iteration and raw offset
-mutation with PHP's deprecation and reference/lifetime boundaries.
+The accepted `array-object-native-sort-contracts` train adds eleven exact
+PHP 8.5 passes over `be94d082`, without loss. Six cold native sorting methods
+share canonical comparison schedules, reference/COW storage, callback partial
+state and receiver-local mutation rejection. The broader 108-case set now has
+33 passes; three supplying object-property-backed sorting cases remain explicit
+holdouts, not claims of general object-hash sorting.
 
 One checked five-configuration Cargo matrix, all-target, exact 7,174-case
-no-loss, Composer/Symfony S0-S3 and static/unsafe gates pass. Core counts stay
+no-loss, Composer/Symfony S0-S3 and static/unsafe gates pass. Core counts remain
 6,435/346/182/211. All seventeen fixed-parent controls and three holdouts meet
 unchanged common +1% / pay-use +5% budgets on the user-authorized shared host.
-Rejected scalar/layout experiments were removed; instruction profiles prove
-empty sparse-table cleanup and no-try-entry dispatch work removal instead.
-No representation, dependency or JIT admission change; unsafe ceilings unchanged.
+The highest common paired median is native-cycle +0.916%; ordinary calls and
+objects improve by 11.165% and 4.090%. Exact hashes are in `compatibility.md`.
 
-A final SAFETY-comment rebuild differs only in ELF artifact metadata:
-program headers, executable code and runtime data are byte-identical to the
-measured binary. Full load-equivalence proof and both release hashes are
-explicit in `compatibility.md`; this is not whole-file identity or permission
-to reuse evidence after code/data/layout changes.
+Rejected code-placement candidates are explicitly recorded. A bounded baseline
+integer-update proof removes repeated reference/diagnostic/drop work while
+preserving snapshots, pre/post results, overflow and alias fallbacks. Three
+instruction simulations corroborate work removal; no representation, dependency,
+JIT admission or unsafe-inventory change. One shared final packet and automatic
+cleanup complete the train.
 
-Flags, custom iterators, sorting, object numeric append, self/enum storage,
-general SPL serialization/cursor behavior and unrelated handle-order/release
-holdouts remain non-claims. Next admission examines native ArrayObject and
-ArrayIterator sorting methods. Require ten reachable current failures before
-implementation; separate object property-order, flags and extension prerequisites.
-Reuse the established array comparison/callback semantics, keep registration
-and storage-specific work cold, and retain one shared final evidence packet.
+Next admission examines sixteen current ArrayObject constructor/flags/iterator
+class and property-view failures. All sixteen reference cases pass, but require
+at least ten reachable shared-cause targets before implementation. Separate
+cursor/serialization, object hash-order, self/enum and missing-SPL prerequisites.
+Retain the existing unintegrated cursor worktree unchanged; do not combine it
+blindly with this independent constructor-policy admission.
 
-The preceding Directory train (`428436a1`) added fifteen exact passes and
-passed the same core/framework matrix with nineteen performance lanes green.
+The preceding backing-projection train (`be94d082`) added sixteen exact passes
+with the same full gate. Directory (`428436a1`) added fifteen. Their exact
+technical records and bounded non-claims remain in `compatibility.md`.
 
 ### Preceding data-wrapper checkpoint
 
