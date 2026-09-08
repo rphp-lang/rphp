@@ -34,6 +34,36 @@ static ASSERT_OPTIONS_DEPRECATION: InternalFunctionDeprecation = InternalFunctio
     message: "",
 };
 
+// Keep the nullable timestamp descriptor construction with cold registration
+// work instead of growing the shared startup function's generated body.
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code; section placement does not change its ABI.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn register_touch(eg: &mut ExecutorGlobals) -> Box<InternalFunction> {
+    let mut function = Box::new(make_internal_function(
+        fn_touch,
+        3,
+        1,
+        vec!["filename".into(), "mtime".into(), "atime".into()],
+    ));
+    function.common.sig.param_type_hints = vec![
+        ParamTypeHint::String,
+        ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+        ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+    ];
+    function.common.sig.return_type_hint = ParamTypeHint::Bool;
+    function.handler_validates_types = true;
+    let pointer = &function.common as *const FunctionCommon;
+    eg.register_function("touch", pointer).unwrap();
+    eg.register_internal_function_reflection_metadata(
+        pointer,
+        vec![None, Some(Value::null()), Some(Value::null())],
+        "standard",
+    );
+    function
+}
+
 // ============================================================================
 // Registration
 // ============================================================================
@@ -2241,6 +2271,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         );
         funcs.push(function);
     }
+    funcs.push(register_touch(eg));
     reg!("chmod", fn_chmod, 2, 2, "filename", "permissions");
     reg!("umask", fn_umask, 1, 0, "mask");
     reg_typed!(

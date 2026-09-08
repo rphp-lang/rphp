@@ -1,0 +1,7 @@
+TypeError:touch(): Argument #1 ($filename) must be of type string, int given
+TypeError:touch(): Argument #2 ($mtime) must be of type ?int, string given
+TypeError:touch(): Argument #2 ($mtime) must be of type ?int, float given
+TypeError:touch(): Argument #3 ($atime) must be of type ?int, true given
+bool(true)
+int(123)
+int(123)

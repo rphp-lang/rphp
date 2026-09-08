@@ -36,24 +36,28 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `native-filesystem-link-lifecycle` train adds nineteen exact PHP
-8.5 passes over `0538f3cf`, with no loss. A cold local boundary implements
-hard/symbolic links and raw-byte target reads; it preserves stat cache and
-diagnostic/evaluation order. A bounded source-unpack prerequisite restores
-canonical internal caller validation without changing ordinary dispatch or
-representation. Eleven original oracles and the preceding stream/data packets
-remain exact. The 7,174-case core is byte-identical at 6,435/346/182/211.
-One five-configuration checked Cargo matrix, all-target, exact no-loss,
-Composer/Symfony S0-S3 and static/unsafe gates pass. The first release passes
-all fourteen fixed-parent controls and three calibrated holdouts under unchanged
-common +1% / pay-use +5% budgets on the user-authorized shared host.
+The accepted `native-filesystem-timestamp-lifecycle` train adds nineteen exact
+PHP 8.5 passes over `6a2cb14d`, with no loss. Cold native `touch()` handling
+preserves creation, existing bytes, timestamp/default/null validation, path
+provenance, diagnostic order, owner permissions and stat-cache invalidation.
+One documented Linux-64 POSIX boundary fits the unchanged unsafe ceiling;
+there is no new dependency, shared RPHP ABI or common VM change.
 
-Warm persistent realpath-cache compression, destructive close-during-coercion
-and unrelated process APIs remain explicit holdouts. Next admission examines
-`touch()`/timestamp lifecycle and dependent file cases. Require ten reachable
-shared-cause failures before edits; do not count independent missing APIs.
-Retain cold pay-use design, bounded sampling and one shared final evidence
-packet. Exact hashes and non-claims remain in `compatibility.md`.
+Thirteen original oracles and prior link/stream/data packets pass. One checked
+five-configuration Cargo matrix, all-target, exact 7,174-case no-loss,
+Composer/Symfony S0-S3 and static/unsafe gates pass. Core counts remain
+6,435/346/182/211. The first candidate's independently confirmed object control
+regression was rejected; after outlining only new cold registration, the second
+passes all fourteen fixed-parent controls and three calibrated holdouts under
+unchanged common +1% / pay-use +5% budgets on the user-authorized shared host.
+
+User-wrapper metadata callbacks, broader URI policy, non-Linux-64 timestamp
+equivalence and the reference-side atime-precondition case remain non-claims.
+Next admission examines seventeen `dir()`/`Directory` factory, resource-lifecycle
+and property-capability candidates. Require ten reachable current failures
+sharing that boundary; do not count unrelated Reflection/ArrayObject blockers.
+Keep new registration and handlers cold from the outset and retain one shared
+final evidence packet. Exact hashes and non-claims are in `compatibility.md`.
 
 ### Preceding data-wrapper checkpoint
 

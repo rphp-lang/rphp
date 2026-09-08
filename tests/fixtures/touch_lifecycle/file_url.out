@@ -1,0 +1,13 @@
+bool(true)
+123:456
+bool(true)
+234:567
+2:touch(localhost/missing/child): Unable to create file localhost/missing/child because No such file or directory
+bool(false)
+2:touch(): Cannot call touch() for a non-standard stream
+bool(false)
+2:touch(): Cannot call touch() for a non-standard stream
+bool(false)
+2:touch(): Unable to find the wrapper "timestamp-unknown" - did you forget to enable it when you configured PHP?
+2:touch(): Unable to create file timestamp-unknown://missing because No such file or directory
+bool(false)

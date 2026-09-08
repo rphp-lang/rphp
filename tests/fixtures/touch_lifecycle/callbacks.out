@@ -1,0 +1,7 @@
+callback:Implicit conversion from float 1.5 to int loses precision
+interrupted
+bool(false)
+123:456
+callback:touch(): Unable to create file missing/child because No such file or directory
+interrupted
+bool(false)

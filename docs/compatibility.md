@@ -7,60 +7,71 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 PHP 8.5 checkpoint is `native-filesystem-link-lifecycle`,
-against parent `0538f3cf`. Cold local `link()`/`symlink()`/`readlink()` handlers
-preserve native hard-link resolution, symbolic target bytes and destination
-expansion, dangling links, diagnostic order and stat-cache non-invalidation.
-The four link predicates/operations have exact tested parameter metadata.
-Source-unpacked internal arguments use their existing canonical caller frame;
-user-function validation, references and ordinary dispatch remain unchanged.
-There is no representation, ABI, dependency or unsafe-operation change.
+The latest measured AMD64 PHP 8.5 checkpoint is
+`native-filesystem-timestamp-lifecycle`, against parent `6a2cb14d`.
+Cold `touch()` handling preserves create-without-truncate, signed/default/null
+timestamps, links and native path bytes, owner timestamp permissions, canonical
+weak/strict/named validation, diagnostic priority and stat-cache invalidation.
+Its descriptor initialization is also cold and out of line. No common VM,
+object representation or dependency changes are introduced.
 
-All nineteen admitted php-src `fcc29c8` cases pass: **+19/-0** over eighteen
-failures and one skip. Eleven original PHP 8.5.10 byte-exact CLI specimens cover
-positive/negative paths, raw bytes, strict/weak/named calls, error priority,
-Stringable side effects, metadata, stat cache and wrapper non-dispatch.
-The previous eleven-case stream and thirteen-case data PHPT packets remain
-exact, as do their original oracles. The 7,174-case core is byte-identical:
-**6,435 pass / 346 fail / 182 skip / 211 unsupported**, without a lost pass,
-missing case, timeout or crash. Zend/lang manifest/pass set:
+Nineteen supplying php-src `fcc29c8` cases move from fail to exact pass:
+**+19/-0**. A twentieth admission case fails its reference-side atime
+precondition before its FILE body and is not counted. Thirteen original PHP
+8.5.10 byte-exact CLI specimens and the previous link/stream/data packets pass.
+An existing side-effect test's local helper was renamed to avoid redeclaring
+the newly available builtin; its output and assertions remain unchanged.
+The 7,174-case core remains byte-identical at **6,435 pass / 346 fail / 182 skip /
+211 unsupported**, without a missing case, lost pass, timeout or crash.
+Zend/lang manifest/pass set:
 `51e25d959386e020ee7a17fc5abc32dbfb9c0566a34cad4e6c3072518287b349` /
 `b89857885e8fcf40bf3650374fdd0fecf0eb34f443b8eceb1c723fe79ed661ca`.
 Strings/array manifest/pass set:
 `9bf891c30b8763bbd23a62590ce7898e80c02f123682ec54139a8a277f1b46b2` /
 `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
 Supplying manifest:
-`b27e2d7443606350b1aa5485c2f83266a7bc0598e3e1463b57e32fda2f9e65bb`.
+`3bc04d4f5e47245e16f1ae2b99f385ee8a9a848a190b54399f8a19ffcfea0913`.
 
 One checked five-configuration Cargo matrix passes
-(4,779/4,482/4,850/4,872/4,923; unchanged 13/13/13/13/16 ignored), alongside
-immutable-release no-loss and Composer/Symfony S0-S3. All-target, runner
-self-test, formatting/public hygiene and the unchanged 1,621/289 unsafe
-inventory pass; automatic cleanup runs between large configurations.
-Matrix record:
-`635ef8498839c2a9183ad6291d9d290c26bf64568e829865baacfe2cc38a208b`.
+(4,792/4,495/4,863/4,885/4,936; unchanged 13/13/13/13/16 ignored), alongside
+immutable-release no-loss and Composer/Symfony S0-S3. All-target, runner and
+unsafe-policy self-tests, formatting and public hygiene pass. Matrix record:
+`b5fb0fa6a5200a4ce41681bfb1a323b77ce48a6950283104396714118e8cb8ba`.
+Automatic cleanup between configurations removed 18.2 GiB of rebuildable
+workspace output; source snapshots and active release baselines were retained.
 
-The first fixed-parent release passes all fourteen unchanged 32-pair controls
-and three independently calibrated holdouts under common +1% / pay-use +5%
-budgets. Common medians range from -2.182% to +0.460%; the largest pay-use
-median is +2.949%. The 128-invocation closure holdout is +0.401%.
-Outputs match exactly. The user-authorized shared host logged two background
-events; this is not exclusive-host evidence. Results/summary:
-`4b568c1712b9ba409a9487552ee790b4e3b968a6124a1b4ba20f5ea0aceabb08` /
-`5898f3e3d7a6bca2ec81e65f0c9a44e5a7b4517b3be6927f6e82e4bf865cbbf2`.
+The first candidate's +1.573% object-lifecycle result, independently +1.511%,
+was rejected. Instruction profiles showed unchanged common execution counts;
+cold timestamp descriptor construction was then outlined without VM changes.
+The second immutable release passes all fourteen unchanged 32-pair controls
+and three calibrated holdouts under common +1% / pay-use +5% budgets.
+Common medians range from -2.727% to +0.724%; the largest pay-use median is
++0.224%. The unchanged 128-invocation closure holdout is -0.915%.
+Outputs match exactly. Two background events were logged on the user-authorized
+shared host; this is not exclusive-host evidence. Results/summary:
+`e7c0c462d2e529c153e5e722463596f9a45eb00b6d5e017c22ad123b12d89a88` /
+`427b50234e7d8d8280a6a5df2c4cb9fd2d191d37396179f5eb4348717a146b1b`.
 Independent holdout results:
-`b873a00fe36a34a0948b87b65c9a1d06a3166a72ef2ef34753154bd3896fe905`.
+`188808334b9bae561a52a11ae868d99bd7558554937653127e60c709cd6cf83a`.
 Exact release:
-`a109c46ee5ed6de7cdca290a0c5afc6fe1a1dd8bc029e599e508ef1a292b5102`.
-Complete technical record:
-`69950981ec8eff70fd009feaa7168473034d9c09909f06ebbdccd0118c902044`.
+`ac240793cf167cbc9b8959909076cabc23565cd2047f4cfd962c91ca7730eab8`.
+Complete technical record, including rejected-candidate disposition:
+`2618bc0c9ff7e2a510a9702dd69f7c614e3e4b5a430193cbf1145ec7e13b33dc`.
 
-Warm persistent realpath-cache compression of deeper symbolic chains remains
-a named holdout; cold 32/33-follow boundaries are tested. Windows, process APIs,
-`touch()`, destructive close-during-coercion, additional filter codecs, broader
-wrapper seek, ARM performance and allocation/OOM equivalence remain non-claims.
-No private benchmark host was configured. Next admission examines timestamp
-lifecycle and dependent file tests, requiring ten reachable shared-cause failures.
+Linux-64 uses one audited synchronous POSIX timestamp call: opening an existing
+file merely to change its timestamps incorrectly requires content permissions.
+The native two-field layout, pointer lifetimes and null/current-time behavior
+are verified. Unsafe inventory is 1,622/289 within unchanged 1,623/289 ceilings;
+no new dependency or shared RPHP ABI is added. Other-platform permission/time
+equivalence, user-wrapper metadata callbacks, broader URI policy, warm realpath
+cache compression, ARM performance and allocation/OOM equivalence remain
+non-claims. No private benchmark host was configured. Next admission examines
+the missing resource-backed `Directory` object boundary, requiring ten reachable
+shared-cause failures before implementation.
+
+The preceding `native-filesystem-link-lifecycle` checkpoint (`6a2cb14d`) added
+**+19/-0** with all seventeen performance controls green. Its complete technical
+record is `69950981ec8eff70fd009feaa7168473034d9c09909f06ebbdccd0118c902044`.
 
 The preceding `native-stream-read-projections` checkpoint (`0538f3cf`) added
 **+11/-0** for native/data/filter byte and output cursor projections, with all

@@ -21,6 +21,8 @@ use super::{
 
 mod links;
 pub(super) use links::{fn_link, fn_readlink, fn_symlink};
+mod timestamps;
+pub(super) use timestamps::fn_touch;
 
 pub(crate) const GLOB_ERR: i64 = 0x0004;
 pub(crate) const GLOB_MARK: i64 = 0x0008;

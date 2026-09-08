@@ -1,0 +1,12 @@
+bool(true)
+8192:Implicit conversion from float 1.5 to int loses precision
+8192:Implicit conversion from float 2.5 to int loses precision
+bool(true)
+TypeError:touch(): Argument #2 ($mtime) must be of type ?int, array given
+TypeError:touch(): Argument #3 ($atime) must be of type ?int, array given
+TypeError:touch(): Argument #2 ($mtime) must be of type ?int, string given
+8192:touch(): Passing null to parameter #1 ($filename) of type string is deprecated
+bool(false)
+TypeError:touch(): Argument #1 ($filename) must be of type string, array given
+123:1
+1:2

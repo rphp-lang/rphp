@@ -1,0 +1,6 @@
+bool(true)
+123:456:new-target
+bool(true)
+789:321:dangling
+bool(true)
+111:222

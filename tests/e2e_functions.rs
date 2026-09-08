@@ -378,9 +378,9 @@ fn test_e2e_composed_scalar_body_does_not_speculate_side_effecting_target() {
     assert_eq!(
         run_php(
             r#"<?php
-function touch($value) { echo 'T'; return $value + 1; }
+function advanceWithEffect($value) { echo 'T'; return $value + 1; }
 function twice($value) { return $value * 2; }
-function combine($a, $b) { return touch($a) + twice($b); }
+function combine($a, $b) { return advanceWithEffect($a) + twice($b); }
 echo ':' . combine(2, 3);
 "#
         ),

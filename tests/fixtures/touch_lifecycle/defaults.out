@@ -1,0 +1,17 @@
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+123:123
+bool(true)
+123:123
+bool(true)
+123:456
+touch(): Argument #2 ($mtime) cannot be null when argument #3 ($atime) is an integer
+bool(false)
