@@ -19,6 +19,9 @@ use super::{
     typed_internal_string_value_argument_expected,
 };
 
+mod links;
+pub(super) use links::{fn_link, fn_readlink, fn_symlink};
+
 pub(crate) const GLOB_ERR: i64 = 0x0004;
 pub(crate) const GLOB_MARK: i64 = 0x0008;
 pub(crate) const GLOB_NOCHECK: i64 = 0x0010;

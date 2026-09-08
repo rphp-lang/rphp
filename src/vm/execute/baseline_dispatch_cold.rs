@@ -2789,6 +2789,7 @@ fn op_call_user_func_array<'a>(
                     eg,
                     source_file,
                     op_array.strict_types,
+                    (frame, source_line),
                 )?
             } else {
                 if crate::stdlib::callback_has_hard_reference_parameters(&resolved) {
@@ -2840,6 +2841,7 @@ fn op_call_user_func_array<'a>(
             Some(cache_slot),
             source_file,
             op_array.strict_types,
+            (frame, source_line),
         )?
     } else {
         if let Some(resolved) = crate::stdlib::resolve_callback_with_cache(

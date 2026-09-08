@@ -36,26 +36,24 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `native-stream-read-projections` train adds eleven exact PHP 8.5
-passes over `6509314e`, with no loss. `fgetc`/`fpassthru` share the existing
-native/data/filter cursor and byte/output/error contracts; native include-path
-opens preserve source-directory fallback. Profile-backed read, resource,
-scalar and object-release cost repairs retain representation and semantics.
-The preceding native argument contract remains intact. The full
-7,174-case core remains byte-identical at 6,435/346/182/211. Original/focused
-checks, five checked Cargo configurations, all-target, exact no-loss,
-Composer/Symfony S0-S3 and static/unsafe gates pass. Fourteen fixed-parent controls
-and three independently calibrated holdouts satisfy unchanged common +1% /
-pay-use +5% budgets on the user-authorized shared host.
+The accepted `native-filesystem-link-lifecycle` train adds nineteen exact PHP
+8.5 passes over `0538f3cf`, with no loss. A cold local boundary implements
+hard/symbolic links and raw-byte target reads; it preserves stat cache and
+diagnostic/evaluation order. A bounded source-unpack prerequisite restores
+canonical internal caller validation without changing ordinary dispatch or
+representation. Eleven original oracles and the preceding stream/data packets
+remain exact. The 7,174-case core is byte-identical at 6,435/346/182/211.
+One five-configuration checked Cargo matrix, all-target, exact no-loss,
+Composer/Symfony S0-S3 and static/unsafe gates pass. The first release passes
+all fourteen fixed-parent controls and three calibrated holdouts under unchanged
+common +1% / pay-use +5% budgets on the user-authorized shared host.
 
-Destructive closure of the original resource during coercion remains a failed
-adjacent lifetime/order holdout, not a claimed pass; related reference PHP
-behavior can crash. Next admission examines native link lifecycle and dependent
-filesystem cases. Require ten reachable shared-cause failures before edits;
-separately missing `touch`/process APIs are not counted. Start with bounded
-sampling intervals and profile-backed hot-path
-design, then share one final matrix/no-loss/performance packet. Exact evidence
-hashes and non-claims remain in `compatibility.md`.
+Warm persistent realpath-cache compression, destructive close-during-coercion
+and unrelated process APIs remain explicit holdouts. Next admission examines
+`touch()`/timestamp lifecycle and dependent file cases. Require ten reachable
+shared-cause failures before edits; do not count independent missing APIs.
+Retain cold pay-use design, bounded sampling and one shared final evidence
+packet. Exact hashes and non-claims remain in `compatibility.md`.
 
 ### Preceding data-wrapper checkpoint
 

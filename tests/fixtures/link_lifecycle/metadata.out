@@ -1,0 +1,22 @@
+link:2/2:bool
+target:string:0:0
+link:string:0:0
+symlink:2/2:bool
+target:string:0:0
+link:string:0:0
+readlink:1/1:string|false
+path:string:0:0
+is_link:1/1:bool
+filename:string:0:0
+bool(true)
+bool(true)
+string(6) "source"
+link() expects exactly 2 arguments, 0 given
+link() expects exactly 2 arguments, 3 given
+Unknown named parameter $unknown
+symlink() expects exactly 2 arguments, 0 given
+symlink() expects exactly 2 arguments, 3 given
+Unknown named parameter $unknown
+readlink() expects exactly 1 argument, 0 given
+readlink() expects exactly 1 argument, 3 given
+Unknown named parameter $unknown

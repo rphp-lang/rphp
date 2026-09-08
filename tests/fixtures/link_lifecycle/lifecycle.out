@@ -1,0 +1,15 @@
+bool(true)
+bool(true)
+bool(true)
+string(4) "file"
+string(4) "link"
+source:initial
+updated:updated
+bool(false)
+bool(true)
+bool(true)
+source:updated
+bool(true)
+string(6) "source"
+bool(true)
+bool(true)

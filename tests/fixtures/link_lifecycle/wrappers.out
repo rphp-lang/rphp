@@ -1,0 +1,16 @@
+link(): No such file or directory
+bool(false)
+link(): No such file or directory
+bool(false)
+link(): No such file or directory
+bool(false)
+bool(true)
+symlink(): No such file or directory
+bool(false)
+symlink(): No such file or directory
+bool(false)
+readlink(): No such file or directory
+readlink(): No such file or directory
+bool(false)
+bool(false)
+bool(false)

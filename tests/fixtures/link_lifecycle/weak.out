@@ -1,0 +1,23 @@
+bool(true)
+bool(true)
+string(1) "1"
+8192:link(): Passing null to parameter #1 ($target) of type string is deprecated
+TypeError:link(): Argument #2 ($link) must be of type string, array given
+ValueError:link(): Argument #1 ($target) must not contain any null bytes
+8192:link(): Passing null to parameter #2 ($link) of type string is deprecated
+2:link(): No such file or directory
+bool(false)
+TypeError:link(): Argument #1 ($target) must be of type string, array given
+8192:symlink(): Passing null to parameter #1 ($target) of type string is deprecated
+TypeError:symlink(): Argument #2 ($link) must be of type string, array given
+ValueError:symlink(): Argument #1 ($target) must not contain any null bytes
+8192:symlink(): Passing null to parameter #2 ($link) of type string is deprecated
+2:symlink(): No such file or directory
+bool(false)
+TypeError:symlink(): Argument #1 ($target) must be of type string, array given
+8192:readlink(): Passing null to parameter #1 ($path) of type string is deprecated
+2:readlink(): No such file or directory
+bool(false)
+TypeError:readlink(): Argument #1 ($path) must be of type string, array given
+TypeError:readlink(): Argument #1 ($path) must be of type string, stdClass given
+ValueError:readlink(): Argument #1 ($path) must not contain any null bytes

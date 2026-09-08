@@ -1153,6 +1153,7 @@ fn op_new_obj_resolved<'a>(
                 eg,
                 source_file,
                 op_array.strict_types,
+                (frame, op_array.source_line(ip).unwrap_or(0)),
             )?;
             if let Some(exception) = eg.exception.take() {
                 return Ok(match throw_in_frame(eg, frame, exception)? {

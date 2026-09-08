@@ -1,0 +1,19 @@
+target
+destination
+bool(true)
+invalid-target
+link(): Argument #1 ($target) must not contain any null bytes
+valid-target
+invalid-destination
+link(): Argument #2 ($link) must not contain any null bytes
+target
+destination
+bool(true)
+invalid-target
+symlink(): Argument #1 ($target) must not contain any null bytes
+valid-target
+invalid-destination
+symlink(): Argument #2 ($link) must not contain any null bytes
+read
+source
+bool(false)

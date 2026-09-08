@@ -2198,7 +2198,49 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         eg.register_internal_function_reflection_metadata(pointer, vec![None], "standard");
         funcs.push(function);
     }
-    reg!("is_link", fn_is_link, 1, 1, "filename");
+    reg_typed!(
+        "is_link",
+        fn_is_link,
+        1,
+        1,
+        ["filename"],
+        [ParamTypeHint::String],
+        ParamTypeHint::Bool
+    );
+    for (name, handler, parameters, result) in [
+        (
+            "link",
+            fn_link as crate::vm::function::InternalFunctionHandler,
+            pn!["target", "link"],
+            ParamTypeHint::Bool,
+        ),
+        (
+            "symlink",
+            fn_symlink as crate::vm::function::InternalFunctionHandler,
+            pn!["target", "link"],
+            ParamTypeHint::Bool,
+        ),
+        (
+            "readlink",
+            fn_readlink as crate::vm::function::InternalFunctionHandler,
+            pn!["path"],
+            or_false(ParamTypeHint::String),
+        ),
+    ] {
+        let count = parameters.len() as u32;
+        let mut function = Box::new(make_internal_function(handler, count, count, parameters));
+        function.common.sig.param_type_hints = vec![ParamTypeHint::String; count as usize];
+        function.common.sig.return_type_hint = result;
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function(name, pointer).unwrap();
+        eg.register_internal_function_reflection_metadata(
+            pointer,
+            vec![None; count as usize],
+            "standard",
+        );
+        funcs.push(function);
+    }
     reg!("chmod", fn_chmod, 2, 2, "filename", "permissions");
     reg!("umask", fn_umask, 1, 0, "mask");
     reg_typed!(

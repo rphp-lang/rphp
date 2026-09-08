@@ -1,0 +1,5 @@
+TypeError:link(): Argument #1 ($target) must be of type string, int given
+TypeError:link(): Argument #2 ($link) must be of type string, int given
+TypeError:symlink(): Argument #1 ($target) must be of type string, int given
+TypeError:symlink(): Argument #2 ($link) must be of type string, int given
+TypeError:readlink(): Argument #1 ($path) must be of type string, int given

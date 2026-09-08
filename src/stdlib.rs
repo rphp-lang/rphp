@@ -24915,7 +24915,11 @@ fn source_unpack_argument(
         return Ok(None);
     };
 
-    if let Some(hint) = signature.param_type_hints.get(reference_index)
+    // Internal calls validate in their canonical call frame (or their own
+    // argument parser). Pre-coercion here loses strict/null diagnostics and
+    // lets a later parameter error overtake an earlier handler-owned error.
+    if resolved.common().fn_type != FunctionType::Internal
+        && let Some(hint) = signature.param_type_hints.get(reference_index)
         && !matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed)
     {
         let original = prepared.dereferenced().clone();
@@ -24965,6 +24969,7 @@ fn call_resolved_with_source_unpack(
     args: &PhpArray,
     source_file: &str,
     strict_types: bool,
+    call_origin: (*mut ExecuteData, usize),
 ) -> Result<Value, VmError> {
     if resolved.is_magic_call {
         let mut arguments = PhpArray::new();
@@ -25140,6 +25145,26 @@ fn call_resolved_with_source_unpack(
     normalized.truncate(highest_fixed.max(required));
     normalized.extend(positional_extras);
     let num_args = resolved.prepend_args.len() + normalized.len() + resolved.use_vars.len();
+    if resolved.common().fn_type == FunctionType::Internal {
+        return with_detached_strict_call(call_origin.0, strict_types, || {
+            call_resolved_owned_iter_with_named_from(
+                eg,
+                &resolved,
+                num_args,
+                resolved
+                    .prepend_args
+                    .iter()
+                    .cloned()
+                    .chain(normalized)
+                    .chain(resolved.use_vars.iter().map(Value::clone_closure_capture)),
+                named_extras,
+                args.has_external_byte_keys(),
+                call_origin.0,
+                source_file,
+                call_origin.1,
+            )
+        });
+    }
     call_resolved_owned_iter_with_named(
         eg,
         &resolved,
@@ -25166,6 +25191,7 @@ pub(crate) fn invoke_source_unpacked_call(
     cache_slot: Option<*mut InlineCache>,
     source_file: &str,
     strict_types: bool,
+    call_origin: (*mut ExecuteData, usize),
 ) -> Result<Value, VmError> {
     let Some(args) = args_value.as_array() else {
         return Err(VmError::Fatal(
@@ -25179,7 +25205,7 @@ pub(crate) fn invoke_source_unpacked_call(
         ));
         return Ok(Value::null());
     };
-    call_resolved_with_source_unpack(eg, resolved, args, source_file, strict_types)
+    call_resolved_with_source_unpack(eg, resolved, args, source_file, strict_types, call_origin)
 }
 
 pub(crate) fn invoke_resolved_source_unpacked_call(
@@ -25188,13 +25214,14 @@ pub(crate) fn invoke_resolved_source_unpacked_call(
     eg: &mut ExecutorGlobals,
     source_file: &str,
     strict_types: bool,
+    call_origin: (*mut ExecuteData, usize),
 ) -> Result<Value, VmError> {
     let Some(args) = args_value.as_array() else {
         return Err(VmError::Fatal(
             "Compiler-owned unpack argument list is not an array".to_string(),
         ));
     };
-    call_resolved_with_source_unpack(eg, resolved, args, source_file, strict_types)
+    call_resolved_with_source_unpack(eg, resolved, args, source_file, strict_types, call_origin)
 }
 
 /// VM entry for compiler-lowered call_user_func_array. It shares all callback
