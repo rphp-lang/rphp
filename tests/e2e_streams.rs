@@ -962,12 +962,18 @@ fn closing_one_alias_invalidates_every_alias_but_preserves_id() {
             echo get_resource_type($alias); echo ':';
             if (get_resource_id($alias) === $id) { echo 'same-id'; }
             echo ':';
-            if (fclose($alias)) { echo 'twice'; } else { echo 'once'; }
+            try { fclose($alias); echo 'unexpected-close'; }
+            catch (TypeError $error) { echo $error->getMessage(); }
             echo ':';
-            if (fread($alias, 1) === false) { echo 'unusable'; }
+            try { fread($alias, 1); echo 'unexpected-read'; }
+            catch (TypeError $error) { echo $error->getMessage(); }
             "
         ),
-        "same:numeric:1:closed:resource (closed):Unknown:same-id:once:unusable"
+        concat!(
+            "same:numeric:1:closed:resource (closed):Unknown:same-id:",
+            "fclose(): Argument #1 ($stream) must be an open stream resource:",
+            "fread(): Argument #1 ($stream) must be an open stream resource"
+        )
     );
 }
 

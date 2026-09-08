@@ -1,0 +1,10 @@
+fread(): Argument #2 ($length) must be of type int, string given
+fgets(): Argument #2 ($length) must be of type ?int, float given
+fwrite(): Argument #2 ($data) must be of type string, int given
+fwrite(): Argument #3 ($length) must be of type ?int, string given
+fseek(): Argument #2 ($offset) must be of type int, string given
+fseek(): Argument #3 ($whence) must be of type int, string given
+int(4)
+string(4) "ABCD"
+int(1)
+fread(): Argument #1 ($stream) must be an open stream resource

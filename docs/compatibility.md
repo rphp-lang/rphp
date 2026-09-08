@@ -7,7 +7,60 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 PHP 8.5 checkpoint is `data-wrapper-open-policy`,
+The latest measured AMD64 PHP 8.5 checkpoint is `native-stream-argument-contracts`,
+against parent `5fbf9ce9`. Native read/write, close/flush, EOF and seek/tell/rewind
+share canonical argument diagnostics. An initially invalid or closed resource
+is rejected before a later argument diagnostic; weak/strict conversions and
+non-destructive callback snapshots retain PHP ordering. Successful native I/O
+uses its existing resource lookup, without a second validation lookup. Pure
+weak conversions avoid argument copies; cold diagnostics reuse their existing
+Linux section. No VM/value representation, dependency or unsafe operation changes.
+
+All ten supplying php-src `fcc29c8` cases now pass: **+10/-0**. Eight original
+CLI specimens match PHP 8.5.10 stdout/stderr/exit, 93 focused checks pass, and the
+preceding 40-process/13-PHPT stream packet remains exact. The 7,174-case core is
+byte-identical to the parent: **6,435 pass / 346 fail / 182 skip / 211 unsupported**,
+without a lost pass, missing case, timeout or crash. Zend/lang manifest/pass set:
+`51e25d959386e020ee7a17fc5abc32dbfb9c0566a34cad4e6c3072518287b349` /
+`b89857885e8fcf40bf3650374fdd0fecf0eb34f443b8eceb1c723fe79ed661ca`.
+Strings/array manifest/pass set:
+`9bf891c30b8763bbd23a62590ce7898e80c02f123682ec54139a8a277f1b46b2` /
+`0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+Supplying manifest:
+`ca40790d74c9979548c0dbb34c0fa16e2274dbce33d900cb75b4c255c781fa52`.
+
+Five checked Cargo configurations pass (4,743/4,451/4,814/4,836/4,887;
+unchanged 13/13/13/13/16 ignored), with all-target, exact no-loss,
+Composer/Symfony S0-S3, runner self-test, formatting/public hygiene and the
+unchanged 1,621/289 unsafe inventory. One matrix shares the final packet with
+immutable-release PHPT/framework checks and automatic cleanup. Matrix record:
+`a85de2a1e3b36ab1469d7a95b0bebca34775b699165d6a9634fface999008127`.
+
+All twelve fixed-parent 32-pair controls meet unchanged common +1% / pay-use
++5% budgets on the user-authorized shared host, not an exclusive host. The
+highest common median is object lifecycle +0.777%; native I/O is -1.685% and
+weak lengths -1.875%. Output checksums match. Results/summary:
+`30be2daf009770a54c141bdab6616ebab54870669e1a1aaa0f5cf3010aaa36db` /
+`1c0d42170983da2542ab0450a2d5b9bff554cf9e58da6f20881a965c3cedfcad`.
+An initial +1.681% closure holdout used underpowered 4ms observations and remains
+rejected. Identical-parent A/A calibration validates batching 128 unchanged
+closure invocations per observation, without changing binaries or thresholds.
+The three independent 32-pair holdouts pass at -0.175%/-0.274%/-0.273%; their
+results hash is `3ade9fd4cf881bc0a6a0fb2ee9404f641d14c4dfacb0ee34df24b20f1bf831cf`.
+Both final performance packets retain two background events each. Exact release:
+`8ea0a1dce183e0b7466e2774cd687cac997bcf892f0ab29da59a35d67724198b`.
+Complete technical record:
+`0da26da44170f018bde6b6a5a1535be2d42b9afef5230c0a206810a42c59bcc9`.
+
+Destructive callbacks that close the callee's original stream during coercion
+remain a **failed adjacent holdout**, including later-argument error priority;
+the parent also fails. A related fractional-length case crashes PHP 8.5.10,
+which is not behavior to reproduce. Broader wrapper seek, missing read APIs,
+ARM performance and allocation/OOM equivalence remain non-claims. No private
+benchmark host was configured. Next admission examines the missing byte-read
+and pass-through stream projections as a shared-root-cause cluster.
+
+The preceding measured AMD64 PHP 8.5 checkpoint is `data-wrapper-open-policy`,
 against parent `7e7b9734`. Data URI opens share header validation, binary decode,
 read-only cursor/EOF behavior and detached metadata. Startup-only
 `allow_url_fopen` is enforced before data/user-URL factories; local wrappers

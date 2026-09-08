@@ -15,18 +15,6 @@ use super::stream::{PhpStream, StreamStat};
 // unrelated hot-code placement enough to fail the runtime admission gate. Keep
 // both dependency-free implementations separately selectable until that
 // codegen boundary is solved.
-#[cfg(any(
-    feature = "csv-errors",
-    feature = "stream-contents",
-    feature = "stream-copy",
-    feature = "stream-context",
-    feature = "stream-line",
-    feature = "stream-registry",
-    feature = "stream-truncate",
-    feature = "file-contents",
-    feature = "file-write",
-    feature = "file-lines"
-))]
 pub(super) mod checked_args;
 #[cfg(feature = "stream-contents")]
 mod contents;
@@ -799,22 +787,35 @@ fn fn_fread(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let resource = argument(execute_data, 0).as_resource_id();
-    let length = argument(execute_data, 1).to_long_val();
+    let Some(resource) = checked_args::native_stream_id(execute_data, eg, "fread") else {
+        return Ok(());
+    };
+    let Some(length) = checked_args::stream_long_argument(
+        execute_data,
+        eg,
+        resource,
+        "fread",
+        1,
+        "length",
+        "int",
+    )?
+    else {
+        return Ok(());
+    };
+    if length <= 0 {
+        checked_args::positive_length_error(eg, resource, "fread");
+        return Ok(());
+    }
     let Ok(length) = usize::try_from(length) else {
         return return_value(return_pointer, Value::bool(false));
     };
-    if length == 0 {
-        return return_value(return_pointer, Value::bool(false));
-    }
 
     let mut bytes = Vec::new();
     if bytes.try_reserve_exact(length).is_err() {
         return return_value(return_pointer, Value::bool(false));
     }
     bytes.resize(length, 0);
-    let result = resource
-        .and_then(|resource| with_stream_io(eg, resource, |stream| stream.read(&mut bytes)));
+    let result = with_stream_io(eg, resource, |stream| stream.read(&mut bytes));
     match result {
         Some(Ok(read)) => {
             bytes.truncate(read);
@@ -828,19 +829,16 @@ fn fn_fread(
         }
         _ => {
             #[cfg(feature = "stream-registry")]
-            if let Some(resource) = resource
-                && let Some(bytes) = filters::with_source(eg, execute_data, |eg| {
-                    filters::read(eg, resource, length)
-                })?
+            if let Some(bytes) =
+                filters::with_source(eg, execute_data, |eg| filters::read(eg, resource, length))?
             {
                 return return_value(return_pointer, super::php_byte_result(bytes, false));
             }
             #[cfg(feature = "stream-registry")]
-            if let Some(resource) = resource
-                && let Some(bytes) = user_wrapper::read(eg, resource, length)?
-            {
+            if let Some(bytes) = user_wrapper::read(eg, resource, length)? {
                 return return_value(return_pointer, super::php_byte_result(bytes, false));
             }
+            checked_args::ensure_open_stream(eg, resource, "fread");
             return_value(return_pointer, Value::bool(false))
         }
     }
@@ -852,22 +850,42 @@ fn fn_fgets(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let resource = argument(execute_data, 0).as_resource_id();
+    let Some(resource) = checked_args::native_stream_id(execute_data, eg, "fgets") else {
+        return Ok(());
+    };
     let length = match optional_argument(execute_data, 1) {
-        Some(length) => match usize::try_from(length.to_long_val()) {
-            Ok(length) => Some(length),
-            Err(_) => return return_value(return_pointer, Value::bool(false)),
-        },
+        Some(value) if value.value_type() == ValueType::Null => None,
+        Some(_) => {
+            let Some(length) = checked_args::stream_long_argument(
+                execute_data,
+                eg,
+                resource,
+                "fgets",
+                1,
+                "length",
+                "?int",
+            )?
+            else {
+                return Ok(());
+            };
+            if length <= 0 {
+                checked_args::positive_length_error(eg, resource, "fgets");
+                return Ok(());
+            }
+            let Ok(length) = usize::try_from(length) else {
+                return return_value(return_pointer, Value::bool(false));
+            };
+            Some(length)
+        }
         None => None,
     };
-    let result = if let Some(resource) = resource {
-        read_stream_line(eg, execute_data, resource, length)?
-    } else {
-        None
-    };
+    let result = read_stream_line(eg, execute_data, resource, length)?;
     match result {
         Some(bytes) => return_value(return_pointer, super::php_byte_result(bytes, false)),
-        _ => return_value(return_pointer, Value::bool(false)),
+        _ => {
+            checked_args::ensure_open_stream(eg, resource, "fgets");
+            return_value(return_pointer, Value::bool(false))
+        }
     }
 }
 
@@ -972,38 +990,57 @@ fn fn_fwrite(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let resource = argument(execute_data, 0).as_resource_id();
-    // Retain immutable string storage across a filter/error callback instead
-    // of copying it into a second String. Non-string coercion stays unchanged.
-    let supplied = argument(execute_data, 1);
-    let string_owner = supplied.as_str().map(|_| supplied.clone());
-    let data = match string_owner.as_ref().and_then(Value::as_str) {
-        Some(text) => Cow::Borrowed(text),
-        None => argument_string(execute_data, 1),
+    let Some(resource) = checked_args::native_stream_id(execute_data, eg, "fwrite") else {
+        return Ok(());
     };
+    // Retain immutable string storage across a filter/error callback instead
+    // of copying it into a second String. Coercions use the canonical checker.
+    let supplied = argument(execute_data, 1);
+    let string_owner = if supplied.as_str().is_some() {
+        supplied.clone()
+    } else {
+        let Some(value) = checked_args::coerce_write_data(execute_data, eg, resource)? else {
+            return Ok(());
+        };
+        value
+    };
+    let data = string_owner.as_str().expect("validated string argument");
     // ASCII (including NUL) already has the required byte representation.
     // Non-ASCII lossless storage still uses the existing byte conversion.
     let storage = if data.is_ascii() {
         Cow::Borrowed(data.as_bytes())
     } else {
-        Cow::Owned(super::php_string_to_bytes(data.as_ref()))
+        Cow::Owned(super::php_string_to_bytes(data))
     };
     let mut bytes = storage.as_ref();
-    if let Some(length) = optional_argument(execute_data, 2) {
-        let Ok(length) = usize::try_from(length.to_long_val()) else {
-            return return_value(return_pointer, Value::bool(false));
+    if let Some(value) = optional_argument(execute_data, 2)
+        && value.value_type() != ValueType::Null
+    {
+        let Some(length) = checked_args::stream_long_argument(
+            execute_data,
+            eg,
+            resource,
+            "fwrite",
+            2,
+            "length",
+            "?int",
+        )?
+        else {
+            return Ok(());
         };
-        bytes = &bytes[..bytes.len().min(length)];
+        bytes = &bytes[..bytes
+            .len()
+            .min(usize::try_from(length.max(0)).unwrap_or(usize::MAX))];
     }
-    let result = if let Some(resource) = resource {
-        write_stream_bytes(eg, execute_data, resource, bytes)?
-    } else {
-        None
-    };
+    let result = write_stream_bytes(eg, execute_data, resource, bytes)?;
     match result {
         Some(Ok(written)) => return_value(return_pointer, Value::long(written as i64)),
         Some(Err(error)) if error.kind() == std::io::ErrorKind::PermissionDenied => {
             report_stream_not_writable(eg, execute_data)?;
+            return_value(return_pointer, Value::bool(false))
+        }
+        None => {
+            checked_args::ensure_open_stream(eg, resource, "fwrite");
             return_value(return_pointer, Value::bool(false))
         }
         _ => return_value(return_pointer, Value::bool(false)),
@@ -1034,25 +1071,24 @@ fn fn_fclose(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let resource = argument(execute_data, 0).as_resource_id();
-    let closed = resource
-        .is_some_and(|resource| super::resource::close_for_request::<PhpStream>(eg, resource));
+    let Some(resource) = checked_args::native_stream_id(execute_data, eg, "fclose") else {
+        return Ok(());
+    };
+    let closed = super::resource::close_for_request::<PhpStream>(eg, resource);
     if closed {
         return return_value(return_pointer, Value::bool(true));
     }
     #[cfg(feature = "stream-registry")]
-    if let Some(resource) = resource
-        && let Some(closed) =
-            filters::with_source(eg, execute_data, |eg| filters::close(eg, resource, false))?
+    if let Some(closed) =
+        filters::with_source(eg, execute_data, |eg| filters::close(eg, resource, false))?
     {
         return return_value(return_pointer, Value::bool(closed));
     }
     #[cfg(feature = "stream-registry")]
-    if let Some(resource) = resource
-        && let Some(closed) = user_wrapper::close(eg, resource)?
-    {
+    if let Some(closed) = user_wrapper::close(eg, resource)? {
         return return_value(return_pointer, Value::bool(closed));
     }
+    checked_args::ensure_open_stream(eg, resource, "fclose");
     return_value(return_pointer, Value::bool(false))
 }
 
@@ -1062,26 +1098,24 @@ fn fn_fflush(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let resource = argument(execute_data, 0).as_resource_id();
-    let flushed = resource
-        .and_then(|resource| with_stream_io(eg, resource, |stream| stream.flush().is_ok()))
-        .unwrap_or(false);
+    let Some(resource) = checked_args::native_stream_id(execute_data, eg, "fflush") else {
+        return Ok(());
+    };
+    if let Some(flushed) = with_stream_io(eg, resource, |stream| stream.flush().is_ok()) {
+        return return_value(return_pointer, Value::bool(flushed));
+    }
     #[cfg(feature = "stream-registry")]
-    if !flushed
-        && let Some(resource) = resource
-        && let Some(flushed) =
-            filters::with_source(eg, execute_data, |eg| filters::flush(eg, resource))?
+    if let Some(flushed) =
+        filters::with_source(eg, execute_data, |eg| filters::flush(eg, resource))?
     {
         return return_value(return_pointer, Value::bool(flushed));
     }
     #[cfg(feature = "stream-registry")]
-    if !flushed
-        && let Some(resource) = resource
-        && let Some(flushed) = user_wrapper::flush(eg, resource)?
-    {
+    if let Some(flushed) = user_wrapper::flush(eg, resource)? {
         return return_value(return_pointer, Value::bool(flushed));
     }
-    return_value(return_pointer, Value::bool(flushed))
+    checked_args::ensure_open_stream(eg, resource, "fflush");
+    return_value(return_pointer, Value::bool(false))
 }
 
 #[cold]
@@ -1230,27 +1264,26 @@ fn fn_feof(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let resource = argument(execute_data, 0).as_resource_id();
-    if let Some(eof) = resource.and_then(|resource| {
+    let Some(resource) = checked_args::native_stream_id(execute_data, eg, "feof") else {
+        return Ok(());
+    };
+    if let Some(eof) =
         super::resource::with_request_payload_mut::<PhpStream, _>(eg, resource, |stream| {
             stream.is_eof()
         })
-    }) {
-        return return_value(return_pointer, Value::bool(eof));
-    }
-    #[cfg(feature = "stream-registry")]
-    if let Some(resource) = resource
-        && let Some(eof) = filters::eof(eg, resource)
     {
         return return_value(return_pointer, Value::bool(eof));
     }
     #[cfg(feature = "stream-registry")]
-    if let Some(resource) = resource
-        && user_wrapper::is_user_stream(eg, resource)
-    {
+    if let Some(eof) = filters::eof(eg, resource) {
+        return return_value(return_pointer, Value::bool(eof));
+    }
+    #[cfg(feature = "stream-registry")]
+    if user_wrapper::is_user_stream(eg, resource) {
         let eof = user_wrapper::eof(eg, resource)?.unwrap_or(false);
         return return_value(return_pointer, Value::bool(eof));
     }
+    checked_args::ensure_open_stream(eg, resource, "feof");
     return_value(return_pointer, Value::bool(false))
 }
 
@@ -1260,26 +1293,24 @@ fn fn_ftell(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let position = argument(execute_data, 0)
-        .as_resource_id()
-        .and_then(|resource| with_stream_io(eg, resource, |stream| stream.position()));
+    let Some(resource) = checked_args::native_stream_id(execute_data, eg, "ftell") else {
+        return Ok(());
+    };
+    let position = with_stream_io(eg, resource, |stream| stream.position());
     match position {
         Some(Ok(position)) if position <= i64::MAX as u64 => {
             return_value(return_pointer, Value::long(position as i64))
         }
         _ => {
             #[cfg(feature = "stream-registry")]
-            if let Some(resource) = argument(execute_data, 0).as_resource_id()
-                && let Some(position) = filters::position(eg, resource)
-            {
+            if let Some(position) = filters::position(eg, resource) {
                 return return_value(return_pointer, Value::long(position as i64));
             }
             #[cfg(feature = "stream-registry")]
-            if let Some(resource) = argument(execute_data, 0).as_resource_id()
-                && let Some(position) = user_wrapper::position(eg, resource)
-            {
+            if let Some(position) = user_wrapper::position(eg, resource) {
                 return return_value(return_pointer, Value::long(position));
             }
+            checked_args::ensure_open_stream(eg, resource, "ftell");
             return_value(return_pointer, Value::bool(false))
         }
     }
@@ -1291,32 +1322,67 @@ fn fn_fseek(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let offset = argument(execute_data, 1).to_long_val();
-    let whence = optional_argument(execute_data, 2)
-        .map(Value::to_long_val)
-        .unwrap_or(0);
+    let Some(resource) = checked_args::native_stream_id(execute_data, eg, "fseek") else {
+        return Ok(());
+    };
+    let Some(offset) = checked_args::stream_long_argument(
+        execute_data,
+        eg,
+        resource,
+        "fseek",
+        1,
+        "offset",
+        "int",
+    )?
+    else {
+        return Ok(());
+    };
+    let whence = if optional_argument(execute_data, 2).is_some() {
+        let Some(whence) = checked_args::stream_long_argument(
+            execute_data,
+            eg,
+            resource,
+            "fseek",
+            2,
+            "whence",
+            "int",
+        )?
+        else {
+            return Ok(());
+        };
+        whence
+    } else {
+        0
+    };
     let seek_from = match whence {
         0 => match u64::try_from(offset) {
             Ok(offset) => SeekFrom::Start(offset),
-            Err(_) => return return_value(return_pointer, Value::long(-1)),
+            Err(_) => {
+                checked_args::ensure_open_stream(eg, resource, "fseek");
+                return return_value(return_pointer, Value::long(-1));
+            }
         },
         1 => SeekFrom::Current(offset),
         2 => SeekFrom::End(offset),
-        _ => return return_value(return_pointer, Value::long(-1)),
+        _ => {
+            checked_args::ensure_open_stream(eg, resource, "fseek");
+            return return_value(return_pointer, Value::long(-1));
+        }
     };
-    let resource = argument(execute_data, 0).as_resource_id();
-    let succeeded = resource.and_then(|resource| {
+    let succeeded =
         super::resource::with_request_payload_mut::<PhpStream, _>(eg, resource, |stream| {
             stream.seek(seek_from).is_ok()
-        })
-    });
+        });
     #[cfg(feature = "stream-registry")]
-    let succeeded = match (succeeded, resource) {
-        (None, Some(id)) => {
-            filters::with_source(eg, execute_data, |eg| filters::seek(eg, id, seek_from))?
-        }
-        (value, _) => value,
+    let succeeded = match succeeded {
+        None => filters::with_source(eg, execute_data, |eg| {
+            filters::seek(eg, resource, seek_from)
+        })?,
+        value => value,
     };
+    if succeeded.is_none() {
+        checked_args::ensure_open_stream(eg, resource, "fseek");
+    }
     let succeeded = succeeded.unwrap_or(false);
     return_value(return_pointer, Value::long(if succeeded { 0 } else { -1 }))
 }
@@ -1327,19 +1393,23 @@ fn fn_rewind(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let resource = argument(execute_data, 0).as_resource_id();
-    let succeeded = resource.and_then(|resource| {
+    let Some(resource) = checked_args::native_stream_id(execute_data, eg, "rewind") else {
+        return Ok(());
+    };
+    let succeeded =
         super::resource::with_request_payload_mut::<PhpStream, _>(eg, resource, |stream| {
             stream.seek(SeekFrom::Start(0)).is_ok()
-        })
-    });
+        });
     #[cfg(feature = "stream-registry")]
-    let succeeded = match (succeeded, resource) {
-        (None, Some(id)) => filters::with_source(eg, execute_data, |eg| {
-            filters::seek(eg, id, SeekFrom::Start(0))
+    let succeeded = match succeeded {
+        None => filters::with_source(eg, execute_data, |eg| {
+            filters::seek(eg, resource, SeekFrom::Start(0))
         })?,
-        (value, _) => value,
+        value => value,
     };
+    if succeeded.is_none() {
+        checked_args::ensure_open_stream(eg, resource, "rewind");
+    }
     let succeeded = succeeded.unwrap_or(false);
     return_value(return_pointer, Value::bool(succeeded))
 }

@@ -1,0 +1,94 @@
+fclose
+TypeError:fclose(): Argument #1 ($stream) must be of type resource, null given
+TypeError:fclose(): Argument #1 ($stream) must be of type resource, false given
+TypeError:fclose(): Argument #1 ($stream) must be of type resource, true given
+TypeError:fclose(): Argument #1 ($stream) must be of type resource, int given
+TypeError:fclose(): Argument #1 ($stream) must be of type resource, float given
+TypeError:fclose(): Argument #1 ($stream) must be of type resource, string given
+TypeError:fclose(): Argument #1 ($stream) must be of type resource, array given
+TypeError:fclose(): Argument #1 ($stream) must be of type resource, stdClass given
+TypeError:fclose(): Argument #1 ($stream) must be an open stream resource
+feof
+TypeError:feof(): Argument #1 ($stream) must be of type resource, null given
+TypeError:feof(): Argument #1 ($stream) must be of type resource, false given
+TypeError:feof(): Argument #1 ($stream) must be of type resource, true given
+TypeError:feof(): Argument #1 ($stream) must be of type resource, int given
+TypeError:feof(): Argument #1 ($stream) must be of type resource, float given
+TypeError:feof(): Argument #1 ($stream) must be of type resource, string given
+TypeError:feof(): Argument #1 ($stream) must be of type resource, array given
+TypeError:feof(): Argument #1 ($stream) must be of type resource, stdClass given
+TypeError:feof(): Argument #1 ($stream) must be an open stream resource
+ftell
+TypeError:ftell(): Argument #1 ($stream) must be of type resource, null given
+TypeError:ftell(): Argument #1 ($stream) must be of type resource, false given
+TypeError:ftell(): Argument #1 ($stream) must be of type resource, true given
+TypeError:ftell(): Argument #1 ($stream) must be of type resource, int given
+TypeError:ftell(): Argument #1 ($stream) must be of type resource, float given
+TypeError:ftell(): Argument #1 ($stream) must be of type resource, string given
+TypeError:ftell(): Argument #1 ($stream) must be of type resource, array given
+TypeError:ftell(): Argument #1 ($stream) must be of type resource, stdClass given
+TypeError:ftell(): Argument #1 ($stream) must be an open stream resource
+rewind
+TypeError:rewind(): Argument #1 ($stream) must be of type resource, null given
+TypeError:rewind(): Argument #1 ($stream) must be of type resource, false given
+TypeError:rewind(): Argument #1 ($stream) must be of type resource, true given
+TypeError:rewind(): Argument #1 ($stream) must be of type resource, int given
+TypeError:rewind(): Argument #1 ($stream) must be of type resource, float given
+TypeError:rewind(): Argument #1 ($stream) must be of type resource, string given
+TypeError:rewind(): Argument #1 ($stream) must be of type resource, array given
+TypeError:rewind(): Argument #1 ($stream) must be of type resource, stdClass given
+TypeError:rewind(): Argument #1 ($stream) must be an open stream resource
+fseek
+TypeError:fseek(): Argument #1 ($stream) must be of type resource, null given
+TypeError:fseek(): Argument #1 ($stream) must be of type resource, false given
+TypeError:fseek(): Argument #1 ($stream) must be of type resource, true given
+TypeError:fseek(): Argument #1 ($stream) must be of type resource, int given
+TypeError:fseek(): Argument #1 ($stream) must be of type resource, float given
+TypeError:fseek(): Argument #1 ($stream) must be of type resource, string given
+TypeError:fseek(): Argument #1 ($stream) must be of type resource, array given
+TypeError:fseek(): Argument #1 ($stream) must be of type resource, stdClass given
+TypeError:fseek(): Argument #1 ($stream) must be an open stream resource
+fread
+TypeError:fread(): Argument #1 ($stream) must be of type resource, null given
+TypeError:fread(): Argument #1 ($stream) must be of type resource, false given
+TypeError:fread(): Argument #1 ($stream) must be of type resource, true given
+TypeError:fread(): Argument #1 ($stream) must be of type resource, int given
+TypeError:fread(): Argument #1 ($stream) must be of type resource, float given
+TypeError:fread(): Argument #1 ($stream) must be of type resource, string given
+TypeError:fread(): Argument #1 ($stream) must be of type resource, array given
+TypeError:fread(): Argument #1 ($stream) must be of type resource, stdClass given
+TypeError:fread(): Argument #1 ($stream) must be an open stream resource
+fgets
+TypeError:fgets(): Argument #1 ($stream) must be of type resource, null given
+TypeError:fgets(): Argument #1 ($stream) must be of type resource, false given
+TypeError:fgets(): Argument #1 ($stream) must be of type resource, true given
+TypeError:fgets(): Argument #1 ($stream) must be of type resource, int given
+TypeError:fgets(): Argument #1 ($stream) must be of type resource, float given
+TypeError:fgets(): Argument #1 ($stream) must be of type resource, string given
+TypeError:fgets(): Argument #1 ($stream) must be of type resource, array given
+TypeError:fgets(): Argument #1 ($stream) must be of type resource, stdClass given
+TypeError:fgets(): Argument #1 ($stream) must be an open stream resource
+fwrite
+TypeError:fwrite(): Argument #1 ($stream) must be of type resource, null given
+TypeError:fwrite(): Argument #1 ($stream) must be of type resource, false given
+TypeError:fwrite(): Argument #1 ($stream) must be of type resource, true given
+TypeError:fwrite(): Argument #1 ($stream) must be of type resource, int given
+TypeError:fwrite(): Argument #1 ($stream) must be of type resource, float given
+TypeError:fwrite(): Argument #1 ($stream) must be of type resource, string given
+TypeError:fwrite(): Argument #1 ($stream) must be of type resource, array given
+TypeError:fwrite(): Argument #1 ($stream) must be of type resource, stdClass given
+TypeError:fwrite(): Argument #1 ($stream) must be an open stream resource
+fflush
+TypeError:fflush(): Argument #1 ($stream) must be of type resource, null given
+TypeError:fflush(): Argument #1 ($stream) must be of type resource, false given
+TypeError:fflush(): Argument #1 ($stream) must be of type resource, true given
+TypeError:fflush(): Argument #1 ($stream) must be of type resource, int given
+TypeError:fflush(): Argument #1 ($stream) must be of type resource, float given
+TypeError:fflush(): Argument #1 ($stream) must be of type resource, string given
+TypeError:fflush(): Argument #1 ($stream) must be of type resource, array given
+TypeError:fflush(): Argument #1 ($stream) must be of type resource, stdClass given
+TypeError:fflush(): Argument #1 ($stream) must be an open stream resource
+bool(false)
+bool(false)
+int(10)
+int(10)

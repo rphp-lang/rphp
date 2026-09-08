@@ -1,0 +1,55 @@
+int(0)
+position:0
+
+int(0)
+position:0
+
+int(2)
+position:2
+4100
+int(4)
+position:4
+410042ff
+int(0)
+position:0
+
+int(1)
+position:1
+41
+int(2)
+position:2
+4100
+8192:Implicit conversion from float-string "2.5" to int loses precision
+int(2)
+position:2
+4100
+8192:Implicit conversion from float 2.5 to int loses precision
+int(2)
+position:2
+4100
+TypeError:fwrite(): Argument #3 ($length) must be of type ?int, array given
+position:0
+
+TypeError:fwrite(): Argument #3 ($length) must be of type ?int, string given
+position:0
+
+8192:fwrite(): Passing null to parameter #2 ($data) of type string is deprecated
+int(0)
+position:0
+int(0)
+position:0
+int(1)
+position:1
+int(2)
+position:2
+int(3)
+position:3
+int(4)
+position:4
+TypeError:fwrite(): Argument #2 ($data) must be of type string, array given
+position:0
+TypeError:fwrite(): Argument #2 ($data) must be of type string, stdClass given
+position:0
+fwrite(): Argument #1 ($stream) must be an open stream resource
+fwrite(): Argument #1 ($stream) must be an open stream resource
+fwrite(): Argument #1 ($stream) must be an open stream resource

@@ -1,6 +1,202 @@
 use crate::runtime::ExecutorGlobals;
 use crate::value::{Value, ValueType};
+use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
+
+// Successful native I/O validates the resource through its existing payload
+// lookup. Only type/coercion failures and an operation miss need the cold
+// open-stream check, before a later argument can emit a diagnostic/callback.
+#[inline]
+pub(super) fn native_stream_id(
+    execute_data: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+) -> Option<i64> {
+    let value = super::argument(execute_data, 0);
+    match value.as_resource_id() {
+        Some(id) => Some(id),
+        None => {
+            stream_type_error(eg, function, 0, "stream", value);
+            None
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated executable code; placement does not change ABI.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn stream_type_error(
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    index: u32,
+    parameter: &str,
+    value: &Value,
+) {
+    let argument = index + 1;
+    argument_error(
+        eg,
+        "TypeError",
+        format!(
+            "{function}(): Argument #{argument} (${parameter}) must be of type resource, {} given",
+            given_type_name(value)
+        ),
+    );
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated executable code; placement does not change ABI.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+pub(super) fn ensure_open_stream(eg: &mut ExecutorGlobals, resource: i64, function: &str) -> bool {
+    ensure_open_stream_at(eg, resource, function, 0, "stream")
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated executable code; placement does not change ABI.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn ensure_open_stream_at(
+    eg: &mut ExecutorGlobals,
+    resource: i64,
+    function: &str,
+    index: u32,
+    parameter: &str,
+) -> bool {
+    if eg.exception.is_some() {
+        return false;
+    }
+    if super::super::resource::type_for_request(eg, resource) == "stream" {
+        return true;
+    }
+    let argument = index + 1;
+    argument_error(
+        eg,
+        "TypeError",
+        format!(
+            "{function}(): Argument #{argument} (${parameter}) must be an open stream resource"
+        ),
+    );
+    false
+}
+
+#[inline]
+pub(super) fn stream_long_argument(
+    execute_data: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    resource: i64,
+    function: &str,
+    index: u32,
+    parameter: &str,
+    expected: &str,
+) -> Result<Option<i64>, VmError> {
+    let value = super::argument(execute_data, index);
+    if let Some(integer) = value.as_long() {
+        return Ok(Some(integer));
+    }
+    coerce_stream_long_argument(
+        execute_data,
+        eg,
+        resource,
+        function,
+        index,
+        parameter,
+        expected,
+    )
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated executable code; placement does not change ABI.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn coerce_stream_long_argument(
+    execute_data: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    resource: i64,
+    function: &str,
+    index: u32,
+    parameter: &str,
+    expected: &str,
+) -> Result<Option<i64>, VmError> {
+    // Exact weak conversions cannot call user code or emit a diagnostic, so
+    // the operation's payload lookup can still validate the stream once.
+    // Fractional/null/invalid inputs must validate it before entering the
+    // canonical coercer, which can invoke an error handler.
+    if !super::super::internal_call_is_strict(execute_data) {
+        let value = super::argument(execute_data, index);
+        let converted = match value.value_type() {
+            ValueType::String => value.as_str().and_then(|source| {
+                source
+                    .trim_matches([' ', '\t', '\n', '\r', '\u{b}', '\u{c}'])
+                    .parse::<i64>()
+                    .ok()
+            }),
+            ValueType::True => Some(1),
+            ValueType::False => Some(0),
+            ValueType::Double => value.as_double().and_then(|number| {
+                if number >= i64::MIN as f64
+                    && number < -(i64::MIN as f64)
+                    && (number as i64) as f64 == number
+                {
+                    Some(number as i64)
+                } else {
+                    None
+                }
+            }),
+            _ => None,
+        };
+        if converted.is_some() {
+            return Ok(converted);
+        }
+    }
+    if !ensure_open_stream(eg, resource, function) {
+        return Ok(None);
+    }
+    super::super::typed_internal_int_argument_expected(
+        execute_data,
+        eg,
+        function,
+        index,
+        parameter,
+        expected,
+    )
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated executable code; placement does not change ABI.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+pub(super) fn positive_length_error(eg: &mut ExecutorGlobals, resource: i64, function: &str) {
+    if ensure_open_stream(eg, resource, function) {
+        argument_error(
+            eg,
+            "ValueError",
+            format!("{function}(): Argument #2 ($length) must be greater than 0"),
+        );
+    }
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated executable code; placement does not change ABI.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+pub(super) fn coerce_write_data(
+    execute_data: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    resource: i64,
+) -> Result<Option<Value>, VmError> {
+    if !ensure_open_stream(eg, resource, "fwrite") {
+        return Ok(None);
+    }
+    super::super::typed_internal_string_value_argument_expected(
+        execute_data,
+        eg,
+        "fwrite",
+        1,
+        "data",
+        "string",
+    )
+}
 
 #[cold]
 #[cfg(any(
@@ -84,29 +280,9 @@ pub(super) fn stream_argument_at(
     parameter: &str,
 ) -> Option<i64> {
     let value = super::argument(execute_data, index);
-    let argument = index + 1;
     let Some(resource) = value.as_resource_id() else {
-        argument_error(
-            eg,
-            "TypeError",
-            format!(
-                "{function}(): Argument #{argument} (${parameter}) must be of type resource, {} given",
-                given_type_name(value)
-            ),
-        );
+        stream_type_error(eg, function, index, parameter, value);
         return None;
     };
-    if !super::super::resource::is_open_for_request(eg, resource)
-        || super::super::resource::type_for_request(eg, resource) != "stream"
-    {
-        argument_error(
-            eg,
-            "TypeError",
-            format!(
-                "{function}(): Argument #{argument} (${parameter}) must be an open stream resource"
-            ),
-        );
-        return None;
-    }
-    Some(resource)
+    ensure_open_stream_at(eg, resource, function, index, parameter).then_some(resource)
 }

@@ -1,0 +1,29 @@
+int(0)
+position:1
+int(-1)
+position:0
+int(0)
+position:4
+int(0)
+position:1
+int(-1)
+position:0
+int(0)
+position:2
+8192:Implicit conversion from float 2.5 to int loses precision
+int(0)
+position:2
+8192:fseek(): Passing null to parameter #2 ($offset) of type int is deprecated
+int(0)
+position:0
+TypeError:fseek(): Argument #2 ($offset) must be of type int, array given
+position:0
+TypeError:fseek(): Argument #3 ($whence) must be of type int, array given
+position:0
+8192:fseek(): Passing null to parameter #3 ($whence) of type int is deprecated
+int(0)
+position:0
+fseek(): Argument #1 ($stream) must be an open stream resource
+fseek(): Argument #1 ($stream) must be an open stream resource
+fseek(): Argument #1 ($stream) must be an open stream resource
+fseek(): Argument #1 ($stream) must be an open stream resource

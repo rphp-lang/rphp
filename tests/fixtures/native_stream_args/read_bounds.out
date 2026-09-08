@@ -1,0 +1,73 @@
+fread
+ValueError:fread(): Argument #2 ($length) must be greater than 0
+position:0
+ValueError:fread(): Argument #2 ($length) must be greater than 0
+position:0
+41
+position:1
+410042
+position:3
+8192:fread(): Passing null to parameter #2 ($length) of type int is deprecated
+ValueError:fread(): Argument #2 ($length) must be greater than 0
+position:0
+ValueError:fread(): Argument #2 ($length) must be greater than 0
+position:0
+41
+position:1
+4100
+position:2
+8192:Implicit conversion from float-string "2.5" to int loses precision
+4100
+position:2
+8192:Implicit conversion from float 2.5 to int loses precision
+4100
+position:2
+TypeError:fread(): Argument #2 ($length) must be of type int, string given
+position:0
+TypeError:fread(): Argument #2 ($length) must be of type int, array given
+position:0
+TypeError:fread(): Argument #2 ($length) must be of type int, stdClass given
+position:0
+TypeError:fread(): Argument #2 ($length) must be of type int, float given
+position:0
+fgets
+ValueError:fgets(): Argument #2 ($length) must be greater than 0
+position:0
+ValueError:fgets(): Argument #2 ($length) must be greater than 0
+position:0
+bool(false)
+position:0
+4100
+position:2
+4100420a
+position:4
+ValueError:fgets(): Argument #2 ($length) must be greater than 0
+position:0
+bool(false)
+position:0
+41
+position:1
+8192:Implicit conversion from float-string "2.5" to int loses precision
+41
+position:1
+8192:Implicit conversion from float 2.5 to int loses precision
+41
+position:1
+TypeError:fgets(): Argument #2 ($length) must be of type ?int, string given
+position:0
+TypeError:fgets(): Argument #2 ($length) must be of type ?int, array given
+position:0
+TypeError:fgets(): Argument #2 ($length) must be of type ?int, stdClass given
+position:0
+TypeError:fgets(): Argument #2 ($length) must be of type ?int, float given
+position:0
+fread(): Argument #1 ($stream) must be an open stream resource
+fread(): Argument #1 ($stream) must be an open stream resource
+fread(): Argument #1 ($stream) must be an open stream resource
+fread(): Argument #1 ($stream) must be an open stream resource
+fread(): Argument #1 ($stream) must be an open stream resource
+fgets(): Argument #1 ($stream) must be an open stream resource
+fgets(): Argument #1 ($stream) must be an open stream resource
+fgets(): Argument #1 ($stream) must be an open stream resource
+fgets(): Argument #1 ($stream) must be an open stream resource
+fgets(): Argument #1 ($stream) must be an open stream resource

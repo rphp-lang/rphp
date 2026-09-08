@@ -1,0 +1,7 @@
+8192:Implicit conversion from float 2.5 to int loses precision
+string(2) "so"
+int(2)
+int(0)
+stop:fwrite(): Passing null to parameter #2 ($data) of type string is deprecated
+int(0)
+bool(true)

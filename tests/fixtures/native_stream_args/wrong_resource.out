@@ -1,0 +1,8 @@
+fread(): Argument #1 ($stream) must be an open stream resource
+fgets(): Argument #1 ($stream) must be an open stream resource
+fwrite(): Argument #1 ($stream) must be an open stream resource
+fseek(): Argument #1 ($stream) must be an open stream resource
+ftell(): Argument #1 ($stream) must be an open stream resource
+fclose(): Argument #1 ($stream) must be an open stream resource
+fflush(): Argument #1 ($stream) must be an open stream resource
+stream-context
