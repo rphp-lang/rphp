@@ -254,7 +254,7 @@ fn value_is_shallow_plain_drop(eg: &ExecutorGlobals, value: &Value) -> bool {
                     ValueType::Resource => !nested.needs_vm_resource_release(),
                     ValueType::Object => !value_requires_vm_release(eg, nested) && nested.as_object().is_some_and(|object| {
                         let mut plain = true;
-                        object.for_each_property(|_, property| {
+                        object.for_each_owned_value(|property| {
                             plain &= !property_prevents_shallow_drop(property);
                         });
                         plain
@@ -265,7 +265,7 @@ fn value_is_shallow_plain_drop(eg: &ExecutorGlobals, value: &Value) -> bool {
         }),
         ValueType::Object => !value_requires_vm_release(eg, value) && value.as_object().is_some_and(|object| {
             let mut plain = true;
-            object.for_each_property(|_, property| {
+            object.for_each_owned_value(|property| {
                 plain &= !property_prevents_shallow_drop(property);
             });
             plain
@@ -362,7 +362,7 @@ fn value_tree_requires_vm_release(
                 if value.object_identity().is_some()
                     && let Some(object) = value.as_object()
                 {
-                    object.for_each_property(|_, property| {
+                    object.for_each_owned_value(|property| {
                         queue_cycle_child(property, depth, &mut pending)
                     });
                     if let Some(generator) = &object.generator {
@@ -847,7 +847,7 @@ fn run_final_object_destructor_tree_inner(
     let mut seen_closures = std::collections::HashSet::new();
     let mut seen_generators = std::collections::HashSet::new();
     if let Some(object) = owner.as_object() {
-        object.for_each_property(|_, property| {
+        object.for_each_owned_value(|property| {
             collect_destructor_children(
                 eg,
                 property,
@@ -2066,15 +2066,75 @@ unsafe fn pop_call_storage(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
 #[cold]
 #[inline(never)]
 fn pop_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
-    eg.discard_late_static_scope(call as usize);
+    // Empty side tables cannot own this frame. Avoid entering the cold
+    // cleanup routines for ordinary calls, but preserve their order whenever
+    // state exists (including state belonging to a different live frame).
+    if eg.pending_invoke_this.is_some() {
+        eg.discard_late_static_scope(call as usize);
+    }
     eg.discard_closure_static_vars(call as usize);
-    eg.discard_dynamic_scope(call as usize);
+    if !eg.dynamic_scope_owners.is_empty() || !eg.dynamic_variables.is_empty() {
+        eg.discard_dynamic_scope(call as usize);
+    }
     eg.end_error_suppression(call as usize);
     eg.discard_finally_exceptions(call as usize);
     if let Some(arguments) = eg.take_function_arguments(call as usize) {
         eg.recycle_function_argument_buffer(arguments.values);
     }
     eg.vm_stack.pop_call_frame(call);
+}
+
+#[cfg(test)]
+mod sparse_vm_frame_pop_tests {
+    use super::{ExecuteData, ExecutorGlobals, Value, VmError, pop_vm_call_frame};
+    use std::collections::HashMap;
+    use std::ptr::null_mut;
+
+    fn empty_internal(
+        _: *mut ExecuteData,
+        _: *mut Value,
+        _: &mut ExecutorGlobals,
+    ) -> Result<(), VmError> {
+        Ok(())
+    }
+
+    #[test]
+    fn frame_pop_preserves_other_owners_and_reused_sparse_storage() {
+        let function = crate::compiler::make_internal_function(empty_internal, 0, 0, vec![]);
+        let mut eg = ExecutorGlobals::new();
+        for mask in 0..8 {
+            let outer = eg.vm_stack.push_call_frame(&function.common, 0, 0, null_mut(), null_mut());
+            let inner = eg.vm_stack.push_call_frame(&function.common, 0, 0, outer, null_mut());
+            // A caller's late-static entry must survive an untagged callee.
+            eg.push_late_static_scope(outer as usize, 31);
+            if mask & 1 != 0 {
+                eg.push_late_static_scope(inner as usize, 47);
+            }
+            for frame in [outer, inner] {
+                if mask & 2 != 0 {
+                    eg.dynamic_scope_owners.insert(frame as usize, outer as usize);
+                }
+                if mask & 4 != 0 {
+                    eg.dynamic_variables.insert(frame as usize, HashMap::from([
+                        ("held".into(), Value::string("retained")),
+                    ]));
+                }
+            }
+            pop_vm_call_frame(&mut eg, inner);
+            assert_eq!(eg.late_static_scope_class_id(outer as usize), 31);
+            assert!(!eg.dynamic_scope_owners.contains_key(&(inner as usize)));
+            assert!(!eg.dynamic_variables.contains_key(&(inner as usize)));
+            assert_eq!(eg.dynamic_scope_owners.contains_key(&(outer as usize)), mask & 2 != 0);
+            assert_eq!(eg.dynamic_variables.contains_key(&(outer as usize)), mask & 4 != 0);
+            pop_vm_call_frame(&mut eg, outer);
+            assert!(eg.pending_invoke_this.is_none());
+            assert!(eg.dynamic_scope_owners.is_empty());
+            assert!(eg.dynamic_variables.is_empty());
+            // Also visit the fully absent and allocated-but-empty paths.
+            let empty = eg.vm_stack.push_call_frame(&function.common, 0, 0, null_mut(), null_mut());
+            pop_vm_call_frame(&mut eg, empty);
+        }
+    }
 }
 
 /// Enable automatic destruction only for the exact constructor frame created
@@ -2563,7 +2623,7 @@ fn call_magic_method_with_trace_site(
         let obj = obj_val.as_object().unwrap();
         obj.class_name.clone()
     };
-    let full_name = format!("{}::{}", class_name.to_lowercase(), method_name);
+    let full_name = format!("{}::{}", class_name, method_name);
     let func_ptr = match eg.find_function(&full_name) {
         Some(ptr) => ptr,
         None => return Ok(None),

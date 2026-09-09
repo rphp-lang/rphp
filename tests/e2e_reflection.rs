@@ -145,7 +145,7 @@ fn reflection_class_get_interfaces_and_traits_return_named_reflections() {
         run_php(
             "<?php interface ObjectRoot {} interface ObjectChild extends ObjectRoot {} trait ObjectTrait {} class ObjectParent implements ObjectChild {} class ObjectLeaf extends ObjectParent { use ObjectTrait; } $reflection = new ReflectionClass(ObjectLeaf::class); foreach ($reflection->getInterfaces() as $name => $interface) { echo $name, '=', $interface->getName(), ','; } echo '|'; foreach ($reflection->getTraits() as $name => $trait) { echo $name, '=', $trait->getName(); }"
         ),
-        "ObjectChild=ObjectChild,ObjectRoot=ObjectRoot,|ObjectTrait=ObjectTrait"
+        "ObjectRoot=ObjectRoot,ObjectChild=ObjectChild,|ObjectTrait=ObjectTrait"
     );
 }
 

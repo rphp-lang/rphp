@@ -4723,7 +4723,7 @@ fn op_assign_obj_prop_inner<'a>(
         if eg
             .find_function(&format!(
                 "{}::__set",
-                php_obj.class_name.to_ascii_lowercase()
+                php_obj.class_name
             ))
             .is_some()
         {
@@ -5309,6 +5309,9 @@ fn op_init_method_call<'a>(
                 }
                 _ => {
                     let Some(direct) = direct else {
+                        if try_init_iterator_delegated_call(eg, frame, obj_val, method, opline.extended_value) {
+                            return Ok(ColdResult::Done);
+                        }
                         let error = make_error_value(
                             "Error",
                             &format!(
@@ -5510,6 +5513,20 @@ fn op_init_method_call<'a>(
     }
     Ok(ColdResult::Done)
 }
+#[cold]
+#[inline(never)]
+fn try_init_iterator_delegated_call(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    receiver: &Value,
+    method: &str,
+    explicit_args: u32,
+) -> bool {
+    let Some(resolved) = crate::stdlib::resolve_iterator_delegated_method(eg, receiver, method) else { return false; };
+    init_resolved_user_call(eg, frame, explicit_args, resolved);
+    true
+}
+
 enum MagicCallMethod {
     Concrete(*const FunctionCommon),
     Abstract,
@@ -5524,6 +5541,10 @@ fn find_abstract_method_declaration(
 ) -> Option<(String, String)> {
     let mut current = eg.find_public_class(class).or_else(|| eg.find_class(class));
     while let Some(definition) = current {
+        if definition.is_interface && let Some((name, _)) = eg.internal_declared_method_names(&definition.name)
+            .into_iter().find(|(name,_)| name.eq_ignore_ascii_case(method)) {
+            return Some((definition.name.clone(),name.to_string()));
+        }
         if let Some((name, _, _, _, _)) = definition.methods.iter().find(|(name, _, _, _, _)| {
             name.eq_ignore_ascii_case(method)
                 && (definition.is_interface || definition.method_is_abstract(name))

@@ -6743,6 +6743,11 @@ fn collect_reflected_methods(
     if let Some(parent) = class.parent.clone() {
         collect_reflected_methods(eg, &parent, methods, seen);
     }
+    if class.is_interface {
+        for interface in &class.implements {
+            collect_reflected_methods(eg, interface, methods, seen);
+        }
+    }
 }
 
 fn reflected_method_value(
@@ -7057,7 +7062,11 @@ fn class_get_methods(
         if closure_method.is_some() && name.eq_ignore_ascii_case("__invoke") {
             continue;
         }
-        let modifiers = method_modifiers(visibility, is_static, is_final);
+        let is_abstract = eg
+            .find_class(&declaring_class)
+            .is_some_and(|class| class.is_interface || class.method_is_abstract(&name));
+        let modifiers =
+            method_modifiers(visibility, is_static, is_final) | if is_abstract { 64 } else { 0 };
         if filter.is_some_and(|filter| modifiers & filter == 0) {
             continue;
         }
@@ -7081,7 +7090,7 @@ fn class_get_methods(
 fn method_get_modifiers(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let visibility = reflected_property(ed, "__reflection_method_visibility")
         .and_then(|value| value.as_long())
@@ -7094,6 +7103,12 @@ fn method_get_modifiers(
         }
         | if parameter_property_bool(ed, "__reflection_method_final") {
             32
+        } else {
+            0
+        };
+    let modifiers = modifiers
+        | if reflected_method_is_abstract(ed, eg) {
+            64
         } else {
             0
         };
@@ -7193,12 +7208,30 @@ fn method_is_final(
 fn method_is_abstract(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    return_value(
-        rv,
-        Value::bool(parameter_property_bool(ed, "__reflection_method_abstract")),
-    )
+    return_value(rv, Value::bool(reflected_method_is_abstract(ed, eg)))
+}
+
+fn reflected_method_is_abstract(ed: *mut ExecuteData, eg: &ExecutorGlobals) -> bool {
+    if parameter_property_bool(ed, "__reflection_method_abstract") {
+        return true;
+    }
+    let Some(owner) = reflected_property(ed, "__reflection_declaring_class") else {
+        return false;
+    };
+    let Some(name) = reflected_property(ed, "name") else {
+        return false;
+    };
+    owner
+        .as_str()
+        .and_then(|owner| eg.find_class(owner))
+        .is_some_and(|class| {
+            class.is_interface
+                || name
+                    .as_str()
+                    .is_some_and(|name| class.method_is_abstract(name))
+        })
 }
 
 fn method_has_prototype(

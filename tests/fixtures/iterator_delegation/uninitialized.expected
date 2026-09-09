@@ -1,0 +1,35 @@
+BareIterator
+Error:The object is in an invalid state as the parent constructor was not called
+Error:The object is in an invalid state as the parent constructor was not called
+Error:The object is in an invalid state as the parent constructor was not called
+Error:The object is in an invalid state as the parent constructor was not called
+Error:The object is in an invalid state as the parent constructor was not called
+Error:The object is in an invalid state as the parent constructor was not called
+BareLimit
+Error:The object is in an invalid state as the parent constructor was not called
+Error:The object is in an invalid state as the parent constructor was not called
+Error:The object is in an invalid state as the parent constructor was not called
+Error:The object is in an invalid state as the parent constructor was not called
+Error:The object is in an invalid state as the parent constructor was not called
+Error:The object is in an invalid state as the parent constructor was not called
+Error:The object is in an invalid state as the parent constructor was not called
+Error:The object is in an invalid state as the parent constructor was not called
+BareNoRewind
+Error:The object is in an invalid state as the parent constructor was not called
+Error:The object is in an invalid state as the parent constructor was not called
+Error:The object is in an invalid state as the parent constructor was not called
+Error:The object is in an invalid state as the parent constructor was not called
+NULL
+Error:The object is in an invalid state as the parent constructor was not called
+TypeError:IteratorIterator::__construct(): Argument #1 ($iterator) must be of type Traversable, array given
+TypeError:IteratorIterator::__construct(): Argument #1 ($iterator) must be of type Traversable, int given
+TypeError:IteratorIterator::__construct(): Argument #1 ($iterator) must be of type Traversable, null given
+TypeError:IteratorIterator::__construct(): Argument #1 ($iterator) must be of type Traversable, stdClass given
+TypeError:LimitIterator::__construct(): Argument #1 ($iterator) must be of type Iterator, array given
+TypeError:LimitIterator::__construct(): Argument #1 ($iterator) must be of type Iterator, int given
+TypeError:LimitIterator::__construct(): Argument #1 ($iterator) must be of type Iterator, null given
+TypeError:LimitIterator::__construct(): Argument #1 ($iterator) must be of type Iterator, stdClass given
+TypeError:NoRewindIterator::__construct(): Argument #1 ($iterator) must be of type Iterator, array given
+TypeError:NoRewindIterator::__construct(): Argument #1 ($iterator) must be of type Iterator, int given
+TypeError:NoRewindIterator::__construct(): Argument #1 ($iterator) must be of type Iterator, null given
+TypeError:NoRewindIterator::__construct(): Argument #1 ($iterator) must be of type Iterator, stdClass given

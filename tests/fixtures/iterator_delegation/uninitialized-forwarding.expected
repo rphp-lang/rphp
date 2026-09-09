@@ -1,0 +1,4 @@
+Error:Call to undefined method EmptyDelegate::absent()
+bool(false)
+bool(false)
+TypeError:call_user_func(): Argument #1 ($callback) must be a valid callback, class EmptyDelegate does not have a method "absent"

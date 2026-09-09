@@ -8,9 +8,11 @@ use std::ops::Deref;
 use std::rc::Rc;
 
 mod native_array_iteration;
+mod native_iterator_delegate;
 pub(crate) use native_array_iteration::{
     NativeArrayBuckets, NativeArrayCursor, NativeArrayIteration,
 };
+pub(crate) use native_iterator_delegate::NativeIteratorDelegate;
 
 #[cold]
 #[inline(never)]
@@ -564,6 +566,7 @@ struct DynamicPropertyAux {
     object_cursor: usize,
     native_array_options: NativeArrayOptions,
     native_array_iteration: Option<Box<NativeArrayIteration>>,
+    native_iterator_delegate: Option<Box<NativeIteratorDelegate>>,
 }
 
 /// Scalar policy owned only by native array wrappers. Keeping it in the
@@ -583,6 +586,7 @@ impl DynamicPropertyAux {
             object_cursor: OBJECT_CURSOR_UNTOUCHED,
             native_array_options: NativeArrayOptions::default(),
             native_array_iteration: None,
+            native_iterator_delegate: None,
         }
     }
 }
@@ -973,6 +977,7 @@ impl DynamicPropertyMap {
             && auxiliary.object_cursor == OBJECT_CURSOR_UNTOUCHED
             && auxiliary.native_array_options == NativeArrayOptions::default()
             && auxiliary.native_array_iteration.is_none()
+            && auxiliary.native_iterator_delegate.is_none()
         {
             self.auxiliary = None;
         }
@@ -1676,6 +1681,35 @@ impl PhpObject {
     }
 
     #[cold]
+    pub(crate) fn native_iterator_delegate(&self) -> Option<&NativeIteratorDelegate> {
+        self.dynamic_properties
+            .as_ref()?
+            .auxiliary
+            .as_ref()?
+            .native_iterator_delegate
+            .as_deref()
+    }
+
+    #[cold]
+    pub(crate) fn native_iterator_delegate_mut(&mut self) -> Option<&mut NativeIteratorDelegate> {
+        self.dynamic_properties
+            .as_mut()?
+            .auxiliary
+            .as_mut()?
+            .native_iterator_delegate
+            .as_deref_mut()
+    }
+
+    #[cold]
+    pub(crate) fn set_native_iterator_delegate(&mut self, state: NativeIteratorDelegate) {
+        self.dynamic_properties
+            .get_or_insert_with(|| Box::new(DynamicPropertyMap::with_capacity(0)))
+            .auxiliary
+            .get_or_insert_with(|| Box::new(DynamicPropertyAux::new()))
+            .native_iterator_delegate = Some(Box::new(state));
+    }
+
+    #[cold]
     pub(crate) fn native_array_iteration_mut(&mut self) -> &mut NativeArrayIteration {
         self.dynamic_properties
             .get_or_insert_with(|| Box::new(DynamicPropertyMap::with_capacity(0)))
@@ -1770,6 +1804,17 @@ impl PhpObject {
         }
     }
 
+    /// Ownership edges include native payloads invisible to PHP property
+    /// enumeration. Ordinary objects retain their existing property storage.
+    pub(crate) fn for_each_owned_value(&self, mut visitor: impl FnMut(&Value)) {
+        if self.dynamic_properties.is_some()
+            && let Some(state) = self.native_iterator_delegate()
+        {
+            state.for_each_value(&mut visitor);
+        }
+        self.for_each_property(|_, value| visitor(value));
+    }
+
     /// Test property payloads without resolving declared slot names. Release
     /// planning depends only on values, so it can avoid a layout lookup for
     /// every declared Throwable property at each catch boundary.
@@ -1781,6 +1826,13 @@ impl PhpObject {
         let mut found = false;
         if let Some(dynamic) = &self.dynamic_properties {
             dynamic.for_each(|_, value| found |= predicate(value));
+            if let Some(state) = dynamic
+                .auxiliary
+                .as_ref()
+                .and_then(|aux| aux.native_iterator_delegate.as_ref())
+            {
+                state.for_each_value(|value| found |= predicate(value));
+            }
         }
         found
     }
@@ -6461,7 +6513,7 @@ impl Value {
                 let Ok(object) = object_owner.try_borrow() else {
                     return false;
                 };
-                object.for_each_property(|_, value| push(value));
+                object.for_each_owned_value(&mut push);
                 if let Some(generator) = &object.generator {
                     let Ok(generator) = generator.as_ref().try_borrow() else {
                         return false;
@@ -7848,7 +7900,7 @@ fn append_php_array_values(mut array: PhpArray, pending: &mut Vec<Value>) {
 }
 
 fn append_dynamic_property_values_reversed(
-    properties: DynamicPropertyMap,
+    mut properties: DynamicPropertyMap,
     pending: &mut Vec<Value>,
 ) {
     match properties.storage {
@@ -7868,6 +7920,13 @@ fn append_dynamic_property_values_reversed(
         DynamicPropertyStorage::Indexed(indexed) => {
             pending.extend(indexed.entries.into_iter().rev().map(|(_, value)| value));
         }
+    }
+    if let Some(state) = properties
+        .auxiliary
+        .as_mut()
+        .and_then(|aux| aux.native_iterator_delegate.take())
+    {
+        state.append_values_reversed(pending);
     }
 }
 

@@ -1,0 +1,152 @@
+limits:0:-1
+[false,null,null]
+int(0)
+[true,"a",3]
+int(0)
+seek:0
+int(0)
+[true,"a",3]
+[true,"a",3]
+int(0)
+seek:1
+int(1)
+[true,"b",5]
+[true,"b",5]
+int(1)
+seek:2
+int(2)
+[true,"c",7]
+[true,"c",7]
+int(2)
+seek:3
+OutOfBoundsException:Seek position 3 is out of range
+[false,null,null]
+[false,null,null]
+int(2)
+seek:-1
+OutOfBoundsException:Cannot seek to -1 which is below the offset 0
+[false,null,null]
+[false,null,null]
+int(2)
+seek:1
+int(1)
+[true,"b",5]
+[true,"b",5]
+int(1)
+[true,"c",7]
+int(2)
+limits:1:1
+[false,null,null]
+int(0)
+[true,"b",5]
+int(1)
+seek:0
+OutOfBoundsException:Cannot seek to 0 which is below the offset 1
+[false,null,null]
+[true,"b",5]
+int(1)
+seek:1
+int(1)
+[true,"b",5]
+[true,"b",5]
+int(1)
+seek:2
+OutOfBoundsException:Cannot seek to 2 which is behind offset 1 plus count 1
+[false,null,null]
+[true,"b",5]
+int(1)
+seek:3
+OutOfBoundsException:Cannot seek to 3 which is behind offset 1 plus count 1
+[false,null,null]
+[true,"b",5]
+int(1)
+seek:-1
+OutOfBoundsException:Cannot seek to -1 which is below the offset 1
+[false,null,null]
+[true,"b",5]
+int(1)
+seek:1
+int(1)
+[true,"b",5]
+[true,"b",5]
+int(1)
+[false,null,null]
+int(2)
+limits:1:0
+[false,null,null]
+int(0)
+OutOfBoundsException:Cannot seek to 1 which is behind offset 1 plus count 0
+[false,null,null]
+int(0)
+seek:0
+OutOfBoundsException:Cannot seek to 0 which is below the offset 1
+[false,null,null]
+[true,"a",3]
+int(0)
+seek:1
+OutOfBoundsException:Cannot seek to 1 which is behind offset 1 plus count 0
+[false,null,null]
+[true,"a",3]
+int(0)
+seek:2
+OutOfBoundsException:Cannot seek to 2 which is behind offset 1 plus count 0
+[false,null,null]
+[true,"a",3]
+int(0)
+seek:3
+OutOfBoundsException:Cannot seek to 3 which is behind offset 1 plus count 0
+[false,null,null]
+[true,"a",3]
+int(0)
+seek:-1
+OutOfBoundsException:Cannot seek to -1 which is below the offset 1
+[false,null,null]
+[true,"a",3]
+int(0)
+seek:1
+OutOfBoundsException:Cannot seek to 1 which is behind offset 1 plus count 0
+[false,null,null]
+[true,"a",3]
+int(0)
+[false,null,null]
+int(1)
+limits:5:2
+[false,null,null]
+int(0)
+OutOfBoundsException:Seek position 5 is out of range
+[false,null,null]
+int(0)
+seek:0
+OutOfBoundsException:Cannot seek to 0 which is below the offset 5
+[false,null,null]
+[false,null,null]
+int(0)
+seek:1
+OutOfBoundsException:Cannot seek to 1 which is below the offset 5
+[false,null,null]
+[false,null,null]
+int(0)
+seek:2
+OutOfBoundsException:Cannot seek to 2 which is below the offset 5
+[false,null,null]
+[false,null,null]
+int(0)
+seek:3
+OutOfBoundsException:Cannot seek to 3 which is below the offset 5
+[false,null,null]
+[false,null,null]
+int(0)
+seek:-1
+OutOfBoundsException:Cannot seek to -1 which is below the offset 5
+[false,null,null]
+[false,null,null]
+int(0)
+seek:1
+OutOfBoundsException:Cannot seek to 1 which is below the offset 5
+[false,null,null]
+[false,null,null]
+int(0)
+[false,null,null]
+int(1)
+ValueError:LimitIterator::__construct(): Argument #2 ($offset) must be greater than or equal to 0
+ValueError:LimitIterator::__construct(): Argument #3 ($limit) must be greater than or equal to -1

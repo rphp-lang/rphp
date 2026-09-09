@@ -1,0 +1,13 @@
+aggregate:outer
+aggregate:inner
+constructed
+bool(false)
+[false,null,null]
+[true,"v",14]
+TypeError:LimitIterator::__construct(): Argument #1 ($iterator) must be of type Iterator, NestedAggregate given
+TypeError:NoRewindIterator::__construct(): Argument #1 ($iterator) must be of type Iterator, NestedAggregate given
+Exception:Objects returned by SelfAggregate::getIterator() must be traversable or implement interface Iterator
+[true,"v",14]
+[true,"v",14]
+[true,"v",14]
+[true,"v",14]

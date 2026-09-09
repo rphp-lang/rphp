@@ -1,0 +1,41 @@
+OuterIterator:Iterator,Traversable
+OuterIterator::getInnerIterator()?Iterator
+Iterator::current()mixed
+Iterator::next()void
+Iterator::key()mixed
+Iterator::valid()bool
+Iterator::rewind()void
+properties:0
+IteratorIterator:OuterIterator,Traversable,Iterator
+IteratorIterator::__construct(Traversable $iterator;?string $class=null;)-
+IteratorIterator::getInnerIterator()?Iterator
+IteratorIterator::rewind()void
+IteratorIterator::valid()bool
+IteratorIterator::key()mixed
+IteratorIterator::current()mixed
+IteratorIterator::next()void
+properties:0
+LimitIterator:Iterator,Traversable,OuterIterator
+LimitIterator::__construct(Iterator $iterator;int $offset=0;int $limit=-1;)-
+LimitIterator::rewind()void
+LimitIterator::valid()bool
+LimitIterator::next()void
+LimitIterator::seek(int $offset;)int
+LimitIterator::getPosition()int
+IteratorIterator::getInnerIterator()?Iterator
+IteratorIterator::key()mixed
+IteratorIterator::current()mixed
+properties:0
+NoRewindIterator:Iterator,Traversable,OuterIterator
+NoRewindIterator::__construct(Iterator $iterator;)-
+NoRewindIterator::rewind()void
+NoRewindIterator::valid()bool
+NoRewindIterator::key()mixed
+NoRewindIterator::current()mixed
+NoRewindIterator::next()void
+IteratorIterator::getInnerIterator()?Iterator
+properties:0
+array(0) {
+}
+array(0) {
+}

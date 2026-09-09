@@ -211,7 +211,7 @@ pub(crate) use builtin_classes::{
     NativeIteratorMove, NativeIteratorProjection, array_object_array_cast,
     array_object_property_uses_dimension, bind_array_object_property,
     consume_native_iterator_array, native_iterator_entry, native_iterator_projected_entry,
-    prepare_array_object_clone, uses_native_iterator_protocol,
+    prepare_array_object_clone, resolve_iterator_delegated_method, uses_native_iterator_protocol,
 };
 
 pub(super) fn owned_argument(ed: *mut ExecuteData, index: u32) -> Value {
@@ -7838,7 +7838,46 @@ fn php_byte_result(bytes: Vec<u8>, binary: bool) -> Value {
     if binary || !bytes.is_ascii() {
         Value::binary_string(&bytes)
     } else {
-        Value::string(String::from_utf8(bytes).expect("ASCII PHP byte result is valid UTF-8"))
+        // SAFETY: the preceding branch proved every byte is ASCII, hence
+        // valid UTF-8 (including NUL). The owned Vec is unchanged between
+        // that proof and this conversion; no callback can mutate it.
+        Value::string(unsafe { String::from_utf8_unchecked(bytes) })
+    }
+}
+
+#[cfg(test)]
+mod php_byte_result_tests {
+    use super::php_byte_result;
+
+    #[test]
+    fn ascii_proof_preserves_all_bytes_empty_buffers_and_provenance() {
+        for size in [0, 1, 15, 16, 31, 32, 63, 64, 127, 128, 257, 1024] {
+            let bytes: Vec<u8> = (0..size).map(|index| (index % 128) as u8).collect();
+            for binary in [false, true] {
+                let value = php_byte_result(bytes.clone(), binary);
+                assert_eq!(value.is_binary_string(), binary);
+                assert_eq!(value.php_string_bytes().unwrap().as_ref(), bytes);
+                assert_eq!(value.php_string_len(), Some(size));
+            }
+        }
+    }
+
+    #[test]
+    fn high_bytes_and_utf8_sequences_retain_lossless_binary_storage() {
+        let mut cases = vec![
+            vec![0xc3, 0xa9],
+            vec![0xf0, 0x9f, 0x98, 0x80],
+            vec![0xe0, 0x80, 0x80],
+            vec![0xff, 0x00, 0x7f],
+        ];
+        cases.extend((128..=255).map(|byte| vec![b'a', byte, 0]));
+        for bytes in cases {
+            for binary in [false, true] {
+                let value = php_byte_result(bytes.clone(), binary);
+                assert!(value.is_binary_string());
+                assert_eq!(value.php_string_bytes().unwrap().as_ref(), bytes);
+            }
+        }
     }
 }
 
@@ -13488,6 +13527,10 @@ fn fn_method_exists(
             && eg
                 .function_table
                 .contains_key(&format!("closure::{}", method_name.to_ascii_lowercase())));
+    let found = found
+        || (!needs_autoload
+            && resolve_iterator_delegated_method(eg, first, &method_name)
+                .is_some_and(|method| !method.is_magic_call));
     ret!(rv, Value::bool(found));
 }
 
@@ -22548,8 +22591,11 @@ pub(crate) fn resolve_object_public_method(
     let func_ptr = if let Some(function) = eg.find_function(&internal_name) {
         function
     } else {
-        let (visibility, is_static, function, _) =
-            find_method_in_class_hierarchy(eg, &class_name, method)?;
+        let Some((visibility, is_static, function, _)) =
+            find_method_in_class_hierarchy(eg, &class_name, method)
+        else {
+            return resolve_iterator_delegated_method(eg, receiver, method);
+        };
         if visibility != Visibility::Public || is_static {
             return None;
         }
@@ -23542,7 +23588,8 @@ fn resolve_callback(
                         method_name,
                         "__call",
                         Some(obj_val),
-                    );
+                    )
+                    .or_else(|| resolve_iterator_delegated_method(eg, obj_val, method_name));
                 };
                 if !eg.check_method_visibility(
                     caller_class,

@@ -12,6 +12,7 @@ use crate::vm::instruction::{
 };
 
 mod array_object;
+mod iterator_delegate;
 pub(crate) use array_object::cursor::{
     Move as NativeIteratorMove, Projection as NativeIteratorProjection,
     consume_array as consume_native_iterator_array, entry as native_iterator_entry,
@@ -23,6 +24,7 @@ pub(crate) use array_object::{
     prepare_clone as prepare_array_object_clone,
     property_uses_dimension as array_object_property_uses_dimension,
 };
+pub(crate) use iterator_delegate::resolve_method as resolve_iterator_delegated_method;
 
 const ROUNDING_MODE_CLASS: &str = "RoundingMode";
 const ROUNDING_MODE_CASES: [&str; 8] = [
@@ -3487,6 +3489,32 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         );
     }
     funcs.extend(array_object::register(eg));
+    eg.register_class(empty_internal_type(
+        "OuterIterator",
+        vec!["Iterator".into()],
+        true,
+        false,
+    ))
+    .unwrap();
+    for (name, parent) in [
+        ("IteratorIterator", None),
+        ("LimitIterator", Some("IteratorIterator")),
+        ("NoRewindIterator", Some("IteratorIterator")),
+    ] {
+        let mut class = empty_internal_type(
+            name,
+            if parent.is_none() {
+                vec!["OuterIterator".into()]
+            } else {
+                vec![]
+            },
+            false,
+            false,
+        );
+        class.parent = parent.map(str::to_owned);
+        eg.register_class(class).unwrap();
+    }
+    funcs.extend(iterator_delegate::register(eg));
     let mut spl_object_storage = empty_internal_type(
         "SplObjectStorage",
         vec![
@@ -3500,6 +3528,9 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     );
     for (name, return_type, tentative) in [
         ("valid", ParamTypeHint::Bool, true),
+        ("next", ParamTypeHint::Void, true),
+        ("key", ParamTypeHint::Int, true),
+        ("rewind", ParamTypeHint::Void, true),
         (
             "current",
             ParamTypeHint::ClassName("object".to_string()),
@@ -3661,6 +3692,27 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         false,
         false,
     );
+    // These existing native methods satisfy Iterator for descendants too.
+    // Publish their link contracts before validating a user subclass.
+    for (name, return_type) in [
+        ("current", ParamTypeHint::Mixed),
+        ("next", ParamTypeHint::Void),
+        ("key", ParamTypeHint::Int),
+        ("valid", ParamTypeHint::Bool),
+        ("rewind", ParamTypeHint::Void),
+    ] {
+        eg.register_internal_method_contract(
+            "SplPriorityQueue",
+            name,
+            false,
+            0,
+            &[],
+            vec![],
+            return_type,
+            &[],
+            true,
+        );
+    }
     spl_priority_queue.constants = [
         ("EXTR_DATA", SPL_PRIORITY_EXTR_DATA),
         ("EXTR_PRIORITY", SPL_PRIORITY_EXTR_PRIORITY),

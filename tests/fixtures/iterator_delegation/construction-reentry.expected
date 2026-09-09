@@ -1,0 +1,13 @@
+returning
+aggregate-enter
+[false,null,null]
+[true,0,37]
+BadMethodCallException:IteratorIterator::getIterator() must be called exactly once per instance
+[true,0,37]
+throwing
+aggregate-enter
+[false,null,null]
+Exception:aggregate-failure
+[true,0,91]
+BadMethodCallException:IteratorIterator::getIterator() must be called exactly once per instance
+[true,0,91]

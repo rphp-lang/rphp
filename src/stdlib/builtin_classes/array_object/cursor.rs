@@ -249,6 +249,53 @@ pub(crate) fn projected_entry(
     entry(receiver, movement, false, projection, eg)
 }
 
+/// A delegated native iterator caches an existing reference container without
+/// creating a new reference. Public current() and by-reference foreach have
+/// different contracts and retain their existing projection paths.
+#[cold]
+pub(crate) fn cached_value(receiver: &Value, eg: &ExecutorGlobals) -> Value {
+    if projected_entry(receiver, Move::Current, Projection::None, eg).is_none() {
+        return Value::null();
+    }
+    let state = receiver.as_object().and_then(|o| {
+        o.native_array_iteration()?
+            .cursor
+            .as_ref()
+            .map(|cursor| *cursor.borrow())
+    });
+    let Some(state) = state else {
+        return Value::null();
+    };
+    let Some(storage) = backing(receiver) else {
+        return Value::null();
+    };
+    let (owner, key) = match storage {
+        Backing::Array(owner, key) => (owner, Some(key)),
+        Backing::Object(owner) => (owner, None),
+    };
+    let Some(object) = owner.as_object() else {
+        return Value::null();
+    };
+    let Some(buckets) = object
+        .native_array_iteration()
+        .and_then(|i| i.buckets.as_ref())
+    else {
+        return Value::null();
+    };
+    let index = buckets.index(state.live);
+    if let Some(key) = key {
+        object
+            .get_property(key)
+            .and_then(Value::as_array)
+            .and_then(|a| a.get_value_at(index))
+            .map_or_else(Value::null, Value::clone_for_php_storage)
+    } else {
+        object_entries(&object, eg)
+            .get(index)
+            .map_or_else(Value::null, |row| row.value.clone_for_php_storage())
+    }
+}
+
 #[cold]
 #[inline(never)]
 fn entry_slow(

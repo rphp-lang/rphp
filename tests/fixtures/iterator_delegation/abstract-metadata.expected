@@ -1,0 +1,14 @@
+bool(true)
+int(65)
+bool(true)
+int(65)
+bool(false)
+int(1)
+getInnerIterator
+current
+next
+key
+valid
+rewind
+Error:Cannot call abstract method Iterator::current()
+Error:Cannot call abstract method OuterIterator::getInnerIterator()

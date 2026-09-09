@@ -123,7 +123,12 @@ fn op_clone_obj<'a>(
                 || eg
                     .class_table
                     .get(obj.class_name.as_ref())
-                    .is_some_and(|class_def| class_def.is_enum);
+                    .is_some_and(|class_def| {
+                        class_def.is_enum
+                            || class_def.name == "IteratorIterator"
+                            || (class_def.parent.is_some()
+                                && eg.class_is_a(&class_def.name, "IteratorIterator"))
+                    });
             if uncloneable {
                     let err = make_error_value(
                         "Error",

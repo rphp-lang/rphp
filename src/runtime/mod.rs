@@ -107,7 +107,7 @@ struct MethodDeclaration<'a> {
 /// class linking only; it deliberately does not publish a callable body or
 /// claim that the surrounding extension is implemented.
 struct InternalMethodContract {
-    name: Box<str>,
+    name: &'static str,
     is_static: bool,
     signature: SignatureInfo,
     parameter_default_diagnostics: Vec<Option<Box<str>>>,
@@ -125,7 +125,9 @@ type InternalFunctionReflectionMetadata = (
 #[derive(Default)]
 struct InternalCallableMetadata {
     functions: HashMap<*const FunctionCommon, InternalFunctionReflectionMetadata>,
-    methods: HashMap<String, Vec<InternalMethodContract>>,
+    // Only builtin declarations enter this table. Their immutable spellings
+    // outlive every request; the signatures themselves remain request-owned.
+    methods: HashMap<&'static str, Vec<InternalMethodContract>>,
 }
 
 #[derive(Clone)]
@@ -1668,7 +1670,7 @@ impl ExecutorGlobals {
         // php_user_filter and StreamBucket add two entries only when the
         // stream registry is installed; do not double these vectors at startup.
         // SeekableIterator adds one unconditional interface to that envelope.
-        let class_capacity = 97 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        let class_capacity = 101 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;
@@ -2111,7 +2113,7 @@ impl ExecutorGlobals {
         function: *const FunctionCommon,
         name: String,
     ) {
-        if name != name.to_ascii_lowercase() {
+        if name.bytes().any(|byte| byte.is_ascii_uppercase()) {
             self.internal_function_display_names
                 .get_or_insert_with(|| Box::new(HashMap::new()))
                 .insert(function, name);
@@ -2252,8 +2254,8 @@ impl ExecutorGlobals {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn register_internal_method_contract(
         &mut self,
-        owner: &str,
-        name: &str,
+        owner: &'static str,
+        name: &'static str,
         is_static: bool,
         required_num_args: u32,
         param_names: &[&str],
@@ -2266,7 +2268,7 @@ impl ExecutorGlobals {
         debug_assert_eq!(param_names.len(), parameter_default_diagnostics.len());
         debug_assert!(required_num_args <= param_names.len() as u32);
         let contract = InternalMethodContract {
-            name: name.into(),
+            name,
             is_static,
             signature: SignatureInfo {
                 num_args: param_names.len() as u32,
@@ -2291,7 +2293,7 @@ impl ExecutorGlobals {
         self.internal_callable_metadata
             .get_or_insert_with(|| Box::new(InternalCallableMetadata::default()))
             .methods
-            .entry(owner.to_string())
+            .entry(owner)
             .or_default()
             .push(contract);
     }
@@ -2311,11 +2313,7 @@ impl ExecutorGlobals {
             .internal_callable_metadata
             .as_mut()
             .and_then(|metadata| metadata.methods.get_mut(owner))
-            .and_then(|methods| {
-                methods
-                    .iter_mut()
-                    .find(|method| method.name.as_ref() == name)
-            })
+            .and_then(|methods| methods.iter_mut().find(|method| method.name == name))
             .expect("internal method declaration precedes its reference mask");
         contract.signature.ref_args = ref_args;
     }
@@ -2336,7 +2334,7 @@ impl ExecutorGlobals {
         let contracts = self.internal_method_contracts(owner);
         let mut names = Vec::with_capacity(contracts.len());
         for contract in contracts {
-            names.push((contract.name.as_ref(), contract.is_static));
+            names.push((contract.name, contract.is_static));
         }
         names
     }
@@ -2873,7 +2871,7 @@ impl ExecutorGlobals {
     ) -> MethodDeclaration<'a> {
         MethodDeclaration {
             owner: &class_def.name,
-            name: &contract.name,
+            name: contract.name,
             visibility: Visibility::Public,
             enforces_visibility: true,
             is_static: contract.is_static,
@@ -3361,8 +3359,7 @@ impl ExecutorGlobals {
                 .iter()
                 .filter(|contract| contract.return_type_is_tentative)
             {
-                let Some(implementation) =
-                    self.find_effective_method(class_def, contract.name.as_ref())
+                let Some(implementation) = self.find_effective_method(class_def, contract.name)
                 else {
                     continue;
                 };
@@ -8189,23 +8186,42 @@ impl ExecutorGlobals {
         }
 
         let canonical_owner = class.name.clone();
+        if !seen.insert(canonical_owner.to_ascii_lowercase()) {
+            return;
+        }
         let parent = class.parent.clone();
         let interfaces = class.implements.clone();
         let contributes_stringable = self.class_contributes_stringable(class);
 
-        // PHP exposes interfaces inherited from the parent before this
-        // declaration's own interfaces. An interface's ancestors follow the
-        // interface itself in source order.
+        // PHP projects each inherited interface table in reverse order. All
+        // directly declared interfaces precede their inherited ancestors.
+        // Keep this cold reflection projection separate from link traversal.
         if let Some(parent) = parent {
-            self.collect_class_interface_names(&parent, names, seen);
+            let mut inherited = Vec::new();
+            self.collect_class_interface_names(&parent, &mut inherited, seen);
+            for name in inherited.into_iter().rev() {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
         }
+        let mut direct = Vec::new();
         for interface in interfaces {
             let canonical = self
                 .find_class(&interface)
                 .map_or(interface, |class| class.name.clone());
-            if seen.insert(canonical.to_ascii_lowercase()) {
+            if !names.contains(&canonical) {
                 names.push(canonical.clone());
-                self.collect_class_interface_names(&canonical, names, seen);
+            }
+            direct.push(canonical);
+        }
+        for interface in direct {
+            let mut inherited = Vec::new();
+            self.collect_class_interface_names(&interface, &mut inherited, seen);
+            for name in inherited.into_iter().rev() {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
             }
         }
 
@@ -8217,10 +8233,11 @@ impl ExecutorGlobals {
             let canonical = self
                 .find_class("Stringable")
                 .map_or_else(|| "Stringable".to_string(), |class| class.name.clone());
-            if seen.insert(canonical.to_ascii_lowercase()) {
+            if !names.contains(&canonical) {
                 names.push(canonical);
             }
         }
+        seen.remove(&canonical_owner.to_ascii_lowercase());
     }
 
     /// Return the canonical, ordered interface projection exposed by PHP's
@@ -8771,7 +8788,7 @@ impl ExecutorGlobals {
                     continue;
                 }
                 errors.extend(
-                    self.method_contract_errors(requirement, implementation, Some(class_def))
+                    self.method_contract_hard_errors(requirement, implementation, Some(class_def))
                         .into_iter()
                         .map(|reason| {
                             (
@@ -9294,7 +9311,7 @@ impl ExecutorGlobals {
                 .function_table
                 .get(&lower)
                 .copied()
-                .or_else(|| self.find_inherited_function(&lower));
+                .or_else(|| self.find_inherited_function(&lower, name));
             if found.is_some() {
                 stats::inc_find_function_lower_hit();
             } else {
@@ -9302,7 +9319,7 @@ impl ExecutorGlobals {
             }
             found
         } else {
-            let found = self.find_inherited_function(name);
+            let found = self.find_inherited_function(name, name);
             if found.is_none() {
                 stats::inc_find_function_miss();
             }
@@ -9335,11 +9352,15 @@ impl ExecutorGlobals {
     /// is flattened into `function_table`; on that rare miss, follow the now
     /// resolvable parent chain without adding work to exact-hit dispatch.
     #[cold]
-    fn find_inherited_function(&self, name: &str) -> Option<*const FunctionCommon> {
+    fn find_inherited_function(&self, name: &str, original: &str) -> Option<*const FunctionCommon> {
         if let Some(alias) = crate::builtin_metadata::internal_function_alias(name) {
             return self.function_table.get(alias.target).copied();
         }
-        let (class_name, method) = name.split_once("::")?;
+        let (_, method) = name.split_once("::")?;
+        // Functions use normalized keys, but class declarations retain their
+        // canonical spelling. Preserve the caller's class name so a missing
+        // method on an exact class does not scan every registered class.
+        let (class_name, _) = original.split_once("::")?;
         let mut class = self.find_class(class_name)?;
         for _ in 0..self.class_table.len() {
             let parent_name = class.parent.as_deref()?;
@@ -10387,6 +10408,115 @@ mod sparse_call_cleanup_tests {
 #[cfg(test)]
 mod stdlib_capacity_tests {
     use super::ExecutorGlobals;
+
+    #[test]
+    fn internal_display_names_retain_only_ascii_case_changes() {
+        for name in [
+            "plain",
+            "getInnerIterator",
+            "UPPER",
+            "a1__",
+            "\u{e9}",
+            "\u{c9}",
+            "\u{e9}A",
+            "",
+        ] {
+            let mut eg = ExecutorGlobals::new();
+            let function = std::ptr::null();
+            eg.register_internal_function_display_name(function, name.into());
+            assert_eq!(
+                eg.internal_function_display_name(function),
+                (name != name.to_ascii_lowercase()).then_some(name),
+            );
+        }
+    }
+
+    #[test]
+    fn internal_method_contracts_append_without_changing_owner_or_method_order() {
+        use crate::vm::function::ParamTypeHint;
+        let mut eg = ExecutorGlobals::new();
+        let mut ordinary_growth = Vec::<super::InternalMethodContract>::new();
+        ordinary_growth.reserve(1);
+        for (owner, name) in [("First", "initial"), ("Second", "other"), ("First", "next")] {
+            eg.register_internal_method_contract(
+                owner,
+                name,
+                false,
+                0,
+                &[],
+                Vec::new(),
+                ParamTypeHint::Mixed,
+                &[],
+                false,
+            );
+            let contracts = &eg.internal_callable_metadata.as_ref().unwrap().methods[owner];
+            assert_eq!(contracts.capacity(), ordinary_growth.capacity());
+        }
+        let metadata = eg.internal_callable_metadata.as_ref().unwrap();
+        assert_eq!(metadata.methods.len(), 2);
+        let first = &metadata.methods["First"];
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].name, "initial");
+        assert_eq!(first[1].name, "next");
+        assert_eq!(metadata.methods["Second"][0].name, "other");
+    }
+
+    #[test]
+    fn builtin_method_spellings_are_static_but_signatures_are_request_local() {
+        use crate::vm::function::ParamTypeHint;
+        const OWNER: &str = "StaticOwner";
+        const NAME: &str = "byReference";
+        let mut requests = [ExecutorGlobals::new(), ExecutorGlobals::new()];
+        for request in &mut requests {
+            request.register_internal_method_contract(
+                OWNER,
+                NAME,
+                false,
+                1,
+                &["value"],
+                vec![ParamTypeHint::Mixed],
+                ParamTypeHint::Void,
+                &[None],
+                true,
+            );
+            // A caller may look up the metadata using a temporary string;
+            // only declaration spellings require a static lifetime.
+            let query = String::from(OWNER);
+            let (owner, methods) = request
+                .internal_callable_metadata
+                .as_ref()
+                .unwrap()
+                .methods
+                .get_key_value(query.as_str())
+                .unwrap();
+            assert!(std::ptr::eq(*owner, OWNER));
+            assert!(std::ptr::eq(methods[0].name, NAME));
+            assert_eq!(methods[0].signature.ref_args, 0);
+        }
+        // Exercise ownership independently of the optional stream registry's
+        // reference-mask registration helper, including no-default builds.
+        requests[0]
+            .internal_callable_metadata
+            .as_mut()
+            .unwrap()
+            .methods
+            .get_mut(OWNER)
+            .unwrap()[0]
+            .signature
+            .ref_args = 1;
+        assert_eq!(
+            requests[0].internal_method_contracts(OWNER)[0]
+                .signature
+                .ref_args,
+            1
+        );
+        assert_eq!(
+            requests[1].internal_method_contracts(OWNER)[0]
+                .signature
+                .ref_args,
+            0
+        );
+    }
 
     #[test]
     fn stdlib_registration_fits_the_reserved_registry_envelopes() {

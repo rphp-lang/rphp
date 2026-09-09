@@ -8,6 +8,61 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
+`iterator-delegation-contracts`, against `da792c23`: IteratorIterator,
+LimitIterator, NoRewindIterator and the necessary OuterIterator contract add
+**+24/-0** deduplicated passes (21 SPL and three core). All twenty admitted
+cases pass; the overlapping 108-case neighbor set is 65 pass / 36 fail /
+6 unsupported / 1 XFAIL. The 7,174-case core is **6,443 pass / 338 fail /
+182 skip / 211 unsupported**, with exact pass-set preservation, no new
+timeout/crash or changed failure stage. This is not the full upstream suite.
+
+Sparse object-owned delegation state preserves cached/live projection,
+limits/seek/rewind, aggregate resolution, overrides, exceptions, references/COW
+and release ordering. Missing-method forwarding resolves the actual inner
+descriptor before named/by-reference arguments; it is not cached by wrapper
+class. Native ownership edges participate in cycle/deep-release walks without
+becoming PHP properties. Reflection interface order and tentative native
+Iterator link contracts follow the PHP oracle. No common Value/object/VM
+field, dependency, JIT or ordinary dispatch change is introduced.
+
+Seventeen original delegation specimens, three assignment and three link
+specimens, plus the preceding 24 cursor specimens match PHP 8.5.10. The checked
+five-configuration matrix passes 4,919/4,617/4,990/5,012/5,063 tests
+(13/13/13/13/16 ignored, none filtered), followed by all-targets, exact no-loss,
+Composer/Symfony S0-S3, runner/unsafe self-tests, format and public hygiene.
+Unsafe inventory is 1,622/289 under unchanged 1,623/289 ceilings. Cleanup runs
+between configurations and after release/performance cycles.
+
+All 26 fixed-parent 32-pair controls meet unchanged common +1% / pay-use +5%
+limits: highest common +0.873% (objects), highest pay-use +1.050% (aggregate
+cursor), ordinary calls +0.175%, memory I/O -3.374%. Outputs remain exact.
+Profile-guided static builtin spellings remove request-local name copies while
+signatures remain request-owned; rejected assignment/metadata experiments are
+not part of the final runtime. Three newly implemented API workloads have
+exact PHP results and separately recorded costs, not invented parent deltas:
+candidate/PHP time ratios are 2.722/3.262/17.886 for native/limit/user adapters.
+No general PHP speed parity is claimed. The user-authorized shared host recorded
+two background events; this is not exclusive-host evidence. No private host
+was configured.
+
+SHA-256 evidence:
+
+- Release: `4d51b9ffa0d792ca30a85bb2546a51272f756306fde7d8f3bb0b5bf8cce0c38c`.
+- Complete technical record: `d2b28c95f66effad613432fa1c379b38b91753d423762566dc67f36d105a3697`.
+- Matrix: `0625ef2e512513fa67b88fba84f3d406cd67d92ca3bef8d702a99017597042f7`.
+- Supplying / neighbor manifests: `6954e4f8600cb9331591a2fb3f7c4459c2091fa0ff000dbaf91979f76fe6a968` / `c72da0695186a312a05b908875ff2f6c63dd2ee833ad76bbe258723b9defacc0`.
+- Zend/lang manifest / pass set: `1b4b7fcc1dd1b2a9b18bfc9562a8c8b68c6b4380660393ffbccec3249910a06e` / `7f7fb9f042312164f5d7c5a77b279505b07a8a916eb65a496ac9dc8fd5ca455e`.
+- Strings/array manifest / pass set: `9bf891c30b8763bbd23a62590ce7898e80c02f123682ec54139a8a277f1b46b2` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+- Performance / holdout results: `4131ac211f192ebc5d0385bfbdccfc368f0b76dbaf82423454b98c99ffdcdf33` / `7aa1686a432981f04ba1e70a6cf6745861ab9a054f39a73281145e92e8e6e2b6`.
+- Delegation oracle / new-API results: `8f167fef4527294163284b81283394312e2fa8d697d4da50d93086e6defe82d2` / `fd06c9554916236fc85f61c2a195b4cc9eb1f0a1c412ec66cc68ea956f2130b1`.
+
+Recursive/filter/caching/append/empty/file iterator families, SPL serialization,
+the pre-existing root-frame callback-array alias shutdown issue, 32-bit and
+OOM equivalence remain non-claims. Read-only next admission finds fourteen
+shared ArrayObject/ArrayIterator serialization failures among eighteen
+reference-passing cases; four existing passes must remain intact.
+
+The preceding measured AMD64 PHP 8.5 checkpoint is
 `native-array-iterator-cursor-protocol`, against `338cd70a`. Stable native
 cursor positions, live append/unset/reference/COW behavior and guarded iterator
 consumers add **+17/-0**: thirteen deduplicated SPL gains and four core gains.

@@ -1,0 +1,16 @@
+19:31
+int(23)
+int(24)
+Error:Call to undefined method OrdinaryCloneChild::unregistered()
+Error:Trying to clone an uncloneable object of class UninitializedCloneDelegate
+[true,"ref",{"value":8}]
+[{"value":8},{"value":8},{"value":8}]
+Error:An iterator cannot be used with foreach by reference
+IteratorIterator
+Error:Trying to clone an uncloneable object of class IteratorIterator
+LimitIterator
+Error:Trying to clone an uncloneable object of class LimitIterator
+NoRewindIterator
+Error:Trying to clone an uncloneable object of class NoRewindIterator
+cycle-release
+NULL

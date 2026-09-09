@@ -36,6 +36,33 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `iterator-delegation-contracts` train adds 24 deduplicated PHP 8.5
+passes over `da792c23`: 21 SPL and three core, with no loss. IteratorIterator,
+LimitIterator and NoRewindIterator share sparse traced native state, cached/live
+projections and canonical override/delegated call resolution. Named/reference
+sends use the actual inner descriptor. No common VM/Value field, dependency,
+ordinary dispatch or JIT change is introduced.
+
+Core counts reach 6,443/338/182/211. All twenty supplying cases pass; the
+108-case neighbor set reaches 65 passes. One checked five-configuration matrix,
+all-targets, exact pass-set no-loss, S0-S3, original oracles and static/unsafe
+gates pass. All 26 fixed-parent 32-pair controls meet unchanged common +1% /
+pay-use +5% limits (highest +0.873%/+1.050%) on the authorized shared host.
+Static builtin name storage eliminates redundant request-local copies while
+retaining owned signatures; rejected experiments remain excluded. Three new
+API workloads retain exact PHP outputs without claiming parent timing deltas.
+Exact evidence and bounded non-claims are in `compatibility.md`.
+
+Next admission has fourteen current failures among eighteen PHP-passing
+ArrayObject/ArrayIterator serialization cases. Review modern/legacy native
+state projection, references, member properties, flags/classes and invalid
+payload ordering before edits; require at least ten reachable shared-cause
+gains and preserve four existing passes. Do not absorb other SPL families,
+root-frame shutdown accounting, suspension or general serialization redesign.
+Automatic cleanup and one cumulative final evidence packet remain mandatory.
+
+### Preceding native cursor checkpoint
+
 The accepted `native-array-iterator-cursor-protocol` train adds seventeen
 deduplicated PHP 8.5 passes over `338cd70a`: thirteen SPL and four core cases,
 without loss. Stable native cursors preserve live mutation, references/COW,

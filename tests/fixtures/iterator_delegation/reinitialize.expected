@@ -1,0 +1,21 @@
+IteratorIterator
+[true,1,22]
+BadMethodCallException:IteratorIterator::getIterator() must be called exactly once per instance
+[true,1,22]
+bool(true)
+BadMethodCallException:IteratorIterator::getIterator() must be called exactly once per instance
+[true,1,22]
+LimitIterator
+[true,1,22]
+BadMethodCallException:LimitIterator::getIterator() must be called exactly once per instance
+[true,1,22]
+bool(true)
+BadMethodCallException:LimitIterator::getIterator() must be called exactly once per instance
+[true,1,22]
+NoRewindIterator
+[true,1,22]
+BadMethodCallException:NoRewindIterator::getIterator() must be called exactly once per instance
+[true,1,22]
+bool(true)
+BadMethodCallException:NoRewindIterator::getIterator() must be called exactly once per instance
+[true,1,22]

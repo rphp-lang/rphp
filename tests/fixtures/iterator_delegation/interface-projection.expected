@@ -1,0 +1,7 @@
+MiddleProjection:RootProjection
+OuterProjection:MiddleProjection,RootProjection
+BaseProjection:OuterProjection,OtherProjection,RootProjection,MiddleProjection
+ChildProjection:MiddleProjection,RootProjection,OtherProjection,OuterProjection
+FinalProjection:OuterProjection,OtherProjection,RootProjection,MiddleProjection
+CustomIteratorProjection:Iterator,Traversable,OuterIterator
+CustomLimitProjection:OuterIterator,Traversable,Iterator
