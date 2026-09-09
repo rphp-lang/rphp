@@ -1,0 +1,30 @@
+modern:string
+array
+TypeError:Cannot assign string to property RestoredTypedMember::$number of type int
+legacy:string
+string
+TypeError:Cannot assign string to property RestoredTypedMember::$number of type int
+modern:0:integer
+restored
+{"fresh":157}:changed:changed:5
+modern:0:string
+restored
+{"fresh":157}:changed:changed:wrong
+modern:1:integer
+Error:Cannot modify readonly property RestoredReadonly::$number
+{"fresh":157}:changed:old:3
+modern:1:string
+Error:Cannot modify readonly property RestoredReadonly::$number
+{"fresh":157}:changed:old:3
+legacy:0:integer
+restored
+{"fresh":157}:changed:changed:5
+legacy:0:string
+restored
+{"fresh":157}:changed:changed:wrong
+legacy:1:integer
+Error:Cannot modify readonly property RestoredReadonly::$number
+{"fresh":157}:changed:old:3
+legacy:1:string
+Error:Cannot modify readonly property RestoredReadonly::$number
+{"fresh":157}:changed:old:3

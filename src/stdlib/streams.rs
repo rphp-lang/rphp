@@ -1008,9 +1008,10 @@ fn fn_fwrite(
         value
     };
     let data = string_owner.as_str().expect("validated string argument");
-    // ASCII (including NUL) already has the required byte representation.
-    // Non-ASCII lossless storage still uses the existing byte conversion.
-    let storage = if data.is_ascii() {
+    // Source UTF-8 is already PHP byte storage: its provenance proves that
+    // no scan/conversion is needed. Only externally materialized binary
+    // storage uses the lossless bridge; ASCII binary data can still borrow.
+    let storage = if !string_owner.is_binary_string() || data.is_ascii() {
         Cow::Borrowed(data.as_bytes())
     } else {
         Cow::Owned(super::php_string_to_bytes(data))

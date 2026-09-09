@@ -1,0 +1,6 @@
+diagnostic:8192:ArrayObject::__construct(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants
+[16777216,null,{"entry":"self-value"},null]
+diagnostic:8192:Creation of dynamic property SelfState::$entry is deprecated
+[16777216,null,{"entry":"self-value"},null]:self-value
+diagnostic:8192:Creation of dynamic property ArrayObject::$entry is deprecated
+[16777216,null,{"entry":"self-value"},null]:self-value

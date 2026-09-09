@@ -1,0 +1,9 @@
+[2,{"alpha":13},[],"StateCursor"]
+ArrayObject:2:{"alpha":13}
+iterator:StateCursor
+[1,{"beta":29},[],null]
+ArrayIterator:1:{"beta":29}
+[3,{"gamma":31},{"\u0000StateContainer\u0000hidden":"private-state","\u0000*\u0000number":17,"label":"public-state"},"StateCursor"]
+StateContainer:3:{"gamma":31}
+iterator:StateCursor
+private-state:public-state

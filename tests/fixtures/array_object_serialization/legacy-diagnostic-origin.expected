@@ -1,0 +1,4 @@
+8192:ArrayObject::unserialize(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants
+bool(true)
+bool(true)
+[0,{},[],null]

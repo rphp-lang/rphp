@@ -10,10 +10,7 @@ const SORT_GUARD: &str = "\0rphp-native-array-sort";
 #[inline(never)]
 // SAFETY: ordinary compiler-generated code retains the normal calling convention.
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
-pub(in crate::stdlib::builtin_classes) fn reject_mutation(
-    receiver: &Value,
-    eg: &mut ExecutorGlobals,
-) -> bool {
+pub(in crate::stdlib) fn reject_mutation(receiver: &Value, eg: &mut ExecutorGlobals) -> bool {
     if receiver
         .as_object()
         .is_some_and(|o| o.property_guard_active(SORT_GUARD, 1))

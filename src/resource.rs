@@ -14,8 +14,67 @@ use std::rc::{Rc, Weak};
 static NEXT_RESOURCE_SCOPE: AtomicU32 = AtomicU32::new(1);
 
 thread_local! {
-    static REQUEST_RESOURCES: RefCell<HashMap<u32, ResourceRegistry>> =
-        RefCell::new(HashMap::new());
+    static REQUEST_RESOURCES: RefCell<RequestRegistries> =
+        const { RefCell::new(RequestRegistries::Empty) };
+}
+
+// Most native I/O belongs to one request on this thread. Store that scope
+// directly instead of locating the only occupied hash bucket on every I/O.
+// Nested requests promote once to the general table, which never scans its
+// retained capacity and does not demote while requests are being removed.
+enum RequestRegistries {
+    Empty,
+    Single(u32, ResourceRegistry),
+    Multiple(HashMap<u32, ResourceRegistry>),
+}
+
+impl RequestRegistries {
+    #[cold]
+    fn get(&self, scope: &u32) -> Option<&ResourceRegistry> {
+        match self {
+            Self::Empty => None,
+            Self::Single(registered_scope, registry) => {
+                (registered_scope == scope).then_some(registry)
+            }
+            Self::Multiple(registries) => registries.get(scope),
+        }
+    }
+
+    #[cold]
+    fn get_or_insert(&mut self, scope: u32) -> &mut ResourceRegistry {
+        match self {
+            Self::Empty => *self = Self::Single(scope, ResourceRegistry::new()),
+            Self::Single(registered_scope, _) if *registered_scope != scope => {
+                let Self::Single(previous_scope, previous) = std::mem::replace(self, Self::Empty)
+                else {
+                    unreachable!("single request promotion");
+                };
+                let mut registries = HashMap::with_capacity(2);
+                registries.insert(previous_scope, previous);
+                *self = Self::Multiple(registries);
+            }
+            _ => {}
+        }
+        match self {
+            Self::Single(_, registry) => registry,
+            Self::Multiple(registries) => registries.entry(scope).or_default(),
+            Self::Empty => unreachable!("request insertion initializes the registry"),
+        }
+    }
+
+    #[cold]
+    fn remove(&mut self, scope: &u32) -> Option<ResourceRegistry> {
+        match self {
+            Self::Single(registered_scope, _) if registered_scope == scope => {
+                let Self::Single(_, registry) = std::mem::replace(self, Self::Empty) else {
+                    unreachable!("single request removal");
+                };
+                Some(registry)
+            }
+            Self::Multiple(registries) => registries.remove(scope),
+            _ => None,
+        }
+    }
 }
 
 struct ResourceEntry {
@@ -35,12 +94,20 @@ impl ResourceEntry {
     }
 }
 
-// IDs are monotonic and never reused. Index only this bounded prefix; a
-// request which outgrows it permanently uses hashing, even after mass close.
+// IDs are monotonic and never reused. Index a bounded prefix and retain one
+// sparse overflow slot. Overlapping overflow IDs promote permanently to
+// hashing; no lookup scans the lifetime ID space or a retained hash capacity.
 const SMALL_RESOURCE_LIMIT: usize = 8;
 
+// Allocate this slot once on first overflow, not on every open/close. Boxing
+// keeps the common registry enum bounded by its existing HashMap variant.
+type SparseResourceSlot = Option<Box<Option<(i64, ResourceEntry)>>>;
+
 enum ResourceEntries {
-    Small(Vec<Option<ResourceEntry>>),
+    Small {
+        entries: Vec<Option<ResourceEntry>>,
+        overflow: SparseResourceSlot,
+    },
     Large(HashMap<i64, ResourceEntry>),
 }
 
@@ -48,9 +115,14 @@ impl ResourceEntries {
     #[inline]
     fn get(&self, id: &i64) -> Option<&ResourceEntry> {
         match self {
-            Self::Small(entries) => entries
-                .get(usize::try_from(*id).ok()?.wrapping_sub(1))?
-                .as_ref(),
+            Self::Small { entries, overflow } => {
+                let index = usize::try_from(*id).ok()?.wrapping_sub(1);
+                if index < entries.len() {
+                    return entries[index].as_ref();
+                }
+                let (stored_id, entry) = overflow.as_deref()?.as_ref()?;
+                (*stored_id == *id).then_some(entry)
+            }
             Self::Large(entries) => entries.get(id),
         }
     }
@@ -58,9 +130,14 @@ impl ResourceEntries {
     #[inline]
     fn get_mut(&mut self, id: &i64) -> Option<&mut ResourceEntry> {
         match self {
-            Self::Small(entries) => entries
-                .get_mut(usize::try_from(*id).ok()?.wrapping_sub(1))?
-                .as_mut(),
+            Self::Small { entries, overflow } => {
+                let index = usize::try_from(*id).ok()?.wrapping_sub(1);
+                if index < entries.len() {
+                    return entries[index].as_mut();
+                }
+                let (stored_id, entry) = overflow.as_deref_mut()?.as_mut()?;
+                (*stored_id == *id).then_some(entry)
+            }
             Self::Large(entries) => entries.get_mut(id),
         }
     }
@@ -68,7 +145,7 @@ impl ResourceEntries {
     #[cold]
     fn insert(&mut self, id: i64, entry: ResourceEntry) -> Option<ResourceEntry> {
         debug_assert!(id > 0);
-        if let Self::Small(entries) = self {
+        if let Self::Small { entries, overflow } = self {
             if id <= SMALL_RESOURCE_LIMIT as i64 {
                 let index = id as usize - 1;
                 if index >= entries.len() {
@@ -76,11 +153,22 @@ impl ResourceEntries {
                 }
                 return entries[index].replace(entry);
             }
-            let mut large = HashMap::with_capacity(entries.len() + 1);
+            let spare = overflow.get_or_insert_with(|| Box::new(None));
+            if spare
+                .as_ref()
+                .as_ref()
+                .is_none_or(|(stored_id, _)| *stored_id == id)
+            {
+                return spare.replace((id, entry)).map(|(_, entry)| entry);
+            }
+            let mut large = HashMap::with_capacity(entries.len() + 2);
             for (index, entry) in entries.drain(..).enumerate() {
                 if let Some(entry) = entry {
                     large.insert(index as i64 + 1, entry);
                 }
+            }
+            if let Some((stored_id, entry)) = spare.take() {
+                large.insert(stored_id, entry);
             }
             *self = Self::Large(large);
         }
@@ -97,10 +185,20 @@ impl ResourceEntries {
         predicate: impl FnOnce(&ResourceEntry) -> bool,
     ) -> Option<ResourceEntry> {
         match self {
-            Self::Small(entries) => {
-                let slot = entries.get_mut(usize::try_from(id).ok()?.wrapping_sub(1))?;
-                if predicate(slot.as_ref()?) {
-                    slot.take()
+            Self::Small { entries, overflow } => {
+                let index = usize::try_from(id).ok()?.wrapping_sub(1);
+                if index < entries.len() {
+                    let slot = &mut entries[index];
+                    return if predicate(slot.as_ref()?) {
+                        slot.take()
+                    } else {
+                        None
+                    };
+                }
+                let spare = overflow.as_deref_mut()?;
+                let (stored_id, entry) = spare.as_ref()?;
+                if *stored_id == id && predicate(entry) {
+                    spare.take().map(|(_, entry)| entry)
                 } else {
                     None
                 }
@@ -135,7 +233,10 @@ impl ResourceRegistry {
     pub fn new() -> Self {
         Self {
             next_id: 1,
-            entries: ResourceEntries::Small(Vec::new()),
+            entries: ResourceEntries::Small {
+                entries: Vec::new(),
+                overflow: None,
+            },
         }
     }
 
@@ -256,8 +357,11 @@ impl Drop for ResourceRegistry {
         // Retire all handles before dropping any backend: backend teardown
         // may itself release another resource from this same registry.
         match &self.entries {
-            ResourceEntries::Small(entries) => {
+            ResourceEntries::Small { entries, overflow } => {
                 for entry in entries.iter().flatten() {
+                    entry.retire_owner();
+                }
+                if let Some(Some((_, entry))) = overflow.as_deref() {
                     entry.retire_owner();
                 }
             }
@@ -295,8 +399,7 @@ pub(crate) fn insert<T: 'static>(scope: u32, resource_type: &'static str, payloa
             return registry.insert(resource_type, payload);
         }
         registries
-            .entry(scope)
-            .or_default()
+            .get_or_insert(scope)
             .insert(resource_type, payload)
     })
 }
@@ -305,18 +408,15 @@ pub(crate) fn insert<T: 'static>(scope: u32, resource_type: &'static str, payloa
 // SAFETY: compiler-generated executable code; placement does not change ABI.
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
 fn registry_for_scope_mut(
-    registries: &mut HashMap<u32, ResourceRegistry>,
+    registries: &mut RequestRegistries,
     scope: u32,
 ) -> Option<&mut ResourceRegistry> {
-    // A thread commonly serves one request. In a tiny single-entry table
-    // compare that key directly instead of hashing the same scope for every
-    // I/O operation. Retained large tables and nested requests use the normal
-    // lookup: iteration must never scale with capacity.
-    if registries.len() == 1 && registries.capacity() <= 8 {
-        let (registered_scope, registry) = registries.iter_mut().next()?;
-        (*registered_scope == scope).then_some(registry)
-    } else {
-        registries.get_mut(&scope)
+    match registries {
+        RequestRegistries::Empty => None,
+        RequestRegistries::Single(registered_scope, registry) => {
+            (*registered_scope == scope).then_some(registry)
+        }
+        RequestRegistries::Multiple(registries) => registries.get_mut(&scope),
     }
 }
 
@@ -463,8 +563,7 @@ pub(crate) fn insert_value_for_request<T: 'static>(
             return registry.insert_value(scope, resource_type, payload);
         }
         registries
-            .entry(scope)
-            .or_default()
+            .get_or_insert(scope)
             .insert_value(scope, resource_type, payload)
     })
 }
@@ -657,6 +756,70 @@ mod tests {
     }
 
     #[test]
+    fn request_registry_promotion_preserves_payloads_and_release_order() {
+        let drops = Rc::new(Cell::new(0));
+        let mut requests = super::RequestRegistries::Empty;
+        let first = requests
+            .get_or_insert(11)
+            .insert("probe", DropProbe(drops.clone()));
+        assert!(matches!(requests, super::RequestRegistries::Single(11, _)));
+        let address = super::registry_for_scope_mut(&mut requests, 11)
+            .unwrap()
+            .with_payload_mut::<DropProbe, _>(first, |probe| probe as *const _ as usize);
+        assert!(super::registry_for_scope_mut(&mut requests, 12).is_none());
+        assert!(requests.remove(&12).is_none());
+        let second = requests.get_or_insert(12).insert("number", 23u64);
+        assert_eq!(first, second, "ids stay local to the same scope");
+        assert!(matches!(requests, super::RequestRegistries::Multiple(_)));
+        assert_eq!(drops.get(), 0, "promotion must not release a backend");
+        assert_eq!(
+            super::registry_for_scope_mut(&mut requests, 11)
+                .unwrap()
+                .with_payload_mut::<DropProbe, _>(first, |probe| probe as *const _ as usize),
+            address
+        );
+        let retired = requests.remove(&11).unwrap();
+        assert_eq!(drops.get(), 0, "removal transfers ownership to its caller");
+        assert!(super::registry_for_scope_mut(&mut requests, 11).is_none());
+        assert_eq!(
+            super::registry_for_scope_mut(&mut requests, 12)
+                .unwrap()
+                .with_payload_mut::<u64, _>(second, |number| *number),
+            Some(23)
+        );
+        drop(retired);
+        assert_eq!(drops.get(), 1);
+        let replacement = requests.get_or_insert(13).insert("number", 51u64);
+        assert_eq!(replacement, first);
+        assert!(super::registry_for_scope_mut(&mut requests, 11).is_none());
+        drop(requests);
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn single_request_removal_returns_to_empty_without_reusing_scope() {
+        let drops = Rc::new(Cell::new(0));
+        let mut requests = super::RequestRegistries::Empty;
+        let first = requests
+            .get_or_insert(17)
+            .insert("probe", DropProbe(drops.clone()));
+        drop(requests.remove(&17));
+        assert_eq!(drops.get(), 1);
+        assert!(matches!(requests, super::RequestRegistries::Empty));
+        let second = requests
+            .get_or_insert(18)
+            .insert("probe", DropProbe(drops.clone()));
+        assert_eq!(
+            second, first,
+            "a different request starts its own resource sequence"
+        );
+        assert!(super::registry_for_scope_mut(&mut requests, 17).is_none());
+        assert!(requests.get(&18).unwrap().is_open(second));
+        drop(requests);
+        assert_eq!(drops.get(), 2);
+    }
+
+    #[test]
     fn nested_scope_projection_never_selects_another_requests_local_id() {
         let first = allocate_scope();
         let second = allocate_scope();
@@ -759,7 +922,10 @@ mod tests {
         let ids: Vec<_> = (0..super::SMALL_RESOURCE_LIMIT)
             .map(|_| registry.insert("probe", DropProbe(drops.clone())))
             .collect();
-        assert!(matches!(registry.entries, super::ResourceEntries::Small(_)));
+        assert!(matches!(
+            registry.entries,
+            super::ResourceEntries::Small { .. }
+        ));
         let address = registry
             .with_payload_mut::<DropProbe, _>(ids[0], |probe| probe as *const DropProbe as usize)
             .unwrap();
@@ -767,6 +933,14 @@ mod tests {
         assert_eq!(drops.get(), 1);
         let next = registry.insert("probe", DropProbe(drops.clone()));
         assert_eq!(next, ids.last().unwrap() + 1);
+        assert!(matches!(
+            registry.entries,
+            super::ResourceEntries::Small { .. }
+        ));
+        let overflow_address =
+            registry.with_payload_mut::<DropProbe, _>(next, |probe| probe as *const _ as usize);
+        let second_overflow = registry.insert("probe", DropProbe(drops.clone()));
+        assert_eq!(second_overflow, next + 1);
         assert!(matches!(registry.entries, super::ResourceEntries::Large(_)));
         assert_eq!(drops.get(), 1, "migration must only move entries");
         assert_eq!(
@@ -774,16 +948,106 @@ mod tests {
                 as usize),
             Some(address)
         );
+        assert_eq!(
+            registry.with_payload_mut::<DropProbe, _>(next, |probe| probe as *const _ as usize),
+            overflow_address
+        );
         assert!(!registry.is_open(ids[2]));
         assert_eq!(registry.resource_type(ids[2]), "Unknown");
         assert!(!registry.close::<String>(next));
-        for id in ids.into_iter().chain([next]) {
+        for id in ids.into_iter().chain([next, second_overflow]) {
             if registry.is_open(id) {
                 assert_eq!(registry.resource_type(id), "probe");
             }
         }
         drop(registry);
-        assert_eq!(drops.get(), super::SMALL_RESOURCE_LIMIT + 1);
+        assert_eq!(drops.get(), super::SMALL_RESOURCE_LIMIT + 2);
+    }
+
+    #[test]
+    fn sparse_overflow_reuses_storage_without_reusing_ids_or_disturbing_live_prefix() {
+        for kept in [0, 1, 3, 7, 8] {
+            let drops = Rc::new(Cell::new(0));
+            let mut registry = ResourceRegistry::new();
+            let prefix: Vec<_> = (0..kept)
+                .map(|_| registry.insert("probe", DropProbe(drops.clone())))
+                .collect();
+            let mut previous = 0;
+            let mut slot_address = None;
+            for turn in 1..=257 {
+                let id = registry.insert("probe", DropProbe(drops.clone()));
+                assert_eq!(id, kept + turn);
+                assert!(!registry.is_open(previous));
+                assert_eq!(registry.resource_type(previous), "Unknown");
+                assert!(!registry.close::<DropProbe>(previous));
+                let super::ResourceEntries::Small { entries, overflow } = &registry.entries else {
+                    panic!("one sparse overflow must not require a hash table");
+                };
+                assert!(
+                    entries.len() <= super::SMALL_RESOURCE_LIMIT
+                        && entries.capacity() <= super::SMALL_RESOURCE_LIMIT
+                );
+                if let Some(slot) = overflow {
+                    let address = slot.as_ref() as *const _ as usize;
+                    if let Some(previous_address) = slot_address {
+                        assert_eq!(address, previous_address);
+                    }
+                    slot_address = Some(address);
+                }
+                assert!(!registry.close::<String>(id));
+                assert!(registry.close::<DropProbe>(id));
+                assert_eq!(drops.get(), turn as usize);
+                for &pinned in &prefix {
+                    assert!(registry.is_open(pinned));
+                }
+                previous = id;
+            }
+            drop(registry);
+            assert_eq!(drops.get(), kept as usize + 257);
+        }
+    }
+
+    #[test]
+    fn sparse_overflow_promotion_preserves_payloads_and_retired_ids() {
+        let mut registry = ResourceRegistry::new();
+        for _ in 0..24 {
+            let id = registry.insert("number", 0u64);
+            assert!(registry.close::<u64>(id));
+        }
+        let first = registry.insert("number", 77u64);
+        assert_eq!(first, 25);
+        let address =
+            registry.with_payload_mut::<u64, _>(first, |value| value as *const _ as usize);
+        for _ in 0..7 {
+            let id = registry.insert("number", 1u64);
+            assert!(registry.close::<u64>(id));
+        }
+        let next = registry.insert("number", 99u64);
+        assert_eq!(next, 33);
+        assert!(matches!(
+            &registry.entries,
+            super::ResourceEntries::Large(_)
+        ));
+        assert_eq!(
+            registry.with_payload_mut::<u64, _>(first, |value| value as *const _ as usize),
+            address
+        );
+        assert_eq!(
+            registry.with_payload_mut::<u64, _>(first, |value| *value),
+            Some(77)
+        );
+        for retired in (1..first).chain(first + 1..next) {
+            assert!(!registry.is_open(retired));
+            assert!(!registry.close::<u64>(retired));
+        }
+        assert!(registry.close::<u64>(first));
+        assert!(registry.close::<u64>(next));
+        let last = registry.insert("number", 101u64);
+        assert_eq!(last, 34);
+        assert!(matches!(
+            &registry.entries,
+            super::ResourceEntries::Large(_)
+        ));
     }
 
     #[test]
@@ -898,7 +1162,9 @@ mod tests {
         for &(scope, _) in &scopes[..31] {
             close_scope(scope);
         }
-        REQUEST_RESOURCES.with(|registries| assert!(registries.borrow().capacity() > 8));
+        REQUEST_RESOURCES.with(|registries| {
+            assert!(matches!(&*registries.borrow(), super::RequestRegistries::Multiple(table) if table.capacity() > 8));
+        });
         let (scope, id) = scopes[31];
         assert_eq!(with_payload_mut::<u64, _>(scope, id, |v| *v), Some(31));
         assert_eq!(with_payload_mut::<u64, _>(scopes[0].0, id, |_| ()), None);

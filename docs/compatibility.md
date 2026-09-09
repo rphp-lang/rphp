@@ -8,6 +8,64 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
+`array-object-serialization-contracts`, against `bb9d1daa`: native modern and
+legacy ArrayObject/ArrayIterator state restoration adds **+12/-0** SPL passes.
+The eighteen supplying cases reach 16 pass / 2 fail; the overlapping 108-case
+ArrayObject set reaches 69 pass / 32 fail / 6 unsupported / 1 XFAIL. Core
+manifests remain byte-identical: **6,443 pass / 338 fail / 182 skip /
+211 unsupported** among 7,174 cases, with no lost pass, new timeout/crash or
+failure-stage movement. This is not the full upstream suite.
+
+Flags, raw backing, real member properties and iterator classes share the
+existing serializer reference graph, including legacy embedded payloads.
+Reference/COW identity, cycles, reinitialization, partial mutation, callback
+order and sorting guards match PHP 8.5.10. Native member restoration retains
+PHP's raw typed-slot behavior while guarding initialized readonly properties;
+it does not change ordinary object property loading.
+
+The user-authorized resource prerequisite keeps one request scope directly
+and the existing eight-ID indexed prefix plus one reusable sparse overflow
+slot. Multiple live overflow resources permanently promote to hashing. IDs
+remain monotonic, with unchanged scope/type checks, aliases, backend addresses,
+unwind and retirement ordering. No common Value/VM field, dependency or unsafe
+ceiling changes. Stream writes preserve UTF-8/binary provenance, and ordinary
+serialization transfers already-owned key bytes instead of copying them.
+
+Eighteen original specimens match PHP byte-exactly. The complete checked
+matrix passes 4,941/4,639/5,012/5,034/5,085 tests (13/13/13/13/16 ignored,
+none filtered), plus all-targets, exact no-loss, Composer/Symfony S0-S3,
+runner/unsafe self-tests, formatting and public hygiene. A test-only reader
+correction for no-default features was revalidated with unchanged expectations
+and production binary. Unsafe inventory stays 1,622/289 under 1,623/289 ceilings.
+Mandatory cleanup runs between configurations and after full cycles.
+
+All thirty fixed-parent 32-pair controls meet unchanged common +1% / pay-use
++5% limits. Highest medians are +0.774% common and +1.867% pay-use; ordinary
+serialization is -0.710%, resource aliases -8.194%, memory I/O -0.929% and
+calls +0.145%, with exact outputs. Rejected registry/copy experiments remain
+excluded or superseded by profile-confirmed work removal, not layout tuning.
+New modern/legacy API candidate-to-PHP paired ratios are 0.746/0.832; these
+are separate measured workloads, not invented parent deltas or general speed
+parity. The authorized shared host recorded two background events; no exclusive
+host or private benchmark host evidence is claimed.
+
+SHA-256 evidence:
+
+- Release: `f05932bde08e088416571b5ef1b56c155292a0b93420af2cd0b06738bbf74c7f`.
+- Complete technical record: `030f3ad833991796e1f21d1078c824e36ecd37ed9ef9645d08de4dc12b33ca98`.
+- Matrix: `373b851db9578b314693708a8bc8405a227859f609bba5f613c3435dca535990`.
+- Supplying / neighbor manifests: `6b0af2787aeba62faa919ffa46ffbd4c14ef9f9e6155a9968daacfa3403a7c10` / `f801eb7dad10bf5f89544b237c4030aae78267b47f4ab5827db1e5d0ab01ce23`.
+- Zend/lang manifest / pass set: `1b4b7fcc1dd1b2a9b18bfc9562a8c8b68c6b4380660393ffbccec3249910a06e` / `7f7fb9f042312164f5d7c5a77b279505b07a8a916eb65a496ac9dc8fd5ca455e`.
+- Strings/array manifest / pass set: `9bf891c30b8763bbd23a62590ce7898e80c02f123682ec54139a8a277f1b46b2` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+- Full performance admission: `1a618f9910933aa46965f3492793be3020a25ee4879aa2bc1a591785e21ad704`.
+
+Native DateInterval overloaded backing (`bug70155`) and self-backed debug
+projection/object-handle reuse (`bug74669`) remain explicit holdouts. Other SPL
+families, general root-frame lifetime repair, 32-bit and OOM equivalence remain
+non-claims. Read-only next admission identifies 28 PHP-passing/current-failing
+recursive traversal cases; it does not claim their implementation.
+
+The preceding measured AMD64 PHP 8.5 checkpoint is
 `iterator-delegation-contracts`, against `da792c23`: IteratorIterator,
 LimitIterator, NoRewindIterator and the necessary OuterIterator contract add
 **+24/-0** deduplicated passes (21 SPL and three core). All twenty admitted

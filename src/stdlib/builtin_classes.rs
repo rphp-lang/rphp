@@ -11,7 +11,7 @@ use crate::vm::instruction::{
     FETCH_DIM_COMPOUND, FETCH_DIM_EMPTY, FETCH_DIM_MUTABLE, FETCH_DIM_UNSET,
 };
 
-mod array_object;
+pub(super) mod array_object;
 mod iterator_delegate;
 pub(crate) use array_object::cursor::{
     Move as NativeIteratorMove, Projection as NativeIteratorProjection,
@@ -3429,6 +3429,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 traversal_interface.to_string(),
                 "ArrayAccess".to_string(),
                 "Countable".to_string(),
+                "Serializable".to_string(),
             ],
             false,
             false,

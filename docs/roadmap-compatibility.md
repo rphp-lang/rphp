@@ -36,30 +36,32 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `iterator-delegation-contracts` train adds 24 deduplicated PHP 8.5
-passes over `da792c23`: 21 SPL and three core, with no loss. IteratorIterator,
-LimitIterator and NoRewindIterator share sparse traced native state, cached/live
-projections and canonical override/delegated call resolution. Named/reference
-sends use the actual inner descriptor. No common VM/Value field, dependency,
-ordinary dispatch or JIT change is introduced.
+The accepted `array-object-serialization-contracts` train adds twelve PHP 8.5
+SPL passes over `bb9d1daa`, with no loss. Modern/legacy native state shares the
+existing serializer reference graph, retaining reference/COW identity, partial
+restore order, raw typed members, readonly guards and callback/sort boundaries.
+The supplying set reaches 16/18 and the overlapping 108-case neighbor set 69
+passes. DateInterval backing and self-backed debug projection remain holdouts.
 
-Core counts reach 6,443/338/182/211. All twenty supplying cases pass; the
-108-case neighbor set reaches 65 passes. One checked five-configuration matrix,
-all-targets, exact pass-set no-loss, S0-S3, original oracles and static/unsafe
-gates pass. All 26 fixed-parent 32-pair controls meet unchanged common +1% /
-pay-use +5% limits (highest +0.873%/+1.050%) on the authorized shared host.
-Static builtin name storage eliminates redundant request-local copies while
-retaining owned signatures; rejected experiments remain excluded. Three new
-API workloads retain exact PHP outputs without claiming parent timing deltas.
-Exact evidence and bounded non-claims are in `compatibility.md`.
+Core counts remain 6,443/338/182/211 with byte-identical exact manifests. A
+complete checked five-configuration matrix, all-targets, S0-S3, original oracles,
+no-loss and static/unsafe gates pass. All thirty fixed-parent 32-pair controls
+meet unchanged common +1% / pay-use +5% limits (highest +0.774%/+1.867%).
+Profile-proven direct request scope, sparse resource overflow and owned-key
+transfer remove work without Value/VM ABI, dependency or unsafe-ceiling changes.
+Resource IDs, alias/retirement invariants and stream byte provenance are tested.
+New API costs and shared-host limitations are explicit in `compatibility.md`.
 
-Next admission has fourteen current failures among eighteen PHP-passing
-ArrayObject/ArrayIterator serialization cases. Review modern/legacy native
-state projection, references, member properties, flags/classes and invalid
-payload ordering before edits; require at least ten reachable shared-cause
-gains and preserve four existing passes. Do not absorb other SPL families,
-root-frame shutdown accounting, suspension or general serialization redesign.
-Automatic cleanup and one cumulative final evidence packet remain mandatory.
+Next admission finds 28 PHP-passing/current-failing recursive traversal cases.
+Review RecursiveArrayIterator child projection and an explicit depth-first
+RecursiveIteratorIterator state machine, hook/error order, depth/mode and
+uninitialized/aggregate boundaries before implementation. Require at least ten
+shared-cause gains; keep directory/filter/cache/tree families, suspension,
+general root-frame lifetime repair and 32-bit/OOM outside. Preserve established
+controls, use one cumulative final evidence packet and automatic cleanup.
+
+The preceding iterator-delegation train added 24 deduplicated passes (21 SPL
+and three core); its exact evidence remains in `compatibility.md`.
 
 ### Preceding native cursor checkpoint
 

@@ -1,0 +1,30 @@
+UnexpectedValueException:Incomplete or ill-typed serialization data
+ArrayObject:2:{"retained":41}
+iterator:ArrayIterator
+UnexpectedValueException:Incomplete or ill-typed serialization data
+ArrayObject:2:{"retained":41}
+iterator:ArrayIterator
+InvalidArgumentException:Passed variable is not an array or object
+ArrayObject:0:{"retained":41}
+iterator:ArrayIterator
+UnexpectedValueException:Incomplete or ill-typed serialization data
+ArrayObject:0:{"retained":41}
+iterator:ArrayIterator
+UnexpectedValueException:Incomplete or ill-typed serialization data
+ArrayObject:0:{"retained":41}
+iterator:ArrayIterator
+UnexpectedValueException:Cannot deserialize ArrayObject with iterator class 'AbsentStateCursor'; no such class exists
+ArrayObject:0:[]
+iterator:ArrayIterator
+UnexpectedValueException:Cannot deserialize ArrayObject with iterator class 'stdClass'; this class does not implement the Iterator interface
+ArrayObject:0:[]
+iterator:ArrayIterator
+restored
+ArrayObject:1:{"fresh":43}
+iterator:ArrayIterator
+restored
+ArrayObject:2:{"last":47}
+iterator:ArrayIterator
+TypeError:ArrayObject::__unserialize(): Argument #1 ($data) must be of type array, string given
+ArrayObject:2:{"last":47}
+iterator:ArrayIterator

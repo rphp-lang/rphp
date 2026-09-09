@@ -1,0 +1,7 @@
+Error:Modification of ArrayObject during sorting is prohibited
+Error:Modification of ArrayObject during sorting is prohibited
+ArrayObject:0:{"a":101,"z":97}
+iterator:ArrayIterator
+Error:Modification of ArrayObject during sorting is prohibited
+Error:Modification of ArrayObject during sorting is prohibited
+ArrayIterator:0:{"a":101,"z":97}

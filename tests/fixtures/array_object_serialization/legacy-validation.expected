@@ -1,0 +1,28 @@
+input:
+restored
+ArrayObject:2:{"kept":71}
+iterator:ArrayIterator
+input:62726f6b656e
+UnexpectedValueException:Error at offset 0 of 6 bytes
+ArrayObject:2:{"kept":71}
+iterator:ArrayIterator
+input:783a693a303b
+UnexpectedValueException:Error at offset 6 of 6 bytes
+ArrayObject:2:{"kept":71}
+iterator:ArrayIterator
+input:783a693a303b613a303a7b7d3b6d3a613a303a7b7d
+restored
+ArrayObject:0:[]
+iterator:ArrayIterator
+input:783a693a303b613a303a7b7d3b6d3a613a303a7b7d747261696c696e67
+restored
+ArrayObject:0:[]
+iterator:ArrayIterator
+input:783a693a303b693a373b3b6d3a613a303a7b7d
+UnexpectedValueException:Error at offset 6 of 19 bytes
+ArrayObject:0:[]
+iterator:ArrayIterator
+input:783a693a303b723a39393b3b6d3a613a303a7b7d
+UnexpectedValueException:Error at offset 11 of 20 bytes
+ArrayObject:0:[]
+iterator:ArrayIterator

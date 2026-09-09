@@ -1,0 +1,8 @@
+UnexpectedValueException:Error at offset 30 of 30 bytes
+[0,{"fresh":131},[],null]
+UnexpectedValueException:Error at offset 21 of 21 bytes
+[1,[],[],null]
+diagnostic:8192:Creation of dynamic property ArrayObject::$7 is deprecated
+[2,[],{"7":139},null]
+diagnostic:2:unserialize(): Error at offset 22 of 45 bytes
+bool(false)

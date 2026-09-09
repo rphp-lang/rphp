@@ -12,8 +12,9 @@ use std::rc::Rc;
 
 pub(crate) mod cursor;
 mod options;
+pub(in crate::stdlib) mod serialization;
 mod sorting;
-pub(super) use sorting::reject_mutation;
+pub(in crate::stdlib) use sorting::reject_mutation;
 
 fn native_storage_key(object: &PhpObject) -> Option<&'static str> {
     if object.property_slot(ARRAY_OBJECT_STORAGE).is_some() {
@@ -36,9 +37,17 @@ pub(crate) fn array_cast(receiver: &Value, eg: &ExecutorGlobals) -> Option<Value
         drop(object);
         return Some(Value::array(snapshot(receiver, eg, false)));
     }
+    drop(object);
+    Some(Value::array(member_properties(receiver, eg)))
+}
+
+fn member_properties(receiver: &Value, eg: &ExecutorGlobals) -> PhpArray {
+    let object = receiver.as_object().expect("native array receiver");
     let mut result = PhpArray::new();
     for slot in eg.instance_property_slots_in_iteration_order(object.class_id) {
-        let definition = eg.instance_property_definition(object.class_id, slot)?;
+        let Some(definition) = eg.instance_property_definition(object.class_id, slot) else {
+            continue;
+        };
         if definition.name == "storage"
             && matches!(
                 definition.declaring_class.as_str(),
@@ -65,7 +74,7 @@ pub(crate) fn array_cast(receiver: &Value, eg: &ExecutorGlobals) -> Option<Value
             result.set_str(name, value.clone_for_php_storage());
         }
     });
-    Some(Value::array(result))
+    result
 }
 
 #[inline]
@@ -359,7 +368,10 @@ pub(super) fn append(
 #[inline(never)]
 // SAFETY: compiler-generated code retains its normal calling convention.
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
-pub(super) fn release_plan(eg: &ExecutorGlobals, value: &Value) -> Option<PreparedValueDestructor> {
+pub(in crate::stdlib) fn release_plan(
+    eg: &ExecutorGlobals,
+    value: &Value,
+) -> Option<PreparedValueDestructor> {
     // These raw bucket operations detach the slot rather than writing through
     // a shared PHP reference. Its other aliases still retain the old payload.
     if value.owned_reference_is_aliased() {
@@ -621,6 +633,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     functions.extend(sorting::register(eg));
     functions.extend(options::register(eg));
     functions.extend(cursor::register(eg));
+    functions.extend(serialization::register(eg));
     functions
 }
 

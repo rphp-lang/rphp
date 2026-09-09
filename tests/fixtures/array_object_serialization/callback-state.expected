@@ -1,0 +1,6 @@
+serialize-hook
+after
+unserialize-hook
+before
+HookContainer:1:{"entry":103}
+iterator:ArrayIterator

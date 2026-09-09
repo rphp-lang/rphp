@@ -167,7 +167,10 @@ fn serialize_value(
     state: &mut SerializeState,
 ) -> Result<(), VmError> {
     let reference = state.next_reference;
-    if let Some(identity) = value.reference_identity() {
+    if let Some(identity) = value
+        .reference_identity()
+        .filter(|_| !value.is_owned_reference() || value.owned_reference_is_aliased())
+    {
         if let Some(reference) = state.references.get(&identity) {
             output.push_str("R:");
             output.push_str(&reference.to_string());
@@ -223,7 +226,9 @@ fn serialize_value(
                         let key = if array.has_external_byte_keys() {
                             crate::value::php_byte_string_bytes(&key)
                         } else {
-                            key.as_bytes().to_vec()
+                            // The iterator already owns this String. Transfer
+                            // its UTF-8 bytes instead of allocating a second copy.
+                            key.into_bytes()
                         };
                         output.push_str("s:");
                         output.push_str(&key.len().to_string());
@@ -438,7 +443,7 @@ fn serialize_value(
                         let key = if properties.has_external_byte_keys() {
                             crate::value::php_byte_string_bytes(&key)
                         } else {
-                            key.as_bytes().to_vec()
+                            key.into_bytes()
                         };
                         output.push_str("s:");
                         output.push_str(&key.len().to_string());
@@ -463,6 +468,9 @@ fn serialize_value(
 
 struct Parser<'a> {
     input: &'a [u8],
+    // Native C: parsing stays in this graph instead of opening a second
+    // parser. Retain the public call's source for cold method diagnostics.
+    source_frame: *mut ExecuteData,
     position: usize,
     last_value_start: usize,
     next_reference: usize,
@@ -567,7 +575,7 @@ fn clone_unserialized_storage_value(value: &Value) -> Value {
     }
 }
 
-fn unserialized_property_storage_key(
+pub(super) fn unserialized_property_storage_key(
     eg: &ExecutorGlobals,
     object: &PhpObject,
     serialized_key: &str,
@@ -781,6 +789,89 @@ fn populate_object_properties(
 }
 
 impl<'a> Parser<'a> {
+    /// Parse the native Serializable payload using this graph's reference
+    /// table. Embedded C: payloads and direct method calls share this parser;
+    /// only the latter starts a fresh graph.
+    #[cold]
+    #[inline(never)]
+    fn array_wrapper_payload(
+        &mut self,
+        receiver: &Value,
+        eg: &mut ExecutorGlobals,
+        allowed: &AllowedClasses,
+        ed: *mut ExecuteData,
+    ) -> Result<(), ()> {
+        use super::builtin_classes::array_object::serialization as native;
+        if self.input.is_empty() {
+            return Ok(());
+        }
+        if super::builtin_classes::array_object::reject_mutation(receiver, eg) {
+            return Err(());
+        }
+        let result = (|| {
+            if !self.input.starts_with(b"x:") {
+                return Err(());
+            }
+            self.position = 2;
+            let flags = self.value(eg, allowed)?;
+            let flags = flags.dereferenced();
+            if flags.value_type() != ValueType::Long {
+                return Err(());
+            }
+            let flags = flags.as_long().ok_or(())?;
+            if flags & (1 << 24) != 0 {
+                native::restore_storage(receiver, flags, &Value::null(), ed, eg, "unserialize")
+                    .map_err(|_| ())?;
+            } else {
+                if !matches!(
+                    self.input.get(self.position),
+                    Some(b'a' | b'O' | b'C' | b'r')
+                ) {
+                    return Err(());
+                }
+                let storage = self.value(eg, allowed)?;
+                native::restore_storage(
+                    receiver,
+                    flags,
+                    storage.dereferenced(),
+                    ed,
+                    eg,
+                    "unserialize",
+                )
+                .map_err(|_| ())?;
+                if eg.exception.is_some() {
+                    return Err(());
+                }
+                self.expect(b';')?;
+            }
+            self.expect(b'm')?;
+            self.expect(b':')?;
+            let members_tag = self.input.get(self.position).copied();
+            let members = self.value(eg, allowed)?;
+            let members = members.dereferenced();
+            if members_tag != Some(b'a') || members.value_type() != ValueType::Array {
+                return Err(());
+            }
+            native::restore_members(receiver, members.as_array().ok_or(())?, ed, eg)
+                .map_err(|_| ())?;
+            if eg.exception.is_some() {
+                return Err(());
+            }
+            Ok(())
+        })();
+        if result.is_err() && eg.exception.is_none() {
+            eg.exception = Some(crate::value::make_error_value(
+                "UnexpectedValueException",
+                &format!(
+                    "Error at offset {} of {} bytes",
+                    self.position,
+                    self.input.len()
+                ),
+            ));
+        }
+        result
+    }
+
     #[inline]
     fn reserve_reference(&mut self, reference: usize) {
         if !self.uppercase_reference_targets.contains(&reference) {
@@ -1292,6 +1383,9 @@ impl<'a> Parser<'a> {
                 let class_name = std::str::from_utf8(class_bytes).map_err(|_| ())?;
                 self.expect(b':')?;
                 let payload_length = usize::try_from(self.integer(b':')?).map_err(|_| ())?;
+                if self.input.get(self.position) != Some(&b'{') {
+                    return self.reject(None, self.position);
+                }
                 self.expect(b'{')?;
                 let payload_end = self.position.checked_add(payload_length).ok_or(())?;
                 let payload = self.input.get(self.position..payload_end).ok_or(())?;
@@ -1306,15 +1400,37 @@ impl<'a> Parser<'a> {
                 };
                 self.publish_partial_reference(reference, &object)?;
                 if allowed {
-                    let payload = std::str::from_utf8(payload).map_err(|_| ())?;
-                    let serialized = Value::string(payload);
-                    crate::stdlib::call_object_public_method(
-                        eg,
-                        &object,
-                        "unserialize",
-                        std::slice::from_ref(&serialized),
-                    )
-                    .map_err(|_| ())?;
+                    let resolved =
+                        crate::stdlib::resolve_object_public_method(eg, &object, "unserialize");
+                    let native = resolved.as_ref().is_some_and(|resolved| {
+                        ["ArrayObject::unserialize", "ArrayIterator::unserialize"]
+                            .iter()
+                            .any(|name| {
+                                eg.find_function(name)
+                                    .is_some_and(|function| function == resolved.func_ptr)
+                            })
+                    });
+                    if native {
+                        // Keep global reference numbers while bounding native
+                        // syntax and error offsets to the declared payload.
+                        let outer_input = self.input;
+                        let outer_position = self.position;
+                        self.input = payload;
+                        self.position = 0;
+                        let result = self.array_wrapper_payload(
+                            &object,
+                            eg,
+                            allowed_classes,
+                            self.source_frame,
+                        );
+                        self.input = outer_input;
+                        self.position = outer_position;
+                        result?;
+                    } else if let Some(resolved) = resolved {
+                        let serialized = super::php_byte_result(payload.to_vec(), false);
+                        crate::stdlib::call_resolved_with_values(eg, &resolved, &[serialized])
+                            .map_err(|_| ())?;
+                    }
                 }
                 if eg.exception.is_some() {
                     Err(())
@@ -1367,6 +1483,56 @@ pub(super) fn serialize(
         return return_value(rv, Value::null());
     }
     return_value(rv, super::php_byte_result(output.into_bytes(), false))
+}
+
+#[cold]
+#[inline(never)]
+pub(super) fn serialize_array_wrapper(
+    receiver: &Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<Value, VmError> {
+    use super::builtin_classes::array_object::serialization as native;
+    let (flags, storage, _) = native::storage_state(receiver);
+    let mut output = SerializeOutput::new();
+    let mut state = SerializeState::new();
+    output.push_str("x:");
+    serialize_value(&Value::long(flags), &mut output, eg, &mut state)?;
+    if flags & (1 << 24) == 0 {
+        serialize_value(&storage, &mut output, eg, &mut state)?;
+        if eg.exception.is_some() {
+            return Ok(Value::null());
+        }
+        output.push(';');
+    }
+    output.push_str("m:");
+    serialize_value(
+        &Value::array(native::members(receiver, eg)),
+        &mut output,
+        eg,
+        &mut state,
+    )?;
+    Ok(super::php_byte_result(output.into_bytes(), false))
+}
+
+#[cold]
+#[inline(never)]
+pub(super) fn unserialize_array_wrapper(
+    receiver: &Value,
+    input: &[u8],
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+) {
+    let mut parser = Parser {
+        input,
+        source_frame: ed,
+        position: 0,
+        last_value_start: 0,
+        next_reference: 1,
+        references: HashMap::new(),
+        uppercase_reference_targets: uppercase_reference_targets(input),
+        diagnostic: None,
+    };
+    let _ = parser.array_wrapper_payload(receiver, eg, &AllowedClasses::All, ed);
 }
 
 /// Discover the reference-table slots that may need stable PHP cells before
@@ -1454,6 +1620,7 @@ pub(super) fn unserialize(
         });
     let mut parser = Parser {
         input: input_bytes.as_ref(),
+        source_frame: ed,
         position: 0,
         last_value_start: 0,
         next_reference: 1,
