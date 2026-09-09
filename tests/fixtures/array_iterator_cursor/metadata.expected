@@ -1,0 +1,17 @@
+rewind:0/0:void
+current:0/0:mixed
+key:0/0:string|int|null
+next:0/0:void
+valid:0/0:bool
+seek:1/1:void
+offset:int
+seekable
+iterator_count:1/1:int
+iterator:Traversable|array:required
+iterator_apply:2/3:int
+iterator:Traversable:required
+callback:callable:required
+args:?array:optional
+iterator_to_array:1/2:array
+iterator:Traversable|array:required
+preserve_keys:bool:optional

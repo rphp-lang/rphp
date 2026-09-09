@@ -7,6 +7,11 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::rc::Rc;
 
+mod native_array_iteration;
+pub(crate) use native_array_iteration::{
+    NativeArrayBuckets, NativeArrayCursor, NativeArrayIteration,
+};
+
 #[cold]
 #[inline(never)]
 pub(crate) fn php_byte_string_bytes(value: &str) -> Vec<u8> {
@@ -558,6 +563,7 @@ struct DynamicPropertyAux {
     property_guards: HashMap<String, u8>,
     object_cursor: usize,
     native_array_options: NativeArrayOptions,
+    native_array_iteration: Option<Box<NativeArrayIteration>>,
 }
 
 /// Scalar policy owned only by native array wrappers. Keeping it in the
@@ -576,6 +582,7 @@ impl DynamicPropertyAux {
             property_guards: HashMap::new(),
             object_cursor: OBJECT_CURSOR_UNTOUCHED,
             native_array_options: NativeArrayOptions::default(),
+            native_array_iteration: None,
         }
     }
 }
@@ -965,6 +972,7 @@ impl DynamicPropertyMap {
         if auxiliary.property_guards.is_empty()
             && auxiliary.object_cursor == OBJECT_CURSOR_UNTOUCHED
             && auxiliary.native_array_options == NativeArrayOptions::default()
+            && auxiliary.native_array_iteration.is_none()
         {
             self.auxiliary = None;
         }
@@ -1455,10 +1463,10 @@ fn materialize_declared_property_defaults(defaults: &[Value]) -> Vec<Value> {
     } else if reused {
         stats::inc_declared_property_storage_reuse();
     }
-    values.extend(defaults.iter().map(|value| {
+    for value in defaults {
         value.publish_deferred_object_handles();
-        value.clone()
-    }));
+        values.push(value.clone());
+    }
     values
 }
 
@@ -1655,6 +1663,26 @@ impl PhpObject {
             .map_or_else(NativeArrayOptions::default, |auxiliary| {
                 auxiliary.native_array_options
             })
+    }
+
+    #[inline]
+    pub(crate) fn native_array_iteration(&self) -> Option<&NativeArrayIteration> {
+        self.dynamic_properties
+            .as_ref()?
+            .auxiliary
+            .as_ref()?
+            .native_array_iteration
+            .as_deref()
+    }
+
+    #[cold]
+    pub(crate) fn native_array_iteration_mut(&mut self) -> &mut NativeArrayIteration {
+        self.dynamic_properties
+            .get_or_insert_with(|| Box::new(DynamicPropertyMap::with_capacity(0)))
+            .auxiliary
+            .get_or_insert_with(|| Box::new(DynamicPropertyAux::new()))
+            .native_array_iteration
+            .get_or_insert_with(|| Box::new(NativeArrayIteration::default()))
     }
 
     #[cold]

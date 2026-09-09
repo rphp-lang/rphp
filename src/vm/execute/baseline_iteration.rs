@@ -42,11 +42,12 @@ fn assign_foreach_cv(
             })
             .flatten();
         let replaced_references = 1 + usize::from(mirrored_global_name.is_some());
-        let destructor = prepare_replaced_value_destructor_with_references(
-            eg,
-            &*target,
-            replaced_references,
-        );
+        // Scalar/string replacement has no PHP release work. The slot write
+        // still performs Rust/bitmap cleanup; references and container owners
+        // must retain the canonical destructor/lifecycle planner.
+        let destructor = if ((*target).value_type() as u8) >= ValueType::Array as u8 {
+            prepare_replaced_value_destructor_with_references(eg, &*target, replaced_references)
+        } else { None };
         if target == slot {
             frame_slot_set(frame, slot, value);
         } else {
@@ -55,7 +56,9 @@ fn assign_foreach_cv(
         if let Some(global_name) = mirrored_global_name {
             globals_set(&mut eg.globals, global_name, (&*target).clone());
         }
-        run_prepared_value_destructor(eg, destructor)?;
+        if destructor.is_some() {
+            run_prepared_value_destructor(eg, destructor)?;
+        }
     }
     Ok(())
 }
@@ -392,14 +395,6 @@ fn collect_unpack_traversable(
     Ok(Some(entries))
 }
 
-/// Collect one canonical Traversable for stdlib consumers that need the same
-/// Generator, IteratorAggregate and Iterator semantics as foreach/unpacking.
-pub(crate) fn collect_traversable_entries(
-    eg: &mut ExecutorGlobals,
-    source: &Value,
-) -> Result<Option<Vec<(ArrayKey, Value, bool)>>, VmError> {
-    collect_unpack_traversable(eg, source, TraversableUnpackKind::Array)
-}
 
 fn append_array_unpack_entry(
     target: &mut PhpArray,
@@ -704,9 +699,13 @@ fn bind_foreach_value_cv(
     // slot and must use frame bitmap bookkeeping.
     unsafe {
         let slot = (*frame).cv_mut(cv);
-        let destructor = prepare_replaced_value_destructor(eg, &*slot);
+        let destructor = if (slot.value_type() as u8) >= ValueType::Array as u8 {
+            prepare_replaced_value_destructor(eg, &*slot)
+        } else { None };
         frame_slot_set(frame, slot, value);
-        run_prepared_value_destructor(eg, destructor)?;
+        if destructor.is_some() {
+            run_prepared_value_destructor(eg, destructor)?;
+        }
     }
     Ok(())
 }
@@ -1116,7 +1115,7 @@ fn uses_user_iterator_protocol(value: &Value, eg: &ExecutorGlobals) -> bool {
     drop(object);
     !matches!(
         class_name.as_str(),
-        "Generator" | "ArrayIterator" | "ArrayObject" | "SplObjectStorage" | "SplPriorityQueue"
+        "Generator" | "SplObjectStorage" | "SplPriorityQueue"
     ) && eg.class_is_a(&class_name, "Iterator")
 }
 
@@ -1126,9 +1125,7 @@ fn builtin_iterator_values(value: &Value, eg: &ExecutorGlobals) -> Option<Value>
     let class_name = object.class_name.to_string();
     let legacy_values = object.get_property("__rphp_iterator_values").cloned();
     drop(object);
-    if eg.class_is_a(&class_name, "ArrayIterator") || eg.class_is_a(&class_name, "ArrayObject") {
-        crate::stdlib::array_object_iterable_values(value, eg)
-    } else if eg.class_is_a(&class_name, "SplObjectStorage")
+    if eg.class_is_a(&class_name, "SplObjectStorage")
         || eg.class_is_a(&class_name, "SplPriorityQueue")
     {
         legacy_values
@@ -1366,6 +1363,11 @@ fn op_foreach_init<'a>(
         set_foreach_iteration_state(frame, opline, Some(arr_val.clone()), 0);
     } else {
         if uses_user_iterator_protocol(arr_val, eg) {
+            if crate::stdlib::uses_native_iterator_protocol(arr_val, eg) {
+                crate::stdlib::native_iterator_projected_entry(arr_val, crate::stdlib::NativeIteratorMove::Rewind, crate::stdlib::NativeIteratorProjection::None, eg);
+                set_foreach_iteration_state(frame, opline, Some(arr_val.clone()), i64::MIN);
+                return Ok(ColdResult::Done);
+            }
             if by_reference && !eg.weak_iterator_allows_references(arr_val) {
                 let error = make_error_value(
                     "Error",
@@ -1499,6 +1501,88 @@ fn op_foreach_init<'a>(
     Ok(ColdResult::Done)
 }
 
+#[inline]
+fn finish_foreach_step<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    opline: &Instruction,
+    next_position: Option<i64>,
+    has_more: bool,
+) -> Result<ColdResult<'a>, VmError> {
+    // SAFETY: both destinations are compiler-allocated operands in the live
+    // frame. A throwing release transfers control before the result write.
+    unsafe {
+        if let Some(next) = next_position {
+            let position = (*frame).get_op_mut(opline.op2 as u32, opline.op2_type);
+            frame_result_set(frame, position, opline.op2_type, Value::long(next));
+        }
+        if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
+            return Ok(control);
+        }
+        let result = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+        frame_result_set(frame, result, opline.result_type, Value::bool(has_more));
+    }
+    Ok(ColdResult::Done)
+}
+
+// Native protocol work is shared by all three foreach specializations. It
+// does not probe Generator/public Iterator callbacks on each native step.
+#[inline(never)]
+fn next_native_foreach<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    source: &Value,
+    first: bool,
+    by_reference: bool,
+    assign_through_reference: bool,
+) -> Result<ColdResult<'a>, VmError> {
+    let movement = if first {
+        crate::stdlib::NativeIteratorMove::Current
+    } else {
+        crate::stdlib::NativeIteratorMove::Next
+    };
+    let valid = if first {
+        // Validity precedes aggregate release, but neither a payload alias nor
+        // a reference wrapper may exist yet: the destructor can remove it.
+        let valid = crate::stdlib::native_iterator_projected_entry(
+            source, movement, crate::stdlib::NativeIteratorProjection::None, eg,
+        ).is_some();
+        if let Some(control) = release_temporary_foreach_aggregate(eg, frame, op_array, opline)? {
+            return Ok(control);
+        }
+        valid
+    } else { true };
+    let key_encoded = (opline.extended_value >> 16) as u32;
+    let projection = if key_encoded == 0 {
+        crate::stdlib::NativeIteratorProjection::Value
+    } else {
+        crate::stdlib::NativeIteratorProjection::Both
+    };
+    let entry = if valid {
+        crate::stdlib::native_iterator_entry(source, movement, by_reference, projection, eg)
+    } else { None };
+    let has_more = if let Some((key, value)) = entry {
+        let value_cv = (opline.extended_value & 0xFFFF) as u32;
+        if by_reference || !assign_through_reference {
+            bind_foreach_value_cv(eg, frame, value_cv, value)?;
+        } else {
+            assign_foreach_cv(eg, frame, value_cv, value)?;
+        }
+        if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
+            return Ok(control);
+        }
+        if key_encoded > 0 {
+            assign_foreach_cv(eg, frame, key_encoded - 1, key)?;
+        }
+        true
+    } else {
+        false
+    };
+    finish_foreach_step(eg, frame, opline, has_more.then_some(i64::MIN + 1), has_more)
+}
+
 #[inline(never)]
 fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_LOOP: bool>(
     eg: &mut ExecutorGlobals,
@@ -1549,6 +1633,12 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
         return Ok(control);
     }
     let arr_val = initialized_source.as_ref().unwrap_or(source);
+    if cursor <= i64::MIN + 1 {
+        return next_native_foreach(
+            eg, frame, op_array, opline, arr_val, cursor == i64::MIN,
+            BY_REFERENCE_LOOP, ASSIGN_THROUGH_REFERENCE,
+        );
+    }
     // Check for Generator object
     let gen_ref_opt = if let Some(obj) = arr_val.as_object() {
         if obj.class_name.as_ref() == "Generator" {
@@ -1625,17 +1715,6 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                 }
                 assign_foreach_cv(eg, frame, key_encoded - 1, key.dereferenced().clone())?;
             }
-            // SAFETY: the compiler validated the position operand for this
-            // live user frame; the write remains within its TMP/CV storage.
-            unsafe {
-                let pos_ptr = (*frame).get_op_mut(opline.op2 as u32, opline.op2_type);
-                frame_result_set(
-                    frame,
-                    pos_ptr,
-                    opline.op2_type,
-                    Value::long(cursor - 1),
-                )
-            };
             true
         }
     } else if let Some(gen_ref) = gen_ref_opt {
@@ -1709,6 +1788,9 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                             .and_then(|array| array.argument_unpack_reference_at(pos))
                             .expect("live foreach position must remain addressable");
                         bind_foreach_value_cv(eg, frame, val_cv, value)?;
+                        if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
+                            return Ok(control);
+                        }
                         if key_encoded > 0 {
                             let key_cv = key_encoded - 1;
                             let key = iteration_state
@@ -1733,6 +1815,9 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                             )?;
                         } else {
                             assign_foreach_cv(eg, frame, val_cv, val.clone())?;
+                        }
+                        if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
+                            return Ok(control);
                         }
                         let key_cv = key_encoded - 1;
                         let key_val = materialize_foreach_array_key(key, external_byte_keys);
@@ -2052,13 +2137,9 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
         }
     };
 
-    if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
-        return Ok(control);
-    }
-
-    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-    unsafe { frame_result_set(frame, result_ptr, opline.result_type, Value::bool(has_more)) };
-    Ok(ColdResult::Done)
+    finish_foreach_step(
+        eg, frame, opline, (cursor < 0 && has_more).then(|| cursor - 1), has_more,
+    )
 }
 
 #[inline(never)]

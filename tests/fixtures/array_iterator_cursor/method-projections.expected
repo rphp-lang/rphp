@@ -1,0 +1,15 @@
+NULL
+bool(true)
+string(4) "heap"
+string(4) "tail"
+bool(true)
+drop|removed
+[{"v":9},{"v":7}]
+bool(false)
+NULL
+NULL
+bool(true)
+string(4) "late"
+int(11)
+int(2)
+int(1)

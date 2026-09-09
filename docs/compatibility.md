@@ -8,6 +8,54 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
+`native-array-iterator-cursor-protocol`, against `338cd70a`. Stable native
+cursor positions, live append/unset/reference/COW behavior and guarded iterator
+consumers add **+17/-0**: thirteen deduplicated SPL gains and four core gains.
+The 7,174-case core is **6,440 pass / 341 fail / 182 skip / 211 unsupported**,
+with no lost pass, timeout or crash. The supplied fifteen cases reach 12 pass;
+the overlapping 108-case neighbor set reaches 62 pass / 39 fail / 6 unsupported
+/ 1 XFAIL. Generic call-temporary lifetime (`iterator_041a/b`) and object-handle
+reuse (`arrayObject_getIteratorClass_basic1` tail) remain explicit holdouts.
+
+Native consumers fetch only requested values/keys and preserve aggregate
+release-before-fetch ordering; overrides retain canonical PHP calls. Following
+explicit authorization, the internal resource registry directly indexes the
+first eight monotonic IDs, then permanently uses hashing. Migration preserves
+backend addresses, aliases, holes, type/scope validation, unwind and shutdown
+boundaries. No Value ABI, common VM field, dependency or unsafe-ceiling change.
+
+Twenty-four original iterator specimens and the resource-growth specimen match
+PHP 8.5.10 byte-exactly. Focused checks pass 178 tests. One checked five-way
+matrix passes 4,890/4,588/4,961/4,983/5,034 tests (13/13/13/13/16 ignored),
+plus all-targets, exact core no-loss, Composer/Symfony S0-S3, runner/unsafe
+self-tests, format and public hygiene. Unsafe inventory is 1,621/289, within
+the unchanged 1,623/289 ceilings; automatic cleanup runs between configurations.
+
+All 26 fixed-parent 32-pair performance controls pass unchanged common +1% /
+pay-use +5% limits. The highest common median is closure-service +0.664%;
+native cursor/aggregate are +4.013%/+4.275%, native stream I/O -0.340%, and
+iterator-to-array -9.562%. Outputs remain exact. Rejected visitor/layout
+experiments were removed; instruction simulation separately verifies bounded
+resource lookup work, not hardware counters. Measurements use the authorized
+shared host with two recorded background events, not exclusive-host evidence.
+No private benchmark host was configured.
+
+SHA-256 evidence for this complete train:
+
+- Release: `fb11c1aa081cc564623d406e2345998ec7ace04ba7149feb23d62ec8e65e5bef`.
+- Complete technical record: `2ff9c5c603f6956be70bd79512f852d041a3bb37eec86ca932a439778f0fd627`.
+- Matrix: `bd9bc9d6cf7f71954e4600fbc20de16bee07ef605b346516afc3133b8caa634e`.
+- Zend/lang manifest / pass set: `8624a7815a07d654d573384cb97eb51ef53000032ad5b3ef912d30de38dd38da` / `f554044beb9b896175b5527154a588eab7d824d642b11174c950152c25ade6d2`.
+- Strings/array manifest / pass set: `9bf891c30b8763bbd23a62590ce7898e80c02f123682ec54139a8a277f1b46b2` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+- Performance / holdout results: `9186265531ae9ee2c6e422950248124afcc835832285b544c352263c912211f1` / `fcd5ba2559f12531e54352f0bbaea90380fabe5b9166a309088fcf0f4b83147b`.
+- Iterator / resource oracle: `d32b98c255cc4848b8c75007663082e3d00365e8e69fb9b494410400fd0e25c0` / `a9703012b141d8ef46c13e413c57ccb17f7d06bfd394cee2c867363e5b6dd077`.
+
+Other SPL adapters, general interface-link/Reflection enforcement, SPL
+serialization, 32-bit and OOM equivalence remain non-claims. Next admission
+reviews twenty failing IteratorIterator/LimitIterator/NoRewindIterator cases
+against this exact release before any new implementation.
+
+The preceding measured AMD64 PHP 8.5 checkpoint is
 `array-object-construction-view-policy`, against parent `b7d879ab`.
 ArrayObject/ArrayIterator constructor options, flags and custom iterator classes
 share sparse native metadata. Property/backing views preserve visibility,

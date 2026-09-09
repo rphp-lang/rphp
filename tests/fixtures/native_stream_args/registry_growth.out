@@ -1,0 +1,35 @@
+width=2
+bool(true)
+bool(true)
+string(6) "alpha
+"
+string(5) "omega"
+int(11)
+bool(true)
+bool(false)
+fwrite(): Argument #1 ($stream) must be an open stream resource
+int(0)
+item:1
+bool(true)
+bool(true)
+string(5) "alpha"
+width=12
+bool(true)
+bool(true)
+string(6) "alpha
+"
+string(5) "omega"
+int(11)
+bool(true)
+bool(false)
+fwrite(): Argument #1 ($stream) must be an open stream resource
+int(0)
+item:1
+item:3
+item:5
+item:7
+item:9
+item:11
+bool(true)
+bool(true)
+string(5) "alpha"

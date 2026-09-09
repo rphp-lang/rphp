@@ -1,0 +1,17 @@
+rewind
+valid
+current
+key
+k=6
+next
+valid
+values-only
+rewind
+valid
+current
+6
+next
+valid
+by-reference
+Error:An iterator cannot be used with foreach by reference
+{"k":6}

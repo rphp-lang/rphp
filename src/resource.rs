@@ -35,6 +35,92 @@ impl ResourceEntry {
     }
 }
 
+// IDs are monotonic and never reused. Index only this bounded prefix; a
+// request which outgrows it permanently uses hashing, even after mass close.
+const SMALL_RESOURCE_LIMIT: usize = 8;
+
+enum ResourceEntries {
+    Small(Vec<Option<ResourceEntry>>),
+    Large(HashMap<i64, ResourceEntry>),
+}
+
+impl ResourceEntries {
+    #[inline]
+    fn get(&self, id: &i64) -> Option<&ResourceEntry> {
+        match self {
+            Self::Small(entries) => entries
+                .get(usize::try_from(*id).ok()?.wrapping_sub(1))?
+                .as_ref(),
+            Self::Large(entries) => entries.get(id),
+        }
+    }
+
+    #[inline]
+    fn get_mut(&mut self, id: &i64) -> Option<&mut ResourceEntry> {
+        match self {
+            Self::Small(entries) => entries
+                .get_mut(usize::try_from(*id).ok()?.wrapping_sub(1))?
+                .as_mut(),
+            Self::Large(entries) => entries.get_mut(id),
+        }
+    }
+
+    #[cold]
+    fn insert(&mut self, id: i64, entry: ResourceEntry) -> Option<ResourceEntry> {
+        debug_assert!(id > 0);
+        if let Self::Small(entries) = self {
+            if id <= SMALL_RESOURCE_LIMIT as i64 {
+                let index = id as usize - 1;
+                if index >= entries.len() {
+                    entries.resize_with(index + 1, || None);
+                }
+                return entries[index].replace(entry);
+            }
+            let mut large = HashMap::with_capacity(entries.len() + 1);
+            for (index, entry) in entries.drain(..).enumerate() {
+                if let Some(entry) = entry {
+                    large.insert(index as i64 + 1, entry);
+                }
+            }
+            *self = Self::Large(large);
+        }
+        let Self::Large(entries) = self else {
+            unreachable!("small insertion returns before migration");
+        };
+        entries.insert(id, entry)
+    }
+
+    #[cold]
+    fn remove_if(
+        &mut self,
+        id: i64,
+        predicate: impl FnOnce(&ResourceEntry) -> bool,
+    ) -> Option<ResourceEntry> {
+        match self {
+            Self::Small(entries) => {
+                let slot = entries.get_mut(usize::try_from(id).ok()?.wrapping_sub(1))?;
+                if predicate(slot.as_ref()?) {
+                    slot.take()
+                } else {
+                    None
+                }
+            }
+            Self::Large(entries) => {
+                let Entry::Occupied(entry) = entries.entry(id) else {
+                    return None;
+                };
+                predicate(entry.get()).then(|| entry.remove())
+            }
+        }
+    }
+
+    #[cold]
+    #[cfg(any(feature = "resource-lifetime", feature = "stream-registry"))]
+    fn remove(&mut self, id: &i64) -> Option<ResourceEntry> {
+        self.remove_if(*id, |_| true)
+    }
+}
+
 /// Request-owned PHP resource registry.
 ///
 /// Resource `Value`s contain a stable integer id. With `resource-lifetime`, a
@@ -42,14 +128,14 @@ impl ResourceEntry {
 /// Request shutdown remains the safety net in both configurations.
 pub struct ResourceRegistry {
     next_id: i64,
-    entries: HashMap<i64, ResourceEntry>,
+    entries: ResourceEntries,
 }
 
 impl ResourceRegistry {
     pub fn new() -> Self {
         Self {
             next_id: 1,
-            entries: HashMap::new(),
+            entries: ResourceEntries::Small(Vec::new()),
         }
     }
 
@@ -104,7 +190,7 @@ impl ResourceRegistry {
 
     #[inline]
     pub fn is_open(&self, id: i64) -> bool {
-        self.entries.contains_key(&id)
+        self.entries.get(&id).is_some()
     }
 
     #[inline]
@@ -122,18 +208,6 @@ impl ResourceRegistry {
         id: i64,
         operation: impl FnOnce(&mut T) -> R,
     ) -> Option<R> {
-        // Bound by all IDs ever issued, not the current live count: a sparse
-        // registry that grew large must never walk its retained table. A new
-        // tiny registry can compare integer IDs without repeatedly hashing
-        // them for native I/O. Type validation and the borrow stay identical.
-        if self.next_id <= 8 {
-            for (&key, entry) in &mut self.entries {
-                if key == id {
-                    return Some(operation(entry.payload.downcast_mut::<T>()?));
-                }
-            }
-            return None;
-        }
         let payload = self.entries.get_mut(&id)?.payload.downcast_mut::<T>()?;
         Some(operation(payload))
     }
@@ -149,28 +223,21 @@ impl ResourceRegistry {
     )]
     #[cold]
     pub fn close<T: 'static>(&mut self, id: i64) -> bool {
-        let Entry::Occupied(entry) = self.entries.entry(id) else {
+        let Some(entry) = self.entries.remove_if(id, |entry| entry.payload.is::<T>()) else {
             return false;
         };
-        if !entry.get().payload.is::<T>() {
-            return false;
-        }
         // Validate and remove through one lookup; a wrong type leaves the
         // original entry and owner live.
-        entry.remove().retire_owner();
+        entry.retire_owner();
         true
     }
 
     #[cfg(feature = "resource-lifetime")]
     #[cold]
     fn remove<T: 'static>(&mut self, id: i64) -> Option<ResourceEntry> {
-        let Entry::Occupied(entry) = self.entries.entry(id) else {
-            return None;
-        };
-        if !entry.get().payload.is::<T>() {
-            return None;
-        }
-        let entry = entry.remove();
+        let entry = self
+            .entries
+            .remove_if(id, |entry| entry.payload.is::<T>())?;
         entry.retire_owner();
         Some(entry)
     }
@@ -188,8 +255,17 @@ impl Drop for ResourceRegistry {
     fn drop(&mut self) {
         // Retire all handles before dropping any backend: backend teardown
         // may itself release another resource from this same registry.
-        for entry in self.entries.values() {
-            entry.retire_owner();
+        match &self.entries {
+            ResourceEntries::Small(entries) => {
+                for entry in entries.iter().flatten() {
+                    entry.retire_owner();
+                }
+            }
+            ResourceEntries::Large(entries) => {
+                for entry in entries.values() {
+                    entry.retire_owner();
+                }
+            }
         }
     }
 }
@@ -609,7 +685,7 @@ mod tests {
                 .map(|value| registry.insert("number", value as u64))
                 .collect();
             let calls = Cell::new(0);
-            for missing in [0, -1, i64::MAX] {
+            for missing in [0, -1, i64::MIN, i64::MAX] {
                 assert_eq!(
                     registry.with_payload_mut::<u64, _>(missing, |_| calls.set(1)),
                     None,
@@ -649,7 +725,9 @@ mod tests {
             assert!(registry.close::<u64>(id));
         }
         assert!(registry.next_id > 8);
-        assert!(registry.entries.capacity() > 8);
+        assert!(
+            matches!(&registry.entries, super::ResourceEntries::Large(entries) if entries.capacity() > 8)
+        );
         for &id in &ids[..31] {
             assert_eq!(
                 registry.with_payload_mut::<u64, _>(id, |value| *value),
@@ -675,6 +753,140 @@ mod tests {
     }
 
     #[test]
+    fn small_registry_migration_moves_backends_without_release_or_id_reuse() {
+        let drops = Rc::new(Cell::new(0));
+        let mut registry = ResourceRegistry::new();
+        let ids: Vec<_> = (0..super::SMALL_RESOURCE_LIMIT)
+            .map(|_| registry.insert("probe", DropProbe(drops.clone())))
+            .collect();
+        assert!(matches!(registry.entries, super::ResourceEntries::Small(_)));
+        let address = registry
+            .with_payload_mut::<DropProbe, _>(ids[0], |probe| probe as *const DropProbe as usize)
+            .unwrap();
+        assert!(registry.close::<DropProbe>(ids[2]));
+        assert_eq!(drops.get(), 1);
+        let next = registry.insert("probe", DropProbe(drops.clone()));
+        assert_eq!(next, ids.last().unwrap() + 1);
+        assert!(matches!(registry.entries, super::ResourceEntries::Large(_)));
+        assert_eq!(drops.get(), 1, "migration must only move entries");
+        assert_eq!(
+            registry.with_payload_mut::<DropProbe, _>(ids[0], |probe| probe as *const DropProbe
+                as usize),
+            Some(address)
+        );
+        assert!(!registry.is_open(ids[2]));
+        assert_eq!(registry.resource_type(ids[2]), "Unknown");
+        assert!(!registry.close::<String>(next));
+        for id in ids.into_iter().chain([next]) {
+            if registry.is_open(id) {
+                assert_eq!(registry.resource_type(id), "probe");
+            }
+        }
+        drop(registry);
+        assert_eq!(drops.get(), super::SMALL_RESOURCE_LIMIT + 1);
+    }
+
+    #[test]
+    fn migrated_payload_unwind_releases_borrow_and_keeps_mutation() {
+        let scope = allocate_scope();
+        let ids: Vec<_> = (0..12).map(|n| insert(scope, "number", n as u64)).collect();
+        let id = ids[1];
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_payload_mut::<u64, _>(scope, id, |value| {
+                *value = 91;
+                panic!("native operation stopped");
+            });
+        }));
+        assert!(result.is_err());
+        assert_eq!(
+            with_payload_mut::<u64, _>(scope, id, |value| *value),
+            Some(91)
+        );
+        assert_eq!(with_payload_mut::<String, _>(scope, id, |_| ()), None);
+        close_scope(scope);
+        assert_eq!(with_payload_mut::<u64, _>(scope, id, |_| ()), None);
+    }
+
+    #[test]
+    #[cfg(feature = "stream-registry")]
+    fn wrapping_preserves_resource_ids_on_both_sides_of_migration() {
+        for width in [1, 12] {
+            let mut executor = ExecutorGlobals::with_output(Box::new(std::io::sink()));
+            let ids: Vec<_> = (0..width)
+                .map(|n| insert_for_request(&mut executor, "probe", n as u64))
+                .collect();
+            let id = ids[0];
+            assert!(!super::wrap_request_payload::<String, u64>(
+                &mut executor,
+                id,
+                |_| { panic!("wrong type must not invoke the wrapper") }
+            ));
+            assert!(super::wrap_request_payload::<u64, String>(
+                &mut executor,
+                id,
+                |n| { format!("wrapped:{n}") }
+            ));
+            assert!(is_open_for_request(&executor, id));
+            assert_eq!(super::type_for_request(&executor, id), "probe");
+            assert_eq!(
+                super::with_request_payload_mut::<String, _>(&mut executor, id, |s| s.clone()),
+                Some("wrapped:0".to_string())
+            );
+            assert!(!close_for_request::<u64>(&mut executor, id));
+            assert!(close_for_request::<String>(&mut executor, id));
+            assert!(!is_open_for_request(&executor, id));
+            if width > 1 {
+                assert_eq!(
+                    super::with_request_payload_mut::<u64, _>(&mut executor, ids[1], |n| *n),
+                    Some(1)
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "resource-lifetime")]
+    fn shutdown_retires_all_aliases_before_any_small_or_large_backend_drop() {
+        struct InspectOwners {
+            aliases: Rc<std::cell::RefCell<Vec<crate::value::Value>>>,
+            drops: Rc<Cell<usize>>,
+        }
+        impl Drop for InspectOwners {
+            fn drop(&mut self) {
+                assert!(
+                    self.aliases
+                        .borrow()
+                        .iter()
+                        .all(|v| !v.needs_vm_resource_release())
+                );
+                self.drops.set(self.drops.get() + 1);
+            }
+        }
+        for width in [3, 8, 9, 17] {
+            let aliases = Rc::new(std::cell::RefCell::new(Vec::new()));
+            let drops = Rc::new(Cell::new(0));
+            let mut executor = ExecutorGlobals::with_output(Box::new(std::io::sink()));
+            for _ in 0..width {
+                let value = insert_value_for_request(
+                    &mut executor,
+                    "probe",
+                    InspectOwners {
+                        aliases: aliases.clone(),
+                        drops: drops.clone(),
+                    },
+                );
+                value.set_vm_resource_release(|_, _| panic!("retired callback cannot run"));
+                aliases.borrow_mut().push(value);
+            }
+            assert_eq!(drops.get(), 0);
+            drop(executor);
+            assert_eq!(drops.get(), width);
+            aliases.borrow_mut().clear();
+            assert_eq!(drops.get(), width);
+        }
+    }
+
+    #[test]
     fn sparse_retained_scope_table_preserves_projection() {
         let scopes: Vec<_> = (0..32)
             .map(|value| {
@@ -690,6 +902,53 @@ mod tests {
         let (scope, id) = scopes[31];
         assert_eq!(with_payload_mut::<u64, _>(scope, id, |v| *v), Some(31));
         assert_eq!(with_payload_mut::<u64, _>(scopes[0].0, id, |_| ()), None);
+        close_scope(scope);
+    }
+
+    #[test]
+    fn payload_operation_capture_release_boundaries() {
+        struct Capture(Rc<Cell<Option<bool>>>);
+        impl Drop for Capture {
+            fn drop(&mut self) {
+                self.0.set(Some(
+                    REQUEST_RESOURCES.with(|registries| registries.try_borrow_mut().is_err()),
+                ));
+            }
+        }
+        let scope = allocate_scope();
+        let id = insert(scope, "number", 7u64);
+        for (case, requested_scope, requested_id, wrong_type, panic) in [
+            ("zero scope", 0, id, false, false),
+            ("absent scope", allocate_scope(), id, false, false),
+            ("absent id", scope, id + 1, false, false),
+            ("wrong type", scope, id, true, false),
+            ("success", scope, id, false, false),
+            ("unwind", scope, id, false, true),
+        ] {
+            let state = Rc::new(Cell::new(None));
+            let capture = Capture(state.clone());
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if wrong_type {
+                    with_payload_mut::<String, _>(requested_scope, requested_id, |_| {
+                        drop(capture);
+                    })
+                } else {
+                    with_payload_mut::<u64, _>(requested_scope, requested_id, |_| {
+                        if panic {
+                            panic!("operation unwind");
+                        }
+                        drop(capture);
+                    })
+                }
+            }));
+            assert_eq!(result.is_err(), panic, "{case}");
+            assert_eq!(
+                state.get(),
+                Some(requested_scope == scope),
+                "capture release borrow boundary: {case}"
+            );
+            assert_eq!(with_payload_mut::<u64, _>(scope, id, |v| *v), Some(7));
+        }
         close_scope(scope);
     }
 

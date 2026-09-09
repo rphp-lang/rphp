@@ -12,6 +12,12 @@ use crate::vm::instruction::{
 };
 
 mod array_object;
+pub(crate) use array_object::cursor::{
+    Move as NativeIteratorMove, Projection as NativeIteratorProjection,
+    consume_array as consume_native_iterator_array, entry as native_iterator_entry,
+    native_protocol as uses_native_iterator_protocol,
+    projected_entry as native_iterator_projected_entry,
+};
 pub(crate) use array_object::{
     array_cast as array_object_array_cast, bind_property as bind_array_object_property,
     prepare_clone as prepare_array_object_clone,
@@ -1320,21 +1326,6 @@ fn array_object_storage_key(object: &PhpObject) -> &'static str {
     }
 }
 
-pub(crate) fn array_object_iterable_values(
-    receiver: &Value,
-    eg: &ExecutorGlobals,
-) -> Option<Value> {
-    let values = receiver.as_object().and_then(|object| {
-        let storage = array_object_storage_key(&object);
-        object.get_property(storage).cloned()
-    })?;
-    if values.value_type() == ValueType::Array {
-        Some(values)
-    } else {
-        Some(Value::array(array_object::snapshot(receiver, eg, true)))
-    }
-}
-
 fn fn_array_iterator_construct(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -1718,7 +1709,16 @@ fn fn_array_object_offset_unset(
         return array_object::offset_unset(ed, eg, key);
     };
     let key = array.normalize_string_key(key, arg!(ed, 1).dereferenced());
-    array.remove(&key);
+    let release = array_object_value(array, &key)
+        .filter(|value| (value.value_type() as u8) >= ValueType::Array as u8)
+        .and_then(|value| array_object::release_plan(eg, value));
+    if let Some(position) = array.remove_with_position(&key) {
+        array_object::cursor::removed(&mut object, position);
+    }
+    drop(object);
+    if release.is_some() {
+        crate::vm::execute::run_prepared_value_destructor(eg, release)?;
+    }
     Ok(())
 }
 
@@ -3409,9 +3409,16 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         false,
     ))
     .unwrap();
+    eg.register_class(empty_internal_type(
+        "SeekableIterator",
+        vec!["Iterator".into()],
+        true,
+        false,
+    ))
+    .unwrap();
     funcs.extend(super::weak::register(eg));
     for (name, traversal_interface) in [
-        ("ArrayIterator", "Iterator"),
+        ("ArrayIterator", "SeekableIterator"),
         ("ArrayObject", "IteratorAggregate"),
     ] {
         let mut class = empty_internal_type(

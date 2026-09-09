@@ -119,7 +119,27 @@ fn reflected_signature_type(hint: &ParamTypeHint) -> Value {
     match hint {
         ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => {
             let mut types = PhpArray::with_packed_capacity(parts.len());
+            let union = matches!(hint, ParamTypeHint::Union(_));
+            let mut display = String::new();
             for part in parts {
+                if !display.is_empty() {
+                    display.push(if union { '|' } else { '&' });
+                }
+                // Reflection follows signature order, not property-error
+                // canonicalization (which also reorders singleton types).
+                if matches!(part, ParamTypeHint::Nullable(inner) if matches!(inner.as_ref(), ParamTypeHint::None))
+                {
+                    display.push_str("null");
+                } else {
+                    let grouped = union && matches!(part, ParamTypeHint::Intersection(_));
+                    if grouped {
+                        display.push('(');
+                    }
+                    display.push_str(&part.display_name());
+                    if grouped {
+                        display.push(')');
+                    }
+                }
                 types.push(reflected_signature_type(part));
             }
             object_value(
@@ -130,8 +150,19 @@ fn reflected_signature_type(hint: &ParamTypeHint) -> Value {
                 },
                 [
                     ("__generic_types", Value::array(types)),
-                    ("__generic_string", Value::string(hint.display_name())),
-                    ("__reflection_allows_null", Value::bool(false)),
+                    ("__generic_string", Value::string(display)),
+                    ("__reflection_allows_null", Value::bool(hint.allows_null())),
+                ],
+            )
+        }
+        ParamTypeHint::Nullable(inner) if matches!(inner.as_ref(), ParamTypeHint::None) => {
+            object_value(
+                "ReflectionNamedType",
+                [
+                    ("__generic_name", Value::string("null")),
+                    ("__generic_arguments", Value::array(PhpArray::new())),
+                    ("__generic_string", Value::string("null")),
+                    ("__reflection_allows_null", Value::bool(true)),
                 ],
             )
         }

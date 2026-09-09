@@ -1667,7 +1667,8 @@ impl ExecutorGlobals {
         // free without relying on Vec's growth doubling at the boundary.
         // php_user_filter and StreamBucket add two entries only when the
         // stream registry is installed; do not double these vectors at startup.
-        let class_capacity = 96 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        // SeekableIterator adds one unconditional interface to that envelope.
+        let class_capacity = 97 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;

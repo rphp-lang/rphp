@@ -36,6 +36,31 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `native-array-iterator-cursor-protocol` train adds seventeen
+deduplicated PHP 8.5 passes over `338cd70a`: thirteen SPL and four core cases,
+without loss. Stable native cursors preserve live mutation, references/COW,
+override calls and release-before-fetch ordering. User-authorized internal
+resource indexing removes bounded small-table traversal while preserving
+monotonic IDs, typed/scope checks, aliases, migration, unwind and shutdown.
+Large sparse registries permanently retain hash lookup. No common VM field,
+Value ABI, dependency or unsafe-ceiling change is introduced.
+
+Core counts reach 6,440/341/182/211. One checked five-configuration matrix,
+all-targets, exact pass-set no-loss, S0-S3, original oracles and static/unsafe
+gates pass. All 26 fixed-parent 32-pair controls meet unchanged common +1% /
+pay-use +5% limits on the authorized shared host; highest medians are +0.664%
+common and +4.275% pay-use. Evidence hashes and three independent supplying
+holdouts are recorded in `compatibility.md`. Automatic cleanup remains part
+of every full matrix and release/performance cycle.
+
+Next admission has twenty reference-passing/current-failing cases sharing
+IteratorIterator/LimitIterator/NoRewindIterator delegation. Review constructor,
+cached projection, seek/rewind, override, exception and release boundaries
+before implementation; require at least ten reachable shared-cause gains.
+Do not absorb recursive/general SPL families, file backends or suspension.
+
+### Preceding array-object checkpoint
+
 The accepted `array-object-construction-view-policy` train adds twenty-two
 deduplicated PHP 8.5 passes over `b7d879ab`, without loss. Constructor flags,
 iterator classes and property/backing views share sparse native state and retain

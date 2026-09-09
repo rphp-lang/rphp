@@ -1,0 +1,16 @@
+NULL
+[true,"green",25]
+OutOfBoundsException:Seek position -1 is out of range
+[true,"green",25]
+OutOfBoundsException:Seek position 9 is out of range
+[false,null,null]
+NULL
+[true,"red",14]
+NULL
+[true,"blue",36]
+NULL
+[true,"green",25]
+TypeError:ArrayIterator::seek(): Argument #1 ($offset) must be of type int, array given
+[true,"green",25]
+ArgumentCountError:ArrayIterator::seek() expects exactly 1 argument, 0 given
+ArgumentCountError:ArrayIterator::next() expects exactly 0 arguments, 1 given

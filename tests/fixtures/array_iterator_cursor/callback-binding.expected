@@ -1,0 +1,3 @@
+int(2)
+int(7)
+iterator_to_array(): Argument #2 ($preserve_keys) must be of type bool, int given

@@ -1,0 +1,9 @@
+ArgumentCountError:iterator_to_array() expects at least 1 argument, 0 given
+TypeError:iterator_to_array(): Argument #1 ($iterator) must be of type Traversable|array, int given
+ArgumentCountError:iterator_count() expects exactly 1 argument, 0 given
+TypeError:iterator_count(): Argument #1 ($iterator) must be of type Traversable|array, int given
+TypeError:iterator_apply(): Argument #2 ($callback) must be a valid callback, function "missing_cursor_callback" not found or invalid function name
+TypeError:iterator_apply(): Argument #3 ($args) must be of type ?array, int given
+2
+1:1
+[4]

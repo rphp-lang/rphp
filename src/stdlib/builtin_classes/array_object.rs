@@ -10,6 +10,7 @@ use crate::vm::execute::{
 use crate::vm::function::InternalFunctionHandler;
 use std::rc::Rc;
 
+pub(crate) mod cursor;
 mod options;
 mod sorting;
 pub(super) use sorting::reject_mutation;
@@ -136,6 +137,10 @@ fn prepare_native_clone(source: &Value, clone: &mut PhpObject, eg: &ExecutorGlob
     let Some(key) = native_storage_key(clone) else {
         return;
     };
+    if key == ARRAY_ITERATOR_STORAGE {
+        clone.set_property(key, source.clone());
+        return;
+    }
     if clone
         .get_property(key)
         .is_some_and(|value| value.value_type() == ValueType::Object)
@@ -189,15 +194,19 @@ enum Backing {
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
 fn backing(receiver: &Value) -> Option<Backing> {
     let mut owner = receiver.clone();
-    let mut seen = Vec::new();
+    // Most native cursors have zero or one wrapper hop. Cycle detection must
+    // not allocate a Vec for every element they read. Deep chains still spill
+    // rather than imposing a semantic nesting limit.
+    let mut inline = [0usize; 4];
+    let mut used = 0;
+    let mut overflow = Vec::new();
     loop {
         let object = owner.as_object()?;
         let identity = owner.object_identity()?;
-        if seen.contains(&identity) {
+        if inline[..used].contains(&identity) || overflow.contains(&identity) {
             drop(object);
             return Some(Backing::Object(owner));
         }
-        seen.push(identity);
         let key = array_object_storage_key(&object);
         let Some(value) = object.get_property(key) else {
             drop(object);
@@ -206,6 +215,12 @@ fn backing(receiver: &Value) -> Option<Backing> {
         if value.value_type() == ValueType::Array {
             drop(object);
             return Some(Backing::Array(owner, key));
+        }
+        if used < inline.len() {
+            inline[used] = identity;
+            used += 1;
+        } else {
+            overflow.push(identity);
         }
         let next = value.clone();
         drop(object);
@@ -344,7 +359,7 @@ pub(super) fn append(
 #[inline(never)]
 // SAFETY: compiler-generated code retains its normal calling convention.
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
-fn release_plan(eg: &ExecutorGlobals, value: &Value) -> Option<PreparedValueDestructor> {
+pub(super) fn release_plan(eg: &ExecutorGlobals, value: &Value) -> Option<PreparedValueDestructor> {
     // These raw bucket operations detach the slot rather than writing through
     // a shared PHP reference. Its other aliases still retain the old payload.
     if value.owned_reference_is_aliased() {
@@ -403,6 +418,15 @@ fn replace_storage(
     value: Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    replace_storage_with_cursor_policy(receiver, value, eg, true)
+}
+
+fn replace_storage_with_cursor_policy(
+    receiver: &Value,
+    value: Value,
+    eg: &mut ExecutorGlobals,
+    new_table: bool,
+) -> Result<(), VmError> {
     let Some(object) = receiver.as_object() else {
         return Ok(());
     };
@@ -414,10 +438,11 @@ fn replace_storage(
         .get_property(key)
         .and_then(|old| release_plan(eg, old));
     drop(object);
-    receiver
-        .as_object_mut()
-        .expect("retained native receiver")
-        .set_property(key, value);
+    let len = value.as_array().map_or(0, PhpArray::len);
+    let mut object = receiver.as_object_mut().expect("retained native receiver");
+    object.set_property(key, value);
+    cursor::storage_replaced(&mut object, len, new_table);
+    drop(object);
     run_prepared_value_destructor(eg, release)
 }
 
@@ -459,6 +484,12 @@ pub(super) fn construct(
         .as_object_mut()
         .expect("native receiver")
         .set_native_array_options(options);
+    if owner == "ArrayIterator" {
+        let mut object = arg!(ed, 0).as_object_mut().expect("native receiver");
+        if object.native_array_iteration().is_some() {
+            object.native_array_iteration_mut().cursor = None;
+        }
+    }
     replace_storage(arg!(ed, 0), value, eg)
 }
 
@@ -589,6 +620,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     }
     functions.extend(sorting::register(eg));
     functions.extend(options::register(eg));
+    functions.extend(cursor::register(eg));
     functions
 }
 
@@ -840,6 +872,11 @@ pub(super) fn offset_unset(
     eg: &mut ExecutorGlobals,
     key: ArrayKey,
 ) -> Result<(), VmError> {
+    let receiver_cursor = arg!(ed, 0).as_object().and_then(|object| {
+        object
+            .native_array_iteration()
+            .and_then(|state| state.cursor.clone())
+    });
     let Some(storage) = backing(arg!(ed, 0)) else {
         return Ok(());
     };
@@ -847,6 +884,7 @@ pub(super) fn offset_unset(
         Backing::Array(owner, key) => (owner, Some(key)),
         Backing::Object(owner) => (owner, None),
     };
+    let identity = owner.object_identity().expect("resolved backing identity");
     let mut object = owner.as_object_mut().expect("resolved backing owner");
     let release;
     if let Some(storage_key) = array_key {
@@ -856,7 +894,9 @@ pub(super) fn offset_unset(
             .expect("array backing");
         let key = array.normalize_string_key(key, arg!(ed, 1));
         release = array_object_value(array, &key).and_then(|v| release_plan(eg, v));
-        array.remove(&key);
+        if let Some(position) = array.remove_with_position(&key) {
+            cursor::removed(&mut object, position);
+        }
     } else {
         let target = property_slot(&object, &key, eg);
         release = object_slot(&mut object, &target).and_then(|v| release_plan(eg, v));
@@ -867,9 +907,11 @@ pub(super) fn offset_unset(
                     .expect("declared property")
                     .to_owned();
                 object.unset_property(&name);
+                cursor::object_removed(&mut object, identity, receiver_cursor.as_ref(), &name, eg);
             }
             PropertySlot::Dynamic(name) => {
                 object.remove_dynamic_property(&name);
+                cursor::object_removed(&mut object, identity, receiver_cursor.as_ref(), &name, eg);
             }
         }
     }

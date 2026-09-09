@@ -214,7 +214,7 @@ fn sort(
         );
     }
     copy_array_key_provenance(array, &sorted);
-    replace_storage(&owner, Value::array(sorted), eg)?;
+    replace_storage_with_cursor_policy(&owner, Value::array(sorted), eg, false)?;
     if let Err(Some(error)) = outcome {
         return Err(error);
     }

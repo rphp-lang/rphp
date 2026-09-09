@@ -1,0 +1,9 @@
+Exception:rewind stopped
+[true,"one",8]
+Exception:current stopped
+[true,"one",8]
+Exception:next stopped
+[true,"one",8]
+2
+Exception:callback stopped
+[true,"one",8]

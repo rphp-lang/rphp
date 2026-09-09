@@ -496,23 +496,60 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "callback",
         "mode"
     );
-    {
-        let mut function = Box::new(make_internal_function(
-            fn_iterator_to_array,
-            2,
+    for (name, handler, required, names, hints, defaults, result) in [
+        (
+            "iterator_to_array",
+            iterator::to_array as crate::vm::function::InternalFunctionHandler,
             1,
-            pn!["iterator", "preserve_keys"],
-        ));
-        function.common.sig.param_type_hints = vec![
-            ParamTypeHint::Union(vec![
-                ParamTypeHint::ClassName("Traversable".to_string()),
+            vec!["iterator", "preserve_keys"],
+            vec![
+                ParamTypeHint::Union(vec![
+                    ParamTypeHint::ClassName("Traversable".into()),
+                    ParamTypeHint::Array,
+                ]),
+                ParamTypeHint::Bool,
+            ],
+            vec![None, Some(Value::bool(true))],
+            ParamTypeHint::Array,
+        ),
+        (
+            "iterator_count",
+            iterator::count,
+            1,
+            vec!["iterator"],
+            vec![ParamTypeHint::Union(vec![
+                ParamTypeHint::ClassName("Traversable".into()),
                 ParamTypeHint::Array,
-            ]),
-            ParamTypeHint::Bool,
-        ];
-        function.common.sig.return_type_hint = ParamTypeHint::Array;
+            ])],
+            vec![None],
+            ParamTypeHint::Int,
+        ),
+        (
+            "iterator_apply",
+            iterator::apply,
+            2,
+            vec!["iterator", "callback", "args"],
+            vec![
+                ParamTypeHint::ClassName("Traversable".into()),
+                ParamTypeHint::Callable,
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Array)),
+            ],
+            vec![None, None, Some(Value::null())],
+            ParamTypeHint::Int,
+        ),
+    ] {
+        let mut function = Box::new(make_internal_function(
+            handler,
+            names.len() as u32,
+            required,
+            names.iter().map(|name| name.to_string()).collect(),
+        ));
+        function.common.sig.param_type_hints = hints;
+        function.common.sig.return_type_hint = result;
+        function.handler_validates_types = true;
         let pointer = &function.common as *const FunctionCommon;
-        eg.register_function("iterator_to_array", pointer).unwrap();
+        eg.register_function(name, pointer).unwrap();
+        eg.register_internal_function_reflection_metadata(pointer, defaults, "SPL");
         funcs.push(function);
     }
     reg_var!("compact", fn_compact, 1, "var_name", "var_names");

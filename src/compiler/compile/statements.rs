@@ -4111,6 +4111,9 @@ impl Compiler {
                     } else if matches!(
                         array,
                         Expr::ArrayLiteral(_)
+                            | Expr::New { .. }
+                            | Expr::DynamicNew { .. }
+                            | Expr::AnonymousNew { .. }
                             | Expr::FunctionCall { .. }
                             | Expr::MethodCall { .. }
                             | Expr::StaticCall { .. }

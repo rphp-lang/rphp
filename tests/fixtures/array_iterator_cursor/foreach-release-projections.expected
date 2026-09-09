@@ -1,0 +1,21 @@
+value
+aggregate-begin
+payload-drop
+aggregate-end
+body:7
+{"last":7}
+reference
+aggregate-begin
+payload-drop
+aggregate-end
+body:7
+{"last":17}
+aggregate-begin
+aggregate-end
+[19]
+aggregate-begin
+payload-drop
+aggregate-end
+Error:aggregate-release
+string(9) "unchanged"
+{"last":8}

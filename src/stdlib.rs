@@ -197,6 +197,7 @@ mod filesystem;
 mod formatted_io;
 mod hebrew;
 mod html_entities;
+mod iterator;
 mod process;
 mod recursive_arrays;
 mod source_filters;
@@ -205,11 +206,12 @@ mod weak;
 
 use filesystem::{bytes_to_php_string, php_string_to_bytes};
 
-pub(crate) use builtin_classes::array_object_iterable_values;
 pub use builtin_classes::register_builtin_classes;
 pub(crate) use builtin_classes::{
-    array_object_array_cast, array_object_property_uses_dimension, bind_array_object_property,
-    prepare_array_object_clone,
+    NativeIteratorMove, NativeIteratorProjection, array_object_array_cast,
+    array_object_property_uses_dimension, bind_array_object_property,
+    consume_native_iterator_array, native_iterator_entry, native_iterator_projected_entry,
+    prepare_array_object_clone, uses_native_iterator_protocol,
 };
 
 pub(super) fn owned_argument(ed: *mut ExecuteData, index: u32) -> Value {
@@ -1580,61 +1582,6 @@ fn fn_array_reverse(
         array_projection_insert(&mut result, key, value, key_policy);
     }
     copy_array_key_provenance(array, &result);
-    ret!(rv, Value::array(result));
-}
-
-fn fn_iterator_to_array(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let source = arg!(ed, 0).dereferenced();
-    let preserve_keys = arg_opt!(ed, 1).is_none_or(Value::is_truthy);
-    let source_array = source.as_array();
-    let entries = if let Some(array) = source_array {
-        let external_byte_keys = array.has_external_byte_keys();
-        array
-            .iter()
-            .map(|(key, value)| (key, value.dereferenced().clone(), external_byte_keys))
-            .collect()
-    } else if let Some(entries) = crate::vm::execute::collect_traversable_entries(eg, source)? {
-        entries
-    } else {
-        eg.exception = Some(crate::value::make_error_value(
-            "TypeError",
-            &format!(
-                "iterator_to_array(): Argument #1 ($iterator) must be of type Traversable|array, {} given",
-                source.type_name()
-            ),
-        ));
-        ret!(rv, Value::null());
-    };
-
-    if eg.exception.is_some() {
-        ret!(rv, Value::null());
-    }
-    let mut result = PhpArray::new();
-    for (key, value, external_byte_key) in entries {
-        if preserve_keys {
-            let key = match key {
-                ArrayKey::String(key) => {
-                    let source = if external_byte_key {
-                        Value::binary_string_from_storage(key.clone())
-                    } else {
-                        Value::string(key.clone())
-                    };
-                    result.prepare_string_key_for_write(ArrayKey::String(key), &source)
-                }
-                key => key,
-            };
-            match key {
-                ArrayKey::Int(key) => result.set_int(key, value),
-                ArrayKey::String(key) => result.set_str(&key, value),
-            }
-        } else {
-            result.push(value);
-        }
-    }
     ret!(rv, Value::array(result));
 }
 
@@ -24708,6 +24655,22 @@ fn call_resolved_with_values_from(
 fn call_resolved_with_php_array_at(
     eg: &mut ExecutorGlobals,
     resolved: ResolvedCallback,
+    args: &PhpArray,
+    preserve_reference_aliases: bool,
+    call_origin: Option<(*mut ExecuteData, &str, usize)>,
+) -> Result<Value, VmError> {
+    call_resolved_borrowed_with_php_array_at(
+        eg,
+        &resolved,
+        args,
+        preserve_reference_aliases,
+        call_origin,
+    )
+}
+
+fn call_resolved_borrowed_with_php_array_at(
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
     args: &PhpArray,
     preserve_reference_aliases: bool,
     call_origin: Option<(*mut ExecuteData, &str, usize)>,
