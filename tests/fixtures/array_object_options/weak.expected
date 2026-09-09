@@ -1,0 +1,10 @@
+case:weak
+flag:null
+diagnostic:8192:Implicit conversion from float 2.5 to int loses precision
+flag:null
+diagnostic:8192:ArrayObject::setFlags(): Passing null to parameter #1 ($flags) of type int is deprecated
+flag:null
+flag:["TypeError","ArrayObject::setFlags(): Argument #1 ($flags) must be of type int, array given"]
+flag:["TypeError","ArrayObject::setFlags(): Argument #1 ($flags) must be of type int, stdClass given"]
+state:[0,{"key":1}]
+outcome:null

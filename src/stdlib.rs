@@ -207,6 +207,10 @@ use filesystem::{bytes_to_php_string, php_string_to_bytes};
 
 pub(crate) use builtin_classes::array_object_iterable_values;
 pub use builtin_classes::register_builtin_classes;
+pub(crate) use builtin_classes::{
+    array_object_array_cast, array_object_property_uses_dimension, bind_array_object_property,
+    prepare_array_object_clone,
+};
 
 pub(super) fn owned_argument(ed: *mut ExecuteData, index: u32) -> Value {
     // SAFETY: internal handlers receive a live ExecuteData frame and their
@@ -6887,6 +6891,29 @@ fn typed_internal_string_value_argument_with_null_expected(
     null_expected: &str,
 ) -> Result<Option<Value>, VmError> {
     let argument = owned_argument(ed, index);
+    typed_internal_string_value_expected(
+        ed,
+        eg,
+        &argument,
+        function,
+        index,
+        parameter,
+        expected,
+        null_expected,
+    )
+}
+
+#[inline(always)]
+fn typed_internal_string_value_expected(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    argument: &Value,
+    function: &str,
+    index: u32,
+    parameter: &str,
+    expected: &str,
+    null_expected: &str,
+) -> Result<Option<Value>, VmError> {
     let argument = argument.dereferenced();
     let strict = internal_call_is_strict(ed);
     let converted = match argument.value_type() {
@@ -19568,12 +19595,24 @@ fn var_dump_value_inner(
                     property_count,
                     eg,
                 );
+                // Native ArrayObject storage is a synthetic debug member:
+                // PHP emits it after the object's real declared/dynamic members.
+                let mut native_array_storage = None;
                 if let Some(class) = class {
                     for slot in var_dump_property_slots(eg, object.class_id) {
                         let definition = &class.properties[slot];
                         let Some(value) = object.get_property_slot(slot) else {
                             continue;
                         };
+                        if definition.name == "storage"
+                            && matches!(
+                                definition.declaring_class.as_str(),
+                                "ArrayObject" | "ArrayIterator"
+                            )
+                        {
+                            native_array_storage = Some((definition, value));
+                            continue;
+                        }
                         if definition.is_virtual_hook_property() {
                             continue;
                         }
@@ -19617,6 +19656,22 @@ fn var_dump_value_inner(
                         visited_objects,
                     ));
                 });
+                if let Some((definition, value)) = native_array_storage {
+                    out.push_str(&format!(
+                        "{}  {}=>\n",
+                        prefix,
+                        var_dump_property_key(definition)
+                    ));
+                    out.append(var_dump_value_inner(
+                        value,
+                        indent + 1,
+                        eg,
+                        true,
+                        context.child(),
+                        visited_arrays,
+                        visited_objects,
+                    ));
+                }
                 out.push_str(&format!("{}}}\n", prefix));
                 out
             };
@@ -19861,6 +19916,7 @@ fn print_r_value_inner(
             out.extend_from_slice(b" Object\n");
             out.extend_from_slice(prefix.as_bytes());
             out.extend_from_slice(b"(\n");
+            let mut native_array_storage = None;
             for slot in var_dump_property_slots(eg, object.class_id) {
                 let definition = &class.properties[slot];
                 if definition.is_virtual_hook_property() {
@@ -19870,6 +19926,15 @@ fn print_r_value_inner(
                     continue;
                 };
                 if value.value_type() == ValueType::Undef {
+                    continue;
+                }
+                if definition.name == "storage"
+                    && matches!(
+                        definition.declaring_class.as_str(),
+                        "ArrayObject" | "ArrayIterator"
+                    )
+                {
+                    native_array_storage = Some((definition, value));
                     continue;
                 }
                 out.extend_from_slice(inner.as_bytes());
@@ -19901,6 +19966,19 @@ fn print_r_value_inner(
                 ));
                 out.push(b'\n');
             });
+            if let Some((definition, value)) = native_array_storage {
+                out.extend_from_slice(inner.as_bytes());
+                out.extend_from_slice(print_r_property_key(definition).as_bytes());
+                out.extend_from_slice(b" => ");
+                out.extend_from_slice(&print_r_value_inner(
+                    value,
+                    indent + 1,
+                    eg,
+                    visited_arrays,
+                    visited_objects,
+                ));
+                out.push(b'\n');
+            }
             out.extend_from_slice(prefix.as_bytes());
             out.extend_from_slice(b")\n");
             visited_objects.remove(&identity);
@@ -22341,7 +22419,7 @@ fn method_declared_in_class_hierarchy(
 /// Search for a method in a class hierarchy and return its direct function
 /// pointer. This avoids rebuilding `class::method` strings and looking the
 /// method up a second time in the global function table.
-fn find_method_in_class_hierarchy<'a>(
+pub(crate) fn find_method_in_class_hierarchy<'a>(
     eg: &'a ExecutorGlobals,
     class_name: &str,
     method_name: &str,

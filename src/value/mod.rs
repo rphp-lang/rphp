@@ -557,6 +557,17 @@ const OBJECT_CURSOR_INVALID: usize = usize::MAX - 1;
 struct DynamicPropertyAux {
     property_guards: HashMap<String, u8>,
     object_cursor: usize,
+    native_array_options: NativeArrayOptions,
+}
+
+/// Scalar policy owned only by native array wrappers. Keeping it in the
+/// existing cold auxiliary allocation does not enlarge PhpObject or expose
+/// implementation properties to PHP. Class IDs refer to immutable request
+/// metadata and own no PHP value or reference cycle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct NativeArrayOptions {
+    pub flags: u16,
+    pub iterator_class_id: u32,
 }
 
 impl DynamicPropertyAux {
@@ -564,6 +575,7 @@ impl DynamicPropertyAux {
         Self {
             property_guards: HashMap::new(),
             object_cursor: OBJECT_CURSOR_UNTOUCHED,
+            native_array_options: NativeArrayOptions::default(),
         }
     }
 }
@@ -575,12 +587,29 @@ impl Clone for DynamicPropertyMap {
             // A cloned PHP object starts outside any magic operation even if
             // cloning was requested from inside a getter or setter, and its
             // legacy object cursor starts at the first storage bucket.
-            auxiliary: None,
+            auxiliary: self.clone_native_array_auxiliary(),
         }
     }
 }
 
 impl DynamicPropertyMap {
+    #[inline]
+    fn clone_native_array_auxiliary(&self) -> Option<Box<DynamicPropertyAux>> {
+        let options = self.auxiliary.as_ref()?.native_array_options;
+        if options == NativeArrayOptions::default() {
+            return None;
+        }
+        Some(Self::allocate_native_array_auxiliary(options))
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn allocate_native_array_auxiliary(options: NativeArrayOptions) -> Box<DynamicPropertyAux> {
+        let mut auxiliary = Box::new(DynamicPropertyAux::new());
+        auxiliary.native_array_options = options;
+        auxiliary
+    }
+
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         let storage = if capacity <= SMALL_DYNAMIC_PROPERTY_CAPACITY {
             DynamicPropertyStorage::Small(SmallDynamicProperties::new())
@@ -621,6 +650,7 @@ impl DynamicPropertyMap {
             };
             clone.insert_owned(name.to_string(), value);
         });
+        clone.auxiliary = self.clone_native_array_auxiliary();
         clone
     }
 
@@ -639,6 +669,7 @@ impl DynamicPropertyMap {
             };
             clone.insert_owned(name.to_string(), value);
         });
+        clone.auxiliary = self.clone_native_array_auxiliary();
         clone
     }
 
@@ -933,6 +964,7 @@ impl DynamicPropertyMap {
         }
         if auxiliary.property_guards.is_empty()
             && auxiliary.object_cursor == OBJECT_CURSOR_UNTOUCHED
+            && auxiliary.native_array_options == NativeArrayOptions::default()
         {
             self.auxiliary = None;
         }
@@ -1613,6 +1645,33 @@ impl PhpObject {
         self.dynamic_properties
             .as_ref()
             .is_some_and(|properties| properties.property_guard_active(key, operation))
+    }
+
+    #[inline]
+    pub(crate) fn native_array_options(&self) -> NativeArrayOptions {
+        self.dynamic_properties
+            .as_ref()
+            .and_then(|properties| properties.auxiliary.as_ref())
+            .map_or_else(NativeArrayOptions::default, |auxiliary| {
+                auxiliary.native_array_options
+            })
+    }
+
+    #[cold]
+    pub(crate) fn set_native_array_options(&mut self, options: NativeArrayOptions) {
+        if options == NativeArrayOptions::default() && self.dynamic_properties.is_none() {
+            return;
+        }
+        let properties = self
+            .dynamic_properties
+            .get_or_insert_with(|| Box::new(DynamicPropertyMap::with_capacity(0)));
+        if options == NativeArrayOptions::default() && properties.auxiliary.is_none() {
+            return;
+        }
+        properties
+            .auxiliary
+            .get_or_insert_with(|| Box::new(DynamicPropertyAux::new()))
+            .native_array_options = options;
     }
 
     #[inline]
@@ -8015,6 +8074,59 @@ mod arithmetic_projection_tests {
         ] {
             assert_eq!(value.to_arithmetic_long(), None);
         }
+    }
+}
+
+#[cfg(test)]
+mod native_array_options_tests {
+    use super::*;
+
+    #[test]
+    fn native_array_options_are_sparse_and_survive_guard_cleanup() {
+        let mut object = PhpObject::dynamic("ArrayObject".into(), 0, HashMap::new());
+        object.set_native_array_options(NativeArrayOptions::default());
+        assert!(object.dynamic_properties.is_none());
+        let options = NativeArrayOptions {
+            flags: 3,
+            iterator_class_id: 42,
+        };
+        object.set_native_array_options(options);
+        object.set_property_guard("entry", 1, true);
+        object.set_property_guard("entry", 1, false);
+        assert_eq!(object.native_array_options(), options);
+        assert!(object.dynamic_properties.as_ref().unwrap().is_empty());
+        assert!(!object.property_guard_active("entry", 1));
+        // These are scalar request metadata, not additional PHP value owners.
+        assert_eq!(std::mem::size_of::<NativeArrayOptions>(), 8);
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(std::mem::size_of::<PhpObject>(), 72);
+    }
+
+    #[test]
+    fn native_array_options_clone_without_transient_guards_or_cursor() {
+        let mut properties = DynamicPropertyMap::with_capacity(0);
+        properties.set_property_guard("entry", 1, true);
+        properties.set_object_cursor(Some(9));
+        let options = NativeArrayOptions {
+            flags: 2,
+            iterator_class_id: 17,
+        };
+        properties.auxiliary.as_mut().unwrap().native_array_options = options;
+        for clone in [
+            properties.clone(),
+            properties.clone_for_php_object(),
+            properties.clone_for_storage_snapshot(),
+        ] {
+            assert_eq!(
+                clone.auxiliary.as_ref().unwrap().native_array_options,
+                options
+            );
+            assert!(!clone.property_guard_active("entry", 1));
+            assert_eq!(clone.object_cursor(), None);
+            assert!(clone.is_empty());
+        }
+        properties.auxiliary.as_mut().unwrap().native_array_options = NativeArrayOptions::default();
+        assert!(properties.clone().auxiliary.is_none());
     }
 }
 

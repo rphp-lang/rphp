@@ -1,0 +1,8 @@
+case:metadata
+ArrayObject::__construct:[0,[["array","object|array",true,[]],["flags","int",true,0],["iteratorClass","string",true,"ArrayIterator"]],""]
+ArrayObject::getFlags:[0,[],"int"]
+ArrayObject::setFlags:[1,[["flags","int",false,null]],"void"]
+ArrayIterator::__construct:[0,[["array","object|array",true,[]],["flags","int",true,0]],""]
+ArrayIterator::getFlags:[0,[],"int"]
+ArrayIterator::setFlags:[1,[["flags","int",false,null]],"void"]
+outcome:null

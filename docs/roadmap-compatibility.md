@@ -36,37 +36,38 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `array-object-native-sort-contracts` train adds eleven exact
-PHP 8.5 passes over `be94d082`, without loss. Six cold native sorting methods
-share canonical comparison schedules, reference/COW storage, callback partial
-state and receiver-local mutation rejection. The broader 108-case set now has
-33 passes; three supplying object-property-backed sorting cases remain explicit
-holdouts, not claims of general object-hash sorting.
+The accepted `array-object-construction-view-policy` train adds twenty-two
+deduplicated PHP 8.5 passes over `b7d879ab`, without loss. Constructor flags,
+iterator classes and property/backing views share sparse native state and retain
+reference/COW, clone, override, visibility and error-order behavior. The broader
+108-case set reaches 54 passes (+21); the additional Zend exception gain comes
+from canonical scoped internal-call resolution. Cursor/serialization and
+general object-hash sorting remain non-claims.
 
 One checked five-configuration Cargo matrix, all-target, exact 7,174-case
-no-loss, Composer/Symfony S0-S3 and static/unsafe gates pass. Core counts remain
-6,435/346/182/211. All seventeen fixed-parent controls and three holdouts meet
+no-loss, Composer/Symfony S0-S3 and static/unsafe gates pass. Core counts reach
+6,436/345/182/211. All twenty fixed-parent controls and three holdouts meet
 unchanged common +1% / pay-use +5% budgets on the user-authorized shared host.
-The highest common paired median is native-cycle +0.916%; ordinary calls and
-objects improve by 11.165% and 4.090%. Exact hashes are in `compatibility.md`.
+The highest common paired median is array +0.057%; ordinary calls and objects
+improve by 5.285% and 5.365%. Exact hashes are in `compatibility.md`.
 
-Rejected code-placement candidates are explicitly recorded. A bounded baseline
-integer-update proof removes repeated reference/diagnostic/drop work while
-preserving snapshots, pre/post results, overflow and alias fallbacks. Three
-instruction simulations corroborate work removal; no representation, dependency,
-JIT admission or unsafe-inventory change. One shared final packet and automatic
-cleanup complete the train.
+Rejected placement/profile and incidental-cost experiments are recorded and
+removed. A bounded slot-write proof skips only already-empty scalar cleanup;
+heap writes, marked slots and large frames retain canonical release. Instruction
+simulation confirms 2.5 million fewer helper calls in the object workload, not
+hardware-counter evidence. No common field, representation, dependency, JIT or
+unsafe-inventory change. One shared final packet and automatic cleanup complete
+the train.
 
-Next admission examines sixteen current ArrayObject constructor/flags/iterator
-class and property-view failures. All sixteen reference cases pass, but require
-at least ten reachable shared-cause targets before implementation. Separate
-cursor/serialization, object hash-order, self/enum and missing-SPL prerequisites.
-Retain the existing unintegrated cursor worktree unchanged; do not combine it
-blindly with this independent constructor-policy admission.
+Next admission rechecks fifteen native ArrayIterator cursor/driver candidates
+against this exact accepted release; require at least ten reachable shared-cause
+failures before implementation. Separate missing driver, recursive iterator,
+serialization and object hash-order prerequisites. Retain the existing foreign
+unintegrated cursor worktree unchanged; do not import its changes blindly.
 
-The preceding backing-projection train (`be94d082`) added sixteen exact passes
-with the same full gate. Directory (`428436a1`) added fifteen. Their exact
-technical records and bounded non-claims remain in `compatibility.md`.
+The preceding sorting (`b7d879ab`), backing (`be94d082`) and Directory
+(`428436a1`) trains added eleven, sixteen and fifteen exact passes respectively.
+Their technical records and bounded non-claims remain in `compatibility.md`.
 
 ### Preceding data-wrapper checkpoint
 

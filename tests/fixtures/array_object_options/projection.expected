@@ -1,0 +1,8 @@
+case:projection
+diagnostic:8192:Creation of dynamic property ArrayObject::$local is deprecated
+view:[0,{"key":17},{"local":21},{"key":17},{"key":17},1]
+diagnostic:8192:Creation of dynamic property ArrayObject::$local is deprecated
+view:[1,{"local":21},{"local":21},{"key":17},{"key":17},1]
+view:[2,{"key":17,"local":21},[],{"key":17,"local":21},{"key":17,"local":21},2]
+view:[3,[],[],{"key":17,"local":21},{"key":17,"local":21},2]
+outcome:null

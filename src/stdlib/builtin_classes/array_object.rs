@@ -10,8 +10,173 @@ use crate::vm::execute::{
 use crate::vm::function::InternalFunctionHandler;
 use std::rc::Rc;
 
+mod options;
 mod sorting;
 pub(super) use sorting::reject_mutation;
+
+fn native_storage_key(object: &PhpObject) -> Option<&'static str> {
+    if object.property_slot(ARRAY_OBJECT_STORAGE).is_some() {
+        Some(ARRAY_OBJECT_STORAGE)
+    } else if object.property_slot(ARRAY_ITERATOR_STORAGE).is_some() {
+        Some(ARRAY_ITERATOR_STORAGE)
+    } else {
+        None
+    }
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+pub(crate) fn array_cast(receiver: &Value, eg: &ExecutorGlobals) -> Option<Value> {
+    let object = receiver.as_object()?;
+    native_storage_key(&object)?;
+    if object.native_array_options().flags & 1 == 0 {
+        drop(object);
+        return Some(Value::array(snapshot(receiver, eg, false)));
+    }
+    let mut result = PhpArray::new();
+    for slot in eg.instance_property_slots_in_iteration_order(object.class_id) {
+        let definition = eg.instance_property_definition(object.class_id, slot)?;
+        if definition.name == "storage"
+            && matches!(
+                definition.declaring_class.as_str(),
+                "ArrayObject" | "ArrayIterator"
+            )
+        {
+            continue;
+        }
+        let Some(value) = object
+            .get_property_slot(slot)
+            .filter(|value| !value.is_undef())
+        else {
+            continue;
+        };
+        let key = match definition.visibility {
+            Visibility::Public => definition.name.clone(),
+            Visibility::Protected => format!("\0*\0{}", definition.name),
+            Visibility::Private => format!("\0{}\0{}", definition.declaring_class, definition.name),
+        };
+        result.set_str(&key, value.clone_for_php_storage());
+    }
+    object.for_each_dynamic_property(|name, value| {
+        if !value.is_undef() {
+            result.set_str(name, value.clone_for_php_storage());
+        }
+    });
+    Some(Value::array(result))
+}
+
+#[inline]
+pub(crate) fn property_uses_dimension(
+    receiver: &Value,
+    name: &str,
+    caller: Option<&str>,
+    eg: &ExecutorGlobals,
+) -> bool {
+    // Ordinary objects have no native policy. Keep this scalar miss at the
+    // caller and enter name/visibility resolution only for the native view.
+    if !receiver
+        .as_object()
+        .is_some_and(|object| object.native_array_options().flags & 2 != 0)
+    {
+        return false;
+    }
+    property_uses_dimension_slow(receiver, name, caller, eg)
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn property_uses_dimension_slow(
+    receiver: &Value,
+    name: &str,
+    caller: Option<&str>,
+    eg: &ExecutorGlobals,
+) -> bool {
+    let Some(object) = receiver.as_object() else {
+        return false;
+    };
+    let in_scope = caller.is_some_and(|caller| eg.class_is_a(&object.class_name, caller));
+    let effective_caller = caller.filter(|_| in_scope);
+    let key = crate::runtime::resolve_property_key(eg, &object.class_name, name, effective_caller);
+    let accessible = eg
+        .find_property_visibility(&object.class_name, name)
+        .is_none_or(|(visibility, declaring)| {
+            visibility == Visibility::Public
+                || eg.check_instance_property_visibility(
+                    caller,
+                    &object.class_name,
+                    name,
+                    &declaring,
+                    visibility,
+                )
+        });
+    !accessible
+        || !object
+            .get_property(&key)
+            .is_some_and(|value| !value.is_undef())
+}
+
+#[inline]
+pub(crate) fn prepare_clone(source: &Value, clone: &mut PhpObject, eg: &ExecutorGlobals) {
+    // Native wrappers always declare their storage slot. A layout without
+    // declared slots cannot require a native snapshot or a name lookup.
+    if clone.property_layout.len() != 0 {
+        prepare_native_clone(source, clone, eg);
+    }
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn prepare_native_clone(source: &Value, clone: &mut PhpObject, eg: &ExecutorGlobals) {
+    let Some(key) = native_storage_key(clone) else {
+        return;
+    };
+    if clone
+        .get_property(key)
+        .is_some_and(|value| value.value_type() == ValueType::Object)
+    {
+        clone.set_property(key, Value::array(snapshot(source, eg, false)));
+    }
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+pub(crate) fn bind_property(
+    receiver: &Value,
+    key: &Value,
+    binding: Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<bool, VmError> {
+    let Some(method) = resolve_object_public_method(eg, receiver, "offsetGet") else {
+        return Ok(false);
+    };
+    let native = ["arrayobject::offsetget", "arrayiterator::offsetget"]
+        .into_iter()
+        .any(|name| eg.find_function(name) == Some(method.func_ptr));
+    if !native {
+        return Ok(false);
+    }
+    if !reject_mutation(receiver, eg) {
+        write_offset(
+            receiver,
+            key,
+            eg,
+            Some(
+                value_to_array_key(key)
+                    .unwrap_or_else(|_| unreachable!("converted property string")),
+            ),
+            binding,
+        )?;
+    }
+    Ok(true)
+}
 
 enum Backing {
     Array(Value, &'static str),
@@ -238,15 +403,21 @@ fn replace_storage(
     value: Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(mut object) = receiver.as_object_mut() else {
+    let Some(object) = receiver.as_object() else {
         return Ok(());
     };
     let key = array_object_storage_key(&object);
+    // A self-backed wrapper (or a tree containing the receiver) can be
+    // inspected by the release planner. Keep this borrow shared until the
+    // plan is ready; no PHP callback runs before publishing the replacement.
     let release = object
         .get_property(key)
         .and_then(|old| release_plan(eg, old));
-    object.set_property(key, value);
     drop(object);
+    receiver
+        .as_object_mut()
+        .expect("retained native receiver")
+        .set_property(key, value);
     run_prepared_value_destructor(eg, release)
 }
 
@@ -269,12 +440,25 @@ pub(super) fn construct(
     let value = arg_opt!(ed, 1)
         .map(|v| v.dereferenced().clone())
         .unwrap_or_else(|| Value::array(PhpArray::new()));
+    // Validate the storage tag first, but defer object deprecation until all
+    // options have passed: an invalid iterator class must not emit it.
+    if !matches!(value.value_type(), ValueType::Array | ValueType::Object) {
+        validate(ed, eg, &value, "__construct", owner)?;
+        return Ok(());
+    }
+    let Some(options) = options::construct_options(ed, eg, &value, owner)? else {
+        return Ok(());
+    };
     if !validate(ed, eg, &value, "__construct", owner)? {
         return Ok(());
     }
     if reject_mutation(arg!(ed, 0), eg) {
         return Ok(());
     }
+    arg!(ed, 0)
+        .as_object_mut()
+        .expect("native receiver")
+        .set_native_array_options(options);
     replace_storage(arg!(ed, 0), value, eg)
 }
 
@@ -308,8 +492,13 @@ fn copy(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Resul
 // SAFETY: compiler-generated code retains its normal calling convention.
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
 fn iterator(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let options = arg!(ed, 0)
+        .as_object()
+        .expect("native receiver")
+        .native_array_options();
     let class = eg
-        .find_class("ArrayIterator")
+        .class_by_id(options.iterator_class_id)
+        .or_else(|| eg.find_class("ArrayIterator"))
         .expect("native iterator registered");
     let mut object = PhpObject::with_layout(
         class.class_id,
@@ -317,6 +506,10 @@ fn iterator(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
         class.property_defaults.to_vec(),
     );
     object.set_property(ARRAY_ITERATOR_STORAGE, arg!(ed, 0).clone());
+    object.set_native_array_options(crate::value::NativeArrayOptions {
+        flags: options.flags,
+        iterator_class_id: 0,
+    });
     ret!(rv, Value::object(object));
 }
 
@@ -395,6 +588,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         functions.push(function);
     }
     functions.extend(sorting::register(eg));
+    functions.extend(options::register(eg));
     functions
 }
 
@@ -536,7 +730,21 @@ pub(super) fn offset_set(
     key: Option<ArrayKey>,
     value: Value,
 ) -> Result<(), VmError> {
-    let Some(storage) = backing(arg!(ed, 0)) else {
+    write_offset(arg!(ed, 0), arg!(ed, 1), eg, key, value)
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn write_offset(
+    receiver: &Value,
+    key_source: &Value,
+    eg: &mut ExecutorGlobals,
+    key: Option<ArrayKey>,
+    value: Value,
+) -> Result<(), VmError> {
+    let Some(storage) = backing(receiver) else {
         return Ok(());
     };
     let (owner, array_key) = match storage {
@@ -551,7 +759,7 @@ pub(super) fn offset_set(
             .and_then(Value::as_array_mut)
             .expect("array backing");
         if let Some(key) = key {
-            let key = array.prepare_string_key_for_write(key, arg!(ed, 1));
+            let key = array.prepare_string_key_for_write(key, key_source);
             if let Some(slot) = array.get_key_mut(&key) {
                 release = release_plan(eg, slot);
                 *slot = value;

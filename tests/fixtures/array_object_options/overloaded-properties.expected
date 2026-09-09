@@ -1,0 +1,14 @@
+case:overloaded-properties
+get:n
+read:4
+set:n
+get:n
+after:8
+get:n
+bind:["Error","Cannot assign by reference to overloaded object"]
+get:n
+preserved:[20,8]
+get:arr
+get:arr
+detached:[1]
+outcome:null

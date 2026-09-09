@@ -1,0 +1,13 @@
+case:iterator-class
+custom:["ViewIterator","ViewIterator",0]
+set:null
+normal:"ArrayIterator"
+invalid:["TypeError","ArrayObject::setIteratorClass(): Argument #1 ($iteratorClass) must be a class name derived from ArrayIterator, MissingViewIterator given"]
+unchanged:"ArrayIterator"
+invalid:["TypeError","ArrayObject::setIteratorClass(): Argument #1 ($iteratorClass) must be a class name derived from ArrayIterator, stdClass given"]
+unchanged:"ArrayIterator"
+invalid:["TypeError","ArrayObject::setIteratorClass(): Argument #1 ($iteratorClass) must be a class name derived from ArrayIterator, ArrayObject given"]
+unchanged:"ArrayIterator"
+invalid:["TypeError","ArrayObject::setIteratorClass(): Argument #1 ($iteratorClass) must be a class name derived from ArrayIterator,  given"]
+unchanged:"ArrayIterator"
+outcome:null

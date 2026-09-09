@@ -1,0 +1,17 @@
+case:scoped-calls
+scoped:[0,0,0]
+scoped:[1,1,1]
+scoped:[2,2,2]
+untouched:{"key":7}
+scoped:[0,0,0]
+scoped:[1,1,1]
+scoped:[2,2,2]
+untouched:{"key":7}
+global-get:["Error","Non-static method ArrayObject::getFlags() cannot be called statically"]
+global-set:["Error","Non-static method ArrayIterator::setFlags() cannot be called statically"]
+global-constructor:["Error","Non-static method ArrayObject::__construct() cannot be called statically"]
+static-reference:[true,null]
+static-factories:[2,"get",null,"describe"]
+static-reference:[true,null]
+static-factories:[2,"get",null,"describe"]
+outcome:null

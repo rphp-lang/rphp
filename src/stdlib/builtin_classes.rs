@@ -12,6 +12,11 @@ use crate::vm::instruction::{
 };
 
 mod array_object;
+pub(crate) use array_object::{
+    array_cast as array_object_array_cast, bind_property as bind_array_object_property,
+    prepare_clone as prepare_array_object_clone,
+    property_uses_dimension as array_object_property_uses_dimension,
+};
 
 const ROUNDING_MODE_CLASS: &str = "RoundingMode";
 const ROUNDING_MODE_CASES: [&str; 8] = [
@@ -1497,6 +1502,16 @@ fn array_object_offset_get_context(ed: *mut ExecuteData) -> ArrayObjectOffsetGet
         return ArrayObjectOffsetGetContext::Read;
     };
     match opcode {
+        OpCode::BindObjPropRef => ArrayObjectOffsetGetContext::Mutable,
+        OpCode::FetchObjR if flags & crate::vm::instruction::FETCH_OBJ_UNSET != 0 => {
+            ArrayObjectOffsetGetContext::Unset
+        }
+        OpCode::FetchObjR if flags & crate::vm::instruction::FETCH_OBJ_COMPOUND != 0 => {
+            ArrayObjectOffsetGetContext::Read
+        }
+        OpCode::FetchObjR if flags & crate::vm::instruction::FETCH_OBJ_MODIFY != 0 => {
+            ArrayObjectOffsetGetContext::Mutable
+        }
         OpCode::BindArrayAppendRef => ArrayObjectOffsetGetContext::Append,
         OpCode::BindArrayDimRef => ArrayObjectOffsetGetContext::Mutable,
         OpCode::FetchDimR if flags & FETCH_DIM_UNSET != 0 => ArrayObjectOffsetGetContext::Unset,
@@ -3435,14 +3450,6 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             })
             .collect();
         eg.register_class(class).unwrap();
-        reg_method!(
-            name,
-            "__construct",
-            fn_array_iterator_construct,
-            2,
-            0,
-            "array"
-        );
         reg_method!(name, "count", fn_array_iterator_count, 1, 0);
         reg_method!(name, "append", fn_array_object_append, 2, 1, "value");
         reg_method!(name, "offsetGet", fn_array_object_offset_get, 2, 1, "key");

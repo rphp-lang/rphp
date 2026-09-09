@@ -1,0 +1,8 @@
+case:property
+before:["property","visible","private",12]
+write:[{"real":"bucket","hidden":"visible","new":14},"changed"]
+removed-real:["bucket",true]
+diagnostic:2:Undefined array key "real"
+removed-bucket:[null,false]
+private:["Error","Cannot access private property ViewProbe::$hidden"]
+outcome:null

@@ -1,0 +1,8 @@
+case:ordering
+construct:["TypeError","ArrayObject::__construct(): Argument #2 ($flags) must be of type int, array given"]
+construct:["TypeError","ArrayObject::__construct(): Argument #3 ($iteratorClass) must be a class name derived from ArrayIterator, stdClass given"]
+construct:["TypeError","ArrayObject::__construct(): Argument #1 ($array) must be of type array, false given"]
+construct:["TypeError","ArrayObject::__construct(): Argument #1 ($array) must be of type array, false given"]
+replace:["TypeError","ArrayObject::__construct(): Argument #3 ($iteratorClass) must be a class name derived from ArrayIterator, stdClass given"]
+after:[1,{"old":1}]
+outcome:null

@@ -142,10 +142,11 @@ fn op_clone_obj<'a>(
             }
         }
 
-        let cloned_obj = {
+        let mut cloned_obj = {
             let obj = src_val.as_object().unwrap();
             obj.clone_for_php()
         };
+        crate::stdlib::prepare_array_object_clone(&src_val, &mut cloned_obj, eg);
         let cloned_val = Value::object(cloned_obj);
         eg.clone_initialized_lazy_proxy(&src_val, &cloned_val);
         eg.clone_weak_map(&src_val, &cloned_val);

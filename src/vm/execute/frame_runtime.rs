@@ -152,7 +152,15 @@ unsafe fn bitmap_mark_heap(frame: *mut ExecuteData, ptr: *const Value) {
 unsafe fn frame_tmp_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
     let heap = val.needs_cleanup();
     if (*frame).has_heap_slots {
-        bitmap_drop_and_update(frame, ptr, heap);
+        // A clear small-frame bit proves that there is no live heap owner.
+        // Do not inspect the old TMP bytes: they may be uninitialized. A
+        // scalar replacement also leaves that bit clear, so no update is due.
+        if heap
+            || (*frame).num_cvs + (*frame).num_temps > 64
+            || (*frame).heap_bitmap & (1u64 << slot_idx(frame, ptr)) != 0
+        {
+            bitmap_drop_and_update(frame, ptr, heap);
+        }
         ptr.write(val);
     } else {
         ptr.write(val);
@@ -329,7 +337,14 @@ pub(super) unsafe fn frame_slot_set(frame: *mut ExecuteData, ptr: *mut Value, va
     let heap = val.needs_cleanup();
     stats::inc_write_frame_slot(heap);
     if (*frame).has_heap_slots {
-        bitmap_drop_and_update(frame, ptr, heap);
+        // Same no-owner/no-update proof as frame_tmp_set. Large frames and
+        // every heap replacement keep the canonical drop/update boundary.
+        if heap
+            || (*frame).num_cvs + (*frame).num_temps > 64
+            || (*frame).heap_bitmap & (1u64 << slot_idx(frame, ptr)) != 0
+        {
+            bitmap_drop_and_update(frame, ptr, heap);
+        }
         ptr.write(val);
     } else {
         ptr.write(val);

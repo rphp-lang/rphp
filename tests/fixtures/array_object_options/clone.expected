@@ -1,0 +1,5 @@
+case:clone
+direct:[3,0,{"key":18,"local":23},{"key":29,"local":23},[]]
+diagnostic:8192:ArrayObject::__construct(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants
+nested:[3,3,18,31,[]]
+outcome:null

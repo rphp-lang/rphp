@@ -1,0 +1,18 @@
+case:typed-properties
+read:"bucket"
+isset:[true,false,null]
+write:null
+real:[4,4]
+diagnostic:2:Undefined array key "typed"
+diagnostic:2:Undefined array key "typed"
+after-unset:[null,null]
+warm-view:[{"round":0},{"typed":{"round":0}}]
+warm-type:["TypeError","Cannot assign array to property TypedView::$typed of type int"]
+warm-real:[9,{"typed":{"round":0}}]
+warm-view:[{"round":1},{"typed":{"round":1}}]
+warm-type:["TypeError","Cannot assign array to property TypedView::$typed of type int"]
+warm-real:[9,{"typed":{"round":1}}]
+warm-view:[{"round":2},{"typed":{"round":2}}]
+warm-type:["TypeError","Cannot assign array to property TypedView::$typed of type int"]
+warm-real:[9,{"typed":{"round":2}}]
+outcome:null

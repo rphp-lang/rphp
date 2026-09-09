@@ -617,6 +617,9 @@ fn write_fetch_dim_result(frame: *mut ExecuteData, result_ptr: *mut Value, value
 pub(crate) fn cast_object_to_array(value: &Value, eg: &ExecutorGlobals) -> Value {
     let proxy_instance = eg.lazy_proxy_instance(value);
     let value = proxy_instance.as_ref().unwrap_or(value);
+    if let Some(array) = crate::stdlib::array_object_array_cast(value, eg) {
+        return array;
+    }
     let object = value
         .as_object()
         .expect("object-to-array cast requires an object value");

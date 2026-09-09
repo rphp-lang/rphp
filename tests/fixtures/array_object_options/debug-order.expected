@@ -1,0 +1,11 @@
+case:debug-order
+diagnostic:8192:Creation of dynamic property DebugView::$extra is deprecated
+dump:"object(DebugView)#id (4) {\n  [\"secret\":\"DebugView\":private]=>\n  int(5)\n  [\"label\"]=>\n  string(3) \"own\"\n  [\"extra\"]=>\n  int(9)\n  [\"storage\":\"ArrayObject\":private]=>\n  array(1) {\n    [\"key\"]=>\n    int(7)\n  }\n}\n"
+print:"DebugView Object\n(\n    [secret:DebugView:private] => 5\n    [label] => own\n    [extra] => 9\n    [storage:ArrayObject:private] => Array\n        (\n            [key] => 7\n        )\n\n)\n"
+dump:"object(DebugView)#id (4) {\n  [\"secret\":\"DebugView\":private]=>\n  int(5)\n  [\"label\"]=>\n  string(3) \"own\"\n  [\"extra\"]=>\n  int(9)\n  [\"storage\":\"ArrayObject\":private]=>\n  array(1) {\n    [\"key\"]=>\n    int(7)\n  }\n}\n"
+print:"DebugView Object\n(\n    [secret:DebugView:private] => 5\n    [label] => own\n    [extra] => 9\n    [storage:ArrayObject:private] => Array\n        (\n            [key] => 7\n        )\n\n)\n"
+dump:"object(DebugView)#id (4) {\n  [\"secret\":\"DebugView\":private]=>\n  int(5)\n  [\"label\"]=>\n  string(3) \"own\"\n  [\"extra\"]=>\n  int(9)\n  [\"storage\":\"ArrayObject\":private]=>\n  array(1) {\n    [\"key\"]=>\n    int(7)\n  }\n}\n"
+print:"DebugView Object\n(\n    [secret:DebugView:private] => 5\n    [label] => own\n    [extra] => 9\n    [storage:ArrayObject:private] => Array\n        (\n            [key] => 7\n        )\n\n)\n"
+dump:"object(DebugView)#id (4) {\n  [\"secret\":\"DebugView\":private]=>\n  int(5)\n  [\"label\"]=>\n  string(3) \"own\"\n  [\"extra\"]=>\n  int(9)\n  [\"storage\":\"ArrayObject\":private]=>\n  array(1) {\n    [\"key\"]=>\n    int(7)\n  }\n}\n"
+print:"DebugView Object\n(\n    [secret:DebugView:private] => 5\n    [label] => own\n    [extra] => 9\n    [storage:ArrayObject:private] => Array\n        (\n            [key] => 7\n        )\n\n)\n"
+outcome:null

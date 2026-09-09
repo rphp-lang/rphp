@@ -1,0 +1,9 @@
+case:self-replacement
+diagnostic:8192:ArrayObject::__construct(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants
+old:{"entry":null,"other":3}
+new:[{"fresh":9},2,3]
+diagnostic:8192:ArrayObject::__construct(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants
+clone:{"entry":null,"other":3}
+replaced:{"entry":null,"other":3}
+final:[]
+outcome:null

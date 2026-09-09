@@ -430,6 +430,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
             eg.function_table.insert(registered_name.to_ascii_lowercase(), pointer);
             eg.register_internal_function_display_name(pointer, registered_name);
             eg.method_declaring_class.insert(pointer, $class.to_string());
+            eg.register_internal_static_method(pointer);
             functions.push(function);
         }};
     }

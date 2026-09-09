@@ -1885,6 +1885,37 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
         }
     }
 
+    // Scope recovery is itself work: reject the native-only path before
+    // evaluating its caller argument, rather than doing the ordinary probe twice.
+    if obj_val.as_object().is_some_and(|object| object.native_array_options().flags & 2 != 0)
+        && crate::stdlib::array_object_property_uses_dimension(obj_val, &name, get_caller_class(frame, eg).as_deref(), eg) {
+        let key = Value::string(&name);
+        if opline._pad & FETCH_OBJ_SILENT != 0 && write_flags == 0 {
+            let exists = crate::stdlib::call_object_protocol_method(eg, obj_val, "ArrayAccess", "offsetExists", std::slice::from_ref(&key))?;
+            if let Some(result) = take_magic_exception(eg, frame)? { return Ok(result); }
+            if !exists.is_some_and(|value| value.is_truthy()) {
+                set_result(Value::null());
+                return Ok(ColdResult::Done);
+            }
+        }
+        let mut value = crate::stdlib::call_object_protocol_method(eg, obj_val, "ArrayAccess", "offsetGet", &[key])?.unwrap_or_else(Value::null);
+        if let Some(result) = take_magic_exception(eg, frame)? { return Ok(result); }
+        if opline._pad & FETCH_OBJ_MODIFY != 0 {
+            if value.is_reference() {
+                value.mark_indirect_property_modification_reference();
+            } else if opline._pad & (FETCH_OBJ_INCDEC | FETCH_OBJ_COMPOUND) == 0 {
+                if !matches!(value.value_type(), ValueType::Object | ValueType::Closure) {
+                    // Native ARRAY_AS_PROPS discards a by-value overload's
+                    // container update silently, unlike ordinary ArrayAccess.
+                    value = Value::owned_reference(value);
+                }
+                value.mark_indirect_property_modification_result();
+            }
+        }
+        set_result(value);
+        return Ok(ColdResult::Done);
+    }
+
     if let Some(obj) = obj_val.as_object() {
 
         // ── Full resolution (cache miss or private/protected) ──
@@ -2727,6 +2758,13 @@ fn op_isset_obj<'a>(
     let lazy_receiver_owner = eg.lazy_object_state(object).map(|_| object.clone());
     let object = lazy_receiver_owner.as_ref().unwrap_or(object);
     let caller_class = get_caller_class(frame, eg);
+    if crate::stdlib::array_object_property_uses_dimension(object, &name, caller_class.as_deref(), eg) {
+        let receiver = object.clone();
+        let value = crate::stdlib::call_object_protocol_method(eg, &receiver, "ArrayAccess", "offsetExists", &[Value::string(&name)])?;
+        if let Some(result) = take_magic_exception(eg, frame)? { return Ok(result); }
+        set_result(value.is_some_and(|value| value.is_truthy()));
+        return Ok(ColdResult::Done);
+    }
     let object_ref = object.as_object().expect("object tag must expose object storage");
     let receiver_in_scope = caller_class
         .as_ref()
@@ -2916,6 +2954,11 @@ fn op_unset_obj<'a>(
     let lazy_receiver_owner = eg.lazy_object_state(object).map(|_| object.clone());
     let object = lazy_receiver_owner.as_ref().unwrap_or(object);
     let caller_class = get_caller_class(frame, eg);
+    if crate::stdlib::array_object_property_uses_dimension(object, &name, caller_class.as_deref(), eg) {
+        let receiver = object.clone();
+        crate::stdlib::call_object_protocol_method(eg, &receiver, "ArrayAccess", "offsetUnset", &[Value::string(&name)])?;
+        return Ok(take_magic_exception(eg, frame)?.unwrap_or(ColdResult::Done));
+    }
     let object_ref = object.as_object().unwrap();
     let receiver_in_scope = caller_class
         .as_ref()
@@ -3243,6 +3286,32 @@ fn op_bind_obj_prop_ref<'a>(
         drop(object);
 
         let caller_class = get_caller_class(frame, eg);
+        if crate::stdlib::array_object_property_uses_dimension(&receiver, &name, caller_class.as_deref(), eg) {
+            let key = Value::string(&name);
+            if opline._pad & OBJ_PROP_REFERENCE_BIND != 0 {
+                let source = if opline.result_type == OpType::Cv {
+                    (*frame).cv_mut(opline.result as u32) as *mut Value
+                } else {
+                    (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                };
+                let binding = materialize_reference_alias(frame, source);
+                if crate::stdlib::bind_array_object_property(&receiver, &key, binding, eg)? {
+                    return Ok(take_magic_exception(eg, frame)?.unwrap_or(ColdResult::Done));
+                }
+                crate::stdlib::call_object_protocol_method(eg, &receiver, "ArrayAccess", "offsetGet", &[key])?;
+                if let Some(result) = take_magic_exception(eg, frame)? { return Ok(result); }
+                return Ok(object_property_throw(eg, frame, "Error", "Cannot assign by reference to overloaded object".into())?);
+            }
+            let mut binding = crate::stdlib::call_object_protocol_method(eg, &receiver, "ArrayAccess", "offsetGet", &[key])?.unwrap_or_else(Value::null);
+            if let Some(result) = take_magic_exception(eg, frame)? { return Ok(result); }
+            if !binding.is_reference() {
+                binding = Value::owned_reference(binding);
+            }
+            if internal_result { binding.mark_internal_reference_alias(); }
+            let destination = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+            frame_slot_set(frame, destination, binding);
+            return Ok(ColdResult::Done);
+        }
         let receiver_in_scope = caller_class
             .as_ref()
             .is_some_and(|caller| eg.class_is_a(&class_name, caller));
@@ -4373,6 +4442,15 @@ fn op_assign_obj_prop_inner<'a>(
     }
 
     let setter_guarded = property_guard_active(eg, obj, &name, PROPERTY_GUARD_SET);
+    if obj.as_object().is_some_and(|object| object.native_array_options().flags & 2 != 0)
+        && crate::stdlib::array_object_property_uses_dimension(obj, &name, get_caller_class(frame, eg).as_deref(), eg) {
+        let receiver = obj.clone();
+        let assignment_result = (opline._pad & ASSIGN_PROP_RESULT_VALUE != 0).then(|| assigned.clone());
+        crate::stdlib::call_object_protocol_method(eg, &receiver, "ArrayAccess", "offsetSet", &[Value::string(&name), assigned])?;
+        if let Some(result) = take_magic_exception(eg, frame)? { return Ok(result); }
+        if let Some(value) = assignment_result.as_ref() { publish_property_assignment_result(frame, opline, value); }
+        return Ok(ColdResult::Done);
+    }
     if let Some(php_obj) = obj.as_object_mut() {
         let caller_class = get_caller_class(frame, eg);
         let object_display_class_name = if php_obj.class_name.starts_with("class@anonymous#") {
@@ -4968,8 +5046,12 @@ fn op_assign_obj_prop_inner<'a>(
             }
         };
 
-        // Cache: if public, not enum, not readonly, key == name → mark for write fast path.
-        if prop_is_public && prop_is_writable && key == name && object_class_id != 0 {
+        // Native array wrappers can redirect an unset property after setFlags.
+        // Keep that receiver class on canonical writes even when its current
+        // flags are zero; ordinary warmed dispatch needs no extra policy test.
+        if prop_is_public && prop_is_writable && key == name && object_class_id != 0
+            && !eg.class_is_a(&object_class_name, "ArrayObject")
+            && !eg.class_is_a(&object_class_name, "ArrayIterator") {
             // SAFETY: `opline` belongs to `op_array.instructions`, and the
             // instruction-indexed cache slot remains live for this op array.
             let ic_mut = unsafe {
@@ -5635,7 +5717,13 @@ fn resolve_static_call_target<'a>(
     method: &str,
     dynamic_scope: bool,
 ) -> Result<StaticCallTargetResolution<'a>, VmError> {
-    let method_info = eg.find_method_info(class, method);
+    // Registry-only internal methods have no ClassDef method tuple. Reuse
+    // the callable resolver's instance/static contract before deciding whether
+    // this scoped spelling carries a receiver (or must throw without one).
+    let method_info = eg.find_method_info(class, method).or_else(|| {
+        crate::stdlib::find_method_in_class_hierarchy(eg, class, method)
+            .map(|(visibility, is_static, _, owner)| (visibility, is_static, owner.to_string()))
+    });
     let caller_class = if dynamic_scope {
         resolve_static_call_class(eg, frame, "self", true)
     } else {

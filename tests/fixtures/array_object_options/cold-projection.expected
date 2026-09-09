@@ -1,0 +1,10 @@
+case:cold-projection
+diagnostic:8192:Creation of dynamic property ColdPolicyView::$local is deprecated
+view:[0,{"key":17},{"label":"own","local":23},{"key":17},{"key":17},1]
+diagnostic:8192:Creation of dynamic property ColdPolicyView::$local is deprecated
+view:[1,{"label":"own","\u0000ColdPolicyView\u0000secret":"hidden","local":23},{"label":"own","local":23},{"key":17},{"key":17},1]
+diagnostic:8192:Creation of dynamic property ColdPolicyView::$local is deprecated
+view:[2,{"key":17},{"label":"own","local":23},{"key":17},{"key":17},1]
+diagnostic:8192:Creation of dynamic property ColdPolicyView::$local is deprecated
+view:[3,{"label":"own","\u0000ColdPolicyView\u0000secret":"hidden","local":23},{"label":"own","local":23},{"key":17},{"key":17},1]
+outcome:null

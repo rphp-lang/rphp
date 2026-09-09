@@ -1,0 +1,16 @@
+case:nested
+diagnostic:8192:ArrayObject::__construct(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants
+diagnostic:8192:ArrayObject::__construct(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants
+ArrayObject:[3,3,0]
+after-base:[3,0]
+after-child:[1,2]
+diagnostic:8192:ArrayObject::__construct(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants
+reconstructed:3
+diagnostic:8192:ArrayIterator::__construct(): Using an object as a backing array for ArrayIterator is deprecated, as it allows violating class constraints and invariants
+diagnostic:8192:ArrayIterator::__construct(): Using an object as a backing array for ArrayIterator is deprecated, as it allows violating class constraints and invariants
+ArrayIterator:[3,3,0]
+after-base:[3,0]
+after-child:[1,2]
+diagnostic:8192:ArrayIterator::__construct(): Using an object as a backing array for ArrayIterator is deprecated, as it allows violating class constraints and invariants
+reconstructed:3
+outcome:null

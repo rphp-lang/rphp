@@ -1,0 +1,6 @@
+case:write-operations
+ops:[2,4,9]
+nested:{"n":9,"nested":{"right":2,"new":7}}
+bind:[22,22]
+clone-reference:[22,23,22]
+outcome:null

@@ -1,0 +1,7 @@
+case:cold-clone
+diagnostic:8192:Creation of dynamic property ArrayObject::$local is deprecated
+reference:[17,17,29,1,0]
+cow:[{"key":17},{"new":31},{"local":23}]
+diagnostic:8192:ArrayObject::__construct(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants
+snapshot:[1,1,{"key":17,"later":37},{"key":17},[]]
+outcome:null

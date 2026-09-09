@@ -1,0 +1,4 @@
+case:autoload
+missing:["TypeError","ArrayObject::setIteratorClass(): Argument #1 ($iteratorClass) must be a class name derived from ArrayIterator, ProbeAutoloadIterator given"]
+loads:["ProbeAutoloadIterator"]
+outcome:null
