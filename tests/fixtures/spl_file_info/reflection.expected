@@ -1,0 +1,12 @@
+__construct:1/1:::0:filename/string
+getPath:0/0::string:0
+getBasename:0/1::string:0:suffix/string/""
+getPerms:0/0::int|false:0
+getType:0/0::string|false:0
+getFileInfo:0/1::SplFileInfo:0:class/?string/null
+getPathInfo:0/1::?SplFileInfo:0:class/?string/null
+setInfoClass:0/1::void:0:class/string/"SplFileInfo"
+setFileClass:0/1::void:0:class/string/"SplFileObject"
+__toString:0/0:string::0
+__debugInfo:0/0::array:0
+_bad_state_ex:0/0:void::1

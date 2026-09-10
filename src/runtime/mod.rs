@@ -109,6 +109,7 @@ struct MethodDeclaration<'a> {
 struct InternalMethodContract {
     name: &'static str,
     is_static: bool,
+    is_final: bool,
     signature: SignatureInfo,
     parameter_default_diagnostics: Vec<Option<Box<str>>>,
     return_type_is_tentative: bool,
@@ -694,7 +695,9 @@ pub struct ExecutorGlobals {
     /// leaves ordinary objects and requests at their established layouts.
     weak_objects: Option<Box<weak::WeakObjectRuntime>>,
     /// Reverse map: func_ptr → declaring class name (for visibility scope resolution)
-    pub method_declaring_class: HashMap<*const FunctionCommon, String>,
+    /// Builtin owner spellings are immutable static data; user declarations
+    /// retain owned names independently of their source/registration buffers.
+    pub method_declaring_class: HashMap<*const FunctionCommon, std::borrow::Cow<'static, str>>,
     /// Sparse canonical spellings for built-ins whose public name is not the
     /// lowercase lookup key. Most internal functions need no entry.
     internal_function_display_names: Option<Box<HashMap<*const FunctionCommon, String>>>,
@@ -1672,7 +1675,7 @@ impl ExecutorGlobals {
             .get_or_insert_with(|| Box::new(InternalCallableMetadata::default()));
         metadata
             .functions
-            .reserve(224usize.saturating_sub(metadata.functions.len()));
+            .reserve(448usize.saturating_sub(metadata.functions.len()));
         metadata
             .methods
             .reserve(28usize.saturating_sub(metadata.methods.len()));
@@ -1688,7 +1691,7 @@ impl ExecutorGlobals {
         // stream registry is installed; do not double these vectors at startup.
         // SeekableIterator adds one unconditional interface to that envelope.
         // RecursiveArrayIterator and RecursiveIteratorIterator add two classes.
-        let class_capacity = 103 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        let class_capacity = 104 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;
@@ -2264,6 +2267,19 @@ impl ExecutorGlobals {
             .and_then(|(_, _, extension)| *extension)
     }
 
+    /// Reserve a known native method batch without reallocating its already
+    /// registered contracts. Only explicit builtin installation allocates it.
+    #[cold]
+    pub(crate) fn reserve_internal_method_contracts(&mut self, owner: &'static str, count: usize) {
+        let methods = self
+            .internal_callable_metadata
+            .get_or_insert_with(|| Box::new(InternalCallableMetadata::default()))
+            .methods
+            .entry(owner)
+            .or_default();
+        methods.reserve(count.saturating_sub(methods.len()));
+    }
+
     /// Register one link-only internal method contract. Public arity excludes
     /// the hidden receiver because these descriptors never enter a call frame.
     #[cold]
@@ -2288,6 +2304,7 @@ impl ExecutorGlobals {
         let contract = InternalMethodContract {
             name,
             is_static,
+            is_final: false,
             signature: SignatureInfo {
                 num_args: param_names.len() as u32,
                 required_num_args,
@@ -2355,6 +2372,29 @@ impl ExecutorGlobals {
             names.push((contract.name, contract.is_static));
         }
         names
+    }
+
+    #[cold]
+    pub(crate) fn mark_internal_method_final(&mut self, owner: &str, name: &str) {
+        let contracts = self
+            .internal_callable_metadata
+            .as_mut()
+            .expect("registered owner")
+            .methods
+            .get_mut(owner)
+            .expect("registered owner");
+        contracts
+            .iter_mut()
+            .find(|contract| contract.name.eq_ignore_ascii_case(name))
+            .expect("registered method")
+            .is_final = true;
+    }
+
+    #[cold]
+    pub(crate) fn internal_method_is_final(&self, owner: &str, name: &str) -> bool {
+        self.internal_method_contracts(owner)
+            .iter()
+            .any(|contract| contract.is_final && contract.name.eq_ignore_ascii_case(name))
     }
 
     /// Publish the already enforced internal declaration to cold Reflection
@@ -7175,7 +7215,7 @@ impl ExecutorGlobals {
                             };
                         self.method_declaring_class
                             .entry(func_ptr)
-                            .or_insert_with(|| declaring_class.clone());
+                            .or_insert_with(|| declaring_class.clone().into());
                     }
                 }
             } else {
@@ -7247,7 +7287,7 @@ impl ExecutorGlobals {
             };
             self.method_declaring_class
                 .entry(pointer)
-                .or_insert_with(|| declaring_class.clone());
+                .or_insert_with(|| declaring_class.clone().into());
         }
 
         // Interface constants are inherited without being copied into source
@@ -7310,6 +7350,19 @@ impl ExecutorGlobals {
                 let mut ancestor = Some(parent_name.clone());
                 while let Some(ref anc_name) = ancestor {
                     if let Some(anc_def) = self.class_table.get(anc_name.as_str()) {
+                        if let Some(contract) = self
+                            .internal_method_contracts(&anc_def.name)
+                            .iter()
+                            .find(|contract| {
+                                contract.is_final
+                                    && contract.name.eq_ignore_ascii_case(child_method)
+                            })
+                        {
+                            return Err(format!(
+                                "Cannot override final method {}::{}()",
+                                anc_def.name, contract.name
+                            ));
+                        }
                         for (m_name, _vis, _is_static, is_final, _func) in &anc_def.methods {
                             if m_name.to_lowercase() == *child_method && *is_final {
                                 let (message, function) = if m_name.starts_with('$') {
@@ -7524,7 +7577,7 @@ impl ExecutorGlobals {
         // Populate declaring_class reverse map
         for (_full_name, func_ptr) in method_entries {
             self.method_declaring_class
-                .insert(func_ptr, class_name.clone());
+                .insert(func_ptr, class_name.clone().into());
         }
         let constant_expression_lexical_functions = self
             .class_table
@@ -7564,7 +7617,7 @@ impl ExecutorGlobals {
         for (function, declaring_class) in constant_expression_lexical_functions {
             if let Some(function) = self.find_function(&function) {
                 self.method_declaring_class
-                    .insert(function, declaring_class);
+                    .insert(function, declaring_class.into());
             }
         }
 
@@ -7759,7 +7812,7 @@ impl ExecutorGlobals {
     /// Resolve and cache whether a stable runtime class inherits a live user
     /// destructor. Dynamic class-id-zero objects retain the general lookup
     /// because their names do not share one class identity.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn class_has_destructor(&self, class_id: u32, class_name: &str) -> bool {
         if class_id != 0
             && let Some(flag) = self
@@ -7771,6 +7824,14 @@ impl ExecutorGlobals {
         {
             return flag == 2;
         }
+        self.resolve_class_destructor_flag(class_id, class_name)
+    }
+
+    // Keep method traversal and first-use cache growth out of every warmed
+    // object-release check. The RefCell read above is retired before mutation.
+    #[cold]
+    #[inline(never)]
+    fn resolve_class_destructor_flag(&self, class_id: u32, class_name: &str) -> bool {
         let has_destructor = self.find_method_info(class_name, "__destruct").is_some();
         if class_id != 0 {
             let mut flags = self.class_destructor_flags.borrow_mut();
@@ -8655,7 +8716,7 @@ impl ExecutorGlobals {
     pub fn declaring_class_of(&self, func_ptr: *const FunctionCommon) -> Option<&str> {
         self.method_declaring_class
             .get(&func_ptr)
-            .map(|s| s.as_str())
+            .map(|s| s.as_ref())
     }
 
     /// Resolve the class scope into which a trait body was composed for one
@@ -10428,6 +10489,74 @@ mod stdlib_capacity_tests {
     use super::ExecutorGlobals;
 
     #[test]
+    fn declaring_class_names_borrow_static_owners_and_own_runtime_spellings() {
+        use std::borrow::Cow;
+        assert_eq!(
+            std::mem::size_of::<Cow<'static, str>>(),
+            std::mem::size_of::<String>()
+        );
+        let pointer = std::ptr::null(); // Opaque map key, never dereferenced.
+        let mut requests = [ExecutorGlobals::new(), ExecutorGlobals::new()];
+        requests[0]
+            .method_declaring_class
+            .insert(pointer, "NativeOwner".into());
+        let runtime_name = String::from("RuntimeOwner");
+        requests[1]
+            .method_declaring_class
+            .insert(pointer, runtime_name.into());
+        assert!(matches!(
+            requests[0].method_declaring_class[&pointer],
+            Cow::Borrowed(_)
+        ));
+        assert!(matches!(
+            requests[1].method_declaring_class[&pointer],
+            Cow::Owned(_)
+        ));
+        assert_eq!(requests[0].declaring_class_of(pointer), Some("NativeOwner"));
+        assert_eq!(
+            requests[1].declaring_class_of(pointer),
+            Some("RuntimeOwner")
+        );
+        requests[0]
+            .method_declaring_class
+            .insert(pointer, String::from("ReboundOwner").into());
+        assert_eq!(
+            requests[0].declaring_class_of(pointer),
+            Some("ReboundOwner")
+        );
+        assert_eq!(
+            requests[1].declaring_class_of(pointer),
+            Some("RuntimeOwner")
+        );
+        requests[0].method_declaring_class.clear();
+        assert_eq!(requests[0].declaring_class_of(pointer), None);
+        assert_eq!(
+            requests[1].declaring_class_of(pointer),
+            Some("RuntimeOwner")
+        );
+    }
+
+    #[test]
+    fn registered_native_method_owners_do_not_allocate_name_copies() {
+        let mut eg = ExecutorGlobals::new();
+        let _functions = crate::stdlib::register_stdlib(&mut eg);
+        for (method, owner) in [
+            ("SplFileInfo::getPath", "SplFileInfo"),
+            ("ArrayIterator::current", "ArrayIterator"),
+            ("ReflectionClass::getName", "ReflectionClass"),
+            ("Closure::call", "Closure"),
+            ("ValueError::getMessage", "ValueError"),
+        ] {
+            let pointer = eg.find_function(method).expect("registered native method");
+            assert_eq!(eg.declaring_class_of(pointer), Some(owner));
+            assert!(matches!(
+                eg.method_declaring_class[&pointer],
+                std::borrow::Cow::Borrowed(_)
+            ));
+        }
+    }
+
+    #[test]
     fn internal_display_names_retain_only_ascii_case_changes() {
         for name in [
             "plain",
@@ -10447,6 +10576,48 @@ mod stdlib_capacity_tests {
                 (name != name.to_ascii_lowercase()).then_some(name),
             );
         }
+    }
+
+    #[test]
+    fn native_method_batch_reserve_preserves_existing_contracts_and_order() {
+        use crate::vm::function::ParamTypeHint;
+        let mut eg = ExecutorGlobals::new();
+        assert!(eg.internal_callable_metadata.is_none());
+        eg.reserve_internal_method_contracts("ReservedOwner", 3);
+        let contracts = &eg.internal_callable_metadata.as_ref().unwrap().methods["ReservedOwner"];
+        let capacity = contracts.capacity();
+        let address = contracts.as_ptr();
+        for name in ["first", "second", "third"] {
+            eg.register_internal_method_contract(
+                "ReservedOwner",
+                name,
+                false,
+                0,
+                &[],
+                Vec::new(),
+                ParamTypeHint::Int,
+                &[],
+                true,
+            );
+            eg.reserve_internal_method_contracts("ReservedOwner", 3);
+            eg.reserve_internal_method_contracts("ReservedOwner", 1);
+            let contracts =
+                &eg.internal_callable_metadata.as_ref().unwrap().methods["ReservedOwner"];
+            assert_eq!(contracts.capacity(), capacity);
+            assert_eq!(contracts.as_ptr(), address);
+            assert_eq!(contracts.last().unwrap().name, name);
+            assert_eq!(contracts[0].name, "first");
+            assert_eq!(contracts[0].signature.return_type_hint, ParamTypeHint::Int);
+        }
+        assert_eq!(
+            eg.internal_callable_metadata
+                .as_ref()
+                .unwrap()
+                .methods
+                .len(),
+            1
+        );
+        assert!(ExecutorGlobals::new().internal_callable_metadata.is_none());
     }
 
     #[test]

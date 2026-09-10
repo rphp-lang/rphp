@@ -410,7 +410,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
             );
             eg.register_internal_function_display_name(pointer, registered_name);
             eg.method_declaring_class
-                .insert(pointer, $class.to_string());
+                .insert(pointer, $class.into());
             functions.push(function);
         }};
     }
@@ -429,7 +429,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
             let registered_name = format!("{}::{}", $class, $method);
             eg.function_table.insert(registered_name.to_ascii_lowercase(), pointer);
             eg.register_internal_function_display_name(pointer, registered_name);
-            eg.method_declaring_class.insert(pointer, $class.to_string());
+            eg.method_declaring_class.insert(pointer, $class.into());
             eg.register_internal_static_method(pointer);
             functions.push(function);
         }};
@@ -448,7 +448,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
                 .insert(registered_name.to_ascii_lowercase(), pointer);
             eg.register_internal_function_display_name(pointer, registered_name);
             eg.method_declaring_class
-                .insert(pointer, $class.to_string());
+                .insert(pointer, $class.into());
             functions.push(function);
         }};
     }
@@ -467,7 +467,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
                 .insert(registered_name.to_ascii_lowercase(), pointer);
             eg.register_internal_function_display_name(pointer, registered_name);
             eg.method_declaring_class
-                .insert(pointer, $class.to_string());
+                .insert(pointer, $class.into());
             functions.push(function);
         }};
     }

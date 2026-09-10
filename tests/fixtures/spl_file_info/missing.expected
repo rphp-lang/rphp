@@ -1,0 +1,17 @@
+getPerms:RuntimeException:SplFileInfo::getPerms(): stat failed for absent-fixture.info
+getInode:RuntimeException:SplFileInfo::getInode(): stat failed for absent-fixture.info
+getSize:RuntimeException:SplFileInfo::getSize(): stat failed for absent-fixture.info
+getOwner:RuntimeException:SplFileInfo::getOwner(): stat failed for absent-fixture.info
+getGroup:RuntimeException:SplFileInfo::getGroup(): stat failed for absent-fixture.info
+getATime:RuntimeException:SplFileInfo::getATime(): stat failed for absent-fixture.info
+getMTime:RuntimeException:SplFileInfo::getMTime(): stat failed for absent-fixture.info
+getCTime:RuntimeException:SplFileInfo::getCTime(): stat failed for absent-fixture.info
+getType:RuntimeException:SplFileInfo::getType(): Lstat failed for absent-fixture.info
+getLinkTarget:RuntimeException:Unable to read link absent-fixture.info, error: No such file or directory
+getRealPath:bool(false)
+isFile:bool(false)
+isDir:bool(false)
+isLink:bool(false)
+isReadable:bool(false)
+isWritable:bool(false)
+isExecutable:bool(false)

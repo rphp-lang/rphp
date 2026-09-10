@@ -12,6 +12,7 @@ use crate::vm::instruction::{
 };
 
 pub(super) mod array_object;
+mod file_info;
 mod iterator_delegate;
 mod recursive_iterator;
 pub(crate) use array_object::cursor::{
@@ -220,7 +221,7 @@ fn register_rounding_mode(eg: &mut ExecutorGlobals) -> Box<InternalFunction> {
     eg.function_table
         .insert("roundingmode::cases".to_string(), cases_pointer);
     eg.method_declaring_class
-        .insert(cases_pointer, ROUNDING_MODE_CLASS.to_string());
+        .insert(cases_pointer, ROUNDING_MODE_CLASS.into());
     cases_method
 }
 
@@ -2390,14 +2391,14 @@ fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] 
     eg.function_table
         .insert("valueerror::__construct".to_string(), constructor_pointer);
     eg.method_declaring_class
-        .insert(constructor_pointer, "ValueError".to_string());
+        .insert(constructor_pointer, "ValueError".into());
 
     let get_message = Box::new(make_internal_method(fn_throwable_get_message, 1, 0, vec![]));
     let get_message_pointer = &get_message.common as *const FunctionCommon;
     eg.function_table
         .insert("valueerror::getmessage".to_string(), get_message_pointer);
     eg.method_declaring_class
-        .insert(get_message_pointer, "ValueError".to_string());
+        .insert(get_message_pointer, "ValueError".into());
     [constructor, get_message]
 }
 
@@ -2449,7 +2450,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             let ptr = &f.common as *const FunctionCommon;
             let full_name = internal_method_lookup_name(&$class, &$method);
             eg.function_table.insert(full_name, ptr);
-            eg.method_declaring_class.insert(ptr, $class.to_string());
+            eg.method_declaring_class.insert(ptr, $class.into());
             funcs.push(f);
         }};
         ($class:expr, $method:expr, $handler:expr, $num_args:expr, $min_args:expr) => {{
@@ -2457,7 +2458,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             let ptr = &f.common as *const FunctionCommon;
             let full_name = internal_method_lookup_name(&$class, &$method);
             eg.function_table.insert(full_name, ptr);
-            eg.method_declaring_class.insert(ptr, $class.to_string());
+            eg.method_declaring_class.insert(ptr, $class.into());
             funcs.push(f);
         }};
     }
@@ -2470,7 +2471,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             let ptr = &f.common as *const FunctionCommon;
             let full_name = internal_method_lookup_name(&$class, &$method);
             eg.function_table.insert(full_name, ptr);
-            eg.method_declaring_class.insert(ptr, $class.to_string());
+            eg.method_declaring_class.insert(ptr, $class.into());
             eg.register_internal_static_method(ptr);
             funcs.push(f);
         }};
@@ -2995,7 +2996,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             constructor.handler_validates_types = true;
             let pointer = &constructor.common as *const FunctionCommon;
             eg.method_declaring_class
-                .insert(pointer, "ErrorException".to_string());
+                .insert(pointer, "ErrorException".into());
             reg_method!(class, "getseverity", fn_error_exception_get_severity, 1, 0);
         } else {
             reg_method!(
@@ -3028,7 +3029,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 class
             };
             eg.method_declaring_class
-                .insert(pointer, declaring_class.to_string());
+                .insert(pointer, declaring_class.into());
         }
         // getMessage: num_args=1 (CV 0=$this), required=0 (no explicit args)
         reg_method!(class, "getmessage", fn_throwable_get_message, 1, 0);
@@ -3369,7 +3370,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     eg.function_table
         .insert("closure::call".to_string(), closure_call_ptr);
     eg.method_declaring_class
-        .insert(closure_call_ptr, "Closure".to_string());
+        .insert(closure_call_ptr, "Closure".into());
     funcs.push(closure_call);
     let mut closure_invoke = Box::new(make_internal_method_variadic(
         fn_closure_invoke,
@@ -3382,7 +3383,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     eg.function_table
         .insert("closure::__invoke".to_string(), closure_invoke_ptr);
     eg.method_declaring_class
-        .insert(closure_invoke_ptr, "Closure".to_string());
+        .insert(closure_invoke_ptr, "Closure".into());
     funcs.push(closure_invoke);
 
     // Canonical iterator hierarchy used by generator return contracts,
@@ -3586,6 +3587,14 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     }
     eg.register_class(recursive_driver).unwrap();
     funcs.extend(recursive_iterator::register(eg));
+    eg.register_class(empty_internal_type(
+        "SplFileInfo",
+        vec!["Stringable".into()],
+        false,
+        false,
+    ))
+    .unwrap();
+    funcs.extend(file_info::register(eg));
     let mut spl_object_storage = empty_internal_type(
         "SplObjectStorage",
         vec![

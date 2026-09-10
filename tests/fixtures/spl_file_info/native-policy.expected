@@ -1,0 +1,7 @@
+Exception:Serialization of 'SplFileInfo' is not allowed
+Exception:Serialization of 'PolicyInfo' is not allowed
+Exception:Unserialization of 'SplFileInfo' is not allowed
+O:11:"SplFileInfo":0:{}
+diagnostic:8192:Method SplFileInfo::_bad_state_ex() is deprecated since 8.2
+Error:The parent constructor was not called: the object is in an invalid state
+string(0) ""

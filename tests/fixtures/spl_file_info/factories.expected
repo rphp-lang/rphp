@@ -1,0 +1,8 @@
+SplFileInfo:folder/item.bin
+SplFileInfo:folder
+construct:folder/item.bin
+construct:folder
+ChosenInfo:folder/item.bin
+ChosenInfo:folder
+TypeError:SplFileInfo::getFileInfo(): Argument #1 ($class) must be a class name derived from ChosenInfo or null, SplFileInfo given
+SplFileInfo

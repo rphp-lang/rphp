@@ -1,0 +1,11 @@
+stat:infostat://item:4
+stat:infostat://item:5
+int(13)
+int(23)
+string(4) "file"
+stat:infostat://item:6
+stat:infostat://item:7
+bool(true)
+bool(false)
+stat:infostat://item:6
+bool(false)

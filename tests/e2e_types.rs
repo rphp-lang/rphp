@@ -2392,6 +2392,31 @@ fn test_unset_declared_object_property() {
 // ========== Type casting ==========
 
 #[test]
+fn immediate_numeric_casts_preserve_reference_values_and_skip_diagnostics() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function () { throw new Exception("unexpected diagnostic"); });
+foreach ([true, false, null, -7, PHP_INT_MIN, PHP_INT_MAX] as $value) {
+    $original = $value;
+    $alias = &$value;
+    $copy = $alias;
+    settype($copy, "integer");
+    echo (int) $alias, ":", intval($alias), ":", $copy, ":";
+    var_dump($value === $original);
+    unset($alias);
+}
+"#
+        ),
+        concat!(
+            "1:1:1:bool(true)\n0:0:0:bool(true)\n0:0:0:bool(true)\n-7:-7:-7:bool(true)\n",
+            "-9223372036854775808:-9223372036854775808:-9223372036854775808:bool(true)\n",
+            "9223372036854775807:9223372036854775807:9223372036854775807:bool(true)\n",
+        ),
+    );
+}
+
+#[test]
 fn test_cast_int_from_float() {
     assert_eq!(run_php("<?php echo (int)3.7;"), "3");
 }

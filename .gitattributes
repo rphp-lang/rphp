@@ -1,3 +1,5 @@
 *.rs text eol=lf
 rustfmt.toml text eol=lf
 *.sh text eol=lf
+# The final empty line is PHP output, asserted byte-for-byte by the CLI test.
+tests/fixtures/spl_file_info/callback-state.expected whitespace=-blank-at-eof

@@ -419,7 +419,7 @@ fn internal_class(name: &str, implements: Vec<String>) -> ClassDef {
 fn register_method(
     eg: &mut ExecutorGlobals,
     functions: &mut Vec<Box<InternalFunction>>,
-    class: &str,
+    class: &'static str,
     name: &str,
     display_name: &str,
     function: InternalFunction,
@@ -429,7 +429,7 @@ fn register_method(
     let pointer = &function.common as *const FunctionCommon;
     eg.function_table
         .insert(format!("{class}::{name}").to_ascii_lowercase(), pointer);
-    eg.method_declaring_class.insert(pointer, class.to_string());
+    eg.method_declaring_class.insert(pointer, class.into());
     if is_static {
         eg.register_internal_static_method(pointer);
     }

@@ -1,0 +1,10 @@
+LabelInfo:string:0
+NumericInfoLabel:string:0
+NumericLabelInfo:string:0
+InfoLabelContract:string:0
+label:item.bin:label:item.bin:label:item.bin
+folder/item.bin
+42:42:42
+item.bin
+TypeError:NullLabelInfo::__toString(): Return value must be of type string, null returned
+TypeError:NullLabelInfo::__toString(): Return value must be of type string, null returned

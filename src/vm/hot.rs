@@ -547,6 +547,7 @@ pub fn execute_hot_frame(
                                         func_common,
                                         plan,
                                     )
+                                    .map(|(result, next)| (result, next.as_ptr().cast_const()))
                                 }
                             };
                         if let Some((result, do_fcall_ptr)) = evaluated {
@@ -1407,6 +1408,7 @@ pub fn execute_hot_frame(
                                 func_common,
                                 plan,
                             )
+                            .map(|(result, next)| (result, next.as_ptr().cast_const()))
                         }
                     };
                     let Some((result, do_fcall_ptr)) = evaluated else {
@@ -1577,6 +1579,7 @@ pub fn execute_hot_frame(
                                         func_common,
                                         plan,
                                     )
+                                    .map(|(result, next)| (result, next.as_ptr().cast_const()))
                                 }
                             };
                         if let Some((result, do_fcall_ptr)) = evaluated {

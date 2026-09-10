@@ -41,7 +41,7 @@ pub(crate) fn array_cast(receiver: &Value, eg: &ExecutorGlobals) -> Option<Value
     Some(Value::array(member_properties(receiver, eg)))
 }
 
-fn member_properties(receiver: &Value, eg: &ExecutorGlobals) -> PhpArray {
+pub(super) fn member_properties(receiver: &Value, eg: &ExecutorGlobals) -> PhpArray {
     let object = receiver.as_object().expect("native array receiver");
     let mut result = PhpArray::new();
     for slot in eg.instance_property_slots_in_iteration_order(object.class_id) {

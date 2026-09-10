@@ -8781,6 +8781,22 @@ impl Compiler {
         Ok(())
     }
 
+    /// PHP supplies the string contract even when __toString omits its return
+    /// annotation. Publish it during declaration, before linking/Reflection,
+    /// rather than weakening a parent or interface's real string contract.
+    #[cold]
+    fn method_return_type_hint(
+        &self,
+        name: &str,
+        hint: &Option<crate::parser::TypeHint>,
+    ) -> crate::vm::function::ParamTypeHint {
+        if hint.is_none() && name.eq_ignore_ascii_case("__toString") {
+            crate::vm::function::ParamTypeHint::String
+        } else {
+            self.convert_type_hint(hint)
+        }
+    }
+
     /// Convert parser TypeHint to runtime ParamTypeHint.
     fn convert_type_hint(
         &self,

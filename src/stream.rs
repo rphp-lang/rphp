@@ -827,6 +827,30 @@ impl PhpStream {
         }
     }
 
+    /// Boolean rewind needs no relative-offset arithmetic or returned cursor.
+    /// Keep failed native seeks from changing any logical read state.
+    #[inline]
+    pub(crate) fn rewind(&mut self) -> bool {
+        let succeeded = match &mut self.backend {
+            StreamBackend::File(file) => file.seek(SeekFrom::Start(0)).is_ok(),
+            StreamBackend::Memory(memory) => {
+                memory.set_position(0);
+                true
+            }
+            StreamBackend::Temp(temp) => temp.seek(SeekFrom::Start(0)).is_ok(),
+            StreamBackend::Standard(_) => false,
+        };
+        if succeeded {
+            self.discard_prefetched();
+            self.eof = false;
+            #[cfg(feature = "stream-truncate")]
+            {
+                self.memory_append_after_truncate = false;
+            }
+        }
+        succeeded
+    }
+
     pub fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
         let position = match position {
             SeekFrom::Current(offset) => {

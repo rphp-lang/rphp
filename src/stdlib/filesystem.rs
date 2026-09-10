@@ -732,6 +732,15 @@ fn filesystem_stat_value(
     path: &str,
     query: FilesystemStatQuery,
 ) -> Result<Value, VmError> {
+    filesystem_stat_value_at(eg, path, None, query)
+}
+
+fn filesystem_stat_value_at(
+    eg: &mut ExecutorGlobals,
+    path: &str,
+    local: Option<&std::path::Path>,
+    query: FilesystemStatQuery,
+) -> Result<Value, VmError> {
     if let Some(value) = cached_stat_value(eg, query, path) {
         return Ok(value);
     }
@@ -755,7 +764,8 @@ fn filesystem_stat_value(
         return Ok(value);
     }
 
-    let Some(local) = local_filesystem_path(path) else {
+    let Some(local) = local.or_else(|| local_filesystem_path(path).map(std::path::Path::new))
+    else {
         return Ok(Value::bool(false));
     };
     let metadata = match query {
@@ -780,14 +790,94 @@ fn filesystem_stat_value(
     Ok(value)
 }
 
-fn stat_mode(value: &Value) -> Option<i64> {
+/// Native file-info objects preserve Unix bytes. ASCII/UTF-8 paths share the
+/// ordinary stat cache; invalid UTF-8 uses an impossible (NUL-prefixed) native
+/// key, avoiding collision with a valid textual spelling of the same storage.
+#[cold]
+pub(super) fn file_info_stat(
+    eg: &mut ExecutorGlobals,
+    path: &[u8],
+    link: bool,
+    quiet: bool,
+) -> Result<Value, VmError> {
+    let query = match (link, quiet) {
+        (true, true) => FilesystemStatQuery::LinkQuiet,
+        (true, false) => FilesystemStatQuery::LinkReport,
+        (false, true) => FilesystemStatQuery::Quiet,
+        (false, false) => FilesystemStatQuery::Report,
+    };
+    if let Ok(path) = std::str::from_utf8(path) {
+        return filesystem_stat_value(eg, path, query);
+    }
+    let mut key = String::from("\0");
+    key.extend(path.iter().map(|byte| char::from(*byte)));
+    let Some(local) = file_info_local_path(path) else {
+        return Ok(Value::bool(false));
+    };
+    filesystem_stat_value_at(eg, &key, Some(&local), query)
+}
+
+/// File-wrapper access/stat accept the same local URL spellings as the global
+/// predicates. realpath/readlink deliberately keep their raw path semantics.
+#[cold]
+fn file_info_local_path(path: &[u8]) -> Option<std::path::PathBuf> {
+    if let Ok(text) = std::str::from_utf8(path) {
+        return local_filesystem_path(text).map(|local| file_info_native_path(local.as_bytes()));
+    }
+    // URL syntax is ASCII; a reversible byte storage lets the existing parser
+    // handle a raw Unix suffix without replacing invalid UTF-8 bytes.
+    let storage: String = path.iter().map(|byte| char::from(*byte)).collect();
+    let local = local_filesystem_path(&storage)?;
+    let bytes: Vec<u8> = local.chars().map(|byte| byte as u8).collect();
+    Some(file_info_native_path(&bytes))
+}
+
+#[cold]
+pub(super) fn file_info_native_path(path: &[u8]) -> std::path::PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        std::path::PathBuf::from(std::ffi::OsStr::from_bytes(path))
+    }
+    #[cfg(not(unix))]
+    std::path::PathBuf::from(String::from_utf8_lossy(path).as_ref())
+}
+
+#[cold]
+pub(super) fn file_info_access(
+    _eg: &mut ExecutorGlobals,
+    path: &[u8],
+    mode: u8,
+) -> Result<bool, VmError> {
+    let access = match mode {
+        0 => FileAccessKind::Read,
+        1 => FileAccessKind::Write,
+        _ => FileAccessKind::Execute,
+    };
+    #[cfg(feature = "stream-registry")]
+    if let Ok(text) = std::str::from_utf8(path)
+        && super::user_wrapper::definition_for_url(_eg, text).is_some()
+    {
+        let value = filesystem_stat_value(_eg, text, FilesystemStatQuery::Quiet)?;
+        return Ok(stat_access_allowed(&value, access));
+    }
+    let Some(local) = file_info_local_path(path) else {
+        return Ok(false);
+    };
+    Ok(std::fs::metadata(local).is_ok_and(|metadata| {
+        let fields = metadata_stat_fields(&metadata);
+        stat_access_allowed_fields(fields[2], Some(fields[4]), Some(fields[5]), access, true)
+    }))
+}
+
+pub(super) fn stat_mode(value: &Value) -> Option<i64> {
     value
         .as_array()
         .and_then(|stat| stat.get_str("mode"))
         .and_then(Value::as_long)
 }
 
-fn stat_long_field(value: &Value, field: &str) -> Option<i64> {
+pub(super) fn stat_long_field(value: &Value, field: &str) -> Option<i64> {
     value
         .as_array()
         .and_then(|stat| stat.get_str(field))
@@ -1202,7 +1292,7 @@ pub(super) fn fn_fileinode(
     stat_field_result(ed, rv, eg, "fileinode", "ino")
 }
 
-fn file_type_name(mode: i64) -> Option<&'static str> {
+pub(super) fn file_type_name(mode: i64) -> Option<&'static str> {
     match mode & 0o170000 {
         0o010000 => Some("fifo"),
         0o020000 => Some("char"),
@@ -1744,7 +1834,7 @@ fn classify_optional_stream_context(
     }
 }
 
-fn filesystem_error_reason(error: &std::io::Error) -> String {
+pub(super) fn filesystem_error_reason(error: &std::io::Error) -> String {
     let rendered = error.to_string();
     rendered
         .split_once(" (os error ")

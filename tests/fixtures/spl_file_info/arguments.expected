@@ -1,0 +1,12 @@
+diagnostic:8192:SplFileInfo::__construct(): Passing null to parameter #1 ($filename) of type string is deprecated
+string(0) ""
+string(2) "17"
+string(1) "1"
+TypeError:SplFileInfo::__construct(): Argument #1 ($filename) must be of type string, array given
+ValueError:SplFileInfo::__construct(): Argument #1 ($filename) must not contain any null bytes
+ArgumentCountError:SplFileInfo::getFilename() expects exactly 0 arguments, 1 given
+TypeError:SplFileInfo::getBasename(): Argument #1 ($suffix) must be of type string, array given
+ValueError:SplFileInfo::__construct(): Argument #1 ($filename) must not contain any null bytes
+folder/item.bin
+NULL
+next/name

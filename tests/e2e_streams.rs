@@ -33,6 +33,26 @@ impl Drop for TemporaryPath {
 }
 
 #[test]
+fn rewind_restarts_shared_cursor_after_prefetch_and_eof() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            foreach (["php://memory", "php://temp/maxmemory:3"] as $path) {
+                $s = fopen($path, "w+"); $alias = $s;
+                fwrite($s, "a\nbc"); rewind($s);
+                echo bin2hex(fgets($s)), ":", ftell($alias), ":";
+                fseek($s, 99); fread($s, 1);
+                echo (int)feof($s), ":", (int)rewind($alias), ":", ftell($s), ":",
+                    (int)feof($s), ":", bin2hex(fread($s, 4)), "\n";
+                fclose($s);
+            }
+        "#
+        ),
+        "610a:2:1:1:0:0:610a6263\n610a:2:1:1:0:0:610a6263\n"
+    );
+}
+
+#[test]
 fn memory_stream_round_trip_preserves_position_and_eof() {
     assert_eq!(
         run_php(

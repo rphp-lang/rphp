@@ -14,6 +14,25 @@ fn return_value(rv: *mut Value, value: Value) -> Result<(), VmError> {
     Ok(())
 }
 
+/// Native serialization policy belongs to the actual allocated class, not an
+/// incomplete object's retained wire name. Ordinary root classes need no
+/// interface traversal, name allocation, or target-class lookup.
+fn file_info_class<'a>(
+    eg: &'a ExecutorGlobals,
+    mut class: Option<&'a crate::compiler::compile::ClassDef>,
+) -> bool {
+    while let Some(definition) = class {
+        if definition.name == "SplFileInfo" {
+            return true;
+        }
+        class = definition
+            .parent
+            .as_deref()
+            .and_then(|name| eg.find_class(name));
+    }
+    false
+}
+
 struct SerializeState {
     next_reference: usize,
     objects: HashMap<usize, usize>,
@@ -310,7 +329,8 @@ fn serialize_value(
                     | "sensitiveparametervalue"
                     | "reflectionproperty"
                     | "directory"
-            ) {
+            ) || file_info_class(eg, eg.class_by_id(class_id))
+            {
                 Some(class_name.as_str())
             } else {
                 None
@@ -508,9 +528,8 @@ fn allocate_object(eg: &mut ExecutorGlobals, class_name: &str) -> Result<Value, 
     }
     // Apply the native capability to the resolved class, including aliases
     // published by an autoloader, before allocating or initializing any slot.
-    let canonical_name = eg
-        .find_class(class_name)
-        .map_or(class_name, |class| class.name.as_str());
+    let class = eg.find_class(class_name);
+    let canonical_name = class.map_or(class_name, |class| class.name.as_str());
     if matches!(
         canonical_name.to_ascii_lowercase().as_str(),
         "generator"
@@ -519,7 +538,8 @@ fn allocate_object(eg: &mut ExecutorGlobals, class_name: &str) -> Result<Value, 
             | "internaliterator"
             | "reflectionproperty"
             | "directory"
-    ) {
+    ) || file_info_class(eg, class)
+    {
         eg.exception = Some(crate::value::make_error_value(
             "Exception",
             &format!("Unserialization of '{canonical_name}' is not allowed"),

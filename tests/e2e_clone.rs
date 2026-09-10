@@ -2,6 +2,47 @@ mod common;
 use common::run_php;
 
 #[test]
+fn shared_clone_site_preserves_polymorphism_reentry_and_native_state() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function copyOne($value) { return clone $value; }
+class PlainClone { public $n = 1; }
+class HookClone { public $n = 1; function __CLONE() { $this->n += 2; } }
+class InheritedClone extends HookClone {}
+trait CloneTrait { function bump() { $this->n += 4; } }
+class TraitClone { use CloneTrait { bump as __clone; } public $n = 1; }
+foreach ([new PlainClone, new HookClone, new InheritedClone, new TraitClone, new PlainClone] as $original) {
+    for ($i = 0; $i < 2; ++$i) {
+        $copy = copyOne($original);
+        echo get_class($copy), ':', $original->n, ':', $copy->n, "\n";
+    }
+}
+class RecursiveClone {
+    public $n = 1;
+    function __clone() { $plain = copyOne(new PlainClone); $this->n = $plain->n + 6; }
+}
+class ThrowClone {
+    public $n = 1;
+    function __clone() { copyOne(new PlainClone); throw new Exception('clone stopped'); }
+}
+for ($i = 0; $i < 2; ++$i) {
+    echo 'nested:', copyOne(new RecursiveClone)->n, "\n";
+    try { copyOne(new ThrowClone); } catch (Exception $error) { echo $error->getMessage(), "\n"; }
+    echo 'after:', copyOne(new PlainClone)->n, "\n";
+}
+class InfoClone extends SplFileInfo { function __clone() { parent::__construct('changed.bin'); } }
+foreach ([new SplFileInfo('item.txt'), new InfoClone('item.txt'), new SplFileInfo('item.txt')] as $original) {
+    $copy = copyOne($original);
+    echo get_class($copy), ':', $original->getPathname(), ':', $copy->getPathname(), "\n";
+}
+"#
+        ),
+        "PlainClone:1:1\nPlainClone:1:1\nHookClone:1:3\nHookClone:1:3\nInheritedClone:1:3\nInheritedClone:1:3\nTraitClone:1:5\nTraitClone:1:5\nPlainClone:1:1\nPlainClone:1:1\nnested:7\nclone stopped\nafter:1\nnested:7\nclone stopped\nafter:1\nSplFileInfo:item.txt:item.txt\nInfoClone:item.txt:changed.bin\nSplFileInfo:item.txt:item.txt\n"
+    );
+}
+
+#[test]
 fn test_clone_basic_properties_independent() {
     let output = run_php(
         r#"<?php

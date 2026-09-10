@@ -1,0 +1,17 @@
+Error:Object not initialized
+string(0) ""
+Error:Object not initialized
+Error:Object not initialized
+string(0) ""
+Error:Object not initialized
+Error:Object not initialized
+bool(false)
+Error:Object not initialized
+Error:Object not initialized
+NULL
+string(0) ""
+diagnostic:8192:Method SplFileInfo::_bad_state_ex() is deprecated since 8.2
+Error:The parent constructor was not called: the object is in an invalid state
+0053706c46696c65496e666f00706174684e616d65:
+NULL
+NULL

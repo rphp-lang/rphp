@@ -181,22 +181,48 @@ fn op_clone_obj<'a>(
             eg.bind_reified_object(&cloned_val, binding);
         }
 
-        let clone_identity = cloned_val
-            .object_identity()
-            .expect("cloned object has stable identity");
-        let readonly_properties = {
+        // This instruction's existing monomorphic cache belongs only to
+        // CloneObj. A nonzero class ID also makes an absent __clone stable:
+        // linked class methods are immutable, just as for method-call caches.
+        // Dynamic class-id-zero receivers always retain ordinary resolution.
+        let clone_method = {
             let cloned = cloned_val.as_object().unwrap();
-            eg.class_table
-                .get(cloned.class_name.as_ref())
-                .map(|class| class.readonly_props.iter().cloned().collect())
-                .unwrap_or_default()
+            let ip = (opline as *const Instruction)
+                .offset_from(op_array.instructions.as_ptr()) as usize;
+            let cached = &op_array.cache[ip];
+            if cloned.class_id != 0 && cached.class_id == cloned.class_id {
+                cached.func
+            } else {
+                let resolved = eg
+                    .find_function(&format!("{}::__clone", cloned.class_name))
+                    .unwrap_or(std::ptr::null());
+                let cache = &mut *(op_array.cache.as_ptr().add(ip)
+                    as *mut crate::vm::instruction::InlineCache);
+                cache.class_id = cloned.class_id;
+                cache.func = resolved;
+                resolved
+            }
         };
-        eg.clone_readonly_reinitialization
-            .push((clone_identity, readonly_properties));
-        let clone_result = call_magic_method(eg, &cloned_val, "__clone", &[]);
-        let popped = eg.clone_readonly_reinitialization.pop();
-        debug_assert!(popped.is_some_and(|(identity, _)| identity == clone_identity));
-        let _ = clone_result?;
+        if !clone_method.is_null() {
+            let clone_identity = cloned_val
+                .object_identity()
+                .expect("cloned object has stable identity");
+            let readonly_properties = {
+                let cloned = cloned_val.as_object().unwrap();
+                eg.class_table
+                    .get(cloned.class_name.as_ref())
+                    .map(|class| class.readonly_props.iter().cloned().collect())
+                    .unwrap_or_default()
+            };
+            eg.clone_readonly_reinitialization
+                .push((clone_identity, readonly_properties));
+            // Resolve before invoking user code: reentrant clones may replace
+            // the cache but cannot change this request-owned function pointer.
+            let clone_result = call_function(eg, clone_method, &[cloned_val.clone()]);
+            let popped = eg.clone_readonly_reinitialization.pop();
+            debug_assert!(popped.is_some_and(|(identity, _)| identity == clone_identity));
+            let _ = clone_result?;
+        }
 
     // If __clone threw an exception, propagate it
         if let Some(exc) = eg.exception.take() {

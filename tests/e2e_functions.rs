@@ -263,6 +263,35 @@ fn test_e2e_scalar_long_plan_falls_back_on_overflow() {
 }
 
 #[test]
+fn direct_scalar_completion_keeps_side_exits_and_next_instruction() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function combine_result($left, $right) { return $left + $right; }
+class ResultVariants {
+    static function sum($left, $right) { return $left + $right; }
+    function difference($left, $right) { return $left - $right; }
+}
+$object = new ResultVariants;
+foreach ([[0,0],[-3,2],[PHP_INT_MAX,1],[1.5,2],['5',2]] as [$left,$right]) {
+    $a = combine_result($left,$right);
+    $b = ResultVariants::sum($left,$right);
+    $c = $object->difference($left,$right);
+    echo gettype($a), ':', (int)($a === $b), ':', gettype($c), ';';
+}
+try { combine_result([],1); } catch (TypeError $error) { echo 'type;'; }
+try { combine_result(1); } catch (ArgumentCountError $error) { echo 'arity;'; }
+$shared = 7;
+$alias =& $shared;
+combine_result($alias,3);
+echo combine_result($alias,3), ':', $shared, ':tail';
+"#
+        ),
+        "integer:1:integer;integer:1:integer;double:1:integer;double:1:double;integer:1:integer;type;arity;10:7:tail"
+    );
+}
+
+#[test]
 fn test_e2e_scalar_long_plan_three_way_compare_and_double_fallback() {
     assert_eq!(
         run_php(

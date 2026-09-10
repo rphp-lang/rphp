@@ -1,0 +1,8 @@
+TypeError:SplFileInfo::__construct(): Argument #1 ($filename) must be of type string, int given
+TypeError:SplFileInfo::getBasename(): Argument #1 ($suffix) must be of type string, int given
+TypeError:SplFileInfo::getBasename(): Argument #1 ($suffix) must be of type string, array given
+TypeError:SplFileInfo::getFileInfo(): Argument #1 ($class) must be a class name derived from SplFileInfo or null, stdClass given
+TypeError:SplFileInfo::getPathInfo(): Argument #1 ($class) must be a class name derived from SplFileInfo or null, stdClass given
+diagnostic:2:Array to string conversion
+TypeError:SplFileInfo::setInfoClass(): Argument #1 ($class) must be a class name derived from SplFileInfo, Array given
+Error:Object of class stdClass could not be converted to string

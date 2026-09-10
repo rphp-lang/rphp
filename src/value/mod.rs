@@ -569,6 +569,16 @@ struct DynamicPropertyAux {
     native_array_options: NativeArrayOptions,
     native_array_iteration: Option<Box<NativeArrayIteration>>,
     native_iterator_delegate: Option<Box<NativeIteratorDelegate>>,
+    native_object_state: Option<Box<dyn NativeObjectState>>,
+}
+
+/// Cold native capabilities without PHP values or reference-cycle edges.
+/// Concrete payload ownership stays with its native implementation instead of
+/// expanding the common Value clone/drop code whenever that payload changes.
+pub(crate) trait NativeObjectState: std::any::Any {
+    fn clone_state(&self) -> Box<dyn NativeObjectState>;
+    fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
 /// Scalar policy owned only by native array wrappers. Keeping it in the
@@ -589,6 +599,7 @@ impl DynamicPropertyAux {
             native_array_options: NativeArrayOptions::default(),
             native_array_iteration: None,
             native_iterator_delegate: None,
+            native_object_state: None,
         }
     }
 }
@@ -608,11 +619,26 @@ impl Clone for DynamicPropertyMap {
 impl DynamicPropertyMap {
     #[inline]
     fn clone_native_array_auxiliary(&self) -> Option<Box<DynamicPropertyAux>> {
-        let options = self.auxiliary.as_ref()?.native_array_options;
+        let source = self.auxiliary.as_ref()?;
+        if source.native_object_state.is_some() {
+            return Some(Self::clone_native_object_auxiliary(source));
+        }
+        let options = source.native_array_options;
         if options == NativeArrayOptions::default() {
             return None;
         }
         Some(Self::allocate_native_array_auxiliary(options))
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn clone_native_object_auxiliary(source: &DynamicPropertyAux) -> Box<DynamicPropertyAux> {
+        let mut auxiliary = Self::allocate_native_array_auxiliary(source.native_array_options);
+        auxiliary.native_object_state = source
+            .native_object_state
+            .as_ref()
+            .map(|state| state.clone_state());
+        auxiliary
     }
 
     #[cold]
@@ -658,14 +684,14 @@ impl DynamicPropertyMap {
             // Existing slots already have unique keys in insertion order.
             // Copy their PHP owners directly, without searching each key in
             // the progressively rebuilt map. This does not alias the slots.
+            let mut copied = SmallDynamicProperties::new();
+            for (destination, source) in copied.entries.iter_mut().zip(&small.entries) {
+                if let Some((key, value)) = source {
+                    *destination = Some((key.clone(), value.clone_for_php_storage()));
+                }
+            }
             return Self {
-                storage: DynamicPropertyStorage::Small(SmallDynamicProperties {
-                    entries: std::array::from_fn(|index| {
-                        small.entries[index]
-                            .as_ref()
-                            .map(|(key, value)| (key.clone(), value.clone_for_php_storage()))
-                    }),
-                }),
+                storage: DynamicPropertyStorage::Small(copied),
                 auxiliary: self.clone_native_array_auxiliary(),
             };
         }
@@ -995,6 +1021,7 @@ impl DynamicPropertyMap {
             && auxiliary.native_array_options == NativeArrayOptions::default()
             && auxiliary.native_array_iteration.is_none()
             && auxiliary.native_iterator_delegate.is_none()
+            && auxiliary.native_object_state.is_none()
         {
             self.auxiliary = None;
         }
@@ -1832,6 +1859,31 @@ impl PhpObject {
     }
 
     #[cold]
+    pub(crate) fn native_object_state<T: std::any::Any>(&self) -> Option<&T> {
+        self.dynamic_properties
+            .as_ref()?
+            .auxiliary
+            .as_ref()?
+            .native_object_state
+            .as_deref()?
+            .as_any()
+            .downcast_ref()
+    }
+
+    #[cold]
+    pub(crate) fn native_object_state_mut<T: NativeObjectState + Default>(&mut self) -> &mut T {
+        self.dynamic_properties
+            .get_or_insert_with(|| Box::new(DynamicPropertyMap::with_capacity(0)))
+            .auxiliary
+            .get_or_insert_with(|| Box::new(DynamicPropertyAux::new()))
+            .native_object_state
+            .get_or_insert_with(|| Box::new(T::default()))
+            .as_any_mut()
+            .downcast_mut()
+            .expect("native object capability type does not change")
+    }
+
+    #[cold]
     pub(crate) fn native_array_iteration_mut(&mut self) -> &mut NativeArrayIteration {
         self.dynamic_properties
             .get_or_insert_with(|| Box::new(DynamicPropertyMap::with_capacity(0)))
@@ -1940,21 +1992,32 @@ impl PhpObject {
     /// Test property payloads without resolving declared slot names. Release
     /// planning depends only on values, so it can avoid a layout lookup for
     /// every declared Throwable property at each catch boundary.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn any_property_value(&self, mut predicate: impl FnMut(&Value) -> bool) -> bool {
         if self.property_values.iter().any(&mut predicate) {
             return true;
         }
+        self.dynamic_properties
+            .as_deref()
+            .is_some_and(|dynamic| Self::any_dynamic_owned_value(dynamic, &mut predicate))
+    }
+
+    // Dynamic maps and native iterator edges are sparse, separately owned
+    // payloads. Their traversal must not expand a declared-only release scan.
+    #[cold]
+    #[inline(never)]
+    fn any_dynamic_owned_value(
+        dynamic: &DynamicPropertyMap,
+        predicate: &mut impl FnMut(&Value) -> bool,
+    ) -> bool {
         let mut found = false;
-        if let Some(dynamic) = &self.dynamic_properties {
-            dynamic.for_each(|_, value| found |= predicate(value));
-            if let Some(state) = dynamic
-                .auxiliary
-                .as_ref()
-                .and_then(|aux| aux.native_iterator_delegate.as_ref())
-            {
-                state.for_each_value(|value| found |= predicate(value));
-            }
+        dynamic.for_each(|_, value| found |= predicate(value));
+        if let Some(state) = dynamic
+            .auxiliary
+            .as_ref()
+            .and_then(|aux| aux.native_iterator_delegate.as_ref())
+        {
+            state.for_each_value(|value| found |= predicate(value));
         }
         found
     }
@@ -8259,6 +8322,66 @@ impl Drop for Value {
 }
 
 #[cfg(test)]
+mod native_owned_value_scan_tests {
+    use super::*;
+
+    #[test]
+    fn declared_scan_keeps_short_circuit_and_all_cold_owned_edges() {
+        let layout = Rc::new(ObjectLayout::new(
+            "OwnedEdgeRow",
+            vec!["first".into(), "second".into()],
+        ));
+        let mut object =
+            PhpObject::with_layout_from_defaults(1, layout, &[Value::long(1), Value::long(2)]);
+        object.set_property("dynamic_first", Value::long(3));
+        object.set_property("dynamic_second", Value::long(4));
+        let mut delegate = NativeIteratorDelegate::new(Value::long(8), Value::long(7), 0, -1);
+        delegate.current = Value::long(5);
+        delegate.key = Value::long(6);
+        delegate.recursive = Some(Box::new(RecursiveTraversal {
+            frames: vec![RecursiveFrame {
+                iterator: Value::long(9),
+                phase: RecursivePhase::Check,
+            }],
+            mode: 0,
+            flags: 0,
+            max_depth: -1,
+            in_iteration: false,
+            generation: 0,
+        }));
+        object.set_native_iterator_delegate(delegate);
+        for (needle, expected, visited) in [
+            (2, true, vec![1, 2]),
+            (3, true, vec![1, 2, 3, 4, 9, 5, 6, 7, 8]),
+            (9, true, vec![1, 2, 3, 4, 9, 5, 6, 7, 8]),
+            (10, false, vec![1, 2, 3, 4, 9, 5, 6, 7, 8]),
+        ] {
+            let mut actual = Vec::new();
+            assert_eq!(
+                object.any_property_value(|value| {
+                    let value = value.as_long().unwrap();
+                    actual.push(value);
+                    value == needle
+                }),
+                expected
+            );
+            assert_eq!(actual, visited);
+        }
+    }
+
+    #[test]
+    fn empty_declared_scan_does_not_allocate_cold_storage() {
+        let object = PhpObject::with_layout_from_defaults(
+            1,
+            Rc::new(ObjectLayout::new("EmptyOwnedRow", Vec::new())),
+            &[],
+        );
+        assert!(!object.any_property_value(|_| panic!("no owned values")));
+        assert!(object.dynamic_properties.is_none());
+    }
+}
+
+#[cfg(test)]
 mod arithmetic_projection_tests {
     use super::{PhpArray, Value};
 
@@ -8316,6 +8439,45 @@ mod arithmetic_projection_tests {
 #[cfg(test)]
 mod dynamic_property_clone_tests {
     use super::*;
+
+    #[test]
+    fn small_clone_preserves_each_optional_slot_and_its_owner() {
+        for occupied in 0u8..8 {
+            let mut small = SmallDynamicProperties::new();
+            for (index, slot) in small.entries.iter_mut().enumerate() {
+                if occupied & (1 << index) != 0 {
+                    *slot = Some((
+                        format!("slot{index}"),
+                        Value::string(format!("value{index}")),
+                    ));
+                }
+            }
+            let properties = DynamicPropertyMap {
+                storage: DynamicPropertyStorage::Small(small),
+                auxiliary: None,
+            };
+            let mut cloned = properties.clone_for_php_object();
+            let DynamicPropertyStorage::Small(source) = &properties.storage else {
+                unreachable!()
+            };
+            let DynamicPropertyStorage::Small(copy) = &mut cloned.storage else {
+                panic!("small clone changed storage tier")
+            };
+            for (original, copied) in source.entries.iter().zip(&mut copy.entries) {
+                match (original, copied) {
+                    (None, None) => {}
+                    (Some((key, value)), Some((copied_key, copied_value))) => {
+                        assert_eq!(key, copied_key);
+                        assert_eq!(value.as_str(), copied_value.as_str());
+                        *copied_value = Value::null();
+                        assert!(value.as_str().unwrap().starts_with("value"));
+                    }
+                    _ => panic!("clone changed an optional slot"),
+                }
+            }
+            assert!(cloned.auxiliary.is_none());
+        }
+    }
 
     #[test]
     fn php_clone_preserves_order_and_independent_slots_at_storage_boundaries() {

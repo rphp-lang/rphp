@@ -1,0 +1,8 @@
+6578747261:member
+0053706c46696c65496e666f00706174684e616d65:folder/item.bin
+0053706c46696c65496e666f0066696c654e616d65:item.bin
+folder/item.bin:1
+array(1) {
+  [0]=>
+  string(5) "extra"
+}

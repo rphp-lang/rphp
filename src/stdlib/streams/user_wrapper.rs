@@ -111,12 +111,23 @@ pub(crate) fn protocol_from_url(url: &str) -> Option<&str> {
     Some(&url[..separator])
 }
 
+#[inline]
 pub(crate) fn definition_for_url(eg: &ExecutorGlobals, url: &str) -> Option<WrapperDefinition> {
+    // An untouched request cannot have a user wrapper. Keep both URL parsing
+    // and definition materialization behind the existing sparse registry.
+    definition_for_registered_url(registry(eg)?, url)
+}
+
+#[cold]
+#[inline(never)]
+fn definition_for_registered_url(
+    state: &std::collections::HashMap<String, Value>,
+    url: &str,
+) -> Option<WrapperDefinition> {
     let first = *url.as_bytes().first()?;
     if !first.is_ascii_alphanumeric() && !matches!(first, b'+' | b'-' | b'.') {
         return None;
     }
-    let state = registry(eg)?;
     let protocol = protocol_from_url(url)?;
     state
         .get(&custom_key(protocol))
@@ -355,6 +366,9 @@ pub(crate) fn is_user_directory(eg: &mut ExecutorGlobals, resource: i64) -> bool
         .is_some_and(|stream| stream.borrow().kind == UserStreamKind::Directory)
 }
 
+// This is only the sparse admission guard. Keep it in the caller, while the
+// registered-wrapper operation and its large state remain out of line.
+#[inline(always)]
 fn open(
     eg: &mut ExecutorGlobals,
     path: &str,
@@ -365,6 +379,21 @@ fn open(
     let Some(definition) = definition_for_url(eg, path) else {
         return Ok(OpenResult::NotRegistered);
     };
+    open_registered(eg, path, mode, options, kind, definition)
+}
+
+// Ordinary native opens need only the definition lookup. Keep wrapper object
+// construction, callback arguments and retirement state out of that boundary.
+#[cold]
+#[inline(never)]
+fn open_registered(
+    eg: &mut ExecutorGlobals,
+    path: &str,
+    mode: &str,
+    options: i64,
+    kind: UserStreamKind,
+    definition: WrapperDefinition,
+) -> Result<OpenResult, VmError> {
     let object = instantiate_wrapper(eg, &definition)?;
     if eg.exception.is_some() || object.value_type() != ValueType::Object {
         return Ok(OpenResult::Declined {
@@ -428,6 +457,7 @@ fn open(
     Ok(OpenResult::Opened(value))
 }
 
+#[inline(always)]
 pub(crate) fn open_file(
     eg: &mut ExecutorGlobals,
     path: &str,
@@ -437,12 +467,83 @@ pub(crate) fn open_file(
     open(eg, path, mode, options, UserStreamKind::File)
 }
 
+#[inline(always)]
 pub(crate) fn open_directory(
     eg: &mut ExecutorGlobals,
     path: &str,
     options: i64,
 ) -> Result<OpenResult, VmError> {
     open(eg, path, "", options, UserStreamKind::Directory)
+}
+
+#[cfg(test)]
+mod open_lookup_tests {
+    use super::*;
+
+    #[test]
+    fn definition_lookup_observes_only_the_current_sparse_registry() {
+        let mut eg = ExecutorGlobals::new();
+        eg.static_vars.entry("unrelated".into()).or_default();
+        assert!(definition_for_url(&eg, "local://item").is_none());
+        let definition = WrapperDefinition {
+            scheme: "local".into(),
+            class: "LocalWrapper".into(),
+            flags: 1,
+        };
+        let state = eg.static_vars.entry(REGISTRY_STATE.into()).or_default();
+        state.insert(custom_key("local"), definition_value(&definition));
+        // Even present keys cannot bypass the public URL prefix rule.
+        state.insert(custom_key("/bad"), definition_value(&definition));
+        state.insert(custom_key(""), definition_value(&definition));
+        for url in [
+            "",
+            "://item",
+            "/bad://item",
+            "local",
+            "LOCAL://item",
+            "none://item",
+        ] {
+            assert!(definition_for_url(&eg, url).is_none(), "{url}");
+        }
+        let found = definition_for_url(&eg, "local://item").unwrap();
+        assert_eq!(found.scheme, "local");
+        assert_eq!(found.class, "LocalWrapper");
+        assert_eq!(found.flags, 1);
+        assert!(definition_for_url(&ExecutorGlobals::new(), "local://item").is_none());
+        eg.static_vars
+            .get_mut(REGISTRY_STATE)
+            .unwrap()
+            .remove(&custom_key("local"));
+        assert!(definition_for_url(&eg, "local://item").is_none());
+        assert!(eg.static_vars.contains_key("unrelated"));
+        assert!(eg.exception.is_none());
+        assert_eq!(eg.resource_scope, 0);
+    }
+
+    #[test]
+    fn absent_wrapper_open_keeps_the_request_unmodified() {
+        let mut eg = ExecutorGlobals::new();
+        for path in [
+            "",
+            "relative/file",
+            "/absolute",
+            "php://memory",
+            "unknown://item",
+            "+custom://item",
+        ] {
+            assert!(matches!(
+                open_file(&mut eg, path, "w+", 0).unwrap(),
+                OpenResult::NotRegistered
+            ));
+            assert!(matches!(
+                open_directory(&mut eg, path, 0).unwrap(),
+                OpenResult::NotRegistered
+            ));
+            assert!(eg.exception.is_none());
+            assert!(eg.static_vars.is_empty());
+            assert_eq!(eg.resource_scope, 0);
+        }
+    }
 }
 
 fn invoke_on_stream(

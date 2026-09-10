@@ -117,6 +117,24 @@ mod scalar_long_operation_range_tests {
     use super::*;
 
     #[test]
+    fn direct_scalar_completion_uses_pointer_niche_without_extra_tag() {
+        type Completion = Option<(i64, std::ptr::NonNull<Instruction>)>;
+        assert_eq!(
+            std::mem::size_of::<Completion>(),
+            std::mem::size_of::<(i64, *const Instruction)>(),
+        );
+        let pointer = std::ptr::NonNull::<Instruction>::dangling();
+        for value in [i64::MIN, -1, 0, 1, i64::MAX] {
+            let completion: Completion = Some((value, pointer));
+            assert_eq!(
+                completion.map(|(result, next)| (result, next.as_ptr())),
+                Some((value, pointer.as_ptr())),
+            );
+        }
+        assert!(Completion::None.is_none());
+    }
+
+    #[test]
     fn shared_interpreter_retains_checked_operation_dependencies_and_outputs() {
         use crate::vm::function::ScalarLongProgram;
         for count in 0..=8 {
@@ -966,6 +984,13 @@ pub(crate) unsafe fn try_execute_direct_single_scalar_long_op(
 /// callee before any ExecuteData frame is allocated. Argument expressions that
 /// need their own opcodes simply fail this shape guard and retain the ordinary
 /// call protocol.
+///
+/// # Safety
+/// `plan` must be the compiler-published scalar_long_plan of the immutable user
+/// function headed by `common`. Its builder checks signature admission, and
+/// publishing diagnostic attributes removes the plan. All callers obtain this
+/// matching pair from the resolved UserFunction; no runtime value proof is
+/// implied, so the Send, Long, arity and checked-arithmetic guards remain here.
 #[inline(never)]
 pub(crate) unsafe fn try_execute_direct_scalar_long_call(
     caller: *mut ExecuteData,
@@ -973,8 +998,9 @@ pub(crate) unsafe fn try_execute_direct_scalar_long_call(
     sends: *const Instruction,
     common: &FunctionCommon,
     plan: &ScalarLongFunctionPlan,
-) -> Option<(i64, *const Instruction)> {
-    if !common.supports_scalar_long_plan() || common.sig.public_arity() != plan.public_args as u32 {
+) -> Option<(i64, std::ptr::NonNull<Instruction>)> {
+    debug_assert!(common.supports_scalar_long_plan());
+    if common.sig.public_arity() != plan.public_args as u32 {
         return None;
     }
 
@@ -1013,7 +1039,9 @@ pub(crate) unsafe fn try_execute_direct_scalar_long_call(
         return None;
     }
     let result = evaluate_scalar_long_plan(plan, &arguments)?;
-    Some((result, do_fcall_ptr))
+    // The completed instruction is non-null. Use its null niche for failure
+    // instead of a separate tag and caller-owned 24-byte return buffer.
+    Some((result, std::ptr::NonNull::new(do_fcall_ptr.cast_mut())?))
 }
 
 /// Borrow a contiguous positional Send sequence and enter the exact-Double

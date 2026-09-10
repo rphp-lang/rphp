@@ -5502,7 +5502,7 @@ impl Compiler {
                     }
                     let mut cp = self.compile_params(&mut func_compiler, &method.params)?;
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
-                    cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    cp.return_type_hint = self.method_return_type_hint(&method.name, &method.return_type);
                     if explicit_set_hooks.contains(&method.name.to_ascii_lowercase()) {
                         // Explicit set hooks have PHP's public void contract.
                         // A synthetic plain-property setter remains an internal
@@ -6376,7 +6376,7 @@ impl Compiler {
                     func_compiler.definitely_defined_cvs.insert(this_cv);
                     let mut cp = self.compile_params(&mut func_compiler, &method.params)?;
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
-                    cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    cp.return_type_hint = self.method_return_type_hint(&method.name, &method.return_type);
                     if method.name.starts_with('$') && method.name.ends_with("::set") {
                         cp.return_type_hint = crate::vm::function::ParamTypeHint::Void;
                     }
@@ -6733,7 +6733,7 @@ impl Compiler {
                     func_compiler.definitely_defined_cvs.insert(this_cv);
                     let mut cp = self.compile_params(&mut func_compiler, &method.params)?;
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
-                    cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    cp.return_type_hint = self.method_return_type_hint(&method.name, &method.return_type);
                     if method.name.starts_with('$') && method.name.ends_with("::set") {
                         cp.return_type_hint = crate::vm::function::ParamTypeHint::Void;
                     }
@@ -7689,7 +7689,7 @@ impl Compiler {
                     func_compiler.definitely_defined_cvs.insert(this_cv);
                     let mut cp = self.compile_params(&mut func_compiler, &method.params)?;
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
-                    cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    cp.return_type_hint = self.method_return_type_hint(&method.name, &method.return_type);
                     self.validate_attribute_target(&method.attributes, "method", method.line)?;
                     self.validate_deprecated_target(&method.attributes, "method")?;
                     self.validate_no_discard_callable(

@@ -1205,9 +1205,22 @@ pub(crate) fn integer_operator_operand(value: &Value) -> Result<IntegerOperatorO
 /// Convert an explicit integer-cast operand. PHP accepts the complete numeric
 /// prefix grammar for strings but does not emit the arithmetic warning or
 /// precision deprecation at an explicit `(int)`/`intval()` boundary.
-#[inline]
+#[inline(always)]
 pub(crate) fn explicit_long_conversion(value: &Value) -> i64 {
     let value = value.dereferenced();
+    match value.value_type() {
+        ValueType::Long => value.as_long().unwrap(),
+        ValueType::True => 1,
+        ValueType::False | ValueType::Null | ValueType::Undef => 0,
+        _ => explicit_nontrivial_long_conversion(value),
+    }
+}
+
+// The immediate tags need neither parsing nor the general numeric projection.
+// Preserve the existing coercions for every other kind behind this boundary.
+#[cold]
+#[inline(never)]
+fn explicit_nontrivial_long_conversion(value: &Value) -> i64 {
     match value.value_type() {
         ValueType::Double => php_float_to_long(value.as_double().unwrap()),
         ValueType::String => {
@@ -1255,12 +1268,26 @@ pub(crate) enum ExplicitNumericCastTarget {
 /// Return the PHP warning for an explicit numeric conversion, if any. Keep the
 /// diagnostic separate from the scalar result so handlers run before the
 /// result becomes observable and may interrupt the conversion by throwing.
-#[inline]
+#[inline(always)]
 pub(crate) fn explicit_numeric_cast_warning(
     value: &Value,
     target: ExplicitNumericCastTarget,
 ) -> Option<String> {
     let value = value.dereferenced();
+    match value.value_type() {
+        ValueType::Double if matches!(target, ExplicitNumericCastTarget::Int) => {}
+        ValueType::Object | ValueType::Closure => {}
+        _ => return None,
+    }
+    explicit_numeric_cast_diagnostic(value, target)
+}
+
+#[cold]
+#[inline(never)]
+fn explicit_numeric_cast_diagnostic(
+    value: &Value,
+    target: ExplicitNumericCastTarget,
+) -> Option<String> {
     if matches!(target, ExplicitNumericCastTarget::Int)
         && let Some(number) = value.as_double()
         && (!number.is_finite() || !(-PHP_LONG_UPPER_BOUND..PHP_LONG_UPPER_BOUND).contains(&number))
@@ -1281,6 +1308,36 @@ pub(crate) fn explicit_numeric_cast_warning(
         ));
     }
     None
+}
+
+#[cfg(test)]
+mod immediate_numeric_cast_tests {
+    use super::*;
+
+    #[test]
+    fn immediate_values_and_references_preserve_projection_without_diagnostics() {
+        for (value, expected) in [
+            (Value::undef(), 0),
+            (Value::null(), 0),
+            (Value::bool(false), 0),
+            (Value::bool(true), 1),
+            (Value::long(i64::MIN), i64::MIN),
+            (Value::long(i64::MAX), i64::MAX),
+            (Value::long(-17), -17),
+        ] {
+            let reference = Value::owned_reference(value.clone());
+            for source in [&value, &reference] {
+                assert_eq!(explicit_long_conversion(source), expected);
+                for target in [
+                    ExplicitNumericCastTarget::Int,
+                    ExplicitNumericCastTarget::Float,
+                ] {
+                    assert!(explicit_numeric_cast_warning(source, target).is_none());
+                }
+            }
+            assert_eq!(reference.dereferenced().value_type(), value.value_type());
+        }
+    }
 }
 
 #[inline]

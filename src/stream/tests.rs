@@ -2,6 +2,67 @@ use super::{PhpStream, StreamMode, php_memory_stream_mode};
 use std::io::SeekFrom;
 
 #[test]
+fn boolean_rewind_matches_absolute_seek_for_prefetch_eof_and_failures() {
+    for path in [
+        "php://memory",
+        "php://temp/maxmemory:99",
+        "php://temp/maxmemory:3",
+    ] {
+        for stage in 0..3 {
+            let mut direct = PhpStream::open(path, "w+").unwrap();
+            let mut general = PhpStream::open(path, "w+").unwrap();
+            for stream in [&mut direct, &mut general] {
+                stream.write(b"a\nbc").unwrap();
+                stream.seek(SeekFrom::Start(0)).unwrap();
+                if stage > 0 {
+                    stream.read_line(&mut Vec::new(), None).unwrap();
+                }
+                if stage > 1 {
+                    stream.read(&mut [0; 32]).unwrap();
+                    assert!(stream.is_eof());
+                }
+            }
+            assert_eq!(direct.rewind(), general.seek(SeekFrom::Start(0)).is_ok());
+            assert_eq!(direct.position().unwrap(), 0);
+            assert_eq!(direct.is_eof(), general.is_eof());
+            assert_eq!(direct.metadata().unread_bytes, 0);
+            let mut actual = [0; 8];
+            let mut expected = [0; 8];
+            assert_eq!(
+                direct.read(&mut actual).unwrap(),
+                general.read(&mut expected).unwrap()
+            );
+            assert_eq!(actual, expected);
+        }
+    }
+    for kind in [
+        super::StandardStream::Input,
+        super::StandardStream::Output,
+        super::StandardStream::Error,
+    ] {
+        let mut stream = PhpStream::standard(kind);
+        stream.eof = true;
+        assert!(!stream.rewind());
+        assert!(stream.is_eof());
+        assert_eq!(stream.metadata().unread_bytes, 0);
+    }
+}
+
+#[test]
+#[cfg(feature = "stream-truncate")]
+fn boolean_rewind_retires_memory_truncate_append_state() {
+    let mut stream = PhpStream::open("php://memory", "w+").unwrap();
+    stream.write(b"abcdef").unwrap();
+    stream.truncate(2).unwrap();
+    assert!(stream.rewind());
+    stream.write(b"Z").unwrap();
+    assert!(stream.rewind());
+    let mut bytes = [0; 4];
+    assert_eq!(stream.read(&mut bytes).unwrap(), 2);
+    assert_eq!(&bytes[..2], b"Zb");
+}
+
+#[test]
 fn finite_memory_read_preserves_eof_empty_and_prefetched_boundaries() {
     for length in [0, 1, 7, 31, 64, 255, 8193] {
         for extra in [0, 1, 9] {

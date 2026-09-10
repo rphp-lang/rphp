@@ -1,0 +1,7 @@
+outer
+factory:outer
+RuntimeException:factory stopped
+outer
+without-parent:outer
+Error:Object not initialized
+

@@ -6718,7 +6718,7 @@ fn collect_reflected_methods(
                 name.to_string(),
                 Visibility::Public,
                 is_static,
-                false,
+                eg.internal_method_is_final(&class.name, name),
                 function,
                 class.name.clone(),
             ));

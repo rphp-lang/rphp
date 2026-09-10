@@ -5175,6 +5175,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 plan,
                             )
                         } {
+                            let do_fcall_ptr = do_fcall_ptr.as_ptr();
                             stats::inc_do_fcall_fast();
                             stats::inc_return_fast();
                             let count = common.call_count.get();
@@ -9575,6 +9576,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     )
                                 }
                             {
+                                let do_fcall_ptr = do_fcall_ptr.as_ptr();
                                 stats::inc_do_fcall_fast();
                                 stats::inc_return_fast();
                                 let count = common.call_count.get();
@@ -9636,6 +9638,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                         plan,
                                     )
                                 } {
+                                    let do_fcall_ptr = do_fcall_ptr.as_ptr();
                                     stats::inc_do_fcall_fast();
                                     stats::inc_return_fast();
                                     let count = common.call_count.get();
@@ -9808,6 +9811,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                         plan,
                                     )
                                 } {
+                                    let do_fcall_ptr = do_fcall_ptr.as_ptr();
                                     stats::inc_do_fcall_fast();
                                     stats::inc_return_fast();
                                     let count = common.call_count.get();

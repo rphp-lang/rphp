@@ -36,6 +36,31 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `spl-file-info-path-metadata-contracts` train adds 24 PHP 8.5
+passes over `0faf366c`, without loss, new process hazards or moved failure
+stages. All 23 admitted cases pass; the full SPL set reaches 260/485/31
+unsupported/8 skip/1 XFAIL. Core stays 6,444/337/182/211 with byte-identical
+manifests. Sparse native path/metadata state preserves byte provenance,
+cache, clone, factory, diagnostics and Reflection contracts.
+
+One final checked five-configuration matrix, all-targets, original oracles,
+exact no-loss, S0-S3 and static/unsafe gates pass. All 34 fixed-parent 32-pair
+controls meet unchanged common +1% / pay-use +5% limits (highest +0.510%/
++0.843%). Profile-backed work removal preserves public behavior and avoids
+common Value/VM fields or new JIT admission. New-API absolute costs, rejected
+alternatives, the corrected private API harness and shared-host limitations
+are recorded compactly in `compatibility.md`. Automatic cleanup remains required.
+
+Next admission confirms 24 PHP-passing/current-failing DirectoryIterator and
+FilesystemIterator cases. First characterize native cursor lifetime, clone,
+seek/rewind, dot filtering and current/key/FileInfo projections with original
+oracles. Reuse existing directory backends and sparse native ownership; retain
+the exact accepted baseline and add the five now-present FileInfo API canaries.
+Require at least ten reachable shared-cause gains. File-stream objects,
+recursive-directory/glob/tree families, suspension and 32-bit/OOM remain out.
+
+### Preceding recursive traversal checkpoint
+
 The accepted `recursive-iterator-traversal-contracts` train adds 49 PHP 8.5
 passes over `d5879401` (48 SPL, one core), with no loss or new process hazard.
 Sparse traced recursive frames preserve depth-first modes, hooks, child/error

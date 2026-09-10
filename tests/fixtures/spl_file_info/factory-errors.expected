@@ -1,0 +1,17 @@
+TypeError:SplFileInfo::setInfoClass(): Argument #1 ($class) must be a class name derived from SplFileInfo, AbsentInfoType given
+TypeError:SplFileInfo::getFileInfo(): Argument #1 ($class) must be a class name derived from SplFileInfo or null, AbsentInfoType given
+TypeError:SplFileInfo::setFileClass(): Argument #1 ($class) must be a class name derived from SplFileObject, AbsentInfoType given
+TypeError:SplFileInfo::setInfoClass(): Argument #1 ($class) must be a class name derived from SplFileInfo, stdClass given
+TypeError:SplFileInfo::getFileInfo(): Argument #1 ($class) must be a class name derived from SplFileInfo or null, stdClass given
+TypeError:SplFileInfo::setFileClass(): Argument #1 ($class) must be a class name derived from SplFileObject, stdClass given
+TypeError:SplFileInfo::setInfoClass(): Argument #1 ($class) must be a class name derived from SplFileInfo,  given
+TypeError:SplFileInfo::getFileInfo(): Argument #1 ($class) must be a class name derived from SplFileInfo or null,  given
+TypeError:SplFileInfo::setFileClass(): Argument #1 ($class) must be a class name derived from SplFileObject,  given
+TypeError:SplFileInfo::setInfoClass(): Argument #1 ($class) must be a class name derived from SplFileInfo,  given
+string(11) "SplFileInfo"
+TypeError:SplFileInfo::setFileClass(): Argument #1 ($class) must be a class name derived from SplFileObject,  given
+TypeError:SplFileInfo::setInfoClass(): Argument #1 ($class) must be a class name derived from SplFileInfo, 1 given
+TypeError:SplFileInfo::getFileInfo(): Argument #1 ($class) must be a class name derived from SplFileInfo or null, 1 given
+TypeError:SplFileInfo::setFileClass(): Argument #1 ($class) must be a class name derived from SplFileObject, 1 given
+NULL
+SplFileInfo

@@ -978,7 +978,7 @@ fn execute_source_unit_inner(
     if let Some(caller_class) = include_caller_class {
         eg.method_declaring_class.insert(
             &main_func.common as *const FunctionCommon,
-            caller_class,
+            caller_class.into(),
         );
     }
 

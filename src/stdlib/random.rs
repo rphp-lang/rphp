@@ -112,7 +112,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     eg.function_table
         .insert("random\\intervalboundary::cases".to_string(), cases_pointer);
     eg.method_declaring_class
-        .insert(cases_pointer, INTERVAL_BOUNDARY.to_string());
+        .insert(cases_pointer, INTERVAL_BOUNDARY.into());
 
     vec![cases_method]
 }

@@ -817,6 +817,41 @@ mod tests {
     }
 
     #[test]
+    fn request_payload_unwind_releases_the_borrow_in_single_and_multiple_scopes() {
+        for nested in [false, true] {
+            let scope = allocate_scope();
+            let id = insert(scope, "number", 7u64);
+            let neighbor = nested.then(|| {
+                let scope = allocate_scope();
+                (scope, insert(scope, "number", 19u64))
+            });
+            let outcome = std::panic::catch_unwind(|| {
+                with_payload_mut::<u64, _>(scope, id, |value| {
+                    *value = 11;
+                    panic!("native operation interrupted");
+                });
+            });
+            assert!(outcome.is_err());
+            assert_eq!(
+                with_payload_mut::<u64, _>(scope, id, |value| *value),
+                Some(11)
+            );
+            assert_eq!(with_payload_mut::<String, _>(scope, id, |_| ()), None);
+            if let Some((neighbor_scope, neighbor_id)) = neighbor {
+                assert_eq!(neighbor_id, id);
+                assert_eq!(
+                    with_payload_mut::<u64, _>(neighbor_scope, neighbor_id, |value| *value),
+                    Some(19)
+                );
+                close_scope(neighbor_scope);
+                assert_eq!(with_payload_mut::<u64, _>(neighbor_scope, id, |_| ()), None);
+            }
+            close_scope(scope);
+            assert_eq!(with_payload_mut::<u64, _>(scope, id, |_| ()), None);
+        }
+    }
+
+    #[test]
     fn request_registry_promotion_preserves_payloads_and_release_order() {
         let drops = Rc::new(Cell::new(0));
         let mut requests = super::RequestRegistries::Empty;

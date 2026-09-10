@@ -6186,6 +6186,7 @@ fn op_init_static_call<'a>(
                 )
             }
         {
+            let do_fcall_ptr = do_fcall_ptr.as_ptr();
             stats::inc_do_fcall_fast();
             stats::inc_return_fast();
             let count = common.call_count.get();
@@ -6524,6 +6525,7 @@ fn op_init_late_static_call<'a>(
                 )
             }
         {
+            let do_fcall_ptr = do_fcall_ptr.as_ptr();
             stats::inc_do_fcall_fast();
             stats::inc_return_fast();
             let count = common.call_count.get();

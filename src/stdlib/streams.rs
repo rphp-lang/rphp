@@ -1401,9 +1401,7 @@ fn fn_rewind(
         return Ok(());
     };
     let succeeded =
-        super::resource::with_request_payload_mut::<PhpStream, _>(eg, resource, |stream| {
-            stream.seek(SeekFrom::Start(0)).is_ok()
-        });
+        super::resource::with_request_payload_mut::<PhpStream, _>(eg, resource, PhpStream::rewind);
     #[cfg(feature = "stream-registry")]
     let succeeded = match succeeded {
         None => filters::with_source(eg, execute_data, |eg| {

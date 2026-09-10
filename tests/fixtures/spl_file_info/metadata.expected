@@ -1,0 +1,17 @@
+getPerms:1
+getInode:1
+getSize:1
+getOwner:1
+getGroup:1
+getATime:1
+getMTime:1
+getCTime:1
+getType:string(4) "file"
+isFile:bool(true)
+isDir:bool(false)
+isLink:bool(false)
+isReadable:bool(true)
+isWritable:bool(true)
+isExecutable:bool(false)
+1
+dir:1

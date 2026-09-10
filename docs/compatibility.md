@@ -8,6 +8,60 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
+`spl-file-info-path-metadata-contracts`, against `0faf366c`: **+24/-0** SPL
+passes. All 23 admitted cases pass; the complete 785-case SPL set reaches
+260 pass / 485 fail / 31 unsupported / 8 skip / 1 XFAIL. The separate
+7,174-case core remains **6,444 pass / 337 fail / 182 skip / 211 unsupported**,
+with byte-identical manifests, no lost pass, new process hazard or moved failure
+stage. These selected suites do not measure all PHP tests.
+
+Thirty native SplFileInfo methods share raw-byte paths, existing stat/link/cache
+helpers, string/debug and factory policies. Sparse object-owned native payloads
+contain no PHP values or GC edges; clone preserves independent state and user
+hooks. Final internal-method metadata and implicit __toString return contracts
+use canonical linking/Reflection. SplFileObject/openFile, directory iterators,
+general SPL, suspension, 32-bit and allocation-limit/OOM equivalence are excluded.
+
+Profile-backed work removal avoids builtin owner-string copies, metadata growth,
+empty clone-hook scopes, redundant immutable signature validation and general
+rewind arithmetic. Matching compiler-issued scalar plans retain runtime type,
+arity, overflow and fallback checks. Existing clone caches retain class-id-zero
+resolution and reentry. No common Value/VM field, dependency, JIT admission or
+unsafe-ceiling change; resource-registry production changes were rejected.
+
+Original byte-exact oracles, adjacent regressions and one final checked matrix
+pass: 5,020/4,713/5,091/5,113/5,164 tests (13/13/13/13/16 ignored, none filtered),
+plus all-features/all-targets, exact no-loss, Composer/Symfony S0-S3,
+runner/unsafe self-tests, formatting and public hygiene. Unsafe inventory stays
+1,622/289. Automatic cleanup runs before/after cycles and between configurations.
+
+All 34 fixed-parent 32-pair controls meet unchanged common +1% / pay-use +5%
+limits: highest +0.510%/+0.843%; ordinary calls -0.124%, objects -1.718%,
+dynamic clone -3.225%. Rejected measurements and instruction-simulation proofs
+remain explicit, without hardware-counter claims or unchanged timing rerolls.
+Five new APIs have exact PHP outputs and candidate/PHP ratios 2.665/2.552/2.924/
+3.020/4.652, not parent deltas or speed-parity claims. Their separate harness
+completion replaces unsupported CLI argument selection with an environment
+selector; the successful 34 controls were not rerun. The authorized shared host
+recorded two background events in the main packet and one in the API completion;
+neither packet is exclusive-host evidence.
+
+SHA-256 evidence:
+
+- Release: `44fb279cbcafeb0b313108eca91699876934f42d311b3b5ae5c9334256a45ba3`.
+- Complete technical record: `b3c0e772152f05375a277bbeefb78d40e6189a9b0f80b174a816b19608a5e5b2`.
+- Matrix: `7c1541d96850738b7af08d143a95b1c90fbcda4c49cc6d6b7862417855cb6c57`.
+- Supplying / SPL manifests: `7b701ce653fcdec3ee59a2674c86be5a0536c202d9a851700407182d73dee4c3` / `ec5c654a99240b6b47b0b73174f590011c9dd9b0ba957d246bdc7f9a064fad1a`.
+- SPL pass set: `6558fe1890cb3377ce8a411d6f21d73ff31844e89275e0fbe99678b521f3f296`.
+- Primary / holdout results: `8207389c668023d4885435efe3054e0f416fffeb4645f6b5948ece58811c99f3` / `0914477dcdb650b530113bc09e75d1a70210b16b42dac60979aedacb6ae72948`.
+- Core manifest/pass-set hashes remain those of the preceding traversal record.
+
+Next read-only admission confirms 24 PHP-passing/current-failing directory
+iterator cases (`06bdbf9dd68ef9a89864c45f4941f2fb95b9237291dc4c8dee58606c825a1efe`).
+Require at least ten shared cursor/FileInfo-projection gains; keep file-stream,
+recursive-directory and general SPL expansion outside this next slice.
+
+The preceding measured AMD64 PHP 8.5 checkpoint is
 `recursive-iterator-traversal-contracts`, against `d5879401`: **+49/-0**
 deduplicated passes (48 SPL and one core). All 28 admitted traversal cases
 pass. The full 785-case SPL set reaches 236 pass / 509 fail / 31 unsupported /

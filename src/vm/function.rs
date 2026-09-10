@@ -1585,8 +1585,16 @@ impl FunctionCommon {
         if self.plan.call.supports_scalar_long_plan() {
             return true;
         }
-        self.plan.call == CallStrategy::Fast
-            && self.sig.ref_args == 0
+        self.plan.call == CallStrategy::Fast && self.supports_fast_long_signature()
+    }
+
+    // Return-only declarations retain the canonical Fast ABI. Its metadata
+    // scan is not needed by the already classified scalar strategies and
+    // should not expand every frame-free admission site.
+    #[cold]
+    #[inline(never)]
+    fn supports_fast_long_signature(&self) -> bool {
+        self.sig.ref_args == 0
             && self.sig.param_type_hints.iter().all(|hint| {
                 matches!(
                     hint,
@@ -1653,6 +1661,119 @@ impl FunctionCommon {
                             | ParamTypeHint::Mixed
                     )
                 }))
+    }
+}
+
+#[cfg(test)]
+mod scalar_signature_admission_tests {
+    use super::*;
+
+    #[test]
+    fn published_long_plans_preserve_signature_and_attribute_admission() {
+        let source = r#"<?php
+function plain($x) { return $x + 1; }
+function mixedValue(mixed $x) { return $x + 1; }
+function integerValue(int $x): int { return $x + 1; }
+function returnInteger($x): int { return $x + 1; }
+function referenceArgument(&$x) { return $x + 1; }
+function &referenceReturn($x) { return $x; }
+function variadicValue(...$x) { return $x[0] + 1; }
+function floatValue(float $x): float { return $x + 1; }
+#[Deprecated] function diagnostic($x) { return $x + 1; }
+#[NoDiscard] function mustUse($x) { return $x + 1; }
+"#;
+        let tokens = crate::lexer::Lexer::new(source).tokenize().unwrap();
+        let ast = crate::parser::Parser::new(tokens).parse().unwrap();
+        let program = crate::compiler::compile::Compiler::new()
+            .compile(&ast)
+            .unwrap();
+        assert_eq!(program.functions.len(), 10);
+        for (name, function) in &program.functions {
+            let expected = matches!(
+                name.as_str(),
+                "plain" | "mixedValue" | "integerValue" | "returnInteger"
+            );
+            assert_eq!(function.scalar_long_plan.is_some(), expected, "{name}");
+            if let Some(plan) = &function.scalar_long_plan {
+                assert!(function.common.supports_scalar_long_plan(), "{name}");
+                assert_eq!(
+                    u32::from(plan.public_args),
+                    function.common.sig.public_arity()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn long_plan_admission_preserves_strategy_signature_and_diagnostic_guards() {
+        let main = crate::compiler::compile::Compiler::new()
+            .compile(&[])
+            .unwrap()
+            .main;
+        let mut function = crate::compiler::make_user_function(main);
+        let common = &mut function.common;
+        let hints = [
+            ParamTypeHint::None,
+            ParamTypeHint::Mixed,
+            ParamTypeHint::Int,
+            ParamTypeHint::Void,
+            ParamTypeHint::Float,
+            ParamTypeHint::String,
+            ParamTypeHint::Array,
+            ParamTypeHint::ClassName("AdmissionValue".into()),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+            ParamTypeHint::Union(vec![ParamTypeHint::Int, ParamTypeHint::String]),
+        ];
+        for strategy in [
+            CallStrategy::FastScalar,
+            CallStrategy::FastTypedScalar,
+            CallStrategy::Fast,
+            CallStrategy::Full,
+        ] {
+            common.plan.call = strategy;
+            for flags in 0..4 {
+                common.plan.set_has_deprecated_attribute(flags & 1 != 0);
+                common.plan.set_has_no_discard_attribute(flags & 2 != 0);
+                for returns_reference in [false, true] {
+                    common.sig.returns_reference = returns_reference;
+                    for ref_args in [0, 1] {
+                        common.sig.ref_args = ref_args;
+                        for parameter in &hints {
+                            common.sig.param_type_hints =
+                                vec![ParamTypeHint::None, parameter.clone()];
+                            for result in &hints {
+                                common.sig.return_type_hint = result.clone();
+                                let expected = !returns_reference
+                                    && flags == 0
+                                    && (matches!(
+                                        strategy,
+                                        CallStrategy::FastScalar | CallStrategy::FastTypedScalar
+                                    ) || (strategy == CallStrategy::Fast
+                                        && ref_args == 0
+                                        && matches!(
+                                            parameter,
+                                            ParamTypeHint::None
+                                                | ParamTypeHint::Mixed
+                                                | ParamTypeHint::Int
+                                        )
+                                        && matches!(
+                                            result,
+                                            ParamTypeHint::None
+                                                | ParamTypeHint::Mixed
+                                                | ParamTypeHint::Int
+                                                | ParamTypeHint::Void
+                                        )));
+                                assert_eq!(
+                                    common.supports_scalar_long_plan(),
+                                    expected,
+                                    "{strategy:?} flags={flags} ref={ref_args} return_ref={returns_reference} {parameter:?}->{result:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
