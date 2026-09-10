@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fs::{File, Metadata, OpenOptions};
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 #[cfg(test)]
@@ -150,8 +151,10 @@ pub(crate) struct StreamContext {
 pub struct PhpStream {
     backend: StreamBackend,
     mode: StreamMode,
-    reported_mode: String,
-    uri: String,
+    // Canonical backend metadata is static. Dynamic caller input remains
+    // owned so streams never borrow a path or mode from a temporary argument.
+    reported_mode: Cow<'static, str>,
+    uri: Cow<'static, str>,
     eof: bool,
     read_buffer: Option<Box<ReadBuffer>>,
     plain_file_io: bool,
@@ -238,8 +241,8 @@ impl PhpStream {
         Self {
             backend: StreamBackend::Standard(stream),
             mode,
-            reported_mode: reported_mode.to_string(),
-            uri: uri.to_string(),
+            reported_mode: Cow::Borrowed(reported_mode),
+            uri: Cow::Borrowed(uri),
             eof: false,
             read_buffer: None,
             plain_file_io: false,
@@ -258,8 +261,8 @@ impl PhpStream {
             return Ok(Self {
                 backend: StreamBackend::Memory(Cursor::new(Vec::new())),
                 mode,
-                reported_mode: php_memory_mode(mode).to_string(),
-                uri: path.to_string(),
+                reported_mode: Cow::Borrowed(php_memory_mode(mode)),
+                uri: Cow::Borrowed("php://memory"),
                 eof: false,
                 read_buffer: None,
                 plain_file_io: false,
@@ -274,8 +277,8 @@ impl PhpStream {
             return Ok(Self {
                 backend: StreamBackend::Temp(TempStream::new(max_memory)),
                 mode,
-                reported_mode: php_memory_mode(mode).to_string(),
-                uri: path.to_string(),
+                reported_mode: Cow::Borrowed(php_memory_mode(mode)),
+                uri: Cow::Owned(path.to_string()),
                 eof: false,
                 read_buffer: None,
                 plain_file_io: false,
@@ -322,8 +325,8 @@ impl PhpStream {
         Ok(Self {
             backend: StreamBackend::File(file),
             mode,
-            reported_mode: requested_mode.to_string(),
-            uri: path.to_string(),
+            reported_mode: Cow::Owned(requested_mode.to_string()),
+            uri: Cow::Owned(path.to_string()),
             eof: false,
             read_buffer: None,
             plain_file_io: false,
@@ -343,8 +346,8 @@ impl PhpStream {
             mode: StreamMode::parse("rb").expect("constant stream mode"),
             // The effective backend is always read-only; retain the requested
             // mode separately without allocating an immediately replaced "rb".
-            reported_mode: reported_mode.split('\0').next().unwrap_or("").into(),
-            uri: uri.into(),
+            reported_mode: Cow::Owned(reported_mode.split('\0').next().unwrap_or("").into()),
+            uri: Cow::Owned(uri.into()),
             eof: false,
             read_buffer: None,
             plain_file_io: false,
@@ -437,6 +440,19 @@ impl PhpStream {
                 io::ErrorKind::PermissionDenied,
                 "stream is not readable",
             ));
+        }
+        // A finite memory cursor consumes all available bytes in one read.
+        // Its short read already proves EOF: unlike a file or callback there
+        // is no second backend read to retry. Preserve buffered line data and
+        // the existing empty-request EOF state through the general boundary.
+        if self.unread_len() == 0
+            && let StreamBackend::Memory(memory) = &mut self.backend
+        {
+            let read = memory.read(buffer)?;
+            if !buffer.is_empty() {
+                self.eof = read < buffer.len();
+            }
+            return Ok(read);
         }
         let mut total = 0;
         while total < buffer.len() {

@@ -13,6 +13,7 @@ use crate::vm::instruction::{
 
 pub(super) mod array_object;
 mod iterator_delegate;
+mod recursive_iterator;
 pub(crate) use array_object::cursor::{
     Move as NativeIteratorMove, Projection as NativeIteratorProjection,
     consume_array as consume_native_iterator_array, entry as native_iterator_entry,
@@ -25,6 +26,7 @@ pub(crate) use array_object::{
     property_uses_dimension as array_object_property_uses_dimension,
 };
 pub(crate) use iterator_delegate::resolve_method as resolve_iterator_delegated_method;
+pub(crate) use recursive_iterator::validate_start as validate_recursive_iterator_start;
 
 const ROUNDING_MODE_CLASS: &str = "RoundingMode";
 const ROUNDING_MODE_CASES: [&str; 8] = [
@@ -2399,6 +2401,39 @@ fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] 
     [constructor, get_message]
 }
 
+// Share construction across builtin registrations instead of allocating a
+// formatted name and then allocating its lowercase copy. Builtin spellings
+// are ASCII; retain the original Unicode conversion for any other caller.
+#[cold]
+#[inline(never)]
+fn internal_method_lookup_name(owner: &str, method: &str) -> String {
+    let mut name = String::with_capacity(owner.len() + method.len() + 2);
+    name.push_str(owner);
+    name.push_str("::");
+    name.push_str(method);
+    if name.is_ascii() {
+        name.make_ascii_lowercase();
+        name
+    } else {
+        name.to_lowercase()
+    }
+}
+
+#[cfg(test)]
+mod method_lookup_name_tests {
+    #[test]
+    fn owned_lookup_spelling_matches_original_ascii_and_unicode_conversion() {
+        for owner in ["ArrayIterator", "Closure", "", "lower", "\u{130}nternal"] {
+            for method in ["__construct", "getChildren", "", "UPPER", "\u{3a3}"] {
+                assert_eq!(
+                    super::internal_method_lookup_name(owner, method),
+                    format!("{owner}::{method}").to_lowercase()
+                );
+            }
+        }
+    }
+}
+
 /// Register Throwable, Error, TypeError, Exception classes with
 /// __construct and getMessage methods.
 pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
@@ -2412,7 +2447,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         ($class:expr, $method:expr, $handler:expr, $num_args:expr, $min_args:expr, $($pnames:expr),*) => {{
             let f = Box::new(make_internal_method($handler, $num_args, $min_args, vec![$($pnames.to_string()),*]));
             let ptr = &f.common as *const FunctionCommon;
-            let full_name = format!("{}::{}", $class, $method).to_lowercase();
+            let full_name = internal_method_lookup_name(&$class, &$method);
             eg.function_table.insert(full_name, ptr);
             eg.method_declaring_class.insert(ptr, $class.to_string());
             funcs.push(f);
@@ -2420,7 +2455,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         ($class:expr, $method:expr, $handler:expr, $num_args:expr, $min_args:expr) => {{
             let f = Box::new(make_internal_method($handler, $num_args, $min_args, vec![]));
             let ptr = &f.common as *const FunctionCommon;
-            let full_name = format!("{}::{}", $class, $method).to_lowercase();
+            let full_name = internal_method_lookup_name(&$class, &$method);
             eg.function_table.insert(full_name, ptr);
             eg.method_declaring_class.insert(ptr, $class.to_string());
             funcs.push(f);
@@ -2433,7 +2468,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         ($class:expr, $method:expr, $handler:expr, $num_args:expr, $min_args:expr, $($pnames:expr),*) => {{
             let f = Box::new(make_internal_method($handler, $num_args, $min_args, vec![$($pnames.to_string()),*]));
             let ptr = &f.common as *const FunctionCommon;
-            let full_name = format!("{}::{}", $class, $method).to_lowercase();
+            let full_name = internal_method_lookup_name(&$class, &$method);
             eg.function_table.insert(full_name, ptr);
             eg.method_declaring_class.insert(ptr, $class.to_string());
             eg.register_internal_static_method(ptr);
@@ -3516,6 +3551,41 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         eg.register_class(class).unwrap();
     }
     funcs.extend(iterator_delegate::register(eg));
+    let mut recursive_array = empty_internal_type(
+        "RecursiveArrayIterator",
+        vec!["RecursiveIterator".into()],
+        false,
+        false,
+    );
+    recursive_array.parent = Some("ArrayIterator".into());
+    recursive_array.constants.push(recursive_iterator::constant(
+        "RecursiveArrayIterator",
+        "CHILD_ARRAYS_ONLY",
+        4,
+    ));
+    eg.register_class(recursive_array).unwrap();
+    let mut recursive_driver = empty_internal_type(
+        "RecursiveIteratorIterator",
+        vec!["OuterIterator".into()],
+        false,
+        false,
+    );
+    for (name, value) in [
+        ("LEAVES_ONLY", 0),
+        ("SELF_FIRST", 1),
+        ("CHILD_FIRST", 2),
+        ("CATCH_GET_CHILD", 16),
+    ] {
+        recursive_driver
+            .constants
+            .push(recursive_iterator::constant(
+                "RecursiveIteratorIterator",
+                name,
+                value,
+            ));
+    }
+    eg.register_class(recursive_driver).unwrap();
+    funcs.extend(recursive_iterator::register(eg));
     let mut spl_object_storage = empty_internal_type(
         "SplObjectStorage",
         vec![

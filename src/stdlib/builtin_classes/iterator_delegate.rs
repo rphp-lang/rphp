@@ -24,7 +24,12 @@ pub(crate) fn resolve_method(
     loop {
         let object = receiver.as_object()?;
         let state = object.native_iterator_delegate()?;
-        let next = state.inner.clone();
+        let next = state
+            .recursive
+            .as_ref()
+            .and_then(|recursive| recursive.frames.last())
+            .map_or(&state.inner, |frame| &frame.iterator)
+            .clone();
         drop(object);
         let identity = next.object_identity()?;
         if seen.contains(&identity) {
@@ -85,7 +90,7 @@ fn inner(receiver: &Value) -> Value {
         .clone()
 }
 
-fn discard(value: Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+pub(super) fn discard(value: Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let release = if value.dereferenced().value_type() == ValueType::Array {
         prepare_replaced_value_tree_destructor_with_references(eg, &value, 1)
     } else {
@@ -108,7 +113,11 @@ fn clear(receiver: &Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     discard(key, eg)
 }
 
-fn protocol(eg: &mut ExecutorGlobals, iterator: &Value, name: &str) -> Result<Value, VmError> {
+pub(super) fn protocol(
+    eg: &mut ExecutorGlobals,
+    iterator: &Value,
+    name: &str,
+) -> Result<Value, VmError> {
     if array_object::cursor::native_protocol(iterator, eg) {
         use array_object::cursor::{Move, Projection, projected_entry};
         return Ok(match name {

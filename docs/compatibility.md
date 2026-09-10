@@ -8,6 +8,63 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
+`recursive-iterator-traversal-contracts`, against `d5879401`: **+49/-0**
+deduplicated passes (48 SPL and one core). All 28 admitted traversal cases
+pass. The full 785-case SPL set reaches 236 pass / 509 fail / 31 unsupported /
+8 skip / 1 XFAIL. The separate 7,174-case core reaches **6,444 pass / 337 fail /
+182 skip / 211 unsupported**, without lost passes, new crashes or timeouts.
+Every gain is independently confirmed against PHP 8.5.10. These are selected
+suites, not a complete PHP compatibility claim.
+
+RecursiveArrayIterator child projection and a sparse, traced depth-first
+RecursiveIteratorIterator stack preserve modes/depth, hooks, aggregate and
+uninitialized boundaries, references/COW, reentry and child retirement order.
+Invalid-child destructor failures retain PHP's exception chain. Six existing
+SPL failures advance to explicitly incomplete lazy backing, inherited constant
+ordering, reentrant endChildren/rewind, caching or tree behavior; core failure
+stages are unchanged. General root-frame lifetime, other SPL families,
+suspension, 32-bit and allocation-limit/OOM equivalence remain non-claims.
+
+User-authorized resource storage uses a bounded sorted live set after the
+eight-ID prefix, promoting permanently to hashing above 64 live entries.
+IDs, types/scopes, aliases, backend addresses and retirement remain tested.
+Profile-backed work removal shares scalar-interpreter fallback code, avoids
+redundant call/property checks and metadata copies, and preserves native
+dispatch ordering. Static stream metadata stays borrowed only for static
+strings. No common Value/VM field, dependency, JIT backend or unsafe-ceiling
+change is introduced.
+
+Twenty-one original traversal/interaction specimens are byte-exact. The
+complete checked five-configuration matrix passes 4,978/4,676/5,049/5,071/5,122
+tests (13/13/13/13/16 ignored, none filtered), plus all-targets, exact no-loss,
+Composer/Symfony S0-S3, runner/unsafe self-tests, format and public hygiene.
+Unsafe inventory remains 1,622/289. Automatic cleanup runs between large
+configurations and after release/performance cycles.
+
+All 32 fixed-parent 32-pair controls meet unchanged common +1% / pay-use +5%
+limits: highest medians +0.777%/+1.817%, ordinary calls -5.301%, memory I/O
+-3.038%, objects -0.799%, arithmetic -1.021%. Rejected candidates are retained
+as failed evidence; neither lanes nor budgets were rerolled. New recursive
+native/hook workloads have exact PHP output and candidate/PHP time ratios
+7.501/6.620, not invented parent deltas or a claim of speed parity. The
+user-authorized shared host recorded two background events; no exclusive-host
+or private-host performance evidence is claimed.
+
+SHA-256 evidence:
+
+- Release: `94743967a597c5cf3030ef5468123d11f49ae23f410693c462183909304afb3c`.
+- Complete technical record: `9d67418ee3d46dbfff51e09af7636d29991bd86566b61a90c84ae79b3c70a102`.
+- Matrix: `f7e88dd64dd3273444ceff49b139e40a47abb47331a3a981148608ee81e878e4`.
+- Supplying / SPL manifests: `14b7fd38369298491542bd7ad0f70dbfc72c48e0173b24545664fcd9b3be2d13` / `89dabadb5344b6eb928bdafab8e243bf45703fc1059ea9943aba230266295b01`.
+- SPL pass set: `ebe9b2e773e930d3b776e1d77deb33c384ae29d76489cf2c8410239666dda852`.
+- Zend/lang manifest / pass set: `26b69c66ef2e2f5510c48368fe9a5de9419276a170154904f212c189eda69221` / `f4358d8ffd7418684b1944db29356290777f91594e9da8ca405ea715a21b843f`.
+- Strings/array manifest / pass set: `9bf891c30b8763bbd23a62590ce7898e80c02f123682ec54139a8a277f1b46b2` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+- Performance admission: `403afd802c643f50816a6e39ffa5996c7f118bc15b2f87157ab4e91898a499c4`.
+
+Next read-only admission confirms 23 PHP-passing/current-failing SplFileInfo
+path/metadata cases; SplFileObject and directory-iterator consumers are excluded.
+
+The preceding measured AMD64 PHP 8.5 checkpoint is
 `array-object-serialization-contracts`, against `bb9d1daa`: native modern and
 legacy ArrayObject/ArrayIterator state restoration adds **+12/-0** SPL passes.
 The eighteen supplying cases reach 16 pass / 2 fail; the overlapping 108-case

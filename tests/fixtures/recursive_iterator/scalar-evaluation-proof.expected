@@ -1,0 +1,9 @@
+double;integer:9223372036854775806;integer:9223372036854775807;integer:9223372036854775807;integer:0;integer:1;integer:1;integer:9223372036854775807;integer:9223372036854775806;double;integer:-1;
+double;integer:-9223372036854775807;double;ArithmeticError;integer:0;integer:-1;integer:-9223372036854775808;integer:-1;integer:9223372036854775807;double;integer:-9223372036854775805;
+integer:-17;integer:-17;integer:0;DivisionByZeroError;DivisionByZeroError;integer:-1;integer:0;integer:-17;integer:-17;integer:28;integer:-14;
+integer:30;integer:16;integer:161;integer:3;integer:2;integer:1;integer:7;integer:23;integer:16;integer:130;integer:5;
+double;double;double;diagnostic:8192:Implicit conversion from float 1.5 to int loses precision
+integer:0;diagnostic:8192:Implicit conversion from float 1.5 to int loses precision
+integer:1;integer:-1;double;double;
+integer:7;integer:-1;integer:12;integer:0;integer:3;integer:-1;integer:0;integer:7;integer:7;integer:12;integer:6;
+15:11

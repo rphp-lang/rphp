@@ -1,0 +1,42 @@
+0:normal
+make-invalid
+drop-invalid
+UnexpectedValueException:Objects returned by RecursiveIterator::getChildren() must implement RecursiveIterator
+previous:none
+after
+done
+0:throw
+make-invalid
+drop-invalid
+UnexpectedValueException:Objects returned by RecursiveIterator::getChildren() must implement RecursiveIterator
+previous:RuntimeException
+after
+done
+0:held
+make-invalid
+UnexpectedValueException:Objects returned by RecursiveIterator::getChildren() must implement RecursiveIterator
+previous:none
+after
+drop-invalid
+done
+16:normal
+make-invalid
+drop-invalid
+UnexpectedValueException:Objects returned by RecursiveIterator::getChildren() must implement RecursiveIterator
+previous:none
+after
+done
+16:throw
+make-invalid
+drop-invalid
+UnexpectedValueException:Objects returned by RecursiveIterator::getChildren() must implement RecursiveIterator
+previous:RuntimeException
+after
+done
+16:held
+make-invalid
+UnexpectedValueException:Objects returned by RecursiveIterator::getChildren() must implement RecursiveIterator
+previous:none
+after
+drop-invalid
+done

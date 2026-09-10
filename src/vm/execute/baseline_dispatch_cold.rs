@@ -1577,6 +1577,13 @@ fn pending_call_argument_is_ref(
         debug_assert!(!call.is_null());
         let common = &*(*call).func;
 
+        // An all-value signature cannot acquire a reference through a name,
+        // variadic position or forwarding index. Wrapper signatures which
+        // need to inspect the wrapped callable have nonzero reference masks.
+        if common.sig.ref_args == 0 {
+            return false;
+        }
+
         if let RuntimeCallArgument::Name(name) = argument {
             if let Some(index) = common
                 .sig

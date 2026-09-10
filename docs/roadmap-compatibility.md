@@ -36,29 +36,31 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `array-object-serialization-contracts` train adds twelve PHP 8.5
-SPL passes over `bb9d1daa`, with no loss. Modern/legacy native state shares the
-existing serializer reference graph, retaining reference/COW identity, partial
-restore order, raw typed members, readonly guards and callback/sort boundaries.
-The supplying set reaches 16/18 and the overlapping 108-case neighbor set 69
-passes. DateInterval backing and self-backed debug projection remain holdouts.
+The accepted `recursive-iterator-traversal-contracts` train adds 49 PHP 8.5
+passes over `d5879401` (48 SPL, one core), with no loss or new process hazard.
+Sparse traced recursive frames preserve depth-first modes, hooks, child/error
+retirement, reference/COW and reentry. All 28 supplying cases pass; the full
+785-case SPL set reaches 236 passes. Six later-stage holdouts remain explicit.
 
-Core counts remain 6,443/338/182/211 with byte-identical exact manifests. A
-complete checked five-configuration matrix, all-targets, S0-S3, original oracles,
-no-loss and static/unsafe gates pass. All thirty fixed-parent 32-pair controls
-meet unchanged common +1% / pay-use +5% limits (highest +0.774%/+1.867%).
-Profile-proven direct request scope, sparse resource overflow and owned-key
-transfer remove work without Value/VM ABI, dependency or unsafe-ceiling changes.
-Resource IDs, alias/retirement invariants and stream byte provenance are tested.
-New API costs and shared-host limitations are explicit in `compatibility.md`.
+Core counts reach 6,444/337/182/211. One checked five-configuration matrix,
+all-targets, S0-S3, original oracles, exact no-loss and static/unsafe gates pass.
+All 32 fixed-parent 32-pair controls meet unchanged common +1% / pay-use +5%
+limits (highest +0.777%/+1.817%). Profile-backed resource/metadata/call work
+removal and shared interpreter fallback preserve IDs, aliases, byte provenance
+and native dispatch. No common Value/VM field, dependency, JIT backend or unsafe
+ceiling change. New API costs and authorized shared-host limitations are
+explicit in `compatibility.md`; no failed measurement was rerolled.
 
-Next admission finds 28 PHP-passing/current-failing recursive traversal cases.
-Review RecursiveArrayIterator child projection and an explicit depth-first
-RecursiveIteratorIterator state machine, hook/error order, depth/mode and
-uninitialized/aggregate boundaries before implementation. Require at least ten
-shared-cause gains; keep directory/filter/cache/tree families, suspension,
-general root-frame lifetime repair and 32-bit/OOM outside. Preserve established
-controls, use one cumulative final evidence packet and automatic cleanup.
+Next admission confirms 23 PHP-passing/current-failing SplFileInfo path and
+metadata cases. Reuse the accepted filesystem stat/link/cache boundary and
+sparse native object ownership; characterize startup capacity and allocation
+costs before editing. Require at least ten reachable shared-cause gains and
+keep SplFileObject/directory-iterator consumers, new filesystem APIs,
+suspension, general root-frame lifetime and 32-bit/OOM outside. Preserve the
+fixed baseline and controls, one cumulative final packet and automatic cleanup.
+
+The preceding native serialization train added twelve SPL passes; its exact
+evidence and DateInterval/self-backed debug holdouts remain in `compatibility.md`.
 
 The preceding iterator-delegation train added 24 deduplicated passes (21 SPL
 and three core); its exact evidence remains in `compatibility.md`.

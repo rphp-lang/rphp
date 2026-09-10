@@ -117,6 +117,39 @@ mod scalar_long_operation_range_tests {
     use super::*;
 
     #[test]
+    fn shared_interpreter_retains_checked_operation_dependencies_and_outputs() {
+        use crate::vm::function::ScalarLongProgram;
+        for count in 0..=8 {
+            for initial in [i64::MIN, -17, 0, 23, i64::MAX] {
+                for kind in [ScalarLongOpKind::Add, ScalarLongOpKind::Multiply,
+                    ScalarLongOpKind::IntDivide, ScalarLongOpKind::Modulo,
+                    ScalarLongOpKind::BitwiseXor] {
+                    let operations: Vec<_> = (0..count).map(|index| ScalarLongOp {
+                        kind,
+                        lhs: if index == 0 { ScalarLongSource::Input(0) }
+                            else { ScalarLongSource::Temporary(index as u8 - 1) },
+                        rhs: ScalarLongSource::Constant(if index % 2 == 0 { 3 } else { 0 }),
+                    }).collect();
+                    let mut arguments = [0; 8];
+                    arguments[0] = initial;
+                    for output in [ScalarLongSource::Input(0), ScalarLongSource::Temporary(0),
+                        ScalarLongSource::Temporary(7), ScalarLongSource::Temporary(8)] {
+                        let mut temporaries = [0; 8];
+                        let expected = evaluate_scalar_long_operation_range(
+                            &operations, &arguments, &mut temporaries, 0, count,
+                        ).and_then(|()| resolve_scalar_function_source(output, &arguments, &temporaries));
+                        let plan = ScalarLongFunctionPlan::new(1, ScalarLongProgram {
+                            operations: operations.clone().into_boxed_slice(),
+                            outputs: [output], output_count: 1,
+                        }, None);
+                        assert_eq!(evaluate_scalar_long_plan_interpreted(&plan, &arguments), expected);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn single_output_leaf_matches_general_temporary_evaluation() {
         use crate::vm::function::ScalarLongProgram;
         let kinds = [ScalarLongOpKind::Add, ScalarLongOpKind::Subtract,
@@ -129,7 +162,9 @@ mod scalar_long_operation_range_tests {
                 for rhs in values {
                     let mut arguments = [0; 8]; arguments[0] = lhs; arguments[7] = rhs;
                     for source in [ScalarLongSource::Input(7), ScalarLongSource::Constant(rhs),
-                        ScalarLongSource::Input(8), ScalarLongSource::Temporary(0)] {
+                        ScalarLongSource::Input(8), ScalarLongSource::Temporary(0),
+                        ScalarLongSource::Temporary(7), ScalarLongSource::Temporary(8),
+                        ScalarLongSource::Temporary(u8::MAX)] {
                         let operations = vec![ScalarLongOp { kind, lhs: ScalarLongSource::Input(0), rhs: source }];
                         let mut temporaries = [0; 8];
                         let expected = evaluate_scalar_long_operation_range(&operations, &arguments, &mut temporaries, 0, 1)
@@ -244,6 +279,37 @@ fn evaluate_scalar_long_plan(plan: &ScalarLongFunctionPlan, arguments: &[i64; 8]
             return None;
         }
     }
+    // A single operation returning its own result has no temporary dependency
+    // to materialize. Keep native dispatch above this proof and resolve even
+    // malformed public sources exactly as the zero-initialized general path.
+    if plan.select.is_none()
+        && plan.program.operations.len() == 1
+        && plan.program.outputs[0] == ScalarLongSource::Temporary(0)
+    {
+        let operand = |source| match source {
+            ScalarLongSource::Input(index) => arguments.get(index as usize).copied(),
+            ScalarLongSource::Constant(value) => Some(value),
+            ScalarLongSource::Temporary(index) => (index < 8).then_some(0),
+        };
+        let operation = plan.program.operations[0];
+        return apply_scalar_long_op(
+            operation.kind,
+            operand(operation.lhs)?,
+            operand(operation.rhs)?,
+        );
+    }
+    evaluate_scalar_long_plan_interpreted(plan, arguments)
+}
+
+// Keep the multi-operation interpreter shared instead of embedding its
+// temporary storage and branch evaluators in every direct-call adapter.
+// Native dispatch and the single-operation path retain their existing order;
+// this fallback is also the ordinary implementation when no JIT is enabled.
+#[inline(never)]
+fn evaluate_scalar_long_plan_interpreted(
+    plan: &ScalarLongFunctionPlan,
+    arguments: &[i64; 8],
+) -> Option<i64> {
     let mut temporaries = [0i64; 8];
     let operations = plan.program.operations.as_ref();
     let output = if let Some(select) = plan.select {

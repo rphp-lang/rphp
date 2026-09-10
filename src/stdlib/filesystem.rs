@@ -667,6 +667,8 @@ fn cache_stat_value(
     );
 }
 
+// Keep the cache's hash-table walk shared across native I/O callers.
+#[inline(never)]
 pub(super) fn clear_filesystem_stat_cache(eg: &mut ExecutorGlobals) {
     if eg.static_vars.is_empty() {
         return;
@@ -678,7 +680,7 @@ pub(super) fn clear_filesystem_stat_cache(eg: &mut ExecutorGlobals) {
     }
 }
 
-#[inline]
+#[inline(never)]
 pub(super) fn filesystem_stat_cache_is_populated(eg: &ExecutorGlobals) -> bool {
     if eg.static_vars.is_empty() {
         return false;

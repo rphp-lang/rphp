@@ -1663,6 +1663,23 @@ impl ExecutorGlobals {
         self.function_table.reserve(900);
         self.class_table.reserve(66);
         self.method_declaring_class.reserve(512);
+        // Reflection/display metadata reaches these same table envelopes
+        // through repeated growth with default and all features. Reserve the
+        // final capacities once; executors without stdlib keep both owners
+        // absent, and pre-existing request-local entries remain untouched.
+        let metadata = self
+            .internal_callable_metadata
+            .get_or_insert_with(|| Box::new(InternalCallableMetadata::default()));
+        metadata
+            .functions
+            .reserve(224usize.saturating_sub(metadata.functions.len()));
+        metadata
+            .methods
+            .reserve(28usize.saturating_sub(metadata.methods.len()));
+        let display_names = self
+            .internal_function_display_names
+            .get_or_insert_with(|| Box::new(HashMap::new()));
+        display_names.reserve(448usize.saturating_sub(display_names.len()));
         // The ordinary ReflectionEnum/ReflectionReference family brings the
         // fixed class/interface inventory above the prior 80-entry vector
         // envelope. Keep modest headroom so registration remains allocation-
@@ -1670,7 +1687,8 @@ impl ExecutorGlobals {
         // php_user_filter and StreamBucket add two entries only when the
         // stream registry is installed; do not double these vectors at startup.
         // SeekableIterator adds one unconditional interface to that envelope.
-        let class_capacity = 101 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        // RecursiveArrayIterator and RecursiveIteratorIterator add two classes.
+        let class_capacity = 103 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;
@@ -10521,6 +10539,8 @@ mod stdlib_capacity_tests {
     #[test]
     fn stdlib_registration_fits_the_reserved_registry_envelopes() {
         let mut eg = ExecutorGlobals::new();
+        assert!(eg.internal_callable_metadata.is_none());
+        assert!(eg.internal_function_display_names.is_none());
         eg.reserve_stdlib_capacity();
         let capacities = (
             eg.function_table.capacity(),
@@ -10531,9 +10551,44 @@ mod stdlib_capacity_tests {
             eg.static_property_values.capacity(),
             eg.static_property_handles_published.capacity(),
         );
+        let metadata_capacities = (
+            eg.internal_callable_metadata
+                .as_ref()
+                .unwrap()
+                .functions
+                .capacity(),
+            eg.internal_callable_metadata
+                .as_ref()
+                .unwrap()
+                .methods
+                .capacity(),
+            eg.internal_function_display_names
+                .as_ref()
+                .unwrap()
+                .capacity(),
+        );
 
         let functions = crate::stdlib::register_stdlib(&mut eg);
-
+        assert_eq!(
+            (
+                eg.internal_callable_metadata
+                    .as_ref()
+                    .unwrap()
+                    .functions
+                    .capacity(),
+                eg.internal_callable_metadata
+                    .as_ref()
+                    .unwrap()
+                    .methods
+                    .capacity(),
+                eg.internal_function_display_names
+                    .as_ref()
+                    .unwrap()
+                    .capacity(),
+            ),
+            metadata_capacities,
+            "fixed stdlib registration must not rehash cold metadata"
+        );
         assert_eq!(
             (
                 eg.function_table.capacity(),
@@ -10548,6 +10603,61 @@ mod stdlib_capacity_tests {
             "fixed stdlib registration must not grow a reserved registry"
         );
         assert!(!functions.is_empty());
+    }
+
+    #[test]
+    fn metadata_reservation_preserves_sparse_constructors_and_request_owned_entries() {
+        let mut requests = [
+            ExecutorGlobals::new(),
+            ExecutorGlobals::with_output(Box::new(Vec::<u8>::new())),
+        ];
+        for request in &requests {
+            assert!(request.internal_callable_metadata.is_none());
+            assert!(request.internal_function_display_names.is_none());
+        }
+        // The pointer is only an opaque lookup key; no function body is used.
+        let function = std::ptr::null();
+        for (index, request) in requests.iter_mut().enumerate() {
+            request.register_internal_function_display_name(function, "LocalMethod".into());
+            request.register_internal_function_reflection_metadata_with_diagnostics(
+                function,
+                vec![Some(crate::value::Value::long(index as i64))],
+                &[Some("LOCAL_DEFAULT")],
+                "local",
+            );
+            request.reserve_stdlib_capacity();
+            request.reserve_stdlib_capacity();
+            assert_eq!(
+                request.internal_function_display_name(function),
+                Some("LocalMethod")
+            );
+            assert_eq!(request.internal_function_extension(function), Some("local"));
+            assert_eq!(
+                request.internal_function_parameter_default_diagnostic(function, 0),
+                Some("LOCAL_DEFAULT")
+            );
+            assert_eq!(
+                request
+                    .internal_function_parameter_default(function, 0)
+                    .unwrap()
+                    .as_long(),
+                Some(index as i64)
+            );
+        }
+        assert_eq!(
+            requests[0]
+                .internal_function_parameter_default(function, 0)
+                .unwrap()
+                .as_long(),
+            Some(0)
+        );
+        assert_eq!(
+            requests[1]
+                .internal_function_parameter_default(function, 0)
+                .unwrap()
+                .as_long(),
+            Some(1)
+        );
     }
 
     #[test]

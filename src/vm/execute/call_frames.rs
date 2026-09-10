@@ -3045,7 +3045,7 @@ enum ThrowResult<'a> {
 /// of the new Throwable's explicit previous chain. PHP preserves an explicitly
 /// supplied previous value first and adds the displaced exception after it.
 #[cold]
-fn append_replaced_exception(
+pub(crate) fn append_replaced_exception(
     thrown: &Value,
     displaced: &Value,
     eg: &ExecutorGlobals,

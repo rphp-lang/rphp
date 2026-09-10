@@ -43,6 +43,9 @@ fn resolve_iterator(source: &Value, eg: &mut ExecutorGlobals) -> Result<Option<V
         let class = object.class_name.to_string();
         drop(object);
         if !eg.class_is_a(&class, "IteratorAggregate") {
+            if !validate_recursive_iterator_start(&iterator, eg) {
+                return Ok(None);
+            }
             return Ok(Some(iterator));
         }
         let identity = iterator.object_identity().expect("object iterator");

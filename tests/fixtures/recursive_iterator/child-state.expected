@@ -1,0 +1,12 @@
+construct:2
+construct:2
+["Branch",2,{"value":7}]
+[{"value":7},{"value":7},8]
+true
+construct:2
+[]
+false
+construct:2
+TypeError:ArrayIterator::__construct(): Argument #1 ($array) must be of type array, int given
+false
+null

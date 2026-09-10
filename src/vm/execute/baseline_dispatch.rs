@@ -2321,6 +2321,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }};
         }
         macro_rules! prepare_constrained_write {
+            (@slot $slot:expr, $value:expr) => {{
+                let value = $value;
+                let slot = $slot;
+                // Only owned PHP reference cells carry property constraints.
+                // Ordinary slots need neither a cloned vector nor its drop;
+                // references keep the canonical coercion/error boundary.
+                if slot.is_owned_reference() {
+                    prepare_constrained_write!(slot.reference_property_constraints(), value)
+                } else {
+                    value
+                }
+            }};
             ($constraints:expr, $value:expr) => {{
                 let value = $value;
                 let constraints = $constraints;
@@ -5041,55 +5053,63 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // op2 = CONST index pointing to function name string
                 // extended_value = CONST index of fallback name (for unqualified calls in namespace), 0 = no fallback
 
-                if opline._pad & CALL_FLAG_CALLBACK_ARRAY_PIPELINE != 0
-                    && let Some((result, do_fcall_ptr)) = unsafe {
-                        try_execute_callback_array_pipeline(eg, frame, op_array, opline_ptr)
+                // Ordinary calls have no callback-pipeline metadata. Prove
+                // that once before the ordered, independently guarded paths.
+                if opline._pad & (CALL_FLAG_CALLBACK_ARRAY_PIPELINE
+                    | CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE
+                    | CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE
+                    | CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_SINK) != 0
+                {
+                    if opline._pad & CALL_FLAG_CALLBACK_ARRAY_PIPELINE != 0
+                        && let Some((result, do_fcall_ptr)) = unsafe {
+                            try_execute_callback_array_pipeline(eg, frame, op_array, opline_ptr)
+                        }?
+                    {
+                        unsafe { complete_direct_scalar_long_call(frame, do_fcall_ptr, result) };
+                        continue 'vm;
+                    }
+                    if opline._pad & CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE != 0
+                        && let Some((result, do_fcall_ptr)) = unsafe {
+                            try_execute_staged_callback_array_pipeline(
+                                eg,
+                                frame,
+                                op_array,
+                                opline_ptr,
+                            )
+                        }?
+                    {
+                        unsafe { complete_direct_scalar_long_call(frame, do_fcall_ptr, result) };
+                        continue 'vm;
+                    }
+                    if opline._pad & CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE != 0
+                        && let Some((result, do_fcall_ptr)) = unsafe {
+                            try_execute_filter_map_callback_array_pipeline(
+                                eg,
+                                frame,
+                                op_array,
+                                opline_ptr,
+                            )
+                        }?
+                    {
+                        unsafe { complete_direct_scalar_long_call(frame, do_fcall_ptr, result) };
+                        continue 'vm;
+                    }
+                    if opline._pad & CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_SINK != 0
+                        && let Some((result, do_fcall_ptr)) = unsafe {
+                            try_execute_json_callback_array_pipeline(
+                                eg,
+                                frame,
+                                op_array,
+                                opline_ptr,
+                            )
                     }?
-                {
-                    unsafe { complete_direct_scalar_long_call(frame, do_fcall_ptr, result) };
-                    continue 'vm;
-                }
-                if opline._pad & CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE != 0
-                    && let Some((result, do_fcall_ptr)) = unsafe {
-                        try_execute_staged_callback_array_pipeline(
-                            eg,
-                            frame,
-                            op_array,
-                            opline_ptr,
-                        )
-                    }?
-                {
-                    unsafe { complete_direct_scalar_long_call(frame, do_fcall_ptr, result) };
-                    continue 'vm;
-                }
-                if opline._pad & CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE != 0
-                    && let Some((result, do_fcall_ptr)) = unsafe {
-                        try_execute_filter_map_callback_array_pipeline(
-                            eg,
-                            frame,
-                            op_array,
-                            opline_ptr,
-                        )
-                    }?
-                {
-                    unsafe { complete_direct_scalar_long_call(frame, do_fcall_ptr, result) };
-                    continue 'vm;
-                }
-                if opline._pad & CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_SINK != 0
-                    && let Some((result, do_fcall_ptr)) = unsafe {
-                        try_execute_json_callback_array_pipeline(
-                            eg,
-                            frame,
-                            op_array,
-                            opline_ptr,
-                        )
-                }?
-                {
-                    // SAFETY: the callback pipeline returns this live frame's DoFcall site.
-                    unsafe {
-                        complete_direct_value_call(frame, do_fcall_ptr, Value::string(result))
-                    };
-                    continue 'vm;
+                    {
+                        // SAFETY: the callback pipeline returns this live frame's DoFcall site.
+                        unsafe {
+                            complete_direct_value_call(frame, do_fcall_ptr, Value::string(result))
+                        };
+                        continue 'vm;
+                    }
                 }
 
                 // Inline cache: if we resolved this function before, reuse the pointer
@@ -5141,8 +5161,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     && num_args == common.sig.public_arity()
                 {
                     let user = unsafe { &*(func_ptr as *const UserFunction) };
-                    scalar_plan_eligible = user.composed_scalar_long_plan.is_some()
-                        || user.scalar_double_plan.is_some();
+                    // Each plan branch below records eligibility before its
+                    // attempt. Do not inspect later plans before a successful
+                    // earlier call; fallbacks still accumulate the same flag.
                     if let Some(plan) = user.scalar_long_plan.as_deref() {
                         scalar_plan_eligible = true;
                         if let Some((result, do_fcall_ptr)) = unsafe {
@@ -5528,11 +5549,20 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         _ => unreachable!("indirect reference send returned invalid control flow"),
                     }
                 }
-                let call = unsafe { (*frame).call };
-                debug_assert!(!call.is_null());
+                // SAFETY: call initialization owns this live pending frame
+                // and its resolved descriptor before argument evaluation.
+                // Read its immutable mask here; all-value calls need no
+                // positional/forwarding lookup in the out-of-line helper.
+                let (call, callee_ref_args) = unsafe {
+                    let call = (*frame).call;
+                    debug_assert!(!call.is_null());
+                    (call, (*(*call).func).sig.ref_args)
+                };
                 let param_idx = opline.extended_value;
                 let is_ref = if opline._pad & SEND_FLAG_PREPARED_PROPERTY_ARGUMENT != 0 {
                     operand_is_reference(frame, opline.op1, opline.op1_type)
+                } else if callee_ref_args == 0 {
+                    false
                 } else {
                     pending_call_argument_is_ref(
                         frame,
@@ -9169,10 +9199,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             let property = obj_val
                                 .object_property_slot_unchecked(ic.property_slot())
                                 as *mut Value;
-                            cloned = prepare_constrained_write!(
-                                (&*property).reference_property_constraints(),
-                                cloned
-                            );
+                            cloned = prepare_constrained_write!(@slot &*property, cloned);
                             publish_property_assignment_result(frame, opline, &cloned);
                             let destructor = prepare_replaced_value_destructor(eg, &*property);
                             let destructor_ran = destructor.is_some();
@@ -9211,7 +9238,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                         .object_property_slot_unchecked(ic.property_slot())
                                         as *mut Value;
                                     let value = prepare_constrained_write!(
-                                        (&*property).reference_property_constraints(),
+                                        @slot &*property,
                                         Value::long(source.raw_long())
                                     );
                                     assignment_slot_set(
@@ -9266,10 +9293,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                         let property = obj_val
                                             .object_property_slot_unchecked(ic.property_slot())
                                             as *mut Value;
-                                        cloned = prepare_constrained_write!(
-                                            (&*property).reference_property_constraints(),
-                                            cloned
-                                        );
+                                        cloned = prepare_constrained_write!(@slot &*property, cloned);
                                         publish_property_assignment_result(
                                             frame, opline, &cloned,
                                         );

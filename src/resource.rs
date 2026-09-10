@@ -1,4 +1,4 @@
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -95,9 +95,13 @@ impl ResourceEntry {
 }
 
 // IDs are monotonic and never reused. Index a bounded prefix and retain one
-// sparse overflow slot. Overlapping overflow IDs promote permanently to
-// hashing; no lookup scans the lifetime ID space or a retained hash capacity.
+// sparse overflow slot. Overlapping overflow IDs promote to a bounded sorted
+// live set, then permanently to hashing. No lookup scans the lifetime ID space
+// or a retained hash capacity.
 const SMALL_RESOURCE_LIMIT: usize = 8;
+// Keep the contiguous tagged entry storage below one 4-KiB page. Above this
+// bound retain general hash lookup rather than an unbounded shifting table.
+const COMPACT_RESOURCE_LIMIT: usize = 64;
 
 // Allocate this slot once on first overflow, not on every open/close. Boxing
 // keeps the common registry enum bounded by its existing HashMap variant.
@@ -108,6 +112,7 @@ enum ResourceEntries {
         entries: Vec<Option<ResourceEntry>>,
         overflow: SparseResourceSlot,
     },
+    Compact(Vec<(i64, ResourceEntry)>),
     Large(HashMap<i64, ResourceEntry>),
 }
 
@@ -123,6 +128,10 @@ impl ResourceEntries {
                 let (stored_id, entry) = overflow.as_deref()?.as_ref()?;
                 (*stored_id == *id).then_some(entry)
             }
+            Self::Compact(entries) => entries
+                .binary_search_by_key(id, |(stored_id, _)| *stored_id)
+                .ok()
+                .map(|index| &entries[index].1),
             Self::Large(entries) => entries.get(id),
         }
     }
@@ -138,6 +147,10 @@ impl ResourceEntries {
                 let (stored_id, entry) = overflow.as_deref_mut()?.as_mut()?;
                 (*stored_id == *id).then_some(entry)
             }
+            Self::Compact(entries) => entries
+                .binary_search_by_key(id, |(stored_id, _)| *stored_id)
+                .ok()
+                .map(|index| &mut entries[index].1),
             Self::Large(entries) => entries.get_mut(id),
         }
     }
@@ -161,35 +174,63 @@ impl ResourceEntries {
             {
                 return spare.replace((id, entry)).map(|(_, entry)| entry);
             }
-            let mut large = HashMap::with_capacity(entries.len() + 2);
+            let mut compact = Vec::with_capacity((entries.len() + 2).next_power_of_two());
             for (index, entry) in entries.drain(..).enumerate() {
                 if let Some(entry) = entry {
-                    large.insert(index as i64 + 1, entry);
+                    compact.push((index as i64 + 1, entry));
                 }
             }
             if let Some((stored_id, entry)) = spare.take() {
+                compact.push((stored_id, entry));
+            }
+            *self = Self::Compact(compact);
+        }
+        if let Self::Compact(entries) = self {
+            // New public IDs are monotonic. Retain replacement/out-of-order
+            // insertion for internal entry transfers without a second lookup.
+            let index = if entries.last().is_none_or(|(stored_id, _)| *stored_id < id) {
+                entries.len()
+            } else {
+                match entries.binary_search_by_key(&id, |(stored_id, _)| *stored_id) {
+                    Ok(index) => return Some(std::mem::replace(&mut entries[index].1, entry)),
+                    Err(index) => index,
+                }
+            };
+            if entries.len() < COMPACT_RESOURCE_LIMIT {
+                if index == entries.len() {
+                    entries.push((id, entry));
+                } else {
+                    entries.insert(index, (id, entry));
+                }
+                return None;
+            }
+            let mut large = HashMap::with_capacity(entries.len() + 1);
+            for (stored_id, entry) in entries.drain(..) {
                 large.insert(stored_id, entry);
             }
             *self = Self::Large(large);
         }
         let Self::Large(entries) = self else {
-            unreachable!("small insertion returns before migration");
+            unreachable!("bounded insertion returns before hash migration");
         };
         entries.insert(id, entry)
     }
 
     #[cold]
-    fn remove_if(
-        &mut self,
-        id: i64,
-        predicate: impl FnOnce(&ResourceEntry) -> bool,
-    ) -> Option<ResourceEntry> {
+    #[inline(never)]
+    fn remove_matching(&mut self, id: i64, expected_type: Option<TypeId>) -> Option<ResourceEntry> {
+        // The table walk is identical for all concrete backends. Carry only
+        // their exact type identity rather than cloning this whole walk into
+        // every typed-close caller. None is the native untyped release path.
+        let matches = |entry: &ResourceEntry| {
+            expected_type.is_none_or(|expected| entry.payload.as_ref().type_id() == expected)
+        };
         match self {
             Self::Small { entries, overflow } => {
                 let index = usize::try_from(id).ok()?.wrapping_sub(1);
                 if index < entries.len() {
                     let slot = &mut entries[index];
-                    return if predicate(slot.as_ref()?) {
+                    return if matches(slot.as_ref()?) {
                         slot.take()
                     } else {
                         None
@@ -197,17 +238,23 @@ impl ResourceEntries {
                 }
                 let spare = overflow.as_deref_mut()?;
                 let (stored_id, entry) = spare.as_ref()?;
-                if *stored_id == id && predicate(entry) {
+                if *stored_id == id && matches(entry) {
                     spare.take().map(|(_, entry)| entry)
                 } else {
                     None
                 }
             }
+            Self::Compact(entries) => {
+                let index = entries
+                    .binary_search_by_key(&id, |(stored_id, _)| *stored_id)
+                    .ok()?;
+                matches(&entries[index].1).then(|| entries.remove(index).1)
+            }
             Self::Large(entries) => {
                 let Entry::Occupied(entry) = entries.entry(id) else {
                     return None;
                 };
-                predicate(entry.get()).then(|| entry.remove())
+                matches(entry.get()).then(|| entry.remove())
             }
         }
     }
@@ -215,7 +262,7 @@ impl ResourceEntries {
     #[cold]
     #[cfg(any(feature = "resource-lifetime", feature = "stream-registry"))]
     fn remove(&mut self, id: &i64) -> Option<ResourceEntry> {
-        self.remove_if(*id, |_| true)
+        self.remove_matching(*id, None)
     }
 }
 
@@ -254,6 +301,9 @@ impl ResourceRegistry {
             },
         );
         debug_assert!(replaced.is_none());
+        if let Some(replaced) = replaced {
+            drop(replaced);
+        }
         id
     }
 
@@ -286,7 +336,11 @@ impl ResourceRegistry {
             },
         );
         debug_assert!(replaced.is_none());
-        Value::resource_owner(owner)
+        let value = Value::resource_owner(owner);
+        if let Some(replaced) = replaced {
+            drop(replaced);
+        }
+        value
     }
 
     #[inline]
@@ -324,7 +378,7 @@ impl ResourceRegistry {
     )]
     #[cold]
     pub fn close<T: 'static>(&mut self, id: i64) -> bool {
-        let Some(entry) = self.entries.remove_if(id, |entry| entry.payload.is::<T>()) else {
+        let Some(entry) = self.entries.remove_matching(id, Some(TypeId::of::<T>())) else {
             return false;
         };
         // Validate and remove through one lookup; a wrong type leaves the
@@ -336,9 +390,7 @@ impl ResourceRegistry {
     #[cfg(feature = "resource-lifetime")]
     #[cold]
     fn remove<T: 'static>(&mut self, id: i64) -> Option<ResourceEntry> {
-        let entry = self
-            .entries
-            .remove_if(id, |entry| entry.payload.is::<T>())?;
+        let entry = self.entries.remove_matching(id, Some(TypeId::of::<T>()))?;
         entry.retire_owner();
         Some(entry)
     }
@@ -362,6 +414,11 @@ impl Drop for ResourceRegistry {
                     entry.retire_owner();
                 }
                 if let Some(Some((_, entry))) = overflow.as_deref() {
+                    entry.retire_owner();
+                }
+            }
+            ResourceEntries::Compact(entries) => {
+                for (_, entry) in entries {
                     entry.retire_owner();
                 }
             }
@@ -457,9 +514,11 @@ pub(crate) fn close<T: 'static>(scope: u32, id: i64) -> bool {
         registry_for_scope_mut(&mut registries.borrow_mut(), scope)
             .and_then(|registry| registry.remove::<T>(id))
     });
-    let closed = entry.is_some();
+    let Some(entry) = entry else {
+        return false;
+    };
     drop(entry);
-    closed
+    true
 }
 
 #[cfg(feature = "resource-lifetime")]
@@ -481,7 +540,9 @@ fn close_any(scope: u32, id: i64) {
     };
     // Drop the backend after releasing the thread-local RefCell borrow. A
     // backend destructor may itself release another resource Value.
-    drop(entry);
+    if let Some(entry) = entry {
+        drop(entry);
+    }
 }
 
 #[cold]
@@ -842,7 +903,7 @@ mod tests {
 
     #[test]
     fn payload_projection_preserves_id_type_and_mutation_across_small_tables() {
-        for width in [0, 1, 2, 4, 7, 8, 33] {
+        for width in [0, 1, 2, 4, 7, 8, 33, 64, 65, 129] {
             let mut registry = ResourceRegistry::new();
             let ids: Vec<_> = (0..width)
                 .map(|value| registry.insert("number", value as u64))
@@ -880,39 +941,47 @@ mod tests {
 
     #[test]
     fn payload_projection_preserves_retired_ids_and_large_sparse_registries() {
-        let mut registry = ResourceRegistry::new();
-        let ids: Vec<_> = (0..33)
-            .map(|value| registry.insert("number", value as u64))
-            .collect();
-        for &id in &ids[..31] {
-            assert!(registry.close::<u64>(id));
-        }
-        assert!(registry.next_id > 8);
-        assert!(
-            matches!(&registry.entries, super::ResourceEntries::Large(entries) if entries.capacity() > 8)
-        );
-        for &id in &ids[..31] {
+        for width in [33, 65, 129] {
+            let mut registry = ResourceRegistry::new();
+            let ids: Vec<_> = (0..width)
+                .map(|value| registry.insert("number", value as u64))
+                .collect();
+            for &id in &ids[..width - 2] {
+                assert!(registry.close::<u64>(id));
+            }
+            assert!(registry.next_id > 8);
+            if width <= super::COMPACT_RESOURCE_LIMIT {
+                assert!(
+                    matches!(&registry.entries, super::ResourceEntries::Compact(entries) if entries.len() == 2)
+                );
+            } else {
+                assert!(
+                    matches!(&registry.entries, super::ResourceEntries::Large(entries) if entries.capacity() > 8)
+                );
+            }
+            for &id in &ids[..width - 2] {
+                assert_eq!(
+                    registry.with_payload_mut::<u64, _>(id, |value| *value),
+                    None
+                );
+            }
+            for (index, &id) in ids.iter().enumerate().skip(width - 2) {
+                assert_eq!(
+                    registry.with_payload_mut::<u64, _>(id, |value| *value),
+                    Some(index as u64),
+                );
+            }
+            let next = registry.insert("number", 90u64);
+            assert!(next > ids[width - 1]);
             assert_eq!(
-                registry.with_payload_mut::<u64, _>(id, |value| *value),
+                registry.with_payload_mut::<u64, _>(next, |value| *value),
+                Some(90)
+            );
+            assert_eq!(
+                registry.with_payload_mut::<u64, _>(ids[0], |value| *value),
                 None
             );
         }
-        for (index, &id) in ids.iter().enumerate().skip(31) {
-            assert_eq!(
-                registry.with_payload_mut::<u64, _>(id, |value| *value),
-                Some(index as u64),
-            );
-        }
-        let next = registry.insert("number", 90u64);
-        assert!(next > ids[32]);
-        assert_eq!(
-            registry.with_payload_mut::<u64, _>(next, |value| *value),
-            Some(90)
-        );
-        assert_eq!(
-            registry.with_payload_mut::<u64, _>(ids[0], |value| *value),
-            None
-        );
     }
 
     #[test]
@@ -941,7 +1010,10 @@ mod tests {
             registry.with_payload_mut::<DropProbe, _>(next, |probe| probe as *const _ as usize);
         let second_overflow = registry.insert("probe", DropProbe(drops.clone()));
         assert_eq!(second_overflow, next + 1);
-        assert!(matches!(registry.entries, super::ResourceEntries::Large(_)));
+        assert!(matches!(
+            registry.entries,
+            super::ResourceEntries::Compact(_)
+        ));
         assert_eq!(drops.get(), 1, "migration must only move entries");
         assert_eq!(
             registry.with_payload_mut::<DropProbe, _>(ids[0], |probe| probe as *const DropProbe
@@ -1026,7 +1098,7 @@ mod tests {
         assert_eq!(next, 33);
         assert!(matches!(
             &registry.entries,
-            super::ResourceEntries::Large(_)
+            super::ResourceEntries::Compact(_)
         ));
         assert_eq!(
             registry.with_payload_mut::<u64, _>(first, |value| value as *const _ as usize),
@@ -1046,8 +1118,151 @@ mod tests {
         assert_eq!(last, 34);
         assert!(matches!(
             &registry.entries,
-            super::ResourceEntries::Large(_)
+            super::ResourceEntries::Compact(_)
         ));
+    }
+
+    #[test]
+    fn compact_registry_reuses_live_storage_without_reviving_shifted_ids() {
+        for width in [2, 5, 9, 17, 61] {
+            let drops = Rc::new(Cell::new(0));
+            let mut registry = ResourceRegistry::new();
+            let pinned: Vec<_> = (0..3)
+                .map(|_| registry.insert("probe", DropProbe(drops.clone())))
+                .collect();
+            let mut previous = Vec::new();
+            for turn in 0..32 {
+                let current: Vec<_> = (0..width)
+                    .map(|_| registry.insert("probe", DropProbe(drops.clone())))
+                    .collect();
+                assert_eq!(current[0], (4 + turn * width) as i64);
+                for &id in &previous {
+                    assert!(!registry.is_open(id));
+                    assert!(!registry.close::<DropProbe>(id));
+                }
+                if let super::ResourceEntries::Compact(entries) = &registry.entries {
+                    assert!(entries.capacity() <= super::COMPACT_RESOURCE_LIMIT);
+                    assert!(entries.windows(2).all(|pair| pair[0].0 < pair[1].0));
+                } else {
+                    assert!(matches!(
+                        registry.entries,
+                        super::ResourceEntries::Small { .. }
+                    ));
+                }
+                // Remove from both ends and the middle as positions shift.
+                for &id in current
+                    .iter()
+                    .step_by(2)
+                    .chain(current.iter().skip(1).step_by(2))
+                {
+                    assert!(!registry.close::<String>(id));
+                    assert!(registry.close::<DropProbe>(id));
+                    assert!(!registry.is_open(id));
+                    for &pinned_id in &pinned {
+                        assert!(registry.is_open(pinned_id));
+                    }
+                }
+                assert_eq!(drops.get(), (turn + 1) * width);
+                previous = current;
+            }
+            drop(registry);
+            assert_eq!(drops.get(), 3 + 32 * width);
+        }
+    }
+
+    #[test]
+    fn compact_hash_promotion_and_entry_transfers_preserve_backend_addresses() {
+        let drops = Rc::new(Cell::new(0));
+        let mut registry = ResourceRegistry::new();
+        let mut addresses = Vec::new();
+        for _ in 0..super::COMPACT_RESOURCE_LIMIT {
+            let id = registry.insert("probe", DropProbe(drops.clone()));
+            let address = registry.with_payload_mut::<DropProbe, _>(id, |v| v as *const _ as usize);
+            addresses.push((id, address));
+        }
+        assert!(
+            matches!(&registry.entries, super::ResourceEntries::Compact(entries)
+            if entries.len() == super::COMPACT_RESOURCE_LIMIT
+                && entries.capacity() <= super::COMPACT_RESOURCE_LIMIT)
+        );
+        let moved = registry.entries.remove_matching(17, None).unwrap();
+        assert!(!registry.is_open(17));
+        assert!(registry.entries.insert(17, moved).is_none());
+        let replacement = super::ResourceEntry {
+            resource_type: "probe",
+            payload: Box::new(DropProbe(drops.clone())),
+            #[cfg(feature = "resource-lifetime")]
+            owner: std::rc::Weak::new(),
+        };
+        // Replacement at full capacity must not promote or release the old
+        // backend before the caller has consumed the returned entry.
+        let old = registry.entries.insert(17, replacement).unwrap();
+        assert!(matches!(
+            registry.entries,
+            super::ResourceEntries::Compact(_)
+        ));
+        assert_eq!(drops.get(), 0);
+        let replacement = registry.entries.insert(17, old).unwrap();
+        drop(replacement);
+        assert_eq!(drops.get(), 1);
+        let next = registry.insert("probe", DropProbe(drops.clone()));
+        assert_eq!(next, super::COMPACT_RESOURCE_LIMIT as i64 + 1);
+        assert!(matches!(registry.entries, super::ResourceEntries::Large(_)));
+        assert_eq!(drops.get(), 1);
+        for (id, address) in addresses {
+            assert_eq!(
+                registry.with_payload_mut::<DropProbe, _>(id, |v| v as *const _ as usize),
+                address
+            );
+        }
+        drop(registry);
+        assert_eq!(drops.get(), super::COMPACT_RESOURCE_LIMIT + 2);
+    }
+
+    #[test]
+    fn backend_type_identity_is_not_the_public_resource_label() {
+        for width in [1, 8, 9, 64, 65, 129] {
+            let mut registry = ResourceRegistry::new();
+            for index in 0..width {
+                let id = if index % 2 == 0 {
+                    registry.insert("shared-label", index as u32)
+                } else {
+                    registry.insert("shared-label", index as u64)
+                };
+                let entry = registry.entries.get(&id).unwrap();
+                let expected = if index % 2 == 0 {
+                    std::any::TypeId::of::<u32>()
+                } else {
+                    std::any::TypeId::of::<u64>()
+                };
+                assert_eq!(entry.payload.as_ref().type_id(), expected);
+            }
+            for index in 0..width {
+                let id = index as i64 + 1;
+                assert_eq!(registry.resource_type(id), "shared-label");
+                if index % 2 == 0 {
+                    assert!(!registry.close::<u64>(id));
+                    assert!(registry.close::<u32>(id));
+                } else {
+                    assert!(!registry.close::<u32>(id));
+                    assert!(registry.close::<u64>(id));
+                }
+                assert!(!registry.is_open(id));
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_registry_storage_retains_the_hash_variant_size_envelope() {
+        assert!(
+            std::mem::size_of::<super::ResourceEntries>()
+                <= std::mem::size_of::<std::collections::HashMap<i64, super::ResourceEntry>>()
+                    + std::mem::size_of::<usize>()
+        );
+        assert!(
+            std::mem::size_of::<(i64, super::ResourceEntry)>() * super::COMPACT_RESOURCE_LIMIT
+                <= 4096
+        );
     }
 
     #[test]
@@ -1074,7 +1289,7 @@ mod tests {
     #[test]
     #[cfg(feature = "stream-registry")]
     fn wrapping_preserves_resource_ids_on_both_sides_of_migration() {
-        for width in [1, 12] {
+        for width in [1, 12, 65] {
             let mut executor = ExecutorGlobals::with_output(Box::new(std::io::sink()));
             let ids: Vec<_> = (0..width)
                 .map(|n| insert_for_request(&mut executor, "probe", n as u64))
@@ -1126,7 +1341,7 @@ mod tests {
                 self.drops.set(self.drops.get() + 1);
             }
         }
-        for width in [3, 8, 9, 17] {
+        for width in [3, 8, 9, 17, 64, 65, 129] {
             let aliases = Rc::new(std::cell::RefCell::new(Vec::new()));
             let drops = Rc::new(Cell::new(0));
             let mut executor = ExecutorGlobals::with_output(Box::new(std::io::sink()));

@@ -2,6 +2,49 @@ use super::{PhpStream, StreamMode, php_memory_stream_mode};
 use std::io::SeekFrom;
 
 #[test]
+fn finite_memory_read_preserves_eof_empty_and_prefetched_boundaries() {
+    for length in [0, 1, 7, 31, 64, 255, 8193] {
+        for extra in [0, 1, 9] {
+            let mut stream = PhpStream::open("php://memory", "w+").unwrap();
+            let payload: Vec<u8> = (0..length).map(|index| index as u8).collect();
+            stream.write(&payload).unwrap();
+            stream.seek(SeekFrom::Start(0)).unwrap();
+            let mut output = vec![0xaa; length + extra];
+            assert_eq!(stream.read(&mut output).unwrap(), length);
+            assert_eq!(&output[..length], &payload);
+            assert!(output[length..].iter().all(|byte| *byte == 0xaa));
+            assert_eq!(stream.is_eof(), extra != 0);
+            assert_eq!(stream.position().unwrap(), length as u64);
+            assert_eq!(stream.read(&mut []).unwrap(), 0);
+            assert_eq!(stream.is_eof(), extra != 0);
+            assert_eq!(stream.read(&mut [0]).unwrap(), 0);
+            assert!(stream.is_eof());
+            assert_eq!(stream.read(&mut []).unwrap(), 0);
+            assert!(stream.is_eof());
+            stream.seek(SeekFrom::Start(length as u64 + 3)).unwrap();
+            assert_eq!(stream.read(&mut [0]).unwrap(), 0);
+            assert_eq!(stream.position().unwrap(), length as u64 + 3);
+            assert!(stream.is_eof());
+        }
+    }
+    let mut stream = PhpStream::open("php://memory", "w+").unwrap();
+    stream.write(b"a\nbc").unwrap();
+    stream.seek(SeekFrom::Start(0)).unwrap();
+    let mut line = Vec::new();
+    stream.read_line(&mut line, None).unwrap();
+    assert_eq!(line, b"a\n");
+    assert_eq!(stream.metadata().unread_bytes, 2);
+    let mut rest = [0; 2];
+    assert_eq!(stream.read(&mut rest).unwrap(), 2);
+    assert_eq!(&rest, b"bc");
+    assert!(!stream.is_eof());
+    assert_eq!(stream.read(&mut []).unwrap(), 0);
+    assert!(!stream.is_eof());
+    assert_eq!(stream.read(&mut [0]).unwrap(), 0);
+    assert!(stream.is_eof());
+}
+
+#[test]
 fn native_prefetch_keeps_logical_seek_write_and_failed_seek_state() {
     let mut stream = PhpStream::open("php://memory", "w+").unwrap();
     stream.write(b"a\nbcdef").unwrap();
@@ -208,6 +251,71 @@ fn metadata_identifies_each_backend_without_platform_helpers() {
     assert_eq!(metadata.stream_type, "TEMP");
     assert_eq!(metadata.mode, "a+b");
     assert_eq!(metadata.eof, None);
+}
+
+#[test]
+fn canonical_stream_metadata_borrows_only_static_backend_strings() {
+    use super::{Cow, StandardStream};
+
+    assert_eq!(
+        std::mem::size_of::<Cow<'static, str>>(),
+        std::mem::size_of::<String>()
+    );
+    for (requested, reported) in [
+        ("r", "rb"),
+        ("w", "w+b"),
+        ("a+", "a+b"),
+        ("x", "rb"),
+        ("r\0w", "rb"),
+    ] {
+        let mut path = String::from("php://memory");
+        let mut mode = requested.to_string();
+        let stream = PhpStream::open(&path, &mode).unwrap();
+        path.clear();
+        mode.clear();
+        assert!(matches!(stream.uri, Cow::Borrowed("php://memory")));
+        assert!(matches!(stream.reported_mode, Cow::Borrowed(_)));
+        assert_eq!(stream.metadata().uri, "php://memory");
+        assert_eq!(stream.metadata().mode, reported);
+    }
+    for (kind, uri, mode) in [
+        (StandardStream::Input, "php://stdin", "rb"),
+        (StandardStream::Output, "php://stdout", "wb"),
+        (StandardStream::Error, "php://stderr", "wb"),
+    ] {
+        let stream = PhpStream::standard(kind);
+        assert!(matches!(stream.uri, Cow::Borrowed(_)));
+        assert!(matches!(stream.reported_mode, Cow::Borrowed(_)));
+        assert_eq!((stream.metadata().uri, stream.metadata().mode), (uri, mode));
+    }
+}
+
+#[test]
+fn dynamic_stream_metadata_keeps_its_own_input_snapshot() {
+    use super::Cow;
+
+    let mut path = String::from("php://temp/maxmemory:3");
+    let mut mode = String::from("a+");
+    let mut temporary = PhpStream::open(&path, &mode).unwrap();
+    path.clear();
+    mode.clear();
+    assert!(matches!(temporary.uri, Cow::Owned(_)));
+    assert!(matches!(temporary.reported_mode, Cow::Borrowed(_)));
+    temporary.write(b"spill and retain metadata").unwrap();
+    assert_eq!(temporary.metadata().uri, "php://temp/maxmemory:3");
+    assert_eq!(temporary.metadata().mode, "a+b");
+
+    let mut uri = String::from("data:text/plain,example");
+    let mut requested_mode = String::from("wb\0ignored");
+    let decoded = PhpStream::decoded_input(b"example".to_vec(), &uri, &requested_mode);
+    uri.clear();
+    requested_mode.clear();
+    assert!(matches!(decoded.uri, Cow::Owned(_)));
+    assert!(matches!(decoded.reported_mode, Cow::Owned(_)));
+    assert_eq!(decoded.metadata().uri, "data:text/plain,example");
+    assert_eq!(decoded.metadata().mode, "wb");
+    assert!(decoded.is_readable());
+    assert!(!decoded.is_writable());
 }
 
 #[test]

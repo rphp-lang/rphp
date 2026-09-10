@@ -1,0 +1,18 @@
+0:0
+RuntimeException:child blocked
+[0,"a",[1]]
+0:1
+RuntimeException:child blocked
+[0,"a",[1]]
+0:2
+RuntimeException:child blocked
+[0,"a",[1]]
+16:0
+{"z":2}
+[0,null,null]
+16:1
+{"a":[1],"z":2}
+[0,null,null]
+16:2
+{"z":2}
+[0,null,null]

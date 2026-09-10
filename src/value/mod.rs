@@ -12,7 +12,9 @@ mod native_iterator_delegate;
 pub(crate) use native_array_iteration::{
     NativeArrayBuckets, NativeArrayCursor, NativeArrayIteration,
 };
-pub(crate) use native_iterator_delegate::NativeIteratorDelegate;
+pub(crate) use native_iterator_delegate::{
+    NativeIteratorDelegate, RecursiveFrame, RecursivePhase, RecursiveTraversal,
+};
 
 #[cold]
 #[inline(never)]
@@ -652,6 +654,21 @@ impl DynamicPropertyMap {
     }
 
     fn clone_for_php_object(&self) -> Self {
+        if let DynamicPropertyStorage::Small(small) = &self.storage {
+            // Existing slots already have unique keys in insertion order.
+            // Copy their PHP owners directly, without searching each key in
+            // the progressively rebuilt map. This does not alias the slots.
+            return Self {
+                storage: DynamicPropertyStorage::Small(SmallDynamicProperties {
+                    entries: std::array::from_fn(|index| {
+                        small.entries[index]
+                            .as_ref()
+                            .map(|(key, value)| (key.clone(), value.clone_for_php_storage()))
+                    }),
+                }),
+                auxiliary: self.clone_native_array_auxiliary(),
+            };
+        }
         let mut clone = Self::with_capacity(self.len());
         self.for_each(|name, value| {
             let value = if value.is_owned_reference() && value.owned_reference_is_aliased() {
@@ -1311,6 +1328,18 @@ pub(crate) fn cycle_root_snapshot() -> Vec<Value> {
 }
 
 impl ObjectHandleState {
+    #[cold]
+    fn begin_request(&mut self) {
+        self.stale.extend(std::mem::take(&mut self.before_request));
+        // These are retained identities, not the public handle reuse stack.
+        // Order them once at the request boundary so every new object release
+        // need not linearly inspect all owners retained across requests.
+        self.stale.sort_unstable();
+        self.next = 1;
+        self.released.clear();
+        self.in_request = true;
+    }
+
     fn allocate(&mut self) -> u32 {
         let handle = self.released.pop().unwrap_or_else(|| {
             let handle = if self.next == 0 { 1 } else { self.next };
@@ -1333,16 +1362,15 @@ impl ObjectHandleState {
     }
 
     fn release(&mut self, identity: usize, handle: u32) {
-        // New request objects normally miss these tracking sets. Membership
-        // can use the integer slice implementation; only a match needs its
-        // exact removal position. No identity order or handle policy changes.
-        if self.stale.contains(&identity) {
-            let position = self
-                .stale
-                .iter()
-                .position(|candidate| *candidate == identity)
-                .expect("tracked identity exists");
-            self.stale.swap_remove(position);
+        // Retained identities are sorted at the request boundary. Exclude
+        // current owners outside their range before an exact interior search.
+        if self.stale.first().is_some_and(|first| identity >= *first)
+            && self.stale.last().is_some_and(|last| identity <= *last)
+            && let Ok(position) = self.stale.binary_search(&identity)
+        {
+            // Preserve the search order. Retiring an old request owner must
+            // never return its old number to the current request's free stack.
+            self.stale.remove(position);
             return;
         }
         if self.before_request.contains(&identity) {
@@ -1354,6 +1382,84 @@ impl ObjectHandleState {
             self.before_request.swap_remove(position);
         }
         self.released.push(handle);
+    }
+}
+
+#[cfg(test)]
+mod object_handle_state_tests {
+    use super::ObjectHandleState;
+
+    #[test]
+    fn retained_identity_range_misses_keep_exact_interior_and_lifo_semantics() {
+        let mut state = ObjectHandleState::default();
+        for identity in [100, 200, 400] {
+            state.allocate();
+            state.register_identity(identity);
+        }
+        state.begin_request();
+        for identity in [50, 900, 150, 300] {
+            let handle = state.allocate();
+            assert_eq!(handle, 1);
+            state.release(identity, handle);
+            assert_eq!(state.released, [1]);
+            assert_eq!(state.stale, [100, 200, 400]);
+        }
+        for (identity, old_handle) in [(100, 1), (400, 3), (200, 2)] {
+            state.release(identity, old_handle);
+            assert_eq!(state.released, [1]);
+        }
+        assert!(state.stale.is_empty());
+        assert_eq!(state.allocate(), 1);
+        assert_eq!(state.allocate(), 2);
+    }
+
+    #[test]
+    fn retained_owners_never_recycle_old_handles_into_the_new_request() {
+        let mut state = ObjectHandleState::default();
+        for identity in [90, 10, 70, 30] {
+            state.allocate();
+            state.register_identity(identity);
+        }
+        state.begin_request();
+        assert_eq!(state.stale, [10, 30, 70, 90]);
+        assert_eq!(state.allocate(), 1);
+        state.release(70, 3);
+        state.release(10, 2);
+        assert_eq!(state.stale, [30, 90]);
+        assert!(state.released.is_empty());
+        assert_eq!(state.allocate(), 2);
+        state.release(50, 1);
+        state.release(60, 2);
+        assert_eq!(state.allocate(), 2);
+        assert_eq!(state.allocate(), 1);
+        state.release(90, 1);
+        state.release(30, 4);
+        assert!(state.stale.is_empty());
+        assert_eq!(state.allocate(), 3);
+    }
+
+    #[test]
+    fn later_request_merges_surviving_owners_without_changing_free_stack_order() {
+        let mut state = ObjectHandleState::default();
+        state.allocate();
+        state.register_identity(40);
+        state.begin_request();
+        state.in_request = false;
+        state.register_identity(20);
+        state.register_identity(60);
+        state.release(20, 5);
+        assert_eq!(state.before_request, [60]);
+        assert_eq!(state.released, [5]);
+        state.begin_request();
+        assert_eq!(state.stale, [40, 60]);
+        assert!(state.released.is_empty());
+        assert_eq!(state.allocate(), 1);
+        state.release(80, 1);
+        state.release(40, 1);
+        state.release(60, 2);
+        assert!(state.stale.is_empty());
+        assert_eq!(state.allocate(), 1);
+        assert_eq!(state.allocate(), 2);
     }
 }
 
@@ -1395,13 +1501,7 @@ fn release_object_handle(identity: usize, handle: u32) {
 /// request has gone away. A still-live object means the caller intentionally
 /// reuses one ExecutorGlobals and its request-local state.
 pub(crate) fn begin_object_handle_request() {
-    with_object_handles(|state| {
-        let before_request = std::mem::take(&mut state.before_request);
-        state.stale.extend(before_request);
-        state.next = 1;
-        state.released.clear();
-        state.in_request = true;
-    });
+    with_object_handles(ObjectHandleState::begin_request);
     CYCLE_ROOTS.with(|state| {
         let mut state = state.borrow_mut();
         state.active = true;
@@ -1455,24 +1555,46 @@ fn materialize_declared_property_defaults(defaults: &[Value]) -> Vec<Value> {
     } else {
         None
     };
-    let reused = pooled.is_some();
-    let mut values = pooled.unwrap_or_else(|| {
-        stats::inc_declared_property_storage_allocation();
-        Vec::with_capacity(defaults.len())
-    });
-    if values.capacity() < defaults.len() {
-        stats::inc_declared_property_storage_allocation();
-        values.reserve_exact(defaults.len() - values.capacity());
-    } else if !values.is_empty() {
-        unreachable!("pooled declared-property storage must be cleared before reuse");
-    } else if reused {
-        stats::inc_declared_property_storage_reuse();
-    }
+    let mut values = match pooled {
+        Some(values) => {
+            // PhpObject::drop admits only cleared buffers whose capacity is
+            // exactly this width. No resize or repair is needed on reuse.
+            debug_assert!(values.is_empty());
+            debug_assert_eq!(values.capacity(), defaults.len());
+            stats::inc_declared_property_storage_reuse();
+            values
+        }
+        None => {
+            stats::inc_declared_property_storage_allocation();
+            Vec::with_capacity(defaults.len())
+        }
+    };
     for value in defaults {
-        value.publish_deferred_object_handles();
-        values.push(value.clone());
+        let copied = if matches!(
+            value.value_type(),
+            ValueType::Undef
+                | ValueType::Null
+                | ValueType::False
+                | ValueType::True
+                | ValueType::Long
+                | ValueType::Double
+        ) {
+            value.clone()
+        } else {
+            clone_managed_property_default(value)
+        };
+        values.push(copied);
     }
     values
+}
+
+/// Scalar defaults cannot own handles or references. Keep managed publication
+/// and cloning outside their materialization loop, without changing its order.
+#[cold]
+#[inline(never)]
+fn clone_managed_property_default(value: &Value) -> Value {
+    value.publish_deferred_object_handles();
+    value.clone()
 }
 
 impl PhpObject {
@@ -2084,6 +2206,33 @@ mod declared_property_storage_tests {
             ],
         );
         assert_eq!(ordinary.property_values.capacity(), 4);
+    }
+
+    #[test]
+    fn overlapping_owners_retain_one_empty_exact_width_buffer() {
+        for width in 1..=8 {
+            let layout = Rc::new(ObjectLayout::new(
+                "OverlappingRows",
+                (0..width).map(|i| format!("p{i}")).collect(),
+            ));
+            let defaults = vec![Value::long(7); width];
+            let first = PhpObject::with_layout_from_defaults(1, Rc::clone(&layout), &defaults);
+            let pointer = first.property_values.as_ptr();
+            let second = PhpObject::with_layout_from_defaults(1, Rc::clone(&layout), &defaults);
+            assert_ne!(pointer, second.property_values.as_ptr());
+            drop(first);
+            drop(second);
+            let reused = PhpObject::with_layout_from_defaults(1, layout, &defaults);
+            assert_eq!(reused.property_values.as_ptr(), pointer);
+            assert_eq!(reused.property_values.capacity(), width);
+            assert_eq!(reused.property_values.len(), width);
+            assert!(
+                reused
+                    .property_values
+                    .iter()
+                    .all(|v| v.as_long() == Some(7))
+            );
+        }
     }
 }
 
@@ -8165,6 +8314,77 @@ mod arithmetic_projection_tests {
 }
 
 #[cfg(test)]
+mod dynamic_property_clone_tests {
+    use super::*;
+
+    #[test]
+    fn php_clone_preserves_order_and_independent_slots_at_storage_boundaries() {
+        for width in [0, 1, 2, 3, 4, 8, 9, 17] {
+            let mut properties = DynamicPropertyMap::with_capacity(width);
+            for index in 0..width {
+                properties.insert_owned(format!("k{index}"), Value::long(index as i64));
+            }
+            if width > 1 {
+                assert!(properties.remove("k0"));
+                properties.insert_owned("k0".into(), Value::long(90));
+            }
+            let mut cloned = properties.clone_for_php_object();
+            let mut original = Vec::new();
+            properties.for_each(|key, value| original.push((key.to_owned(), value.as_long())));
+            let mut copied = Vec::new();
+            cloned.for_each(|key, value| copied.push((key.to_owned(), value.as_long())));
+            assert_eq!(copied, original);
+            for (key, value) in original {
+                cloned.insert_owned(key.clone(), Value::long(-1));
+                assert_eq!(properties.get(&key).unwrap().as_long(), value);
+            }
+            cloned.insert_owned("new".into(), Value::null());
+            assert!(properties.get("new").is_none());
+        }
+    }
+
+    #[test]
+    fn php_clone_keeps_aliased_cells_but_detaches_singleton_references() {
+        for width in [3, 4, 9] {
+            let mut properties = DynamicPropertyMap::with_capacity(width);
+            let external = Value::owned_reference(Value::long(7));
+            properties.insert_owned("shared".into(), external.clone_owned_reference_alias());
+            properties.insert_owned("single".into(), Value::owned_reference(Value::long(8)));
+            let mut array = PhpArray::new();
+            array.push(Value::long(9));
+            properties.insert_owned("array".into(), Value::array(array));
+            for index in 3..width {
+                properties.insert_owned(format!("p{index}"), Value::null());
+            }
+            let mut cloned = properties.clone_for_php_object();
+            assert_eq!(
+                cloned.get("shared").unwrap().reference_identity(),
+                external.reference_identity()
+            );
+            assert!(!cloned.get("single").unwrap().is_reference());
+            assert_eq!(cloned.get("single").unwrap().as_long(), Some(8));
+            assert_eq!(
+                cloned.get("array").unwrap().array_identity(),
+                properties.get("array").unwrap().array_identity()
+            );
+            cloned
+                .get_mut("array")
+                .unwrap()
+                .as_array_mut()
+                .unwrap()
+                .push(Value::long(10));
+            assert_eq!(
+                properties.get("array").unwrap().as_array().unwrap().len(),
+                1
+            );
+            assert_eq!(cloned.get("array").unwrap().as_array().unwrap().len(), 2);
+            drop(cloned);
+            assert_eq!(external.owned_reference_handle_count(), 2);
+        }
+    }
+}
+
+#[cfg(test)]
 mod native_array_options_tests {
     use super::*;
 
@@ -8266,7 +8486,13 @@ mod object_handle_release_tests {
                     let mut expected = identities.clone();
                     let found = expected.iter().position(|value| *value == identity);
                     if let Some(position) = found {
-                        expected.swap_remove(position);
+                        if stale {
+                            // Old identities now preserve sorted membership;
+                            // the public handle free stack is still LIFO.
+                            expected.remove(position);
+                        } else {
+                            expected.swap_remove(position);
+                        }
                     }
                     let mut state = ObjectHandleState::default();
                     if stale {
@@ -8275,6 +8501,7 @@ mod object_handle_release_tests {
                         state.before_request = identities.clone();
                     }
                     state.release(identity, 7);
+                    assert!(state.stale.is_sorted());
                     assert_eq!(
                         if stale {
                             &state.stale

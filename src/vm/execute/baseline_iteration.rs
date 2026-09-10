@@ -1383,6 +1383,11 @@ fn op_foreach_init<'a>(
             if by_reference {
                 eg.enable_weak_iterator_references(arr_val);
             }
+            if !crate::stdlib::validate_recursive_iterator_start(arr_val, eg) {
+                if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
+                    return Ok(control);
+                }
+            }
             let _ = crate::stdlib::call_object_protocol_method(
                 eg,
                 arr_val,

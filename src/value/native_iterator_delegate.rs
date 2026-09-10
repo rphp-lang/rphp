@@ -11,6 +11,31 @@ pub(crate) struct NativeIteratorDelegate {
     pub position: i64,
     pub offset: i64,
     pub limit: i64,
+    pub recursive: Option<Box<RecursiveTraversal>>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum RecursivePhase {
+    Check,
+    Descend,
+    AfterChildren,
+    Advance,
+}
+
+pub(crate) struct RecursiveFrame {
+    pub iterator: Value,
+    pub phase: RecursivePhase,
+}
+
+/// Allocated only for recursive drivers. Every iterator is an ordinary traced
+/// ownership edge; the reusable depth stack is independent of the Rust stack.
+pub(crate) struct RecursiveTraversal {
+    pub frames: Vec<RecursiveFrame>,
+    pub mode: i64,
+    pub flags: i64,
+    pub max_depth: i64,
+    pub in_iteration: bool,
+    pub generation: u64,
 }
 
 impl NativeIteratorDelegate {
@@ -23,10 +48,16 @@ impl NativeIteratorDelegate {
             position: 0,
             offset,
             limit,
+            recursive: None,
         }
     }
 
     pub(crate) fn for_each_value(&self, mut visit: impl FnMut(&Value)) {
+        if let Some(recursive) = &self.recursive {
+            for frame in &recursive.frames {
+                visit(&frame.iterator);
+            }
+        }
         visit(&self.current);
         visit(&self.key);
         visit(&self.iterator);
@@ -35,5 +66,8 @@ impl NativeIteratorDelegate {
 
     pub(crate) fn append_values_reversed(self, pending: &mut Vec<Value>) {
         pending.extend([self.inner, self.iterator, self.key, self.current]);
+        if let Some(recursive) = self.recursive {
+            pending.extend(recursive.frames.into_iter().map(|frame| frame.iterator));
+        }
     }
 }

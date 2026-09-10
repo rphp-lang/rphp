@@ -1,0 +1,20 @@
+rewind:Error:The Unready instance wasn't initialized properly
+valid:Error:The Unready instance wasn't initialized properly
+key:Error:The Unready instance wasn't initialized properly
+current:Error:The Unready instance wasn't initialized properly
+next:Error:The Unready instance wasn't initialized properly
+getDepth:Error:The Unready instance wasn't initialized properly
+getSubIterator:Error:The Unready instance wasn't initialized properly
+getInnerIterator:Error:The Unready instance wasn't initialized properly
+beginIteration:Error:The Unready instance wasn't initialized properly
+endIteration:Error:The Unready instance wasn't initialized properly
+callHasChildren:Error:The Unready instance wasn't initialized properly
+callGetChildren:Error:The Unready instance wasn't initialized properly
+beginChildren:Error:The Unready instance wasn't initialized properly
+endChildren:Error:The Unready instance wasn't initialized properly
+nextElement:Error:The Unready instance wasn't initialized properly
+getMaxDepth:Error:The Unready instance wasn't initialized properly
+setMaxDepth:Error:The Unready instance wasn't initialized properly
+Error:Object is not initialized
+Error:Object is not initialized
+Error:Object is not initialized

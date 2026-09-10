@@ -1,0 +1,15 @@
+begin-replace
+drop:child
+drop:old
+end-replace
+after:9
+drop:new
+done
+begin-replace
+drop:child
+end-replace
+held-alive
+drop:new
+release-held
+drop:held-old
+alias-done
