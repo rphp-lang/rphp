@@ -7403,6 +7403,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     };
                     if opline._pad & FETCH_DIM_COMPOUND != 0
+                        && !fetch_dim_incdec_context(opline._pad)
                         && !internal_array_object
                         && eg.exception.take().is_some()
                     {
@@ -7444,7 +7445,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             eg,
                             &receiver,
                             "ArrayAccess",
-                            "offsetGet",
+                            if fetch_dim_terminal_empty(opline._pad) {
+                                "offsetGetAfterExists"
+                            } else {
+                                "offsetGet"
+                            },
                             std::slice::from_ref(&key),
                         )?
                         .unwrap_or_else(Value::null);
@@ -7472,6 +7477,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         && (opline._pad & FETCH_DIM_COMPOUND == 0
                             || fetch_dim_incdec_context(opline._pad))
                         && !value.is_reference()
+                        && !matches!(value.value_type(), ValueType::Object | ValueType::Closure)
                     {
                         let class_name = receiver
                             .as_object()

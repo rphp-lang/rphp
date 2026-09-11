@@ -7,11 +7,37 @@ use crate::stdlib::{self, resource, streams};
 use crate::vm::frame::ExecuteData;
 use std::io::SeekFrom;
 
-#[inline]
+// Keep the short length/prefix rejection in each opener. Outlining this
+// predicate spills the opener's live owners even for ordinary native streams.
+#[inline(always)]
 pub(in crate::stdlib) fn recognizes(path: &str) -> bool {
     path.as_bytes()
         .get(..13)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"php://filter/"))
+}
+
+#[cfg(test)]
+mod prefix_tests {
+    #[test]
+    fn filter_prefix_is_ascii_insensitive_and_requires_its_full_delimiter() {
+        for path in ["php://filter/", "PHP://FiLtEr/resource=php://memory"] {
+            assert!(super::recognizes(path));
+        }
+        for path in [
+            "",
+            "php://memory",
+            "php://filter",
+            "php://filters/",
+            "php://filterX",
+            "éphp://filter/",
+        ] {
+            assert!(!super::recognizes(path));
+        }
+        let prefix = "php://filter/";
+        for end in 0..prefix.len() {
+            assert!(!super::recognizes(&prefix[..end]));
+        }
+    }
 }
 
 #[cold]

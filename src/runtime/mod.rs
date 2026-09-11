@@ -1734,7 +1734,8 @@ impl ExecutorGlobals {
         // SeekableIterator adds one unconditional interface to that envelope.
         // RecursiveArrayIterator and RecursiveIteratorIterator add two classes.
         // DirectoryIterator and FilesystemIterator add two more fixed classes.
-        let class_capacity = 106 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        // SplFixedArray adds one fixed-slot container without a startup grow.
+        let class_capacity = 107 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;
@@ -9494,11 +9495,11 @@ impl ExecutorGlobals {
         if let Some(alias) = crate::builtin_metadata::internal_function_alias(name) {
             return self.function_table.get(alias.target).copied();
         }
-        let (_, method) = name.split_once("::")?;
+        let (_, method) = Self::split_method_lookup_name(name)?;
         // Functions use normalized keys, but class declarations retain their
         // canonical spelling. Preserve the caller's class name so a missing
         // method on an exact class does not scan every registered class.
-        let (class_name, _) = original.split_once("::")?;
+        let (class_name, _) = Self::split_method_lookup_name(original)?;
         let mut class = self.find_class(class_name)?;
         for _ in 0..self.class_table.len() {
             let parent_name = class.parent.as_deref()?;
@@ -9509,6 +9510,19 @@ impl ExecutorGlobals {
                 return Some(*function);
             }
             class = self.find_class(parent_name)?;
+        }
+        None
+    }
+
+    /// Method lookup needs only the first ASCII separator, not a general
+    /// substring searcher. A colon is always a UTF-8 character boundary.
+    #[inline]
+    fn split_method_lookup_name(name: &str) -> Option<(&str, &str)> {
+        let bytes = name.as_bytes();
+        for index in memchr::memchr_iter(b':', bytes) {
+            if bytes.get(index + 1) == Some(&b':') {
+                return Some((&name[..index], &name[index + 2..]));
+            }
         }
         None
     }
@@ -10546,6 +10560,35 @@ mod sparse_call_cleanup_tests {
 #[cfg(test)]
 mod stdlib_capacity_tests {
     use super::ExecutorGlobals;
+
+    #[test]
+    fn method_lookup_separator_matches_first_substring_without_normalizing() {
+        let alphabet = ["a", "Z", ":", "\0", "\u{130}", "\u{1f642}"];
+        let mut level = vec![String::new()];
+        for _ in 0..=5 {
+            let mut next = Vec::new();
+            for name in level {
+                assert_eq!(
+                    ExecutorGlobals::split_method_lookup_name(&name),
+                    name.split_once("::"),
+                    "{name:?}"
+                );
+                for suffix in alphabet {
+                    next.push(format!("{name}{suffix}"));
+                }
+            }
+            level = next;
+        }
+        for length in [7, 8, 15, 16, 31, 32, 63, 64, 1024] {
+            for separator in ["", ":", "::", ":::"] {
+                let name = format!("{}{}\u{130}Method::Tail", "Class".repeat(length), separator);
+                assert_eq!(
+                    ExecutorGlobals::split_method_lookup_name(&name),
+                    name.split_once("::")
+                );
+            }
+        }
+    }
 
     #[test]
     fn class_name_traversal_promotion_preserves_case_and_duplicate_semantics() {

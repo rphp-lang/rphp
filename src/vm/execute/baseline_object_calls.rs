@@ -4097,7 +4097,9 @@ fn op_bind_array_dim_ref<'a>(
             } else if returned.is_reference() {
                 Value::reference(returned.as_ref_ptr())
             } else {
-                if opline._pad & FETCH_DIM_FUNC_ARG == 0 {
+                if opline._pad & FETCH_DIM_FUNC_ARG == 0
+                    && !matches!(returned.value_type(), ValueType::Object | ValueType::Closure)
+                {
                     let class_name = receiver
                         .as_object()
                         .map(|object| object.class_name.to_string())

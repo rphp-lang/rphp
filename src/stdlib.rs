@@ -6940,6 +6940,17 @@ fn typed_internal_bool_argument(
     parameter: &str,
 ) -> Result<Option<bool>, VmError> {
     let argument = owned_argument(ed, index);
+    typed_internal_bool_value_argument(ed, eg, &argument, function, index, parameter)
+}
+
+fn typed_internal_bool_value_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    argument: &Value,
+    function: &str,
+    index: u32,
+    parameter: &str,
+) -> Result<Option<bool>, VmError> {
     let argument = argument.dereferenced();
     let strict = internal_call_is_strict(ed);
     let converted = match argument.value_type() {
@@ -13212,6 +13223,9 @@ fn fn_get_mangled_object_vars(
         ));
         return Ok(());
     }
+    if let Some(members) = builtin_classes::fixed_array::member_projection(&target, eg) {
+        ret!(rv, Value::array(members));
+    }
     ret!(rv, crate::vm::execute::cast_object_to_array(&target, eg));
 }
 
@@ -18994,6 +19008,31 @@ fn var_dump_debug_info_object(
     eg: &ExecutorGlobals,
     context: DumpContext,
 ) -> PhpOutputBytes {
+    let mut visited_arrays = std::collections::HashSet::new();
+    let mut visited_objects = std::collections::HashSet::new();
+    if let Some(identity) = object_value.object_identity() {
+        visited_objects.insert(identity);
+    }
+    var_dump_projected_object(
+        object_value,
+        debug_info,
+        indent,
+        eg,
+        context,
+        &mut visited_arrays,
+        &mut visited_objects,
+    )
+}
+
+fn var_dump_projected_object(
+    object_value: &Value,
+    debug_info: &Value,
+    indent: usize,
+    eg: &ExecutorGlobals,
+    context: DumpContext,
+    visited_arrays: &mut std::collections::HashSet<usize>,
+    visited_objects: &mut std::collections::HashSet<usize>,
+) -> PhpOutputBytes {
     let prefix = "  ".repeat(indent);
     let object = object_value
         .as_object()
@@ -19026,11 +19065,6 @@ fn var_dump_debug_info_object(
     );
     drop(object);
 
-    let mut visited_arrays = std::collections::HashSet::new();
-    let mut visited_objects = std::collections::HashSet::new();
-    if let Some(identity) = object_value.object_identity() {
-        visited_objects.insert(identity);
-    }
     for (key, value) in properties.iter() {
         output.push_str(&format!("{}  ", prefix));
         match key {
@@ -19049,8 +19083,8 @@ fn var_dump_debug_info_object(
             eg,
             true,
             context.child(),
-            &mut visited_arrays,
-            &mut visited_objects,
+            visited_arrays,
+            visited_objects,
         ));
     }
     output.push_str(&format!("{}}}\n", prefix));
@@ -19341,7 +19375,19 @@ fn var_dump_value_inner(
                 .lazy_object_state(val)
                 .filter(|state| !state.initializing);
             let initialized_proxy = lazy_state.and_then(|state| state.proxy_instance.clone());
-            let output = if object.class_name.as_ref() == "SensitiveParameterValue" {
+            let output = if let Some(projection) = builtin_classes::fixed_array::array_cast(val, eg)
+            {
+                drop(object);
+                var_dump_projected_object(
+                    val,
+                    &projection,
+                    indent,
+                    eg,
+                    context,
+                    visited_arrays,
+                    visited_objects,
+                )
+            } else if object.class_name.as_ref() == "SensitiveParameterValue" {
                 let mut out = dump_object_header(
                     context,
                     val,
@@ -19908,6 +19954,23 @@ fn print_r_value_inner(
             out.extend_from_slice(prefix.as_bytes());
             out.extend_from_slice(b"(\n");
             let mut native_array_storage = None;
+            if let Some(slots) = builtin_classes::fixed_array::slot_projection(val, eg) {
+                for (key, value) in slots.iter() {
+                    let ArrayKey::Int(key) = key else {
+                        unreachable!("fixed slot index")
+                    };
+                    out.extend_from_slice(inner.as_bytes());
+                    out.extend_from_slice(format!("[{key}] => ").as_bytes());
+                    out.extend_from_slice(&print_r_value_inner(
+                        value,
+                        indent + 1,
+                        eg,
+                        visited_arrays,
+                        visited_objects,
+                    ));
+                    out.push(b'\n');
+                }
+            }
             for slot in var_dump_property_slots(eg, object.class_id) {
                 let definition = &class.properties[slot];
                 if definition.is_virtual_hook_property() {
@@ -22532,9 +22595,10 @@ pub(crate) fn call_object_protocol_method(
     args: &[Value],
 ) -> Result<Option<Value>, VmError> {
     let append_get = method.eq_ignore_ascii_case("offsetGetAppend");
+    let after_exists = method.eq_ignore_ascii_case("offsetGetAfterExists");
     let public_method = if method.eq_ignore_ascii_case("offsetSetAppend") {
         "offsetSet"
-    } else if append_get {
+    } else if append_get || after_exists {
         "offsetGet"
     } else {
         method
@@ -22548,7 +22612,24 @@ pub(crate) fn call_object_protocol_method(
         return Ok(None);
     }
     if class_name == "WeakMap" && interface == "ArrayAccess" {
-        return weak::call_map_protocol(eg, receiver, method, args).map(Some);
+        return weak::call_map_protocol(
+            eg,
+            receiver,
+            if after_exists { public_method } else { method },
+            args,
+        )
+        .map(Some);
+    }
+    if after_exists
+        && let Some(value) =
+            builtin_classes::fixed_array::value_after_exists(receiver, args.first(), eg)
+    {
+        return Ok(Some(value));
+    }
+    if (append_get || method.eq_ignore_ascii_case("offsetSetAppend"))
+        && builtin_classes::fixed_array::reject_native_append(receiver, public_method, eg)
+    {
+        return Ok(Some(Value::null()));
     }
     if append_get
         && !class_name.eq_ignore_ascii_case("ArrayObject")

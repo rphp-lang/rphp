@@ -8,6 +8,67 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
+`spl-fixed-array-slot-contracts`, against `517345e0`: **+56/-0** deduplicated
+passes (54 SPL, two core). All thirty admitted cases pass. SPL reaches
+335 pass / 410 fail / 31 unsupported / 8 skip / 1 XFAIL; the separate
+7,174-case core reaches **6,446 pass / 335 fail / 182 skip / 211 unsupported**.
+Together these selected 7,959 cases have 6,781 passes and 745 failures, not
+complete PHP coverage. No previous pass or process-safety result is lost;
+all 56 gains independently pass the PHP 8.5.10 reference.
+
+SplFixedArray uses sparse native null-slot storage with fully traced PHP edges,
+checked size arithmetic, canonical offsets, projections, reference/COW and clone
+behavior. Resize publishes the new size before ascending retirement and handles
+destructor reentry without holding an object borrow. InternalIterator reuses
+existing dispatch and preserves the oracle's cursor-root lifetime. General
+ArrayAccess object-valued views retain identity without a scalar indirect-write
+notice. No common Value/VM field, opcode, dependency, JIT admission or unsafe
+ceiling changes. Profile-backed lookup/prefix work removal and the existing TLS
+release boundary keep the expanded builtin registration off common hot paths.
+
+Seven existing SPL failures advance to independently reviewed later boundaries:
+serialization, export/debug refcounts and a pre-existing global-reference
+shutdown root. They remain failures, not exclusions or gains. A private evidence
+comparison initially rejected three embedded temporary filenames; an exact
+filename-only projection proves every remaining byte matches the frozen
+holdout outputs. No upstream source or expectation was changed. General SPL,
+suspension, 32-bit and allocation-limit/OOM equivalence remain unclaimed.
+
+Thirty-one original cases pass 93 byte-exact PHP/default/JIT-disabled runs;
+the checked final matrix passes 5,080/4,772/5,151/5,173/5,224 tests
+(13/13/13/13/16 ignored, none filtered), plus all-features/all-targets,
+adjacent oracles, exact pass-set checks, Composer/Symfony S0-S3, runner/unsafe
+self-tests, formatting and public hygiene. Unsafe remains 1,622 blocks / 289
+functions. Automatic cleanup runs between configurations and after cycles.
+
+All **47 fixed-parent 32-pair controls** meet unchanged common +1% / pay-use
++5% limits; highest medians are +0.988%/+1.240%. Ordinary calls improve 3.233%,
+ordinary serialization 2.425%; the closure holdout is +0.360%. Rejected timings
+and instruction-simulation hypotheses remain recorded without unchanged timing
+rerolls or hardware-counter claims. Four new-API candidate/PHP ratios are
+0.520/1.843/0.862/1.862 with exact outputs, not absent-parent deltas. The
+user-authorized shared-host guard records two background events; this is not
+exclusive-host evidence and no private benchmark host was configured.
+
+SHA-256 evidence:
+
+- Release: `be8a3c27880c1919771493145baede9eef93354a7687af564407f7a3b417c037`.
+- Complete technical record: `83d98bcc858692d22a6fbb78686a739fe02e6e5a1d37166281af0f2112ea55c4`.
+- Matrix: `9dd71b4bc389cf46ccf54635c802d7c776179df50869d77a0789d01d6b26b6b4`.
+- Supplying / SPL manifests: `291d2a16ac239a3dceb82b048840bb03777eb7b6f76a463f778fe87551ff899c` / `184e374028060b922d4fbafc9fc170466dd60027be19aab28e4597e359613069`.
+- Reference manifest for all 56 gains: `7af8c8ba25a3406007bf29f248914a72157fe04a19da2b4f508f5d56e5622f39`.
+- SPL pass set: `bdcd06c5d12bbd79529f94fd0480972f10881cc1d995e0c408e9e747c01fd65d`.
+- Zend/lang manifest / pass set: `2b16f835ae138c3e8df8de4ff8e84695aaa1a20714a96f9c342a68d6b4a9723d` / `b99f862eabc6857b7347b6f378368ce342ff70acec02d7d2732e8f20daa5fde3`.
+- Strings/array manifest / pass set: `9bf891c30b8763bbd23a62590ce7898e80c02f123682ec54139a8a277f1b46b2` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+- Primary / holdout results: `4df19ec33eb2f75a9907d1887d2248f3f4c23aaaa11cd60d45611da97801cf16` / `63f15b5f9480568aa88a08714b45ce289dc728c83239dad1eff8416f9489dbe1`.
+
+Next read-only admission confirms thirty PHP-passing/current-failing
+SplDoublyLinkedList/SplStack/SplQueue cases
+(`b09c0b80a28d3255e035b1ca03ccff10795e04b792213b1be4554f46eba19f60`).
+Characterize live cursor mutation, FIFO/LIFO/KEEP/DELETE, references and retirement
+before selecting storage; reuse traced native ownership, not hidden GC edges.
+
+The preceding measured AMD64 PHP 8.5 checkpoint is
 `directory-iterator-cursor-projection-contracts`, against `5ac0c4d2`: **+21/-0**
 SPL passes. The full 785-case SPL set reaches 281 pass / 464 fail /
 31 unsupported / 8 skip / 1 XFAIL. The separate 7,174-case core remains

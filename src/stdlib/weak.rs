@@ -279,6 +279,14 @@ fn internal_iterator_current(
     return_value: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if let Some(value) = super::builtin_classes::fixed_array::iterator_operation(
+        &argument(execute_data, 0),
+        "current",
+        eg,
+    ) {
+        write_result(return_value, value);
+        return Ok(());
+    }
     write_result(
         return_value,
         eg.weak_iterator_value(&argument(execute_data, 0))
@@ -292,6 +300,14 @@ fn internal_iterator_key(
     return_value: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if let Some(value) = super::builtin_classes::fixed_array::iterator_operation(
+        &argument(execute_data, 0),
+        "key",
+        eg,
+    ) {
+        write_result(return_value, value);
+        return Ok(());
+    }
     write_result(
         return_value,
         eg.weak_iterator_key(&argument(execute_data, 0))
@@ -305,6 +321,15 @@ fn internal_iterator_next(
     _return_value: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if super::builtin_classes::fixed_array::iterator_operation(
+        &argument(execute_data, 0),
+        "next",
+        eg,
+    )
+    .is_some()
+    {
+        return Ok(());
+    }
     eg.weak_iterator_next(&argument(execute_data, 0));
     Ok(())
 }
@@ -314,6 +339,14 @@ fn internal_iterator_valid(
     return_value: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if let Some(value) = super::builtin_classes::fixed_array::iterator_operation(
+        &argument(execute_data, 0),
+        "valid",
+        eg,
+    ) {
+        write_result(return_value, value);
+        return Ok(());
+    }
     write_result(
         return_value,
         Value::bool(eg.weak_iterator_valid(&argument(execute_data, 0))),
@@ -326,6 +359,15 @@ fn internal_iterator_rewind(
     _return_value: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if super::builtin_classes::fixed_array::iterator_operation(
+        &argument(execute_data, 0),
+        "rewind",
+        eg,
+    )
+    .is_some()
+    {
+        return Ok(());
+    }
     eg.weak_iterator_rewind(&argument(execute_data, 0));
     Ok(())
 }

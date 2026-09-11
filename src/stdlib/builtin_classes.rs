@@ -13,6 +13,7 @@ use crate::vm::instruction::{
 
 pub(super) mod array_object;
 mod file_info;
+pub(super) mod fixed_array;
 mod iterator_delegate;
 mod recursive_iterator;
 pub(crate) use array_object::cursor::{
@@ -2413,7 +2414,7 @@ fn internal_method_lookup_name(owner: &str, method: &str) -> String {
     name.push_str(owner);
     name.push_str("::");
     name.push_str(method);
-    if name.is_ascii() {
+    if internal_method_spelling_is_ascii(&name) {
         name.make_ascii_lowercase();
         name
     } else {
@@ -2421,8 +2422,45 @@ fn internal_method_lookup_name(owner: &str, method: &str) -> String {
     }
 }
 
+// Registration spellings are short. Reduce whole safe word loads rather than
+// constructing the general vector/tail search for each method key. Endianness
+// does not affect the high-bit mask; the incomplete tail is read byte by byte.
+#[inline(never)]
+fn internal_method_spelling_is_ascii(name: &str) -> bool {
+    let mut words = name.as_bytes().chunks_exact(std::mem::size_of::<usize>());
+    let mut bits = 0usize;
+    for word in &mut words {
+        bits |= usize::from_ne_bytes(word.try_into().expect("complete machine word"));
+    }
+    for &byte in words.remainder() {
+        bits |= usize::from(byte);
+    }
+    bits & usize::from_ne_bytes([0x80; std::mem::size_of::<usize>()]) == 0
+}
+
 #[cfg(test)]
 mod method_lookup_name_tests {
+    #[test]
+    fn ascii_lookup_scan_covers_all_bytes_at_word_and_vector_boundaries() {
+        for length in 0..=80 {
+            let ascii = "A".repeat(length);
+            assert!(super::internal_method_spelling_is_ascii(&ascii));
+            for index in 0..=length {
+                for character in ['\0', '\u{7f}', '\u{80}', '\u{ff}', '\u{130}', '\u{1f642}'] {
+                    let name = format!("{}{}{}", &ascii[..index], character, &ascii[index..]);
+                    assert_eq!(
+                        super::internal_method_spelling_is_ascii(&name),
+                        name.is_ascii()
+                    );
+                    assert_eq!(
+                        super::internal_method_lookup_name(&name, "M\u{3a3}"),
+                        format!("{name}::M\u{3a3}").to_lowercase()
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn owned_lookup_spelling_matches_original_ascii_and_unicode_conversion() {
         for owner in ["ArrayIterator", "Closure", "", "lower", "\u{130}nternal"] {
@@ -3951,5 +3989,19 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     reg_method!("Generator", "throw", fn_generator_throw, 2, 1, "exception");
     reg_method!("Generator", "getreturn", fn_generator_get_return, 1, 0);
 
+    eg.register_class(empty_internal_type(
+        "SplFixedArray",
+        vec![
+            "IteratorAggregate".into(),
+            "Traversable".into(),
+            "ArrayAccess".into(),
+            "Countable".into(),
+            "JsonSerializable".into(),
+        ],
+        false,
+        false,
+    ))
+    .unwrap();
+    funcs.extend(fixed_array::register(eg));
     funcs
 }

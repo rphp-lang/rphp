@@ -98,7 +98,13 @@ impl CycleGraph {
             // One owner belongs to this graph snapshot. Every recorded
             // incoming edge corresponds to one real Value handle in another
             // graph node or weak-object sidecar.
-            if strong.saturating_sub(1 + incoming[index]) != 0 {
+            let native_root = node.kind == CycleNodeKind::Object
+                && node.value.as_object_rc().is_some_and(|owner| {
+                    owner
+                        .try_borrow()
+                        .map_or(true, |object| object.native_state_retains_cycle_root())
+                });
+            if native_root || strong.saturating_sub(1 + incoming[index]) != 0 {
                 live[index] = true;
                 queue.push_back(index);
             }

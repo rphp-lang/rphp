@@ -32,7 +32,10 @@ fn native_storage_key(object: &PhpObject) -> Option<&'static str> {
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
 pub(crate) fn array_cast(receiver: &Value, eg: &ExecutorGlobals) -> Option<Value> {
     let object = receiver.as_object()?;
-    native_storage_key(&object)?;
+    if native_storage_key(&object).is_none() {
+        drop(object);
+        return super::fixed_array::array_cast(receiver, eg);
+    }
     if object.native_array_options().flags & 1 == 0 {
         drop(object);
         return Some(Value::array(snapshot(receiver, eg, false)));
@@ -418,6 +421,17 @@ fn validate(
             "{owner}::{method}(): Using an object as a backing array for {owner} is deprecated, as it allows violating class constraints and invariants"
         ),
     )?;
+    if eg.exception.is_none() && super::fixed_array::has_fixed_slots(value, eg) {
+        let name = value
+            .as_object()
+            .expect("object backing")
+            .class_name
+            .to_string();
+        eg.exception = Some(make_error_value(
+            "InvalidArgumentException",
+            &format!("Overloaded object of type {name} is not compatible with {owner}"),
+        ));
+    }
     Ok(eg.exception.is_none())
 }
 

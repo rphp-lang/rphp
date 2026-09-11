@@ -572,13 +572,22 @@ struct DynamicPropertyAux {
     native_object_state: Option<Box<dyn NativeObjectState>>,
 }
 
-/// Cold native capabilities without PHP values or reference-cycle edges.
+/// Cold native capabilities. Payloads owning PHP values must expose every
+/// strong edge to the shared cycle and release walkers below.
 /// Concrete payload ownership stays with its native implementation instead of
 /// expanding the common Value clone/drop code whenever that payload changes.
 pub(crate) trait NativeObjectState: std::any::Any {
     fn clone_state(&self) -> Box<dyn NativeObjectState>;
     fn as_any(&self) -> &dyn std::any::Any;
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+    fn for_each_value(&self, _visit: &mut dyn FnMut(&Value)) {}
+    /// Some PHP internal iterators retain their source outside cyclic GC.
+    /// Ownership walkers still see every edge for safe release and diagnostics.
+    fn retains_cycle_root(&self) -> bool {
+        false
+    }
+    /// Move owned edges onto the iterative release stack in reverse PHP order.
+    fn append_values_reversed(&mut self, _pending: &mut Vec<Value>) {}
 }
 
 /// Scalar policy owned only by native array wrappers. Keeping it in the
@@ -1388,6 +1397,8 @@ impl ObjectHandleState {
         }
     }
 
+    // Keep retained-identity searches separate from the small TLS adapter.
+    #[inline(never)]
     fn release(&mut self, identity: usize, handle: u32) {
         // Retained identities are sorted at the request boundary. Exclude
         // current owners outside their range before an exact interior search.
@@ -1989,12 +2000,33 @@ impl PhpObject {
     /// Ownership edges include native payloads invisible to PHP property
     /// enumeration. Ordinary objects retain their existing property storage.
     pub(crate) fn for_each_owned_value(&self, mut visitor: impl FnMut(&Value)) {
-        if self.dynamic_properties.is_some()
-            && let Some(state) = self.native_iterator_delegate()
-        {
-            state.for_each_value(&mut visitor);
+        if let Some(dynamic) = &self.dynamic_properties {
+            Self::for_each_native_owned_value(dynamic, &mut visitor);
         }
         self.for_each_property(|_, value| visitor(value));
+    }
+
+    #[cold]
+    pub(crate) fn native_state_retains_cycle_root(&self) -> bool {
+        self.dynamic_properties
+            .as_ref()
+            .and_then(|dynamic| dynamic.auxiliary.as_ref())
+            .and_then(|auxiliary| auxiliary.native_object_state.as_ref())
+            .is_some_and(|state| state.retains_cycle_root())
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn for_each_native_owned_value(dynamic: &DynamicPropertyMap, visitor: &mut dyn FnMut(&Value)) {
+        let Some(auxiliary) = &dynamic.auxiliary else {
+            return;
+        };
+        if let Some(state) = &auxiliary.native_iterator_delegate {
+            state.for_each_value(&mut *visitor);
+        }
+        if let Some(state) = &auxiliary.native_object_state {
+            state.for_each_value(visitor);
+        }
     }
 
     /// Test property payloads without resolving declared slot names. Release
@@ -2020,13 +2052,7 @@ impl PhpObject {
     ) -> bool {
         let mut found = false;
         dynamic.for_each(|_, value| found |= predicate(value));
-        if let Some(state) = dynamic
-            .auxiliary
-            .as_ref()
-            .and_then(|aux| aux.native_iterator_delegate.as_ref())
-        {
-            state.for_each_value(|value| found |= predicate(value));
-        }
+        Self::for_each_native_owned_value(dynamic, &mut |value| found |= predicate(value));
         found
     }
 
@@ -8145,6 +8171,13 @@ fn append_dynamic_property_values_reversed(
         .auxiliary
         .as_mut()
         .and_then(|aux| aux.native_iterator_delegate.take())
+    {
+        state.append_values_reversed(pending);
+    }
+    if let Some(state) = properties
+        .auxiliary
+        .as_mut()
+        .and_then(|aux| aux.native_object_state.as_mut())
     {
         state.append_values_reversed(pending);
     }

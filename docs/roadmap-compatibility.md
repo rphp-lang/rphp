@@ -36,6 +36,31 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `spl-fixed-array-slot-contracts` train adds 56 PHP 8.5 passes over
+`517345e0`: 54 SPL and two core, with no lost pass or new process hazard.
+All thirty admitted cases pass. SPL reaches 335/410/31 unsupported/8 skip/
+1 XFAIL; core reaches 6,446/335/182/211. Seven later-stage serialization,
+export/debug and shutdown-root failures remain explicitly reviewed failures.
+Sparse native slots expose all strong PHP edges, retain reference/COW and
+cursor semantics, and publish resize state before reentrant retirement.
+
+One checked five-configuration matrix, all-targets, original/adjacent oracles,
+exact no-loss, S0-S3 and unsafe/static gates pass. All 47 fixed-parent 32-pair
+controls meet unchanged common +1% / pay-use +5% limits (highest +0.988%/
++1.240%). Profile-backed work removal preserves the common representation,
+JIT admission and unsafe ceiling. Exact records, rejected alternatives,
+new-API costs and shared-host limitations are in `compatibility.md`.
+
+Next admission confirms thirty PHP-passing/current-failing doubly-linked-list,
+stack and queue cases. First establish original FIFO/LIFO/KEEP/DELETE, live
+mutation/cursor, offset, reference/COW, clone and destructor-reentry oracles.
+Select storage from that contract, reusing traced native ownership; require at
+least ten shared-cause gains. Retain the 47 controls plus four now-present
+FixedArray API controls. Serialization, debug refcounts, general containers,
+suspension and 32-bit/OOM remain outside. Automatic cleanup remains mandatory.
+
+### Preceding directory cursor checkpoint
+
 The accepted `directory-iterator-cursor-projection-contracts` train adds
 21 PHP 8.5 SPL passes over `5ac0c4d2`, without loss, new process hazards or moved
 failure stages. SPL reaches 281/464/31 unsupported/8 skip/1 XFAIL; core stays
