@@ -103,6 +103,48 @@ struct MethodDeclaration<'a> {
     suppresses_tentative_return_deprecation: bool,
 }
 
+/// Query-local, case-insensitive cycle detection for cold class linking.
+/// Small graphs borrow names; larger graphs retain hashed, bounded lookup.
+struct ClassNameTraversalSet<'a> {
+    names: [&'a str; 8],
+    len: usize,
+    overflow: Option<std::collections::HashSet<String>>,
+}
+
+impl<'a> ClassNameTraversalSet<'a> {
+    fn new() -> Self {
+        Self {
+            names: [""; 8],
+            len: 0,
+            overflow: None,
+        }
+    }
+
+    fn insert(&mut self, name: &'a str) -> bool {
+        if let Some(seen) = self.overflow.as_mut() {
+            return seen.insert(name.to_ascii_lowercase());
+        }
+        if self.names[..self.len]
+            .iter()
+            .any(|seen| seen.eq_ignore_ascii_case(name))
+        {
+            return false;
+        }
+        if self.len < self.names.len() {
+            self.names[self.len] = name;
+            self.len += 1;
+        } else {
+            let mut seen = std::collections::HashSet::with_capacity(self.len + 1);
+            for previous in &self.names[..self.len] {
+                seen.insert(previous.to_ascii_lowercase());
+            }
+            seen.insert(name.to_ascii_lowercase());
+            self.overflow = Some(seen);
+        }
+        true
+    }
+}
+
 /// Cold callable contract for one built-in method. The descriptor is used by
 /// class linking only; it deliberately does not publish a callable body or
 /// claim that the surrounding extension is implemented.
@@ -1691,7 +1733,8 @@ impl ExecutorGlobals {
         // stream registry is installed; do not double these vectors at startup.
         // SeekableIterator adds one unconditional interface to that envelope.
         // RecursiveArrayIterator and RecursiveIteratorIterator add two classes.
-        let class_capacity = 104 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        // DirectoryIterator and FilesystemIterator add two more fixed classes.
+        let class_capacity = 106 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;
@@ -5447,21 +5490,23 @@ impl ExecutorGlobals {
     }
 
     #[cold]
-    fn interface_closure_for_roots(&self, roots: &[String]) -> Vec<String> {
+    fn interface_closure_for_roots<'a>(&'a self, roots: &[&'a str]) -> Vec<&'a str> {
         let mut closure = Vec::new();
-        let mut stack = roots.iter().rev().cloned().collect::<Vec<_>>();
-        let mut seen = std::collections::HashSet::new();
+        let mut stack = roots.iter().rev().copied().collect::<Vec<_>>();
+        let mut seen = ClassNameTraversalSet::new();
         while let Some(name) = stack.pop() {
-            let definition = self.find_class(&name);
-            let canonical = definition.map_or(name, |interface| interface.name.clone());
-            if !seen.insert(canonical.to_ascii_lowercase()) {
+            let definition = self.find_class(name);
+            // The immutable query keeps registry and input spellings alive;
+            // only large visited sets need owned ASCII-case-folded keys.
+            let canonical = definition.map_or(name, |interface| interface.name.as_str());
+            if !seen.insert(canonical) {
                 continue;
             }
             closure.push(canonical);
             if let Some(interface) = definition
                 && interface.is_interface
             {
-                stack.extend(interface.implements.iter().rev().cloned());
+                stack.extend(interface.implements.iter().rev().map(String::as_str));
             }
         }
         closure
@@ -5553,22 +5598,22 @@ impl ExecutorGlobals {
                     !name.eq_ignore_ascii_case("UnitEnum")
                         && !(is_backed_enum && name.eq_ignore_ascii_case("BackedEnum"))
                 })
-                .cloned()
+                .map(String::as_str)
                 .collect::<Vec<_>>()
         } else {
-            class_def.implements.clone()
+            class_def.implements.iter().map(String::as_str).collect()
         };
         if !class_def.is_enum {
             let mut parent = class_def.parent.as_deref();
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = ClassNameTraversalSet::new();
             while let Some(name) = parent {
-                if !seen.insert(name.to_ascii_lowercase()) {
+                if !seen.insert(name) {
                     break;
                 }
                 let Some(definition) = self.find_class(name) else {
                     break;
                 };
-                roots.extend(definition.implements.iter().cloned());
+                roots.extend(definition.implements.iter().map(String::as_str));
                 parent = definition.parent.as_deref();
             }
         }
@@ -5590,7 +5635,14 @@ impl ExecutorGlobals {
             ));
         }
 
-        if !class_def.is_enum {
+        // The union closure already proves that every root is free of enum
+        // interfaces. Only the exceptional case needs per-root traversal to
+        // preserve the first offending root and its exact diagnostic.
+        if !class_def.is_enum
+            && closure.iter().any(|name| {
+                name.eq_ignore_ascii_case("UnitEnum") || name.eq_ignore_ascii_case("BackedEnum")
+            })
+        {
             for root in &roots {
                 let inherited = self.interface_closure_for_roots(std::slice::from_ref(root));
                 if inherited
@@ -5611,7 +5663,8 @@ impl ExecutorGlobals {
                     ));
                 }
             }
-        } else if !is_backed_enum
+        } else if class_def.is_enum
+            && !is_backed_enum
             && closure
                 .iter()
                 .any(|name| name.eq_ignore_ascii_case("BackedEnum"))
@@ -7707,7 +7760,13 @@ impl ExecutorGlobals {
         let Some(class_def) = self.class_table.get(class_name) else {
             return Ok(());
         };
-        if class_def.is_interface || class_def.is_abstract || class_def.is_trait {
+        // This pass only compares existing property implementations. Missing
+        // implementations are still diagnosed by the method-contract pass.
+        if class_def.properties.is_empty()
+            || class_def.is_interface
+            || class_def.is_abstract
+            || class_def.is_trait
+        {
             return Ok(());
         }
         for interface_name in self.collect_all_interfaces(class_name) {
@@ -10487,6 +10546,92 @@ mod sparse_call_cleanup_tests {
 #[cfg(test)]
 mod stdlib_capacity_tests {
     use super::ExecutorGlobals;
+
+    #[test]
+    fn class_name_traversal_promotion_preserves_case_and_duplicate_semantics() {
+        let names = (0..24).map(|i| format!("Node{i}")).collect::<Vec<_>>();
+        let lower = names
+            .iter()
+            .map(|s| s.to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        let mut visited = super::ClassNameTraversalSet::new();
+        for (index, name) in names.iter().enumerate() {
+            assert!(visited.insert(name));
+            assert!(!visited.insert(&lower[index]));
+            assert_eq!(visited.overflow.is_some(), index >= 8);
+            for previous in &names[..index] {
+                assert!(!visited.insert(previous));
+            }
+        }
+        // PHP's class-name folding is ASCII-only on either representation.
+        for mut visited in [super::ClassNameTraversalSet::new(), visited] {
+            assert!(visited.insert("\u{c5}Name"));
+            assert!(!visited.insert("\u{c5}NAME"));
+            assert!(visited.insert("\u{e5}Name"));
+        }
+    }
+
+    #[test]
+    fn interface_closure_borrows_spellings_and_preserves_cycle_and_alias_order() {
+        use crate::compiler::compile::Compiler;
+        use crate::lexer::Lexer;
+        use crate::parser::Parser;
+        use std::rc::Rc;
+
+        let source =
+            "<?php interface BorrowAlpha {} interface BorrowBeta {} interface BorrowGamma {}";
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        let compiled = Compiler::new().compile(&statements).unwrap();
+        let mut eg = ExecutorGlobals::new();
+        // Exercise defensive traversal of a cyclic registry without admitting
+        // that graph through the public class-link validation boundary.
+        for mut definition in compiled
+            .class_defs
+            .into_iter()
+            .chain(compiled.runtime_class_defs.into_iter().map(|(_, c)| c))
+        {
+            definition.implements = match definition.name.as_str() {
+                "BorrowAlpha" => vec!["BorrowBeta".into(), "UnresolvedEdge".into()],
+                "BorrowBeta" => vec!["BorrowGamma".into()],
+                "BorrowGamma" => vec!["borrowalpha".into()],
+                _ => unreachable!(),
+            };
+            eg.class_table
+                .insert(definition.name.clone(), Rc::new(definition));
+        }
+        assert_eq!(eg.class_table.len(), 3);
+        let alias = eg.class_table["BorrowBeta"].clone();
+        eg.class_table.insert("BetaAlias".into(), alias);
+        let unknown = String::from("OuterUnknown");
+        let roots = [
+            "betaalias",
+            "BORROWALPHA",
+            "unresolvededge",
+            unknown.as_str(),
+            "OUTERUNKNOWN",
+        ];
+        let closure = eg.interface_closure_for_roots(&roots);
+        assert_eq!(
+            closure,
+            [
+                "BorrowBeta",
+                "BorrowGamma",
+                "BorrowAlpha",
+                "UnresolvedEdge",
+                "OuterUnknown"
+            ]
+        );
+        for name in closure.iter().take(3) {
+            assert_eq!(name.as_ptr(), eg.find_class(name).unwrap().name.as_ptr());
+        }
+        assert_eq!(
+            closure[3].as_ptr(),
+            eg.class_table["BorrowAlpha"].implements[1].as_ptr()
+        );
+        assert_eq!(closure[4].as_ptr(), unknown.as_ptr());
+        assert!(eg.interface_closure_for_roots(&[]).is_empty());
+    }
 
     #[test]
     fn declaring_class_names_borrow_static_owners_and_own_runtime_spellings() {

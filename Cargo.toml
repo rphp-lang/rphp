@@ -56,6 +56,10 @@ serde_stacker = "0.1.14"
 stacker = "0.1.25"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
+[target.'cfg(unix)'.dependencies]
+# Owned directory cursors must retain dot entries and rewind the open handle.
+rustix = { version = "1.1.4", default-features = false, features = ["std", "fs"] }
+
 [dev-dependencies]
 
 # Opt-in fast edit/build/test loop; ordinary dev/test retain full debug info.

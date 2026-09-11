@@ -5894,12 +5894,16 @@ fn resolve_static_call_target<'a>(
     ))
 }
 
+// Keep owned name cleanup and the resolution result in this activation,
+// rather than extending their unwind state across the main dispatch loop.
+#[inline(never)]
 fn op_init_static_call<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
+    use std::borrow::Cow;
     // Inline cache: static calls have constant class+method — cache resolved func_ptr.
     // Visibility is checked on first resolve only (same instruction = same caller context).
     let dynamic_scope = opline._pad & CALL_FLAG_DYNAMIC_STATIC_SCOPE != 0;
@@ -5910,9 +5914,24 @@ fn op_init_static_call<'a>(
             (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
         )
     };
-    let raw_class = class_name.as_str().unwrap_or("").to_string();
-    let method = method_name.as_str().unwrap_or("").to_string();
-    let resolved_class = resolve_static_call_class(eg, frame, &raw_class, dynamic_scope);
+    // Literal strings belong to this immutable live op array, even across
+    // autoload or diagnostic callbacks. Runtime operands still need snapshots.
+    let raw_class = if opline.op1_type == OpType::Const {
+        Cow::Borrowed(class_name.as_str().unwrap_or(""))
+    } else {
+        Cow::Owned(class_name.as_str().unwrap_or("").to_string())
+    };
+    let method = if opline.op2_type == OpType::Const {
+        Cow::Borrowed(method_name.as_str().unwrap_or(""))
+    } else {
+        Cow::Owned(method_name.as_str().unwrap_or("").to_string())
+    };
+    let relative_scope = raw_class.eq_ignore_ascii_case("self")
+        || raw_class.eq_ignore_ascii_case("parent")
+        || raw_class.eq_ignore_ascii_case("static");
+    let resolved_class = relative_scope
+        .then(|| resolve_static_call_class(eg, frame, &raw_class, dynamic_scope))
+        .flatten();
     if raw_class.eq_ignore_ascii_case("parent") && resolved_class.is_none() {
         let error = make_error_value(
             "Error",
@@ -5925,7 +5944,7 @@ fn op_init_static_call<'a>(
             ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
         });
     }
-    let class = resolved_class.unwrap_or_else(|| raw_class.clone());
+    let class = resolved_class.map_or_else(|| Cow::Borrowed(raw_class.as_ref()), Cow::Owned);
     let num_args = opline.extended_value;
     let cached = op_array.cache[ip].func;
     if !cached.is_null() && cached as usize & STATIC_CALL_DIRECT_TRAIT != 0 {
@@ -5951,9 +5970,6 @@ fn op_init_static_call<'a>(
             )
         }
     } else {
-        let relative_scope = raw_class.eq_ignore_ascii_case("self")
-            || raw_class.eq_ignore_ascii_case("parent")
-            || raw_class.eq_ignore_ascii_case("static");
         let class_is_available = if relative_scope {
             eg.find_class(&class).is_some()
         } else {

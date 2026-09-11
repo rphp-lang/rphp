@@ -8,6 +8,64 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
+`directory-iterator-cursor-projection-contracts`, against `5ac0c4d2`: **+21/-0**
+SPL passes. The full 785-case SPL set reaches 281 pass / 464 fail /
+31 unsupported / 8 skip / 1 XFAIL. The separate 7,174-case core remains
+**6,444 pass / 337 fail / 182 skip / 211 unsupported**, with byte-identical
+manifests. Neither set loses a pass, adds a process hazard or changes a failure
+stage. These selected suites are not the complete PHP suite.
+
+DirectoryIterator/FilesystemIterator share sparse native cursor and FileInfo
+projections: flags, dot filtering, seek/rewind, raw Unix bytes, diagnostics,
+clone independence, current identity and lifetime. Unix descriptor ownership
+uses rustix without hidden PHP values or GC edges. The supplying set has
+20 passes and one independent missing-decoct holdout. Recursive-directory,
+SplFileObject/openFile, general SPL, suspension, 32-bit and OOM equivalence
+remain excluded.
+
+The user-authorized VM prerequisite separates activation changes from ordinary
+opcode continuation and resolves pending finally completion at its existing
+marker. Static-call initialization borrows immutable literal names; runtime
+operands retain snapshots and relative scopes retain canonical resolution.
+Cold interface traversal borrows spellings and promotes its bounded visited
+prefix to hashing for larger graphs. No common Value/VM field, opcode, JIT
+admission or unsafe-ceiling change. Existing broader finally/dynamic-autoload
+ordering limitations are not claimed fixed.
+
+Original byte-exact oracles and the final checked matrix pass:
+5,043/4,736/5,114/5,136/5,187 tests (13/13/13/13/16 ignored, none filtered),
+plus all-features/all-targets, exact no-loss, Composer/Symfony S0-S3,
+runner/unsafe self-tests, formatting and public hygiene. Unsafe stays 1,622/289.
+Automatic cleanup runs between configurations; closed binary duplicates were
+archived losslessly without removing sources or active comparison binaries.
+
+All **43 fixed-parent 32-pair controls** meet unchanged common +1% / pay-use
++5% limits; highest medians are +0.145%/+2.606%. Ordinary calls improve 3.730%,
+objects 3.037%, cached static calls 23.290% and static reference calls 10.539%.
+Instruction simulation independently confirms removed work; it is not a
+hardware-counter claim. Failed hypotheses and timings remain in the evidence,
+without rerolling unchanged rejected candidates. Four new-API candidate/PHP
+ratios are 0.619/1.479/2.817/0.748 with exact outputs, not invented parent deltas.
+The authorized shared-host performance/API guards record two/one background
+events; neither is exclusive-host evidence.
+
+SHA-256 evidence:
+
+- Release: `3aa2c2c1a3335ca2f74e0f7139fe2afef099a27eb7e53b3e7be2153945a49c4b`.
+- Complete technical record: `229b8964fb350d0a47ab8bdc19d2074497bf9e26ad8f4b6132a9ff8de60c646a`.
+- Matrix: `fe454c40996cbbe1aea020fa60a5724eba141e639ce7ba95460a3403d1ef1a85`.
+- Supplying / SPL manifests: `37a48adede6d205284fb6cb3919d814c41685bc425cbf3248be65b60f6d86d71` / `a80e8033de68a9bb607ce64febac3fb5d3fde39b66ee772a55d34fbb930b613b`.
+- SPL pass set: `9cde666445ef0061ef823efc9b5e8205fb1eb6f85a3e975c70183feadcae8950`.
+- Primary / static-dispatch results: `87091f050cbcd519f07fca93dff2a8a52ce71ca581f9345dbc736dd10c985a13` / `d9b3c5ec69926923d94b5f2f07c60b985da5a8abccd5e1487e9f93d7acd4edc0`.
+- Core manifest/pass-set hashes remain those of the preceding traversal record.
+
+Next read-only admission confirms thirty PHP-passing/current-failing
+SplFixedArray size/offset/projection cases
+(`866a23b3e66ad5efc12e4cc1572d043bef6dface7c617b2e000d1b22261c7095`).
+Characterize references, resize/retirement and iteration before implementation;
+keep serialization, general containers and 32-bit/OOM outside the next slice.
+
+The preceding measured AMD64 PHP 8.5 checkpoint is
 `spl-file-info-path-metadata-contracts`, against `0faf366c`: **+24/-0** SPL
 passes. All 23 admitted cases pass; the complete 785-case SPL set reaches
 260 pass / 485 fail / 31 unsupported / 8 skip / 1 XFAIL. The separate

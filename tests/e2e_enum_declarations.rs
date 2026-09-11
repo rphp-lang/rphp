@@ -271,6 +271,14 @@ echo (int) (ExitState::Ready instanceof BackedEnum);
             "<?php\nenum Invalid implements UnitEnum { case Value; }",
             "Enum Invalid cannot implement previously implemented interface UnitEnum in /virtual/enum-interfaces.php on line 2",
         ),
+        (
+            "<?php\ninterface Marker {} interface WrappedEnum extends BackedEnum {} class Invalid implements Marker, WrappedEnum, BackedEnum {}",
+            "Non-enum class Invalid cannot implement interface UnitEnum in /virtual/enum-interfaces.php on line 2",
+        ),
+        (
+            "<?php\ninterface Marker {} interface WrappedEnum extends BackedEnum {} class Invalid implements Marker, BackedEnum, WrappedEnum {}",
+            "Non-enum class Invalid cannot implement interface BackedEnum in /virtual/enum-interfaces.php on line 2",
+        ),
     ] {
         let error = run_php_expect_error_with_source_context(
             source,

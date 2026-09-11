@@ -211,8 +211,8 @@ pub(crate) use builtin_classes::{
     NativeIteratorMove, NativeIteratorProjection, array_object_array_cast,
     array_object_property_uses_dimension, bind_array_object_property,
     consume_native_iterator_array, native_iterator_entry, native_iterator_projected_entry,
-    prepare_array_object_clone, resolve_iterator_delegated_method, uses_native_iterator_protocol,
-    validate_recursive_iterator_start,
+    prepare_array_object_clone, prepare_file_info_clone, resolve_iterator_delegated_method,
+    uses_native_iterator_protocol, validate_recursive_iterator_start,
 };
 
 pub(super) fn owned_argument(ed: *mut ExecuteData, index: u32) -> Value {

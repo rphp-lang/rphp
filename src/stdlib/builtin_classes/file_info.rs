@@ -5,12 +5,17 @@ use crate::stdlib::filesystem;
 use crate::vm::function::InternalFunctionHandler;
 use std::rc::Rc;
 
+mod directory;
+pub(crate) use directory::prepare_clone;
+pub(super) use directory::register as register_directory_iterators;
+
 /// Only native bytes and request-local class IDs: no PHP values or GC edges.
 #[derive(Clone, Default)]
 struct NativeFileInfo {
     path: Option<Vec<u8>>,
     info_class_id: u32,
     file_class_id: u32,
+    directory: Option<Box<directory::DirectoryState>>,
 }
 
 impl crate::value::NativeObjectState for NativeFileInfo {
@@ -65,10 +70,30 @@ fn path_error(eg: &mut ExecutorGlobals, prefix: &str, path: &[u8], suffix: &str)
 }
 
 fn path(receiver: &Value, eg: &mut ExecutorGlobals) -> Option<Vec<u8>> {
-    let object = receiver.as_object().expect("file-info receiver");
-    let path = object
-        .native_file_info()
-        .and_then(|state| state.path.clone());
+    let mut object = receiver.as_object_mut().expect("file-info receiver");
+    let state = object.native_file_info();
+    let directory = state
+        .and_then(|state| state.directory.as_deref())
+        .filter(|directory| directory.is_projected());
+    let path = if let Some(directory) = directory
+        && directory.filename.is_empty()
+    {
+        Some(if directory.is_open() {
+            directory.base().to_vec()
+        } else {
+            directory.pathname()
+        })
+    } else {
+        state.and_then(|state| state.path.clone())
+    };
+    if directory.is_some() {
+        object
+            .native_file_info_mut()
+            .directory
+            .as_mut()
+            .unwrap()
+            .stat_path_materialized = true;
+    }
     if path.is_none() {
         error(eg, "Error", "Object not initialized");
     }
@@ -108,11 +133,15 @@ fn construct(
     while path.len() > 1 && path.last() == Some(&b'/') {
         path.pop();
     }
-    arg!(ed, 0)
-        .as_object_mut()
-        .expect("file-info receiver")
-        .native_file_info_mut()
-        .path = Some(path);
+    let mut object = arg!(ed, 0).as_object_mut().expect("file-info receiver");
+    let state = object.native_file_info_mut();
+    if let Some(directory) = &mut state.directory
+        && directory.is_projected()
+    {
+        let separator = path.iter().rposition(|byte| *byte == b'/').unwrap_or(0);
+        directory.base = Some(path[..separator].to_vec());
+    }
+    state.path = Some(path);
     ret!(rv, Value::null());
 }
 
@@ -141,29 +170,39 @@ fn lexical(
         Vec::new()
     };
     let object = arg!(ed, 0).as_object().expect("file-info receiver");
-    let path = object
-        .native_file_info()
-        .and_then(|state| state.path.as_deref());
+    let state = object.native_file_info();
+    let path = state.and_then(|state| state.path.as_deref());
     if path.is_none() && !matches!(projection, Projection::Path | Projection::Pathname) {
         error(eg, "Error", "Object not initialized");
         return Ok(());
     }
     let path = path.unwrap_or_default();
     let separator = path.iter().rposition(|byte| *byte == b'/');
-    let filename = if path == b"/" {
+    let directory = state
+        .and_then(|state| state.directory.as_deref())
+        .filter(|directory| directory.is_projected());
+    let filename = if let Some(directory) = directory {
+        &directory.filename
+    } else if path == b"/" {
         path
     } else {
         &path[separator.map_or(0, |position| position + 1)..]
     };
     let result = match projection {
-        Projection::Path => path[..separator.unwrap_or(0)].to_vec(),
+        Projection::Path => directory.map_or_else(
+            || path[..separator.unwrap_or(0)].to_vec(),
+            |directory| directory.base().to_vec(),
+        ),
         Projection::Pathname => path.to_vec(),
         Projection::Filename => filename.to_vec(),
         Projection::Extension => filename
             .iter()
             .rposition(|byte| *byte == b'.')
             .map_or_else(Vec::new, |dot| filename[dot + 1..].to_vec()),
-        Projection::Basename => crate::path_decomposition::basename(path, &suffix),
+        Projection::Basename => crate::path_decomposition::basename(
+            if directory.is_some() { filename } else { path },
+            &suffix,
+        ),
     };
     ret!(rv, php_byte_result(result, false));
 }
@@ -348,14 +387,26 @@ fn get_real_path(
     let object = arg!(ed, 0).as_object().expect("file-info receiver");
     let Some(path) = object
         .native_file_info()
-        .and_then(|state| state.path.as_deref())
+        .and_then(|state| {
+            if let Some(directory) = &state.directory
+                && directory.is_projected()
+                && directory.filename.is_empty()
+            {
+                return Some(if directory.is_open() {
+                    std::borrow::Cow::Borrowed(directory.base())
+                } else {
+                    std::borrow::Cow::Owned(directory.pathname())
+                });
+            }
+            state.path.as_deref().map(std::borrow::Cow::Borrowed)
+        })
         .filter(|path| !path.is_empty())
     else {
         ret!(rv, Value::bool(false));
     };
     ret!(
         rv,
-        std::fs::canonicalize(filesystem::file_info_native_path(path))
+        std::fs::canonicalize(filesystem::file_info_native_path(&path))
             .map_or_else(|_| Value::bool(false), |path| path_value(&path))
     );
 }
@@ -368,15 +419,19 @@ fn debug_info(
 ) -> Result<(), VmError> {
     let mut properties = array_object::member_properties(arg!(ed, 0), eg);
     let object = arg!(ed, 0).as_object().expect("file-info receiver");
-    let path = object
-        .native_file_info()
-        .and_then(|state| state.path.as_deref());
+    let state = object.native_file_info();
+    let path = state.and_then(|state| state.path.as_deref());
     properties.set_str(
         "\0SplFileInfo\0pathName",
         php_byte_result(path.unwrap_or_default().to_vec(), false),
     );
     if let Some(path) = path {
-        let filename = if path == b"/" {
+        let directory = state
+            .and_then(|state| state.directory.as_deref())
+            .filter(|directory| directory.is_projected());
+        let filename = if let Some(directory) = directory {
+            &directory.filename
+        } else if path == b"/" {
             path
         } else {
             &path[path
@@ -384,10 +439,21 @@ fn debug_info(
                 .rposition(|byte| *byte == b'/')
                 .map_or(0, |position| position + 1)..]
         };
-        properties.set_str(
-            "\0SplFileInfo\0fileName",
-            php_byte_result(filename.to_vec(), false),
-        );
+        if directory.is_none_or(|directory| {
+            !directory.filename.is_empty() || directory.stat_path_materialized
+        }) {
+            properties.set_str(
+                "\0SplFileInfo\0fileName",
+                php_byte_result(filename.to_vec(), false),
+            );
+        }
+        if directory.is_some() {
+            properties.set_str("\0DirectoryIterator\0glob", Value::bool(false));
+            properties.set_str(
+                "\0RecursiveDirectoryIterator\0subPathName",
+                Value::string(""),
+            );
+        }
     }
     ret!(rv, Value::array(properties));
 }
@@ -526,13 +592,27 @@ fn factory(
     eg: &mut ExecutorGlobals,
     parent: bool,
 ) -> Result<(), VmError> {
+    factory_projection(ed, rv, eg, parent, true)
+}
+
+#[cold]
+fn factory_projection(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    parent: bool,
+    accepts_class: bool,
+) -> Result<(), VmError> {
     let receiver = owned_argument(ed, 0);
-    let (path, selected) = {
+    let (path, selected, directory) = {
         let object = receiver.as_object().expect("file-info receiver");
         let state = object.native_file_info();
         (
             state.and_then(|state| state.path.clone()),
             state.map_or(0, |state| state.info_class_id),
+            state
+                .and_then(|state| state.directory.as_deref())
+                .is_some_and(|directory| directory.is_projected()),
         )
     };
     let method = if parent { "getPathInfo" } else { "getFileInfo" };
@@ -540,8 +620,13 @@ fn factory(
         .class_by_id(selected)
         .map_or("SplFileInfo", |class| class.name.as_str())
         .to_owned();
-    let Some(class_id) = class_argument(ed, eg, method, &base, true)? else {
-        return Ok(());
+    let class_id = if accepts_class {
+        let Some(class_id) = class_argument(ed, eg, method, &base, true)? else {
+            return Ok(());
+        };
+        class_id
+    } else {
+        0
     };
     let path = if parent {
         match path.filter(|path| !path.is_empty()) {
@@ -552,6 +637,10 @@ fn factory(
         }
     } else {
         match path {
+            Some(path) if directory && path.is_empty() => {
+                error(eg, "RuntimeException", "Could not open file");
+                return Ok(());
+            }
             Some(path) => path,
             None => {
                 error(eg, "Error", "Object not initialized");

@@ -152,7 +152,17 @@ fn op_clone_obj<'a>(
             obj.clone_for_php()
         };
         crate::stdlib::prepare_array_object_clone(&src_val, &mut cloned_obj, eg);
+        let prepare_native = cloned_obj.has_native_object_state();
         let cloned_val = Value::object(cloned_obj);
+        if prepare_native {
+            crate::stdlib::prepare_file_info_clone(&cloned_val, frame, eg, op_array)?;
+            if let Some(exception) = eg.exception.take() {
+                return Ok(match throw_in_frame(eg, frame, exception)? {
+                    ThrowResult::Handled(new_frame, new_op_array) => ColdResult::NewFrame(new_frame, new_op_array),
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
+        }
         eg.clone_initialized_lazy_proxy(&src_val, &cloned_val);
         eg.clone_weak_map(&src_val, &cloned_val);
         {

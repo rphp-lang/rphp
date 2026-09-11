@@ -761,6 +761,16 @@ var_dump((new FixedValue(42))->value);
 }
 
 #[test]
+fn empty_property_layout_still_requires_interface_getter_implementation() {
+    let error = run_php_expect_error(
+        "<?php interface Slot { public int $value { get; } } class MissingSlot implements Slot {}",
+    );
+    assert!(error.to_string().contains(
+        "Class MissingSlot contains 1 abstract method and must therefore be declared abstract or implement the remaining method (Slot::$value::get)"
+    ));
+}
+
+#[test]
 fn readonly_property_does_not_implement_interface_set_hook() {
     let error = run_php_expect_error(
         r#"<?php

@@ -17,6 +17,61 @@ const INITIAL_WORKING_DIRECTORY: &str = "\0rphp-initial-working-directory";
 
 pub(super) mod object;
 
+/// Object iterators need native dot ordering and descriptor-preserving rewind.
+/// This separate backend does not change the existing resource API policy.
+#[cfg(unix)]
+pub(super) struct OwnedDirectoryCursor(rustix::fs::Dir);
+
+#[cfg(unix)]
+impl OwnedDirectoryCursor {
+    pub(super) fn open(path: &Path) -> io::Result<Self> {
+        use rustix::fs::{Mode, OFlags};
+        let descriptor = rustix::fs::open(
+            path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        rustix::fs::Dir::new(descriptor)
+            .map(Self)
+            .map_err(Into::into)
+    }
+
+    pub(super) fn next_entry(&mut self) -> io::Result<Option<Vec<u8>>> {
+        self.0
+            .read()
+            .map(|entry| {
+                entry
+                    .map(|entry| entry.file_name().to_bytes().to_vec())
+                    .map_err(Into::into)
+            })
+            .transpose()
+    }
+
+    pub(super) fn rewind(&mut self) {
+        self.0.rewind();
+    }
+}
+
+#[cfg(not(unix))]
+pub(super) struct OwnedDirectoryCursor(DirectoryStream);
+
+#[cfg(not(unix))]
+impl OwnedDirectoryCursor {
+    pub(super) fn open(path: &Path) -> io::Result<Self> {
+        DirectoryStream::open(path).map(Self)
+    }
+
+    pub(super) fn next_entry(&mut self) -> io::Result<Option<Vec<u8>>> {
+        self.0
+            .next_entry()
+            .map(|entry| entry.map(String::into_bytes))
+    }
+
+    pub(super) fn rewind(&mut self) {
+        let _ = self.0.rewind();
+    }
+}
+
 struct DirectoryStream {
     path: PathBuf,
     entries: std::fs::ReadDir,

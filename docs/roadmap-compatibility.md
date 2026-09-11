@@ -36,6 +36,31 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `directory-iterator-cursor-projection-contracts` train adds
+21 PHP 8.5 SPL passes over `5ac0c4d2`, without loss, new process hazards or moved
+failure stages. SPL reaches 281/464/31 unsupported/8 skip/1 XFAIL; core stays
+6,444/337/182/211 with byte-identical manifests. Native descriptor-backed
+cursors preserve raw paths, flags, projections, identity, rewind/seek and clone
+retirement. The supplying set's remaining decoct dependency is explicit.
+
+The authorized dispatch prerequisite removes per-opcode activation setup and
+finally polling, repeated static-name copies and cold traversal allocations.
+One final checked five-configuration matrix, all-targets, original oracles,
+exact no-loss, S0-S3 and unsafe/static gates pass. All 43 fixed-parent 32-pair
+controls meet unchanged common +1% / pay-use +5% limits (highest +0.145%/
++2.606%). No common Value/VM field, opcode, JIT admission or unsafe-ceiling
+change. Exact records, rejected hypotheses, API ratios and shared-host limits
+are in `compatibility.md`; automatic cleanup remains mandatory.
+
+Next admission confirms thirty PHP-passing/current-failing SplFixedArray
+constructor, size, offset and projection cases. First characterize null slots,
+references/COW, resize and destructor reentry, iteration and clone with original
+oracles. Reuse existing native state and traced PHP-value ownership; do not hide
+GC edges in opaque payloads. Require at least ten reachable shared-cause gains.
+Serialization, general containers, suspension, 32-bit/OOM remain outside.
+
+### Preceding file-info checkpoint
+
 The accepted `spl-file-info-path-metadata-contracts` train adds 24 PHP 8.5
 passes over `0faf366c`, without loss, new process hazards or moved failure
 stages. All 23 admitted cases pass; the full SPL set reaches 260/485/31

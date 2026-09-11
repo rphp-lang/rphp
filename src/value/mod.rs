@@ -1870,6 +1870,14 @@ impl PhpObject {
             .downcast_ref()
     }
 
+    #[inline]
+    pub(crate) fn has_native_object_state(&self) -> bool {
+        self.dynamic_properties
+            .as_ref()
+            .and_then(|properties| properties.auxiliary.as_ref())
+            .is_some_and(|auxiliary| auxiliary.native_object_state.is_some())
+    }
+
     #[cold]
     pub(crate) fn native_object_state_mut<T: NativeObjectState + Default>(&mut self) -> &mut T {
         self.dynamic_properties

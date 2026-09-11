@@ -26,6 +26,7 @@ pub(crate) use array_object::{
     prepare_clone as prepare_array_object_clone,
     property_uses_dimension as array_object_property_uses_dimension,
 };
+pub(crate) use file_info::prepare_clone as prepare_file_info_clone;
 pub(crate) use iterator_delegate::resolve_method as resolve_iterator_delegated_method;
 pub(crate) use recursive_iterator::validate_start as validate_recursive_iterator_start;
 
@@ -3595,6 +3596,45 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     ))
     .unwrap();
     funcs.extend(file_info::register(eg));
+    for (name, parent) in [
+        ("DirectoryIterator", "SplFileInfo"),
+        ("FilesystemIterator", "DirectoryIterator"),
+    ] {
+        let interfaces = if name == "DirectoryIterator" {
+            vec!["SeekableIterator".into()]
+        } else {
+            vec![]
+        };
+        let mut class = empty_internal_type(name, interfaces, false, false);
+        class.parent = Some(parent.into());
+        if name == "FilesystemIterator" {
+            for (constant, value) in [
+                ("CURRENT_MODE_MASK", 0xf0),
+                ("CURRENT_AS_PATHNAME", 0x20),
+                ("CURRENT_AS_FILEINFO", 0),
+                ("CURRENT_AS_SELF", 0x10),
+                ("KEY_MODE_MASK", 0xf00),
+                ("KEY_AS_PATHNAME", 0),
+                ("FOLLOW_SYMLINKS", 0x4000),
+                ("KEY_AS_FILENAME", 0x100),
+                ("NEW_CURRENT_AND_KEY", 0x100),
+                ("OTHER_MODE_MASK", 0x7000),
+                ("SKIP_DOTS", 0x1000),
+                ("UNIX_PATHS", 0x2000),
+            ] {
+                class
+                    .constants
+                    .push(recursive_iterator::constant(name, constant, value));
+            }
+        }
+        eg.register_class(class)
+            .expect("valid native directory inheritance");
+        // Publish this parent's real bodies before a child inherits aliases.
+        funcs.extend(file_info::register_directory_iterators(
+            eg,
+            name == "FilesystemIterator",
+        ));
+    }
     let mut spl_object_storage = empty_internal_type(
         "SplObjectStorage",
         vec![
