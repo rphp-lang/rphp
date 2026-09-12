@@ -1116,7 +1116,7 @@ fn uses_user_iterator_protocol(value: &Value, eg: &ExecutorGlobals) -> bool {
     drop(object);
     !matches!(
         class_name.as_str(),
-        "Generator" | "SplObjectStorage" | "SplPriorityQueue"
+        "Generator" | "SplObjectStorage"
     ) && eg.class_is_a(&class_name, "Iterator")
 }
 
@@ -1126,9 +1126,7 @@ fn builtin_iterator_values(value: &Value, eg: &ExecutorGlobals) -> Option<Value>
     let class_name = object.class_name.to_string();
     let legacy_values = object.get_property("__rphp_iterator_values").cloned();
     drop(object);
-    if eg.class_is_a(&class_name, "SplObjectStorage")
-        || eg.class_is_a(&class_name, "SplPriorityQueue")
-    {
+    if eg.class_is_a(&class_name, "SplObjectStorage") {
         legacy_values
     } else {
         None

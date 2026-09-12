@@ -198,6 +198,37 @@ mod scalar_long_operation_range_tests {
     }
 
     #[test]
+    fn single_operation_preserves_the_native_admission_boundary() {
+        use crate::vm::function::ScalarLongProgram;
+        for kind in [ScalarLongOpKind::Add, ScalarLongOpKind::Multiply,
+            ScalarLongOpKind::IntDivide, ScalarLongOpKind::Modulo] {
+            let plan = ScalarLongFunctionPlan::new(2, ScalarLongProgram {
+                operations: vec![ScalarLongOp { kind, lhs: ScalarLongSource::Input(0),
+                    rhs: ScalarLongSource::Input(1) }].into_boxed_slice(),
+                outputs: [ScalarLongSource::Temporary(0)], output_count: 1,
+            }, None);
+            for _ in 0..128 {
+                for (left, right) in [(17, 3), (i64::MAX, 2), (i64::MIN, -1), (3, 0)] {
+                    let mut arguments = [0; 8];
+                    arguments[0] = left; arguments[1] = right;
+                    assert_eq!(evaluate_scalar_long_plan(&plan, &arguments),
+                        evaluate_scalar_long_plan_interpreted(&plan, &arguments));
+                    #[cfg(all(feature = "jit-prototype", any(
+                        all(target_arch = "aarch64", target_os = "macos"),
+                        all(target_arch = "x86_64", target_os = "linux")
+                    )))]
+                    {
+                        assert!(matches!(plan.native_jit().dispatch(&plan, &arguments), ScalarLongJitDispatch::Interpret));
+                        assert!(!plan.native_jit().is_compiled());
+                        assert_eq!(plan.native_jit().native_entries(), 0);
+                        assert_eq!(plan.native_jit().side_exits(), 0);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn tiny_ranges_preserve_temporary_dependencies() {
         let operations = [
             ScalarLongOp {
@@ -245,6 +276,45 @@ mod scalar_long_operation_range_tests {
     }
 
     #[test]
+    fn native_exclusion_preserves_short_fallbacks_and_warmed_programs() {
+        use crate::vm::function::ScalarLongProgram;
+        for count in 0..=2 {
+            let operations = [
+                ScalarLongOp { kind: ScalarLongOpKind::Multiply, lhs: ScalarLongSource::Input(0), rhs: ScalarLongSource::Constant(2) },
+                ScalarLongOp { kind: ScalarLongOpKind::Add, lhs: ScalarLongSource::Temporary(0), rhs: ScalarLongSource::Constant(1) },
+            ];
+            for output in [ScalarLongSource::Input(0), ScalarLongSource::Temporary(0),
+                ScalarLongSource::Temporary(1), ScalarLongSource::Temporary(7), ScalarLongSource::Temporary(8)] {
+                let plan = ScalarLongFunctionPlan::new(1, ScalarLongProgram {
+                    operations: operations[..count].to_vec().into_boxed_slice(),
+                    outputs: [output], output_count: 1,
+                }, None);
+                for _ in 0..128 {
+                    for input in [i64::MIN, -1, 0, 1, i64::MAX] {
+                        let mut arguments = [0; 8]; arguments[0] = input;
+                        assert_eq!(evaluate_scalar_long_plan(&plan, &arguments),
+                            evaluate_scalar_long_plan_interpreted(&plan, &arguments),
+                            "count={count} output={output:?} input={input}");
+                    }
+                }
+                #[cfg(all(feature = "jit-prototype", any(
+                    all(target_arch = "aarch64", target_os = "macos"),
+                    all(target_arch = "x86_64", target_os = "linux")
+                )))]
+                if count < 2 {
+                    assert!(!plan.native_jit().is_compiled());
+                    assert_eq!(plan.native_jit().native_entries(), 0);
+                    assert_eq!(plan.native_jit().side_exits(), 0);
+                } else if output == ScalarLongSource::Temporary(1) {
+                    assert!(plan.native_jit().is_compiled());
+                    assert!(plan.native_jit().native_entries() > 0);
+                    assert!(plan.native_jit().side_exits() > 0);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn malformed_or_failing_ranges_return_none_before_unchecked_access() {
         let operations = [ScalarLongOp {
             kind: ScalarLongOpKind::IntDivide,
@@ -266,6 +336,36 @@ mod scalar_long_operation_range_tests {
             evaluate_scalar_long_operation_range(&operations, &arguments, &mut temporaries, 0, 1,),
             None
         );
+    }
+
+    #[test]
+    fn unvalidated_plans_retain_bounds_checks_before_native_admission() {
+        use crate::vm::function::ScalarLongProgram;
+        for count in 0..=9 {
+            for output_count in [0, 1, 2] {
+                let plan = ScalarLongFunctionPlan::new(1, ScalarLongProgram {
+                    operations: vec![ScalarLongOp { kind: ScalarLongOpKind::Add,
+                        lhs: ScalarLongSource::Input(0), rhs: ScalarLongSource::Constant(1) }; count].into_boxed_slice(),
+                    outputs: [ScalarLongSource::Input(0)], output_count,
+                }, None);
+                let arguments = [3; 8];
+                if count > 8 || output_count != 1 {
+                    for _ in 0..128 { assert_eq!(evaluate_scalar_long_plan(&plan, &arguments), None); }
+                    #[cfg(all(feature = "jit-prototype", any(
+                        all(target_arch = "aarch64", target_os = "macos"),
+                        all(target_arch = "x86_64", target_os = "linux")
+                    )))]
+                    {
+                        assert!(!plan.native_jit().is_compiled());
+                        assert_eq!(plan.native_jit().native_entries(), 0);
+                        assert_eq!(plan.native_jit().side_exits(), 0);
+                    }
+                } else {
+                    assert_eq!(evaluate_scalar_long_plan(&plan, &arguments),
+                        evaluate_scalar_long_plan_interpreted(&plan, &arguments));
+                }
+            }
+        }
     }
 }
 

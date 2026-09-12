@@ -36,30 +36,29 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `spl-deque-stack-queue-contracts` train adds 48 PHP 8.5 SPL passes
-over `da70dffb`, with no lost pass or new process hazard. All thirty admitted
-cases pass. SPL reaches 383/362/31 unsupported/8 skip/1 XFAIL; core retains
-6,446/335/182/211 and identical pass sets. Four later SPL serialization/debug
-failures and three pre-existing Reflection closure-binding failures remain
-reviewed failures. Sparse traced deque storage preserves FIFO/LIFO/KEEP/DELETE,
-mutation, cursor, reference/COW, clone and reentrant retirement contracts.
+The accepted `spl-heap-priority-queue-contracts` train adds 36 PHP 8.5 SPL
+passes over `b4e1043c`, with no loss or new process hazard. All 26 admitted
+cases pass; SPL reaches 419/326/31 unsupported/8 skip/1 XFAIL and core
+retains 6,446/335/182/211 with identical pass sets. Sparse traced heap
+ownership preserves mutation, comparison, destructive iteration, locks,
+corruption/recovery, clone and reentrant retirement. Five later serialization
+failures and six pre-existing temporary-stream EOF differences remain explicit.
 
 One checked five-configuration matrix, all-targets, original/adjacent oracles,
-exact no-loss, S0-S3 and unsafe/static gates pass. All 55 fixed-parent 32-pair
-controls meet unchanged common +1% / pay-use +5% limits (highest +0.925%/
-+3.990%). Profile-backed work removal preserves the common representation,
-JIT admission and unsafe ceiling. Original failed gates and their exact
-dispositions remain recorded; final SAFETY-only comments preserve every
-executable byte and source-line position. Evidence is in `compatibility.md`.
+exact no-loss, S0-S3 and unsafe/static gates pass. All 59 fixed-parent 32-pair
+controls meet unchanged common +1% / pay-use +5% limits. Profile-backed work
+removal preserves common representation and JIT admission; scalar-call production source
+is accepted-parent byte-identical. Rejected hypotheses and shared-host limits
+remain in the compact evidence packet linked from `compatibility.md`.
 
-Next admission confirms 26 PHP-passing/current-failing heap and priority-queue
-cases. First characterize ordering/ties, destructive iteration, extraction
-flags, compare callbacks, write locks, corruption/recovery, clone/reference
-ownership and destructor reentry. Reuse sparse traced native ownership and
-bounded logarithmic mutation, not sorting or snapshot iteration. Require at
-least ten shared-cause gains; retain the 55 controls and add the four now-present
-deque API controls. General containers, serialization, suspension and
-32-bit/OOM remain outside. Automatic cleanup remains mandatory.
+Next admission confirms 20 reference-passing/current-failing native container
+serialization/restoration cases. Characterize wire state, malformed input,
+corruption/write locks and callback/retirement order before implementation;
+reuse existing traced heap/deque ownership through one cold projection and
+validation boundary. Require at least ten reachable shared-cause gains, retain
+the 59 controls and add the four now-present heap API controls. General object
+restoration, Reflection rebinding, other containers, suspension and 32-bit/OOM
+remain outside. Automatic cleanup remains mandatory.
 
 ### Preceding directory cursor checkpoint
 

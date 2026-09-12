@@ -2,6 +2,166 @@ use super::{PhpStream, StreamMode, php_memory_stream_mode};
 use std::io::SeekFrom;
 
 #[test]
+fn retained_readahead_never_exposes_stale_suffixes_after_seek_short_read_or_error() {
+    let path = std::env::temp_dir().join(format!("rphp-retained-readahead-{}", std::process::id()));
+    std::fs::write(&path, []).unwrap();
+    let mut stream = PhpStream::open(path.to_str().unwrap(), "r+").unwrap();
+    let mut allocation = None;
+    for length in [10000, 65, 1, 0, 257, 2] {
+        let payload: Vec<u8> = (0..length).map(|i| (i + 128) as u8).collect();
+        std::fs::write(&path, &payload).unwrap();
+        stream.seek(SeekFrom::Start(0)).unwrap();
+        let mut first = [0xaa];
+        let count = stream.read(&mut first).unwrap();
+        assert_eq!(&first[..count], &payload[..count]);
+        let mut tail = vec![0xaa; payload.len() + 1];
+        let read = stream.read(&mut tail).unwrap();
+        assert_eq!(&tail[..read], &payload[count..]);
+        assert!(tail[read..].iter().all(|&byte| byte == 0xaa));
+        assert!(stream.is_eof());
+        assert_eq!(stream.unread_len(), 0);
+        let buffer = stream.read_buffer.as_ref().unwrap();
+        assert_eq!(buffer.bytes.len(), 8192);
+        let pointer = buffer.bytes.as_ptr();
+        if let Some(previous) = allocation {
+            assert_eq!(pointer, previous);
+        }
+        allocation = Some(pointer);
+    }
+    // Both put-back shapes must publish only their explicit valid range.
+    stream.put_back(b"abcd");
+    let mut first = [0; 3];
+    assert_eq!(stream.read_prefetched(&mut first).unwrap(), 3);
+    assert_eq!(&first, b"abc");
+    stream.put_back(b"XY");
+    stream.put_back(b"12345");
+    let mut restored = [0; 8];
+    assert_eq!(stream.read_prefetched(&mut restored).unwrap(), 8);
+    assert_eq!(&restored, b"12345XYd");
+    let mut write_only = PhpStream::open(path.to_str().unwrap(), "w").unwrap();
+    write_only.read_buffer = stream.read_buffer.take();
+    write_only.discard_prefetched();
+    assert!(write_only.read(&mut [0; 3]).is_err());
+    assert_eq!(write_only.unread_len(), 0);
+    assert_eq!(write_only.read_buffer.as_ref().unwrap().end, 0);
+    drop(write_only);
+    drop(stream);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn memory_overwrite_matches_cursor_for_empty_bounds_growth_and_gaps() {
+    use std::io::{Cursor, Write};
+    for size in [0, 1, 63, 64, 65, 129] {
+        let initial: Vec<u8> = (0..size).map(|i| i as u8).collect();
+        for position in [0, 1, 63, 64, 65, 128, 129, 9999] {
+            for count in [0, 1, 2, 63, 64, 65, 130] {
+                let bytes: Vec<u8> = (0..count).map(|i| (i + 128) as u8).collect();
+                let mut actual = Cursor::new(initial.clone());
+                let mut expected = actual.clone();
+                actual.set_position(position);
+                expected.set_position(position);
+                for _ in 0..2 {
+                    assert_eq!(
+                        PhpStream::write_memory(&mut actual, &bytes).unwrap(),
+                        expected.write(&bytes).unwrap()
+                    );
+                    assert_eq!(actual.get_ref(), expected.get_ref());
+                    assert_eq!(actual.position(), expected.position());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn owned_read_matches_slice_read_with_prefetch_empty_eof_and_far_cursors() {
+    let payload: Vec<u8> = (0..9000).map(|index| index as u8).collect();
+    for path in [
+        "php://memory",
+        "php://temp/maxmemory:99999",
+        "php://temp/maxmemory:3",
+    ] {
+        for position in [0, 1, 63, 64, 65, 8191, 8999, 9000, 9999] {
+            for length in [0, 1, 2, 63, 64, 65, 8191, 8192, 8193] {
+                for prefetch in [false, true] {
+                    let mut owned = PhpStream::open(path, "w+").unwrap();
+                    let mut slice = PhpStream::open(path, "w+").unwrap();
+                    for stream in [&mut owned, &mut slice] {
+                        stream.write(&payload).unwrap();
+                        stream.seek(SeekFrom::Start(position)).unwrap();
+                        if prefetch {
+                            stream.read_line(&mut Vec::new(), Some(2)).unwrap();
+                        }
+                    }
+                    let mut actual = vec![0xaa; 5];
+                    actual.reserve(length);
+                    let mut expected = vec![0; length];
+                    for _ in 0..2 {
+                        let count = slice.read(&mut expected).unwrap();
+                        assert_eq!(owned.read_into_vec(&mut actual, length).unwrap(), count);
+                        assert_eq!(actual, expected[..count]);
+                        assert_eq!(owned.position().unwrap(), slice.position().unwrap());
+                        assert_eq!(owned.is_eof(), slice.is_eof());
+                        assert_eq!(owned.metadata().unread_bytes, slice.metadata().unread_bytes);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bounded_line_scratch_preserves_bytes_prefetch_and_eof_across_boundaries() {
+    for path in [
+        "php://memory",
+        "php://temp/maxmemory:99999",
+        "php://temp/maxmemory:3",
+    ] {
+        for newline in [0, 1, 62, 63, 64, 65, 8190, 8191, 8192, 8193] {
+            let mut payload = vec![0x80; newline];
+            payload.extend_from_slice(b"\n\0\xfftail");
+            for maximum in [1, 2, 63, 64, 65, 8191, 8192, 8193] {
+                let mut bounded = PhpStream::open(path, "w+").unwrap();
+                let mut large = PhpStream::open(path, "w+").unwrap();
+                for stream in [&mut bounded, &mut large] {
+                    stream.write(&payload).unwrap();
+                    stream.seek(SeekFrom::Start(0)).unwrap();
+                }
+                let mut actual = vec![0xaa; 5];
+                let mut expected = Vec::new();
+                let count = (newline + 1).min(maximum);
+                assert_eq!(
+                    bounded.read_line(&mut actual, Some(maximum + 1)).unwrap(),
+                    Some(count)
+                );
+                assert_eq!(
+                    large.read_line_large(&mut expected, maximum).unwrap(),
+                    Some(count)
+                );
+                assert_eq!(actual, payload[..count]);
+                assert_eq!(actual, expected);
+                assert_eq!(bounded.position().unwrap(), count as u64);
+                assert_eq!(bounded.is_eof(), large.is_eof());
+                assert!(!bounded.is_eof());
+                assert_eq!(
+                    bounded.metadata().unread_bytes,
+                    large.metadata().unread_bytes
+                );
+                let mut rest = vec![0; payload.len() + 1];
+                assert_eq!(bounded.read(&mut rest).unwrap(), payload.len() - count);
+                assert_eq!(&rest[..payload.len() - count], &payload[count..]);
+                assert!(bounded.is_eof());
+                assert_eq!(bounded.position().unwrap(), payload.len() as u64);
+                assert!(bounded.rewind());
+                assert_eq!(bounded.read_line(&mut actual, Some(1)).unwrap(), None);
+                assert_eq!(bounded.position().unwrap(), 0);
+            }
+        }
+    }
+}
+
+#[test]
 fn boolean_rewind_matches_absolute_seek_for_prefetch_eof_and_failures() {
     for path in [
         "php://memory",

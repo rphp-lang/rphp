@@ -114,15 +114,14 @@ fn op_clone_obj<'a>(
         let result_ptr = (*frame).get_op_mut(opline.result as u32, opline.result_type);
 
         // Enum cases and Generator instances are engine-owned singletons.
-        {
+        let registered_source_class_id = {
             let obj = src_val.as_object().unwrap();
+            let class_def = eg.class_table.get(obj.class_name.as_ref());
             let uncloneable = matches!(
                 obj.class_name.as_ref(),
                 "Generator" | "WeakReference" | "InternalIterator" | "ReflectionProperty" | "Directory"
             )
-                || eg
-                    .class_table
-                    .get(obj.class_name.as_ref())
+                || class_def
                     .is_some_and(|class_def| {
                         class_def.is_enum
                             || class_def.name == "IteratorIterator"
@@ -145,7 +144,8 @@ fn op_clone_obj<'a>(
                         ThrowResult::Unhandled(t) => return Ok(ColdResult::Unhandled(t)),
                     }
             }
-        }
+            class_def.map_or(0, |class| class.class_id)
+        };
 
         let mut cloned_obj = {
             let obj = src_val.as_object().unwrap();
@@ -194,13 +194,20 @@ fn op_clone_obj<'a>(
         // This instruction's existing monomorphic cache belongs only to
         // CloneObj. A nonzero class ID also makes an absent __clone stable:
         // linked class methods are immutable, just as for method-call caches.
-        // Dynamic class-id-zero receivers always retain ordinary resolution.
+        // A dynamic receiver may omit the ID even though its exact class name
+        // is registered. Reuse the identity already found by the cloneability
+        // check; unknown names still resolve normally on every invocation.
         let clone_method = {
             let cloned = cloned_val.as_object().unwrap();
             let ip = (opline as *const Instruction)
                 .offset_from(op_array.instructions.as_ptr()) as usize;
             let cached = &op_array.cache[ip];
-            if cloned.class_id != 0 && cached.class_id == cloned.class_id {
+            let class_id = if cloned.class_id != 0 {
+                cloned.class_id
+            } else {
+                registered_source_class_id
+            };
+            if class_id != 0 && cached.class_id == class_id {
                 cached.func
             } else {
                 let resolved = eg
@@ -208,7 +215,7 @@ fn op_clone_obj<'a>(
                     .unwrap_or(std::ptr::null());
                 let cache = &mut *(op_array.cache.as_ptr().add(ip)
                     as *mut crate::vm::instruction::InlineCache);
-                cache.class_id = cloned.class_id;
+                cache.class_id = class_id;
                 cache.func = resolved;
                 resolved
             }

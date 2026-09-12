@@ -8,76 +8,72 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
-`spl-deque-stack-queue-contracts`, against `da70dffb`: **+48/-0** SPL passes.
-All thirty admitted cases pass. SPL reaches 383 pass / 362 fail /
+`spl-heap-priority-queue-contracts`, against `b4e1043c`: **+36/-0** SPL passes.
+All 26 admitted cases pass. SPL reaches 419 pass / 326 fail /
 31 unsupported / 8 skip / 1 XFAIL; the separate 7,174-case core retains
-**6,446 pass / 335 fail / 182 skip / 211 unsupported** with identical pass sets.
-Together these selected 7,959 cases have **6,829 passes and 697 failures**, not
-complete PHP coverage. No previous pass or process-safety result is lost;
-all 48 gains independently pass the PHP 8.5.10 reference.
+**6,446 pass / 335 fail / 182 skip / 211 unsupported** and identical pass sets.
+Together these selected 7,959 cases have **6,865 passes and 661 failures**,
+not complete PHP coverage. Every gain independently passes PHP 8.5.10.
 
-SplDoublyLinkedList, SplStack and SplQueue use sparse native linked storage with
-fully traced PHP edges, constant-time ends and nearest-end indexed traversal.
-FIFO/LIFO/KEEP/DELETE, live cursor mutation, nested consumers, offsets,
-reference/COW and clone behavior match original differential oracles. Retirement
-publishes state before callbacks and never holds a node/object borrow across
-user code. Generic ArrayAccess reference append preserves writable-fetch,
-diagnostic and RHS-promotion ordering. No common Value/VM field, opcode,
-dependency, JIT admission or unsafe-ceiling change. Profile-backed work removal
-uses existing scalar tags, initialized-slot bitmaps, immutable compiler plans
-and exact registration capacities; coercing/relative paths retain fallback.
+SplHeap, SplMinHeap, SplMaxHeap and SplPriorityQueue share sparse fully traced
+native ownership and logarithmic heap mutation. Ordering/ties, extraction
+flags, destructive live iteration, compare overrides, modification locks,
+corruption/recovery, references/COW, clone and reentrant retirement match
+original oracles. State is published before callbacks and retirement; no
+object borrow spans user code. Cold method visibility/abstract metadata and
+iterator projections use the same canonical contract.
 
-Four existing SPL failures advance to reviewed serialization/debug boundaries.
-Three core failures now reach existing Reflection method-closure binding gaps;
-independent SplFixedArray and user-method specimens reproduce them byte-exact
-on both accepted parent and candidate. These seven cases remain failures, not
-exclusions or gains. Exact diagnostic filename projection and immutable raw
-stage hashes are retained; no upstream source or expectation changed. General
-SPL, native deque serialization/print_r, closure rebinding, suspension, 32-bit
-and allocation-limit/OOM equivalence remain unclaimed.
+Profile-backed common-path work removal classifies native stream payloads once,
+retains initialized read scratch, avoids redundant memory copies/array capacity
+checks, reuses resolved clone identity and constructs inherited method keys
+once. Numeric projections preserve integer precedence, float bits and canonical
+mixed/error paths. Scalar-call/JIT production source is byte-identical to the accepted
+parent; additional boundary regressions remain. No common Value/VM field,
+opcode, dependency, JIT admission or unsafe-ceiling change.
 
-Thirty-five original cases pass 105 byte-exact PHP/default/JIT-disabled runs;
-the checked final matrix passes 5,124/4,816/5,195/5,217/5,268 tests
+Twenty-eight original heap cases pass 84 byte-exact PHP/default/JIT-disabled
+runs. The final checked matrix passes 5,174/4,864/5,245/5,267/5,318 tests
 (13/13/13/13/16 ignored, none filtered), plus all-features/all-targets,
-adjacent oracles, exact pass-set checks, Composer/Symfony S0-S3, runner/unsafe
-self-tests, formatting and public hygiene. Unsafe remains 1,622 blocks / 289
-functions. The initial unsafe diff gate required three written invariants;
-its repaired gate passes. A separate exact proof permits only ordinary-comment
-changes, preserving every executable byte and line position of the measured
-candidate and matrix. Original rejection logs are retained. Automatic cleanup
-runs between configurations and after cycles.
+adjacent oracles, exact no-loss, Composer/Symfony S0-S3, runner/unsafe self-tests,
+formatting and public hygiene. A PHP-oracle correction replaces one old E2E's
+snapshot-iteration assumption with destructive drain plus cloned flag coverage;
+the rejected default log is retained and measured production stays byte-exact.
+Two untouched synthetic IPv4 fixture strings are verified against the public
+parent rather than treated as newly introduced private connectivity; all new
+findings remain blocking. The completed matrix is fingerprint/hash-verified.
+Cleanup runs between large configurations and after build/benchmark cycles.
+Five later serialization stages remain reviewed
+failures. Six pre-existing temporary-stream EOF differences remain explicit:
+the 252-case ownership oracle preserves every parent result, 246 also match PHP.
+General containers/serialization, Reflection rebinding, debug refcounts,
+suspension, 32-bit and allocation-limit/OOM equivalence remain unclaimed.
 
-All **55 fixed-parent 32-pair controls** meet unchanged common +1% / pay-use
-+5% limits; highest medians are +0.925%/+3.990%. Object lifecycle improves
-0.532%, ordinary property reads 0.454%, arithmetic holdout 3.924%; ordinary
-calls are +0.925%. Rejected candidates and instruction-simulation hypotheses
-remain recorded without unchanged timing rerolls, layout lotteries or hardware
-counter claims. Four new-API candidate/PHP ratios are 3.731/2.561/1.087/1.669
-with exact outputs, not absent-parent deltas. The user-authorized shared-host
-guard records one background event; this is not exclusive-host evidence and
-no private benchmark host was configured.
+All **59 fixed-parent 32-pair controls** meet unchanged common +1% / pay-use
++5% limits. Rejected timings and instruction-profile hypotheses remain recorded;
+there are no unchanged timing rerolls or hardware-counter claims. Four new-API
+candidate/PHP ratios are 1.667/3.406/2.325/2.489, with exact outputs, not
+absent-parent deltas. The authorized shared-host guard records one background
+event; this is not exclusive/private-host evidence.
 
 SHA-256 evidence:
 
-- Release: `9f7cba60110de189d1d317a83f0f92512cf58a6fbdd468a6a83f5c3d7dc2d169`.
-- Complete technical record: `3d41a90dfcf087c8f5f49f059bc2e862d6d00063d0bf678a2fba6843251ea50b`.
-- Matrix: `0d39d1e22a714910d937528857263ce5d663d3527251bdff4863e49d292c30d8`.
-- Supplying / SPL manifests: `32646f76087a84f7a07eccf4566fe6405e0033b6ac920eadf115584232c81c34` / `09dd87cf73025b14df8f2ac3e24240cfef1db99578a72cbd152b922f238f07b3`.
-- Reference manifest for all 48 gains: `8a03727f91fc98ffffb52b647fc0b7fc08651063b2d11b62bc7caafbcaf0d859`.
-- SPL pass set: `ae6477aa3555792736e99862bbc0102ae9d8cd589e7ba9a7e471353cced658f7`.
-- Zend/lang manifest / pass set: `784bee7b51dfa41d6ae785b8fa74556019db374328204199f1011caac311e2ea` / `b99f862eabc6857b7347b6f378368ce342ff70acec02d7d2732e8f20daa5fde3`.
-- Strings/array manifest / pass set: `9bf891c30b8763bbd23a62590ce7898e80c02f123682ec54139a8a277f1b46b2` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
-- Primary / holdout results: `805132edcb573a7c0930abc42b60fdbcac6face465df29ea6db687d5bb145c15` / `cdb5bbd753cd1cbee2766a953e75e0bd5db92f87e446c2fbea9c554e2c793344`.
-- Core stage / SAFETY annotation proofs: `7e6d077c78eda2b1e9029ce7bd11543a181b631466b7b719c8778cd0f226c274` / `d9f4b91339fca68e334b77fc4c41f6a51541c00e08e0c0dcc298a33023f8e913`.
+- Release: `1b55b001be368aeac0156eca3d29f966e76358db40628c0e1ad34b2abe5bed73`.
+- Complete technical record: `395068b82333883ad9af9d92109528d04c8f94057bb5bf2d9983d179769db445`.
+- Matrix: `2a749cdf3b89710f40637f7adb219b2f601ae99ac104477b430047b82b5e7aa0`.
+- Test-only oracle correction: `bb644f8d5f9e690fd113cabf56f05c4616fef76fdf2f355b72f9daa692ee1bce`.
+- SPL manifest / pass set: `97fb89ed9bb06da28ecbb4335186d19393f055180571bd6aa4248bbec6bd138c` / `fa7543f7092d02dc544879483d9b609b268082d86a8fce7ac54bc03aca557f87`.
+- Reference manifest for all gains: `7cbccbc204e0cd828ecfa0e91237e7e47bc4ca2a84fd49036d8bd8973852a292`.
+- Zend/lang manifest / pass set: `be524a7deb6ecb2e526929e29bf168e351f0bbd91b0de9939dd2bb1767ac0372` / `b99f862eabc6857b7347b6f378368ce342ff70acec02d7d2732e8f20daa5fde3`.
+- Strings/array manifest / pass set: `b346cab0848f90a0722d46bda7e28dfa792a059f7ca24668a8348d3fe85ee5ca` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+- Primary / holdout results: `6e15cd52f55c7ad9c4dac7d7b01da30be872f510fc6b10b40f7e4334354ffda6` / `4e57bca731911055e126b0802973be4d141e4d01353bf346876789131e39ad80`.
 
-Next read-only admission confirms 26 PHP-passing/current-failing heap and
-priority-queue cases
-(`08240bdea4233eb4efc4466efb06f8e5c8f0cb626ebb53ff991ece23fbcaad27`).
-Characterize ordering, destructive iteration, callbacks, write locks,
-corruption/recovery, clone and retirement before selecting sparse traced
-storage; retain all 55 controls and add the four now-present deque API controls.
+Next read-only admission confirms 20 reference-passing/current-failing
+native container serialization/restoration cases (`1301ff43d1b01731960d0bc19a02d3c7b88c4aca9343e725a639e8464625dbac`).
+First characterize wire-state projection, restore validation, corruption and
+callback/retirement order; reuse traced heap/deque ownership. Require at least
+ten shared-cause gains and preserve the fixed baseline and all existing controls.
 
-The preceding measured AMD64 PHP 8.5 checkpoint is
+An earlier measured AMD64 PHP 8.5 checkpoint is
 `directory-iterator-cursor-projection-contracts`, against `5ac0c4d2`: **+21/-0**
 SPL passes. The full 785-case SPL set reaches 281 pass / 464 fail /
 31 unsupported / 8 skip / 1 XFAIL. The separate 7,174-case core remains

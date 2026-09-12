@@ -15,6 +15,7 @@ pub(super) mod array_object;
 pub(super) mod deque;
 mod file_info;
 pub(super) mod fixed_array;
+mod heap;
 mod iterator_delegate;
 mod recursive_iterator;
 pub(crate) use array_object::cursor::{
@@ -34,6 +35,43 @@ pub(crate) use iterator_delegate::resolve_method as resolve_iterator_delegated_m
 pub(crate) use recursive_iterator::validate_start as validate_recursive_iterator_start;
 
 const ROUNDING_MODE_CLASS: &str = "RoundingMode";
+#[cold]
+fn empty_internal_type(
+    name: &str,
+    implements: Vec<String>,
+    is_interface: bool,
+    is_final: bool,
+) -> ClassDef {
+    ClassDef {
+        attributes: Vec::new(),
+        name: name.to_string(),
+        source_file: None,
+        declaration_line: 0,
+        parent: None,
+        implements,
+        is_interface,
+        is_abstract: false,
+        is_final,
+        is_trait: false,
+        is_enum: false,
+        is_readonly: false,
+        allow_dynamic_properties: name.eq_ignore_ascii_case("stdClass"),
+        uses: vec![],
+        trait_aliases: vec![],
+        trait_precedences: vec![],
+        properties: vec![],
+        static_properties: vec![],
+        constants: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec![],
+        methods: vec![],
+        abstract_methods: vec![],
+        enum_backing_error: None,
+        deferred_instance_defaults: None,
+        class_id: 0,
+    }
+}
 const ROUNDING_MODE_CASES: [&str; 8] = [
     "HalfAwayFromZero",
     "HalfTowardsZero",
@@ -1738,13 +1776,6 @@ const SPL_STORAGE_DATA: &str = "__rphp_spl_storage_data";
 const SPL_STORAGE_OBJECTS: &str = "__rphp_spl_storage_objects";
 const SPL_STORAGE_ITERATOR: &str = "__rphp_iterator_values";
 const SPL_STORAGE_POSITION: &str = "__rphp_spl_storage_position";
-const SPL_PRIORITY_ENTRIES: &str = "__rphp_spl_priority_entries";
-const SPL_PRIORITY_POSITION: &str = "__rphp_spl_priority_position";
-const SPL_PRIORITY_EXTRACT_FLAGS: &str = "__rphp_spl_priority_extract_flags";
-const SPL_PRIORITY_EXTR_DATA: i64 = 1;
-const SPL_PRIORITY_EXTR_PRIORITY: i64 = 2;
-const SPL_PRIORITY_EXTR_BOTH: i64 = 3;
-
 pub(super) fn spl_object_storage_internal_properties() -> &'static [&'static str] {
     &[
         SPL_STORAGE_DATA,
@@ -2041,250 +2072,6 @@ fn fn_spl_object_storage_next(
         receiver.set_property(SPL_STORAGE_POSITION, Value::long(next));
     }
     Ok(())
-}
-
-#[inline]
-fn spl_priority_entries(receiver: &Value) -> PhpArray {
-    spl_storage_array(receiver, SPL_PRIORITY_ENTRIES)
-}
-
-#[inline]
-fn spl_priority_position(receiver: &Value) -> usize {
-    receiver
-        .as_object()
-        .and_then(|object| {
-            object
-                .get_property(SPL_PRIORITY_POSITION)
-                .and_then(Value::as_long)
-        })
-        .unwrap_or(0)
-        .max(0) as usize
-}
-
-fn spl_priority_compare(left: &Value, right: &Value) -> std::cmp::Ordering {
-    match (left.as_array(), right.as_array()) {
-        (Some(left), Some(right)) => {
-            for (left, right) in left.values().zip(right.values()) {
-                let ordering = spl_priority_compare(left, right);
-                if ordering != std::cmp::Ordering::Equal {
-                    return ordering;
-                }
-            }
-            return left.len().cmp(&right.len());
-        }
-        (Some(_), None) => return std::cmp::Ordering::Greater,
-        (None, Some(_)) => return std::cmp::Ordering::Less,
-        (None, None) => {}
-    }
-
-    match (left.value_type(), right.value_type()) {
-        (ValueType::Long | ValueType::Double, ValueType::Long | ValueType::Double) => left
-            .to_float_val()
-            .partial_cmp(&right.to_float_val())
-            .unwrap_or(std::cmp::Ordering::Equal),
-        (ValueType::String, ValueType::String) => left
-            .as_str()
-            .unwrap_or_default()
-            .cmp(right.as_str().unwrap_or_default()),
-        _ => left.echo_to_string().cmp(&right.echo_to_string()),
-    }
-}
-
-#[inline]
-fn spl_priority_entry_part(entry: &Value, index: i64) -> Value {
-    entry
-        .as_array()
-        .and_then(|entry| entry.get_int(index))
-        .cloned()
-        .unwrap_or_else(Value::null)
-}
-
-fn spl_priority_extract_value(receiver: &Value, entry: &Value) -> Value {
-    let data = spl_priority_entry_part(entry, 0);
-    let priority = spl_priority_entry_part(entry, 1);
-    let flags = receiver
-        .as_object()
-        .and_then(|object| {
-            object
-                .get_property(SPL_PRIORITY_EXTRACT_FLAGS)
-                .and_then(Value::as_long)
-        })
-        .unwrap_or(SPL_PRIORITY_EXTR_DATA);
-    match flags {
-        SPL_PRIORITY_EXTR_PRIORITY => priority,
-        SPL_PRIORITY_EXTR_BOTH => {
-            let mut result = PhpArray::new();
-            result.set_str("data", data);
-            result.set_str("priority", priority);
-            Value::array(result)
-        }
-        _ => data,
-    }
-}
-
-fn spl_priority_refresh_iterator(receiver: &Value) {
-    let entries = spl_priority_entries(receiver);
-    let mut iterator = PhpArray::with_packed_capacity(entries.len());
-    for entry in entries.values() {
-        iterator.push(spl_priority_extract_value(receiver, entry));
-    }
-    if let Some(mut receiver) = receiver.as_object_mut() {
-        receiver.set_property(SPL_STORAGE_ITERATOR, Value::array(iterator));
-    }
-}
-
-fn fn_spl_priority_queue_construct(
-    ed: *mut ExecuteData,
-    _rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    if let Some(mut receiver) = arg!(ed, 0).as_object_mut() {
-        receiver.set_property(SPL_PRIORITY_ENTRIES, Value::array(PhpArray::new()));
-        receiver.set_property(SPL_PRIORITY_POSITION, Value::long(0));
-        receiver.set_property(
-            SPL_PRIORITY_EXTRACT_FLAGS,
-            Value::long(SPL_PRIORITY_EXTR_DATA),
-        );
-        receiver.set_property(SPL_STORAGE_ITERATOR, Value::array(PhpArray::new()));
-    }
-    Ok(())
-}
-
-fn fn_spl_priority_queue_insert(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let receiver = arg!(ed, 0).clone();
-    let mut entry = PhpArray::new();
-    entry.push(arg!(ed, 1).clone());
-    entry.push(arg!(ed, 2).clone());
-
-    let mut entries: Vec<Value> = spl_priority_entries(&receiver).values().cloned().collect();
-    entries.push(Value::array(entry));
-    entries.sort_by(|left, right| {
-        spl_priority_compare(
-            &spl_priority_entry_part(right, 1),
-            &spl_priority_entry_part(left, 1),
-        )
-    });
-
-    let mut sorted = PhpArray::with_packed_capacity(entries.len());
-    for entry in entries {
-        sorted.push(entry);
-    }
-    if let Some(mut receiver) = receiver.as_object_mut() {
-        receiver.set_property(SPL_PRIORITY_ENTRIES, Value::array(sorted));
-    }
-    spl_priority_refresh_iterator(&receiver);
-    ret!(rv, Value::bool(true));
-}
-
-fn fn_spl_priority_queue_set_extract_flags(
-    ed: *mut ExecuteData,
-    _rv: *mut Value,
-    eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let flags = arg_long!(ed, 1);
-    if !matches!(
-        flags,
-        SPL_PRIORITY_EXTR_DATA | SPL_PRIORITY_EXTR_PRIORITY | SPL_PRIORITY_EXTR_BOTH
-    ) {
-        eg.exception = Some(crate::value::make_error_value(
-            "ValueError",
-            "SplPriorityQueue::setExtractFlags(): Argument #1 ($flags) must be a valid extract flag",
-        ));
-        return Ok(());
-    }
-    if let Some(mut receiver) = arg!(ed, 0).as_object_mut() {
-        receiver.set_property(SPL_PRIORITY_EXTRACT_FLAGS, Value::long(flags));
-    }
-    spl_priority_refresh_iterator(arg!(ed, 0));
-    Ok(())
-}
-
-fn fn_spl_priority_queue_rewind(
-    ed: *mut ExecuteData,
-    _rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    if let Some(mut receiver) = arg!(ed, 0).as_object_mut() {
-        receiver.set_property(SPL_PRIORITY_POSITION, Value::long(0));
-    }
-    Ok(())
-}
-
-fn fn_spl_priority_queue_valid(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let receiver = arg!(ed, 0);
-    ret!(
-        rv,
-        Value::bool(spl_priority_position(receiver) < spl_priority_entries(receiver).len())
-    );
-}
-
-fn fn_spl_priority_queue_current(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let receiver = arg!(ed, 0);
-    let entry = spl_priority_entries(receiver)
-        .get_value_at(spl_priority_position(receiver))
-        .cloned();
-    ret!(
-        rv,
-        entry
-            .as_ref()
-            .map_or_else(Value::null, |entry| spl_priority_extract_value(
-                receiver, entry
-            ))
-    );
-}
-
-fn fn_spl_priority_queue_key(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    ret!(rv, Value::long(spl_priority_position(arg!(ed, 0)) as i64));
-}
-
-fn fn_spl_priority_queue_next(
-    ed: *mut ExecuteData,
-    _rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let next = spl_priority_position(arg!(ed, 0)).saturating_add(1) as i64;
-    if let Some(mut receiver) = arg!(ed, 0).as_object_mut() {
-        receiver.set_property(SPL_PRIORITY_POSITION, Value::long(next));
-    }
-    Ok(())
-}
-
-fn fn_spl_priority_queue_count(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    ret!(
-        rv,
-        Value::long(spl_priority_entries(arg!(ed, 0)).len() as i64)
-    );
-}
-
-fn fn_spl_priority_queue_is_empty(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    ret!(
-        rv,
-        Value::bool(spl_priority_entries(arg!(ed, 0)).is_empty())
-    );
 }
 
 const SENSITIVE_PARAMETER_VALUE_CLASS: &str = "SensitiveParameterValue";
@@ -3205,37 +2992,6 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     #[cfg(feature = "stream-registry")]
     funcs.extend(super::streams::filters::register_classes(eg));
 
-    let empty_internal_type =
-        |name: &str, implements: Vec<String>, is_interface: bool, is_final: bool| ClassDef {
-            attributes: Vec::new(),
-            name: name.to_string(),
-            source_file: None,
-            declaration_line: 0,
-            parent: None,
-            implements,
-            is_interface,
-            is_abstract: false,
-            is_final,
-            is_trait: false,
-            is_enum: false,
-            is_readonly: false,
-            allow_dynamic_properties: name.eq_ignore_ascii_case("stdClass"),
-            uses: vec![],
-            trait_aliases: vec![],
-            trait_precedences: vec![],
-            properties: vec![],
-            static_properties: vec![],
-            constants: vec![],
-            property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
-            property_defaults: std::rc::Rc::from([]),
-            readonly_props: vec![],
-            methods: vec![],
-            abstract_methods: vec![],
-            enum_backing_error: None,
-            deferred_instance_defaults: None,
-            class_id: 0,
-        };
-
     // stdClass has dynamic object storage but still participates in ordinary
     // class_exists(), aliases, type hints and reflection as an internal class.
     eg.register_class(empty_internal_type("stdClass", vec![], false, false))
@@ -3881,127 +3637,26 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         false,
         false,
     );
-    // These existing native methods satisfy Iterator for descendants too.
-    // Publish their link contracts before validating a user subclass.
-    for (name, return_type) in [
-        ("current", ParamTypeHint::Mixed),
-        ("next", ParamTypeHint::Void),
-        ("key", ParamTypeHint::Int),
-        ("valid", ParamTypeHint::Bool),
-        ("rewind", ParamTypeHint::Void),
-    ] {
-        eg.register_internal_method_contract(
-            "SplPriorityQueue",
-            name,
-            false,
-            0,
-            &[],
-            vec![],
-            return_type,
-            &[],
-            true,
-        );
-    }
-    spl_priority_queue.constants = [
-        ("EXTR_DATA", SPL_PRIORITY_EXTR_DATA),
-        ("EXTR_PRIORITY", SPL_PRIORITY_EXTR_PRIORITY),
-        ("EXTR_BOTH", SPL_PRIORITY_EXTR_BOTH),
-    ]
-    .into_iter()
-    .map(|(name, value)| ClassConstantDefinition {
-        attributes: Vec::new(),
-        name: name.to_string(),
-        value: Value::long(value),
-        source_file: String::new(),
-        evaluation_error: None,
-        source_expression: None,
-        callable_factory: None,
-        evaluation_scope: None,
-        value_is_deferred: false,
-        visibility: Visibility::Public,
-        declaring_class: "SplPriorityQueue".to_string(),
-        type_hint: ParamTypeHint::Int,
-        is_final: false,
-    })
-    .collect();
-    for (name, default) in [
-        (SPL_PRIORITY_ENTRIES, Value::array(PhpArray::new())),
-        (SPL_PRIORITY_POSITION, Value::long(0)),
-        (
-            SPL_PRIORITY_EXTRACT_FLAGS,
-            Value::long(SPL_PRIORITY_EXTR_DATA),
-        ),
-        (SPL_STORAGE_ITERATOR, Value::array(PhpArray::new())),
-    ] {
-        spl_priority_queue.properties.push(PropertyDefinition::new(
-            name.to_string(),
-            Some(default),
-            Visibility::Private,
-            "SplPriorityQueue".to_string(),
-        ));
-    }
+    spl_priority_queue.constants = [("EXTR_DATA", 1), ("EXTR_PRIORITY", 2), ("EXTR_BOTH", 3)]
+        .into_iter()
+        .map(|(name, value)| ClassConstantDefinition {
+            attributes: Vec::new(),
+            name: name.to_string(),
+            value: Value::long(value),
+            source_file: String::new(),
+            evaluation_error: None,
+            source_expression: None,
+            callable_factory: None,
+            evaluation_scope: None,
+            value_is_deferred: false,
+            visibility: Visibility::Public,
+            declaring_class: "SplPriorityQueue".to_string(),
+            type_hint: ParamTypeHint::Int,
+            is_final: false,
+        })
+        .collect();
     eg.register_class(spl_priority_queue).unwrap();
-    reg_method!(
-        "SplPriorityQueue",
-        "__construct",
-        fn_spl_priority_queue_construct,
-        1,
-        0
-    );
-    reg_method!(
-        "SplPriorityQueue",
-        "insert",
-        fn_spl_priority_queue_insert,
-        3,
-        2,
-        "value",
-        "priority"
-    );
-    reg_method!(
-        "SplPriorityQueue",
-        "setextractflags",
-        fn_spl_priority_queue_set_extract_flags,
-        2,
-        1,
-        "flags"
-    );
-    reg_method!(
-        "SplPriorityQueue",
-        "rewind",
-        fn_spl_priority_queue_rewind,
-        1,
-        0
-    );
-    reg_method!(
-        "SplPriorityQueue",
-        "valid",
-        fn_spl_priority_queue_valid,
-        1,
-        0
-    );
-    reg_method!(
-        "SplPriorityQueue",
-        "current",
-        fn_spl_priority_queue_current,
-        1,
-        0
-    );
-    reg_method!("SplPriorityQueue", "key", fn_spl_priority_queue_key, 1, 0);
-    reg_method!("SplPriorityQueue", "next", fn_spl_priority_queue_next, 1, 0);
-    reg_method!(
-        "SplPriorityQueue",
-        "count",
-        fn_spl_priority_queue_count,
-        1,
-        0
-    );
-    reg_method!(
-        "SplPriorityQueue",
-        "isempty",
-        fn_spl_priority_queue_is_empty,
-        1,
-        0
-    );
+    funcs.extend(heap::register_priority_queue(eg));
     eg.register_class(empty_internal_type(
         "Generator",
         vec!["Iterator".to_string()],
@@ -4070,5 +3725,6 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         eg.register_class(class).unwrap();
     }
     funcs.extend(deque::register(eg));
+    funcs.extend(heap::register_heaps(eg));
     funcs
 }

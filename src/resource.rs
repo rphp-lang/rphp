@@ -3,6 +3,8 @@ use std::cell::RefCell;
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use super::stream::PhpStream;
+
 #[cfg(feature = "resource-lifetime")]
 use crate::resource_handle::ResourceHandle;
 use crate::runtime::ExecutorGlobals;
@@ -79,9 +81,53 @@ impl RequestRegistries {
 
 struct ResourceEntry {
     resource_type: &'static str,
-    payload: Box<dyn Any>,
+    payload: ResourcePayload,
     #[cfg(feature = "resource-lifetime")]
     owner: Weak<ResourceHandle>,
+}
+
+// Keep native streams in the same owning allocation, but classify them once
+// at insertion. Their steady-state projection can then check a concrete type
+// without a dynamic Any vtable call on each read/write. All other backends keep
+// their exact Any identity; the public resource label is never a type guard.
+enum ResourcePayload {
+    Stream(Box<PhpStream>),
+    Other(Box<dyn Any>),
+}
+
+impl ResourcePayload {
+    #[cold]
+    fn new<T: 'static>(payload: T) -> Self {
+        match (Box::new(payload) as Box<dyn Any>).downcast::<PhpStream>() {
+            Ok(stream) => Self::Stream(stream),
+            Err(other) => Self::Other(other),
+        }
+    }
+
+    #[inline]
+    fn downcast_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        match self {
+            Self::Stream(stream) => (stream.as_mut() as &mut dyn Any).downcast_mut::<T>(),
+            Self::Other(other) => other.downcast_mut::<T>(),
+        }
+    }
+
+    #[cold]
+    fn backend_type_id(&self) -> TypeId {
+        match self {
+            Self::Stream(_) => TypeId::of::<PhpStream>(),
+            Self::Other(other) => other.as_ref().type_id(),
+        }
+    }
+
+    #[cold]
+    #[cfg(feature = "stream-registry")]
+    fn into_any(self) -> Box<dyn Any> {
+        match self {
+            Self::Stream(stream) => stream,
+            Self::Other(other) => other,
+        }
+    }
 }
 
 impl ResourceEntry {
@@ -136,7 +182,10 @@ impl ResourceEntries {
         }
     }
 
-    #[inline]
+    // Projection is already inlined into the native operation. Keep the
+    // bounded entry lookup there too, without spilling a registry borrow
+    // through an extra call for every read/write.
+    #[inline(always)]
     fn get_mut(&mut self, id: &i64) -> Option<&mut ResourceEntry> {
         match self {
             Self::Small { entries, overflow } => {
@@ -223,7 +272,7 @@ impl ResourceEntries {
         // their exact type identity rather than cloning this whole walk into
         // every typed-close caller. None is the native untyped release path.
         let matches = |entry: &ResourceEntry| {
-            expected_type.is_none_or(|expected| entry.payload.as_ref().type_id() == expected)
+            expected_type.is_none_or(|expected| entry.payload.backend_type_id() == expected)
         };
         match self {
             Self::Small { entries, overflow } => {
@@ -295,7 +344,7 @@ impl ResourceRegistry {
             id,
             ResourceEntry {
                 resource_type,
-                payload: Box::new(payload),
+                payload: ResourcePayload::new(payload),
                 #[cfg(feature = "resource-lifetime")]
                 owner: Weak::new(),
             },
@@ -319,11 +368,11 @@ impl ResourceRegistry {
 
     #[cfg(feature = "resource-lifetime")]
     #[cold]
-    fn insert_value<T: 'static>(
+    fn insert_value(
         &mut self,
         scope: u32,
         resource_type: &'static str,
-        payload: T,
+        payload: ResourcePayload,
     ) -> Value {
         let id = self.allocate_id();
         let owner = Rc::new(ResourceHandle::new(scope, id, close_any));
@@ -331,7 +380,7 @@ impl ResourceRegistry {
             id,
             ResourceEntry {
                 resource_type,
-                payload: Box::new(payload),
+                payload,
                 owner: Rc::downgrade(&owner),
             },
         );
@@ -616,6 +665,11 @@ pub(crate) fn insert_value_for_request<T: 'static>(
     // same scope; a second constant-table lookup provides no new information.
     let scope = ensure_request_scope(eg);
     debug_assert_ne!(scope, 0);
+    // Move the native backend into its final allocation before entering the
+    // registry closure. Passing the erased owner avoids copying a large stream
+    // through the TLS closure and insertion frame; its concrete Any type and
+    // allocation count are unchanged. No PHP callback runs at this boundary.
+    let payload = ResourcePayload::new(payload);
     REQUEST_RESOURCES.with(|registries| {
         // Repeated opens belong to the same request as subsequent I/O. Reuse
         // its bounded lookup; only the first insertion creates a registry.
@@ -657,7 +711,7 @@ pub(crate) fn wrap_request_payload<T: 'static, U: 'static>(
         if !registry
             .entries
             .get(&id)
-            .is_some_and(|entry| entry.payload.is::<T>())
+            .is_some_and(|entry| entry.payload.backend_type_id() == TypeId::of::<T>())
         {
             return false;
         }
@@ -667,13 +721,14 @@ pub(crate) fn wrap_request_payload<T: 'static, U: 'static>(
             .expect("checked resource entry");
         let payload = *entry
             .payload
+            .into_any()
             .downcast::<T>()
             .expect("checked resource payload");
         registry.entries.insert(
             id,
             ResourceEntry {
                 resource_type: entry.resource_type,
-                payload: Box::new(wrap(payload)),
+                payload: ResourcePayload::new(wrap(payload)),
                 #[cfg(feature = "resource-lifetime")]
                 owner: entry.owner,
             },
@@ -722,6 +777,57 @@ mod tests {
         fn drop(&mut self) {
             self.0.set(self.0.get() + 1);
         }
+    }
+
+    #[cfg(feature = "resource-lifetime")]
+    #[test]
+    fn boxed_insertion_preserves_concrete_payload_aliases_and_nested_scopes() {
+        struct WideProbe {
+            bytes: [u8; 4096],
+            drops: Rc<Cell<usize>>,
+        }
+        impl Drop for WideProbe {
+            fn drop(&mut self) {
+                self.drops.set(self.drops.get() + 1);
+            }
+        }
+        let drops = Rc::new(Cell::new(0));
+        let mut first = ExecutorGlobals::new();
+        let value = insert_value_for_request(
+            &mut first,
+            "wide",
+            WideProbe {
+                bytes: [0xa5; 4096],
+                drops: drops.clone(),
+            },
+        );
+        let id = value.as_resource_id().unwrap();
+        let alias = value.clone();
+        let mut second = ExecutorGlobals::new();
+        let other = insert_value_for_request(&mut second, "text", String::from("other"));
+        assert!(!close_for_request::<Box<WideProbe>>(&mut first, id));
+        assert_eq!(
+            super::with_request_payload_mut::<WideProbe, _>(&mut first, id, |p| {
+                assert_eq!(p.bytes, [0xa5; 4096]);
+                p.bytes[4095] = 0xff;
+                p.bytes[4095]
+            }),
+            Some(0xff)
+        );
+        assert!(close_for_request::<WideProbe>(&mut first, id));
+        assert_eq!(drops.get(), 1);
+        assert_eq!(alias.as_resource_id(), Some(id));
+        assert_eq!(
+            super::with_request_payload_mut::<String, _>(
+                &mut second,
+                other.as_resource_id().unwrap(),
+                |s| s.clone()
+            ),
+            Some(String::from("other"))
+        );
+        drop(value);
+        drop(alias);
+        assert_eq!(drops.get(), 1);
     }
 
     #[test]
@@ -1225,7 +1331,7 @@ mod tests {
         assert!(registry.entries.insert(17, moved).is_none());
         let replacement = super::ResourceEntry {
             resource_type: "probe",
-            payload: Box::new(DropProbe(drops.clone())),
+            payload: super::ResourcePayload::new(DropProbe(drops.clone())),
             #[cfg(feature = "resource-lifetime")]
             owner: std::rc::Weak::new(),
         };
@@ -1270,7 +1376,7 @@ mod tests {
                 } else {
                     std::any::TypeId::of::<u64>()
                 };
-                assert_eq!(entry.payload.as_ref().type_id(), expected);
+                assert_eq!(entry.payload.backend_type_id(), expected);
             }
             for index in 0..width {
                 let id = index as i64 + 1;
@@ -1284,6 +1390,119 @@ mod tests {
                 }
                 assert!(!registry.is_open(id));
             }
+        }
+    }
+
+    #[test]
+    fn stream_payload_projection_keeps_type_and_address_through_migration() {
+        use super::PhpStream;
+        for width in [1, 8, 9, 64, 65, 129] {
+            let mut registry = ResourceRegistry::new();
+            let id = registry.insert("shared", PhpStream::open("php://memory", "w+").unwrap());
+            let address = registry.with_payload_mut::<PhpStream, _>(id, |stream| {
+                assert_eq!(stream.write(b"original").unwrap(), 8);
+                stream as *const _ as usize
+            });
+            for index in 1..width {
+                if index % 2 == 0 {
+                    registry.insert("shared", PhpStream::open("php://memory", "w+").unwrap());
+                } else {
+                    registry.insert("shared", index as u64);
+                }
+            }
+            assert_eq!(
+                registry.entries.get(&id).unwrap().payload.backend_type_id(),
+                std::any::TypeId::of::<PhpStream>()
+            );
+            assert_eq!(
+                registry.with_payload_mut::<Box<PhpStream>, _>(id, |_| ()),
+                None
+            );
+            assert!(!registry.close::<u64>(id));
+            assert_eq!(registry.resource_type(id), "shared");
+            assert_eq!(
+                registry.with_payload_mut::<PhpStream, _>(id, |stream| {
+                    stream.seek(std::io::SeekFrom::Start(0)).unwrap();
+                    let mut bytes = [0; 8];
+                    assert_eq!(stream.read(&mut bytes).unwrap(), 8);
+                    assert_eq!(&bytes, b"original");
+                    stream as *const _ as usize
+                }),
+                address
+            );
+            assert!(registry.close::<PhpStream>(id));
+            assert!(!registry.close::<PhpStream>(id));
+            for index in 1..width {
+                let id = index as i64 + 1;
+                if index % 2 == 0 {
+                    assert!(!registry.close::<u64>(id));
+                    assert!(registry.close::<PhpStream>(id));
+                } else {
+                    assert!(!registry.close::<PhpStream>(id));
+                    assert_eq!(
+                        registry.with_payload_mut::<u64, _>(id, |n| *n),
+                        Some(index as u64)
+                    );
+                    assert!(registry.close::<u64>(id));
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "stream-registry")]
+    fn stream_wrapping_retains_identity_and_concrete_backend_ownership() {
+        use super::PhpStream;
+        struct Wrapped(PhpStream);
+        for width in [1, 9, 65] {
+            let mut executor = ExecutorGlobals::with_output(Box::new(std::io::sink()));
+            let id = insert_for_request(
+                &mut executor,
+                "stream",
+                PhpStream::open("php://memory", "w+").unwrap(),
+            );
+            let address = super::with_request_payload_mut::<PhpStream, _>(&mut executor, id, |s| {
+                s.write(b"retained").unwrap();
+                s as *const _ as usize
+            });
+            for n in 1..width {
+                insert_for_request(&mut executor, "other", n as u64);
+            }
+            assert!(!super::wrap_request_payload::<u64, Wrapped>(
+                &mut executor,
+                id,
+                |_| panic!("wrong type")
+            ));
+            assert_eq!(
+                super::with_request_payload_mut::<PhpStream, _>(
+                    &mut executor,
+                    id,
+                    |s| s as *const _ as usize
+                ),
+                address
+            );
+            assert!(super::wrap_request_payload::<PhpStream, Wrapped>(
+                &mut executor,
+                id,
+                Wrapped
+            ));
+            assert!(!close_for_request::<PhpStream>(&mut executor, id));
+            assert!(super::wrap_request_payload::<Wrapped, PhpStream>(
+                &mut executor,
+                id,
+                |w| w.0
+            ));
+            assert_eq!(super::type_for_request(&executor, id), "stream");
+            assert_eq!(
+                super::with_request_payload_mut::<PhpStream, _>(&mut executor, id, |s| {
+                    s.seek(std::io::SeekFrom::Start(0)).unwrap();
+                    let mut bytes = [0; 8];
+                    s.read(&mut bytes).unwrap();
+                    bytes
+                }),
+                Some(*b"retained")
+            );
+            assert!(close_for_request::<PhpStream>(&mut executor, id));
         }
     }
 

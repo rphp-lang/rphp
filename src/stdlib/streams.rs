@@ -817,8 +817,9 @@ fn fn_fread(
     if bytes.try_reserve_exact(length).is_err() {
         return return_value(return_pointer, Value::bool(false));
     }
-    bytes.resize(length, 0);
-    let result = read_projections::read_native(eg, resource, &mut bytes);
+    let result = with_stream_io(eg, resource, |stream| {
+        stream.read_into_vec(&mut bytes, length)
+    });
     match result {
         Some(Ok(read)) => {
             bytes.truncate(read);

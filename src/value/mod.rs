@@ -3774,9 +3774,10 @@ impl PhpArray {
         let Some(next_int_key) = self.next_int_key.checked_add(count) else {
             return false;
         };
-        for value in values.iter().copied() {
-            packed.push(Value::long(value));
-        }
+        // The full batch has already passed the key/overflow guards. Its
+        // exact length lets Vec reserve once and publish the initialized tail
+        // without repeating the capacity check for every scalar element.
+        packed.extend(values.iter().copied().map(Value::long));
         self.next_int_key = next_int_key;
         true
     }
@@ -7356,6 +7357,14 @@ impl Value {
         let kind = self.value_type();
         if kind == ValueType::Long {
             Some(unsafe { self.data.long })
+        } else if matches!(
+            kind,
+            ValueType::Undef | ValueType::Null | ValueType::False | ValueType::True
+        ) {
+            // These four tags have no payload to convert. Keep their shared
+            // zero/one projection next to the exact integer guard instead
+            // of calling the string/rejection helper for each operand.
+            Some(i64::from(kind == ValueType::True))
         } else if kind == ValueType::Double {
             // Floating arithmetic already has its own projection. It cannot
             // produce an integer operand, so needs no scalar-coercion call.
@@ -7365,14 +7374,11 @@ impl Value {
         }
     }
 
-    // Already-integer operands need only their tag and payload. Keep the
-    // coercion decision tree out of each arithmetic caller; this preserves
-    // the same null/bool/string kinds and rejects resources and references.
+    // Nontrivial conversion stays out of each arithmetic caller. Resources
+    // and references remain rejected; callers own canonical dereferencing.
     #[inline(never)]
     fn arithmetic_non_long(&self) -> Option<i64> {
         match self.value_type() {
-            ValueType::True => Some(1),
-            ValueType::False | ValueType::Null | ValueType::Undef => Some(0),
             ValueType::String => self.as_str()?.trim().parse::<i64>().ok(),
             _ => None,
         }
@@ -7383,10 +7389,13 @@ impl Value {
     /// comparisons.
     #[inline]
     pub(crate) fn to_arithmetic_double(&self) -> Option<f64> {
-        if self.value_type() == ValueType::Resource {
-            None
-        } else {
-            self.to_double()
+        match self.value_type() {
+            // Reuse the proven scalar projections without traversing the
+            // general conversion jump table for already-numeric operands.
+            ValueType::Long => self.as_long().map(|value| value as f64),
+            ValueType::Double => self.as_double(),
+            ValueType::Resource => None,
+            _ => self.to_double(),
         }
     }
 
@@ -8434,6 +8443,49 @@ mod native_owned_value_scan_tests {
 #[cfg(test)]
 mod arithmetic_projection_tests {
     use super::{PhpArray, Value};
+
+    #[test]
+    fn floating_projection_matches_existing_conversion_except_resource_ids() {
+        let values = [
+            Value::undef(),
+            Value::null(),
+            Value::bool(false),
+            Value::bool(true),
+            Value::long(i64::MIN),
+            Value::long(i64::MAX),
+            Value::double(-0.0),
+            Value::double(1.25),
+            Value::double(f64::INFINITY),
+            Value::double(f64::NEG_INFINITY),
+            Value::double(f64::from_bits(0x7ff8_0000_0000_0042)),
+            Value::string("  -12.5\n"),
+            Value::string("3e2"),
+            Value::string("9223372036854775808"),
+            Value::string("invalid"),
+            Value::array(PhpArray::new()),
+            Value::owned_reference(Value::long(7)),
+            Value::owned_reference(Value::bool(true)),
+        ];
+        for value in values {
+            assert_eq!(
+                value.to_arithmetic_double().map(f64::to_bits),
+                value.to_double().map(f64::to_bits)
+            );
+            if value.is_reference() {
+                assert_eq!(value.to_arithmetic_long(), None);
+                assert_eq!(value.to_arithmetic_double(), None);
+            }
+        }
+        #[cfg(feature = "resource-lifetime")]
+        let mut eg = crate::runtime::ExecutorGlobals::new();
+        #[cfg(feature = "resource-lifetime")]
+        let resource = crate::stdlib::resource::insert_value_for_request(&mut eg, "number", 123u64);
+        #[cfg(not(feature = "resource-lifetime"))]
+        let resource = Value::resource(123);
+        assert!(resource.to_double().is_some());
+        assert_eq!(resource.to_arithmetic_double(), None);
+        assert_eq!(resource.to_arithmetic_long(), None);
+    }
 
     #[test]
     fn tagged_integer_projection_retains_scalar_kinds() {

@@ -122,8 +122,8 @@ fn read(
     }
 }
 
-// Share the native payload/cursor projection with fread instead of generating
-// a second copy of its resource and stat-cache lookup for scalar readers.
+// Share the native payload/cursor projection and its resource/stat-cache lookup
+// across scalar readers.
 #[inline(never)]
 // SAFETY: compiler-generated executable code; placement does not change ABI.
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]

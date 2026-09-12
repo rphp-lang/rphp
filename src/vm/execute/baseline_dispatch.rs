@@ -3339,8 +3339,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op2 as usize) };
                 let op1 = op1.dereferenced();
                 let op2 = op2.dereferenced();
-                if let (Some(l1), Some(l2)) =
-                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                if let Some((l1, l2)) = arithmetic_long_pair(op1, op2)
                 {
                     if let Some(sum) = l1.checked_add(l2) {
                         // Peek ahead: if next is Return consuming our result TMP,
@@ -3383,8 +3382,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64))
                         };
                     }
-                } else if let (Some(d1), Some(d2)) =
-                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                } else if let Some((d1, d2)) = arithmetic_double_pair(op1, op2)
                 {
                     let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 + d2)) };
@@ -3424,8 +3422,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op2 as usize) };
                 let op2 = op2.dereferenced();
                 let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
-                if let (Some(l1), Some(l2)) =
-                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                if let Some((l1, l2)) = arithmetic_long_pair(op1, op2)
                 {
                     match l1.checked_add(l2) {
                         Some(sum) => unsafe { frame_tmp_set_long(frame, result_ptr, sum) },
@@ -3433,8 +3430,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64))
                         },
                     }
-                } else if let (Some(d1), Some(d2)) =
-                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                } else if let Some((d1, d2)) = arithmetic_double_pair(op1, op2)
                 {
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 + d2)) };
                 } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
@@ -3467,8 +3463,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
                 let op1 = op1_cv.dereferenced();
                 let op2 = &op_array.literals()[opline.op2 as usize];
-                if let (Some(l1), Some(l2)) =
-                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                if let Some((l1, l2)) = arithmetic_long_pair(op1, op2)
                 {
                     // Peek ahead: if next instruction is SendVal consuming our TMP result,
                     // write directly to the call arg slot and skip the SendVal dispatch.
@@ -3496,8 +3491,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             },
                         }
                     }
-                } else if let (Some(d1), Some(d2)) =
-                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                } else if let Some((d1, d2)) = arithmetic_double_pair(op1, op2)
                 {
                     let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 - d2)) };
@@ -3533,8 +3527,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op1 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op1 as usize) };
                 let op2 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op2 as usize) };
                 let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
-                if let (Some(l1), Some(l2)) =
-                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                if let Some((l1, l2)) = arithmetic_long_pair(op1, op2)
                 {
                     match l1.checked_sub(l2) {
                         Some(diff) => unsafe { frame_tmp_set_long(frame, result_ptr, diff) },
@@ -3542,8 +3535,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 - l2 as f64))
                         },
                     }
-                } else if let (Some(d1), Some(d2)) =
-                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                } else if let Some((d1, d2)) = arithmetic_double_pair(op1, op2)
                 {
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 - d2)) };
                 } else {
@@ -3764,8 +3756,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = op2.dereferenced();
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                if let (Some(l1), Some(l2)) =
-                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                if let Some((l1, l2)) = arithmetic_long_pair(op1, op2)
                 {
                     match l1.checked_add(l2) {
                         Some(sum) => unsafe { frame_tmp_set_long(frame, result_ptr, sum) },
@@ -3773,8 +3764,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64))
                         },
                     }
-                } else if let (Some(d1), Some(d2)) =
-                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                } else if let Some((d1, d2)) = arithmetic_double_pair(op1, op2)
                 {
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 + d2)) };
                 } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
@@ -3806,15 +3796,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                let result = if let (Some(l1), Some(l2)) =
-                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                let result = if let Some((l1, l2)) = arithmetic_long_pair(op1, op2)
                 {
                     l1.checked_sub(l2).map_or_else(
                         || Err(Value::double(l1 as f64 - l2 as f64)),
                         Ok,
                     )
-                } else if let (Some(d1), Some(d2)) =
-                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                } else if let Some((d1, d2)) = arithmetic_double_pair(op1, op2)
                 {
                     Err(Value::double(d1 - d2))
                 } else {
@@ -3849,8 +3837,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                if let (Some(l1), Some(l2)) =
-                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                if let Some((l1, l2)) = arithmetic_long_pair(op1, op2)
                 {
                     match l1.checked_mul(l2) {
                         Some(prod) => unsafe { frame_tmp_set_long(frame, result_ptr, prod) },
@@ -3858,8 +3845,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 * l2 as f64))
                         },
                     }
-                } else if let (Some(d1), Some(d2)) =
-                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                } else if let Some((d1, d2)) = arithmetic_double_pair(op1, op2)
                 {
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 * d2)) };
                 } else {
@@ -3905,8 +3891,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                let result = if let (Some(l1), Some(l2)) =
-                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                let result = if let Some((l1, l2)) = arithmetic_long_pair(op1, op2)
                 {
                     if l2 == 0 {
                         throw_operator!("DivisionByZeroError", "Division by zero");
@@ -3918,8 +3903,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                         Err(Value::double(l1 as f64 / l2 as f64))
                     }
-                } else if let (Some(d1), Some(d2)) =
-                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                } else if let Some((d1, d2)) = arithmetic_double_pair(op1, op2)
                 {
                     if d2 == 0.0 {
                         throw_operator!("DivisionByZeroError", "Division by zero");
@@ -4078,8 +4062,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                let result = if let (Some(l1), Some(l2)) =
-                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                let result = if let Some((l1, l2)) = arithmetic_long_pair(op1, op2)
                 {
                     if let Ok(exponent) = u32::try_from(l2)
                         && let Some(value) = l1.checked_pow(exponent)
@@ -4088,8 +4071,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                         Err(Value::double((l1 as f64).powf(l2 as f64)))
                     }
-                } else if let (Some(d1), Some(d2)) =
-                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                } else if let Some((d1, d2)) = arithmetic_double_pair(op1, op2)
                 {
                     Err(Value::double(d1.powf(d2)))
                 } else {

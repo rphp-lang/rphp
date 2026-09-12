@@ -152,6 +152,8 @@ struct InternalMethodContract {
     name: &'static str,
     is_static: bool,
     is_final: bool,
+    visibility: Visibility,
+    is_abstract: bool,
     signature: SignatureInfo,
     parameter_default_diagnostics: Vec<Option<Box<str>>>,
     return_type_is_tentative: bool,
@@ -1706,7 +1708,8 @@ impl ExecutorGlobals {
         // function pointers; optional I/O/resource functions still fit inside
         // the same envelope.
         self.function_table.reserve(900);
-        self.class_table.reserve(66);
+        // The heap family crosses the old 112-class hash-table envelope.
+        self.class_table.reserve(113);
         self.method_declaring_class.reserve(512);
         // Reflection/display metadata reaches these same table envelopes
         // through repeated growth with default and all features. Reserve the
@@ -1724,7 +1727,9 @@ impl ExecutorGlobals {
         let display_names = self
             .internal_function_display_names
             .get_or_insert_with(|| Box::new(HashMap::new()));
-        display_names.reserve(448usize.saturating_sub(display_names.len()));
+        // Heap callable display names cross the previous 448-entry envelope.
+        // Allocate the final table once instead of rehashing during startup.
+        display_names.reserve(512usize.saturating_sub(display_names.len()));
         // The ordinary ReflectionEnum/ReflectionReference family brings the
         // fixed class/interface inventory above the prior 80-entry vector
         // envelope. Keep modest headroom so registration remains allocation-
@@ -1736,7 +1741,8 @@ impl ExecutorGlobals {
         // DirectoryIterator and FilesystemIterator add two more fixed classes.
         // SplFixedArray adds one fixed-slot container without a startup grow.
         // Deque, stack and queue share one native container implementation.
-        let class_capacity = 110 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        // Abstract heap, min heap and max heap add three fixed declarations.
+        let class_capacity = 113 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;
@@ -2350,6 +2356,8 @@ impl ExecutorGlobals {
             name,
             is_static,
             is_final: false,
+            visibility: Visibility::Public,
+            is_abstract: false,
             signature: SignatureInfo {
                 num_args: param_names.len() as u32,
                 required_num_args,
@@ -2433,6 +2441,36 @@ impl ExecutorGlobals {
             .find(|contract| contract.name.eq_ignore_ascii_case(name))
             .expect("registered method")
             .is_final = true;
+    }
+
+    /// Complete cold internal declarations without adding fields to the
+    /// executor or the callable ABI.
+    #[cold]
+    pub(crate) fn set_internal_method_access(
+        &mut self,
+        owner: &str,
+        name: &str,
+        visibility: Visibility,
+        is_abstract: bool,
+    ) {
+        let contract = self
+            .internal_callable_metadata
+            .as_mut()
+            .and_then(|metadata| metadata.methods.get_mut(owner))
+            .and_then(|methods| methods.iter_mut().find(|method| method.name == name))
+            .expect("registered internal method");
+        contract.visibility = visibility;
+        contract.is_abstract = is_abstract;
+    }
+
+    #[cold]
+    pub(crate) fn internal_method_access(&self, owner: &str, name: &str) -> (Visibility, bool) {
+        self.internal_method_contracts(owner)
+            .iter()
+            .find(|contract| contract.name.eq_ignore_ascii_case(name))
+            .map_or((Visibility::Public, false), |contract| {
+                (contract.visibility, contract.is_abstract)
+            })
     }
 
     #[cold]
@@ -2975,10 +3013,10 @@ impl ExecutorGlobals {
         MethodDeclaration {
             owner: &class_def.name,
             name: contract.name,
-            visibility: Visibility::Public,
+            visibility: contract.visibility,
             enforces_visibility: true,
             is_static: contract.is_static,
-            is_abstract: class_def.is_interface,
+            is_abstract: class_def.is_interface || contract.is_abstract,
             source_file: None,
             source_line: 0,
             signature: &contract.signature,
@@ -6961,11 +6999,16 @@ impl ExecutorGlobals {
                     .map(|(n, _, _, _, _)| n.to_lowercase())
                     .collect();
                 let parent_prefix = format!("{}::", parent_name).to_lowercase();
+                // The registry already stores canonical lowercase method
+                // suffixes. Build each destination key once, after deciding
+                // whether it is inherited, instead of allocating a suffix,
+                // formatting it, and lowercasing the full name again.
+                let child_prefix = format!("{}::", class_name).to_lowercase();
                 let inherited: Vec<(String, *const FunctionCommon, bool)> = self
                     .function_table
                     .iter()
                     .filter(|(k, _)| k.starts_with(&parent_prefix))
-                    .map(|(k, v)| {
+                    .filter_map(|(k, v)| {
                         let method_name = &k[parent_prefix.len()..];
                         let concrete_property_hook = method_name
                             .strip_prefix('$')
@@ -6988,22 +7031,26 @@ impl ExecutorGlobals {
                                     })
                             })
                             .unwrap_or(false);
-                        (method_name.to_string(), *v, concrete_property_hook)
+                        let replaces_synthetic_property_accessor = concrete_property_hook
+                            && !own_explicit_property_hooks.contains(method_name);
+                        if child_method_names.contains(method_name)
+                            && !replaces_synthetic_property_accessor
+                        {
+                            return None;
+                        }
+                        let mut child_full =
+                            String::with_capacity(child_prefix.len() + method_name.len());
+                        child_full.push_str(&child_prefix);
+                        child_full.push_str(method_name);
+                        Some((child_full, *v, replaces_synthetic_property_accessor))
                     })
                     .collect();
-                for (method_name, func_ptr, concrete_property_hook) in inherited {
-                    let replaces_synthetic_property_accessor = concrete_property_hook
-                        && method_name.starts_with('$')
-                        && !own_explicit_property_hooks.contains(&method_name);
-                    if !child_method_names.contains(&method_name)
-                        || replaces_synthetic_property_accessor
-                    {
-                        let child_full = format!("{}::{}", class_name, method_name).to_lowercase();
-                        self.function_table.insert(child_full, func_ptr);
-                        if replaces_synthetic_property_accessor {
-                            inherited_concrete_property_hooks.insert(method_name);
-                        }
+                for (child_full, func_ptr, replaces_synthetic_property_accessor) in inherited {
+                    if replaces_synthetic_property_accessor {
+                        inherited_concrete_property_hooks
+                            .insert(child_full[child_prefix.len()..].to_owned());
                     }
+                    self.function_table.insert(child_full, func_ptr);
                 }
             }
         }
@@ -9035,6 +9082,20 @@ impl ExecutorGlobals {
                 {
                     return Some((visibility, is_static, class_name.to_string()));
                 }
+            }
+            // Internal bodies have no synthetic user-method tuple. Their
+            // cold declaration owns visibility and overrides an inherited
+            // body in exactly the same way as a user declaration.
+            if let Some(contract) = self
+                .internal_method_contracts(class_name)
+                .iter()
+                .find(|contract| contract.name.eq_ignore_ascii_case(method_name))
+            {
+                return Some((
+                    contract.visibility,
+                    contract.is_static,
+                    class_name.to_string(),
+                ));
             }
             // Check parent
             if let Some(parent) = &class_def.parent {

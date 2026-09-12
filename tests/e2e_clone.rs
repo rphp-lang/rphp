@@ -2,6 +2,14 @@ mod common;
 use common::run_php;
 
 #[test]
+fn dynamic_registered_clone_site_preserves_polymorphism_and_reentry() {
+    assert_eq!(
+        run_php(include_str!("fixtures/heap/dynamic_clone.php")),
+        "stdClass:1:1:0:0\nstdClass:1:1:0:0\nstdClass:2:2:0:0\nstdClass:2:2:0:0\nDerivedClone:3:13:0:0\nDerivedClone:3:13:0:0\nstdClass:4:4:0:0\nstdClass:4:4:0:0\nstdClass:0:0:0:0\nstdClass:0:0:0:0\n"
+    );
+}
+
+#[test]
 fn shared_clone_site_preserves_polymorphism_reentry_and_native_state() {
     assert_eq!(
         run_php(

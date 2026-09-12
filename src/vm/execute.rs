@@ -1095,6 +1095,78 @@ pub(crate) struct ArithmeticOperatorOperand {
     pub(crate) leading_numeric: bool,
 }
 
+/// Actual floats cannot take the integer-result branch. Reject them before
+/// projecting the other operand: these projections are pure and diagnostics
+/// still belong to the caller's canonical fallback. Actual integer pairs keep
+/// their direct projection; all remaining pairs keep the eager conversion.
+#[inline(always)]
+fn arithmetic_long_pair(left: &Value, right: &Value) -> Option<(i64, i64)> {
+    if left.value_type() == ValueType::Double {
+        return None;
+    }
+    if left.value_type() == ValueType::Long && right.value_type() == ValueType::Long {
+        Some((left.as_long().unwrap(), right.as_long().unwrap()))
+    } else {
+        left.to_arithmetic_long().zip(right.to_arithmetic_long())
+    }
+}
+
+#[inline(always)]
+fn arithmetic_double_pair(left: &Value, right: &Value) -> Option<(f64, f64)> {
+    if left.value_type() == ValueType::Double && right.value_type() == ValueType::Double {
+        Some((left.as_double().unwrap(), right.as_double().unwrap()))
+    } else {
+        left.to_arithmetic_double()
+            .zip(right.to_arithmetic_double())
+    }
+}
+
+#[cfg(test)]
+mod arithmetic_pair_tests {
+    use super::*;
+
+    #[test]
+    fn numeric_pair_preserves_integer_priority_float_bits_and_mixed_fallbacks() {
+        let values = [
+            Value::undef(),
+            Value::null(),
+            Value::bool(false),
+            Value::bool(true),
+            Value::long(i64::MIN),
+            Value::long(i64::MAX),
+            Value::double(0.0),
+            Value::double(-0.0),
+            Value::double(1.25),
+            Value::double(f64::INFINITY),
+            Value::double(f64::NEG_INFINITY),
+            Value::double(f64::from_bits(0x7ff8_0000_0000_0042)),
+            Value::string("42"),
+            Value::string(" -42.5\n"),
+            Value::string("9223372036854775808"),
+            Value::string("3e1"),
+            Value::string("4tail"),
+            Value::string("invalid"),
+            Value::array(crate::value::PhpArray::new()),
+            Value::owned_reference(Value::double(7.5)),
+        ];
+        let bits = |(left, right): (f64, f64)| (left.to_bits(), right.to_bits());
+        for left in &values {
+            for right in &values {
+                assert_eq!(
+                    arithmetic_long_pair(left, right),
+                    left.to_arithmetic_long().zip(right.to_arithmetic_long())
+                );
+                assert_eq!(
+                    arithmetic_double_pair(left, right).map(bits),
+                    left.to_arithmetic_double()
+                        .zip(right.to_arithmetic_double())
+                        .map(bits)
+                );
+            }
+        }
+    }
+}
+
 /// Convert one operand for ordinary PHP arithmetic while retaining whether a
 /// leading-numeric string must emit `E_WARNING`. The runtime reports that
 /// diagnostic before committing the result and before converting the next

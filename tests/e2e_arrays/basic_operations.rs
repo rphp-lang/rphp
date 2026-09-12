@@ -903,17 +903,20 @@ $queue = new SplPriorityQueue();
 $queue->insert(['low'], [1, 9]);
 $queue->insert(['high-late'], [2, 1]);
 $queue->insert(['high-early'], [2, 8]);
+$projection = clone $queue;
 echo $queue->count(), ':', $queue->isEmpty() ? 'empty' : 'ready', '|';
 foreach ($queue as [$name]) {
     echo $name, ',';
 }
-$queue->setExtractFlags(SplPriorityQueue::EXTR_BOTH);
-$queue->rewind();
-$both = $queue->current();
+echo '|', $queue->count(), ':', $queue->isEmpty() ? 'empty' : 'ready',
+    ':', $queue->current() === null ? 'null' : 'value';
+$projection->setExtractFlags(SplPriorityQueue::EXTR_BOTH);
+$projection->rewind();
+$both = $projection->current();
 echo '|', $both['data'][0], ':', $both['priority'][0], ':', $both['priority'][1];
 "#,
         ),
-        "3:ready|high-early,high-late,low,|high-early:2:8"
+        "3:ready|high-early,high-late,low,|0:empty:null|high-early:2:8"
     );
 }
 

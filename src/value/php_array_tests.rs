@@ -80,6 +80,48 @@ fn packed_long_chunks_preserve_keys_and_reject_other_storage() {
 }
 
 #[test]
+fn packed_batches_match_scalar_appends_across_growth_and_cow() {
+    for initial in [0, 1, 7, 32, 65] {
+        for width in [0, 1, 3, 31, 32, 33, 257] {
+            let mut scalar = PhpArray::new();
+            for value in 0..initial {
+                scalar.push(Value::long(value));
+            }
+            let owner = Value::array(scalar.clone());
+            let mut copy = owner.clone();
+            let batch: Vec<i64> = (0..width).map(|i| -i - 1).collect();
+            for _ in 0..3 {
+                assert!(copy.as_array_mut().unwrap().push_packed_long_chunk(&batch));
+                for value in &batch {
+                    scalar.push(Value::long(*value));
+                }
+                let actual = copy.as_array().unwrap();
+                assert_eq!(actual.len(), scalar.len());
+                assert_eq!(actual.next_int_key, scalar.next_int_key);
+                assert_eq!(
+                    actual.values().map(Value::as_long).collect::<Vec<_>>(),
+                    scalar.values().map(Value::as_long).collect::<Vec<_>>()
+                );
+                assert_eq!(owner.as_array().unwrap().len(), initial as usize);
+            }
+            copy.as_array_mut().unwrap().push(Value::long(i64::MAX));
+            assert_eq!(
+                copy.as_array()
+                    .unwrap()
+                    .get_int(scalar.next_int_key)
+                    .and_then(Value::as_long),
+                Some(i64::MAX)
+            );
+        }
+    }
+    let mut noncanonical = PhpArray::new();
+    noncanonical.next_int_key = i64::MAX;
+    assert!(!noncanonical.push_packed_long_chunk(&[7]));
+    assert!(noncanonical.is_empty());
+    assert_eq!(noncanonical.next_int_key, i64::MAX);
+}
+
+#[test]
 fn removal_preserves_the_logical_internal_cursor_position() {
     let mut array = PhpArray::new();
     array.push(Value::string("first"));

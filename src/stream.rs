@@ -166,8 +166,11 @@ pub struct PhpStream {
 
 #[derive(Default)]
 struct ReadBuffer {
+    // Keep initialized scratch bytes across refills/seeks. Only start..end is
+    // published data; the remaining initialized storage is never observable.
     bytes: Vec<u8>,
     start: usize,
+    end: usize,
 }
 
 /// Stable metadata exposed by the currently admitted seekable backends.
@@ -466,6 +469,37 @@ impl PhpStream {
         Ok(total)
     }
 
+    /// Fill an owned result without first zeroing bytes that an unbuffered
+    /// memory cursor will replace. Callers reserve the requested capacity
+    /// before resource projection, preserving allocation/validation order.
+    pub(crate) fn read_into_vec(
+        &mut self,
+        buffer: &mut Vec<u8>,
+        length: usize,
+    ) -> io::Result<usize> {
+        buffer.clear();
+        if self.is_readable()
+            && self.unread_len() == 0
+            && let StreamBackend::Memory(memory) = &mut self.backend
+        {
+            let position = memory.position();
+            let start = usize::try_from(position)
+                .unwrap_or(usize::MAX)
+                .min(memory.get_ref().len());
+            let count = length.min(memory.get_ref().len() - start);
+            buffer.extend_from_slice(&memory.get_ref()[start..start + count]);
+            memory.set_position(position + count as u64);
+            if length != 0 {
+                self.eof = count < length;
+            }
+            return Ok(count);
+        }
+        buffer.resize(length, 0);
+        let count = self.read(buffer)?;
+        buffer.truncate(count);
+        Ok(count)
+    }
+
     fn read_once(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         if self.unread_len() != 0 || self.is_plain_file() {
             self.read_prefetched(buffer)
@@ -476,9 +510,7 @@ impl PhpStream {
 
     #[inline]
     fn unread_len(&self) -> usize {
-        self.read_buffer
-            .as_ref()
-            .map_or(0, |b| b.bytes.len() - b.start)
+        self.read_buffer.as_ref().map_or(0, |b| b.end - b.start)
     }
 
     /// Only actual readahead allocates. Memory fread remains a direct cursor
@@ -493,14 +525,16 @@ impl PhpStream {
             }
             let mut buffer = self.read_buffer.take().unwrap_or_default();
             buffer.start = 0;
-            buffer.bytes.resize(8192, 0);
-            let result = self.read_backend(&mut buffer.bytes);
-            buffer.bytes.truncate(result.as_ref().copied().unwrap_or(0));
+            if buffer.bytes.len() < 8192 {
+                buffer.bytes.resize(8192, 0);
+            }
+            let result = self.read_backend(&mut buffer.bytes[..8192]);
+            buffer.end = result.as_ref().copied().unwrap_or(0);
             self.read_buffer = Some(buffer);
             result?;
         }
         let buffer = self.read_buffer.as_mut().expect("prefetch buffer");
-        let count = output.len().min(buffer.bytes.len() - buffer.start);
+        let count = output.len().min(buffer.end - buffer.start);
         output[..count].copy_from_slice(&buffer.bytes[buffer.start..buffer.start + count]);
         buffer.start += count;
         Ok(count)
@@ -517,9 +551,12 @@ impl PhpStream {
             buffer.start -= bytes.len();
             buffer.bytes[buffer.start..buffer.start + bytes.len()].copy_from_slice(bytes);
         } else {
-            let remaining = buffer.bytes.len() - buffer.start;
-            buffer.bytes.copy_within(buffer.start.., 0);
-            buffer.bytes.resize(remaining + bytes.len(), 0);
+            let remaining = buffer.end - buffer.start;
+            buffer.bytes.copy_within(buffer.start..buffer.end, 0);
+            buffer.end = remaining + bytes.len();
+            if buffer.bytes.len() < buffer.end {
+                buffer.bytes.resize(buffer.end, 0);
+            }
             buffer.bytes.copy_within(..remaining, bytes.len());
             buffer.bytes[..bytes.len()].copy_from_slice(bytes);
             buffer.start = 0;
@@ -530,13 +567,13 @@ impl PhpStream {
     pub(crate) fn prefetched_bytes(&self) -> &[u8] {
         self.read_buffer
             .as_ref()
-            .map_or(&[], |b| &b.bytes[b.start..])
+            .map_or(&[], |b| &b.bytes[b.start..b.end])
     }
 
     pub(crate) fn discard_prefetched(&mut self) {
         if let Some(buffer) = self.read_buffer.as_mut() {
-            buffer.bytes.clear();
             buffer.start = 0;
+            buffer.end = 0;
         }
     }
 
@@ -649,8 +686,31 @@ impl PhpStream {
         if maximum == 0 {
             return Ok(None);
         }
-        let mut chunk = [0u8; 8 * 1024];
+        // A bounded short read must not initialize an 8-KiB scratch buffer.
+        // The prefetch size and logical cursor are unchanged: only scratch
+        // bytes that read_prefetched can actually fill need initialization.
+        if maximum <= 64 {
+            return self.read_line_chunks(buffer, maximum, &mut [0u8; 64]);
+        }
+        self.read_line_large(buffer, maximum)
+    }
 
+    // Keep the large scratch allocation out of the short-read stack frame.
+    #[inline(never)]
+    fn read_line_large(
+        &mut self,
+        buffer: &mut Vec<u8>,
+        maximum: usize,
+    ) -> io::Result<Option<usize>> {
+        self.read_line_chunks(buffer, maximum, &mut [0u8; 8 * 1024])
+    }
+
+    fn read_line_chunks(
+        &mut self,
+        buffer: &mut Vec<u8>,
+        maximum: usize,
+        chunk: &mut [u8],
+    ) -> io::Result<Option<usize>> {
         while buffer.len() < maximum {
             let requested = chunk.len().min(maximum - buffer.len());
             let read = self.read_prefetched(&mut chunk[..requested])?;
@@ -720,7 +780,7 @@ impl PhpStream {
                     if self.memory_append_after_truncate && !self.mode.append {
                         let logical_position = memory.position();
                         memory.set_position(memory.get_ref().len() as u64);
-                        let result = memory.write(buffer);
+                        let result = Self::write_memory(memory, buffer);
                         if let Ok(written) = result {
                             memory.set_position(logical_position.saturating_add(written as u64));
                         } else {
@@ -728,10 +788,10 @@ impl PhpStream {
                         }
                         result
                     } else {
-                        memory.write(buffer)
+                        Self::write_memory(memory, buffer)
                     }
                     #[cfg(not(feature = "stream-truncate"))]
-                    memory.write(buffer)
+                    Self::write_memory(memory, buffer)
                 }
                 StreamBackend::Temp(temp) => temp.write(buffer, self.mode.append),
                 StreamBackend::Standard(StandardStream::Output) => {
@@ -748,6 +808,22 @@ impl PhpStream {
                 result => return result,
             }
         }
+    }
+
+    #[inline]
+    fn write_memory(memory: &mut Cursor<Vec<u8>>, buffer: &[u8]) -> io::Result<usize> {
+        // An overwrite within initialized storage cannot grow the vector or
+        // create a gap. Keep growth, far cursors and overflow on Cursor's
+        // existing allocation/error path instead of duplicating those rules.
+        if let Ok(start) = usize::try_from(memory.position())
+            && let Some(end) = start.checked_add(buffer.len())
+            && end <= memory.get_ref().len()
+        {
+            memory.get_mut()[start..end].copy_from_slice(buffer);
+            memory.set_position(end as u64);
+            return Ok(buffer.len());
+        }
+        memory.write(buffer)
     }
 
     pub fn flush(&mut self) -> io::Result<()> {

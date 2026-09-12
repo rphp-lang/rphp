@@ -6716,7 +6716,7 @@ fn collect_reflected_methods(
         if seen.insert(name.to_ascii_lowercase()) {
             methods.push((
                 name.to_string(),
-                Visibility::Public,
+                eg.internal_method_access(&class.name, name).0,
                 is_static,
                 eg.internal_method_is_final(&class.name, name),
                 function,

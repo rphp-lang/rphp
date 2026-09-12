@@ -22533,7 +22533,7 @@ pub(crate) fn find_method_in_class_hierarchy<'a>(
             // SAFETY: request function-table entries retain immutable
             // FunctionCommon metadata for the complete callback lookup.
             return Some((
-                Visibility::Public,
+                eg.internal_method_access(&class.name, method_name).0,
                 eg.internal_method_is_static(function)
                     || unsafe { (*function).sig.this_offset == 0 },
                 function,

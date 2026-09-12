@@ -38,6 +38,9 @@ specimen!(resources);
 specimen!(metadata);
 specimen!(read_error);
 specimen!(prebuffer);
+specimen!(bounded_lines);
+specimen!(owned_read);
+specimen!(retained_readahead);
 specimen!(output_order);
 #[cfg(feature = "include-path")]
 specimen!(include_source);

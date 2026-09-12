@@ -35,6 +35,7 @@ specimen!(registry_growth);
 specimen!(read_bounds);
 specimen!(seek_bounds);
 specimen!(write_bounds);
+specimen!(write_owners);
 specimen!(strict);
 specimen!(callback_state);
 specimen!(pure_coercions);
