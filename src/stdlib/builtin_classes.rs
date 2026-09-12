@@ -16,7 +16,7 @@ pub(super) mod deque;
 mod file_info;
 pub(super) mod fixed_array;
 mod heap;
-mod iterator_delegate;
+pub(super) mod iterator_delegate;
 mod recursive_iterator;
 pub(crate) use array_object::cursor::{
     Move as NativeIteratorMove, Projection as NativeIteratorProjection,
@@ -3702,6 +3702,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                     "Traversable".into(),
                     "Countable".into(),
                     "ArrayAccess".into(),
+                    "Serializable".into(),
                 ]
             } else {
                 vec![]

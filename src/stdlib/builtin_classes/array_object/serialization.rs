@@ -106,6 +106,33 @@ pub(in crate::stdlib) fn restore_members(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    restore_members_with_policy(receiver, members, ed, eg, true, None)
+}
+
+/// Heap/deque native hooks load the same raw member table, but report a
+/// rejected readonly slot using their container-specific serialization error.
+#[cold]
+#[inline(never)]
+pub(in crate::stdlib) fn restore_container_members(
+    receiver: &Value,
+    members: &PhpArray,
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    invalid: Option<&str>,
+) -> Result<(), VmError> {
+    restore_members_with_policy(receiver, members, ed, eg, false, invalid)
+}
+
+#[cold]
+#[inline(never)]
+fn restore_members_with_policy(
+    receiver: &Value,
+    members: &PhpArray,
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    array_wrapper: bool,
+    invalid: Option<&str>,
+) -> Result<(), VmError> {
     let class_name = receiver
         .as_object()
         .expect("native receiver")
@@ -121,7 +148,7 @@ pub(in crate::stdlib) fn restore_members(
             crate::stdlib::serialization::unserialized_property_storage_key(eg, &object, &name);
         // Native storage is an implementation slot, not a PHP member. A
         // serialized member with the same spelling must not overwrite it.
-        let native_collision = storage_key == array_object_storage_key(&object);
+        let native_collision = array_wrapper && storage_key == array_object_storage_key(&object);
         let old = if native_collision {
             object
                 .get_dynamic_property_with_position(&name)
@@ -141,7 +168,11 @@ pub(in crate::stdlib) fn restore_members(
                 definition.declaring_class, definition.name
             );
             drop(object);
-            eg.exception = Some(make_error_value("Error", &message));
+            eg.exception = Some(if let Some(invalid) = invalid {
+                make_error_value("Exception", invalid)
+            } else {
+                make_error_value("Error", &message)
+            });
             return Ok(());
         }
         let release = old.and_then(|value| release_plan(eg, value));
@@ -160,12 +191,12 @@ pub(in crate::stdlib) fn restore_members(
                     "Creation of dynamic property {class_name}::${display_name} is deprecated"
                 ),
             )?;
-            if eg.exception.is_some() {
+            if eg.exception.is_some() && array_wrapper {
                 return Ok(());
             }
         }
         run_prepared_value_destructor(eg, release)?;
-        if eg.exception.is_some() {
+        if eg.exception.is_some() && array_wrapper {
             return Ok(());
         }
         // PHP's native array-wrapper restore copies members directly, unlike
@@ -181,6 +212,15 @@ pub(in crate::stdlib) fn restore_members(
                 .as_object_mut()
                 .expect("native receiver")
                 .set_property(&storage_key, value.clone_for_php_storage());
+        }
+        if eg.exception.is_some() {
+            // Native container loading commits this member even if its
+            // diagnostic/destructor failed. Heap hooks replace that error
+            // with their serialization exception; deque hooks propagate it.
+            if let Some(invalid) = invalid {
+                eg.exception = Some(make_error_value("Exception", invalid));
+            }
+            return Ok(());
         }
     }
     Ok(())

@@ -2776,7 +2776,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             && !destination_is_reference
                             && ((&*dest).value_type() as u8) <= ValueType::Double as u8
                         {
-                            frame_slot_set(frame, dest, cloned);
+                            if (cloned.value_type() as u8) <= ValueType::Double as u8 {
+                                // Both initialized CV values are primitive:
+                                // there is no owner to retire or publish. Keep
+                                // any conservative heap bit unchanged; it can
+                                // only cause a later no-op scalar drop. Unlike
+                                // TMP storage, these old bytes are initialized.
+                                stats::inc_write_frame_slot(false);
+                                dest.write(cloned);
+                            } else {
+                                frame_slot_set(frame, dest, cloned);
+                            }
                             (*frame).opline = opline_ptr.add(1);
                             continue;
                         }

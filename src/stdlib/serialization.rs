@@ -587,7 +587,7 @@ fn incomplete_object(class_name: &str, properties: &PhpArray) -> Value {
 /// durable array/object storage. Ordinary `Value::clone()` deliberately reads
 /// through references for PHP by-value assignment, which is not the operation
 /// performed while materializing one serialized graph.
-fn clone_unserialized_storage_value(value: &Value) -> Value {
+pub(super) fn clone_unserialized_storage_value(value: &Value) -> Value {
     if value.is_owned_reference() {
         value.clone_owned_reference_alias()
     } else {
@@ -809,6 +809,83 @@ fn populate_object_properties(
 }
 
 impl<'a> Parser<'a> {
+    #[cold]
+    #[inline(never)]
+    fn deque_payload(
+        &mut self,
+        receiver: &Value,
+        eg: &mut ExecutorGlobals,
+        allowed: &AllowedClasses,
+    ) -> Result<(), ()> {
+        use super::builtin_classes::deque::serialization as native;
+        if self.input.is_empty() {
+            return Ok(());
+        }
+        native::legacy_clear(receiver, eg).map_err(|_| ())?;
+        if eg.exception.is_some() {
+            return Err(());
+        }
+        let result = (|| {
+            let flags = self.deque_value(eg, allowed)?;
+            let flags = flags.dereferenced();
+            if flags.value_type() != ValueType::Long {
+                return Err(());
+            }
+            native::legacy_flags(receiver, flags.as_long().ok_or(())?);
+            while self.position < self.input.len() {
+                if self.input[self.position] != b':' {
+                    return Err(());
+                }
+                self.position += 1;
+                let value = self.deque_value(eg, allowed)?;
+                if eg.exception.is_some() {
+                    return Err(());
+                }
+                native::legacy_append(receiver, &value);
+            }
+            Ok(())
+        })();
+        if result.is_err() && eg.exception.is_none() {
+            eg.exception = Some(crate::value::make_error_value(
+                "UnexpectedValueException",
+                &format!(
+                    "Error at offset {} of {} bytes",
+                    self.position,
+                    self.input.len()
+                ),
+            ));
+        }
+        result
+    }
+
+    #[cold]
+    fn deque_value(
+        &mut self,
+        eg: &mut ExecutorGlobals,
+        allowed: &AllowedClasses,
+    ) -> Result<Value, ()> {
+        let start = self.position;
+        let result = self.value(eg, allowed);
+        if result.is_err() {
+            // A malformed atomic token has not committed an input value.
+            // Completed reference tokens instead fail after resolving their
+            // index. Compound values retain the canonical parser's nested
+            // failure position; never rewind them to the outer container.
+            match self.input.get(start) {
+                Some(b'N' | b'b' | b'i' | b'd') => self.position = start,
+                Some(b'R' | b'r')
+                    if self.position == start
+                        || self.input.get(self.position - 1) != Some(&b';') =>
+                {
+                    self.position = start;
+                }
+                Some(b's' | b'a' | b'O' | b'C' | b'E' | b'R' | b'r') => {}
+                _ => self.position = start,
+            }
+        }
+        result
+    }
+
     /// Parse the native Serializable payload using this graph's reference
     /// table. Embedded C: payloads and direct method calls share this parser;
     /// only the latter starts a fresh graph.
@@ -1422,6 +1499,10 @@ impl<'a> Parser<'a> {
                 if allowed {
                     let resolved =
                         crate::stdlib::resolve_object_public_method(eg, &object, "unserialize");
+                    let native_deque = resolved.as_ref().is_some_and(|resolved| {
+                        eg.find_function("SplDoublyLinkedList::unserialize")
+                            .is_some_and(|function| function == resolved.func_ptr)
+                    });
                     let native = resolved.as_ref().is_some_and(|resolved| {
                         ["ArrayObject::unserialize", "ArrayIterator::unserialize"]
                             .iter()
@@ -1430,19 +1511,23 @@ impl<'a> Parser<'a> {
                                     .is_some_and(|function| function == resolved.func_ptr)
                             })
                     });
-                    if native {
+                    if native || native_deque {
                         // Keep global reference numbers while bounding native
                         // syntax and error offsets to the declared payload.
                         let outer_input = self.input;
                         let outer_position = self.position;
                         self.input = payload;
                         self.position = 0;
-                        let result = self.array_wrapper_payload(
-                            &object,
-                            eg,
-                            allowed_classes,
-                            self.source_frame,
-                        );
+                        let result = if native_deque {
+                            self.deque_payload(&object, eg, allowed_classes)
+                        } else {
+                            self.array_wrapper_payload(
+                                &object,
+                                eg,
+                                allowed_classes,
+                                self.source_frame,
+                            )
+                        };
                         self.input = outer_input;
                         self.position = outer_position;
                         result?;
@@ -1532,6 +1617,50 @@ pub(super) fn serialize_array_wrapper(
         &mut state,
     )?;
     Ok(super::php_byte_result(output.into_bytes(), false))
+}
+
+#[cold]
+#[inline(never)]
+pub(super) fn serialize_deque(
+    receiver: &Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<Value, VmError> {
+    use super::builtin_classes::deque::serialization as native;
+    let (flags, mut cursor) = native::legacy_start(receiver, eg);
+    let mut output = SerializeOutput::new();
+    let mut state = SerializeState::new();
+    serialize_value(&Value::long(i64::from(flags)), &mut output, eg, &mut state)?;
+    while let Some(value) = cursor.value(receiver) {
+        output.push(':');
+        serialize_value(&value, &mut output, eg, &mut state)?;
+        super::builtin_classes::iterator_delegate::discard(value, eg)?;
+        if eg.exception.is_some() {
+            return Ok(Value::null());
+        }
+        cursor.advance(receiver);
+    }
+    Ok(super::php_byte_result(output.into_bytes(), false))
+}
+
+#[cold]
+#[inline(never)]
+pub(super) fn unserialize_deque(
+    receiver: &Value,
+    input: &[u8],
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+) {
+    let mut parser = Parser {
+        input,
+        source_frame: ed,
+        position: 0,
+        last_value_start: 0,
+        next_reference: 1,
+        references: HashMap::new(),
+        uppercase_reference_targets: uppercase_reference_targets(input),
+        diagnostic: None,
+    };
+    let _ = parser.deque_payload(receiver, eg, &AllowedClasses::All);
 }
 
 #[cold]

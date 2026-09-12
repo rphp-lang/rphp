@@ -3,6 +3,43 @@ mod common;
 use common::run_php;
 
 #[test]
+fn scalar_assignment_preserves_values_aliases_and_heap_transitions_in_both_frame_sizes() {
+    let body = r#"<?php
+function assign_values() {
+    /* FRAME_LOCALS */
+    $keep = ['alive'];
+    $slot = 'retired string';
+    $slot = 0;
+    foreach ([null, false, true, 0, 17, -2.25, -0.0] as $value) {
+        $slot = $value;
+        $slot = $slot;
+        echo serialize($slot), '|';
+    }
+    $alias =& $slot;
+    $slot = 23;
+    echo $alias, '|';
+    unset($alias);
+    $slot = ['owned'];
+    $copy = $slot;
+    $slot = 31;
+    $slot = 37;
+    echo $copy[0], '|', $slot, '|', $keep[0], "\n";
+}
+assign_values();
+"#;
+    for locals in [0, 80] {
+        let padding = (0..locals)
+            .map(|index| format!("$padding_{index} = {index};\n"))
+            .collect::<String>();
+        assert_eq!(
+            run_php(&body.replace("/* FRAME_LOCALS */", &padding)),
+            "N;|b:0;|b:1;|i:0;|i:17;|d:-2.25;|d:-0;|23|owned|37|alive\n",
+            "additional local slots: {locals}",
+        );
+    }
+}
+
+#[test]
 fn test_e2e_echo_42() {
     assert_eq!(run_php("<?php echo 42;"), "42");
 }

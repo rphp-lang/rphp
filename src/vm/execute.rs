@@ -1095,20 +1095,23 @@ pub(crate) struct ArithmeticOperatorOperand {
     pub(crate) leading_numeric: bool,
 }
 
-/// Actual floats cannot take the integer-result branch. Reject them before
-/// projecting the other operand: these projections are pure and diagnostics
-/// still belong to the caller's canonical fallback. Actual integer pairs keep
-/// their direct projection; all remaining pairs keep the eager conversion.
+/// Check the exact integer pair with one combined tag predicate. All other
+/// projections remain pure and short-circuit on failure; PHP diagnostics
+/// belong to the caller's canonical fallback.
 #[inline(always)]
 fn arithmetic_long_pair(left: &Value, right: &Value) -> Option<(i64, i64)> {
-    if left.value_type() == ValueType::Double {
+    let integer_tag = ValueType::Long as u8;
+    let left_tag = left.value_type() as u8;
+    if left_tag == ValueType::Double as u8 {
         return None;
     }
-    if left.value_type() == ValueType::Long && right.value_type() == ValueType::Long {
-        Some((left.as_long().unwrap(), right.as_long().unwrap()))
-    } else {
-        left.to_arithmetic_long().zip(right.to_arithmetic_long())
+    let right_tag = right.value_type() as u8;
+    // OR of the tag differences is zero only when both tags are Long.
+    // In particular this does not admit a payload-free null or boolean.
+    if ((left_tag ^ integer_tag) | (right_tag ^ integer_tag)) == 0 {
+        return Some((left.as_long().unwrap(), right.as_long().unwrap()));
     }
+    Some((left.to_arithmetic_long()?, right.to_arithmetic_long()?))
 }
 
 #[inline(always)]

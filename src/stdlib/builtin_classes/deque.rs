@@ -6,6 +6,8 @@ use crate::vm::function::InternalFunctionHandler;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+pub(in crate::stdlib) mod serialization;
+
 type NodeRef = Rc<RefCell<Node>>;
 struct Node {
     slot: usize,
@@ -25,7 +27,7 @@ struct Deque {
     head: Option<usize>,
     tail: Option<usize>,
     len: usize,
-    mode: u8,
+    mode: i32,
     cursor: Position,
 }
 impl Deque {
@@ -119,7 +121,7 @@ impl Deque {
         }
         Some(self.node(slot))
     }
-    fn rewind(&self, position: &mut Position, mode: u8) {
+    fn rewind(&self, position: &mut Position, mode: i32) {
         position.node =
             (if mode & 2 != 0 { self.tail } else { self.head }).map(|slot| self.node(slot));
         position.key = if mode & 2 != 0 {
@@ -128,7 +130,7 @@ impl Deque {
             0
         };
     }
-    fn advance(&mut self, position: &mut Position, mode: u8, backward: bool) -> Option<Value> {
+    fn advance(&mut self, position: &mut Position, mode: i32, backward: bool) -> Option<Value> {
         let node = position.node.take()?;
         let reverse = (mode & 2 != 0) ^ backward;
         let next = {
@@ -161,7 +163,10 @@ impl NativeObjectState for Deque {
         while let Some(current) = slot {
             let node = self.node(current);
             let node = node.borrow();
-            copy.insert_before(None, node.value.dereferenced().clone());
+            copy.insert_before(
+                None,
+                crate::stdlib::serialization::clone_unserialized_storage_value(&node.value),
+            );
             slot = node.next;
         }
         copy.cursor.node = copy.head.map(|slot| copy.node(slot));
@@ -206,7 +211,7 @@ impl NativeObjectState for Deque {
 struct ConsumerCursor {
     owner: Value,
     position: Position,
-    mode: u8,
+    mode: i32,
 }
 impl Default for ConsumerCursor {
     fn default() -> Self {
@@ -397,7 +402,7 @@ fn set_mode(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
     ensure(arg!(ed, 0), eg);
     let mut object = arg!(ed, 0).as_object_mut().unwrap();
     let state = object.native_object_state_mut::<Deque>();
-    if state.mode & 4 != 0 && state.mode & 2 != mode as u8 & 2 {
+    if state.mode & 4 != 0 && state.mode & 2 != mode as i32 & 2 {
         error(
             eg,
             "RuntimeException",
@@ -405,7 +410,7 @@ fn set_mode(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
         );
         return Ok(());
     }
-    state.mode = (state.mode & 4) | (mode as u8 & 3);
+    state.mode = (state.mode & 4) | (mode as i32 & 3);
     ret!(rv, Value::long(i64::from(state.mode)));
 }
 fn add(ed: *mut ExecuteData, _rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -765,6 +770,38 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ("SplDoublyLinkedList", "valid", valid, &[], &[], Bool),
         (
             "SplDoublyLinkedList",
+            "__serialize",
+            serialization::serialize,
+            &[],
+            &[],
+            Array,
+        ),
+        (
+            "SplDoublyLinkedList",
+            "__unserialize",
+            serialization::unserialize,
+            &["data"],
+            &[Array],
+            Void,
+        ),
+        (
+            "SplDoublyLinkedList",
+            "serialize",
+            serialization::legacy_serialize,
+            &[],
+            &[],
+            ParamTypeHint::String,
+        ),
+        (
+            "SplDoublyLinkedList",
+            "unserialize",
+            serialization::legacy_unserialize,
+            &["data"],
+            &[ParamTypeHint::String],
+            Void,
+        ),
+        (
+            "SplDoublyLinkedList",
             "__debugInfo",
             debug_info,
             &[],
@@ -775,7 +812,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ("SplQueue", "dequeue", shift, &[], &[], Mixed),
     ];
     let mut functions = Vec::with_capacity(rows.len());
-    eg.reserve_internal_method_contracts("SplDoublyLinkedList", 22);
+    eg.reserve_internal_method_contracts("SplDoublyLinkedList", 26);
     eg.reserve_internal_method_contracts("SplQueue", 2);
     for (owner, name, handler, names, hints, result) in rows {
         let required = names.len() as u32;

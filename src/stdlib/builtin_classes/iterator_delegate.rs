@@ -90,7 +90,7 @@ fn inner(receiver: &Value) -> Value {
         .clone()
 }
 
-pub(super) fn discard(value: Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+pub(in crate::stdlib) fn discard(value: Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let release = if value.dereferenced().value_type() == ValueType::Array {
         prepare_replaced_value_tree_destructor_with_references(eg, &value, 1)
     } else {

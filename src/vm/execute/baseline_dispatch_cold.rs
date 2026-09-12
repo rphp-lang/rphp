@@ -13,6 +13,18 @@ pub(crate) fn sync_dirty_globals_to_frame(eg: &mut ExecutorGlobals, frame: &mut 
     // published by that same frame's immutable op-array. The canonical slot
     // writer keeps heap cleanup metadata synchronized with the replacement.
     unsafe {
+        // A stdlib diagnostic can suspend an internal handler rather than a
+        // user op-array. Only a live user ancestor has tracked CV metadata;
+        // interpreting an InternalFunction as UserFunction corrupts the read.
+        let mut frame = frame;
+        while frame.func.is_null()
+            || Function::from_common_ptr(frame.func).fn_type() != FunctionType::User
+        {
+            if frame.prev_execute_data.is_null() {
+                return;
+            }
+            frame = &mut *frame.prev_execute_data;
+        }
         let vars = {
             let op_array = frame.op_array();
             if !op_array.main_scope_vars.is_empty() {

@@ -8,70 +8,68 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
-`spl-heap-priority-queue-contracts`, against `b4e1043c`: **+36/-0** SPL passes.
-All 26 admitted cases pass. SPL reaches 419 pass / 326 fail /
-31 unsupported / 8 skip / 1 XFAIL; the separate 7,174-case core retains
-**6,446 pass / 335 fail / 182 skip / 211 unsupported** and identical pass sets.
-Together these selected 7,959 cases have **6,865 passes and 661 failures**,
-not complete PHP coverage. Every gain independently passes PHP 8.5.10.
+`spl-native-container-serialization-contracts`, against `8aa9251d`:
+**+15/-0** SPL passes. SPL reaches **434 pass / 311 fail /
+31 unsupported / 8 skip / 1 XFAIL**. Core retains **6,446 pass /
+335 fail / 182 skip / 211 unsupported**, with identical pass sets.
+Together the selected 7,959 cases have **6,880 passes and 646 failures**;
+this is not complete PHP coverage. Every gain independently passes PHP 8.5.10.
+Neither suite loses a pass, introduces a process hazard or moves a failure stage.
 
-SplHeap, SplMinHeap, SplMaxHeap and SplPriorityQueue share sparse fully traced
-native ownership and logarithmic heap mutation. Ordering/ties, extraction
-flags, destructive live iteration, compare overrides, modification locks,
-corruption/recovery, references/COW, clone and reentrant retirement match
-original oracles. State is published before callbacks and retirement; no
-object borrow spans user code. Cold method visibility/abstract metadata and
-iterator projections use the same canonical contract.
+Heap/deque modern state and legacy deque payloads reuse the canonical serializer
+and reference table. Fully traced native ownership preserves references/COW,
+identity, cycles, signed flags, clone, callback locks and corruption checks.
+Restore validates and publishes members, flags and accepted prefixes in PHP
+order, including partial failures and reentrant retirement. Stable legacy
+cursor owners survive callback deletion without retaining object borrows.
 
-Profile-backed common-path work removal classifies native stream payloads once,
-retains initialized read scratch, avoids redundant memory copies/array capacity
-checks, reuses resolved clone identity and constructs inherited method keys
-once. Numeric projections preserve integer precedence, float bits and canonical
-mixed/error paths. Scalar-call/JIT production source is byte-identical to the accepted
-parent; additional boundary regressions remain. No common Value/VM field,
-opcode, dependency, JIT admission or unsafe-ceiling change.
+The diagnostic boundary now walks past internal frames before reading user
+op-array metadata. Profile-backed arithmetic projection and initialized scalar
+CV writes remove redundant conversion/heap bookkeeping while preserving aliases,
+float bits and heap transitions. There is no common Value/VM field, opcode,
+dependency, JIT admission or unsafe-ceiling change; unsafe stays 1,622/289.
 
-Twenty-eight original heap cases pass 84 byte-exact PHP/default/JIT-disabled
-runs. The final checked matrix passes 5,174/4,864/5,245/5,267/5,318 tests
-(13/13/13/13/16 ignored, none filtered), plus all-features/all-targets,
-adjacent oracles, exact no-loss, Composer/Symfony S0-S3, runner/unsafe self-tests,
-formatting and public hygiene. A PHP-oracle correction replaces one old E2E's
-snapshot-iteration assumption with destructive drain plus cloned flag coverage;
-the rejected default log is retained and measured production stays byte-exact.
-Two untouched synthetic IPv4 fixture strings are verified against the public
-parent rather than treated as newly introduced private connectivity; all new
-findings remain blocking. The completed matrix is fingerprint/hash-verified.
-Cleanup runs between large configurations and after build/benchmark cycles.
-Five later serialization stages remain reviewed
-failures. Six pre-existing temporary-stream EOF differences remain explicit:
-the 252-case ownership oracle preserves every parent result, 246 also match PHP.
-General containers/serialization, Reflection rebinding, debug refcounts,
-suspension, 32-bit and allocation-limit/OOM equivalence remain unclaimed.
+Twenty-three original cases pass 69 byte-exact PHP/default/JIT-disabled runs,
+with additional raw-byte, float, callback and small/large-frame regressions.
+The checked matrix passes 5,198/4,888/5,269/5,291/5,342 tests
+(13/13/13/13/16 ignored, none filtered), plus all-features/all-targets.
+Exact no-loss, Composer/Symfony S0-S3, runner/unsafe self-tests, formatting and
+public hygiene pass. Evidence is fingerprint/hash-verified; cleanup runs
+between configurations and after build/benchmark cycles.
 
-All **59 fixed-parent 32-pair controls** meet unchanged common +1% / pay-use
-+5% limits. Rejected timings and instruction-profile hypotheses remain recorded;
-there are no unchanged timing rerolls or hardware-counter claims. Four new-API
-candidate/PHP ratios are 1.667/3.406/2.325/2.489, with exact outputs, not
-absent-parent deltas. The authorized shared-host guard records one background
-event; this is not exclusive/private-host evidence.
+All **63 fixed-parent 32-pair controls** meet unchanged common +1% / pay-use
++5% limits (highest +0.649% / +4.740%). Rejected timings and instruction-profile
+hypotheses remain recorded; no unchanged timing rerolls or hardware-counter
+claims. Four new-API candidate/PHP ratios are 1.075/1.404/1.243/1.475, with
+exact outputs rather than absent-parent deltas. The authorized shared-host
+performance guard records one background event, not exclusive-host evidence.
+
+Five supplying cases remain explicit independent failures: nested native debug
+projection, canonical `__wakeup`, and SplObjectStorage wire/member contracts.
+Arbitrary nested malformed-input offsets remain general parser debt.
+Other containers, general restoration, suspension, 32-bit and
+allocation-limit/OOM equivalence are not claimed.
 
 SHA-256 evidence:
 
-- Release: `1b55b001be368aeac0156eca3d29f966e76358db40628c0e1ad34b2abe5bed73`.
-- Complete technical record: `395068b82333883ad9af9d92109528d04c8f94057bb5bf2d9983d179769db445`.
-- Matrix: `2a749cdf3b89710f40637f7adb219b2f601ae99ac104477b430047b82b5e7aa0`.
-- Test-only oracle correction: `bb644f8d5f9e690fd113cabf56f05c4616fef76fdf2f355b72f9daa692ee1bce`.
-- SPL manifest / pass set: `97fb89ed9bb06da28ecbb4335186d19393f055180571bd6aa4248bbec6bd138c` / `fa7543f7092d02dc544879483d9b609b268082d86a8fce7ac54bc03aca557f87`.
-- Reference manifest for all gains: `7cbccbc204e0cd828ecfa0e91237e7e47bc4ca2a84fd49036d8bd8973852a292`.
-- Zend/lang manifest / pass set: `be524a7deb6ecb2e526929e29bf168e351f0bbd91b0de9939dd2bb1767ac0372` / `b99f862eabc6857b7347b6f378368ce342ff70acec02d7d2732e8f20daa5fde3`.
-- Strings/array manifest / pass set: `b346cab0848f90a0722d46bda7e28dfa792a059f7ca24668a8348d3fe85ee5ca` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
-- Primary / holdout results: `6e15cd52f55c7ad9c4dac7d7b01da30be872f510fc6b10b40f7e4334354ffda6` / `4e57bca731911055e126b0802973be4d141e4d01353bf346876789131e39ad80`.
+- Release: `357c780faa0ad18d756f3c38492ea166d37df7849b0b42b55db57f70f20ca5cb`.
+- Complete technical record: `6bf0268db37deb94637ffd37224bbe2dc84ca37e54118914891a39f86a1f6e9a`.
+- Matrix: `516e81be79751cab2684265658e814929e305e06ba6fedc41ff665613bdf1c50`.
+- SPL manifest / pass set: `5950d7edf43d53370cdbd37cf56e8b35931b40998a68cea56081c8cffbca9c14` / `922a52739659d9f16c0edb946af008a0288579534486cf9ec26b6d296043714d`.
+- Reference manifest for all gains: `5c50afed5276d2696aa7d5b2e6556a14f452099dfaca5bdd2bcf69eb8c41187d`.
+- Zend/lang manifest / pass set: `bce5998ea8f2b5a5df7cef37a9fb9c28280e5b903b494683c8d84b8d1e40ebd6` / `b99f862eabc6857b7347b6f378368ce342ff70acec02d7d2732e8f20daa5fde3`.
+- Strings/array manifest / pass set: `0486b64d44e99dd109aed27abb2c23df671c1fd2089d4e6738009c9144af9669` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+- Reviewed performance: `fc53042aeec5d0e163968c5505b14b9261f85378d968bc5d006c8cc4a7005995`.
 
-Next read-only admission confirms 20 reference-passing/current-failing
-native container serialization/restoration cases (`1301ff43d1b01731960d0bc19a02d3c7b88c4aca9343e725a639e8464625dbac`).
-First characterize wire-state projection, restore validation, corruption and
-callback/retirement order; reuse traced heap/deque ownership. Require at least
-ten shared-cause gains and preserve the fixed baseline and all existing controls.
+Next read-only admission confirms twenty reference-passing/current-failing
+SplObjectStorage state/cursor cases
+(`bd05ad437dec1fb977bba76e7b333a3a85d43b977504af85a51361dbaa423c14`).
+First characterize identity callbacks, live cursor/bulk mutation, debug views,
+references and retirement; reuse sparse traced ownership. Require at least ten
+shared-cause gains and preserve the fixed baseline and retained controls.
+
+The preceding heap/priorities checkpoint added 36 SPL passes; its complete
+technical record remains `395068b82333883ad9af9d92109528d04c8f94057bb5bf2d9983d179769db445`.
 
 An earlier measured AMD64 PHP 8.5 checkpoint is
 `directory-iterator-cursor-projection-contracts`, against `5ac0c4d2`: **+21/-0**

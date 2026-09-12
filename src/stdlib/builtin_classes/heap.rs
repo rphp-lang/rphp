@@ -4,10 +4,20 @@ use super::*;
 use crate::value::NativeObjectState;
 use crate::vm::function::InternalFunctionHandler;
 
-#[derive(Clone)]
+mod serialization;
+
 struct Entry {
     value: Value,
     priority: Value,
+}
+impl Clone for Entry {
+    fn clone(&self) -> Self {
+        use crate::stdlib::serialization::clone_unserialized_storage_value as retained;
+        Self {
+            value: retained(&self.value),
+            priority: retained(&self.priority),
+        }
+    }
 }
 #[derive(Default)]
 struct Heap {
@@ -275,6 +285,15 @@ fn insert(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Res
             Value::null()
         },
     };
+    insert_entry(receiver, entry, eg)?;
+    ret!(rv, Value::bool(true));
+}
+
+// Both public insertion and native restoration use the same locked
+// percolation. Restore retains serialized references instead of dereferencing
+// a public by-value argument. Callers acquire the lock before entering.
+#[inline(always)]
+fn insert_entry(receiver: &Value, entry: Entry, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let (slot, mut hole) = change(receiver, |h| {
         let slot = h.allocate(entry);
         h.order.push(slot);
@@ -302,8 +321,7 @@ fn insert(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Res
         h.len += 1;
     });
     finish(receiver, operation.is_err() || eg.exception.is_some());
-    operation?;
-    ret!(rv, Value::bool(true));
+    operation
 }
 fn retire_visible(receiver: &Value, slot: usize, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     // Prepare while the sole owner is still visible, then release the borrow
@@ -594,6 +612,14 @@ fn register_owner(
             ParamTypeHint::ClassName("true".into()),
         ),
         ("__debugInfo", debug_info, &[], &[], Array),
+        ("__serialize", serialization::serialize, &[], &[], Array),
+        (
+            "__unserialize",
+            serialization::unserialize,
+            &["data"],
+            &[Array],
+            Void,
+        ),
         (
             "compare",
             if queue { compare_max } else { compare_abstract },
