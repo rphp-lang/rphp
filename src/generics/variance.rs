@@ -17,6 +17,11 @@ impl GenericMetadata {
     /// metadata has been merged, so a formerly unknown nested target can
     /// contribute its declared variance.
     pub fn validate_variance_for(&self, owner: &str) -> Result<(), String> {
+        // Builtin registration normally has no generic declarations. Avoid
+        // constructing a method prefix for an empty validation graph.
+        if self.declarations.is_empty() {
+            return Ok(());
+        }
         let method_prefix = format!("{}::", owner);
         for declaration in &self.declarations {
             let Some(declaration_owner) = self.symbol(declaration.owner) else {
@@ -210,5 +215,68 @@ fn type_contains_parameter(value: &GenericType) -> bool {
         | GenericType::Void
         | GenericType::Mixed
         | GenericType::Never => false,
+    }
+}
+
+#[cfg(test)]
+mod startup_variance_tests {
+    use super::*;
+    use crate::generics::{GenericDeclarationKind, GenericParameterMetadata, GenericVarianceUse};
+
+    #[test]
+    fn empty_metadata_accepts_every_owner_without_publishing_state() {
+        let metadata = GenericMetadata::default();
+        for owner in ["", "SplQueue", "Other::method", "\u{130}nternal"] {
+            assert_eq!(metadata.validate_variance_for(owner), Ok(()));
+        }
+        assert!(metadata.declarations.is_empty());
+        assert!(metadata.symbols.is_empty());
+    }
+
+    #[test]
+    fn nonempty_metadata_still_validates_exact_class_and_method_owners() {
+        for (kind, name) in [
+            (GenericDeclarationKind::Class, "Owner"),
+            (GenericDeclarationKind::Method, "Owner::method"),
+        ] {
+            let metadata = GenericMetadata {
+                symbols: vec![name.into(), "T".into()].into_boxed_slice(),
+                declarations: vec![GenericDeclaration {
+                    kind,
+                    owner: 0,
+                    parameters: vec![GenericParameterMetadata {
+                        name: 1,
+                        variance: GenericVariance::Covariant,
+                        bound: None,
+                        default: None,
+                    }]
+                    .into_boxed_slice(),
+                    value_parameters: Box::default(),
+                    return_type: None,
+                    signature_uses_class_pseudo: false,
+                    properties: Box::default(),
+                    variance_uses: vec![GenericVarianceUse {
+                        value_type: GenericType::Parameter(0),
+                        position: GenericTypePosition::Contravariant,
+                        in_static_context: false,
+                    }]
+                    .into_boxed_slice(),
+                    methods: Box::default(),
+                }]
+                .into_boxed_slice(),
+                ..GenericMetadata::default()
+            };
+            for owner in ["Owner", "oWnEr"] {
+                assert!(
+                    metadata
+                        .validate_variance_for(owner)
+                        .unwrap_err()
+                        .contains("cannot be used in contravariant position")
+                );
+            }
+            for owner in ["Ow", "OwnerExtra", "Other", ""] {
+                assert_eq!(metadata.validate_variance_for(owner), Ok(()));
+            }
+        }
     }
 }

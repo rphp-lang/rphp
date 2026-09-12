@@ -304,7 +304,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             function.common.sig.param_type_hints = hints;
             function.handler_validates_types = true;
             let ptr = &function.common as *const FunctionCommon;
-            let display = format!("{owner}::{}", kind.name());
+            let display = internal_method_display_name(owner, kind.name());
             eg.function_table.insert(display.to_ascii_lowercase(), ptr);
             eg.method_declaring_class.insert(ptr, owner.into());
             eg.register_internal_function_display_name(ptr, display);

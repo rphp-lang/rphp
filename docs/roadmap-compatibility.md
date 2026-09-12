@@ -36,28 +36,30 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `spl-fixed-array-slot-contracts` train adds 56 PHP 8.5 passes over
-`517345e0`: 54 SPL and two core, with no lost pass or new process hazard.
-All thirty admitted cases pass. SPL reaches 335/410/31 unsupported/8 skip/
-1 XFAIL; core reaches 6,446/335/182/211. Seven later-stage serialization,
-export/debug and shutdown-root failures remain explicitly reviewed failures.
-Sparse native slots expose all strong PHP edges, retain reference/COW and
-cursor semantics, and publish resize state before reentrant retirement.
+The accepted `spl-deque-stack-queue-contracts` train adds 48 PHP 8.5 SPL passes
+over `da70dffb`, with no lost pass or new process hazard. All thirty admitted
+cases pass. SPL reaches 383/362/31 unsupported/8 skip/1 XFAIL; core retains
+6,446/335/182/211 and identical pass sets. Four later SPL serialization/debug
+failures and three pre-existing Reflection closure-binding failures remain
+reviewed failures. Sparse traced deque storage preserves FIFO/LIFO/KEEP/DELETE,
+mutation, cursor, reference/COW, clone and reentrant retirement contracts.
 
 One checked five-configuration matrix, all-targets, original/adjacent oracles,
-exact no-loss, S0-S3 and unsafe/static gates pass. All 47 fixed-parent 32-pair
-controls meet unchanged common +1% / pay-use +5% limits (highest +0.988%/
-+1.240%). Profile-backed work removal preserves the common representation,
-JIT admission and unsafe ceiling. Exact records, rejected alternatives,
-new-API costs and shared-host limitations are in `compatibility.md`.
+exact no-loss, S0-S3 and unsafe/static gates pass. All 55 fixed-parent 32-pair
+controls meet unchanged common +1% / pay-use +5% limits (highest +0.925%/
++3.990%). Profile-backed work removal preserves the common representation,
+JIT admission and unsafe ceiling. Original failed gates and their exact
+dispositions remain recorded; final SAFETY-only comments preserve every
+executable byte and source-line position. Evidence is in `compatibility.md`.
 
-Next admission confirms thirty PHP-passing/current-failing doubly-linked-list,
-stack and queue cases. First establish original FIFO/LIFO/KEEP/DELETE, live
-mutation/cursor, offset, reference/COW, clone and destructor-reentry oracles.
-Select storage from that contract, reusing traced native ownership; require at
-least ten shared-cause gains. Retain the 47 controls plus four now-present
-FixedArray API controls. Serialization, debug refcounts, general containers,
-suspension and 32-bit/OOM remain outside. Automatic cleanup remains mandatory.
+Next admission confirms 26 PHP-passing/current-failing heap and priority-queue
+cases. First characterize ordering/ties, destructive iteration, extraction
+flags, compare callbacks, write locks, corruption/recovery, clone/reference
+ownership and destructor reentry. Reuse sparse traced native ownership and
+bounded logarithmic mutation, not sorting or snapshot iteration. Require at
+least ten shared-cause gains; retain the 55 controls and add the four now-present
+deque API controls. General containers, serialization, suspension and
+32-bit/OOM remain outside. Automatic cleanup remains mandatory.
 
 ### Preceding directory cursor checkpoint
 

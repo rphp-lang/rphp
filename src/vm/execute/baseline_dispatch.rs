@@ -8281,34 +8281,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     let arr = &mut *arr_ptr;
                     if matches!(arr.value_type(), ValueType::Object | ValueType::Closure) {
-                        let cloned_val = if reference_append {
-                            // A deferred call result follows the pre-existing
-                            // object-protocol ordering: diagnose it before
-                            // materializing the value as an alias.
-                            let source =
-                                (*frame).get_op_mut(opline.op2 as u32, opline.op2_type);
-                            if deferred_reference_notice && !(&*source).is_reference() {
-                                report_php_notice(
-                                    eg,
-                                    frame,
-                                    op_array,
-                                    opline,
-                                    "Only variables should be assigned by reference",
-                                )?;
-                                if let Some(exception) = eg.exception.take() {
-                                    match throw_in_frame(eg, frame, exception)? {
-                                        ThrowResult::Handled(new_frame, new_op_array) => {
-                                            resume_activation!(new_frame, new_op_array);
-                                        }
-                                        ThrowResult::Unhandled(exception) => {
-                                            eg.exception = Some(exception);
-                                            return Ok(());
-                                        }
-                                    }
+                        if reference_append {
+                            let receiver = arr.clone();
+                            match reject_object_reference_append(eg, frame, op_array, opline, &receiver)? {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    resume_activation!(new_frame, new_op_array);
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
                                 }
                             }
-                            materialize_reference_alias(frame, source)
-                        } else {
+                        }
+                        let cloned_val = {
                             let val = &*(*frame).get_op_ptr(
                                 opline.op2 as u32,
                                 opline.op2_type,

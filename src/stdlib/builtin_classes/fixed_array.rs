@@ -659,7 +659,10 @@ fn method(
         .insert(internal_method_lookup_name("SplFixedArray", name), pointer);
     eg.method_declaring_class
         .insert(pointer, "SplFixedArray".into());
-    eg.register_internal_function_display_name(pointer, format!("SplFixedArray::{name}"));
+    eg.register_internal_function_display_name(
+        pointer,
+        internal_method_display_name("SplFixedArray", name),
+    );
     eg.register_internal_function_reflection_metadata(
         pointer,
         defaults

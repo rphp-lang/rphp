@@ -392,6 +392,7 @@ fn register_property_hook_type(eg: &mut ExecutorGlobals) {
 }
 
 pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
+    use crate::stdlib::builtin_classes::internal_method_display_name;
     let mut functions = Vec::new();
 
     macro_rules! register_method {
@@ -403,7 +404,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
                 vec![$($name.to_string()),*],
             ));
             let pointer = &function.common as *const FunctionCommon;
-            let registered_name = format!("{}::{}", $class, $method);
+            let registered_name = internal_method_display_name($class, $method);
             eg.function_table.insert(
                 registered_name.to_ascii_lowercase(),
                 pointer,
@@ -426,7 +427,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
                 vec![$($name.to_string()),*],
             ));
             let pointer = &function.common as *const FunctionCommon;
-            let registered_name = format!("{}::{}", $class, $method);
+            let registered_name = internal_method_display_name($class, $method);
             eg.function_table.insert(registered_name.to_ascii_lowercase(), pointer);
             eg.register_internal_function_display_name(pointer, registered_name);
             eg.method_declaring_class.insert(pointer, $class.into());
@@ -443,7 +444,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
                 vec![$($name.to_string()),*],
             ));
             let pointer = &function.common as *const FunctionCommon;
-            let registered_name = format!("{}::{}", $class, $method);
+            let registered_name = internal_method_display_name($class, $method);
             eg.function_table
                 .insert(registered_name.to_ascii_lowercase(), pointer);
             eg.register_internal_function_display_name(pointer, registered_name);
@@ -462,7 +463,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
                 vec![$($name.to_string()),*],
             ));
             let pointer = &function.common as *const FunctionCommon;
-            let registered_name = format!("{}::{}", $class, $method);
+            let registered_name = internal_method_display_name($class, $method);
             eg.function_table
                 .insert(registered_name.to_ascii_lowercase(), pointer);
             eg.register_internal_function_display_name(pointer, registered_name);

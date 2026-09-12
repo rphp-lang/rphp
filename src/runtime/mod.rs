@@ -1735,7 +1735,8 @@ impl ExecutorGlobals {
         // RecursiveArrayIterator and RecursiveIteratorIterator add two classes.
         // DirectoryIterator and FilesystemIterator add two more fixed classes.
         // SplFixedArray adds one fixed-slot container without a startup grow.
-        let class_capacity = 107 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        // Deque, stack and queue share one native container implementation.
+        let class_capacity = 110 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;

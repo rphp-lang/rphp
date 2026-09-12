@@ -46,7 +46,9 @@ fn resolve_iterator(source: &Value, eg: &mut ExecutorGlobals) -> Result<Option<V
             if !validate_recursive_iterator_start(&iterator, eg) {
                 return Ok(None);
             }
-            return Ok(Some(iterator));
+            return Ok(Some(
+                prepare_native_deque_consumer(&iterator, eg).unwrap_or(iterator),
+            ));
         }
         let identity = iterator.object_identity().expect("object iterator");
         if seen.contains(&identity) {

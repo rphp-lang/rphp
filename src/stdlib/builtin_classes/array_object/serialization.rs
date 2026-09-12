@@ -380,10 +380,15 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             function.common.sig.param_type_hints = hints;
             function.handler_validates_types = true;
             let ptr = &function.common as *const FunctionCommon;
-            eg.function_table
-                .insert(format!("{owner}::{method}").to_ascii_lowercase(), ptr);
+            eg.function_table.insert(
+                internal_method_display_name(owner, method).to_ascii_lowercase(),
+                ptr,
+            );
             eg.method_declaring_class.insert(ptr, owner.into());
-            eg.register_internal_function_display_name(ptr, format!("{owner}::{method}"));
+            eg.register_internal_function_display_name(
+                ptr,
+                internal_method_display_name(owner, method),
+            );
             eg.register_internal_function_reflection_metadata(ptr, vec![None; names.len()], "SPL");
             functions.push(function);
         }

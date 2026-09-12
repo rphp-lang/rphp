@@ -3819,26 +3819,37 @@ fn execute_full_call<'a>(
         }
     }
 
-    let callee_class = unsafe {
-        let mut resolved = eg.declaring_class_of((*call).func).map(str::to_string);
-        if let Some(declared) = resolved.as_deref()
-            && eg
-                .find_class(declared)
-                .is_some_and(|definition| definition.is_trait)
-            && func_common.sig.this_offset == 1
-        {
-            let receiver = (*call).cv(0);
-            if receiver.value_type() == ValueType::Object
-                && let Some(scope) =
-                    eg.trait_composition_scope(receiver.object_class_name_unchecked(), declared)
+    // SAFETY: `call` is the live initialized callee; this_offset == 1 proves
+    // CV0 exists, and its Object tag guards object_class_name_unchecked.
+    // User signatures record every relative argument/return/bound scope;
+    // concrete hints cannot consume it. Internal signatures retain canonical
+    // resolution because their bit is not derived by the user compiler.
+    let callee_class = if func_common.fn_type == FunctionType::User
+        && !func_common.sig.needs_bound_type_scope()
+    {
+        None
+    } else {
+        unsafe {
+            let mut resolved = eg.declaring_class_of((*call).func).map(str::to_string);
+            if let Some(declared) = resolved.as_deref()
+                && eg
+                    .find_class(declared)
+                    .is_some_and(|definition| definition.is_trait)
+                && func_common.sig.this_offset == 1
             {
-                resolved = Some(scope.to_string());
+                let receiver = (*call).cv(0);
+                if receiver.value_type() == ValueType::Object
+                    && let Some(scope) =
+                        eg.trait_composition_scope(receiver.object_class_name_unchecked(), declared)
+                {
+                    resolved = Some(scope.to_string());
+                }
             }
+            if resolved.is_none() && func_common.sig.needs_bound_type_scope() {
+                resolved = get_caller_class(call, eg);
+            }
+            resolved
         }
-        if resolved.is_none() && func_common.sig.needs_bound_type_scope() {
-            resolved = get_caller_class(call, eg);
-        }
-        resolved
     };
     let callee_class_ref = callee_class.as_deref();
 

@@ -753,7 +753,10 @@ fn register_method(
         .insert(internal_method_lookup_name("SplFileInfo", name), pointer);
     eg.method_declaring_class
         .insert(pointer, "SplFileInfo".into());
-    eg.register_internal_function_display_name(pointer, format!("SplFileInfo::{name}"));
+    eg.register_internal_function_display_name(
+        pointer,
+        internal_method_display_name("SplFileInfo", name),
+    );
     eg.register_internal_function_reflection_metadata(
         pointer,
         defaults

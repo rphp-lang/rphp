@@ -25,15 +25,19 @@ unsafe fn try_execute_property_init_constructor(
     reified_protocol: bool,
 ) -> Option<*const Instruction> {
     let common = &callee.common;
-    if common.sig.public_arity() != plan.public_args as u32
-        || !common.plan.call.is_compact_user_call()
-        || common.plan.ret != ReturnStrategy::Fast
-        || common.sig.ref_args != 0
-        || common.sig.is_variadic
-        || plan.assignments.len() > 8
-        || object.value_type() != ValueType::Object
-        || object.is_reference()
-    {
+    // The plan belongs to this finalized UserFunction. Its builder already
+    // proves these immutable signature conditions; diagnostic attributes
+    // invalidate the plan. NewObj supplies the freshly allocated receiver.
+    // Keep call-site operands, cache state and the bounded write transaction
+    // as runtime guards below, without re-admitting any additional plan.
+    debug_assert_eq!(common.sig.public_arity(), plan.public_args as u32);
+    debug_assert!(common.plan.call.is_compact_user_call());
+    debug_assert_eq!(common.plan.ret, ReturnStrategy::Fast);
+    debug_assert_eq!(common.sig.ref_args, 0);
+    debug_assert!(!common.sig.is_variadic);
+    debug_assert_eq!(object.value_type(), ValueType::Object);
+    debug_assert!(!object.is_reference());
+    if plan.assignments.len() > 8 {
         return None;
     }
 
@@ -67,13 +71,16 @@ unsafe fn try_execute_property_init_constructor(
             .param_type_hints
             .get(index)
             .unwrap_or(&ParamTypeHint::None);
-        if !check_type_hint(
-            value,
-            hint,
-            eg,
-            caller_op_array.strict_types,
-            declaring_class,
-        ) {
+        // Reuse the compact-call exact-storage proof. Scalar coercions
+        // (including int-to-float widening) must still execute the call;
+        // class/compound hints retain the existing scoped validation.
+        let argument_matches = match check_fast_scalar_type_hint(value, hint) {
+            Some(matches) => matches,
+            None => check_type_hint(
+                value, hint, eg, caller_op_array.strict_types, declaring_class,
+            ),
+        };
+        if !argument_matches {
             return None;
         }
         #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
@@ -1387,27 +1394,39 @@ fn finish_cached_fetch_obj_r<const FUNC_ARG: bool>(
     if property.is_undef() {
         return CachedFetchObjResult::Miss;
     }
-    let ip = unsafe {
-        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
-    };
-    if let Some(strlen) = op_array.instructions.get(ip + 1) {
-        let consumes_fetch = matches!(strlen.opcode, OpCode::Strlen | OpCode::Strlen_String)
-            && matches!(opline.result_type, OpType::Tmp | OpType::Var)
-            && strlen.op1_type == opline.result_type
-            && strlen.op1 == opline.result
-            && matches!(strlen.result_type, OpType::Tmp | OpType::Var);
-        if consumes_fetch && property.value_type() == ValueType::String {
-            let length = unsafe { property.as_str().unwrap_unchecked().len() as i64 };
-            let result_ptr = unsafe {
-                (*frame).get_op_mut(strlen.result as u32, strlen.result_type)
-            };
-            unsafe { frame_tmp_set_long(frame, result_ptr, length) };
-            return CachedFetchObjResult::CompleteAndSkipNext;
+    // SAFETY: `opline` belongs to this live op_array; the raw String tag
+    // proves as_str succeeds. The guarded TMP/VAR result is an absolute live
+    // frame slot after resolve_tmp_offsets, retired by frame_tmp_set_long.
+    if property.value_type() == ValueType::String {
+        let ip = unsafe {
+            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+        };
+        if let Some(strlen) = op_array.instructions.get(ip + 1) {
+            let consumes_fetch = matches!(strlen.opcode, OpCode::Strlen | OpCode::Strlen_String)
+                && matches!(opline.result_type, OpType::Tmp | OpType::Var)
+                && strlen.op1_type == opline.result_type
+                && strlen.op1 == opline.result
+                && matches!(strlen.result_type, OpType::Tmp | OpType::Var);
+            if consumes_fetch {
+                let length = unsafe { property.as_str().unwrap_unchecked().len() as i64 };
+                let result_ptr = unsafe {
+                    (*frame).slot_ptr(strlen.result as u32)
+                };
+                unsafe { frame_tmp_set_long(frame, result_ptr, length) };
+                return CachedFetchObjResult::CompleteAndSkipNext;
+            }
         }
     }
 
     let result_ptr = unsafe {
-        (*frame).get_op_mut(opline.result as u32, opline.result_type)
+        // SAFETY: TMP/VAR indices are absolute after resolve_tmp_offsets.
+        // CV results still require canonical reference following; neither
+        // route reads the old (possibly uninitialized) temporary contents.
+        if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+            (*frame).slot_ptr(opline.result as u32)
+        } else {
+            (*frame).get_op_mut(opline.result as u32, opline.result_type)
+        }
     };
     let value = if FUNC_ARG && property.is_reference() {
         property.dereferenced().clone()
@@ -3996,6 +4015,58 @@ fn op_bind_obj_prop_ref<'a>(
         frame_slot_set(frame, destination, binding);
     }
     Ok(ColdResult::Done)
+}
+
+#[cold]
+#[inline(never)]
+fn reject_object_reference_append<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    receiver: &Value,
+) -> Result<ThrowResult<'a>, VmError> {
+    // Anonymous object reference assignment performs a writable fetch, never
+    // offsetSet or RHS reference promotion. Even a reference-returning getter
+    // cannot make the overloaded dimension itself rebindable.
+    let returned = crate::stdlib::call_object_protocol_method(
+        eg, receiver, "ArrayAccess", "offsetGetAppend", &[Value::null()],
+    )?;
+    if eg.exception.is_none() {
+        if let Some(returned) = returned {
+            if !returned.is_reference()
+                && !matches!(returned.value_type(), ValueType::Object | ValueType::Closure)
+            {
+                let name = receiver.as_object().map(|o| o.class_name.to_string()).unwrap_or_default();
+                report_php_notice(eg, frame, op_array, opline,
+                    &format!("Indirect modification of overloaded element of {name} has no effect"))?;
+            }
+            if eg.exception.is_none() {
+                eg.exception = Some(make_error_value("Error", "Cannot assign by reference to an array dimension of an object"));
+            }
+            let release = if returned.dereferenced().value_type() == ValueType::Array {
+                prepare_replaced_value_tree_destructor_with_references(eg, &returned, 1)
+            } else {
+                prepare_replaced_value_destructor(eg, &returned)
+            };
+            drop(returned);
+            let pending = eg.exception.take();
+            let released = run_prepared_value_destructor(eg, release);
+            if let Some(pending) = pending {
+                if let Some(replacement) = &eg.exception {
+                    append_replaced_exception(replacement, &pending, eg);
+                } else {
+                    eg.exception = Some(pending);
+                }
+            }
+            released?;
+        } else {
+            let name = receiver.as_object().map(|o| o.class_name.to_string()).unwrap_or_default();
+            eg.exception = Some(make_error_value("Error", &format!("Cannot use object of type {name} as array")));
+        }
+    }
+    let exception = eg.exception.take().expect("reference append rejection");
+    throw_in_frame(eg, frame, exception)
 }
 
 #[cold]

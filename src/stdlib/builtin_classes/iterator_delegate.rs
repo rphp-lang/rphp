@@ -316,6 +316,7 @@ fn construct(
         iterator = next;
     }
     let retained = retained.unwrap_or_else(|| iterator.clone());
+    let iterator = super::deque::consumer(&iterator, eg).unwrap_or(iterator);
     receiver
         .as_object_mut()
         .expect("receiver")
@@ -965,10 +966,15 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         function.common.sig.param_type_hints = hints;
         function.handler_validates_types = true;
         let pointer = &function.common as *const FunctionCommon;
-        eg.function_table
-            .insert(format!("{owner}::{name}").to_ascii_lowercase(), pointer);
+        eg.function_table.insert(
+            internal_method_display_name(owner, name).to_ascii_lowercase(),
+            pointer,
+        );
         eg.method_declaring_class.insert(pointer, owner.into());
-        eg.register_internal_function_display_name(pointer, format!("{owner}::{name}"));
+        eg.register_internal_function_display_name(
+            pointer,
+            internal_method_display_name(owner, name),
+        );
         let values = defaults
             .iter()
             .map(|d| {

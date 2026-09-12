@@ -7346,27 +7346,36 @@ impl Value {
             None
         }
     }
-
+    // SAFETY: arithmetic's exact Long tag proves the active union field is long.
     /// Convert operands whose PHP numeric kind remains integer during
     /// arithmetic. This preserves the result kind for null, booleans, and
     /// integer numeric strings while rejecting resources, whose IDs are
     /// available to explicit casts but are not legal arithmetic operands.
     #[inline(always)]
     pub(crate) fn to_arithmetic_long(&self) -> Option<i64> {
-        match self.value_type() {
-            ValueType::Long => Some(unsafe { self.data.long }),
-            ValueType::True => Some(1),
-            ValueType::False | ValueType::Null | ValueType::Undef => Some(0),
-            ValueType::String => self.arithmetic_string_long(),
-            _ => None,
+        let kind = self.value_type();
+        if kind == ValueType::Long {
+            Some(unsafe { self.data.long })
+        } else if kind == ValueType::Double {
+            // Floating arithmetic already has its own projection. It cannot
+            // produce an integer operand, so needs no scalar-coercion call.
+            None
+        } else {
+            self.arithmetic_non_long()
         }
     }
 
-    // Keep parsing out of the tagged scalar projection. The parser and its
-    // accepted integer range are shared unchanged by every arithmetic caller.
+    // Already-integer operands need only their tag and payload. Keep the
+    // coercion decision tree out of each arithmetic caller; this preserves
+    // the same null/bool/string kinds and rejects resources and references.
     #[inline(never)]
-    fn arithmetic_string_long(&self) -> Option<i64> {
-        self.as_str()?.trim().parse::<i64>().ok()
+    fn arithmetic_non_long(&self) -> Option<i64> {
+        match self.value_type() {
+            ValueType::True => Some(1),
+            ValueType::False | ValueType::Null | ValueType::Undef => Some(0),
+            ValueType::String => self.as_str()?.trim().parse::<i64>().ok(),
+            _ => None,
+        }
     }
 
     /// Convert a complete PHP numeric operand to double without admitting a
@@ -8473,6 +8482,25 @@ mod arithmetic_projection_tests {
             resource,
         ] {
             assert_eq!(value.to_arithmetic_long(), None);
+        }
+    }
+
+    #[test]
+    fn floating_projection_rejects_integer_kind_without_changing_bits() {
+        for number in [
+            0.0,
+            -0.0,
+            1.0,
+            -1.5,
+            f64::MIN,
+            f64::MAX,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::from_bits(0x7ff8_0000_0000_0042),
+        ] {
+            let value = Value::double(number);
+            assert_eq!(value.to_arithmetic_long(), None);
+            assert_eq!(value.as_double().unwrap().to_bits(), number.to_bits());
         }
     }
 }

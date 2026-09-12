@@ -989,8 +989,11 @@ pub(crate) unsafe fn try_execute_direct_single_scalar_long_op(
 /// `plan` must be the compiler-published scalar_long_plan of the immutable user
 /// function headed by `common`. Its builder checks signature admission, and
 /// publishing diagnostic attributes removes the plan. All callers obtain this
-/// matching pair from the resolved UserFunction; no runtime value proof is
-/// implied, so the Send, Long, arity and checked-arithmetic guards remain here.
+/// matching pair from the resolved UserFunction and check the actual call arity
+/// against its signature before entry. The plan's immutable public arity is
+/// copied from that same finalized signature by its builder. No runtime value
+/// proof is implied: Send positions, Long tags and checked arithmetic remain
+/// guarded here, and any mismatch leaves the canonical call untouched.
 #[inline(never)]
 pub(crate) unsafe fn try_execute_direct_scalar_long_call(
     caller: *mut ExecuteData,
@@ -1000,9 +1003,7 @@ pub(crate) unsafe fn try_execute_direct_scalar_long_call(
     plan: &ScalarLongFunctionPlan,
 ) -> Option<(i64, std::ptr::NonNull<Instruction>)> {
     debug_assert!(common.supports_scalar_long_plan());
-    if common.sig.public_arity() != plan.public_args as u32 {
-        return None;
-    }
+    debug_assert_eq!(common.sig.public_arity(), u32::from(plan.public_args));
 
     let mut arguments = [0i64; 8];
     for (index, argument) in arguments

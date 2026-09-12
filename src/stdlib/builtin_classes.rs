@@ -12,6 +12,7 @@ use crate::vm::instruction::{
 };
 
 pub(super) mod array_object;
+pub(super) mod deque;
 mod file_info;
 pub(super) mod fixed_array;
 mod iterator_delegate;
@@ -27,6 +28,7 @@ pub(crate) use array_object::{
     prepare_clone as prepare_array_object_clone,
     property_uses_dimension as array_object_property_uses_dimension,
 };
+pub(crate) use deque::consumer as prepare_native_deque_consumer;
 pub(crate) use file_info::prepare_clone as prepare_file_info_clone;
 pub(crate) use iterator_delegate::resolve_method as resolve_iterator_delegated_method;
 pub(crate) use recursive_iterator::validate_start as validate_recursive_iterator_start;
@@ -1511,6 +1513,9 @@ fn array_object_offset_get_context(ed: *mut ExecuteData) -> ArrayObjectOffsetGet
             ArrayObjectOffsetGetContext::Mutable
         }
         OpCode::BindArrayAppendRef => ArrayObjectOffsetGetContext::Append,
+        OpCode::ArrayPushOp if flags & crate::vm::instruction::ARRAY_ELEMENT_REFERENCE != 0 => {
+            ArrayObjectOffsetGetContext::Append
+        }
         OpCode::BindArrayDimRef => ArrayObjectOffsetGetContext::Mutable,
         OpCode::FetchDimR if flags & FETCH_DIM_UNSET != 0 => ArrayObjectOffsetGetContext::Unset,
         OpCode::FetchDimR if flags & FETCH_DIM_EMPTY != 0 => {
@@ -2410,16 +2415,25 @@ fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] 
 #[cold]
 #[inline(never)]
 fn internal_method_lookup_name(owner: &str, method: &str) -> String {
-    let mut name = String::with_capacity(owner.len() + method.len() + 2);
-    name.push_str(owner);
-    name.push_str("::");
-    name.push_str(method);
+    let mut name = internal_method_display_name(owner, method);
     if internal_method_spelling_is_ascii(&name) {
         name.make_ascii_lowercase();
         name
     } else {
         name.to_lowercase()
     }
+}
+
+// Both the lookup and diagnostic spellings have an exact known length.
+// Registration needs concatenation, not a formatter and its growth estimate.
+#[cold]
+#[inline(never)]
+pub(super) fn internal_method_display_name(owner: &str, method: &str) -> String {
+    let mut name = String::with_capacity(owner.len() + method.len() + 2);
+    name.push_str(owner);
+    name.push_str("::");
+    name.push_str(method);
+    name
 }
 
 // Registration spellings are short. Reduce whole safe word loads rather than
@@ -2440,6 +2454,23 @@ fn internal_method_spelling_is_ascii(name: &str) -> bool {
 
 #[cfg(test)]
 mod method_lookup_name_tests {
+    #[test]
+    fn display_spelling_preserves_bytes_case_and_exact_capacity() {
+        for owner in [
+            "",
+            "SplDoublyLinkedList",
+            "A::B",
+            "\u{130}nternal",
+            "\0Owner",
+        ] {
+            for method in ["", "getIteratorMode", "\u{3a3}", "name\0tail"] {
+                let name = super::internal_method_display_name(owner, method);
+                assert_eq!(name, format!("{owner}::{method}"));
+                assert_eq!(name.capacity(), owner.len() + method.len() + 2);
+            }
+        }
+    }
+
     #[test]
     fn ascii_lookup_scan_covers_all_bytes_at_word_and_vector_boundaries() {
         for length in 0..=80 {
@@ -4003,5 +4034,41 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     ))
     .unwrap();
     funcs.extend(fixed_array::register(eg));
+    for (name, parent) in [
+        ("SplDoublyLinkedList", None),
+        ("SplStack", Some("SplDoublyLinkedList")),
+        ("SplQueue", Some("SplDoublyLinkedList")),
+    ] {
+        let mut class = empty_internal_type(
+            name,
+            if parent.is_none() {
+                vec![
+                    "Iterator".into(),
+                    "Traversable".into(),
+                    "Countable".into(),
+                    "ArrayAccess".into(),
+                ]
+            } else {
+                vec![]
+            },
+            false,
+            false,
+        );
+        class.parent = parent.map(str::to_owned);
+        if parent.is_none() {
+            for (constant, value) in [
+                ("IT_MODE_LIFO", 2),
+                ("IT_MODE_FIFO", 0),
+                ("IT_MODE_DELETE", 1),
+                ("IT_MODE_KEEP", 0),
+            ] {
+                class
+                    .constants
+                    .push(recursive_iterator::constant(name, constant, value));
+            }
+        }
+        eg.register_class(class).unwrap();
+    }
+    funcs.extend(deque::register(eg));
     funcs
 }

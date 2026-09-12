@@ -327,6 +327,7 @@ fn collect_unpack_traversable(
     if !eg.class_is_a(&class_name, "Iterator") {
         return Ok(None);
     }
+    let iterable = crate::stdlib::prepare_native_deque_consumer(&iterable, eg).unwrap_or(iterable);
     let _ = crate::stdlib::call_object_protocol_method(
         eg,
         &iterable,
@@ -1302,7 +1303,8 @@ fn op_foreach_init<'a>(
         }
         resolved_iterable = Some(next);
     }
-    let arr_val = resolved_iterable.as_ref().unwrap_or(source);
+    let native_consumer = crate::stdlib::prepare_native_deque_consumer(resolved_iterable.as_ref().unwrap_or(source), eg);
+    let arr_val = native_consumer.as_ref().or(resolved_iterable.as_ref()).unwrap_or(source);
 
     // Check for Generator object
     let is_generator = if let Some(obj) = arr_val.as_object() {
@@ -2367,7 +2369,7 @@ fn resolve_yield_from_source(
         }));
     }
     if eg.class_is_a(&class_name, "Iterator") {
-        return Ok(Some(YieldFromSource::Iterator(iterable)));
+        return Ok(Some(YieldFromSource::Iterator(crate::stdlib::prepare_native_deque_consumer(&iterable, eg).unwrap_or(iterable))));
     }
     Ok(None)
 }

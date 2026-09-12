@@ -662,7 +662,7 @@ fn method(
     eg.function_table
         .insert(internal_method_lookup_name(owner, name), pointer);
     eg.method_declaring_class.insert(pointer, owner.into());
-    eg.register_internal_function_display_name(pointer, format!("{owner}::{name}"));
+    eg.register_internal_function_display_name(pointer, internal_method_display_name(owner, name));
     eg.register_internal_function_reflection_metadata(
         pointer,
         defaults

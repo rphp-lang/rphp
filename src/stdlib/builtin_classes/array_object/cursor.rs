@@ -644,10 +644,13 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         function.handler_validates_types = true;
         let ptr = &function.common as *const FunctionCommon;
         eg.function_table
-            .insert(format!("arrayiterator::{name}"), ptr);
+            .insert(internal_method_display_name("arrayiterator", name), ptr);
         eg.method_declaring_class
             .insert(ptr, "ArrayIterator".into());
-        eg.register_internal_function_display_name(ptr, format!("ArrayIterator::{name}"));
+        eg.register_internal_function_display_name(
+            ptr,
+            internal_method_display_name("ArrayIterator", name),
+        );
         eg.register_internal_function_reflection_metadata(ptr, vec![None; names.len()], "SPL");
         functions.push(function);
     }

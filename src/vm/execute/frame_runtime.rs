@@ -209,7 +209,13 @@ fn take_assignment_heap_source(
 /// Write a Long value directly to a frame TMP slot. Zero overhead for scalar frames.
 #[inline(always)]
 pub(super) unsafe fn frame_tmp_set_long(frame: *mut ExecuteData, ptr: *mut Value, v: i64) {
-    if (*frame).has_heap_slots {
+    // As in frame_tmp_set, a clear compact-frame bit proves no live heap
+    // owner without reading potentially uninitialized TMP bytes. Long keeps
+    // that bit clear; marked slots and large frames still need retirement.
+    if (*frame).has_heap_slots
+        && ((*frame).num_cvs + (*frame).num_temps > 64
+            || (*frame).heap_bitmap & (1u64 << slot_idx(frame, ptr)) != 0)
+    {
         bitmap_drop_scalar(frame, ptr);
     }
     Value::write_long(ptr, v);
