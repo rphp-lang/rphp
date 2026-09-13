@@ -47,6 +47,7 @@ struct UserStreamState {
     unread: Vec<u8>,
     unread_offset: usize,
     closed: bool,
+    write_pending: bool,
 }
 
 type SharedUserStream = Rc<RefCell<UserStreamState>>;
@@ -448,6 +449,7 @@ fn open_registered(
             unread: Vec::new(),
             unread_offset: 0,
             closed: false,
+            write_pending: false,
         },
     );
     let resource = value
@@ -487,7 +489,7 @@ pub(crate) fn open_file_object(
         eg,
         &object,
         "url_stat",
-        vec![Value::string(path), Value::long(0)],
+        vec![Value::string(path), Value::long(6)],
     )?;
     if stat.is_none() && eg.exception.is_none() {
         eg.exception = Some(crate::value::make_error_value(
@@ -608,6 +610,88 @@ pub(crate) fn rewind_file_object(eg: &mut ExecutorGlobals, resource: i64) -> Res
         state.eof = false;
     }
     Ok(success)
+}
+
+/// A record write owns its bytes across callbacks. Short successful writes
+/// advance through the remaining suffix; no resource borrow crosses PHP.
+#[cold]
+pub(crate) fn write_file_object_record(
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    resource: i64,
+    bytes: &[u8],
+) -> Result<Option<usize>, VmError> {
+    let Some(stream) = shared_stream(eg, resource) else {
+        return Ok(None);
+    };
+    let object = {
+        let state = stream.borrow();
+        if state.closed || state.kind != UserStreamKind::File {
+            return Ok(None);
+        }
+        state.object.clone()
+    };
+    let mut written = 0;
+    if !bytes.is_empty() && eg.exception.is_some() {
+        // Conversion may have left a pending PHP exception. The stream write
+        // is attempted (and needs flushing), but must not enter user code.
+        stream.borrow_mut().write_pending = true;
+        return Ok(None);
+    }
+    while written < bytes.len() {
+        let remaining = (bytes.len() - written).min(USER_READ_SIZE as usize);
+        let value = invoke_callback(
+            eg,
+            &object,
+            "stream_write",
+            vec![crate::stdlib::php_byte_result(
+                bytes[written..written + remaining].to_vec(),
+                false,
+            )],
+        )?;
+        let count = value.as_ref().map_or(-1, |value| {
+            if value.value_type() == ValueType::False {
+                -1
+            } else {
+                value.to_long_val()
+            }
+        });
+        if count != 0 || eg.exception.is_some() {
+            stream.borrow_mut().write_pending = true;
+        }
+        if eg.exception.is_some() {
+            return Ok(None);
+        }
+        if count < 0 {
+            return Ok((written != 0).then_some(written));
+        }
+        if count == 0 {
+            break;
+        }
+        let accepted = (count as usize).min(remaining);
+        {
+            let mut state = stream.borrow_mut();
+            state.position = state.position.saturating_add(accepted);
+        }
+        written += accepted;
+        if count as usize > remaining {
+            let class = object.as_object().unwrap().class_name.to_string();
+            crate::stdlib::report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!(
+                    "SplFileObject::fputcsv(): {class}::stream_write wrote {} bytes more data than requested ({count} written, {remaining} max)",
+                    count as usize - remaining,
+                ),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+        }
+    }
+    Ok(Some(written))
 }
 
 #[inline(always)]
@@ -735,7 +819,9 @@ pub(crate) fn read(
         if eg.exception.is_some() {
             return Ok(None);
         }
-        let bytes = crate::stdlib::php_string_to_bytes(&value.echo_to_string());
+        let bytes = crate::stdlib::php_bytes_after_weak_string_coercion(&value)
+            .0
+            .into_owned();
         let read_empty = bytes.is_empty();
         {
             let mut state = stream.borrow_mut();
@@ -794,10 +880,12 @@ pub(crate) fn flush(eg: &mut ExecutorGlobals, resource: i64) -> Result<Option<bo
         return Ok(None);
     };
     let object = stream.borrow().object.clone();
-    Ok(Some(
-        invoke_callback(eg, &object, "stream_flush", vec![])?
-            .is_some_and(|value| value.is_truthy()),
-    ))
+    let success = invoke_callback(eg, &object, "stream_flush", vec![])?
+        .is_some_and(|value| value.is_truthy());
+    if success {
+        stream.borrow_mut().write_pending = false;
+    }
+    Ok(Some(success))
 }
 
 pub(crate) fn metadata(eg: &mut ExecutorGlobals, resource: i64) -> Result<Option<Value>, VmError> {
@@ -861,7 +949,7 @@ pub(crate) fn close(eg: &mut ExecutorGlobals, resource: i64) -> Result<Option<bo
     let Some(stream) = shared_stream(eg, resource) else {
         return Ok(None);
     };
-    let (object, method) = {
+    let (object, method, pending) = {
         let mut state = stream.borrow_mut();
         if state.closed {
             return Ok(Some(false));
@@ -874,8 +962,19 @@ pub(crate) fn close(eg: &mut ExecutorGlobals, resource: i64) -> Result<Option<bo
             } else {
                 "dir_closedir"
             },
+            std::mem::take(&mut state.write_pending),
         )
     };
+    if pending {
+        if let Err(error) = invoke_callback(eg, &object, "stream_flush", vec![]) {
+            discard_resource(eg, resource);
+            return Err(error);
+        }
+        if eg.exception.is_some() {
+            discard_resource(eg, resource);
+            return Ok(Some(false));
+        }
+    }
     let result = invoke_callback(eg, &object, method, vec![]);
     discard_resource(eg, resource);
     result.map(|_| Some(true))

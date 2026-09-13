@@ -26,7 +26,7 @@ mod temp;
 mod truncate;
 
 #[cfg(not(target_vendor = "apple"))]
-pub(crate) use csv::CsvParser;
+pub(crate) use csv::{CsvEncoder, CsvParser};
 use temp::{TempStream, memory_limit as temp_memory_limit};
 
 /// Parse the complete byte string supplied to `str_getcsv()`. This shares the

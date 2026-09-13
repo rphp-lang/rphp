@@ -1117,7 +1117,10 @@ fn arithmetic_long_pair(left: &Value, right: &Value) -> Option<(i64, i64)> {
 
 #[inline(always)]
 fn arithmetic_double_pair(left: &Value, right: &Value) -> Option<(f64, f64)> {
-    if left.value_type() == ValueType::Double && right.value_type() == ValueType::Double {
+    let double_tag = ValueType::Double as u8;
+    // One combined tag predicate proves both active floating payloads, as
+    // the integer pair does above. Other kinds retain canonical conversion.
+    if ((left.value_type() as u8 ^ double_tag) | (right.value_type() as u8 ^ double_tag)) == 0 {
         Some((left.as_double().unwrap(), right.as_double().unwrap()))
     } else {
         left.to_arithmetic_double()
@@ -1169,6 +1172,79 @@ mod arithmetic_pair_tests {
             }
         }
     }
+
+    #[test]
+    fn add_operand_projection_keeps_reference_identity_and_canonical_fallback() {
+        let values = [
+            Value::long(i64::MIN),
+            Value::long(7),
+            Value::long(i64::MAX),
+            Value::undef(),
+            Value::null(),
+            Value::bool(false),
+            Value::bool(true),
+            Value::double(-0.0),
+            Value::double(f64::INFINITY),
+            Value::double(f64::from_bits(0x7ff8_0000_0000_0042)),
+            Value::string("12"),
+            Value::string("5tail"),
+            Value::string("no"),
+            Value::array(crate::value::PhpArray::new()),
+            Value::owned_reference(Value::long(9)),
+            Value::owned_reference(Value::double(1.25)),
+            Value::owned_reference(Value::string("8tail")),
+            Value::owned_reference(Value::null()),
+            Value::owned_reference(Value::bool(true)),
+            Value::owned_reference(Value::bool(false)),
+        ];
+        for left in &values {
+            for right in &values {
+                let (projected_left, projected_right, pair) = arithmetic_add_operands(left, right);
+                let expected_left = left.dereferenced();
+                let expected_right = right.dereferenced();
+                assert!(std::ptr::eq(projected_left, expected_left));
+                assert!(std::ptr::eq(projected_right, expected_right));
+                assert_eq!(pair, arithmetic_long_pair(expected_left, expected_right));
+            }
+        }
+    }
+}
+
+/// Integer-kind primitive tags also prove that neither operand is a reference.
+/// Reuse that proof before the canonical dereference/coercion path. Null and
+/// booleans have no payload to read; the existing projection supplies zero/one.
+#[inline(always)]
+fn arithmetic_add_operands<'a>(
+    left: &'a Value,
+    right: &'a Value,
+) -> (&'a Value, &'a Value, Option<(i64, i64)>) {
+    let integer_tag = ValueType::Long as u8;
+    let left_tag = left.value_type() as u8;
+    if left_tag <= integer_tag {
+        let right_tag = right.value_type() as u8;
+        // One joint check preserves direct integer payloads. The outer range
+        // keeps this integer-only work off floating and heap operand paths.
+        if ((left_tag ^ integer_tag) | (right_tag ^ integer_tag)) == 0 {
+            return (
+                left,
+                right,
+                Some((left.as_long().unwrap(), right.as_long().unwrap())),
+            );
+        }
+        if right_tag <= integer_tag {
+            return (
+                left,
+                right,
+                Some((
+                    left.to_arithmetic_long().unwrap(),
+                    right.to_arithmetic_long().unwrap(),
+                )),
+            );
+        }
+    }
+    let left = left.dereferenced();
+    let right = right.dereferenced();
+    (left, right, arithmetic_long_pair(left, right))
 }
 
 /// Convert one operand for ordinary PHP arithmetic while retaining whether a

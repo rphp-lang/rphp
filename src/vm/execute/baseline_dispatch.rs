@@ -2545,7 +2545,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
         // consumers and optimized backedges must see the same frame as before.
         // Expanded only inside the opcode's existing validated unsafe region.
         macro_rules! complete_numeric_tmp_assignment {
-            ($source:expr) => {{
+            ($value:expr, $kind:ident, $write:ident) => {{
                 if opline._pad & ARITHMETIC_NEXT_PRIMITIVE_ASSIGN != 0 {
                     // Specialization proved the immutable adjacent instruction
                     // shape and destination CV bound. Only its actual value
@@ -2555,9 +2555,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // No reference constraint, owner retirement or PHP
                         // callback is possible at this assignment boundary.
                         stats::inc_opcode(OpCode::AssignCv as usize);
-                        stats::inc_value_clone((*$source).value_type() as usize);
+                        stats::inc_value_clone(ValueType::$kind as usize);
                         stats::inc_write_frame_slot(false);
-                        Value::raw_copy($source, destination);
+                        // Reuse the computed scalar instead of immediately
+                        // reloading the partially written TMP as a full Value.
+                        // Its canonical slot write and heap bookkeeping above
+                        // remain intact for other consumers and backedges.
+                        Value::$write(destination, $value);
                         (*frame).opline = opline_ptr.add(2);
                         continue 'vm;
                     }
@@ -3439,9 +3443,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let base = frame as *const Value;
                 let op1 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op1 as usize) };
                 let op2 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op2 as usize) };
-                let op1 = op1.dereferenced();
-                let op2 = op2.dereferenced();
-                if let Some((l1, l2)) = arithmetic_long_pair(op1, op2)
+                let (op1, op2, long_pair) = arithmetic_add_operands(op1, op2);
+                if let Some((l1, l2)) = long_pair
                 {
                     if let Some(sum) = l1.checked_add(l2) {
                         // Peek ahead: if next is Return consuming our result TMP,
@@ -3482,22 +3485,24 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // accepts only a disjoint runtime primitive
                         // CV; both result bytes and cleanup bitmap stay live.
                         unsafe {
-                            frame_tmp_set_long(frame, result_ptr, sum);
-                            complete_numeric_tmp_assignment!(result_ptr);
+                            frame_tmp_set_indexed!(frame, result_ptr, opline.result, Value::long(sum));
+                            complete_numeric_tmp_assignment!(sum, Long, write_long);
                         };
                     } else {
                         let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                         unsafe {
-                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64));
-                            complete_numeric_tmp_assignment!(result_ptr);
+                            let sum = l1 as f64 + l2 as f64;
+                            frame_tmp_set_indexed!(frame, result_ptr, opline.result, Value::double(sum));
+                            complete_numeric_tmp_assignment!(sum, Double, write_double);
                         };
                     }
                 } else if let Some((d1, d2)) = arithmetic_double_pair(op1, op2)
                 {
                     let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                     unsafe {
-                        frame_tmp_set(frame, result_ptr, Value::double(d1 + d2));
-                        complete_numeric_tmp_assignment!(result_ptr);
+                        let sum = d1 + d2;
+                            frame_tmp_set_indexed!(frame, result_ptr, opline.result, Value::double(sum));
+                        complete_numeric_tmp_assignment!(sum, Double, write_double);
                     };
                 } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
                     write_array_union_result(frame, opline.result, left, right);
@@ -3523,7 +3528,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe {
                         let result_ptr =
                             (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize);
-                        frame_tmp_set(frame, result_ptr, result)
+                        frame_tmp_set_indexed!(frame, result_ptr, opline.result, result)
                     };
                 }
             }
@@ -3531,11 +3536,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::Add_CvTmp => {
                 let base = frame as *const Value;
                 let cv_ptr = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op1 as usize) };
-                let op1 = cv_ptr.dereferenced();
                 let op2 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op2 as usize) };
-                let op2 = op2.dereferenced();
+                let (op1, op2, long_pair) = arithmetic_add_operands(cv_ptr, op2);
                 let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
-                if let Some((l1, l2)) = arithmetic_long_pair(op1, op2)
+                if let Some((l1, l2)) = long_pair
                 {
                     // SAFETY: result_ptr is this specialized opcode's TMP.
                     // Numeric writes retire its previous owner first; the
@@ -3543,19 +3547,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // destination without dereferencing a reference cell.
                     match l1.checked_add(l2) {
                         Some(sum) => unsafe {
-                            frame_tmp_set_long(frame, result_ptr, sum);
-                            complete_numeric_tmp_assignment!(result_ptr);
+                            frame_tmp_set_indexed!(frame, result_ptr, opline.result, Value::long(sum));
+                            complete_numeric_tmp_assignment!(sum, Long, write_long);
                         },
                         None => unsafe {
-                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64));
-                            complete_numeric_tmp_assignment!(result_ptr);
+                            let sum = l1 as f64 + l2 as f64;
+                            frame_tmp_set_indexed!(frame, result_ptr, opline.result, Value::double(sum));
+                            complete_numeric_tmp_assignment!(sum, Double, write_double);
                         },
                     }
                 } else if let Some((d1, d2)) = arithmetic_double_pair(op1, op2)
                 {
                     unsafe {
-                        frame_tmp_set(frame, result_ptr, Value::double(d1 + d2));
-                        complete_numeric_tmp_assignment!(result_ptr);
+                        let sum = d1 + d2;
+                            frame_tmp_set_indexed!(frame, result_ptr, opline.result, Value::double(sum));
+                        complete_numeric_tmp_assignment!(sum, Double, write_double);
                     };
                 } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
                     write_array_union_result(frame, opline.result, left, right);
@@ -3578,7 +3584,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // specialized opcode, and the owned result is constructed
                     // before it replaces that slot.
                     unsafe {
-                        frame_tmp_set(frame, result_ptr, prepared_add_result(&left, &right))
+                        frame_tmp_set_indexed!(frame, result_ptr, opline.result, prepared_add_result(&left, &right))
                     };
                 }
             }
@@ -3876,11 +3882,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::Add => {
                 let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let op1 = op1.dereferenced();
-                let op2 = op2.dereferenced();
+                let (op1, op2, long_pair) = arithmetic_add_operands(op1, op2);
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                if let Some((l1, l2)) = arithmetic_long_pair(op1, op2)
+                if let Some((l1, l2)) = long_pair
                 {
                     // SAFETY: operands/result are validated frame locations.
                     // Only a numeric TMP and a compiler-proven following
@@ -3888,19 +3893,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // destination is disjoint and has no owner to retire.
                     match l1.checked_add(l2) {
                         Some(sum) => unsafe {
-                            frame_tmp_set_long(frame, result_ptr, sum);
-                            complete_numeric_tmp_assignment!(result_ptr);
+                            frame_tmp_set_indexed!(frame, result_ptr, opline.result, Value::long(sum));
+                            complete_numeric_tmp_assignment!(sum, Long, write_long);
                         },
                         None => unsafe {
-                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64));
-                            complete_numeric_tmp_assignment!(result_ptr);
+                            let sum = l1 as f64 + l2 as f64;
+                            frame_tmp_set_indexed!(frame, result_ptr, opline.result, Value::double(sum));
+                            complete_numeric_tmp_assignment!(sum, Double, write_double);
                         },
                     }
                 } else if let Some((d1, d2)) = arithmetic_double_pair(op1, op2)
                 {
                     unsafe {
-                        frame_tmp_set(frame, result_ptr, Value::double(d1 + d2));
-                        complete_numeric_tmp_assignment!(result_ptr);
+                        let sum = d1 + d2;
+                            frame_tmp_set_indexed!(frame, result_ptr, opline.result, Value::double(sum));
+                        complete_numeric_tmp_assignment!(sum, Double, write_double);
                     };
                 } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
                     write_array_union_result(frame, opline.result, left, right);
@@ -3920,9 +3927,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         );
                     };
                     let result = prepared_add_result(&left, &right);
-                    // SAFETY: `result_ptr` is this instruction's resolved result slot,
-                    // and both operand borrows have ended before the owned result write.
-                    unsafe { frame_tmp_set(frame, result_ptr, result) };
+                    // SAFETY: result_ptr and the absolute opline.result index
+                    // identify the same live frame slot. Both operand borrows
+                    // ended before the indexed writer retires its prior owner.
+                    unsafe { frame_tmp_set_indexed!(frame, result_ptr, opline.result, result) };
                 }
             }
 

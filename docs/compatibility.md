@@ -8,73 +8,75 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
-`spl-file-object-line-cursor-contracts`, against `faff8cc0`: **+31/-0** SPL
-passes. SPL reaches **490 pass / 255 fail / 31 unsupported / 8 skip / 1 XFAIL**.
+`spl-file-object-csv-record-contracts`, against `9dcf676e`: **+21/-0** SPL
+passes. SPL reaches **511 pass / 234 fail / 31 unsupported / 8 skip / 1 XFAIL**.
 Core retains **6,446 pass / 335 fail / 182 skip / 211 unsupported**, with
-identical pass sets. Together the selected 7,959 cases have **6,936 passes
-and 590 failures**; this is not complete PHP coverage. Every gain independently
-passes PHP 8.5.10. No previous pass, expected output or process-safety result
-is lost. Two already-failing cases now reach output comparison: `bug64782`
-(complete CSV/debug state) and `fileobject_004` (requested/opened path metadata).
-Both remain named holdouts, not passes.
+identical pass sets. The selected 7,959 cases now have **6,957 passes and
+569 failures**; this is not complete PHP coverage. Every gain independently
+passes PHP 8.5.10. No previous pass, expectation, failure stage or process-safety
+result is lost. The 29-case admission set has 16 passes and 13 independent
+ftell/SplTempFileObject holdouts; adjacent CSV cases supply the remaining gains.
 
-SplFileObject uses one sparse, traced file owner with a cached physical line
-and separate logical cursor. Flags, current/key, seek/rewind/EOF, byte limits,
-inherited metadata, getCurrentLine overrides and wrapper callback lifetimes
-use canonical stream and VM boundaries. No native-state borrow crosses PHP
-callbacks; cached values and wrapper resources participate in tracing and
-iterative retirement. Full CSV/write APIs, SplTempFileObject, broader debug/
-include-path metadata, suspension, 32-bit and OOM equivalence are not claimed.
+SplFileObject CSV controls and records reuse the existing stream parser/writer
+and sparse traced file owner. Multiline/empty/EOF records, cached READ_CSV
+projection, raw bytes, argument-validation order and PHP 8.5 omitted-escape
+diagnostics preserve physical position, logical keys and reference/COW state.
+Native and wrapper writes preserve partial/error results and callback lifetime;
+no native-state borrow crosses PHP callbacks. General byte-write APIs,
+SplTempFileObject, broader debug/path metadata, suspension, 32-bit and OOM
+equivalence remain outside this checkpoint.
 
-Profile-backed prerequisites remove duplicate class/name lookups, empty
-ownership/destructor work, scalar leaf buffers and repeated pathname allocation.
-Numeric Add/AssignCv adjacency uses existing instruction space and runtime
-primitive checks, retaining both original instructions and fallback. Short
-memory lines preserve buffered bytes and cursor state; scalar projections keep
-byte provenance. References/COW, callbacks, diagnostics and compact/large-frame
-retirement stay covered. No common Value/VM field, opcode, dependency or JIT
-admission changes; unsafe decreases to 1,620 blocks / 289 functions.
+Profile-backed prerequisites remove all-absent internal-default allocations,
+duplicate registration hashing, repeated numeric classification and redundant
+scalar TMP/result work. Existing Add/AssignCv admission, original TMP writes,
+fallback, reference/error ordering and compact/large-frame retirement remain
+intact. No common Value/VM field, opcode, dependency or JIT admission changes;
+production Value copying is unchanged. Unsafe stays within its existing ceiling
+at **1,622 blocks / 289 functions**. Rejected classification, copy, cache and
+dispatch hypotheses remain in the evidence; failed timings were not rerolled.
 
-Twenty-four original cursor cases pass PHP/default/JIT-disabled comparisons;
-755 focused E2E and all 708 library units also pass. The final checked matrix
-passes **5,278/4,964/5,349/5,371/5,422** tests (13/13/13/13/16 ignored,
-none filtered), plus all-features/all-targets. Exact no-loss, Composer/Symfony
-S0-S3, runner/unsafe self-tests, formatting and public hygiene pass. The earlier
-matrix rejection remains recorded: one missing class-reservation slot, a
-surplus-callback debug-boundary check and an empty-prefetch representation
-assertion were repaired without changing PHP expectations or safety checks.
-A disk-reserve stop resumed only hash-verified passing configurations; its
-failed wrapper marker remains preserved. Automatic cleanup keeps exact
-binaries, source snapshots and evidence.
+All **1,107 focused tests** pass, including 713 library units. Thirty-four
+original CSV cases pass both default and JIT-disabled byte-exact comparisons
+(68 runs); prior cursor/storage/lifetime oracles remain green. The final checked
+matrix passes **5,321/4,999/5,392/5,414/5,465** tests
+(13/13/13/13/16 ignored, none filtered), plus all-features/all-targets.
+Exact no-loss, Composer/Symfony S0-S3, runner/unsafe self-tests, formatting and
+public hygiene pass. No-default warnings are identical to the accepted parent.
+Cleanup runs between configurations and preserves sources and exact active
+binaries; all five final configurations passed without a retry.
 
-All **73 fixed-parent 32-pair controls** meet unchanged common +1% / pay-use
-+5% limits (highest +0.339% / +4.366%). Ordinary calls improve 3.899%, object
-lifecycle 1.992%, static reference calls 6.435% and heap clone 7.541%.
-Rejected hypotheses and timings remain recorded without unchanged timing
-rerolls or hardware-counter claims. New cached/cursor/seek/override API
-candidate/PHP ratios are **3.746/1.848/1.276/3.083**, not absent-parent deltas
-or PHP speed parity. The authorized shared-host performance guard records
-one background event, not exclusive-host evidence.
+All **77 fixed-parent 32-pair controls** meet unchanged common +1% / pay-use
++5% limits (highest **+0.762% / +3.081%**). Ordinary calls improve 3.602%,
+object lifecycle 0.715%, static reference calls 1.964% and resource aliases
+4.345%. Simulated instruction profiles prove work removal, not hardware-counter
+results. New CSV read/write/cached/multiline candidate/PHP ratios are
+**1.228/1.064/3.871/1.526**, not absent-parent deltas or PHP speed parity.
+The authorized shared-host guard records two background events, not
+exclusive-host evidence.
 
 SHA-256 evidence:
 
-- Release: `c74dc13e4cdf984c1542857f944aa45ce236737738662b69a774d809d24e26bb`.
-- Complete technical record: `f712700e7a67d5bab6b98e21b01a358c220d8e824ee7c95497e749726ccdeb2b`.
-- Matrix: `42cf2c32528a234a4525e790647bef2c58440056529de3aed2536c70156d5066`.
-- SPL manifest / pass set: `af387d6854d0cb50877b3d5b6b1575e7bd171a33c8147a7e8a16afea4ae94c82` / `92b828fb2d5496632598854d6493f5a01fa29b956188ca459211ea68b0c778ea`.
-- Reference manifest for all gains: `223bbbd18190b9ea7c00f488f5dd87132cc99cecc8b45b9f1afee9261cb22b26`.
-- Zend/lang manifest / pass set: `08b5c58b5269a1207c600552d9aa5322f80c6500e4b3727a7a55e4fb4545c8bb` / `b99f862eabc6857b7347b6f378368ce342ff70acec02d7d2732e8f20daa5fde3`.
-- Strings/array manifest / pass set: `d30c0c408a2001f0445b288c806b1ac1cf40f8e31c5cdf20cb8be6f1201a1d8d` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
-- Reviewed performance: `8b51e53d0b394e412dc9d6683705cb5811cd735bad7c18bfe8cf20f2ed7dbb1f`.
+- Release: `7daeb0b955ab39fa82adc8270e54f09d5cc664a56397f754c7142f0e7e242b79`.
+- Complete technical record: `9e884def425c414eb37171253d94ab8c70f48a454660b2efb1dbdb228e67c402`.
+- Matrix: `bbde1bd3a7e95e4802f0dc3c9848d88599085e5be93ed08cffbd2785300bd8ae`.
+- SPL manifest / pass set: `c8831d59aa5d523a4824c48b00fe7bb0a96fc1cacfecf90de39f96965cc364d1` / `7c7734015aab4f4394e6c83bec342596d36effa3c784f4dda81e37b4951ec0fd`.
+- Reference manifest for all gains: `db535d6d63cf4db47076b3e5a523cc00faa6958513ffdec0c787f1dcc6e05e92`.
+- Zend/lang manifest / pass set: `d1897ba53af464caf1ca87f2a992175f5d9f913ea46b0cc00c57a4d06a8ece0a` / `b99f862eabc6857b7347b6f378368ce342ff70acec02d7d2732e8f20daa5fde3`.
+- Strings/array manifest / pass set: `5cc6530aecc917ca6a5b4b9dafad86ad5a63935bef8f23784cc10290d282f4a3` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+- Reviewed performance: `0ed41d66b682ce81791debbc49111a719c784eb43a1adf4615b4801b920ebf79`.
 
-Next read-only admission confirms **29** reference-passing/current-failing
-SplFileObject CSV cases
-(`43fbbeb4f1379b8cd115eda7225c89e3c4b44ecb5d5098a9c445033aa893d586`).
-Characterize CSV controls, multiline/empty/EOF records, cursor/cache ordering,
-default-escape diagnostics, bytes, writes and callback failures before reusing
-the existing stream parser/writer. Require at least ten common gains and retain
-all controls. Independent parser debt, general writes and whole-class claims
-remain outside that next slice.
+Next read-only admission confirms **13** reference-passing/current-failing
+physical stream cases
+(`d7f6ff2d51e115134391d008e05976260e024b1bb109500fbf952c56e302dc83`).
+Twelve share missing ftell/fgets/fread/fgetc boundaries; one further needs
+fwrite/ftruncate and remains a separate holdout. Characterize physical position,
+cached lines, logical keys, EOF, byte provenance and wrapper lifetime before
+reusing the existing backend. Require at least ten common gains and retain all
+77 controls; no general write, temporary-file or whole-class claim.
+
+The preceding line-cursor checkpoint added 31 SPL passes; its complete
+technical record remains
+`f712700e7a67d5bab6b98e21b01a358c220d8e824ee7c95497e749726ccdeb2b`.
 
 The preceding SplObjectStorage checkpoint added 25 SPL passes; its complete
 technical record remains

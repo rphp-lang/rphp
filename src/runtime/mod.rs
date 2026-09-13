@@ -2353,6 +2353,17 @@ impl ExecutorGlobals {
         debug_assert_eq!(param_names.len(), param_type_hints.len());
         debug_assert_eq!(param_names.len(), parameter_default_diagnostics.len());
         debug_assert!(required_num_args <= param_names.len() as u32);
+        // Linking reads diagnostics by optional index; an absent diagnostic
+        // needs no slot. Keep the complete index map when any default exists.
+        let parameter_default_diagnostics =
+            if parameter_default_diagnostics.iter().any(Option::is_some) {
+                parameter_default_diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.map(Into::into))
+                    .collect()
+            } else {
+                Vec::new()
+            };
         let contract = InternalMethodContract {
             name,
             is_static,
@@ -2373,10 +2384,7 @@ impl ExecutorGlobals {
                 param_names: param_names.iter().map(|name| (*name).to_string()).collect(),
                 return_type_hint,
             },
-            parameter_default_diagnostics: parameter_default_diagnostics
-                .iter()
-                .map(|diagnostic| diagnostic.map(Into::into))
-                .collect(),
+            parameter_default_diagnostics,
             return_type_is_tentative,
         };
         self.internal_callable_metadata
@@ -9387,11 +9395,17 @@ impl ExecutorGlobals {
         {
             return Err(Self::function_redeclaration_error(previous, func, name));
         }
-        if let Some(&previous) = self.function_table.get(&key) {
-            return Err(Self::function_redeclaration_error(previous, func, name));
+        // A vacant entry retains the lookup's hash and bucket, avoiding a
+        // second name hash/probe for every successful declaration.
+        match self.function_table.entry(key) {
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                Err(Self::function_redeclaration_error(*entry.get(), func, name))
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(func);
+                Ok(())
+            }
         }
-        self.function_table.insert(key, func);
-        Ok(())
     }
 
     pub(crate) fn find_private_function(&self, name: &str) -> Option<*const FunctionCommon> {
@@ -10667,6 +10681,39 @@ mod stdlib_capacity_tests {
     use super::ExecutorGlobals;
 
     #[test]
+    fn function_registration_keeps_first_declaration_and_alias_error_priority() {
+        fn handler(
+            _: *mut crate::vm::frame::ExecuteData,
+            _: *mut crate::value::Value,
+            _: &mut ExecutorGlobals,
+        ) -> Result<(), crate::vm::execute::VmError> {
+            Ok(())
+        }
+        let first = crate::compiler::make_internal_function(handler, 0, 0, vec![]);
+        let second = crate::compiler::make_internal_function(handler, 1, 1, vec!["value".into()]);
+        let original = &first.common as *const _;
+        let replacement = &second.common as *const _;
+        let mut eg = ExecutorGlobals::new();
+        for (name, duplicate) in [("MiXeD", "mIXEd"), ("\u{130}TEM", "i\u{307}tem")] {
+            eg.register_function(name, original).unwrap();
+            let error = eg.register_function(duplicate, replacement).unwrap_err();
+            assert_eq!(error, format!("Cannot redeclare function {duplicate}()"));
+            assert_eq!(eg.function_table.get(&name.to_lowercase()), Some(&original));
+            assert_eq!(eg.find_function(duplicate), Some(original));
+        }
+        eg.register_function("RTRIM", original).unwrap();
+        assert_eq!(
+            eg.register_function("ChOp", replacement).unwrap_err(),
+            "Cannot redeclare function ChOp()",
+        );
+        assert!(!eg.function_table.contains_key("chop"));
+        assert_eq!(eg.function_table.get("rtrim"), Some(&original));
+        eg.register_function("Other", replacement).unwrap();
+        assert_eq!(eg.find_function("other"), Some(replacement));
+        assert_eq!(eg.function_table.len(), 4);
+    }
+
+    #[test]
     fn method_lookup_separator_matches_first_substring_without_normalizing() {
         let alphabet = ["a", "Z", ":", "\0", "\u{130}", "\u{1f642}"];
         let mut level = vec![String::new()];
@@ -10941,6 +10988,73 @@ mod stdlib_capacity_tests {
         assert_eq!(first[0].name, "initial");
         assert_eq!(first[1].name, "next");
         assert_eq!(metadata.methods["Second"][0].name, "other");
+    }
+
+    #[test]
+    fn absent_internal_defaults_need_no_storage_but_preserve_signature_indices() {
+        use crate::parser::Visibility;
+        use crate::vm::function::ParamTypeHint;
+
+        let mut eg = ExecutorGlobals::new();
+        for (name, defaults, rendered) in [
+            (
+                "required",
+                [None, None, None],
+                "Defaults::required(mixed $first, mixed $middle, mixed $last): mixed",
+            ),
+            (
+                "middle",
+                [None, Some("null"), None],
+                "Defaults::middle(mixed $first, mixed $middle = null, mixed $last): mixed",
+            ),
+            (
+                "edges",
+                [Some("'start'"), None, Some("17")],
+                "Defaults::edges(mixed $first = 'start', mixed $middle, mixed $last = 17): mixed",
+            ),
+        ] {
+            eg.register_internal_method_contract(
+                "Defaults",
+                name,
+                false,
+                0,
+                &["first", "middle", "last"],
+                vec![ParamTypeHint::Mixed; 3],
+                ParamTypeHint::Mixed,
+                &defaults,
+                true,
+            );
+            let contract = eg.internal_method_contracts("Defaults").last().unwrap();
+            if defaults.iter().all(Option::is_none) {
+                assert_eq!(contract.parameter_default_diagnostics.capacity(), 0);
+            } else {
+                assert_eq!(contract.parameter_default_diagnostics.len(), defaults.len());
+            }
+            for (index, expected) in defaults.iter().enumerate() {
+                assert_eq!(
+                    contract
+                        .parameter_default_diagnostics
+                        .get(index)
+                        .and_then(|v| v.as_deref()),
+                    *expected,
+                );
+            }
+            let declaration = super::MethodDeclaration {
+                owner: "Defaults",
+                name,
+                visibility: Visibility::Public,
+                enforces_visibility: true,
+                is_static: false,
+                is_abstract: false,
+                source_file: None,
+                source_line: 0,
+                signature: &contract.signature,
+                parameter_default_diagnostics: Some(&contract.parameter_default_diagnostics),
+                return_type_is_tentative: true,
+                suppresses_tentative_return_deprecation: false,
+            };
+            assert_eq!(eg.format_method_signature(declaration, None), rendered);
+        }
     }
 
     #[test]

@@ -36,29 +36,29 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `spl-file-object-line-cursor-contracts` train adds 31 PHP 8.5
-SPL passes over `faff8cc0`, without a lost pass or new process hazard. SPL
-reaches 490/255/31 unsupported/8 skip/1 XFAIL; core retains 6,446/335/182/211
-and identical pass sets. A sparse traced file owner preserves cached lines,
-logical cursors, flags, seek/rewind/EOF, overrides and wrapper lifetimes.
-Complete CSV/debug state and requested/opened path metadata remain two named
-output-stage holdouts; full write/CSV, SplTempFileObject and whole-class claims
-are not admitted.
+The accepted `spl-file-object-csv-record-contracts` train adds 21 PHP 8.5
+SPL passes over `9dcf676e`, without loss, changed failure stages or new process
+hazards. SPL reaches 511/234/31 unsupported/8 skip/1 XFAIL; core retains
+6,446/335/182/211 and identical pass sets. The selected 7,959 cases have
+6,957 passes and 569 failures, not complete PHP coverage.
 
-The checked five-configuration matrix, all-targets, original/adjacent oracles,
-exact no-loss, S0-S3 and unsafe/static gates pass. All 73 fixed-parent 32-pair
-controls meet unchanged common +1% / pay-use +5% limits. Profile-backed
-ownership, scalar, lookup and pathname work removal preserves common
-representation, aliases and JIT admission. Rejected evidence, hash-verified
-disk-stop resumption, absolute new-API costs and shared-host limits are in
-`compatibility.md`; automatic cleanup remains mandatory.
+CSV controls/records reuse the sparse traced file owner and stream parser/writer.
+Cached projection, multiline/EOF behavior, bytes, validation/deprecation order,
+partial writes and callback lifetimes are covered. Profile-backed registration,
+metadata and scalar work removal preserves original result writes, references,
+retirement, common representation and JIT admission. The checked five-configuration
+matrix, all-targets, original/no-loss, S0-S3 and unsafe/static gates pass.
+All 77 fixed-parent 32-pair controls meet unchanged common +1% / pay-use +5%
+limits (highest +0.762%/+3.081%). Rejected evidence, absolute API costs and
+shared-host limitations are in `compatibility.md`; cleanup remains mandatory.
 
-Next admission confirms 29 reference-passing/current-failing SplFileObject
-CSV cases. Characterize multiline/empty/EOF records, controls, cursor/cache
-ordering, default-escape diagnostics, bytes, writes and callback failures
-before reusing the stream CSV parser/writer. Require at least ten common gains
-and retain every control. Independent parser debt, general writes,
-SplTempFileObject and whole-class claims remain outside the next slice.
+Next read-only admission confirms 13 reference-passing/current-failing physical
+stream cases: twelve share ftell/fgets/fread/fgetc, while one fwrite/ftruncate
+case is a separate holdout. Characterize physical position, cached lines,
+logical keys, EOF, bytes and wrapper lifetime before reusing the existing
+backend. Require at least ten common gains and retain all 77 controls, promoting
+the four now-present CSV controls. General writes, SplTempFileObject, broader
+debug/path metadata, suspension, 32-bit/OOM and whole-class claims remain out.
 
 ### Preceding directory cursor checkpoint
 

@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::io;
 
 use crate::runtime::ExecutorGlobals;
+use crate::stdlib::stream::CsvEncoder;
 use crate::value::{Value, ValueType};
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
@@ -150,85 +151,6 @@ pub(super) fn fn_fputcsv(
         }
         _ => super::return_value(return_pointer, Value::bool(false)),
     }
-}
-
-/// Incremental encoder for one `fputcsv()` record.
-struct CsvEncoder {
-    separator: u8,
-    enclosure: u8,
-    escape: Option<u8>,
-    bytes: Vec<u8>,
-    first_field: bool,
-}
-
-impl CsvEncoder {
-    fn new(separator: u8, enclosure: u8, escape: Option<u8>) -> Self {
-        Self {
-            separator,
-            enclosure,
-            escape,
-            bytes: Vec::new(),
-            first_field: true,
-        }
-    }
-
-    fn push_field(&mut self, field: &[u8]) -> io::Result<()> {
-        let quote = field.iter().copied().any(|byte| {
-            byte == self.separator
-                || byte == self.enclosure
-                || self.escape == Some(byte)
-                || matches!(byte, b'\n' | b'\r' | b'\t' | b' ')
-        });
-        let separator_bytes = usize::from(!self.first_field);
-        let quote_bytes = if quote {
-            field.len().saturating_add(2)
-        } else {
-            0
-        };
-        self.bytes
-            .try_reserve(
-                separator_bytes
-                    .saturating_add(field.len())
-                    .saturating_add(quote_bytes),
-            )
-            .map_err(allocation_error)?;
-
-        if !self.first_field {
-            self.bytes.push(self.separator);
-        }
-        self.first_field = false;
-        if !quote {
-            self.bytes.extend_from_slice(field);
-            return Ok(());
-        }
-
-        self.bytes.push(self.enclosure);
-        let mut escaped = false;
-        for &byte in field {
-            if self.escape == Some(byte) {
-                escaped = true;
-            } else if byte == self.enclosure && !escaped {
-                self.bytes.push(self.enclosure);
-            } else {
-                escaped = false;
-            }
-            self.bytes.push(byte);
-        }
-        self.bytes.push(self.enclosure);
-        Ok(())
-    }
-
-    fn finish(mut self, eol: &[u8]) -> io::Result<Vec<u8>> {
-        self.bytes
-            .try_reserve(eol.len())
-            .map_err(allocation_error)?;
-        self.bytes.extend_from_slice(eol);
-        Ok(self.bytes)
-    }
-}
-
-fn allocation_error(_: std::collections::TryReserveError) -> io::Error {
-    io::Error::new(io::ErrorKind::OutOfMemory, "CSV record allocation failed")
 }
 
 #[cfg(test)]

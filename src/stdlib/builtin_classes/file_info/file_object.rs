@@ -5,9 +5,12 @@ use super::*;
 use crate::stdlib::stream::PhpStream;
 use std::cell::RefCell;
 
+mod csv_records;
+
 const DROP_NEW_LINE: u32 = 1;
 const READ_AHEAD: u32 = 2;
 const SKIP_EMPTY: u32 = 4;
+const READ_CSV: u32 = 8;
 
 #[derive(Clone)]
 enum Backend {
@@ -25,6 +28,9 @@ pub(super) struct FileState {
     flags: u32,
     eof: bool,
     override_line: bool,
+    csv: csv_records::Controls,
+    csv_read_failed: bool,
+    csv_line: Option<Vec<u8>>,
 }
 
 impl FileState {
@@ -171,6 +177,9 @@ fn construct(
         flags: 0,
         eof: false,
         override_line,
+        csv: csv_records::Controls::default(),
+        csv_read_failed: false,
+        csv_line: None,
     }));
     ret!(rv, Value::null());
 }
@@ -280,8 +289,14 @@ fn fetch_line(
     ed: *mut ExecuteData,
     receiver: &Value,
     eg: &mut ExecutorGlobals,
+    operation: &str,
 ) -> Result<(), VmError> {
     if read(receiver, |state| state.cache.is_some() || state.eof) {
+        return Ok(());
+    }
+    if read(receiver, |state| state.flags & READ_CSV != 0) {
+        let controls = read(receiver, |state| state.csv);
+        let _ = csv_records::fetch(ed, receiver, eg, controls, false, operation)?;
         return Ok(());
     }
     loop {
@@ -334,7 +349,7 @@ fn current(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Re
     if !initialized(&receiver, eg) {
         return Ok(());
     }
-    fetch_line(ed, &receiver, eg)?;
+    fetch_line(ed, &receiver, eg, "SplFileObject::current")?;
     ret!(
         rv,
         read(&receiver, |state| state
@@ -354,17 +369,24 @@ fn to_string(
     if !initialized(&receiver, eg) {
         return Ok(());
     }
-    fetch_line(ed, &receiver, eg)?;
+    fetch_line(ed, &receiver, eg, "SplFileObject::__toString")?;
     if read(&receiver, |state| state.cache.is_none()) && eg.exception.is_none() {
         cannot_read(&receiver, eg);
         return Ok(());
     }
     ret!(
         rv,
-        read(&receiver, |state| state
-            .cache
-            .clone()
-            .unwrap_or_else(|| Value::string("")))
+        read(&receiver, |state| {
+            if state
+                .cache
+                .as_ref()
+                .is_some_and(|value| value.as_array().is_some())
+            {
+                php_byte_result(state.csv_line.clone().unwrap_or_default(), false)
+            } else {
+                state.cache.clone().unwrap_or_else(|| Value::string(""))
+            }
+        })
     );
 }
 
@@ -384,6 +406,7 @@ fn get_current_line(
     }
     write(&receiver, |state| {
         state.cache = Some(value.clone());
+        state.csv_line = None;
         state.index = state.index.wrapping_add(1);
     });
     ret!(rv, value);
@@ -397,11 +420,12 @@ fn next(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Resul
     }
     let ahead = write(&receiver, |state| {
         state.cache = None;
+        state.csv_line = None;
         state.index = state.index.wrapping_add(1);
         state.flags & READ_AHEAD != 0
     });
     if ahead {
-        fetch_line(ed, &receiver, eg)?;
+        fetch_line(ed, &receiver, eg, "SplFileObject::next")?;
     }
     ret!(rv, Value::null());
 }
@@ -420,8 +444,10 @@ fn rewind_cursor(receiver: &Value, eg: &mut ExecutorGlobals) -> Result<bool, VmE
     if ok {
         write(receiver, |state| {
             state.cache = None;
+            state.csv_line = None;
             state.index = 0;
             state.eof = false;
+            state.csv_read_failed = false;
         });
     } else if eg.exception.is_none() {
         error(eg, "RuntimeException", "Cannot rewind file");
@@ -436,7 +462,7 @@ fn rewind(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Res
         return Ok(());
     }
     if rewind_cursor(&receiver, eg)? && read(&receiver, |state| state.flags & READ_AHEAD != 0) {
-        fetch_line(ed, &receiver, eg)?;
+        fetch_line(ed, &receiver, eg, "SplFileObject::rewind")?;
     }
     ret!(rv, Value::null());
 }
@@ -449,7 +475,9 @@ fn valid(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Resu
     }
     let ahead = read(&receiver, |state| state.flags & READ_AHEAD != 0);
     if ahead {
-        fetch_line(ed, &receiver, eg)?;
+        fetch_line(ed, &receiver, eg, "SplFileObject::valid")?;
+    } else {
+        refresh_failed_csv_eof(&receiver, eg)?;
     }
     ret!(
         rv,
@@ -478,7 +506,33 @@ macro_rules! projection {
     };
 }
 projection!(key, |state| Value::long(state.index));
-projection!(eof, |state| Value::bool(state.eof));
+
+#[cold]
+fn refresh_failed_csv_eof(receiver: &Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    #[cfg(feature = "stream-registry")]
+    if read(receiver, |state| state.csv_read_failed) {
+        if let Backend::Wrapper(resource) = read(receiver, |state| state.backend.clone()) {
+            if let Some(eof) =
+                crate::stdlib::streams::user_wrapper::eof(eg, resource.as_resource_id().unwrap())?
+            {
+                write(receiver, |state| state.eof = eof);
+            }
+        }
+    }
+    #[cfg(not(feature = "stream-registry"))]
+    let _ = (receiver, eg);
+    Ok(())
+}
+
+#[cold]
+fn eof(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let receiver = owned_argument(ed, 0);
+    if !initialized(&receiver, eg) {
+        return Ok(());
+    }
+    refresh_failed_csv_eof(&receiver, eg)?;
+    ret!(rv, Value::bool(read(&receiver, |state| state.eof)));
+}
 projection!(get_flags, |state| Value::long(state.flags as i64));
 projection!(get_max_line_len, |state| Value::long(state.maximum as i64));
 projection!(get_children, |_state| Value::null());
@@ -513,23 +567,27 @@ fn seek(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Resul
     }
     let ahead = read(&receiver, |state| state.flags & READ_AHEAD != 0);
     while read(&receiver, |state| state.index < line) {
-        fetch_line(ed, &receiver, eg)?;
+        fetch_line(ed, &receiver, eg, "SplFileObject::seek")?;
         if eg.exception.is_some() {
             return Ok(());
         }
         if read(&receiver, |state| {
             state.eof && (ahead || state.index + 1 < line)
         }) {
-            write(&receiver, |state| state.cache = None);
+            write(&receiver, |state| {
+                state.cache = None;
+                state.csv_line = None;
+            });
             break;
         }
         write(&receiver, |state| {
             state.index = state.index.wrapping_add(1);
             state.cache = None;
+            state.csv_line = None;
         });
     }
     if ahead {
-        fetch_line(ed, &receiver, eg)?;
+        fetch_line(ed, &receiver, eg, "SplFileObject::seek")?;
     }
     ret!(rv, Value::null());
 }
@@ -580,8 +638,8 @@ fn set_max_line_len(
 #[inline(never)]
 pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     use ParamTypeHint::{Array, Bool, ClassName, Int, String, Union, Void};
-    let mut functions = Vec::with_capacity(16);
-    eg.reserve_internal_method_contracts("SplFileObject", 16);
+    let mut functions = Vec::with_capacity(20);
+    eg.reserve_internal_method_contracts("SplFileObject", 20);
     let mut method = |name,
                       handler,
                       names: &[&str],
@@ -628,6 +686,8 @@ pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                     value.map(|value| match value {
                         "null" => Value::null(),
                         "false" => Value::bool(false),
+                        "'\\\\'" => Value::string("\\"),
+                        "\"\\n\"" => Value::string("\n"),
                         _ => Value::string(value.trim_matches('\'')),
                     })
                 })
@@ -677,6 +737,44 @@ pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         vec![Int],
         &[None],
         Void,
+    );
+    method(
+        "getCsvControl",
+        csv_records::get_controls,
+        &[],
+        vec![],
+        &[],
+        Array,
+    );
+    method(
+        "setCsvControl",
+        csv_records::set_controls,
+        &["separator", "enclosure", "escape"],
+        vec![String, String, String],
+        &[Some("','"), Some("'\"'"), Some("'\\\\'")],
+        Void,
+    );
+    method(
+        "fgetcsv",
+        csv_records::get_record,
+        &["separator", "enclosure", "escape"],
+        vec![String, String, String],
+        &[Some("','"), Some("'\"'"), Some("'\\\\'")],
+        Union(vec![Array, ClassName("false".into())]),
+    );
+    method(
+        "fputcsv",
+        csv_records::put_record,
+        &["fields", "separator", "enclosure", "escape", "eol"],
+        vec![Array, String, String, String, String],
+        &[
+            None,
+            Some("','"),
+            Some("'\"'"),
+            Some("'\\\\'"),
+            Some("\"\\n\""),
+        ],
+        Union(vec![Int, ClassName("false".into())]),
     );
     functions
 }

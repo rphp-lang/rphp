@@ -8388,6 +8388,62 @@ impl Drop for Value {
 }
 
 #[cfg(test)]
+mod raw_field_copy_tests {
+    use super::*;
+    use std::mem::{ManuallyDrop, MaybeUninit};
+
+    #[test]
+    fn field_copy_preserves_numeric_bits_provenance_and_borrowed_ownership() {
+        let mut target = Value::long(47);
+        let sources = [
+            Value::undef(),
+            Value::null(),
+            Value::bool(false),
+            Value::bool(true),
+            Value::long(i64::MIN),
+            Value::long(i64::MAX),
+            Value::double(-0.0),
+            Value::double(f64::from_bits(0x7ff8_0000_0000_1234)),
+            Value::double(f64::INFINITY),
+            Value::string("ordinary"),
+            Value::binary_string(&[0, 127, 128, 255]),
+            Value::interned_binary_string_from_storage("\u{ff}".into()),
+            Value::array(PhpArray::new()),
+            Value::object(PhpObject::dynamic("CopyOwner".into(), 0, HashMap::new())),
+            Value::reference(&mut target),
+            Value::owned_reference(Value::string("owned target")),
+            Value::traversable_unpack_value(Value::long(53)),
+        ];
+        for source in &sources {
+            let mut destination = MaybeUninit::<Value>::uninit();
+            let count = source.vm_release_strong_count();
+            // SAFETY: source is initialized and stays alive; destination is
+            // aligned/disjoint. The copy is only a borrow and ManuallyDrop
+            // prevents a second release without a corresponding retain.
+            unsafe {
+                Value::raw_copy(source, destination.as_mut_ptr());
+                let copy = ManuallyDrop::new(destination.assume_init());
+                assert_eq!(copy.type_info, source.type_info);
+                match source.value_type() {
+                    ValueType::Double => {
+                        assert_eq!(copy.data.double.to_bits(), source.data.double.to_bits())
+                    }
+                    ValueType::Undef
+                    | ValueType::Null
+                    | ValueType::False
+                    | ValueType::True
+                    | ValueType::Long => assert_eq!(copy.data.long, source.data.long),
+                    _ => assert_eq!(copy.data.ptr, source.data.ptr),
+                }
+                assert_eq!(source.vm_release_strong_count(), count);
+                assert_eq!(format!("{:?}", &*copy), format!("{source:?}"));
+            }
+        }
+        assert_eq!(target.as_long(), Some(47));
+    }
+}
+
+#[cfg(test)]
 mod native_owned_value_scan_tests {
     use super::*;
 

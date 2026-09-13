@@ -171,6 +171,74 @@ unsafe fn frame_tmp_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
     }
 }
 
+/// Reuse the compiler-resolved absolute result index at a TMP write boundary.
+/// Scalar results keep the canonical retirement predicate without undoing
+/// pointer construction to recover the same index. Heap results retain the
+/// full writer. Expand only inside the caller's live-frame unsafe region.
+macro_rules! frame_tmp_set_indexed {
+    ($frame:expr, $ptr:expr, $index:expr, $value:expr) => {{
+        let value = $value;
+        let frame = $frame;
+        let ptr = $ptr;
+        let index = u32::from($index);
+        debug_assert_eq!(slot_idx(frame, ptr), index);
+        if value.needs_cleanup() {
+            frame_tmp_set(frame, ptr, value);
+        } else {
+            if (*frame).has_heap_slots
+                && ((*frame).num_cvs + (*frame).num_temps > 64
+                    || (*frame).heap_bitmap & (1u64 << index) != 0)
+            {
+                bitmap_drop_scalar(frame, ptr);
+            }
+            ptr.write(value);
+        }
+    }};
+}
+
+#[cfg(test)]
+mod indexed_tmp_write_tests {
+    use super::*;
+
+    #[test]
+    fn resolved_indices_preserve_first_write_owners_and_large_frame_fallback() {
+        for (total, index) in [(64u32, 63u32), (65, 64), (80, 2)] {
+            let mut code = crate::compiler::compile::Compiler::new()
+                .compile(&[]).unwrap().main;
+            code.num_cvs = 1;
+            code.num_temps = total - 1;
+            let function = crate::compiler::make_user_function(code);
+            let mut stack = crate::vm::stack::VmStack::new();
+            let frame = stack.push_call_frame(
+                &function.common, 0, 0, std::ptr::null_mut(), std::ptr::null_mut(),
+            );
+            let owner = Value::array(PhpArray::new());
+            // SAFETY: both indices belong to this live allocation. Compact
+            // first writes must not inspect uninitialized TMP bytes. Large
+            // TMPs are initialized by the normal allocator. Cleanup retires
+            // each remaining owned edge before the stack storage is popped.
+            unsafe {
+                let slot = (*frame).slot_ptr(index);
+                let neighbor = (*frame).slot_ptr(1);
+                frame_tmp_set_indexed!(frame, slot, index, Value::double(-0.0));
+                assert_eq!((*slot).raw_double().to_bits(), (-0.0f64).to_bits());
+                frame_tmp_set(frame, neighbor, owner.clone());
+                frame_tmp_set_indexed!(frame, slot, index, owner.clone());
+                assert_eq!(owner.cycle_strong_count(), Some(3));
+                frame_tmp_set_indexed!(frame, slot, index, Value::long(47));
+                assert_eq!((*slot).as_long(), Some(47));
+                assert_eq!(owner.cycle_strong_count(), Some(2));
+                assert_eq!((*neighbor).array_identity(), owner.array_identity());
+                frame_tmp_set_indexed!(frame, slot, index, Value::bool(false));
+                assert_eq!((*slot).value_type(), ValueType::False);
+                cleanup_frame_slots(frame);
+                assert_eq!(owner.cycle_strong_count(), Some(1));
+                stack.pop_call_frame(frame);
+            }
+        }
+    }
+}
+
 /// Transfer an initialized compiler-owned TMP/VAR out of a live frame slot.
 /// Callers expand this only inside an existing opcode-level unsafe region.
 macro_rules! frame_tmp_take {
