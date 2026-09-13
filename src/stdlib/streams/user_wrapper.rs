@@ -42,7 +42,7 @@ struct UserStreamState {
     mode: String,
     kind: UserStreamKind,
     is_url: bool,
-    position: usize,
+    position: i64,
     eof: bool,
     unread: Vec<u8>,
     unread_offset: usize,
@@ -522,6 +522,78 @@ pub(crate) fn open_file_object(
     }
 }
 
+/// Explicit byte reads attempt the backend again after a previous EOF and
+/// expose EOF only when the request has exhausted the shared unread buffer.
+#[cold]
+pub(crate) fn read_file_object_bytes(
+    eg: &mut ExecutorGlobals,
+    resource: i64,
+    requested: usize,
+) -> Result<Option<(Vec<u8>, bool)>, VmError> {
+    let Some(stream) = shared_stream(eg, resource) else {
+        return Ok(None);
+    };
+    {
+        let state = stream.borrow();
+        if state.closed || state.kind != UserStreamKind::File {
+            return Ok(None);
+        }
+    }
+    let mut bytes = Vec::new();
+    consume_read_buffer(&mut stream.borrow_mut(), &mut bytes, requested);
+    if bytes.len() < requested {
+        // A user-space byte read makes at most one backend attempt, even if
+        // the wrapper returns a short chunk or previously reported EOF.
+        if fill_read_buffer(eg, &stream)?.is_none() || eg.exception.is_some() {
+            return Ok(None);
+        }
+        let remaining = requested - bytes.len();
+        consume_read_buffer(&mut stream.borrow_mut(), &mut bytes, remaining);
+    }
+    let eof = {
+        let state = stream.borrow();
+        state.eof && state.unread_offset == state.unread.len()
+    };
+    Ok(Some((bytes, eof)))
+}
+
+#[cold]
+fn consume_read_buffer(state: &mut UserStreamState, bytes: &mut Vec<u8>, requested: usize) {
+    let start = state.unread_offset;
+    let length = requested.min(state.unread.len() - start);
+    let end = start + length;
+    bytes.extend_from_slice(&state.unread[start..end]);
+    state.unread_offset = end;
+    state.position = state.position.wrapping_add(length as i64);
+    if end == state.unread.len() {
+        state.unread.clear();
+        state.unread_offset = 0;
+    }
+}
+
+/// Buffered bytes mask backend EOF. A failed CSV read explicitly refreshes
+/// the callback; ordinary queries use the cached result once it is true.
+#[cold]
+pub(crate) fn file_object_eof(
+    eg: &mut ExecutorGlobals,
+    resource: i64,
+    refresh: bool,
+) -> Result<Option<bool>, VmError> {
+    let Some(stream) = shared_stream(eg, resource) else {
+        return Ok(None);
+    };
+    if !refresh {
+        let state = stream.borrow();
+        if state.unread_offset < state.unread.len() {
+            return Ok(Some(false));
+        }
+        if state.eof {
+            return Ok(Some(true));
+        }
+    }
+    eof(eg, resource)
+}
+
 /// Consume a physical line from the same request-owned unread buffer used by
 /// ordinary wrapper reads. Every borrow ends before dispatching PHP callbacks.
 #[cold]
@@ -529,6 +601,7 @@ pub(crate) fn read_file_object_line(
     eg: &mut ExecutorGlobals,
     resource: i64,
     maximum: usize,
+    require_line: bool,
 ) -> Result<Option<(Vec<u8>, bool)>, VmError> {
     let Some(stream) = shared_stream(eg, resource) else {
         return Ok(None);
@@ -550,23 +623,24 @@ pub(crate) fn read_file_object_line(
                 .map_or(limit, |index| start + index + 1);
             bytes.extend_from_slice(&state.unread[start..end]);
             state.unread_offset = end;
-            state.position = state.position.saturating_add(end - start);
+            state.position = state.position.wrapping_add((end - start) as i64);
             end > start
         };
         if bytes.last() == Some(&b'\n') || bytes.len() == maximum {
             break;
         }
-        if stream.borrow().eof {
-            break;
-        }
-        if !available && bytes.is_empty() {
+        if !available && bytes.is_empty() && !stream.borrow().eof {
             let _ = eof(eg, resource)?;
             if eg.exception.is_some() {
                 return Ok(None);
             }
-            if stream.borrow().eof {
-                break;
+        }
+        if stream.borrow().eof {
+            if require_line && bytes.is_empty() {
+                let message = format!("Cannot read from file {}", stream.borrow().uri);
+                eg.exception = Some(crate::value::make_error_value("RuntimeException", &message));
             }
+            break;
         }
         let Some(prefix) = read(eg, resource, 1)? else {
             return Ok(None);
@@ -590,7 +664,12 @@ pub(crate) fn read_file_object_line(
 }
 
 #[cold]
-pub(crate) fn rewind_file_object(eg: &mut ExecutorGlobals, resource: i64) -> Result<bool, VmError> {
+pub(crate) fn rewind_file_object(
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    resource: i64,
+    method: &str,
+) -> Result<bool, VmError> {
     let Some(stream) = shared_stream(eg, resource) else {
         return Ok(false);
     };
@@ -603,10 +682,27 @@ pub(crate) fn rewind_file_object(eg: &mut ExecutorGlobals, resource: i64) -> Res
     )?
     .is_some_and(|value| value.is_truthy());
     if success && eg.exception.is_none() {
+        let position = invoke_callback(eg, &object, "stream_tell", vec![])?;
+        if eg.exception.is_some() {
+            return Ok(false);
+        }
+        if position.is_none() {
+            let class = object.as_object().unwrap().class_name.to_string();
+            crate::stdlib::report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("{method}(): {class}::stream_tell is not implemented!"),
+            )?;
+        }
+        let Some(position) = position.and_then(|value| value.as_long()) else {
+            return Ok(false);
+        };
         let mut state = stream.borrow_mut();
         state.unread.clear();
         state.unread_offset = 0;
-        state.position = 0;
+        state.position = position;
         state.eof = false;
     }
     Ok(success)
@@ -671,7 +767,7 @@ pub(crate) fn write_file_object_record(
         let accepted = (count as usize).min(remaining);
         {
             let mut state = stream.borrow_mut();
-            state.position = state.position.saturating_add(accepted);
+            state.position = state.position.wrapping_add(accepted as i64);
         }
         written += accepted;
         if count as usize > remaining {
@@ -786,6 +882,48 @@ fn invoke_on_stream(
     invoke_callback(eg, &object, method, arguments)
 }
 
+#[cold]
+fn fill_read_buffer(
+    eg: &mut ExecutorGlobals,
+    stream: &SharedUserStream,
+) -> Result<Option<bool>, VmError> {
+    let object = stream.borrow().object.clone();
+    let Some(value) = invoke_callback(
+        eg,
+        &object,
+        "stream_read",
+        vec![Value::long(USER_READ_SIZE)],
+    )?
+    else {
+        return Ok(None);
+    };
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    let bytes = crate::stdlib::php_bytes_after_weak_string_coercion(&value)
+        .0
+        .into_owned();
+    let read_empty = bytes.is_empty();
+    let eof =
+        invoke_callback(eg, &object, "stream_eof", vec![])?.is_some_and(|value| value.is_truthy());
+    if eg.exception.is_some() {
+        // The backend's EOF failure invalidates this read, before the
+        // returned chunk becomes visible in the stream buffer.
+        stream.borrow_mut().eof = true;
+        return Ok(None);
+    }
+    {
+        let mut state = stream.borrow_mut();
+        if state.unread_offset == state.unread.len() {
+            state.unread.clear();
+            state.unread_offset = 0;
+        }
+        state.unread.extend_from_slice(&bytes);
+    }
+    stream.borrow_mut().eof |= eof;
+    Ok(Some(read_empty || eof))
+}
+
 pub(crate) fn read(
     eg: &mut ExecutorGlobals,
     resource: i64,
@@ -806,35 +944,10 @@ pub(crate) fn read(
         if available >= requested || stream.borrow().eof {
             break;
         }
-        let object = stream.borrow().object.clone();
-        let Some(value) = invoke_callback(
-            eg,
-            &object,
-            "stream_read",
-            vec![Value::long(USER_READ_SIZE)],
-        )?
-        else {
+        let Some(stop) = fill_read_buffer(eg, &stream)? else {
             return Ok(None);
         };
-        if eg.exception.is_some() {
-            return Ok(None);
-        }
-        let bytes = crate::stdlib::php_bytes_after_weak_string_coercion(&value)
-            .0
-            .into_owned();
-        let read_empty = bytes.is_empty();
-        {
-            let mut state = stream.borrow_mut();
-            if state.unread_offset == state.unread.len() {
-                state.unread.clear();
-                state.unread_offset = 0;
-            }
-            state.unread.extend_from_slice(&bytes);
-        }
-        let eof = invoke_callback(eg, &object, "stream_eof", vec![])?
-            .is_some_and(|value| value.is_truthy());
-        stream.borrow_mut().eof = eof;
-        if read_empty || eof {
+        if stop {
             break;
         }
     }
@@ -846,7 +959,7 @@ pub(crate) fn read(
     let end = start + length;
     let bytes = state.unread[start..end].to_vec();
     state.unread_offset = end;
-    state.position = state.position.saturating_add(length);
+    state.position = state.position.wrapping_add(length as i64);
     if state.unread_offset == state.unread.len() {
         state.unread.clear();
         state.unread_offset = 0;
@@ -867,7 +980,8 @@ pub(crate) fn eof(eg: &mut ExecutorGlobals, resource: i64) -> Result<Option<bool
 
 pub(crate) fn position(eg: &mut ExecutorGlobals, resource: i64) -> Option<i64> {
     let stream = shared_stream(eg, resource)?;
-    i64::try_from(stream.borrow().position).ok()
+    let position = stream.borrow().position;
+    (position != -1).then_some(position)
 }
 
 pub(crate) fn cached_eof(eg: &mut ExecutorGlobals, resource: i64) -> Option<bool> {

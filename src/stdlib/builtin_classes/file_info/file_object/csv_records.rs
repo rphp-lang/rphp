@@ -167,13 +167,16 @@ pub(super) fn set_controls(
 /// Read raw physical bytes. CSV retains embedded line endings; DROP_NEW_LINE
 /// is only an empty-line selection rule, never a mutation of quoted content.
 #[cold]
-fn segment(
+pub(super) fn segment(
     ed: *mut ExecuteData,
     receiver: &Value,
     eg: &mut ExecutorGlobals,
     maximum: usize,
     operation: &str,
+    require_line: bool,
 ) -> Result<Option<(Vec<u8>, bool)>, VmError> {
+    #[cfg(not(feature = "stream-registry"))]
+    let _ = require_line;
     let backend = read(receiver, |state| state.backend.clone());
     let result = match backend {
         Backend::Native(stream) => {
@@ -213,6 +216,7 @@ fn segment(
             eg,
             resource.as_resource_id().unwrap(),
             maximum,
+            require_line,
         )?,
     };
     if let Some((_, eof)) = result.as_ref() {
@@ -249,7 +253,7 @@ pub(super) fn fetch(
     });
     loop {
         let (maximum, flags) = read(receiver, |state| (state.maximum, state.flags));
-        let Some((bytes, mut eof)) = segment(ed, receiver, eg, maximum, operation)? else {
+        let Some((bytes, mut eof)) = segment(ed, receiver, eg, maximum, operation, false)? else {
             write(receiver, |state| {
                 state.csv_read_failed = true;
                 state.cache = Some(Value::bool(false));
@@ -273,7 +277,7 @@ pub(super) fn fetch(
         // CSV record. Move this buffer into the cache after parsing continues.
         let mut first_line = bytes;
         while parser.needs_continuation() && !eof {
-            let Some((bytes, next_eof)) = segment(ed, receiver, eg, 0, operation)? else {
+            let Some((bytes, next_eof)) = segment(ed, receiver, eg, 0, operation, false)? else {
                 return Ok(None);
             };
             eof = next_eof;

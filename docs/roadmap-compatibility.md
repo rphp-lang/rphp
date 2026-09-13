@@ -36,29 +36,31 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `spl-file-object-csv-record-contracts` train adds 21 PHP 8.5
-SPL passes over `9dcf676e`, without loss, changed failure stages or new process
-hazards. SPL reaches 511/234/31 unsupported/8 skip/1 XFAIL; core retains
-6,446/335/182/211 and identical pass sets. The selected 7,959 cases have
-6,957 passes and 569 failures, not complete PHP coverage.
+The accepted `spl-file-object-physical-read-position-contracts` train adds
+12 PHP 8.5 SPL passes over `9cddc39c`, without loss, changed failure stages or
+new process hazards. SPL reaches 523/222/31 unsupported/8 skip/1 XFAIL; core
+retains 6,446/335/182/211 and identical pass sets. The selected 7,959 cases have
+6,969 passes and 557 failures, not complete PHP coverage.
 
-CSV controls/records reuse the sparse traced file owner and stream parser/writer.
-Cached projection, multiline/EOF behavior, bytes, validation/deprecation order,
-partial writes and callback lifetimes are covered. Profile-backed registration,
-metadata and scalar work removal preserves original result writes, references,
-retirement, common representation and JIT admission. The checked five-configuration
-matrix, all-targets, original/no-loss, S0-S3 and unsafe/static gates pass.
-All 77 fixed-parent 32-pair controls meet unchanged common +1% / pay-use +5%
-limits (highest +0.762%/+3.081%). Rejected evidence, absolute API costs and
-shared-host limitations are in `compatibility.md`; cleanup remains mandatory.
+Physical ftell/fgets/fread/fgetc reuse existing native/wrapper backends and
+traced ownership. Cache/key/EOF separation, bytes, validation and callback
+lifetime are covered. Profile-backed scalar/TMP and resource retirement work
+removal preserves fallback, representation and JIT admission. The checked
+five-configuration matrix, all-targets, original/no-loss, S0-S3 and unsafe/static
+gates pass. All 81 fixed-parent 32-pair controls have exact output; 77 meet
+original common +1% / pay-use +5% limits. Four common costs (+1.547% to +2.496%)
+remain explicit optimization debt under the disclosed compatibility-first
+interpretation of the user's +1.65% acceptance. Nominal failures, individual
+numbers, absolute API costs and shared-host limits are in `compatibility.md`.
+Keep exact `9cddc39c` as the cumulative debt anchor; no silent baseline reset.
+Cleanup remains mandatory.
 
-Next read-only admission confirms 13 reference-passing/current-failing physical
-stream cases: twelve share ftell/fgets/fread/fgetc, while one fwrite/ftruncate
-case is a separate holdout. Characterize physical position, cached lines,
-logical keys, EOF, bytes and wrapper lifetime before reusing the existing
-backend. Require at least ten common gains and retain all 77 controls, promoting
-the four now-present CSV controls. General writes, SplTempFileObject, broader
-debug/path metadata, suspension, 32-bit/OOM and whole-class claims remain out.
+Next read-only triage finds 20 current failures first blocked by RegexIterator.
+Before implementation, require at least ten reference-passing reachable cases
+sharing iterator filtering/projection, with original ordering, reference/COW,
+error and lifetime oracles. Reuse existing regex/native ownership paths and
+retain all controls. Recursive/glob/tree iterators, general regex redesign,
+suspension, 32-bit/OOM and whole-class/whole-PHP claims remain separate.
 
 ### Preceding directory cursor checkpoint
 

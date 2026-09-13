@@ -438,18 +438,21 @@ impl ResourceRegistry {
 
     #[cfg(feature = "resource-lifetime")]
     #[cold]
-    fn remove<T: 'static>(&mut self, id: i64) -> Option<ResourceEntry> {
+    fn remove<T: 'static>(&mut self, id: i64) -> Option<ResourcePayload> {
         let entry = self.entries.remove_matching(id, Some(TypeId::of::<T>()))?;
         entry.retire_owner();
-        Some(entry)
+        // Only the backend needs to cross the request-registry borrow for
+        // destruction. The static label and Weak owner are no longer used;
+        // dropping Weak cannot destroy a live ResourceHandle or call PHP.
+        Some(entry.payload)
     }
 
     #[cfg(feature = "resource-lifetime")]
     #[cold]
-    fn remove_any(&mut self, id: i64) -> Option<ResourceEntry> {
+    fn remove_any(&mut self, id: i64) -> Option<ResourcePayload> {
         let entry = self.entries.remove(&id)?;
         entry.retire_owner();
-        Some(entry)
+        Some(entry.payload)
     }
 }
 
@@ -573,14 +576,14 @@ pub(crate) fn close<T: 'static>(scope: u32, id: i64) -> bool {
     if scope == 0 {
         return false;
     }
-    let entry = REQUEST_RESOURCES.with(|registries| {
+    let payload = REQUEST_RESOURCES.with(|registries| {
         registry_for_scope_mut(&mut registries.borrow_mut(), scope)
             .and_then(|registry| registry.remove::<T>(id))
     });
-    let Some(entry) = entry else {
+    let Some(payload) = payload else {
         return false;
     };
-    drop(entry);
+    drop(payload);
     true
 }
 
@@ -590,7 +593,7 @@ fn close_any(scope: u32, id: i64) {
     if scope == 0 {
         return;
     }
-    let Ok(entry) = REQUEST_RESOURCES.try_with(|registries| {
+    let Ok(payload) = REQUEST_RESOURCES.try_with(|registries| {
         let Ok(mut registries) = registries.try_borrow_mut() else {
             // A backend operation currently owns the registry borrow. Request
             // shutdown remains the safety net for this exceptional re-entry.
@@ -603,8 +606,8 @@ fn close_any(scope: u32, id: i64) {
     };
     // Drop the backend after releasing the thread-local RefCell borrow. A
     // backend destructor may itself release another resource Value.
-    if let Some(entry) = entry {
-        drop(entry);
+    if let Some(payload) = payload {
+        drop(payload);
     }
 }
 
@@ -1954,6 +1957,68 @@ mod tests {
         assert!(!is_open_for_request(&executor, inner_id));
         drop(outer);
         assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    #[cfg(feature = "resource-lifetime")]
+    fn removed_payload_drops_after_retirement_and_outside_registry_borrow() {
+        use crate::value::Value;
+        use std::cell::RefCell;
+
+        struct InspectDrop {
+            scope: u32,
+            id: Rc<Cell<i64>>,
+            alias: Rc<RefCell<Option<Value>>>,
+            drops: Rc<Cell<usize>>,
+        }
+        impl Drop for InspectDrop {
+            fn drop(&mut self) {
+                // This read must be possible during backend destruction, and
+                // retirement must already be visible through every alias.
+                assert!(!super::is_open(self.scope, self.id.get()));
+                if let Some(alias) = self.alias.borrow().as_ref() {
+                    assert_eq!(alias.as_resource_id(), Some(self.id.get()));
+                    assert!(!alias.needs_vm_resource_release());
+                }
+                let nested = super::insert(self.scope, "nested", 7_u32);
+                assert!(super::close::<u32>(self.scope, nested));
+                self.drops.set(self.drops.get() + 1);
+            }
+        }
+
+        for width in [1, 9, 17, 65] {
+            let mut executor = ExecutorGlobals::with_output(Box::new(std::io::sink()));
+            let kept: Vec<_> = (1..width)
+                .map(|n| insert_value_for_request(&mut executor, "kept", n as u64))
+                .collect();
+            let id = Rc::new(Cell::new(0));
+            let alias = Rc::new(RefCell::new(None));
+            let drops = Rc::new(Cell::new(0));
+            let scope = super::ensure_request_scope(&mut executor);
+            let value = insert_value_for_request(
+                &mut executor,
+                "stream",
+                InspectDrop {
+                    scope,
+                    id: id.clone(),
+                    alias: alias.clone(),
+                    drops: drops.clone(),
+                },
+            );
+            id.set(value.as_resource_id().unwrap());
+            value.set_vm_resource_release(|_, _| panic!("retired callback"));
+            *alias.borrow_mut() = Some(value.clone());
+            assert!(!close_for_request::<u64>(&mut executor, id.get()));
+            assert!(value.needs_vm_resource_release());
+            assert_eq!(drops.get(), 0);
+            assert!(close_for_request::<InspectDrop>(&mut executor, id.get()));
+            assert_eq!(drops.get(), 1);
+            assert!(!close_for_request::<InspectDrop>(&mut executor, id.get()));
+            alias.borrow_mut().take();
+            drop(value);
+            assert_eq!(drops.get(), 1);
+            drop(kept);
+        }
     }
 
     #[test]

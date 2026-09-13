@@ -173,7 +173,8 @@ unsafe fn frame_tmp_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
 
 /// Reuse the compiler-resolved absolute result index at a TMP write boundary.
 /// Scalar results keep the canonical retirement predicate without undoing
-/// pointer construction to recover the same index. Heap results retain the
+/// pointer construction to recover the same index. A first heap edge in a
+/// compact frame uses the same clear-bit proof; other heap writes retain the
 /// full writer. Expand only inside the caller's live-frame unsafe region.
 macro_rules! frame_tmp_set_indexed {
     ($frame:expr, $ptr:expr, $index:expr, $value:expr) => {{
@@ -183,7 +184,17 @@ macro_rules! frame_tmp_set_indexed {
         let index = u32::from($index);
         debug_assert_eq!(slot_idx(frame, ptr), index);
         if value.needs_cleanup() {
-            frame_tmp_set(frame, ptr, value);
+            if (*frame).has_heap_slots
+                && (*frame).num_cvs + (*frame).num_temps <= 64
+                && (*frame).heap_bitmap & (1u64 << index) == 0
+            {
+                // The bit proves that no prior owner needs retirement.
+                // Do not read uninitialized TMP bytes to establish this.
+                (*frame).heap_bitmap |= 1u64 << index;
+                ptr.write(value);
+            } else {
+                frame_tmp_set(frame, ptr, value);
+            }
         } else {
             if (*frame).has_heap_slots
                 && ((*frame).num_cvs + (*frame).num_temps > 64
@@ -223,12 +234,20 @@ mod indexed_tmp_write_tests {
                 frame_tmp_set_indexed!(frame, slot, index, Value::double(-0.0));
                 assert_eq!((*slot).raw_double().to_bits(), (-0.0f64).to_bits());
                 frame_tmp_set(frame, neighbor, owner.clone());
+                // The ordinary TMP writer also accepts a fresh heap owner
+                // when a neighboring slot already made the frame heap-bearing.
+                frame_tmp_set(frame, slot, owner.clone());
+                assert_eq!(owner.cycle_strong_count(), Some(3));
+                frame_tmp_set(frame, slot, owner.clone());
+                assert_eq!(owner.cycle_strong_count(), Some(3));
                 frame_tmp_set_indexed!(frame, slot, index, owner.clone());
                 assert_eq!(owner.cycle_strong_count(), Some(3));
                 frame_tmp_set_indexed!(frame, slot, index, Value::long(47));
                 assert_eq!((*slot).as_long(), Some(47));
                 assert_eq!(owner.cycle_strong_count(), Some(2));
                 assert_eq!((*neighbor).array_identity(), owner.array_identity());
+                frame_tmp_set_indexed!(frame, slot, index, owner.clone());
+                assert_eq!(owner.cycle_strong_count(), Some(3));
                 frame_tmp_set_indexed!(frame, slot, index, Value::bool(false));
                 assert_eq!((*slot).value_type(), ValueType::False);
                 cleanup_frame_slots(frame);

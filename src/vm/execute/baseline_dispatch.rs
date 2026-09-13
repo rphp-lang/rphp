@@ -3016,20 +3016,44 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         if opline.result_type != OpType::Unused {
                             let result =
                                 (*frame).get_op_mut(opline.result as u32, opline.result_type);
-                            let value = if opline._pad
+                            let live_unpack = opline._pad
                                 & crate::vm::instruction::FETCH_CV_LIVE_UNPACK_SOURCE
-                                != 0
+                                != 0;
+                            let kind = source.value_type();
+                            if !live_unpack
+                                && (kind as u8) <= ValueType::Double as u8
+                                && matches!(opline.result_type, OpType::Tmp | OpType::Var)
                             {
-                                let target = if source.is_reference() {
-                                    source.as_ref_ptr()
-                                } else {
-                                    source as *const Value as *mut Value
-                                };
-                                Value::reference(target)
+                                // The defined primitive tag proves both that
+                                // Clone would only copy the value and that the
+                                // replacement owns no storage. Preserve the
+                                // snapshot bytes and counter; retire the old
+                                // TMP using its already-resolved absolute index.
+                                // Do not inspect potentially uninitialized TMP
+                                // bytes when its compact-frame bit is clear.
+                                stats::inc_value_clone(kind as usize);
+                                let value = std::ptr::read(source);
+                                if (*frame).has_heap_slots
+                                    && ((*frame).num_cvs + (*frame).num_temps > 64
+                                        || (*frame).heap_bitmap
+                                            & (1u64 << u32::from(opline.result)) != 0)
+                                {
+                                    bitmap_drop_scalar(frame, result);
+                                }
+                                result.write(value);
                             } else {
-                                source.clone()
-                            };
-                            frame_tmp_set(frame, result, value);
+                                let value = if live_unpack {
+                                    let target = if source.is_reference() {
+                                        source.as_ref_ptr()
+                                    } else {
+                                        source as *const Value as *mut Value
+                                    };
+                                    Value::reference(target)
+                                } else {
+                                    source.clone()
+                                };
+                                frame_tmp_set(frame, result, value);
+                            }
                         }
                     } else {
                         if opline.result_type != OpType::Unused {
@@ -6746,14 +6770,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                 };
                 // SAFETY: InitArray's result is a compiler-owned TMP in this
-                // live frame; frame_tmp_set records its heap ownership.
+                // live frame; the indexed TMP writer records its heap ownership.
                 unsafe {
                     let result_ptr = (*frame).get_op_mut(opline.result as u32, opline.result_type);
                     let mut value = Value::array(array);
                     if opline._pad & ARRAY_INIT_IMMUTABLE_LITERAL != 0 {
                         value.mark_immutable_array_literal();
                     }
-                    frame_tmp_set(frame, result_ptr, value);
+                    frame_tmp_set_indexed!(frame, result_ptr, opline.result, value);
                 }
             }
 

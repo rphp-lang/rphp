@@ -1,0 +1,11 @@
+{
+  "scalars": "NULL\nint(22)\nint(19)\nbool(false)\nint(22)\nint(19)\nbool(true)\nint(22)\nint(19)\nint(-7)\nint(22)\nint(19)\nfloat(2.5)\nint(22)\nint(19)\nfloat(-0)\nint(22)\nint(19)\n",
+  "aliases": "int(11)\nint(8)\nint(8)\nint(3)\nbool(false)\nint(7)\nint(12)\n",
+  "float_bits": "float(-0)\nfloat(0)\nfloat(INF)\nfloat(-INF)\nfloat(NAN)\nfloat(9.223372036854776E+18)\nint(9223372036854775807)\n",
+  "undefined": "2:Undefined variable $missing\nint(2)\nint(41)\n2:Undefined variable $missing\nNULL\nint(41)\n",
+  "throw_order": "warning\nread stopped\nint(0)\nbool(false)\nbool(false)\n",
+  "unpack": "array(2) {\n  [0]=>\n  int(2)\n  [1]=>\n  int(3)\n}\narray(3) {\n  [0]=>\n  int(77)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n}\narray(2) {\n  [0]=>\n  int(2)\n  [1]=>\n  int(3)\n}\nbool(true)\n",
+  "owners": "string\narray\nobject\nobject\ndouble\nNULL\nowner released\ndone\n",
+  "large_frame": "float(-0.5)\nint(8)\nint(71)\n",
+  "retirement": "int(1)\nint(2)\ndrop:0:1\nint(1)\nint(2)\ndrop:1:1\nint(1)\nint(2)\ndrop:2:1\nfinished\n"
+}

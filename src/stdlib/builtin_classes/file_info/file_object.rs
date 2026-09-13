@@ -6,6 +6,7 @@ use crate::stdlib::stream::PhpStream;
 use std::cell::RefCell;
 
 mod csv_records;
+mod read_position;
 
 const DROP_NEW_LINE: u32 = 1;
 const READ_AHEAD: u32 = 2;
@@ -62,7 +63,11 @@ fn initialized(receiver: &Value, eg: &mut ExecutorGlobals) -> bool {
         .native_file_info()
         .is_some_and(|state| state.file.is_some());
     if !ready {
-        error(eg, "Error", "Object not initialized");
+        error(
+            eg,
+            "Error",
+            "The parent constructor was not called: the object is in an invalid state",
+        );
     }
     ready
 }
@@ -255,8 +260,12 @@ fn physical_line(
         #[cfg(feature = "stream-registry")]
         Backend::Wrapper(value) => {
             let id = value.as_resource_id().unwrap();
-            let Some((bytes, eof)) =
-                crate::stdlib::streams::user_wrapper::read_file_object_line(eg, id, maximum)?
+            let Some((bytes, eof)) = crate::stdlib::streams::user_wrapper::read_file_object_line(
+                eg,
+                id,
+                maximum,
+                require_line,
+            )?
             else {
                 return Ok(None);
             };
@@ -431,14 +440,23 @@ fn next(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Resul
 }
 
 #[cold]
-fn rewind_cursor(receiver: &Value, eg: &mut ExecutorGlobals) -> Result<bool, VmError> {
+fn rewind_cursor(
+    ed: *mut ExecuteData,
+    receiver: &Value,
+    eg: &mut ExecutorGlobals,
+    method: &str,
+) -> Result<bool, VmError> {
+    #[cfg(not(feature = "stream-registry"))]
+    let _ = (ed, method);
     let backend = read(receiver, |state| state.backend.clone());
     let ok = match backend {
         Backend::Native(stream) => stream.borrow_mut().rewind(),
         #[cfg(feature = "stream-registry")]
         Backend::Wrapper(value) => crate::stdlib::streams::user_wrapper::rewind_file_object(
             eg,
+            ed,
             value.as_resource_id().unwrap(),
+            method,
         )?,
     };
     if ok {
@@ -449,8 +467,10 @@ fn rewind_cursor(receiver: &Value, eg: &mut ExecutorGlobals) -> Result<bool, VmE
             state.eof = false;
             state.csv_read_failed = false;
         });
-    } else if eg.exception.is_none() {
-        error(eg, "RuntimeException", "Cannot rewind file");
+    } else {
+        if let Some(path) = path(receiver, eg) {
+            path_error(eg, "Cannot rewind file ", &path, "");
+        }
     }
     Ok(ok)
 }
@@ -461,7 +481,9 @@ fn rewind(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Res
     if !initialized(&receiver, eg) {
         return Ok(());
     }
-    if rewind_cursor(&receiver, eg)? && read(&receiver, |state| state.flags & READ_AHEAD != 0) {
+    if rewind_cursor(ed, &receiver, eg, "SplFileObject::rewind")?
+        && read(&receiver, |state| state.flags & READ_AHEAD != 0)
+    {
         fetch_line(ed, &receiver, eg, "SplFileObject::rewind")?;
     }
     ret!(rv, Value::null());
@@ -477,7 +499,7 @@ fn valid(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Resu
     if ahead {
         fetch_line(ed, &receiver, eg, "SplFileObject::valid")?;
     } else {
-        refresh_failed_csv_eof(&receiver, eg)?;
+        refresh_wrapper_eof(&receiver, eg)?;
     }
     ret!(
         rv,
@@ -508,13 +530,18 @@ macro_rules! projection {
 projection!(key, |state| Value::long(state.index));
 
 #[cold]
-fn refresh_failed_csv_eof(receiver: &Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn refresh_wrapper_eof(receiver: &Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     #[cfg(feature = "stream-registry")]
-    if read(receiver, |state| state.csv_read_failed) {
-        if let Backend::Wrapper(resource) = read(receiver, |state| state.backend.clone()) {
-            if let Some(eof) =
-                crate::stdlib::streams::user_wrapper::eof(eg, resource.as_resource_id().unwrap())?
-            {
+    if let Some((resource, failed)) = read(receiver, |state| match &state.backend {
+        Backend::Wrapper(resource) => Some((resource.clone(), state.csv_read_failed)),
+        Backend::Native(_) => None,
+    }) {
+        if let Some(eof) = crate::stdlib::streams::user_wrapper::file_object_eof(
+            eg,
+            resource.as_resource_id().unwrap(),
+            failed,
+        )? {
+            if eg.exception.is_none() {
                 write(receiver, |state| state.eof = eof);
             }
         }
@@ -530,7 +557,7 @@ fn eof(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result
     if !initialized(&receiver, eg) {
         return Ok(());
     }
-    refresh_failed_csv_eof(&receiver, eg)?;
+    refresh_wrapper_eof(&receiver, eg)?;
     ret!(rv, Value::bool(read(&receiver, |state| state.eof)));
 }
 projection!(get_flags, |state| Value::long(state.flags as i64));
@@ -562,7 +589,7 @@ fn seek(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Resul
         return Ok(());
     }
     let receiver = owned_argument(ed, 0);
-    if !initialized(&receiver, eg) || !rewind_cursor(&receiver, eg)? {
+    if !initialized(&receiver, eg) || !rewind_cursor(ed, &receiver, eg, "SplFileObject::seek")? {
         return Ok(());
     }
     let ahead = read(&receiver, |state| state.flags & READ_AHEAD != 0);
@@ -638,8 +665,8 @@ fn set_max_line_len(
 #[inline(never)]
 pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     use ParamTypeHint::{Array, Bool, ClassName, Int, String, Union, Void};
-    let mut functions = Vec::with_capacity(20);
-    eg.reserve_internal_method_contracts("SplFileObject", 20);
+    let mut functions = Vec::with_capacity(24);
+    eg.reserve_internal_method_contracts("SplFileObject", 24);
     let mut method = |name,
                       handler,
                       names: &[&str],
@@ -775,6 +802,31 @@ pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             Some("\"\\n\""),
         ],
         Union(vec![Int, ClassName("false".into())]),
+    );
+    method(
+        "ftell",
+        read_position::tell,
+        &[],
+        vec![],
+        &[],
+        Union(vec![Int, ClassName("false".into())]),
+    );
+    method("fgets", read_position::line, &[], vec![], &[], String);
+    method(
+        "fgetc",
+        read_position::byte,
+        &[],
+        vec![],
+        &[],
+        Union(vec![String, ClassName("false".into())]),
+    );
+    method(
+        "fread",
+        read_position::bytes,
+        &["length"],
+        vec![Int],
+        &[None],
+        Union(vec![String, ClassName("false".into())]),
     );
     functions
 }
