@@ -41,6 +41,7 @@ specimen!(prebuffer);
 specimen!(bounded_lines);
 specimen!(owned_read);
 specimen!(retained_readahead);
+specimen!(line_projection);
 specimen!(output_order);
 #[cfg(feature = "include-path")]
 specimen!(include_source);

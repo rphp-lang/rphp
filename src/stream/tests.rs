@@ -112,6 +112,60 @@ fn owned_read_matches_slice_read_with_prefetch_empty_eof_and_far_cursors() {
 }
 
 #[test]
+fn direct_line_projection_matches_scratch_cursor_and_retained_bytes() {
+    let path = std::env::temp_dir().join(format!("rphp-line-projection-{}", std::process::id()));
+    let payload: Vec<u8> = (0..8300)
+        .map(|index| {
+            if index % 71 == 0 {
+                b'\n'
+            } else {
+                (index % 256) as u8
+            }
+        })
+        .collect();
+    for uri in [
+        "php://memory",
+        "php://temp/maxmemory:99999",
+        "php://temp/maxmemory:3",
+        path.to_str().unwrap(),
+    ] {
+        for position in [0, 1, 70, 8190, 8191, 8192, 8299, 8300, 9999] {
+            for maximum in [1, 2, 3, 31, 63, 64] {
+                let mut direct = PhpStream::open(uri, "w+").unwrap();
+                let mut scratch = PhpStream::open(uri, "w+").unwrap();
+                for stream in [&mut direct, &mut scratch] {
+                    stream.write(&payload).unwrap();
+                    stream.seek(SeekFrom::Start(position)).unwrap();
+                    stream.take_plain_file_io();
+                }
+                for _ in 0..4 {
+                    let mut actual = Vec::new();
+                    let mut expected = Vec::new();
+                    assert_eq!(
+                        direct.read_line(&mut actual, Some(maximum + 1)).unwrap(),
+                        scratch
+                            .read_line_chunks(&mut expected, maximum, &mut [0; 64])
+                            .unwrap()
+                    );
+                    assert_eq!(actual, expected);
+                    assert_eq!(direct.position().unwrap(), scratch.position().unwrap());
+                    assert_eq!(direct.is_eof(), scratch.is_eof());
+                    assert_eq!(direct.unread_len(), scratch.unread_len());
+                    assert_eq!(direct.take_plain_file_io(), scratch.take_plain_file_io());
+                    let left = direct.read_buffer.as_ref().unwrap();
+                    let right = scratch.read_buffer.as_ref().unwrap();
+                    assert_eq!(
+                        &left.bytes[left.start..left.end],
+                        &right.bytes[right.start..right.end]
+                    );
+                }
+            }
+        }
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn bounded_line_scratch_preserves_bytes_prefetch_and_eof_across_boundaries() {
     for path in [
         "php://memory",

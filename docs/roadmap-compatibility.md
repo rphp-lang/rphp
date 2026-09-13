@@ -36,29 +36,28 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `spl-native-container-serialization-contracts` train adds
-15 PHP 8.5 SPL passes over `8aa9251d`, with no loss, new process hazard
-or moved failure stage. SPL reaches 434/311/31 unsupported/8 skip/1 XFAIL;
-core retains 6,446/335/182/211 and identical pass sets. Modern heap/deque
-and legacy deque state reuse canonical serialization/reference ownership,
-with PHP-ordered partial publication, callbacks and retirement. Five independent
-debug/wakeup/SplObjectStorage holdouts and general malformed-input diagnostic
-debt remain explicit.
+The accepted `spl-object-storage-state-cursor-contracts` train adds
+25 PHP 8.5 SPL passes over `ba9cdd6a`, with no loss, new process hazard
+or moved failure stage. SPL reaches 459/286/31 unsupported/8 skip/1 XFAIL;
+core retains 6,446/335/182/211 and identical pass sets. Sparse traced identity/
+info ownership preserves live cursors, hash callbacks, bulk mutation,
+references/COW, debug views and modern wire restoration. Independent compiler
+coalescing, legacy-wire, custom-hash clone and subclass-comparison holdouts
+remain explicit.
 
 One checked five-configuration matrix, all-targets, original/adjacent oracles,
-exact no-loss, S0-S3 and unsafe/static gates pass. All 63 fixed-parent 32-pair
-controls meet unchanged common +1% / pay-use +5% limits. Profile-backed scalar
-projection/CV work removal and internal-frame diagnostic validation preserve
-common representation and JIT admission. Rejected hypotheses, exact evidence,
+exact no-loss, S0-S3 and unsafe/static gates pass. All 69 fixed-parent 32-pair
+controls meet unchanged common +1% / pay-use +5% limits. Profile-backed operand,
+constructor, resource, line and decimal work removal preserves common
+representation, aliases and JIT admission. Rejected hypotheses, exact evidence,
 new-API costs and shared-host limits are recorded compactly in `compatibility.md`.
 
-Next admission confirms twenty reference-passing/current-failing
-SplObjectStorage state/cursor cases. Characterize identity callbacks,
-live cursor/bulk mutation, references/COW, debug views, GC and reentrant
-retirement before replacing parallel property-backed tables with sparse traced
-native ownership. Require at least ten common gains; preserve existing wire
-bridges without absorbing independent general serialization or compiler debt.
-Retain all controls and add the now-present serialization API controls.
+Next admission confirms 23 reference-passing/current-failing SplFileObject
+line/cursor cases. Characterize current/key, flags, seek/rewind/EOF, length
+limits, inherited metadata, overrides and resource retirement before adding
+one sparse traced file cursor. Require at least ten common gains; do not absorb
+independent parser, full write/CSV, SplTempFileObject or whole-class claims.
+Retain all controls and add the now-present storage API controls.
 Automatic cleanup remains mandatory.
 
 ### Preceding directory cursor checkpoint

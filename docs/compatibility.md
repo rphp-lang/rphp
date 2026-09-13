@@ -8,65 +8,76 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
-`spl-native-container-serialization-contracts`, against `8aa9251d`:
-**+15/-0** SPL passes. SPL reaches **434 pass / 311 fail /
+`spl-object-storage-state-cursor-contracts`, against `ba9cdd6a`:
+**+25/-0** SPL passes. SPL reaches **459 pass / 286 fail /
 31 unsupported / 8 skip / 1 XFAIL**. Core retains **6,446 pass /
 335 fail / 182 skip / 211 unsupported**, with identical pass sets.
-Together the selected 7,959 cases have **6,880 passes and 646 failures**;
+Together the selected 7,959 cases have **6,905 passes and 621 failures**;
 this is not complete PHP coverage. Every gain independently passes PHP 8.5.10.
 Neither suite loses a pass, introduces a process hazard or moves a failure stage.
 
-Heap/deque modern state and legacy deque payloads reuse the canonical serializer
-and reference table. Fully traced native ownership preserves references/COW,
-identity, cycles, signed flags, clone, callback locks and corruption checks.
-Restore validates and publishes members, flags and accepted prefixes in PHP
-order, including partial failures and reentrant retirement. Stable legacy
-cursor owners survive callback deletion without retaining object borrows.
+SplObjectStorage now has one sparse, fully traced native identity/info owner.
+Live cursors, custom hashes, bulk callback mutation, references/COW, debug
+projections and modern serialization use canonical lifecycle boundaries.
+Mutations publish before retirement; no table borrow survives a PHP callback.
+Exact base comparisons ignore cursor/member state and modern restoration keeps
+PHP-ordered validation, accepted prefixes and reference identity.
 
-The diagnostic boundary now walks past internal frames before reading user
-op-array metadata. Profile-backed arithmetic projection and initialized scalar
-CV writes remove redundant conversion/heap bookkeeping while preserving aliases,
-float bits and heap transitions. There is no common Value/VM field, opcode,
-dependency, JIT admission or unsafe-ceiling change; unsafe stays 1,622/289.
+Profile-backed prerequisites remove duplicate operand resolution, scalar
+ownership checks, unused method-name allocation and short-line scratch copies.
+Unpacked constructor setup leaves the ordinary constructor frame; decimal
+serialization uses an initialized stack buffer. Aliases, diagnostics, heap
+transitions, stream position and byte provenance stay covered. There is no
+common Value/VM field, opcode, dependency, JIT admission or unsafe-ceiling
+change; unsafe is 1,621/289.
 
-Twenty-three original cases pass 69 byte-exact PHP/default/JIT-disabled runs,
-with additional raw-byte, float, callback and small/large-frame regressions.
-The checked matrix passes 5,198/4,888/5,269/5,291/5,342 tests
+Thirty-two original cases pass 96 byte-exact PHP/default/JIT-disabled runs,
+plus adjacent constructor, resource, line, numeric and wire regressions.
+The checked matrix passes 5,238/4,928/5,309/5,331/5,382 tests
 (13/13/13/13/16 ignored, none filtered), plus all-features/all-targets.
 Exact no-loss, Composer/Symfony S0-S3, runner/unsafe self-tests, formatting and
-public hygiene pass. Evidence is fingerprint/hash-verified; cleanup runs
-between configurations and after build/benchmark cycles.
+public hygiene pass. One old adjacent expectation was corrected against PHP
+8.5 deprecations without changing its program or suppressing diagnostics;
+production/release hashes stayed unchanged. Fingerprinted evidence permits
+resumption after a disk-reserve stop without repeating passing configurations.
+Cleanup runs between configurations and after build/benchmark cycles.
 
-All **63 fixed-parent 32-pair controls** meet unchanged common +1% / pay-use
-+5% limits (highest +0.649% / +4.740%). Rejected timings and instruction-profile
-hypotheses remain recorded; no unchanged timing rerolls or hardware-counter
-claims. Four new-API candidate/PHP ratios are 1.075/1.404/1.243/1.475, with
-exact outputs rather than absent-parent deltas. The authorized shared-host
+All **69 fixed-parent 32-pair controls** meet unchanged common +1% / pay-use
++5% limits (highest +0.730% / +3.890%). Storage identity and wire workloads
+improve 45.824% and 28.128%; ordinary calls improve 4.391%. Rejected timings
+and instruction-profile hypotheses remain recorded, with no unchanged timing
+rerolls or hardware-counter claim. New cursor/custom-hash/bulk/debug API
+candidate/PHP ratios are 3.159/5.779/3.178/2.470: these costs remain visible,
+not invented absent-parent deltas. The authorized shared-host
 performance guard records one background event, not exclusive-host evidence.
 
-Five supplying cases remain explicit independent failures: nested native debug
-projection, canonical `__wakeup`, and SplObjectStorage wire/member contracts.
-Arbitrary nested malformed-input offsets remain general parser debt.
-Other containers, general restoration, suspension, 32-bit and
+ArrayAccess coalescing, general legacy-wire diagnostics, custom-getHash clone
+callbacks and subclass comparison remain explicit holdouts. General malformed
+restoration, other containers, suspension, 32-bit and
 allocation-limit/OOM equivalence are not claimed.
 
 SHA-256 evidence:
 
-- Release: `357c780faa0ad18d756f3c38492ea166d37df7849b0b42b55db57f70f20ca5cb`.
-- Complete technical record: `6bf0268db37deb94637ffd37224bbe2dc84ca37e54118914891a39f86a1f6e9a`.
-- Matrix: `516e81be79751cab2684265658e814929e305e06ba6fedc41ff665613bdf1c50`.
-- SPL manifest / pass set: `5950d7edf43d53370cdbd37cf56e8b35931b40998a68cea56081c8cffbca9c14` / `922a52739659d9f16c0edb946af008a0288579534486cf9ec26b6d296043714d`.
-- Reference manifest for all gains: `5c50afed5276d2696aa7d5b2e6556a14f452099dfaca5bdd2bcf69eb8c41187d`.
-- Zend/lang manifest / pass set: `bce5998ea8f2b5a5df7cef37a9fb9c28280e5b903b494683c8d84b8d1e40ebd6` / `b99f862eabc6857b7347b6f378368ce342ff70acec02d7d2732e8f20daa5fde3`.
-- Strings/array manifest / pass set: `0486b64d44e99dd109aed27abb2c23df671c1fd2089d4e6738009c9144af9669` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
-- Reviewed performance: `fc53042aeec5d0e163968c5505b14b9261f85378d968bc5d006c8cc4a7005995`.
+- Release: `bad55043ee476eaa64b5f1a89993c9dc7ce7a78a20546ae21581a05d8f47c961`.
+- Complete technical record: `e8cc2f9561980b401b826ca70f28e90bf233a6c441f7bf13198d1d1ae98f36dd`.
+- Matrix: `551beba2c9f5c2b0624c3ab17ddf35a897f1ccad30620ad527ea9d25e33a54dd`.
+- SPL manifest / pass set: `c725fede4c4e6867f2fbba7e671b0050e907cd42b128eb0e8a2be16328ed555f` / `4c8d84852c3fea5f973d544fbaf1b3c0958fa709304b7f16c8171543f905dc6a`.
+- Reference manifest for all gains: `5b4224784d193af6e7fd19452a0bada12ecc01a391ef673e8f7a9162a3427091`.
+- Zend/lang manifest / pass set: `16d536a91e460629eda617e4a1be010309c364b91c6703d97fb4f59c6ad971d7` / `b99f862eabc6857b7347b6f378368ce342ff70acec02d7d2732e8f20daa5fde3`.
+- Strings/array manifest / pass set: `25b18d470dfd4629d62a9c60d6d815084b7149a7646dfe460596fa7382bd9aac` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+- Reviewed performance: `9ddd4518ca77f4267ab8d56e91f1edd988e6e67a228570a53ae77a2f14907fd3`.
 
-Next read-only admission confirms twenty reference-passing/current-failing
-SplObjectStorage state/cursor cases
-(`bd05ad437dec1fb977bba76e7b333a3a85d43b977504af85a51361dbaa423c14`).
-First characterize identity callbacks, live cursor/bulk mutation, debug views,
-references and retirement; reuse sparse traced ownership. Require at least ten
-shared-cause gains and preserve the fixed baseline and retained controls.
+Next read-only admission confirms 23 reference-passing/current-failing
+SplFileObject line/cursor cases
+(`9dd281381d172915a008ed1296ceba3d074c29186181bbef645431c3c81441dc`).
+Characterize cached current lines, flags, seek/rewind/EOF, overrides and traced
+resource retirement before implementing the shared file-cursor boundary.
+Require at least ten common gains; retain all controls and add the now-present
+storage APIs. Full write/CSV, SplTempFileObject and whole-class claims stay out.
+
+The preceding native-container serialization checkpoint added 15 SPL passes;
+its complete technical record remains
+`6bf0268db37deb94637ffd37224bbe2dc84ca37e54118914891a39f86a1f6e9a`.
 
 The preceding heap/priorities checkpoint added 36 SPL passes; its complete
 technical record remains `395068b82333883ad9af9d92109528d04c8f94057bb5bf2d9983d179769db445`.

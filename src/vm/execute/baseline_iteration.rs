@@ -242,24 +242,6 @@ fn collect_unpack_traversable(
         return Ok(None);
     }
 
-    if let Some(values) = builtin_iterator_values(source, eg)
-        && let Some(values) = values.as_array()
-    {
-        let external_byte_keys = values.has_external_byte_keys();
-        return Ok(Some(
-            values
-                .iter()
-                .map(|(key, value)| {
-                    (
-                        key,
-                        kind.value(value.dereferenced().clone()),
-                        external_byte_keys,
-                    )
-                })
-                .collect(),
-        ));
-    }
-
     let mut iterable = source.clone();
     let mut aggregate_identities = Vec::new();
     while eg.class_is_a(&class_name, "IteratorAggregate") {
@@ -304,24 +286,6 @@ fn collect_unpack_traversable(
 
     if class_name == "Generator" {
         return collect_generator_unpack(eg, &iterable, kind).map(Some);
-    }
-
-    if let Some(values) = builtin_iterator_values(&iterable, eg)
-        && let Some(values) = values.as_array()
-    {
-        let external_byte_keys = values.has_external_byte_keys();
-        return Ok(Some(
-            values
-                .iter()
-                .map(|(key, value)| {
-                    (
-                        key,
-                        kind.value(value.dereferenced().clone()),
-                        external_byte_keys,
-                    )
-                })
-                .collect(),
-        ));
     }
 
     if !eg.class_is_a(&class_name, "Iterator") {
@@ -1114,23 +1078,7 @@ fn uses_user_iterator_protocol(value: &Value, eg: &ExecutorGlobals) -> bool {
     };
     let class_name = object.class_name.to_string();
     drop(object);
-    !matches!(
-        class_name.as_str(),
-        "Generator" | "SplObjectStorage"
-    ) && eg.class_is_a(&class_name, "Iterator")
-}
-
-#[inline]
-fn builtin_iterator_values(value: &Value, eg: &ExecutorGlobals) -> Option<Value> {
-    let object = value.as_object()?;
-    let class_name = object.class_name.to_string();
-    let legacy_values = object.get_property("__rphp_iterator_values").cloned();
-    drop(object);
-    if eg.class_is_a(&class_name, "SplObjectStorage") {
-        legacy_values
-    } else {
-        None
-    }
+    class_name != "Generator" && eg.class_is_a(&class_name, "Iterator")
 }
 
 #[inline]
@@ -1404,8 +1352,7 @@ fn op_foreach_init<'a>(
             set_foreach_iteration_state(frame, opline, Some(arr_val.clone()), -1);
             return Ok(ColdResult::Done);
         }
-        let iterator_values = builtin_iterator_values(arr_val, eg);
-        let object_values = if iterator_values.is_none() && arr_val.as_object().is_some() {
+        let object_values = if arr_val.as_object().is_some() {
             let direct_property_iteration = object_uses_direct_property_iteration(arr_val, eg);
             let materialized = if by_reference || direct_property_iteration {
                 arr_val.clone()
@@ -1419,10 +1366,7 @@ fn op_foreach_init<'a>(
         } else {
             None
         };
-        let iterable = iterator_values
-            .as_ref()
-            .or(object_values.as_ref())
-            .unwrap_or(arr_val);
+        let iterable = object_values.as_ref().unwrap_or(arr_val);
         let is_empty = match iterable.dereferenced().as_array() {
             Some(arr) => arr.is_empty(),
             None if iterable.value_type() == ValueType::Object => false,
@@ -1480,11 +1424,9 @@ fn op_foreach_init<'a>(
         let temporary_array_source = matches!(opline.op1_type, OpType::Tmp | OpType::Var)
             && raw_source.value_type() == ValueType::Array
             && resolved_iterable.is_none()
-            && iterator_values.is_none()
             && object_values.is_none();
         let cloned = if let Some(live_source_alias) = live_source_alias.as_ref()
             && resolved_iterable.is_none()
-            && iterator_values.is_none()
         {
             clone_foreach_value::<true>(live_source_alias)
         } else if temporary_array_source {
@@ -2291,9 +2233,6 @@ fn resolve_yield_from_source(
     }
     drop(object);
 
-    if let Some((entries, external_byte_keys)) = snapshot_builtin_yield_from_iterator(eg, source) {
-        return Ok(Some(YieldFromSource::Array(entries, external_byte_keys)));
-    }
     if !eg.class_is_a(&class_name, "Traversable") {
         return Ok(None);
     }
@@ -2348,11 +2287,6 @@ fn resolve_yield_from_source(
             ));
             return Ok(None);
         }
-        if let Some((entries, external_byte_keys)) =
-            snapshot_builtin_yield_from_iterator(eg, &iterable)
-        {
-            return Ok(Some(YieldFromSource::Array(entries, external_byte_keys)));
-        }
     }
 
     if class_name == "Generator" {
@@ -2379,22 +2313,6 @@ enum YieldFromSource {
     ),
     Array(Vec<(crate::value::ArrayKey, Value)>, bool),
     Iterator(Value),
-}
-
-fn snapshot_builtin_yield_from_iterator(
-    eg: &ExecutorGlobals,
-    source: &Value,
-) -> Option<(Vec<(crate::value::ArrayKey, Value)>, bool)> {
-    let values = builtin_iterator_values(source, eg)?;
-    values.as_array().map(|array| {
-        (
-            array
-                .iter()
-                .map(|(key, value)| (key, value.clone()))
-                .collect(),
-            array.has_external_byte_keys(),
-        )
-    })
 }
 
 fn yield_from_iterator_step(

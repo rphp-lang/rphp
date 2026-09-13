@@ -224,7 +224,14 @@ $holder->add($first);
 echo $holder->storage[$first];
 "
         ),
-        "first:second:2:yesok|0=first;1=second;|ok:1|nested"
+        concat!(
+            "\nDeprecated: Method SplObjectStorage::attach() is deprecated since 8.5, use method SplObjectStorage::offsetSet() instead in <main> on line 6\n",
+            "first:second:2:yesok|0=first;1=second;",
+            "\nDeprecated: Method SplObjectStorage::detach() is deprecated since 8.5, use method SplObjectStorage::offsetUnset() instead in <main> on line 13\n",
+            "|",
+            "\nDeprecated: Method SplObjectStorage::contains() is deprecated since 8.5, use method SplObjectStorage::offsetExists() instead in <main> on line 14\n",
+            "ok:1|nested",
+        )
     );
 }
 

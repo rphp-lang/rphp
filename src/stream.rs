@@ -523,21 +523,25 @@ impl PhpStream {
             if output.len() >= 8192 {
                 return self.read_backend(output);
             }
-            let mut buffer = self.read_buffer.take().unwrap_or_default();
-            buffer.start = 0;
-            if buffer.bytes.len() < 8192 {
-                buffer.bytes.resize(8192, 0);
-            }
-            let result = self.read_backend(&mut buffer.bytes[..8192]);
-            buffer.end = result.as_ref().copied().unwrap_or(0);
-            self.read_buffer = Some(buffer);
-            result?;
+            self.refill_read_buffer()?;
         }
         let buffer = self.read_buffer.as_mut().expect("prefetch buffer");
         let count = output.len().min(buffer.end - buffer.start);
         output[..count].copy_from_slice(&buffer.bytes[buffer.start..buffer.start + count]);
         buffer.start += count;
         Ok(count)
+    }
+
+    fn refill_read_buffer(&mut self) -> io::Result<()> {
+        let mut buffer = self.read_buffer.take().unwrap_or_default();
+        buffer.start = 0;
+        if buffer.bytes.len() < 8192 {
+            buffer.bytes.resize(8192, 0);
+        }
+        let result = self.read_backend(&mut buffer.bytes[..8192]);
+        buffer.end = result.as_ref().copied().unwrap_or(0);
+        self.read_buffer = Some(buffer);
+        result.map(|_| ())
     }
 
     /// Return a scanned suffix to the logical stream, not to the underlying
@@ -686,13 +690,44 @@ impl PhpStream {
         if maximum == 0 {
             return Ok(None);
         }
-        // A bounded short read must not initialize an 8-KiB scratch buffer.
-        // The prefetch size and logical cursor are unchanged: only scratch
-        // bytes that read_prefetched can actually fill need initialization.
+        // Short lines always use the retained prefetch buffer. Scan and copy
+        // its valid range directly, without an intermediate scratch copy or
+        // putting the suffix back. Backend read size and cursor stay unchanged.
         if maximum <= 64 {
-            return self.read_line_chunks(buffer, maximum, &mut [0u8; 64]);
+            return self.read_line_buffered(buffer, maximum);
         }
         self.read_line_large(buffer, maximum)
+    }
+
+    fn read_line_buffered(
+        &mut self,
+        output: &mut Vec<u8>,
+        maximum: usize,
+    ) -> io::Result<Option<usize>> {
+        while output.len() < maximum {
+            if self.unread_len() == 0 {
+                self.refill_read_buffer()?;
+            }
+            let buffer = self.read_buffer.as_mut().expect("refill installs buffer");
+            let available = (buffer.end - buffer.start).min(maximum - output.len());
+            if available == 0 {
+                self.eof = true;
+                return Ok((!output.is_empty()).then_some(output.len()));
+            }
+            self.eof = false;
+            let bytes = &buffer.bytes[buffer.start..buffer.start + available];
+            let newline = bytes.iter().position(|byte| *byte == b'\n');
+            let consumed = newline.map_or(available, |position| position + 1);
+            output.try_reserve(consumed).map_err(|_| {
+                io::Error::new(io::ErrorKind::OutOfMemory, "line buffer allocation failed")
+            })?;
+            output.extend_from_slice(&bytes[..consumed]);
+            buffer.start += consumed;
+            if newline.is_some() {
+                return Ok(Some(output.len()));
+            }
+        }
+        Ok(Some(output.len()))
     }
 
     // Keep the large scratch allocation out of the short-read stack frame.

@@ -536,8 +536,22 @@ pub(crate) fn with_payload_mut<T: 'static, R>(
         return None;
     }
     REQUEST_RESOURCES.with(|registries| {
-        registry_for_scope_mut(&mut registries.borrow_mut(), scope)?
-            .with_payload_mut::<T, _>(id, operation)
+        let mut registries = registries.borrow_mut();
+        // The single-request projection needs only its scope comparison.
+        // Keep that check beside the typed payload projection instead of
+        // making every native operation call the general registry resolver.
+        // Nested requests still use the same table lookup; neither the borrow
+        // lifetime nor the concrete payload/type checks change.
+        let registry = match &mut *registries {
+            RequestRegistries::Single(registered_scope, registry) => {
+                if *registered_scope != scope {
+                    return None;
+                }
+                registry
+            }
+            other => registry_for_scope_mut(other, scope)?,
+        };
+        registry.with_payload_mut::<T, _>(id, operation)
     })
 }
 
@@ -920,6 +934,43 @@ mod tests {
         );
         close_scope(scope);
         assert_eq!(with_payload_mut::<u64, _>(scope, id, |_| ()), None);
+    }
+
+    #[test]
+    fn typed_projection_runs_once_across_scope_promotion_and_removal() {
+        let first = allocate_scope();
+        let second = allocate_scope();
+        let id = insert(first, "number", 7u64);
+        let mut calls = 0;
+        for nested in [false, true] {
+            let neighbor = nested.then(|| insert(second, "number", 19u64));
+            assert_eq!(
+                with_payload_mut::<String, _>(first, id, |_| calls += 1),
+                None
+            );
+            assert_eq!(
+                with_payload_mut::<u64, _>(first, id + 99, |_| calls += 1),
+                None
+            );
+            assert_eq!(
+                with_payload_mut::<u64, _>(first, id, |value| {
+                    calls += 1;
+                    *value += 1;
+                    *value
+                }),
+                Some(if nested { 9 } else { 8 })
+            );
+            if let Some(neighbor) = neighbor {
+                close_scope(first);
+                assert_eq!(with_payload_mut::<u64, _>(first, id, |_| calls += 1), None);
+                assert_eq!(
+                    with_payload_mut::<u64, _>(second, neighbor, |value| *value),
+                    Some(19)
+                );
+                close_scope(second);
+            }
+        }
+        assert_eq!(calls, 2);
     }
 
     #[test]

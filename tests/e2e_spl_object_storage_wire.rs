@@ -25,7 +25,8 @@ echo (int) $copy->contains(StorageMode::Omega), ':', $copy[StorageMode::Omega]['
             "i:0;E:17:\"StorageMode:Alpha\";i:1;s:7:\"updated\";",
             "i:2;E:17:\"StorageMode:Omega\";i:3;a:1:{s:1:\"v\";i:9;}",
             "}i:1;a:0:{}}\n",
-            "2:1:updated:1:9",
+            "2:\nDeprecated: Method SplObjectStorage::contains() is deprecated since 8.5, use method SplObjectStorage::offsetExists() instead in <main> on line 11\n",
+            "1:updated:\nDeprecated: Method SplObjectStorage::contains() is deprecated since 8.5, use method SplObjectStorage::offsetExists() instead in <main> on line 12\n1:9",
         )
     );
 }
@@ -54,7 +55,11 @@ echo ':copy=', $copy[OrderedMode::First]['value'];
 echo ':missing=', (int) !$copy->contains(OrderedMode::Middle);
 "#,
         ),
-        "First={\"value\":2};Last=\"last\";|source=2:copy=2:missing=1"
+        concat!(
+            "\nDeprecated: Method SplObjectStorage::detach() is deprecated since 8.5, use method SplObjectStorage::offsetUnset() instead in <main> on line 8\n",
+            "First={\"value\":2};Last=\"last\";|source=2:copy=2:missing=",
+            "\nDeprecated: Method SplObjectStorage::contains() is deprecated since 8.5, use method SplObjectStorage::offsetExists() instead in <main> on line 18\n1",
+        )
     );
 }
 
@@ -130,6 +135,7 @@ echo get_class($blocked);
 "#,
         ),
         concat!(
+            "\nDeprecated: Creation of dynamic property SplObjectStorage::$marker is deprecated in <main> on line 3\n",
             "ok:0:O:16:\"SplObjectStorage\":2:{i:0;a:0:{}i:1;a:1:{s:6:\"marker\";s:2:\"ok\";}}\n",
             "__PHP_Incomplete_Class",
         )

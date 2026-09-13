@@ -206,6 +206,9 @@ mod weak;
 
 use filesystem::{bytes_to_php_string, php_string_to_bytes};
 
+pub(crate) use builtin_classes::object_storage::compare_state as compare_object_storage_state;
+pub(crate) use builtin_classes::object_storage::compare_state_runtime as compare_object_storage_state_runtime;
+pub(crate) use builtin_classes::object_storage::unset_dimension as unset_object_dimension;
 pub use builtin_classes::register_builtin_classes;
 pub(crate) use builtin_classes::{
     NativeIteratorMove, NativeIteratorProjection, array_object_array_cast,

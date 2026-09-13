@@ -7379,7 +7379,14 @@ impl Value {
     #[inline(never)]
     fn arithmetic_non_long(&self) -> Option<i64> {
         match self.value_type() {
-            ValueType::String => self.as_str()?.trim().parse::<i64>().ok(),
+            ValueType::String => {
+                let text = self.as_str()?;
+                // Plain decimal operands need no boundary scan. A failed
+                // exact parse retains the existing whitespace/overflow path.
+                text.parse::<i64>()
+                    .or_else(|_| text.trim().parse::<i64>())
+                    .ok()
+            }
             _ => None,
         }
     }
@@ -8443,6 +8450,40 @@ mod native_owned_value_scan_tests {
 #[cfg(test)]
 mod arithmetic_projection_tests {
     use super::{PhpArray, Value};
+
+    #[test]
+    fn integer_string_projection_preserves_trim_fallback_and_overflow() {
+        let spellings = [
+            "",
+            "+",
+            "-",
+            "0",
+            "-0",
+            "+0007",
+            "-019",
+            "1.5",
+            "2e3",
+            "3tail",
+            "NaN",
+            "inf",
+            "9223372036854775807",
+            "-9223372036854775808",
+            "9223372036854775808",
+            "-9223372036854775809",
+        ];
+        for text in spellings {
+            for prefix in ["", " ", "\t", "\r\n", "\u{a0}", "\u{2003}", "x", "\0"] {
+                for suffix in ["", " ", "\n", "\u{a0}", "\u{2003}", "x", "\0"] {
+                    let text = format!("{prefix}{text}{suffix}");
+                    assert_eq!(
+                        Value::string(&text).to_arithmetic_long(),
+                        text.trim().parse::<i64>().ok(),
+                        "{text:?}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn floating_projection_matches_existing_conversion_except_resource_ids() {

@@ -53,6 +53,33 @@ impl SerializeOutput {
         self.0.extend_from_slice(text.as_bytes());
     }
 
+    fn push_unsigned(&mut self, mut number: u64) {
+        // u64 has at most twenty decimal digits. Build only the suffix used
+        // by this number, without a temporary String or general formatter.
+        let mut digits = [0u8; 20];
+        let mut start = digits.len();
+        loop {
+            start -= 1;
+            digits[start] = b'0' + (number % 10) as u8;
+            number /= 10;
+            if number == 0 {
+                break;
+            }
+        }
+        self.push_bytes(&digits[start..]);
+    }
+
+    fn push_length(&mut self, length: usize) {
+        self.push_unsigned(length as u64);
+    }
+
+    fn push_integer(&mut self, number: i64) {
+        if number < 0 {
+            self.push('-');
+        }
+        self.push_unsigned(number.unsigned_abs());
+    }
+
     fn push(&mut self, character: char) {
         debug_assert!(character.is_ascii());
         self.0.push(character as u8);
@@ -73,6 +100,31 @@ impl SerializeState {
             next_reference: 1,
             objects: HashMap::new(),
             references: HashMap::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod decimal_output_tests {
+    use super::SerializeOutput;
+
+    #[test]
+    fn wire_decimal_output_matches_signed_unsigned_boundaries() {
+        let mut numbers = vec![0, 1, u64::MAX, i64::MAX as u64, i64::MIN.unsigned_abs()];
+        let mut power = 1u64;
+        while let Some(next) = power.checked_mul(10) {
+            numbers.extend([next - 1, next, next + 1]);
+            power = next;
+        }
+        for number in numbers {
+            let mut output = SerializeOutput::new();
+            output.push_unsigned(number);
+            assert_eq!(output.into_bytes(), number.to_string().as_bytes());
+            for signed in [number as i64, (number as i64).wrapping_neg()] {
+                let mut output = SerializeOutput::new();
+                output.push_integer(signed);
+                assert_eq!(output.into_bytes(), signed.to_string().as_bytes());
+            }
         }
     }
 }
@@ -192,7 +244,7 @@ fn serialize_value(
     {
         if let Some(reference) = state.references.get(&identity) {
             output.push_str("R:");
-            output.push_str(&reference.to_string());
+            output.push_length(*reference);
             output.push(';');
             return Ok(());
         }
@@ -209,7 +261,7 @@ fn serialize_value(
         ValueType::True => output.push_str("b:1;"),
         ValueType::Long => {
             output.push_str("i:");
-            output.push_str(&value.as_long().unwrap().to_string());
+            output.push_integer(value.as_long().unwrap());
             output.push(';');
         }
         ValueType::Double => {
@@ -224,7 +276,7 @@ fn serialize_value(
         ValueType::String => {
             let string = value.php_string_bytes().unwrap_or_default();
             output.push_str("s:");
-            output.push_str(&string.len().to_string());
+            output.push_length(string.len());
             output.push_str(":\"");
             output.push_bytes(&string);
             output.push_str("\";");
@@ -232,13 +284,13 @@ fn serialize_value(
         ValueType::Array => {
             let array = value.as_array().unwrap();
             output.push_str("a:");
-            output.push_str(&array.len().to_string());
+            output.push_length(array.len());
             output.push_str(":{");
             for (key, member) in array.iter() {
                 match key {
                     ArrayKey::Int(key) => {
                         output.push_str("i:");
-                        output.push_str(&key.to_string());
+                        output.push_integer(key);
                         output.push(';');
                     }
                     ArrayKey::String(key) => {
@@ -250,7 +302,7 @@ fn serialize_value(
                             key.into_bytes()
                         };
                         output.push_str("s:");
-                        output.push_str(&key.len().to_string());
+                        output.push_length(key.len());
                         output.push_str(":\"");
                         output.push_bytes(&key);
                         output.push_str("\";");
@@ -293,7 +345,7 @@ fn serialize_value(
                 .expect("object value lost its identity");
             if let Some(reference) = state.objects.get(&identity) {
                 output.push_str("r:");
-                output.push_str(&reference.to_string());
+                output.push_length(*reference);
                 output.push(';');
                 return Ok(());
             }
@@ -302,7 +354,7 @@ fn serialize_value(
             if let Some((class_name, case_name)) = enum_case_names(hook_receiver, eg) {
                 let serialized_name = format!("{class_name}:{case_name}");
                 output.push_str("E:");
-                output.push_str(&serialized_name.len().to_string());
+                output.push_length(serialized_name.len());
                 output.push_str(":\"");
                 output.push_str(&serialized_name);
                 output.push_str("\";");
@@ -343,23 +395,6 @@ fn serialize_value(
                 return Ok(());
             }
 
-            if class_name.eq_ignore_ascii_case("SplObjectStorage") {
-                let entries =
-                    super::builtin_classes::spl_object_storage_wire_entries(hook_receiver)
-                        .unwrap_or_else(PhpArray::new);
-                let mut members = ordinary_object_properties(hook_receiver, eg);
-                for internal in super::builtin_classes::spl_object_storage_internal_properties() {
-                    members.remove(&ArrayKey::String((*internal).to_string()));
-                    members.remove(&ArrayKey::String(format!("\0SplObjectStorage\0{internal}")));
-                }
-                output.push_str("O:16:\"SplObjectStorage\":2:{i:0;");
-                serialize_value(&Value::array(entries), output, eg, state)?;
-                output.push_str("i:1;");
-                serialize_value(&Value::array(members), output, eg, state)?;
-                output.push('}');
-                return Ok(());
-            }
-
             // PHP's deprecated Serializable protocol remains observable when
             // no modern __serialize() hook takes precedence. Keep this on the
             // already-cold object serialization path and resolve the method
@@ -393,11 +428,11 @@ fn serialize_value(
                     return Ok(());
                 };
                 output.push_str("C:");
-                output.push_str(&class_name.len().to_string());
+                output.push_length(class_name.len());
                 output.push_str(":\"");
                 output.push_str(&class_name);
                 output.push_str("\":");
-                output.push_str(&payload.len().to_string());
+                output.push_length(payload.len());
                 output.push_str(":{");
                 output.push_bytes(&payload);
                 output.push('}');
@@ -446,17 +481,17 @@ fn serialize_value(
                 return Ok(());
             }
             output.push_str("O:");
-            output.push_str(&class_name.len().to_string());
+            output.push_length(class_name.len());
             output.push_str(":\"");
             output.push_str(&class_name);
             output.push_str("\":");
-            output.push_str(&properties.len().to_string());
+            output.push_length(properties.len());
             output.push_str(":{");
             for (key, member) in properties.iter() {
                 match key {
                     ArrayKey::Int(key) => {
                         output.push_str("i:");
-                        output.push_str(&key.to_string());
+                        output.push_integer(key);
                         output.push(';');
                     }
                     ArrayKey::String(key) => {
@@ -466,7 +501,7 @@ fn serialize_value(
                             key.into_bytes()
                         };
                         output.push_str("s:");
-                        output.push_str(&key.len().to_string());
+                        output.push_length(key.len());
                         output.push_str(":\"");
                         output.push_bytes(&key);
                         output.push_str("\";");
@@ -475,6 +510,12 @@ fn serialize_value(
                 serialize_value(member, output, eg, state)?;
             }
             output.push('}');
+        }
+        ValueType::Closure => {
+            eg.exception = Some(crate::value::make_error_value(
+                "Exception",
+                "Serialization of 'Closure' is not allowed",
+            ));
         }
         _ => {
             eg.exception = Some(crate::value::make_error_value(
@@ -1404,39 +1445,6 @@ impl<'a> Parser<'a> {
                 self.expect(b'}')?;
                 if !allowed {
                     Ok(incomplete_object(class_name, &properties))
-                } else if class_name.eq_ignore_ascii_case("SplObjectStorage") {
-                    let Some(entries) = properties.get_int(0).and_then(Value::as_array) else {
-                        eg.exception = Some(crate::value::make_error_value(
-                            "UnexpectedValueException",
-                            "Invalid serialization data for SplObjectStorage object",
-                        ));
-                        return Err(());
-                    };
-                    let Some(members) = properties.get_int(1).and_then(Value::as_array) else {
-                        eg.exception = Some(crate::value::make_error_value(
-                            "UnexpectedValueException",
-                            "Invalid serialization data for SplObjectStorage object",
-                        ));
-                        return Err(());
-                    };
-                    let mut members = members.clone();
-                    for internal in super::builtin_classes::spl_object_storage_internal_properties()
-                    {
-                        members.remove(&ArrayKey::String((*internal).to_string()));
-                        members
-                            .remove(&ArrayKey::String(format!("\0SplObjectStorage\0{internal}")));
-                    }
-                    if let Err(message) =
-                        super::builtin_classes::restore_spl_object_storage(&object, entries)
-                    {
-                        eg.exception = Some(crate::value::make_error_value(
-                            "UnexpectedValueException",
-                            message,
-                        ));
-                        return Err(());
-                    }
-                    populate_object_properties(eg, &object, class_name, &members)?;
-                    Ok(object)
                 } else {
                     let serialized = Value::array(properties.clone());
                     match crate::stdlib::call_object_public_method(

@@ -9007,8 +9007,15 @@ impl ExecutorGlobals {
         class_name: &str,
         method_name: &str,
     ) -> Option<(Visibility, bool, String)> {
-        let method_lower = method_name.to_lowercase();
         if let Some(class_def) = self.find_class(class_name) {
+            // Only own/trait method tuples consume the normalized spelling.
+            // Empty classes and native contracts use the original name below;
+            // avoid allocating an unused lookup key for those common misses.
+            let method_lower = if class_def.methods.is_empty() && class_def.uses.is_empty() {
+                String::new()
+            } else {
+                method_name.to_lowercase()
+            };
             let class_name = class_def.name.as_str();
             // Check own methods
             for (name, vis, is_static, _is_final, _func) in &class_def.methods {

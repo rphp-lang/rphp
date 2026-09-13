@@ -4975,6 +4975,18 @@ pub(crate) fn values_equal_checked_with_precision(
                     return Ok(false);
                 }
 
+                if left.class_name.as_ref() == "SplObjectStorage" {
+                    drop(left);
+                    drop(right);
+                    let result = crate::stdlib::compare_object_storage_state(a, b, |a, b| {
+                        equal_inner(&a, &b, context, depth + 1, precision)
+                            .map(|equal| i32::from(!equal))
+                    });
+                    context.active_left.remove(&left_identity);
+                    context.active_right.remove(&right_identity);
+                    return result.map(|comparison| comparison == 0);
+                }
+
                 let mut left_count = 0usize;
                 let mut properties_equal = true;
                 let mut comparison_error = false;
@@ -5195,6 +5207,17 @@ pub(crate) fn values_compare_checked_with_precision(
                     context.active_left.remove(&left_identity);
                     context.active_right.remove(&right_identity);
                     return Ok(1);
+                }
+
+                if left.class_name.as_ref() == "SplObjectStorage" {
+                    drop(left);
+                    drop(right);
+                    let result = crate::stdlib::compare_object_storage_state(a, b, |a, b| {
+                        compare_inner(&a, &b, context, depth + 1, precision)
+                    });
+                    context.active_left.remove(&left_identity);
+                    context.active_right.remove(&right_identity);
+                    return result;
                 }
 
                 let mut left_count = 0usize;

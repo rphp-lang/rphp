@@ -1117,6 +1117,16 @@ pub(crate) unsafe fn try_execute_direct_scalar_long_call(
         {
             return None;
         }
+        if send.op1_type == OpType::Cv {
+            let value = (*caller).cv(send.op1 as u32);
+            if value.value_type() == ValueType::Long {
+                // A raw Long CV is already the exact scalar operand. Only
+                // other tags need generic operand/reference resolution; in
+                // particular an aliased CV keeps the existing dereference.
+                *argument = value.raw_long();
+                continue;
+            }
+        }
         let value = match send.op1_type {
             OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
                 &*(*caller).get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array)

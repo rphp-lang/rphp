@@ -767,6 +767,19 @@ fn runtime_values_checked(
                 return Ok(Err(()));
             }
 
+            if left_object.class_name.as_ref() == "SplObjectStorage" {
+                drop(left_object);
+                drop(right_object);
+                let result = crate::stdlib::compare_object_storage_state_runtime(
+                    eg, left, right, |eg, left, right| {
+                        compare_inner(eg, frame, op_array, opline, left, right, context, depth + 1, mode)
+                    },
+                );
+                context.active_left.remove(&left_identity);
+                context.active_right.remove(&right_identity);
+                return result;
+            }
+
             let mut left_count = 0usize;
             left_object.for_each_property(|_, _| left_count += 1);
             let mut right_count = 0usize;
@@ -2707,6 +2720,54 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     } else {
                         // ASSIGN_CV op1=CV(dest), op2=value, result=optional copy
+                        if opline.op1_type == OpType::Cv
+                            && opline.result_type == OpType::Unused
+                            && opline.op2_type != OpType::Unused
+                            && ((*frame).cv(opline.op1 as u32).value_type() as u8)
+                                <= ValueType::Double as u8
+                        {
+                            let source = if opline.op2_type == OpType::Const {
+                                &op_array.literals()[opline.op2 as usize] as *const Value
+                            } else {
+                                (*frame).slot_ptr(opline.op2 as u32) as *const Value
+                            };
+                            let source_type = (&*source).value_type();
+                            if (source_type as u8) <= ValueType::Double as u8 {
+                                // Both raw operands are initialized primitives:
+                                // no alias, constraint or owner can be retired.
+                                // Keep scalar TMP bytes and conservative heap
+                                // bits, as on the general primitive path below.
+                                // read/write also permits exact self-assignment.
+                                stats::inc_value_clone(source_type as usize);
+                                stats::inc_write_frame_slot(false);
+                                let value = std::ptr::read(source);
+                                ((*frame).cv_mut(opline.op1 as u32) as *mut Value).write(value);
+                                (*frame).opline = opline_ptr.add(1);
+                                continue 'vm;
+                            }
+                            if source_type != ValueType::Reference {
+                                // Reuse the same primitive destination proof
+                                // for owning values. This is the canonical
+                                // unused-result write below, without resolving
+                                // both operands and checking the target twice.
+                                let moved = opline._pad & ASSIGN_CV_MOVE_SOURCE != 0
+                                    && matches!(opline.op2_type, OpType::Tmp | OpType::Var)
+                                    && matches!(source_type, ValueType::Array | ValueType::Object | ValueType::Closure | ValueType::Resource);
+                                let value = if moved {
+                                    // The move guard proves this already-resolved
+                                    // address is a mutable TMP/VAR, never a
+                                    // literal or reference cell. Retire that
+                                    // same slot without resolving it again.
+                                    take_assignment_heap_source(&mut *frame, &mut *source.cast_mut(), opline.op2)
+                                } else {
+                                    (&*source).clone()
+                                };
+                                let destination = (*frame).cv_mut(opline.op1 as u32) as *mut Value;
+                                frame_slot_set(frame, destination, value);
+                                (*frame).opline = opline_ptr.add(1);
+                                continue 'vm;
+                            }
+                        }
                         // Unused TMP/VAR results are SSA values. When an
                         // assignment does not publish an expression result,
                         // transfer that sole bytecode owner into the
@@ -8672,13 +8733,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if matches!(arr.value_type(), ValueType::Object | ValueType::Closure) {
                     let receiver = arr.clone();
                     let key = idx_val.clone();
-                    let handled = crate::stdlib::call_object_protocol_method(
-                        eg,
-                        &receiver,
-                        "ArrayAccess",
-                        "offsetUnset",
-                        std::slice::from_ref(&key),
-                    )?;
+                    let handled = crate::stdlib::unset_object_dimension(eg, &receiver, &key)?;
                     if handled.is_none() {
                         let instruction_index = (opline_ptr as usize
                             - op_array.instructions.as_ptr() as usize)
@@ -9117,14 +9172,20 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     let property = obj_val
                                         .object_property_slot_unchecked(ic.property_slot())
                                         as *mut Value;
-                                    let value = prepare_constrained_write!(
-                                        @slot &*property,
-                                        Value::long(source.raw_long())
-                                    );
-                                    assignment_slot_set(
-                                        &mut *property,
-                                        value,
-                                    );
+                                    if (&*property).value_type() == ValueType::Long {
+                                        // A live Long owns no heap edge or
+                                        // reference constraints. Preserve the
+                                        // write counter without generic drop
+                                        // and alias checks for this overwrite.
+                                        stats::inc_write_val();
+                                        Value::write_long(property, source.raw_long());
+                                    } else {
+                                        let value = prepare_constrained_write!(
+                                            @slot &*property,
+                                            Value::long(source.raw_long())
+                                        );
+                                        assignment_slot_set(&mut *property, value);
+                                    }
                                 }
                                 true
                             }

@@ -172,7 +172,20 @@ unsafe fn try_execute_property_init_constructor(
 
     for (index, assignment) in plan.assignments.iter().copied().enumerate() {
         let argument = &*arguments[assignment.argument as usize];
-        object.object_set_property_slot_unchecked(property_slots[index], argument.clone());
+        let property = object.object_property_slot_unchecked(property_slots[index]) as *mut Value;
+        if argument.value_type() as u8 <= ValueType::Double as u8
+            && (*property).value_type() as u8 <= ValueType::Double as u8
+        {
+            // All argument and property contracts were checked above, before
+            // publishing any write. Neither primitive owns an edge or a
+            // reference constraint; preserve clone/drop accounting without
+            // re-entering generic ownership dispatch for this copy.
+            stats::inc_value_clone(argument.value_type() as usize);
+            stats::inc_value_drop((*property).value_type() as usize);
+            property.write(std::ptr::read(argument));
+        } else {
+            object.object_set_property_slot_unchecked(property_slots[index], argument.clone());
+        }
     }
     if matches!(do_fcall.result_type, OpType::Tmp | OpType::Var) {
         let result_ptr = (caller as *mut Value)
@@ -945,6 +958,70 @@ fn validate_new_object_site<'a>(
     }
 }
 
+// Keep callback argument materialization and exception cleanup off the ordinary
+// constructor frame; the caller has already published the receiver and applied
+// the constructor/destructor and generic-contract guards.
+#[cold]
+#[inline(never)]
+fn op_new_obj_unpacked<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    ip: usize,
+    result_ptr: *mut Value,
+    func_ptr: *const FunctionCommon,
+    class_id: u32,
+    constructor_has_destructor: bool,
+) -> Result<ColdResult<'a>, VmError> {
+    if !func_ptr.is_null() {
+        // SAFETY: result_ptr is the just-initialized object result slot and
+        // op2 is the compiler-owned argument list consumed synchronously
+        // before either operand or the active frame can be released.
+        let (object, arguments) = unsafe {
+            (
+                &*result_ptr,
+                &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
+            )
+        };
+        let resolved = crate::stdlib::ResolvedCallback {
+            func_ptr,
+            prepend_args: vec![object.clone()],
+            use_vars: Vec::new(),
+            called_scope_class_id: class_id,
+            closure_scope_class_id: None,
+            bound_this: None,
+            closure_static_vars: None,
+            is_magic_call: false,
+        };
+        let source_file = if op_array.source_file.is_empty() {
+            op_array.name.as_str()
+        } else {
+            op_array.source_file.as_str()
+        };
+        let _ = crate::stdlib::invoke_resolved_source_unpacked_call(
+            resolved,
+            arguments,
+            eg,
+            source_file,
+            op_array.strict_types,
+            (frame, op_array.source_line(ip).unwrap_or(0)),
+        )?;
+        if let Some(exception) = eg.exception.take() {
+            return Ok(match throw_in_frame(eg, frame, exception)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+        if constructor_has_destructor {
+            unsafe { &*result_ptr }.enable_constructed_object_destructor();
+        }
+    }
+    Ok(ColdResult::Done)
+}
+
 #[inline(never)]
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_newobj"))]
 #[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_newobj"))]
@@ -1056,7 +1133,18 @@ fn op_new_obj_resolved<'a>(
     // bitmap bit as no live value and records the new object's ownership. The
     // active frame remains live for the complete opcode dispatch.
     let object = unsafe {
-        frame_tmp_set(frame, result_ptr, Value::object(obj));
+        let value = Value::object(obj);
+        // The newly materialized Object necessarily owns a heap edge. Reuse
+        // the canonical TMP retirement/bitmap boundaries with that proof,
+        // without classifying it again as a possible scalar or reference.
+        if (*frame).has_heap_slots {
+            bitmap_drop_and_update(frame, result_ptr, true);
+            result_ptr.write(value);
+        } else {
+            result_ptr.write(value);
+            (*frame).has_heap_slots = true;
+            bitmap_mark_heap(frame, result_ptr);
+        }
         &*result_ptr
     };
     let constructor_cache_hit = class_id != 0 && ic.class_id == class_id;
@@ -1136,52 +1224,10 @@ fn op_new_obj_resolved<'a>(
     #[cfg(not(feature = "php-generics-reified"))]
     let reified_construction = false;
     if opline._pad & NEW_FLAG_UNPACKED_ARGUMENTS != 0 {
-        if !func_ptr.is_null() {
-            // SAFETY: result_ptr is the just-initialized object result slot and
-            // op2 is the compiler-owned argument list consumed synchronously
-            // before either operand or the active frame can be released.
-            let (object, arguments) = unsafe {
-                (
-                    &*result_ptr,
-                    &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
-                )
-            };
-            let resolved = crate::stdlib::ResolvedCallback {
-                func_ptr,
-                prepend_args: vec![object.clone()],
-                use_vars: Vec::new(),
-                called_scope_class_id: class_id,
-                closure_scope_class_id: None,
-                bound_this: None,
-                closure_static_vars: None,
-                is_magic_call: false,
-            };
-            let source_file = if op_array.source_file.is_empty() {
-                op_array.name.as_str()
-            } else {
-                op_array.source_file.as_str()
-            };
-            let _ = crate::stdlib::invoke_resolved_source_unpacked_call(
-                resolved,
-                arguments,
-                eg,
-                source_file,
-                op_array.strict_types,
-                (frame, op_array.source_line(ip).unwrap_or(0)),
-            )?;
-            if let Some(exception) = eg.exception.take() {
-                return Ok(match throw_in_frame(eg, frame, exception)? {
-                    ThrowResult::Handled(new_frame, new_op_array) => {
-                        ColdResult::NewFrame(new_frame, new_op_array)
-                    }
-                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-                });
-            }
-            if constructor_has_destructor {
-                unsafe { &*result_ptr }.enable_constructed_object_destructor();
-            }
-        }
-        return Ok(ColdResult::Done);
+        return op_new_obj_unpacked(
+            eg, frame, op_array, opline, ip, result_ptr, func_ptr, class_id,
+            constructor_has_destructor,
+        );
     }
     if !func_ptr.is_null() {
         let common = unsafe { &*func_ptr };
@@ -1428,12 +1474,30 @@ fn finish_cached_fetch_obj_r<const FUNC_ARG: bool>(
             (*frame).get_op_mut(opline.result as u32, opline.result_type)
         }
     };
-    let value = if FUNC_ARG && property.is_reference() {
-        property.dereferenced().clone()
-    } else {
-        unsafe { (*property_ptr).clone() }
-    };
-    unsafe { frame_slot_set(frame, result_ptr, value) };
+    // An exact Long copied into a compiler-owned temporary cannot carry an
+    // alias or a heap edge. Reuse the scalar slot lifecycle primitive instead
+    // of cloning/tag-classifying a generic Value and updating a heap bit that
+    // is already clear. Marked temporaries and large frames still retire the
+    // old value through that primitive; reference/CV results stay canonical.
+    // SAFETY: the caller's live object-layout guard proves property_ptr is
+    // initialized; the frame owns result_ptr. The Long tag proves raw_long,
+    // while the TMP/VAR check admits the existing tracked scalar writer.
+    // The fallback keeps initialized slot replacement and reference cloning.
+    unsafe {
+        if matches!(opline.result_type, OpType::Tmp | OpType::Var)
+            && property.value_type() == ValueType::Long
+        {
+            stats::inc_write_frame_slot(false);
+            frame_tmp_set_long(frame, result_ptr, property.raw_long());
+        } else {
+            let value = if FUNC_ARG && property.is_reference() {
+                property.dereferenced().clone()
+            } else {
+                (*property_ptr).clone()
+            };
+            frame_slot_set(frame, result_ptr, value);
+        }
+    }
     CachedFetchObjResult::Complete
 }
 
