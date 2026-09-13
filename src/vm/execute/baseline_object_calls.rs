@@ -1087,10 +1087,12 @@ fn op_new_obj_resolved<'a>(
     } else {
         class_def
     };
-    let deferred_defaults = if deferred_defaults {
+    let (class_def, deferred_defaults) = if deferred_defaults {
         let class_id = class_def.expect("checked class definition").class_id;
         match materialize_deferred_instance_defaults(eg, &InstanceDefaultOrigin::User(frame, op_array, ip), class_id)? {
-            Some(defaults) => Some(defaults),
+            // Materialization can invoke PHP and change the class registry.
+            // Refresh the metadata only across that callback boundary.
+            Some(defaults) => (eg.class_by_id(class_id), Some(defaults)),
             None => {
                 let exception = eg
                     .exception
@@ -1105,9 +1107,11 @@ fn op_new_obj_resolved<'a>(
             }
         }
     } else {
-        None
+        // No callback or mutation occurred since the preceding lookup. Keep
+        // its validated metadata instead of indexing the class table again
+        // for every ordinary object construction.
+        (class_def, None)
     };
-    let class_def = class_id.and_then(|class_id| eg.class_by_id(class_id));
     let (class_id, obj) = if let Some(class_def) = class_def {
         let class_id = class_def.class_id;
         let defaults = deferred_defaults
@@ -1137,14 +1141,26 @@ fn op_new_obj_resolved<'a>(
         // The newly materialized Object necessarily owns a heap edge. Reuse
         // the canonical TMP retirement/bitmap boundaries with that proof,
         // without classifying it again as a possible scalar or reference.
-        if (*frame).has_heap_slots {
-            bitmap_drop_and_update(frame, result_ptr, true);
-            result_ptr.write(value);
+        if (*frame).num_cvs + (*frame).num_temps <= 64 {
+            let bit = 1u64 << slot_idx(frame, result_ptr);
+            if (*frame).has_heap_slots && (*frame).heap_bitmap & bit != 0 {
+                bitmap_drop_and_update(frame, result_ptr, true);
+            } else {
+                // A clear bit is proof that this TMP owns nothing, even if
+                // its stale bytes are uninitialized. Publish the new edge
+                // directly instead of calling the drop helper to rediscover
+                // that same fact on every subsequent allocation at this site.
+                (*frame).heap_bitmap |= bit;
+                (*frame).has_heap_slots = true;
+            }
         } else {
-            result_ptr.write(value);
+            // Large frames keep initialized TMP storage but no per-slot map.
+            if (*frame).has_heap_slots {
+                bitmap_drop_and_update(frame, result_ptr, true);
+            }
             (*frame).has_heap_slots = true;
-            bitmap_mark_heap(frame, result_ptr);
         }
+        result_ptr.write(value);
         &*result_ptr
     };
     let constructor_cache_hit = class_id != 0 && ic.class_id == class_id;

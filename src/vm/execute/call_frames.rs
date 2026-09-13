@@ -1178,6 +1178,28 @@ fn run_frame_destructors(
 
         let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
         let base = (frame as *const Value).add(CALL_FRAME_SLOTS);
+        // Count actual PHP release candidates before allocating the slot
+        // snapshot or resolving trace metadata. Owned scalar references and
+        // native resources often make a frame heap-bearing without requiring
+        // any PHP destructor work. This uses the same identity predicate as
+        // the release planner; no user callback runs during classification.
+        let mut counts = HashMap::<usize, usize>::new();
+        if total <= 64 {
+            for index in HeapSlotIter::new((*frame).owned_heap_bitmap()) {
+                if let Some(identity) = destructor_identity(eg, &*base.add(index as usize)) {
+                    *counts.entry(identity).or_default() += 1;
+                }
+            }
+        } else {
+            for index in 0..total {
+                if let Some(identity) = destructor_identity(eg, &*base.add(index)) {
+                    *counts.entry(identity).or_default() += 1;
+                }
+            }
+        }
+        if counts.is_empty() {
+            return Ok(());
+        }
         let candidate_indices = if total <= 64 {
             HeapSlotIter::new((*frame).owned_heap_bitmap())
                 .map(|index| index as usize)
@@ -1193,13 +1215,6 @@ fn run_frame_destructors(
         } else {
             eg.trace_caller(frame as usize, (*frame).prev_execute_data)
         };
-        let mut counts = HashMap::<usize, usize>::new();
-        for &index in &candidate_indices {
-            let value = &*base.add(index);
-            if let Some(identity) = destructor_identity(eg, value) {
-                *counts.entry(identity).or_default() += 1;
-            }
-        }
         if root_frame {
             // Main-scope CVs are mirrored in the request-global table. Both
             // handles are retired together at shutdown, so include the mirror

@@ -93,14 +93,19 @@ fn op_clone_obj<'a>(
                 ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
             });
         }
-        let source_is_proxy = eg.lazy_object_state(&source).is_some_and(|state| {
+        let lazy_state = eg.lazy_object_state(&source);
+        let source_is_proxy = lazy_state.is_some_and(|state| {
             state.strategy == crate::runtime::LazyObjectStrategy::Proxy
         });
-        let initialized = if eg.is_uninitialized_lazy_object(&source) {
-            crate::stdlib::reflection::initialize_lazy_object(eg, &source)?
-        } else {
-            eg.lazy_proxy_instance(&source)
-                .unwrap_or_else(|| source.clone())
+        // Ordinary objects already have an owning source snapshot. Keep it
+        // instead of creating and retiring a second identical owner, and do
+        // not repeat the same absent lazy-state lookup through two helpers.
+        // Actual lazy objects retain initialization and proxy-chain handling.
+        let initialized = match lazy_state {
+            Some(state) if state.proxy_instance.is_none() =>
+                Some(crate::stdlib::reflection::initialize_lazy_object(eg, &source)?),
+            Some(_) => eg.lazy_proxy_instance(&source),
+            None => None,
         };
         if let Some(exception) = eg.exception.take() {
             return Ok(match throw_in_frame(eg, frame, exception)? {
@@ -110,7 +115,7 @@ fn op_clone_obj<'a>(
                 ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
             });
         }
-        let src_val = if source_is_proxy { source } else { initialized };
+        let src_val = if source_is_proxy { source } else { initialized.unwrap_or(source) };
         let result_ptr = (*frame).get_op_mut(opline.result as u32, opline.result_type);
 
         // Enum cases and Generator instances are engine-owned singletons.
@@ -119,14 +124,15 @@ fn op_clone_obj<'a>(
             let class_def = eg.class_table.get(obj.class_name.as_ref());
             let uncloneable = matches!(
                 obj.class_name.as_ref(),
-                "Generator" | "WeakReference" | "InternalIterator" | "ReflectionProperty" | "Directory"
+                "Generator" | "WeakReference" | "InternalIterator" | "ReflectionProperty" | "Directory" | "SplFileObject"
             )
                 || class_def
                     .is_some_and(|class_def| {
                         class_def.is_enum
                             || class_def.name == "IteratorIterator"
                             || (class_def.parent.is_some()
-                                && eg.class_is_a(&class_def.name, "IteratorIterator"))
+                                && (eg.class_is_a(&class_def.name, "IteratorIterator")
+                                    || eg.class_is_a(&class_def.name, "SplFileObject")))
                     });
             if uncloneable {
                     let err = make_error_value(

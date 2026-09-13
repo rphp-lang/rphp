@@ -18,7 +18,30 @@ function position($iterator, $name) {
     $iterator->seek(array_search($name, $all, true));
 }
 $case = getenv('RPHP_DIRECTORY_CASE');
-if ($case === 'cursor') {
+if ($case === 'path-snapshots') {
+    foreach (['tree', 'raw', 'empty'] as $root) {
+        $it = new DirectoryIterator($root);
+        $all = names($it);
+        $saved = [];
+        for ($round = 0; $round < 3; ++$round) {
+            foreach ($all as $name) {
+                position($it, $name);
+                $path = $it->getPathname();
+                same($path, $root . '/' . $name);
+                if (!$it->isDot()) same($it->getSize() > 0, true);
+                $saved[] = [$path, $it->getFileInfo(), clone $it, $name];
+            }
+            $it->seek(count($all));
+            same($it->getPathname(), '');
+            $it->rewind();
+        }
+        foreach ($saved as [$path, $info, $copy, $name]) {
+            same($path, $root . '/' . $name);
+            same($info->getPathname(), $path);
+            same($copy->getPathname(), $path);
+        }
+    }
+} elseif ($case === 'cursor') {
     $it = new DirectoryIterator('tree///');
     $all = names($it); $sorted = $all; sort($sorted);
     same($sorted, ['.', '..', 'alpha.txt', 'beta.bin']);

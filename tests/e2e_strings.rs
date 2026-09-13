@@ -2,6 +2,31 @@
 mod common;
 use common::{run_php, run_php_with_source_context};
 
+#[test]
+fn serialized_class_resolution_preserves_aliases_autoload_and_capabilities() {
+    let expected = concat!(
+        "BaseWire:29\nBaseWire:29\nLateWire:29\n",
+        "Exception:Unserialization of 'SplFileInfo' is not allowed\n",
+        "RuntimeException:autoload stopped\n",
+        "O:11:\"MissingWire\":1:{s:6:\"number\";i:7;}\n",
+        "[true,17,true,true,[\"LateWire\",\"ForbiddenWire\",\"ExceptionWire\",\"MissingWire\"]]\n",
+    );
+    for disable_jit in [false, true] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_rphp"))
+            .args(["-d", "display_errors=1", "-d", "log_errors=0"])
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/serialized_class_lookup.php"
+            ))
+            .env("RPHP_DISABLE_JIT", if disable_jit { "1" } else { "0" })
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        assert_eq!(output.stdout, expected.as_bytes());
+    }
+}
+
 // === String basics ===
 
 #[test]

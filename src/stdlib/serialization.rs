@@ -210,9 +210,9 @@ fn sleeping_object_properties(
 fn enum_case_names(value: &Value, eg: &ExecutorGlobals) -> Option<(String, String)> {
     let identity = value.object_identity()?;
     let object = value.as_object()?;
-    let class_name = object.class_name.to_string();
-    drop(object);
-    let class = eg.find_class(&class_name)?;
+    let class = eg
+        .class_by_id(object.class_id)
+        .or_else(|| eg.find_class(&object.class_name))?;
     if !class.is_enum {
         return None;
     }
@@ -564,12 +564,17 @@ impl AllowedClasses {
 }
 
 fn allocate_object(eg: &mut ExecutorGlobals, class_name: &str) -> Result<Value, ()> {
-    if eg.find_class(class_name).is_none() {
+    let class = if let Some(class) = eg.find_class(class_name) {
+        Some(class)
+    } else {
         crate::stdlib::autoload::ensure_symbol_loaded(eg, class_name).map_err(|_| ())?;
-    }
+        // An autoloader may publish a declaration or an alias. Resolve again
+        // only across that callback; the existing declaration is otherwise
+        // immutable throughout capability validation and allocation.
+        eg.find_class(class_name)
+    };
     // Apply the native capability to the resolved class, including aliases
     // published by an autoloader, before allocating or initializing any slot.
-    let class = eg.find_class(class_name);
     let canonical_name = class.map_or(class_name, |class| class.name.as_str());
     if matches!(
         canonical_name.to_ascii_lowercase().as_str(),
@@ -587,7 +592,7 @@ fn allocate_object(eg: &mut ExecutorGlobals, class_name: &str) -> Result<Value, 
         ));
         return Err(());
     }
-    let object = eg.find_class(class_name).map_or_else(
+    let object = class.map_or_else(
         || incomplete_object(class_name, &PhpArray::new()),
         |class| {
             if class.class_id == 0 {
@@ -713,19 +718,21 @@ fn unserialized_virtual_property_name(
         .property_slot(&storage_key)
         .and_then(|slot| eg.instance_property_definition(object.class_id, slot))
         .or_else(|| {
-            eg.find_class(class_name).and_then(|class| {
-                class.properties.iter().find(|property| {
-                    let key = if property.visibility == crate::parser::Visibility::Private {
-                        crate::runtime::mangle_private_prop(
-                            &property.declaring_class,
-                            &property.name,
-                        )
-                    } else {
-                        property.name.clone()
-                    };
-                    key == storage_key
+            eg.class_by_id(object.class_id)
+                .or_else(|| eg.find_class(class_name))
+                .and_then(|class| {
+                    class.properties.iter().find(|property| {
+                        let key = if property.visibility == crate::parser::Visibility::Private {
+                            crate::runtime::mangle_private_prop(
+                                &property.declaring_class,
+                                &property.name,
+                            )
+                        } else {
+                            property.name.clone()
+                        };
+                        key == storage_key
+                    })
                 })
-            })
         })?;
     definition
         .is_virtual_hook_property()
@@ -753,19 +760,21 @@ fn populate_object_properties(
         let definition = slot
             .and_then(|slot| eg.instance_property_definition(class_id, slot))
             .or_else(|| {
-                eg.find_class(class_name).and_then(|class| {
-                    class.properties.iter().find(|property| {
-                        let key = if property.visibility == crate::parser::Visibility::Private {
-                            crate::runtime::mangle_private_prop(
-                                &property.declaring_class,
-                                &property.name,
-                            )
-                        } else {
-                            property.name.clone()
-                        };
-                        key == storage_key
+                eg.class_by_id(class_id)
+                    .or_else(|| eg.find_class(class_name))
+                    .and_then(|class| {
+                        class.properties.iter().find(|property| {
+                            let key = if property.visibility == crate::parser::Visibility::Private {
+                                crate::runtime::mangle_private_prop(
+                                    &property.declaring_class,
+                                    &property.name,
+                                )
+                            } else {
+                                property.name.clone()
+                            };
+                            key == storage_key
+                        })
                     })
-                })
             });
 
         #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]

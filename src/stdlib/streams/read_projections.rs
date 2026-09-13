@@ -59,7 +59,15 @@ pub(super) fn fn_fgetc(
     };
     let mut byte = [0];
     let value = match read(eg, frame, id, &mut byte, "fgetc")? {
-        Some(1) => Value::binary_string(&byte),
+        Some(1) => {
+            // One PHP byte needs at most two UTF-8 bytes in the existing
+            // lossless Latin-1 storage. Encode it directly instead of routing
+            // this scalar result through the generic iterator collector.
+            let mut storage = [0; 2];
+            Value::binary_string_from_storage(
+                char::from(byte[0]).encode_utf8(&mut storage).to_owned(),
+            )
+        }
         _ => Value::bool(false),
     };
     return_value(result, value)

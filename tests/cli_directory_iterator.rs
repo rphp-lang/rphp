@@ -73,3 +73,4 @@ specimen!(removed_open_directory, "removed");
 specimen!(reflection, "reflection");
 specimen!(uri_and_root_paths, "uri-root");
 specimen!(metadata, "metadata");
+specimen!(retained_path_snapshots, "path-snapshots");

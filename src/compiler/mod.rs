@@ -303,11 +303,19 @@ impl OpArray {
     /// When all params are Int and Const operands are int literals,
     /// emits Int-guaranteed opcodes that skip runtime type checks.
     pub fn specialize_opcodes_with_hints(&mut self, _param_type_hints: &[ParamTypeHint]) {
-        use crate::vm::instruction::OpType;
+        use crate::vm::instruction::{ARITHMETIC_NEXT_PRIMITIVE_ASSIGN, ASSIGN_CV_REBIND, OpType};
         use crate::vm::opcode::OpCode;
 
         // Pass 1: operand-type specialization (single-instruction patterns)
         for instr in &mut self.instructions {
+            // Re-specializing an op-array must not retain a stale adjacency
+            // proof after an instruction was changed by an earlier pass.
+            if matches!(
+                instr.opcode,
+                OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp
+            ) {
+                instr._pad &= !ARITHMETIC_NEXT_PRIMITIVE_ASSIGN;
+            }
             match instr.opcode {
                 OpCode::Add => {
                     if instr.op1_type == OpType::Tmp && instr.op2_type == OpType::Tmp {
@@ -354,6 +362,24 @@ impl OpArray {
         while i < len - 1 {
             let curr = self.instructions[i];
             let next = self.instructions[i + 1];
+            if matches!(
+                curr.opcode,
+                OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp
+            ) && curr.result_type == OpType::Tmp
+                && next.opcode == OpCode::AssignCv
+                && next.op1_type == OpType::Cv
+                && u32::from(next.op1) < self.num_cvs
+                && next.op2_type == OpType::Tmp
+                && next.op2 == curr.result
+                && next.result_type == OpType::Unused
+                && next._pad & ASSIGN_CV_REBIND == 0
+            {
+                // Only cache immutable instruction shape. Neither instruction
+                // nor its TMP is removed: other entry points, scalar plans and
+                // reference/heap destinations retain the original program.
+                self.instructions[i]._pad |= ARITHMETIC_NEXT_PRIMITIVE_ASSIGN;
+                self.instructions[i].extended_value = u32::from(next.op1);
+            }
             // Pattern A: comparison + conditional jump → fused branch
             let fused_cmp = match (curr.opcode, next.opcode) {
                 (OpCode::IsSmallerOrEqual_CvConst, OpCode::JmpZ)

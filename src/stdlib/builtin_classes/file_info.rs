@@ -6,16 +6,20 @@ use crate::vm::function::InternalFunctionHandler;
 use std::rc::Rc;
 
 mod directory;
+mod file_object;
 pub(crate) use directory::prepare_clone;
 pub(super) use directory::register as register_directory_iterators;
+pub(super) use file_object::register as register_file_object;
 
-/// Only native bytes and request-local class IDs: no PHP values or GC edges.
+/// Path-only objects carry no PHP edges. File cursors expose their cached
+/// value and owned wrapper resource to the existing native-state visitor.
 #[derive(Clone, Default)]
 struct NativeFileInfo {
     path: Option<Vec<u8>>,
     info_class_id: u32,
     file_class_id: u32,
     directory: Option<Box<directory::DirectoryState>>,
+    file: Option<Box<file_object::FileState>>,
 }
 
 impl crate::value::NativeObjectState for NativeFileInfo {
@@ -31,6 +35,18 @@ impl crate::value::NativeObjectState for NativeFileInfo {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+
+    fn for_each_value(&self, visit: &mut dyn FnMut(&Value)) {
+        if let Some(file) = &self.file {
+            file.for_each_value(visit);
+        }
+    }
+
+    fn append_values_reversed(&mut self, pending: &mut Vec<Value>) {
+        if let Some(file) = self.file.take() {
+            file.into_values(pending);
+        }
     }
 }
 

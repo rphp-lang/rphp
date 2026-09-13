@@ -2,6 +2,49 @@ mod common;
 
 use common::run_php;
 
+#[test]
+#[cfg(feature = "stream-truncate")]
+fn short_memory_lines_preserve_prefetch_snapshot_limits_and_shared_cursor() {
+    let source = include_str!("fixtures/short_memory_lines.php");
+    assert_eq!(
+        run_php(source),
+        concat!(
+            "[false,0,true,0]\n[false,0,true,0]\n[false,0,true,0]\n[false,0,true,0]\n",
+            "[\"61\",1,true,0]\n[false,1,true,0]\n[false,1,true,0]\n[false,1,true,0]\n",
+            "[\"610a\",2,false,0]\n[false,2,true,0]\n[false,2,true,0]\n[false,2,true,0]\n",
+            "[\"6162\",2,false,8]\n[\"0d0a\",4,false,6]\n[\"00ff7461696c\",10,true,0]\n[false,10,true,0]\n",
+            "[\"61620a\",3,false,3]\n[\"63640a\",6,false,0]\n[false,6,true,0]\n[\"61\",1,true,0]\n",
+            "[\"78\",1,false,8191]\n[\"0a\",8192,false,4]\n[\"6c617374\",8196,false,0]\n[false,8196,true,0]\n",
+            "[\"610a\",2,2]\n[\"620a\",4,0]\n[false,4,0]\n",
+        )
+    );
+}
+
+#[test]
+fn resource_temporary_reuse_preserves_reference_and_array_owners_across_frame_sizes() {
+    for locals in [0, 80] {
+        let declarations = (0..locals)
+            .map(|index| format!("$padding{index} = {index};\n"))
+            .collect::<String>();
+        let source = include_str!("fixtures/resource_slot_reuse.php")
+            .replace("// FRAME_LOCALS", &declarations);
+        let tokens = rphp::lexer::Lexer::new(&source).tokenize().unwrap();
+        let statements = rphp::parser::Parser::new(tokens).parse().unwrap();
+        let compiled = rphp::compiler::compile::Compiler::new()
+            .compile(&statements)
+            .unwrap();
+        let function = compiled
+            .functions
+            .iter()
+            .find(|(name, _)| name == "exerciseResourceSlotReuse")
+            .map(|(_, function)| function)
+            .unwrap();
+        let slots = function.op_array.num_cvs + function.op_array.num_temps;
+        assert_eq!(slots > 64, locals == 80);
+        assert_eq!(run_php(&source), "AHOVC:32\n");
+    }
+}
+
 struct TemporaryPath(std::path::PathBuf);
 
 impl TemporaryPath {

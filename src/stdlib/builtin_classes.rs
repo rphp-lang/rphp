@@ -3120,6 +3120,24 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     ))
     .unwrap();
     funcs.extend(file_info::register(eg));
+    let mut file = empty_internal_type(
+        "SplFileObject",
+        vec!["RecursiveIterator".into(), "SeekableIterator".into()],
+        false,
+        false,
+    );
+    file.parent = Some("SplFileInfo".into());
+    for (name, value) in [
+        ("DROP_NEW_LINE", 1),
+        ("READ_AHEAD", 2),
+        ("SKIP_EMPTY", 4),
+        ("READ_CSV", 8),
+    ] {
+        file.constants
+            .push(recursive_iterator::constant("SplFileObject", name, value));
+    }
+    eg.register_class(file).unwrap();
+    funcs.extend(file_info::register_file_object(eg));
     for (name, parent) in [
         ("DirectoryIterator", "SplFileInfo"),
         ("FilesystemIterator", "DirectoryIterator"),

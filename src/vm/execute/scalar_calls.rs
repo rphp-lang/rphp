@@ -229,6 +229,64 @@ mod scalar_long_operation_range_tests {
     }
 
     #[test]
+    fn single_operation_retains_invalid_output_count_guard() {
+        use crate::vm::function::ScalarLongProgram;
+        for output_count in [0, 2, u8::MAX] {
+            let plan = ScalarLongFunctionPlan::new(1, ScalarLongProgram {
+                operations: vec![ScalarLongOp {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: ScalarLongSource::Input(0),
+                    rhs: ScalarLongSource::Constant(7),
+                }].into_boxed_slice(),
+                outputs: [ScalarLongSource::Temporary(0)],
+                output_count,
+            }, None);
+            for _ in 0..128 {
+                assert_eq!(evaluate_scalar_long_plan(&plan, &[3; 8]), None);
+            }
+            #[cfg(all(feature = "jit-prototype", any(
+                all(target_arch = "aarch64", target_os = "macos"),
+                all(target_arch = "x86_64", target_os = "linux")
+            )))]
+            {
+                assert!(!plan.native_jit().is_compiled());
+                assert_eq!(plan.native_jit().native_entries(), 0);
+                assert_eq!(plan.native_jit().side_exits(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn one_argument_leaf_matches_zero_filled_buffer_for_every_source_kind() {
+        let sources = [ScalarLongSource::Input(0), ScalarLongSource::Input(7),
+            ScalarLongSource::Input(8), ScalarLongSource::Input(u16::MAX),
+            ScalarLongSource::Temporary(0), ScalarLongSource::Temporary(7),
+            ScalarLongSource::Temporary(8), ScalarLongSource::Constant(3),
+            ScalarLongSource::Constant(i64::MAX)];
+        for first in [i64::MIN, -17, -1, 0, 1, 23, i64::MAX] {
+            let mut arguments = [0; 8]; arguments[0] = first;
+            for kind in [ScalarLongOpKind::Add, ScalarLongOpKind::Subtract,
+                ScalarLongOpKind::Multiply, ScalarLongOpKind::IntDivide,
+                ScalarLongOpKind::Modulo, ScalarLongOpKind::Compare,
+                ScalarLongOpKind::BitwiseAnd, ScalarLongOpKind::BitwiseOr,
+                ScalarLongOpKind::BitwiseXor] {
+                for lhs in sources {
+                    for rhs in sources {
+                        let operation = ScalarLongOp {kind, lhs, rhs};
+                        let mut temporaries = [0; 8];
+                        let expected = evaluate_scalar_long_operation_range(
+                            &[operation], &arguments, &mut temporaries, 0, 1,
+                        ).map(|()| temporaries[0]);
+                        assert_eq!(evaluate_scalar_long_leaf(&operation, |index| match index {
+                            0 => Some(first), 1..=7 => Some(0), _ => None,
+                        }), expected, "{kind:?} {lhs:?} {rhs:?} {first}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn tiny_ranges_preserve_temporary_dependencies() {
         let operations = [
             ScalarLongOp {
@@ -370,6 +428,36 @@ mod scalar_long_operation_range_tests {
 }
 
 #[inline(always)]
+fn scalar_long_leaf_operation(plan: &ScalarLongFunctionPlan) -> Option<&ScalarLongOp> {
+    if let [operation] = plan.program.operations.as_ref()
+        && plan.select.is_none()
+        && plan.program.output_count == 1
+        && plan.program.outputs[0] == ScalarLongSource::Temporary(0)
+    {
+        Some(operation)
+    } else {
+        None
+    }
+}
+
+#[inline(always)]
+fn evaluate_scalar_long_leaf(
+    operation: &ScalarLongOp,
+    input: impl Fn(u16) -> Option<i64>,
+) -> Option<i64> {
+    let operand = |source: &ScalarLongSource| match source {
+        ScalarLongSource::Input(index) => input(*index),
+        ScalarLongSource::Constant(value) => Some(*value),
+        ScalarLongSource::Temporary(index) => (*index < 8).then_some(0),
+    };
+    apply_scalar_long_op(
+        operation.kind,
+        operand(&operation.lhs)?,
+        operand(&operation.rhs)?,
+    )
+}
+
+#[inline(always)]
 fn evaluate_scalar_long_plan(plan: &ScalarLongFunctionPlan, arguments: &[i64; 8]) -> Option<i64> {
     if plan.program.operations.len() > 8 || plan.program.output_count != 1 {
         return None;
@@ -421,8 +509,8 @@ fn evaluate_scalar_long_plan(plan: &ScalarLongFunctionPlan, arguments: &[i64; 8]
 
 // Keep the multi-operation interpreter shared instead of embedding its
 // temporary storage and branch evaluators in every direct-call adapter.
-// Native dispatch and the single-operation path retain their existing order;
-// this fallback is also the ordinary implementation when no JIT is enabled.
+// Native admission excludes the single-operation leaf; this fallback is also
+// the ordinary implementation when no JIT is enabled.
 #[inline(never)]
 fn evaluate_scalar_long_plan_interpreted(
     plan: &ScalarLongFunctionPlan,
@@ -1105,6 +1193,61 @@ pub(crate) unsafe fn try_execute_direct_scalar_long_call(
     debug_assert!(common.supports_scalar_long_plan());
     debug_assert_eq!(common.sig.public_arity(), u32::from(plan.public_args));
 
+    let read_argument = |index: usize| {
+        let send = &*sends.add(index);
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+            || send.op2 as u32 != common.sig.param_cv_index(index as u32)
+        {
+            return None;
+        }
+        if send.op1_type == OpType::Cv {
+            let value = (*caller).cv(send.op1 as u32);
+            if value.value_type() == ValueType::Long {
+                // A raw Long CV is already the exact scalar operand. Only
+                // other tags need generic operand/reference resolution; in
+                // particular an aliased CV keeps the existing dereference.
+                return Some(value.raw_long());
+            }
+        }
+        let value = match send.op1_type {
+            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                &*(*caller).get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array)
+            }
+            OpType::Unused => return None,
+        };
+        if value.value_type() != ValueType::Long {
+            return None;
+        }
+        Some(value.raw_long())
+    };
+
+    // Only an already-admitted one-operation leaf needs the register-only
+    // adapter. Other plans retain their original bounded buffer population,
+    // without a special first operand or duplicate native-plan classification.
+    if plan.program.operations.len() == 1
+        && plan.public_args == 1
+        && let Some(operation) = scalar_long_leaf_operation(plan)
+    {
+        let first = read_argument(0)?;
+        let do_fcall_ptr = sends.add(1);
+        let do_fcall = &*do_fcall_ptr;
+        if do_fcall.opcode != OpCode::DoFcall
+            || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
+        {
+            return None;
+        }
+        let result = evaluate_scalar_long_leaf(operation, |index| match index {
+            0 => Some(first),
+            // Preserve the general buffer's defensive zero values even for
+            // an unvalidated plan referring to an unused in-bounds input.
+            1..=7 => Some(0),
+            _ => None,
+        })?;
+        return Some((result, std::ptr::NonNull::new(do_fcall_ptr.cast_mut())?));
+    }
+    // Retain the original bounded mutable iterator and its direct writes.
+    // An indexed closure here extends operand liveness across a dynamic loop
+    // and prevents the first-argument peel used by the buffered adapter.
     let mut arguments = [0i64; 8];
     for (index, argument) in arguments
         .iter_mut()
@@ -1120,9 +1263,6 @@ pub(crate) unsafe fn try_execute_direct_scalar_long_call(
         if send.op1_type == OpType::Cv {
             let value = (*caller).cv(send.op1 as u32);
             if value.value_type() == ValueType::Long {
-                // A raw Long CV is already the exact scalar operand. Only
-                // other tags need generic operand/reference resolution; in
-                // particular an aliased CV keeps the existing dereference.
                 *argument = value.raw_long();
                 continue;
             }

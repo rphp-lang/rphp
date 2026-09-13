@@ -2051,13 +2051,13 @@ fn fetch_dim_after_array_key_diagnostic<'a>(
 
 /// Prepare a final nested-array root before an AssignCv commit replaces it.
 #[cold]
-fn prepare_replaced_array_assignment(
+fn prepare_replaced_array_assignment<'a>(
     eg: &ExecutorGlobals,
     root_frame: bool,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
     destination_cv: u16,
     destination: &Value,
-) -> (Option<PreparedValueDestructor>, Option<String>) {
+) -> (Option<PreparedValueDestructor>, Option<&'a str>) {
     debug_assert_eq!(destination.dereferenced().value_type(), ValueType::Array);
     let mirrored_global_name = (!destination.is_reference())
         .then(|| {
@@ -2080,7 +2080,10 @@ fn prepare_replaced_array_assignment(
                                     && global.cycle_node().map(|node| node.0)
                                         == replaced_root.cycle_node().map(|node| node.0)
                             })
-                            .map(|_| name.clone())
+                            // The active immutable op-array owns this name;
+                            // no globals/value borrow crosses the commit or
+                            // destructor callback below.
+                            .map(|_| name.as_str())
                     })
             })
             .flatten()
@@ -2210,7 +2213,7 @@ fn complete_finally_marker<'a>(
                     let exceptions = eg.finally_exceptions.get_mut(&(frame as usize))?;
                     let pending = exceptions.pop();
                     if exceptions.is_empty() {
-                        eg.finally_exceptions.remove(&(frame as usize));
+                        eg.discard_finally_exceptions(frame as usize);
                     }
                     pending
                 }).unwrap();
@@ -2536,6 +2539,31 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }};
         }
+        // A numeric TMP has already been committed by the canonical add
+        // operation. Consume only an adjacent unused-result assignment into
+        // a raw primitive CV. Keep the TMP and its bitmap state intact: other
+        // consumers and optimized backedges must see the same frame as before.
+        // Expanded only inside the opcode's existing validated unsafe region.
+        macro_rules! complete_numeric_tmp_assignment {
+            ($source:expr) => {{
+                if opline._pad & ARITHMETIC_NEXT_PRIMITIVE_ASSIGN != 0 {
+                    // Specialization proved the immutable adjacent instruction
+                    // shape and destination CV bound. Only its actual value
+                    // capability needs to be checked again on each execution.
+                    let destination = (*frame).cv_mut(opline.extended_value) as *mut Value;
+                    if ((*destination).value_type() as u8) <= ValueType::Double as u8 {
+                        // No reference constraint, owner retirement or PHP
+                        // callback is possible at this assignment boundary.
+                        stats::inc_opcode(OpCode::AssignCv as usize);
+                        stats::inc_value_clone((*$source).value_type() as usize);
+                        stats::inc_write_frame_slot(false);
+                        Value::raw_copy($source, destination);
+                        (*frame).opline = opline_ptr.add(2);
+                        continue 'vm;
+                    }
+                }
+            }};
+        }
         macro_rules! restore_incdec_snapshot_on_exception {
             ($writeback_cv:expr, $old:expr) => {
                 if eg.exception.is_some() {
@@ -2753,17 +2781,20 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 let moved = opline._pad & ASSIGN_CV_MOVE_SOURCE != 0
                                     && matches!(opline.op2_type, OpType::Tmp | OpType::Var)
                                     && matches!(source_type, ValueType::Array | ValueType::Object | ValueType::Closure | ValueType::Resource);
-                                let value = if moved {
+                                let destination = (*frame).cv_mut(opline.op1 as u32) as *mut Value;
+                                if moved {
                                     // The move guard proves this already-resolved
                                     // address is a mutable TMP/VAR, never a
                                     // literal or reference cell. Retire that
                                     // same slot without resolving it again.
-                                    take_assignment_heap_source(&mut *frame, &mut *source.cast_mut(), opline.op2)
+                                    move_heap_source_to_primitive_cv(
+                                        &mut *frame, op_array.num_cvs,
+                                        &mut *source.cast_mut(), opline.op2,
+                                        &mut *destination, opline.op1,
+                                    );
                                 } else {
-                                    (&*source).clone()
-                                };
-                                let destination = (*frame).cv_mut(opline.op1 as u32) as *mut Value;
-                                frame_slot_set(frame, destination, value);
+                                    frame_slot_set(frame, destination, (&*source).clone());
+                                }
                                 (*frame).opline = opline_ptr.add(1);
                                 continue 'vm;
                             }
@@ -2944,7 +2975,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         if let Some(global_name) = mirrored_global_name {
                             globals_set(&mut eg.globals, global_name, (&*dest).clone());
                         }
-                        if let Some(global_name) = mirrored_array_global_name.as_deref() {
+                        if let Some(global_name) = mirrored_array_global_name {
                             globals_set(&mut eg.globals, global_name, (&*dest).clone());
                         }
                         if destructor_ran {
@@ -3446,17 +3477,28 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                         // Normal path: write to TMP
                         let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
-                        unsafe { frame_tmp_set_long(frame, result_ptr, sum) };
+                        // SAFETY: the specialized opcode owns this TMP. The
+                        // adjacent-assignment proof is compiler-bounded and
+                        // accepts only a disjoint runtime primitive
+                        // CV; both result bytes and cleanup bitmap stay live.
+                        unsafe {
+                            frame_tmp_set_long(frame, result_ptr, sum);
+                            complete_numeric_tmp_assignment!(result_ptr);
+                        };
                     } else {
                         let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                         unsafe {
-                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64))
+                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64));
+                            complete_numeric_tmp_assignment!(result_ptr);
                         };
                     }
                 } else if let Some((d1, d2)) = arithmetic_double_pair(op1, op2)
                 {
                     let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
-                    unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 + d2)) };
+                    unsafe {
+                        frame_tmp_set(frame, result_ptr, Value::double(d1 + d2));
+                        complete_numeric_tmp_assignment!(result_ptr);
+                    };
                 } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
                     write_array_union_result(frame, opline.result, left, right);
                 } else {
@@ -3495,15 +3537,26 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                 if let Some((l1, l2)) = arithmetic_long_pair(op1, op2)
                 {
+                    // SAFETY: result_ptr is this specialized opcode's TMP.
+                    // Numeric writes retire its previous owner first; the
+                    // bounded following assignment proves a primitive CV
+                    // destination without dereferencing a reference cell.
                     match l1.checked_add(l2) {
-                        Some(sum) => unsafe { frame_tmp_set_long(frame, result_ptr, sum) },
+                        Some(sum) => unsafe {
+                            frame_tmp_set_long(frame, result_ptr, sum);
+                            complete_numeric_tmp_assignment!(result_ptr);
+                        },
                         None => unsafe {
-                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64))
+                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64));
+                            complete_numeric_tmp_assignment!(result_ptr);
                         },
                     }
                 } else if let Some((d1, d2)) = arithmetic_double_pair(op1, op2)
                 {
-                    unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 + d2)) };
+                    unsafe {
+                        frame_tmp_set(frame, result_ptr, Value::double(d1 + d2));
+                        complete_numeric_tmp_assignment!(result_ptr);
+                    };
                 } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
                     write_array_union_result(frame, opline.result, left, right);
                 } else {
@@ -3829,15 +3882,26 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 if let Some((l1, l2)) = arithmetic_long_pair(op1, op2)
                 {
+                    // SAFETY: operands/result are validated frame locations.
+                    // Only a numeric TMP and a compiler-proven following
+                    // unused AssignCv can complete early; its raw primitive
+                    // destination is disjoint and has no owner to retire.
                     match l1.checked_add(l2) {
-                        Some(sum) => unsafe { frame_tmp_set_long(frame, result_ptr, sum) },
+                        Some(sum) => unsafe {
+                            frame_tmp_set_long(frame, result_ptr, sum);
+                            complete_numeric_tmp_assignment!(result_ptr);
+                        },
                         None => unsafe {
-                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64))
+                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64));
+                            complete_numeric_tmp_assignment!(result_ptr);
                         },
                     }
                 } else if let Some((d1, d2)) = arithmetic_double_pair(op1, op2)
                 {
-                    unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 + d2)) };
+                    unsafe {
+                        frame_tmp_set(frame, result_ptr, Value::double(d1 + d2));
+                        complete_numeric_tmp_assignment!(result_ptr);
+                    };
                 } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
                     write_array_union_result(frame, opline.result, left, right);
                 } else {
@@ -5540,8 +5604,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             let source =
                                 (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
                             let argument = (&*source).dereferenced().clone();
-                            let arg_slot = (*call).cv_mut(opline.op2 as u32);
-                            frame_slot_init(call, arg_slot as *mut Value, argument);
+                            callback_arg_init(call, opline.op2 as usize, argument);
                             (*frame).opline = opline_ptr.add(1);
                             continue 'vm;
                         }
@@ -5582,8 +5645,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let argument = materialize_reference_alias(frame, caller_value);
                     let call = (*frame).call;
                     debug_assert!(!call.is_null());
-                    let arg_slot = (*call).cv_mut(opline.op2 as u32);
-                    frame_slot_init(call, arg_slot as *mut Value, argument);
+                    callback_arg_init(call, opline.op2 as usize, argument);
                 }
             }
 
@@ -5643,8 +5705,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let raw_ptr = base.add(source_cv as usize);
                         materialize_reference_alias(frame, raw_ptr)
                     };
-                    let arg_slot = unsafe { (*call).cv_mut(opline.op2 as u32) };
-                    unsafe { frame_slot_init(call, arg_slot as *mut Value, argument) };
+                    // SAFETY: this is the same uninitialized pending argument
+                    // CV; the send already carries its absolute frame index.
+                    unsafe { callback_arg_init(call, opline.op2 as usize, argument) };
                 } else {
                     // Same logic as SendVal
                     let source = unsafe {
@@ -5669,7 +5732,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 }
                             }
                         }
-                        unsafe { frame_slot_init(call, arg_slot as *mut Value, snapshot) };
+                        // SAFETY: the resumed successful send still owns the
+                        // same uninitialized, compiler-sized argument CV.
+                        unsafe { callback_arg_init(call, opline.op2 as usize, snapshot) };
                     } else if !unsafe {
                         try_init_borrowed_heap_arg(
                             call,
@@ -5685,7 +5750,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } else {
                             unsafe { (&*source).clone() }
                         };
-                        unsafe { frame_slot_init(call, arg_slot as *mut Value, cloned) };
+                        // SAFETY: the borrowed fast path declined, so this
+                        // live pending argument slot still has no owner.
+                        unsafe { callback_arg_init(call, opline.op2 as usize, cloned) };
                     }
                 }
             }
@@ -10797,7 +10864,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // an older exception whose finally contained the return; a
                 // cleanup exception caught in that finally cancels the return
                 // and must leave the older completion available to resume.
-                eg.finally_exceptions.remove(&(frame as usize));
+                // Reuse the sparse cleanup boundary: an empty table cannot
+                // own this return, so it needs no frame-key hash or lookup.
+                eg.discard_finally_exceptions(frame as usize);
 
                 if func_common_ret.plan.needs_late_static_scope() {
                     eg.discard_late_static_scope(frame as usize);

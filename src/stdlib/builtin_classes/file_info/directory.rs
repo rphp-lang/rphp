@@ -126,11 +126,16 @@ fn local_path(path: &[u8]) -> Option<&[u8]> {
 
 fn update_path(state: &mut NativeFileInfo) {
     let directory = state.directory.as_ref().expect("initialized cursor");
-    state.path = Some(if directory.filename.is_empty() {
-        Vec::new()
-    } else {
-        directory.pathname()
-    });
+    // PHP string/FileInfo/clone projections own their bytes. This buffer is
+    // exclusive native cursor storage, so advancing can reuse its capacity
+    // without changing retained projections or the empty pathname at EOF.
+    let path = state.path.get_or_insert_with(Vec::new);
+    path.clear();
+    if !directory.filename.is_empty() {
+        path.extend_from_slice(directory.base());
+        path.push(b'/');
+        path.extend_from_slice(&directory.filename);
+    }
 }
 
 fn publish_pending(receiver: &Value, path: Vec<u8>, flags: u32) {

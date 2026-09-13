@@ -1,6 +1,179 @@
 mod common;
 
 #[test]
+fn scalar_bitmap_reuse_preserves_owners_and_global_array_mirrors() {
+    for locals in [0, 80] {
+        let declarations = (0..locals)
+            .map(|index| format!("$padding{index} = {index};\n"))
+            .collect::<String>();
+        let source = include_str!("fixtures/scalar_bitmap_mirrors.php")
+            .replace("// FRAME_LOCALS", &declarations);
+        assert_eq!(common::run_php(&source), "100:5:0:1\n5\n1:1\n11:11\n0\n");
+    }
+}
+
+#[test]
+fn numeric_writeback_quickening_records_only_matching_immutable_adjacency() {
+    use rphp::vm::instruction::{
+        ARITHMETIC_COMPOUND_ASSIGN, ARITHMETIC_NEXT_PRIMITIVE_ASSIGN, ASSIGN_CV_REBIND,
+        Instruction, KnownScalarType, OpType,
+    };
+    use rphp::vm::opcode::OpCode;
+    for invalid in 0..8 {
+        let mut code = rphp::compiler::compile::Compiler::new()
+            .compile(&[])
+            .unwrap()
+            .main;
+        code.num_cvs = 2;
+        code.num_temps = 1;
+        let mut add = Instruction::new(OpCode::Add);
+        add.op1_type = OpType::Cv;
+        add.op2_type = OpType::Const;
+        add.result_type = OpType::Tmp;
+        add.result = 2;
+        add._pad = ARITHMETIC_COMPOUND_ASSIGN;
+        add.set_known_result_type(KnownScalarType::Long);
+        let mut assign = Instruction::new(OpCode::AssignCv);
+        assign.op1_type = OpType::Cv;
+        assign.op1 = 1;
+        assign.op2_type = OpType::Tmp;
+        assign.op2 = 2;
+        match invalid {
+            1 => assign.op1 = 2,
+            2 => assign.op2 = 1,
+            3 => assign.op1_type = OpType::Tmp,
+            4 => assign.op2_type = OpType::Cv,
+            5 => assign.result_type = OpType::Tmp,
+            6 => assign._pad = ASSIGN_CV_REBIND,
+            7 => add.result_type = OpType::Cv,
+            _ => {}
+        }
+        code.instructions = vec![add, assign];
+        for _ in 0..2 {
+            code.specialize_opcodes();
+            assert_eq!(code.instructions.len(), 2);
+            let quickened = &code.instructions[0];
+            assert_eq!(
+                quickened._pad & ARITHMETIC_NEXT_PRIMITIVE_ASSIGN != 0,
+                invalid == 0
+            );
+            assert_eq!(
+                quickened._pad & ARITHMETIC_COMPOUND_ASSIGN,
+                ARITHMETIC_COMPOUND_ASSIGN
+            );
+            assert_eq!(quickened.known_result_type(), KnownScalarType::Long);
+            if invalid == 0 {
+                assert_eq!(quickened.extended_value, 1);
+            }
+        }
+        code.instructions.pop();
+        code.specialize_opcodes();
+        assert_eq!(
+            code.instructions[0]._pad & ARITHMETIC_NEXT_PRIMITIVE_ASSIGN,
+            0
+        );
+    }
+}
+
+#[test]
+fn numeric_add_writeback_keeps_temps_aliases_diagnostics_and_evaluation_order() {
+    use rphp::vm::{instruction::OpType, opcode::OpCode};
+    for locals in [0, 80] {
+        let declarations = (0..locals)
+            .map(|index| format!("$padding{index} = {index};\n"))
+            .collect::<String>();
+        let source = include_str!("fixtures/numeric_add_writeback.php")
+            .replace("// FRAME_LOCALS", &declarations);
+        let statements =
+            rphp::parser::Parser::new(rphp::lexer::Lexer::new(&source).tokenize().unwrap())
+                .parse()
+                .unwrap();
+        let compiled = rphp::compiler::compile::Compiler::new()
+            .compile(&statements)
+            .unwrap();
+        let function = &compiled
+            .functions
+            .iter()
+            .find(|(name, _)| name == "numericWriteback")
+            .unwrap()
+            .1;
+        assert_eq!(
+            function.op_array.num_cvs + function.op_array.num_temps > 64,
+            locals == 80
+        );
+        assert!(function.op_array.instructions.windows(2).any(|pair| {
+            matches!(
+                pair[0].opcode,
+                OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp
+            ) && pair[1].opcode == OpCode::AssignCv
+                && pair[1].result_type == OpType::Unused
+                && pair[1].op2 == pair[0].result
+        }));
+        let negative_zero = if cfg!(target_endian = "little") {
+            "0000000000000080"
+        } else {
+            "8000000000000000"
+        };
+        let expected = format!(
+            "integer:21:21\ninteger:2:2\ninteger:97:97\ndouble:35.25:35.25\ninteger:97:97\n6.5:6.5\n11:11\ndouble:0\n{negative_zero}\n{{\"left\":1,\"right\":2}}\n15\nnumeric warning:8\ninvalid:8\nwarnings:1\n"
+        );
+        assert_eq!(common::run_php(&source), expected);
+    }
+}
+
+#[test]
+fn scalar_reference_and_external_results_preserve_frame_retirement() {
+    for locals in [0, 80] {
+        let declarations = (0..locals)
+            .map(|index| format!("$padding{index} = {index};\n"))
+            .collect::<String>();
+        let source = include_str!("fixtures/scalar_reference_retirement.php")
+            .replace("// FRAME_LOCALS", &declarations);
+        let statements =
+            rphp::parser::Parser::new(rphp::lexer::Lexer::new(&source).tokenize().unwrap())
+                .parse()
+                .unwrap();
+        let compiled = rphp::compiler::compile::Compiler::new()
+            .compile(&statements)
+            .unwrap();
+        let function = &compiled
+            .functions
+            .iter()
+            .find(|(name, _)| name == "retirementFrame")
+            .unwrap()
+            .1;
+        assert_eq!(
+            function.op_array.num_cvs + function.op_array.num_temps > 64,
+            locals == 80
+        );
+        assert_eq!(
+            common::run_php(&source),
+            "3:1:5\n5\n3:1:6\ndrop:local\n6\n2:caller\ndone\n"
+        );
+    }
+}
+
+#[test]
+fn single_argument_leaf_preserves_operand_sources_and_canonical_fallbacks() {
+    let expected =
+        b"[[10,20,20,33,18,12,9.5,true,true,10,10,10,\"array-error\",\"string-error\"],13,128]\n";
+    for disable_jit in [false, true] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_rphp"))
+            .args(["-d", "display_errors=1", "-d", "log_errors=0"])
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/scalar_single_argument.php"
+            ))
+            .env("RPHP_DISABLE_JIT", if disable_jit { "1" } else { "0" })
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        assert_eq!(output.stdout, expected);
+    }
+}
+
+#[test]
 fn published_property_initializers_keep_finalized_signature_guards() {
     use rphp::{compiler::compile::Compiler, lexer::Lexer, parser::Parser};
     let source = r#"<?php

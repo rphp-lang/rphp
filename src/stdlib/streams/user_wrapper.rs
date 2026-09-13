@@ -467,6 +467,149 @@ pub(crate) fn open_file(
     open(eg, path, mode, options, UserStreamKind::File)
 }
 
+/// SplFileObject probes the wrapper before opening it, with exceptions rather
+/// than filesystem warnings. Retire the temporary stat receiver through the
+/// VM, before constructing the independently owned stream receiver.
+#[cold]
+pub(crate) fn open_file_object(
+    eg: &mut ExecutorGlobals,
+    path: &str,
+    mode: &str,
+) -> Result<Option<Value>, VmError> {
+    let Some(definition) = definition_for_url(eg, path) else {
+        return Ok(None);
+    };
+    let object = instantiate_wrapper(eg, &definition)?;
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    let stat = invoke_callback(
+        eg,
+        &object,
+        "url_stat",
+        vec![Value::string(path), Value::long(0)],
+    )?;
+    if stat.is_none() && eg.exception.is_none() {
+        eg.exception = Some(crate::value::make_error_value(
+            "RuntimeException",
+            &format!(
+                "SplFileObject::__construct(): {}::url_stat is not implemented!",
+                definition.class
+            ),
+        ));
+    }
+    let release = crate::vm::execute::prepare_replaced_value_destructor(eg, &object);
+    drop(object);
+    crate::vm::execute::run_prepared_value_destructor(eg, release)?;
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    match open_registered(eg, path, mode, 0, UserStreamKind::File, definition)? {
+        OpenResult::Opened(value) => Ok(Some(value)),
+        _ => {
+            if eg.exception.is_none() {
+                eg.exception = Some(crate::value::make_error_value(
+                    "RuntimeException",
+                    &format!(
+                        "SplFileObject::__construct({path}): Failed to open stream: operation failed"
+                    ),
+                ));
+            }
+            Ok(None)
+        }
+    }
+}
+
+/// Consume a physical line from the same request-owned unread buffer used by
+/// ordinary wrapper reads. Every borrow ends before dispatching PHP callbacks.
+#[cold]
+pub(crate) fn read_file_object_line(
+    eg: &mut ExecutorGlobals,
+    resource: i64,
+    maximum: usize,
+) -> Result<Option<(Vec<u8>, bool)>, VmError> {
+    let Some(stream) = shared_stream(eg, resource) else {
+        return Ok(None);
+    };
+    let maximum = if maximum == 0 { usize::MAX } else { maximum };
+    let mut bytes = Vec::new();
+    loop {
+        let available = {
+            let mut state = stream.borrow_mut();
+            let start = state.unread_offset;
+            let limit = state
+                .unread
+                .len()
+                .min(start.saturating_add(maximum - bytes.len()));
+            let data = &state.unread[start..limit];
+            let end = data
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(limit, |index| start + index + 1);
+            bytes.extend_from_slice(&state.unread[start..end]);
+            state.unread_offset = end;
+            state.position = state.position.saturating_add(end - start);
+            end > start
+        };
+        if bytes.last() == Some(&b'\n') || bytes.len() == maximum {
+            break;
+        }
+        if stream.borrow().eof {
+            break;
+        }
+        if !available && bytes.is_empty() {
+            let _ = eof(eg, resource)?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            if stream.borrow().eof {
+                break;
+            }
+        }
+        let Some(prefix) = read(eg, resource, 1)? else {
+            return Ok(None);
+        };
+        if eg.exception.is_some() {
+            return Ok(None);
+        }
+        if prefix.is_empty() {
+            break;
+        }
+        bytes.extend(prefix);
+        if bytes.last() == Some(&b'\n') || bytes.len() == maximum {
+            break;
+        }
+    }
+    let state = stream.borrow();
+    Ok(Some((
+        bytes,
+        state.eof && state.unread_offset == state.unread.len(),
+    )))
+}
+
+#[cold]
+pub(crate) fn rewind_file_object(eg: &mut ExecutorGlobals, resource: i64) -> Result<bool, VmError> {
+    let Some(stream) = shared_stream(eg, resource) else {
+        return Ok(false);
+    };
+    let object = stream.borrow().object.clone();
+    let success = invoke_callback(
+        eg,
+        &object,
+        "stream_seek",
+        vec![Value::long(0), Value::long(0)],
+    )?
+    .is_some_and(|value| value.is_truthy());
+    if success && eg.exception.is_none() {
+        let mut state = stream.borrow_mut();
+        state.unread.clear();
+        state.unread_offset = 0;
+        state.position = 0;
+        state.eof = false;
+    }
+    Ok(success)
+}
+
 #[inline(always)]
 pub(crate) fn open_directory(
     eg: &mut ExecutorGlobals,

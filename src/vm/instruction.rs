@@ -550,6 +550,12 @@ pub const ARRAY_ELEMENT_COMPOUND_APPEND_WRITEBACK: u16 = 1 << 6;
 /// padding bit without changing the compact instruction layout.
 pub const ARITHMETIC_COMPOUND_ASSIGN: u16 = 1;
 
+/// A numeric Add result is followed by an unused AssignCv from the same TMP.
+/// Opcode specialization retains both instructions and records the destination
+/// CV in extended_value. The interpreter may consume both only after checking
+/// the destination's runtime tag; references and owning values keep AssignCv.
+pub const ARITHMETIC_NEXT_PRIMITIVE_ASSIGN: u16 = 1 << 1;
+
 /// Exact scalar representation proven for an instruction result. The fact is
 /// stored in otherwise-unused high padding bits so later compiler tiers and a
 /// future JIT can consume the same declaration-derived contract without

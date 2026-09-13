@@ -32,6 +32,7 @@ macro_rules! specimen {
 }
 
 specimen!(bytes);
+specimen!(all_byte_scalars);
 specimen!(base64_boundary);
 specimen!(passthrough);
 specimen!(resources);

@@ -1742,7 +1742,8 @@ impl ExecutorGlobals {
         // SplFixedArray adds one fixed-slot container without a startup grow.
         // Deque, stack and queue share one native container implementation.
         // Abstract heap, min heap and max heap add three fixed declarations.
-        let class_capacity = 113 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        // SplFileObject adds one line-cursor declaration to that fixed set.
+        let class_capacity = 114 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;
@@ -9945,6 +9946,19 @@ impl ExecutorGlobals {
             return true;
         }
 
+        // Literal boolean and null returns narrow their enclosing builtin
+        // types. The standalone null node is Nullable(None), not a class.
+        if matches!(iface_hint, ParamTypeHint::Bool)
+            && matches!(impl_hint, ParamTypeHint::ClassName(name)
+                if name.eq_ignore_ascii_case("false") || name.eq_ignore_ascii_case("true"))
+        {
+            return true;
+        }
+        if matches!(impl_hint, ParamTypeHint::Nullable(inner) if matches!(inner.as_ref(), ParamTypeHint::None))
+        {
+            return iface_hint.allows_null();
+        }
+
         // The runtime representation retains source-level `T|null` as a union
         // while `?T` is one nullable node. For covariance they denote the same
         // two branches: both T and null must fit the required union.
@@ -10567,6 +10581,28 @@ mod sparse_call_cleanup_tests {
     use super::ExecutorGlobals;
     use crate::value::Value;
     use std::collections::HashMap;
+
+    #[test]
+    fn file_cursor_literal_returns_narrow_recursive_protocol_contracts() {
+        use crate::vm::function::ParamTypeHint as Hint;
+        let eg = ExecutorGlobals::new();
+        let compatible = |value: &Hint, contract: &Hint| {
+            eg.is_return_type_compatible(value, contract, "Child", "Parent", None)
+        };
+        let null = Hint::Nullable(Box::new(Hint::None));
+        let object = Hint::ClassName("RecursiveIterator".into());
+        let nullable = Hint::Nullable(Box::new(object.clone()));
+        assert!(compatible(&Hint::ClassName("false".into()), &Hint::Bool));
+        assert!(compatible(&Hint::ClassName("true".into()), &Hint::Bool));
+        assert!(compatible(&null, &nullable));
+        assert!(compatible(
+            &null,
+            &Hint::Union(vec![Hint::String, null.clone()])
+        ));
+        assert!(!compatible(&null, &object));
+        assert!(!compatible(&Hint::Bool, &Hint::ClassName("false".into())));
+        assert!(!compatible(&nullable, &null));
+    }
 
     #[test]
     fn sparse_call_cleanup_preserves_other_frames_and_repopulated_tables() {

@@ -36,29 +36,29 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `spl-object-storage-state-cursor-contracts` train adds
-25 PHP 8.5 SPL passes over `ba9cdd6a`, with no loss, new process hazard
-or moved failure stage. SPL reaches 459/286/31 unsupported/8 skip/1 XFAIL;
-core retains 6,446/335/182/211 and identical pass sets. Sparse traced identity/
-info ownership preserves live cursors, hash callbacks, bulk mutation,
-references/COW, debug views and modern wire restoration. Independent compiler
-coalescing, legacy-wire, custom-hash clone and subclass-comparison holdouts
-remain explicit.
+The accepted `spl-file-object-line-cursor-contracts` train adds 31 PHP 8.5
+SPL passes over `faff8cc0`, without a lost pass or new process hazard. SPL
+reaches 490/255/31 unsupported/8 skip/1 XFAIL; core retains 6,446/335/182/211
+and identical pass sets. A sparse traced file owner preserves cached lines,
+logical cursors, flags, seek/rewind/EOF, overrides and wrapper lifetimes.
+Complete CSV/debug state and requested/opened path metadata remain two named
+output-stage holdouts; full write/CSV, SplTempFileObject and whole-class claims
+are not admitted.
 
-One checked five-configuration matrix, all-targets, original/adjacent oracles,
-exact no-loss, S0-S3 and unsafe/static gates pass. All 69 fixed-parent 32-pair
-controls meet unchanged common +1% / pay-use +5% limits. Profile-backed operand,
-constructor, resource, line and decimal work removal preserves common
-representation, aliases and JIT admission. Rejected hypotheses, exact evidence,
-new-API costs and shared-host limits are recorded compactly in `compatibility.md`.
+The checked five-configuration matrix, all-targets, original/adjacent oracles,
+exact no-loss, S0-S3 and unsafe/static gates pass. All 73 fixed-parent 32-pair
+controls meet unchanged common +1% / pay-use +5% limits. Profile-backed
+ownership, scalar, lookup and pathname work removal preserves common
+representation, aliases and JIT admission. Rejected evidence, hash-verified
+disk-stop resumption, absolute new-API costs and shared-host limits are in
+`compatibility.md`; automatic cleanup remains mandatory.
 
-Next admission confirms 23 reference-passing/current-failing SplFileObject
-line/cursor cases. Characterize current/key, flags, seek/rewind/EOF, length
-limits, inherited metadata, overrides and resource retirement before adding
-one sparse traced file cursor. Require at least ten common gains; do not absorb
-independent parser, full write/CSV, SplTempFileObject or whole-class claims.
-Retain all controls and add the now-present storage API controls.
-Automatic cleanup remains mandatory.
+Next admission confirms 29 reference-passing/current-failing SplFileObject
+CSV cases. Characterize multiline/empty/EOF records, controls, cursor/cache
+ordering, default-escape diagnostics, bytes, writes and callback failures
+before reusing the stream CSV parser/writer. Require at least ten common gains
+and retain every control. Independent parser debt, general writes,
+SplTempFileObject and whole-class claims remain outside the next slice.
 
 ### Preceding directory cursor checkpoint
 

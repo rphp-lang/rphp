@@ -152,12 +152,18 @@ fn direct_line_projection_matches_scratch_cursor_and_retained_bytes() {
                     assert_eq!(direct.is_eof(), scratch.is_eof());
                     assert_eq!(direct.unread_len(), scratch.unread_len());
                     assert_eq!(direct.take_plain_file_io(), scratch.take_plain_file_io());
-                    let left = direct.read_buffer.as_ref().unwrap();
-                    let right = scratch.read_buffer.as_ref().unwrap();
-                    assert_eq!(
-                        &left.bytes[left.start..left.end],
-                        &right.bytes[right.start..right.end]
-                    );
+                    // An empty suffix need not allocate a prefetch owner.
+                    // Compare all retained bytes independently of that
+                    // allocation choice; cursor/EOF checks above stay exact.
+                    let left = direct
+                        .read_buffer
+                        .as_ref()
+                        .map_or(&[][..], |buffer| &buffer.bytes[buffer.start..buffer.end]);
+                    let right = scratch
+                        .read_buffer
+                        .as_ref()
+                        .map_or(&[][..], |buffer| &buffer.bytes[buffer.start..buffer.end]);
+                    assert_eq!(left, right);
                 }
             }
         }

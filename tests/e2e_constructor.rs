@@ -5,6 +5,27 @@ use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
 
+#[test]
+fn constructor_temporary_reuse_preserves_retained_owners_in_small_and_large_frames() {
+    let specimen = include_str!("fixtures/constructor_slot_reuse.php");
+    for locals in [0, 80] {
+        let declarations = (0..locals)
+            .map(|index| format!("$padding{index} = {index};\n"))
+            .collect::<String>();
+        let source = specimen.replace("// FRAME_LOCALS", &declarations);
+        let compiled = compile_constructor_source(&source);
+        let function = compiled
+            .functions
+            .iter()
+            .find(|(name, _)| name == "exerciseSlotReuse")
+            .map(|(_, function)| function)
+            .unwrap();
+        let slots = function.op_array.num_cvs + function.op_array.num_temps;
+        assert_eq!(slots > 64, locals == 80);
+        assert_eq!(run_php(&source), "2016:54:64\n");
+    }
+}
+
 fn compile_constructor_source(source: &str) -> rphp::compiler::compile::CompileResult {
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();

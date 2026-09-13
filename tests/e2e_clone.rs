@@ -2,6 +2,30 @@ mod common;
 use common::run_php;
 
 #[test]
+fn clone_source_snapshot_preserves_lazy_and_ordinary_state() {
+    let expected = concat!(
+        "[false,2,12,false]\nghost\n[false,7,17,false]\n",
+        "proxy\n[false,9,19,false]\n[false,9,19,false]\n",
+        "[false,2,12,false]\nthrow\ninitializer stopped\n",
+        "[true,12,2]\n23:1\n",
+    );
+    for disable_jit in [false, true] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_rphp"))
+            .args(["-d", "display_errors=1", "-d", "log_errors=0"])
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/clone_source_state.php"
+            ))
+            .env("RPHP_DISABLE_JIT", if disable_jit { "1" } else { "0" })
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        assert_eq!(output.stdout, expected.as_bytes());
+    }
+}
+
+#[test]
 fn dynamic_registered_clone_site_preserves_polymorphism_and_reentry() {
     assert_eq!(
         run_php(include_str!("fixtures/heap/dynamic_clone.php")),

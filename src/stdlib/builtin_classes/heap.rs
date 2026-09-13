@@ -172,17 +172,22 @@ fn healthy(receiver: &Value, eg: &mut ExecutorGlobals) -> bool {
 }
 fn begin(receiver: &Value, eg: &mut ExecutorGlobals) -> bool {
     ensure(receiver, eg);
-    if read(receiver, |h| h.locked) {
-        error(
-            eg,
-            "Heap cannot be changed when it is already being modified.",
-        );
+    // No callback occurs between these checks and lock acquisition. Resolve
+    // native state once, then release the borrow before constructing an error.
+    let failure = change(receiver, |h| {
+        if h.locked {
+            Some("Heap cannot be changed when it is already being modified.")
+        } else if h.corrupted {
+            Some("Heap is corrupted, heap properties are no longer ensured.")
+        } else {
+            h.locked = true;
+            None
+        }
+    });
+    if let Some(message) = failure {
+        error(eg, message);
         return false;
     }
-    if !healthy(receiver, eg) {
-        return false;
-    }
-    change(receiver, |h| h.locked = true);
     true
 }
 fn finish(receiver: &Value, failed: bool) {
@@ -353,19 +358,27 @@ fn remove(receiver: &Value, take: bool, eg: &mut ExecutorGlobals) -> Result<Valu
     if !begin(receiver, eg) {
         return Ok(Value::null());
     }
-    let len = read(receiver, |h| h.len);
-    if len == 0 {
+    // Count, root index and requested projection belong to one immutable
+    // state before the first possible destructor/comparator callback.
+    let initial = read(receiver, |h| {
+        (h.len != 0).then(|| {
+            let root = h.order[0];
+            (
+                root,
+                if take {
+                    h.project(root, h.flags)
+                } else {
+                    Value::null()
+                },
+            )
+        })
+    });
+    let Some((root, result)) = initial else {
         finish(receiver, false);
         if take {
             error(eg, "Can't extract from an empty heap");
         }
         return Ok(Value::null());
-    }
-    let root = read(receiver, |h| h.order[0]);
-    let result = if take {
-        read(receiver, |h| h.project(root, h.flags))
-    } else {
-        Value::null()
     };
     let retirement = if take {
         Ok(())
@@ -382,16 +395,16 @@ fn remove(receiver: &Value, take: bool, eg: &mut ExecutorGlobals) -> Result<Valu
         retirement?;
         while eg.exception.is_none() {
             let child = hole * 2 + 1;
-            let len = read(receiver, |h| h.len);
-            if child >= len {
+            let children = read(receiver, |h| {
+                (child < h.len).then(|| (h.order[child], h.order[child + 1]))
+            });
+            let Some((mut winner, right)) = children else {
                 break;
-            }
-            let mut winner = read(receiver, |h| h.order[child]);
+            };
             let mut destination = child;
             // The retained tail remains available during down-heap comparison,
             // including the child index equal to the newly published count.
-            if child < len {
-                let right = read(receiver, |h| h.order[child + 1]);
+            {
                 let ordering = compare_slots(receiver, &comparator, right, winner, eg)?;
                 if eg.exception.is_some() {
                     break;

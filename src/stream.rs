@@ -694,9 +694,57 @@ impl PhpStream {
         // its valid range directly, without an intermediate scratch copy or
         // putting the suffix back. Backend read size and cursor stay unchanged.
         if maximum <= 64 {
+            if self.unread_len() == 0
+                && let StreamBackend::Memory(memory) = &mut self.backend
+            {
+                return Self::read_short_memory_line(
+                    memory,
+                    &mut self.read_buffer,
+                    &mut self.eof,
+                    buffer,
+                    maximum,
+                );
+            }
             return self.read_line_buffered(buffer, maximum);
         }
         self.read_line_large(buffer, maximum)
+    }
+
+    // A memory cursor already owns the next native read. Copy the consumed
+    // prefix directly to the result, retaining only the unread suffix of the
+    // same 8192-byte snapshot. Do not bypass that snapshot: metadata, filters
+    // and a later truncate must still observe its original bytes.
+    fn read_short_memory_line(
+        memory: &mut Cursor<Vec<u8>>,
+        prefetch: &mut Option<Box<ReadBuffer>>,
+        eof: &mut bool,
+        output: &mut Vec<u8>,
+        maximum: usize,
+    ) -> io::Result<Option<usize>> {
+        debug_assert!((1..=64).contains(&maximum));
+        let position = memory.position();
+        let start = usize::try_from(position)
+            .unwrap_or(usize::MAX)
+            .min(memory.get_ref().len());
+        let read = (memory.get_ref().len() - start).min(8192);
+        let bytes = &memory.get_ref()[start..start + read];
+        let available = read.min(maximum);
+        let newline = bytes[..available].iter().position(|byte| *byte == b'\n');
+        let consumed = newline.map_or(available, |index| index + 1);
+        output.try_reserve(consumed).map_err(|_| {
+            io::Error::new(io::ErrorKind::OutOfMemory, "line buffer allocation failed")
+        })?;
+        output.extend_from_slice(&bytes[..consumed]);
+        if consumed < read {
+            let buffer = prefetch.get_or_insert_with(Default::default);
+            buffer.bytes.clear();
+            buffer.bytes.extend_from_slice(&bytes[consumed..]);
+            buffer.start = 0;
+            buffer.end = read - consumed;
+        }
+        memory.set_position(position + read as u64);
+        *eof = newline.is_none() && consumed < maximum;
+        Ok((consumed != 0).then_some(consumed))
     }
 
     fn read_line_buffered(
