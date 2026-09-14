@@ -7,11 +7,19 @@ use std::cell::RefCell;
 const SKIP_DOTS: u32 = 0x1000;
 const FLAGS_MASK: u32 = 0x7ff0;
 
+struct GlobSnapshot {
+    pattern: Vec<u8>,
+    entries: Vec<Vec<u8>>,
+}
+
 #[derive(Clone, Default)]
 pub(super) struct DirectoryState {
     pub(super) base: Option<Vec<u8>>,
     pub(super) filename: Vec<u8>,
     stream: Option<Rc<RefCell<OwnedDirectoryCursor>>>,
+    glob: Option<Rc<GlobSnapshot>>,
+    glob_index: usize,
+    subpath: Option<Box<[u8]>>,
     index: i64,
     flags: u32,
     pub(super) stat_path_materialized: bool,
@@ -19,7 +27,7 @@ pub(super) struct DirectoryState {
 
 impl DirectoryState {
     pub(super) fn is_open(&self) -> bool {
-        self.stream.is_some()
+        self.stream.is_some() || self.glob.is_some()
     }
 
     pub(super) fn is_projected(&self) -> bool {
@@ -57,6 +65,28 @@ impl DirectoryState {
 
     fn read(&mut self) {
         self.stat_path_materialized = false;
+        if let Some(entries) = &self.glob {
+            // The native snapshot retains dots for count(), while seek uses
+            // the visible cursor index just like the plain directory backend.
+            while self.flags & SKIP_DOTS != 0 {
+                let Some(path) = entries.entries.get(self.glob_index) else {
+                    break;
+                };
+                let name = path.rsplit(|byte| *byte == b'/').next().unwrap_or_default();
+                if name != b"." && name != b".." {
+                    break;
+                }
+                self.glob_index += 1;
+            }
+            let path = entries
+                .entries
+                .get(self.glob_index)
+                .map_or(&[][..], Vec::as_slice);
+            let separator = path.iter().rposition(|byte| *byte == b'/');
+            self.base = Some(path[..separator.unwrap_or(0)].to_vec());
+            self.filename = path[separator.map_or(0, |index| index + 1)..].to_vec();
+            return;
+        }
         loop {
             self.filename = self
                 .stream
@@ -74,6 +104,13 @@ impl DirectoryState {
     }
 
     pub(super) fn pathname(&self) -> Vec<u8> {
+        if let Some(entries) = &self.glob {
+            return entries
+                .entries
+                .get(self.glob_index)
+                .cloned()
+                .unwrap_or_default();
+        }
         let mut path = Vec::with_capacity(self.base().len() + self.filename.len() + 1);
         path.extend_from_slice(self.base());
         path.push(b'/');
@@ -82,17 +119,17 @@ impl DirectoryState {
     }
 
     fn rewind(&mut self) {
-        self.stream
-            .as_ref()
-            .expect("open directory cursor")
-            .borrow_mut()
-            .rewind();
+        if let Some(stream) = &self.stream {
+            stream.borrow_mut().rewind();
+        }
         self.index = 0;
+        self.glob_index = 0;
         self.read();
     }
 
     fn next(&mut self) {
         self.index = self.index.wrapping_add(1);
+        self.glob_index = self.glob_index.saturating_add(1);
         self.read();
     }
 
@@ -107,6 +144,27 @@ impl DirectoryState {
             self.next();
         }
         true
+    }
+
+    pub(super) fn subpath(&self) -> &[u8] {
+        self.subpath.as_deref().unwrap_or_default()
+    }
+
+    pub(super) fn subpathname(&self) -> Vec<u8> {
+        let mut result = self.subpath().to_vec();
+        if !result.is_empty() {
+            result.push(b'/');
+        }
+        result.extend_from_slice(&self.filename);
+        result
+    }
+
+    pub(super) fn is_glob(&self) -> bool {
+        self.glob.is_some()
+    }
+
+    pub(super) fn glob_pattern(&self) -> Option<&[u8]> {
+        self.glob.as_ref().map(|s| s.pattern.as_slice())
     }
 }
 
@@ -132,9 +190,13 @@ fn update_path(state: &mut NativeFileInfo) {
     let path = state.path.get_or_insert_with(Vec::new);
     path.clear();
     if !directory.filename.is_empty() {
-        path.extend_from_slice(directory.base());
-        path.push(b'/');
-        path.extend_from_slice(&directory.filename);
+        if directory.is_glob() {
+            path.extend_from_slice(&directory.pathname());
+        } else {
+            path.extend_from_slice(directory.base());
+            path.push(b'/');
+            path.extend_from_slice(&directory.filename);
+        }
     }
 }
 
@@ -195,25 +257,29 @@ fn constructor(
     ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
-    filesystem_iterator: bool,
+    owner: &'static str,
 ) -> Result<(), VmError> {
-    let owner = if filesystem_iterator {
-        "FilesystemIterator"
-    } else {
-        "DirectoryIterator"
-    };
     let method = format!("{owner}::__construct");
-    let Some(path) = string_argument(ed, eg, &method, "directory")? else {
+    let parameter = if owner == "GlobIterator" {
+        "pattern"
+    } else {
+        "directory"
+    };
+    let Some(path) = string_argument(ed, eg, &method, parameter)? else {
         return Ok(());
     };
-    let flags = if filesystem_iterator {
+    let flags = if owner != "DirectoryIterator" {
         if arg_opt!(ed, 2).is_some() {
             let Some(flags) = int_argument(ed, eg, &method, 1, "flags")? else {
                 return Ok(());
             };
             flags as u32 & FLAGS_MASK
         } else {
-            SKIP_DOTS
+            if owner == "FilesystemIterator" {
+                SKIP_DOTS
+            } else {
+                0
+            }
         }
     } else {
         0
@@ -237,9 +303,30 @@ fn constructor(
         error(
             eg,
             "ValueError",
-            &format!("{method}(): Argument #1 ($directory) {reason}"),
+            &format!("{method}(): Argument #1 (${parameter}) {reason}"),
         );
         return Ok(());
+    }
+    if owner == "GlobIterator" {
+        let pattern = if path.starts_with(b"glob://") {
+            &path[7..]
+        } else {
+            &path
+        };
+        let mut directory = DirectoryState {
+            flags,
+            glob: Some(Rc::new(GlobSnapshot {
+                pattern: [b"glob://".as_slice(), pattern].concat(),
+                entries: filesystem::file_info_glob_paths(pattern),
+            })),
+            ..DirectoryState::default()
+        };
+        directory.read();
+        let mut object = receiver.as_object_mut().unwrap();
+        let state = object.native_file_info_mut();
+        state.directory = Some(Box::new(directory));
+        update_path(state);
+        ret!(rv, Value::null());
     }
     let Some(local) = local_path(&path) else {
         publish_pending(&receiver, path.clone(), flags);
@@ -296,7 +383,7 @@ fn construct(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    constructor(ed, rv, eg, false)
+    constructor(ed, rv, eg, "DirectoryIterator")
 }
 #[cold]
 fn filesystem_construct(
@@ -304,7 +391,213 @@ fn filesystem_construct(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    constructor(ed, rv, eg, true)
+    constructor(ed, rv, eg, "FilesystemIterator")
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+fn recursive_construct(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    constructor(ed, rv, eg, "RecursiveDirectoryIterator")
+}
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+fn glob_construct(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    constructor(ed, rv, eg, "GlobIterator")
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+fn has_children(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let allow_links = if arg_opt!(ed, 1).is_some() {
+        let argument = owned_argument(ed, 1);
+        let Some(value) = typed_internal_bool_value_argument(
+            ed,
+            eg,
+            &argument,
+            "RecursiveDirectoryIterator::hasChildren",
+            0,
+            "allowLinks",
+        )?
+        else {
+            return Ok(());
+        };
+        value
+    } else {
+        false
+    };
+    let receiver = owned_argument(ed, 0);
+    let request = {
+        let object = receiver.as_object().unwrap();
+        object
+            .native_file_info()
+            .and_then(|s| s.directory.as_deref())
+            .filter(|s| s.is_open() && !s.filename.is_empty() && !s.is_dot())
+            .map(|s| (s.pathname(), allow_links || s.flags & 0x4000 != 0))
+    };
+    let result = request.is_some_and(|(path, follow)| {
+        let native = filesystem::file_info_native_path(local_path(&path).unwrap_or(&path));
+        std::fs::symlink_metadata(&native).is_ok_and(|metadata| {
+            if metadata.file_type().is_symlink() {
+                follow && std::fs::metadata(native).is_ok_and(|metadata| metadata.is_dir())
+            } else {
+                metadata.is_dir()
+            }
+        })
+    });
+    ret!(rv, Value::bool(result));
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+fn get_children(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = owned_argument(ed, 0);
+    if !initialized(&receiver, eg) {
+        return Ok(());
+    }
+    let (path, flags, subpath, info_class_id, file_class_id, class_id) = {
+        let object = receiver.as_object().unwrap();
+        let state = object.native_file_info().unwrap();
+        let directory = state.directory.as_ref().unwrap();
+        (
+            directory.pathname(),
+            directory.flags,
+            directory.subpathname(),
+            state.info_class_id,
+            state.file_class_id,
+            object.class_id,
+        )
+    };
+    let class = eg.class_by_id(class_id).expect("recursive directory class");
+    let constructor = eg
+        .find_function(&format!("{}::__construct", class.name))
+        .or_else(|| {
+            find_method_in_class_hierarchy(eg, &class.name, "__construct")
+                .map(|(_, _, function, _)| function)
+        });
+    let child = Value::object(PhpObject::with_layout_from_defaults(
+        class.class_id,
+        Rc::clone(&class.property_layout),
+        &class.property_defaults,
+    ));
+    if let Some(func_ptr) = constructor {
+        let callback = ResolvedCallback {
+            func_ptr,
+            prepend_args: vec![child.clone()],
+            use_vars: vec![],
+            called_scope_class_id: class_id,
+            closure_scope_class_id: None,
+            bound_this: None,
+            closure_static_vars: None,
+            is_magic_call: false,
+        };
+        let result = call_resolved_with_values_from_internal(
+            ed,
+            eg,
+            &callback,
+            &[php_byte_result(path, false), Value::long(flags as i64)],
+            true,
+        )?;
+        iterator_delegate::discard(result, eg)?;
+    }
+    if eg.exception.is_some() {
+        iterator_delegate::discard(child, eg)?;
+        return Ok(());
+    }
+    {
+        let mut object = child.as_object_mut().unwrap();
+        let state = object.native_file_info_mut();
+        state.info_class_id = info_class_id;
+        state.file_class_id = file_class_id;
+        state.directory.get_or_insert_with(Box::default).subpath = Some(subpath.into_boxed_slice());
+    }
+    ret!(rv, child);
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+fn subpath_projection(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+    filename: bool,
+) -> Result<(), VmError> {
+    let receiver = owned_argument(ed, 0);
+    let bytes = receiver
+        .as_object()
+        .unwrap()
+        .native_file_info()
+        .and_then(|s| s.directory.as_deref())
+        .map_or_else(Vec::new, |s| {
+            if filename {
+                s.subpathname()
+            } else {
+                s.subpath().to_vec()
+            }
+        });
+    ret!(rv, php_byte_result(bytes, false));
+}
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+fn get_subpath(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    subpath_projection(ed, rv, eg, false)
+}
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+fn get_subpathname(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    subpath_projection(ed, rv, eg, true)
+}
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+fn glob_count(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = owned_argument(ed, 0);
+    let count = receiver
+        .as_object()
+        .unwrap()
+        .native_file_info()
+        .and_then(|s| s.directory.as_deref())
+        .and_then(|s| s.glob.as_ref())
+        .map(|s| s.entries.len());
+    if let Some(count) = count {
+        ret!(rv, Value::long(count as i64));
+    }
+    error(eg, "Error", "GlobIterator is not initialized");
+    Ok(())
 }
 
 #[cold]
@@ -640,6 +933,34 @@ fn method(
     defaults: &[Option<&str>],
     result: ParamTypeHint,
 ) {
+    method_with_diagnostics(
+        eg,
+        functions,
+        owner,
+        name,
+        handler,
+        names,
+        hints,
+        defaults,
+        result,
+        &[],
+    );
+}
+
+#[cold]
+#[inline(never)]
+fn method_with_diagnostics(
+    eg: &mut ExecutorGlobals,
+    functions: &mut Vec<Box<InternalFunction>>,
+    owner: &'static str,
+    name: &'static str,
+    handler: InternalFunctionHandler,
+    names: &[&str],
+    hints: Vec<ParamTypeHint>,
+    defaults: &[Option<&str>],
+    result: ParamTypeHint,
+    default_diagnostics: &'static [Option<&'static str>],
+) {
     let required = defaults.iter().filter(|value| value.is_none()).count() as u32;
     eg.register_internal_method_contract(
         owner,
@@ -666,20 +987,52 @@ fn method(
     let pointer = &function.common as *const FunctionCommon;
     eg.function_table
         .insert(internal_method_lookup_name(owner, name), pointer);
+    eg.bind_latest_internal_method_body(owner, name, pointer);
     eg.method_declaring_class.insert(pointer, owner.into());
-    eg.register_internal_function_display_name(pointer, internal_method_display_name(owner, name));
-    eg.register_internal_function_reflection_metadata(
+    let static_display = match (owner, name) {
+        ("RecursiveDirectoryIterator", "__construct") => {
+            Some("RecursiveDirectoryIterator::__construct")
+        }
+        ("RecursiveDirectoryIterator", "hasChildren") => {
+            Some("RecursiveDirectoryIterator::hasChildren")
+        }
+        ("RecursiveDirectoryIterator", "getChildren") => {
+            Some("RecursiveDirectoryIterator::getChildren")
+        }
+        ("RecursiveDirectoryIterator", "getSubPath") => {
+            Some("RecursiveDirectoryIterator::getSubPath")
+        }
+        ("RecursiveDirectoryIterator", "getSubPathname") => {
+            Some("RecursiveDirectoryIterator::getSubPathname")
+        }
+        ("GlobIterator", "__construct") => Some("GlobIterator::__construct"),
+        ("GlobIterator", "count") => Some("GlobIterator::count"),
+        _ => None,
+    };
+    if let Some(display) = static_display {
+        eg.register_internal_function_static_display_name(pointer, display);
+    } else {
+        eg.register_internal_function_display_name(
+            pointer,
+            internal_method_display_name(owner, name),
+        );
+    }
+    eg.register_internal_function_reflection_metadata_with_diagnostics(
         pointer,
         defaults
             .iter()
             .map(|value| {
                 value.map(|value| {
+                    if value == "false" {
+                        return Value::bool(false);
+                    }
                     value
                         .parse::<i64>()
                         .map_or_else(|_| Value::string(value.trim_matches('\'')), Value::long)
                 })
             })
             .collect(),
+        default_diagnostics,
         "SPL",
     );
     functions.push(function);
@@ -808,5 +1161,100 @@ pub(crate) fn register(
         &[Option::None],
         Void,
     );
+    functions
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn register_recursive_glob(
+    eg: &mut ExecutorGlobals,
+    glob: bool,
+) -> Vec<Box<InternalFunction>> {
+    use ParamTypeHint::{Bool, ClassName, Int, None, String};
+    let owner = if glob {
+        "GlobIterator"
+    } else {
+        "RecursiveDirectoryIterator"
+    };
+    let count = if glob { 2 } else { 5 };
+    let mut functions = Vec::with_capacity(count);
+    eg.reserve_internal_method_contracts(owner, count);
+    method_with_diagnostics(
+        eg,
+        &mut functions,
+        owner,
+        "__construct",
+        if glob {
+            glob_construct
+        } else {
+            recursive_construct
+        },
+        &[if glob { "pattern" } else { "directory" }, "flags"],
+        vec![String, Int],
+        &[Option::None, Some("0")],
+        None,
+        &[
+            Option::None,
+            Some("FilesystemIterator::KEY_AS_PATHNAME | FilesystemIterator::CURRENT_AS_FILEINFO"),
+        ],
+    );
+    if glob {
+        method(
+            eg,
+            &mut functions,
+            owner,
+            "count",
+            glob_count,
+            &[],
+            vec![],
+            &[],
+            Int,
+        );
+    } else {
+        method(
+            eg,
+            &mut functions,
+            owner,
+            "hasChildren",
+            has_children,
+            &["allowLinks"],
+            vec![Bool],
+            &[Some("false")],
+            Bool,
+        );
+        method(
+            eg,
+            &mut functions,
+            owner,
+            "getChildren",
+            get_children,
+            &[],
+            vec![],
+            &[],
+            ClassName(owner.into()),
+        );
+        method(
+            eg,
+            &mut functions,
+            owner,
+            "getSubPath",
+            get_subpath,
+            &[],
+            vec![],
+            &[],
+            String,
+        );
+        method(
+            eg,
+            &mut functions,
+            owner,
+            "getSubPathname",
+            get_subpathname,
+            &[],
+            vec![],
+            &[],
+            String,
+        );
+    }
     functions
 }

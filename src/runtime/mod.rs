@@ -150,6 +150,9 @@ impl<'a> ClassNameTraversalSet<'a> {
 /// claim that the surrounding extension is implemented.
 struct InternalMethodContract {
     name: &'static str,
+    // Optional actual body for complete native registrations. Like the
+    // function table, this is a non-owning identity into the stdlib's boxes.
+    body: *const FunctionCommon,
     is_static: bool,
     is_final: bool,
     visibility: Visibility,
@@ -1781,7 +1784,8 @@ impl ExecutorGlobals {
         // CachingIterator and AppendIterator add lookahead/list declarations.
         // SplTempFileObject shares the existing file cursor and stream backend.
         // Recursive caching and tree projection add two cold declarations.
-        let class_capacity = 121 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        // RecursiveDirectoryIterator and GlobIterator reuse the native cursor.
+        let class_capacity = 123 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;
@@ -2419,6 +2423,7 @@ impl ExecutorGlobals {
             };
         let contract = InternalMethodContract {
             name,
+            body: std::ptr::null(),
             is_static,
             is_final: false,
             visibility: Visibility::Public,
@@ -2446,6 +2451,25 @@ impl ExecutorGlobals {
             .entry(owner)
             .or_default()
             .push(contract);
+    }
+
+    /// Bind the body immediately after its native declaration is registered.
+    /// The owning stdlib function boxes outlive the executor's metadata.
+    pub(crate) fn bind_latest_internal_method_body(
+        &mut self,
+        owner: &str,
+        name: &str,
+        body: *const FunctionCommon,
+    ) {
+        let contract = self
+            .internal_callable_metadata
+            .as_mut()
+            .and_then(|metadata| metadata.methods.get_mut(owner))
+            .and_then(|methods| methods.last_mut())
+            .expect("native method declaration precedes its body");
+        assert_eq!(contract.name, name);
+        assert!(!body.is_null());
+        contract.body = body;
     }
 
     /// Add the public by-reference parameter mask to an internal declaration.
@@ -5854,7 +5878,71 @@ impl ExecutorGlobals {
     /// Resolves inheritance: merges parent properties/methods into child.
     /// For non-interface, non-abstract classes: validates interface contracts.
     pub fn register_class(&mut self, class_def: ClassDef) -> Result<(), String> {
-        self.register_class_mode(class_def, false)
+        self.register_class_mode(class_def, false, None)
+    }
+
+    /// Startup-only empty native child; the caller guarantees complete parent
+    /// descriptors. Missing bodies keep the canonical full-table fallback.
+    pub(crate) fn register_class_with_complete_native_parent(
+        &mut self,
+        class_def: ClassDef,
+    ) -> Result<(), String> {
+        let aliases = self.native_parent_body_aliases(&class_def);
+        self.register_class_mode(class_def, false, aliases)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn native_parent_body_aliases(
+        &self,
+        child: &ClassDef,
+    ) -> Option<Vec<(String, *const FunctionCommon, bool)>> {
+        if child.source_file.is_some() || !child.methods.is_empty() || !child.uses.is_empty() {
+            return None;
+        }
+        let mut owners = Vec::new();
+        let mut owner = self.find_class(child.parent.as_deref()?);
+        let mut count = 0;
+        while let Some(definition) = owner {
+            if definition.source_file.is_some()
+                || !definition.methods.is_empty()
+                || !definition.uses.is_empty()
+                || definition
+                    .properties
+                    .iter()
+                    .any(|p| p.has_get_hook || p.has_set_hook)
+            {
+                return None;
+            }
+            let contracts = self.internal_method_contracts(&definition.name);
+            if contracts.iter().any(|method| method.body.is_null()) {
+                return None;
+            }
+            count += contracts.len();
+            owners.push(contracts);
+            owner = definition
+                .parent
+                .as_deref()
+                .and_then(|name| self.find_class(name));
+        }
+        let prefix = Self::canonical_method_owner_prefix(&child.name);
+        let mut aliases = Vec::with_capacity(count);
+        // Ancestors first, then actual overrides: duplicate keys deliberately
+        // update the same canonical entry without a separate lookup or index.
+        for contracts in owners.into_iter().rev() {
+            for method in contracts {
+                let mut key = String::with_capacity(prefix.len() + method.name.len());
+                key.push_str(&prefix);
+                key.push_str(method.name);
+                if method.name.is_ascii() {
+                    key.make_ascii_lowercase();
+                } else {
+                    key = key.to_lowercase();
+                }
+                aliases.push((key, method.body, false));
+            }
+        }
+        Some(aliases)
     }
 
     fn same_effective_trait_method(
@@ -6772,7 +6860,7 @@ impl ExecutorGlobals {
                 )
             })?;
         relation.outstanding_variance_dependencies = outstanding_variance_dependencies;
-        self.register_class_mode(class_def, true)?;
+        self.register_class_mode(class_def, true, None)?;
         self.retry_pending_named_classes()
     }
 
@@ -6807,6 +6895,7 @@ impl ExecutorGlobals {
         &mut self,
         mut class_def: ClassDef,
         defer_method_contracts: bool,
+        native_parent_aliases: Option<Vec<(String, *const FunctionCommon, bool)>>,
     ) -> Result<(), String> {
         let class_name = class_def.name.clone();
         let declaration_file = class_def.source_file.clone();
@@ -7081,19 +7170,21 @@ impl ExecutorGlobals {
                 // whether it is inherited, instead of allocating a suffix,
                 // formatting it, and lowercasing the full name again.
                 let child_prefix = Self::canonical_method_owner_prefix(&class_name);
-                let inherited: Vec<(String, *const FunctionCommon, bool)> = self
-                    .function_table
-                    .iter()
-                    .filter(|(k, _)| {
+                let inherited = if let Some(aliases) = native_parent_aliases {
+                    aliases
+                } else {
+                    let mut inherited = Vec::new();
+                    self.function_table.iter().for_each(|(k, v)| {
                         // Most registry keys belong to another owner (or a
                         // global function). Reject mismatched owner lengths
                         // before comparing the whole potentially long prefix.
                         // This is only a necessary condition; the exact
                         // canonical prefix check still decides membership.
-                        k.as_bytes().get(parent_prefix.len() - 1) == Some(&b':')
-                            && k.starts_with(&parent_prefix)
-                    })
-                    .filter_map(|(k, v)| {
+                        if k.as_bytes().get(parent_prefix.len() - 1) != Some(&b':')
+                            || !k.starts_with(&parent_prefix)
+                        {
+                            return;
+                        }
                         let method_name = &k[parent_prefix.len()..];
                         let concrete_property_hook = method_name
                             .strip_prefix('$')
@@ -7121,15 +7212,16 @@ impl ExecutorGlobals {
                         if child_method_names.contains(method_name)
                             && !replaces_synthetic_property_accessor
                         {
-                            return None;
+                            return;
                         }
                         let mut child_full =
                             String::with_capacity(child_prefix.len() + method_name.len());
                         child_full.push_str(&child_prefix);
                         child_full.push_str(method_name);
-                        Some((child_full, *v, replaces_synthetic_property_accessor))
-                    })
-                    .collect();
+                        inherited.push((child_full, *v, replaces_synthetic_property_accessor));
+                    });
+                    inherited
+                };
                 for (child_full, func_ptr, replaces_synthetic_property_accessor) in inherited {
                     if replaces_synthetic_property_accessor {
                         inherited_concrete_property_hooks
@@ -11182,6 +11274,102 @@ mod stdlib_capacity_tests {
                 ExecutorGlobals::canonical_method_owner_prefix(name),
                 format!("{name}::").to_lowercase()
             );
+        }
+    }
+
+    #[test]
+    fn native_file_parent_inheritance_preserves_the_exact_registered_alias_set() {
+        let mut eg = ExecutorGlobals::new();
+        let _functions = crate::stdlib::register_stdlib(&mut eg);
+        for parent in [
+            "SplFileInfo",
+            "SplFileObject",
+            "DirectoryIterator",
+            "FilesystemIterator",
+        ] {
+            let source = format!("<?php class DescriptorChild extends {parent} {{}}");
+            let tokens = crate::lexer::Lexer::new(&source).tokenize().unwrap();
+            let statements = crate::parser::Parser::new(tokens).parse().unwrap();
+            let compiled = crate::compiler::compile::Compiler::new()
+                .compile(&statements)
+                .unwrap();
+            let mut children = compiled
+                .class_defs
+                .into_iter()
+                .chain(compiled.runtime_class_defs.into_iter().map(|(_, c)| c));
+            let mut child = children.next().unwrap();
+            assert!(children.next().is_none());
+            child.source_file = None;
+            child.declaration_line = 0;
+            let prefix = ExecutorGlobals::canonical_method_owner_prefix(parent);
+            let mut expected: Vec<_> = eg
+                .function_table
+                .iter()
+                .filter_map(|(key, &pointer)| {
+                    key.strip_prefix(&prefix)
+                        .map(|suffix| (format!("descriptorchild::{suffix}"), pointer, false))
+                })
+                .collect();
+            let projected = eg.native_parent_body_aliases(&child).unwrap();
+            let projected: std::collections::HashMap<_, _> = projected
+                .into_iter()
+                .map(|(name, body, hook)| {
+                    assert!(!hook);
+                    (name, body)
+                })
+                .collect();
+            assert_eq!(projected.len(), expected.len());
+            for (name, body, _) in &expected {
+                assert_eq!(projected.get(name), Some(body));
+            }
+            child.source_file = Some("/virtual/user.php".into());
+            assert!(eg.native_parent_body_aliases(&child).is_none());
+            child.source_file = None;
+            let body = eg
+                .internal_callable_metadata
+                .as_mut()
+                .unwrap()
+                .methods
+                .get_mut(parent)
+                .unwrap()[0]
+                .body;
+            eg.internal_callable_metadata
+                .as_mut()
+                .unwrap()
+                .methods
+                .get_mut(parent)
+                .unwrap()[0]
+                .body = std::ptr::null();
+            assert!(eg.native_parent_body_aliases(&child).is_none());
+            eg.internal_callable_metadata
+                .as_mut()
+                .unwrap()
+                .methods
+                .get_mut(parent)
+                .unwrap()[0]
+                .body = body;
+            // A fresh request avoids reusing the same child declaration.
+            let mut child_request = ExecutorGlobals::new();
+            let _child_functions = crate::stdlib::register_stdlib(&mut child_request);
+            child_request.register_class(child).unwrap();
+            let mut actual: Vec<_> = child_request
+                .function_table
+                .iter()
+                .filter_map(|(key, &pointer)| {
+                    key.strip_prefix("descriptorchild::")
+                        .map(|suffix| (format!("descriptorchild::{suffix}"), pointer, false))
+                })
+                .collect();
+            // Function addresses are request-local; compare each child's
+            // binding to the corresponding parent in that same request.
+            for (key, pointer, _) in &mut expected {
+                *pointer = child_request
+                    .find_function(&format!("{parent}::{}", &key[17..]))
+                    .unwrap();
+            }
+            actual.sort_by(|a, b| a.0.cmp(&b.0));
+            expected.sort_by(|a, b| a.0.cmp(&b.0));
+            assert_eq!(actual, expected, "complete native parent {parent}");
         }
     }
 

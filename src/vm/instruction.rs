@@ -118,6 +118,9 @@ pub const FIRST_CLASS_CALLABLE_PREFER_GLOBAL_FALLBACK: u16 = 1 << 1;
 /// CreateFirstClassCallable flag: a preceding EnsureFccClassLoaded instruction
 /// already performed the static owner's single autoload attempt.
 pub const FIRST_CLASS_CALLABLE_CLASS_PRELOADED: u16 = 1 << 2;
+/// A syntactically literal instance method can retain its get_method class
+/// guard in this opcode's existing cache; dynamic names must resolve anew.
+pub const FIRST_CLASS_CALLABLE_LITERAL_METHOD: u16 = 1 << 3;
 
 /// FetchConst flag: this exact read resolves PHP's deprecated built-in
 /// `E_STRICT` constant and must emit its PHP 8.5 use-site diagnostic.

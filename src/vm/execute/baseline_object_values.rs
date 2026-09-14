@@ -124,7 +124,7 @@ fn op_clone_obj<'a>(
             let class_def = eg.class_table.get(obj.class_name.as_ref());
             let uncloneable = matches!(
                 obj.class_name.as_ref(),
-                "Generator" | "WeakReference" | "InternalIterator" | "ReflectionProperty" | "Directory" | "SplFileObject"
+                "Generator" | "WeakReference" | "InternalIterator" | "ReflectionProperty" | "Directory" | "SplFileObject" | "GlobIterator"
             )
                 || class_def
                     .is_some_and(|class_def| {
@@ -134,7 +134,8 @@ fn op_clone_obj<'a>(
                             || (class_def.parent.is_some()
                                 && (eg.class_is_a(&class_def.name, "IteratorIterator")
                                     || eg.class_is_a(&class_def.name, "RecursiveIteratorIterator")
-                                    || eg.class_is_a(&class_def.name, "SplFileObject")))
+                                    || eg.class_is_a(&class_def.name, "SplFileObject")
+                                    || eg.class_is_a(&class_def.name, "GlobIterator")))
                     });
             if uncloneable {
                     let err = make_error_value(

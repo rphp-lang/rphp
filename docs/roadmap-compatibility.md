@@ -36,34 +36,35 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `recursive-caching-tree-projection-contracts` train adds thirteen
-PHP 8.5 SPL passes over `0cbbf305`, without loss, new process hazards,
-failure-stage movement or expectation changes. SPL reaches
-607/138/31 unsupported/8 skip/1 XFAIL; core retains 6,446/335/182/211 and
-exact pass sets. Selected coverage is 7,959 cases: 7,053 pass and 473 fail,
-not all PHP.
+The accepted `recursive-directory-glob-cursor-projection-contracts` train adds
+thirteen PHP 8.5 SPL passes over `67dc97cf`, without loss, new process hazards
+or expectation changes. SPL reaches 620/125/31 unsupported/8 skip/1 XFAIL;
+core retains 6,446/335/182/211 and exact pass sets. Selected coverage is
+7,959 cases: 7,066 pass and 460 fail, not all PHP. Two previously failing
+cases advance to known independent open_basedir/foreach-identity boundaries.
 
-Stable recursive child lookahead and tree decorations reuse the existing
-traversal with sparse traced ownership. Original positive/negative regressions
-cover metadata, flags, callbacks, repeated state, reference/COW and retirement.
-One frozen checked five-config matrix/all-targets, exact no-loss, S0-S3 and
-unsafe/public-hygiene gates pass. Common fields and optimized-plan admission
-remain unchanged; profile-backed registration and cached-call prerequisites
-remove redundant work rather than changing PHP behavior.
+Recursive child/subpath projections and immutable glob snapshots reuse native
+directory storage. Original tests cover metadata, flags, factories, raw bytes,
+lookup/error order, reference/COW and retirement. One frozen checked five-config
+matrix/all-targets, exact no-loss, S0-S3 and unsafe/public-hygiene gates pass.
+Profile-backed native-body inheritance and cached literal-operand reads remove
+redundant work; common Value/VM layouts and optimized-plan admission stay fixed.
 
-All 101 established controls meet fixed cumulative common <=1.65% against
-`9cddc39c`, pay-use <=5%; peaks +1.291%/+2.829%.
-Nominal/incremental findings, fixed first-present anchors, new API absolute
-costs and shared-host limitations remain explicit in `compatibility.md`.
+All 105 established controls meet fixed cumulative common <=1.65% against
+`9cddc39c`, pay-use <=5%; peaks +1.020%/+4.230%.
+Nominal/incremental findings, seven unchanged anchors, new API absolute costs
+and shared-host limitations remain explicit in `compatibility.md`.
 Cleanup remains automatic; no unchanged failed timing reroll was used.
 
-Next read-only admission confirms 14 PHP-passing failures first blocked by
-RecursiveDirectoryIterator/GlobIterator. Normalize child/subpath and pattern
-cursor projections over existing native directory storage; require original
-oracles and at least ten reachable shared-cause gains before implementation.
-Retain all controls, including now-present tree APIs. General shutdown,
-unrelated recursive filters, suspension, 32-bit/OOM and whole-PHP claims remain
-separate. No second implementation before current acceptance.
+Next read-only admission confirms ten shared-cause PHP-passing failures for
+CallbackFilterIterator, RecursiveFilterIterator, RecursiveCallbackFilterIterator
+and ParentIterator. Reuse the existing filter loop and traced delegate storage;
+require original callback/constructor/child-factory/reference/cycle oracles and
+at least ten reachable gains before implementation. Two independent broad-
+iterator/parser failures are excluded, not hidden. Retain all controls,
+including now-present directory/glob APIs. General shutdown, unrelated
+iterators, suspension, 32-bit/OOM and whole-PHP claims remain separate.
+No second implementation before current acceptance.
 
 ### Preceding directory cursor checkpoint
 

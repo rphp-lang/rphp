@@ -7,6 +7,35 @@ use rphp::parser::Parser;
 use rphp::vm::opcode::OpCode;
 
 #[test]
+fn cached_integer_property_writes_preserve_literal_cv_temporary_and_reference_operands() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class LiteralOperandProbe { public int $number=0; }
+function literalStore($o) { $o->number=23; }
+function variableStore($o,&$value) { $o->number=$value; }
+function temporaryStore($o,$value) { $o->number=$value+1; }
+function weakLiteralStore($o) { $o->number="42"; }
+$a=new LiteralOperandProbe;$b=new LiteralOperandProbe;
+foreach([$a,$a,$b] as $o){literalStore($o);var_dump($o->number);}
+unset($a->number);literalStore($a);var_dump($a->number);
+$alias=&$a->number;$alias=8;literalStore($a);var_dump($alias);
+$external=9;$b->number=&$external;literalStore($b);var_dump($external);
+$value=7;$reference=&$value;
+for($i=0;$i<2;$i++) {
+ variableStore($a,$reference);var_dump($alias,$reference);
+ temporaryStore($a,$value);var_dump($alias,$reference);
+ weakLiteralStore($a);var_dump($alias);
+}
+$strict=eval('declare(strict_types=1); return function($o) { $o->number="42"; };');
+for($i=0;$i<2;$i++) { try {$strict($a);} catch(TypeError $error) {echo $error->getMessage(),"\n";} var_dump($alias); }
+"#
+        ),
+        "int(23)\nint(23)\nint(23)\nint(23)\nint(23)\nint(23)\nint(7)\nint(7)\nint(8)\nint(7)\nint(42)\nint(7)\nint(7)\nint(8)\nint(7)\nint(42)\nCannot assign string to property LiteralOperandProbe::$number of type int\nint(42)\nCannot assign string to property LiteralOperandProbe::$number of type int\nint(42)\n"
+    );
+}
+
+#[test]
 fn invalid_strict_types_declarations_fail_at_the_directive_line() {
     for (source, expected_line, expected) in [
         (

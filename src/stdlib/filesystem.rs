@@ -2491,6 +2491,7 @@ pub(super) fn fn_glob(
         no_escape: flags & GLOB_NOESCAPE != 0,
         only_dir: flags & GLOB_ONLYDIR != 0,
         abort_on_error: flags & GLOB_ERR != 0,
+        byte_paths: false,
     };
     let expanded = if flags & GLOB_BRACE != 0 {
         expand_glob_braces(&pattern, options.no_escape)
@@ -2527,6 +2528,39 @@ struct GlobOptions {
     no_escape: bool,
     only_dir: bool,
     abort_on_error: bool,
+    byte_paths: bool,
+}
+
+/// Object glob cursors retain raw native bytes in an immutable match snapshot.
+/// The existing matcher operates on lossless byte-codepoint storage here; its
+/// ordinary string API and flags remain unchanged.
+#[cold]
+pub(super) fn file_info_glob_paths(pattern: &[u8]) -> Vec<Vec<u8>> {
+    let pattern: String = pattern.iter().map(|byte| char::from(*byte)).collect();
+    let options = GlobOptions {
+        mark: false,
+        no_check: false,
+        no_sort: false,
+        no_escape: false,
+        only_dir: false,
+        abort_on_error: false,
+        byte_paths: true,
+    };
+    let mut paths = Vec::new();
+    collect_glob_pattern(&pattern, options, &mut paths);
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| path.chars().map(|c| c as u8).collect())
+        .collect()
+}
+
+fn glob_native_component(component: &str, byte_paths: bool) -> PathBuf {
+    if byte_paths {
+        file_info_native_path(&component.chars().map(|c| c as u8).collect::<Vec<_>>())
+    } else {
+        PathBuf::from(component)
+    }
 }
 
 fn collect_glob_pattern(pattern: &str, options: GlobOptions, results: &mut Vec<String>) -> bool {
@@ -2599,7 +2633,8 @@ fn collect_glob_components(
 
     if !component_has_glob_magic(component, options.no_escape) {
         let literal = unescape_glob_literal(component, options.no_escape);
-        let filesystem_path = filesystem_prefix.join(&literal);
+        let filesystem_path =
+            filesystem_prefix.join(glob_native_component(&literal, options.byte_paths));
         let display_path = join_glob_display(display_prefix, &literal);
         if index + 1 < components.len() && !filesystem_path.is_dir() {
             return true;
@@ -2653,7 +2688,29 @@ fn collect_glob_components(
             Err(_) if options.abort_on_error => return false,
             Err(_) => continue,
         };
-        let name = entry.file_name().to_string_lossy().into_owned();
+        let native_name = entry.file_name();
+        let name = if options.byte_paths {
+            #[cfg(unix)]
+            {
+                use std::os::unix::ffi::OsStrExt;
+                native_name
+                    .as_bytes()
+                    .iter()
+                    .map(|byte| char::from(*byte))
+                    .collect::<String>()
+            }
+            #[cfg(not(unix))]
+            {
+                native_name
+                    .to_string_lossy()
+                    .as_bytes()
+                    .iter()
+                    .map(|byte| char::from(*byte))
+                    .collect::<String>()
+            }
+        } else {
+            native_name.to_string_lossy().into_owned()
+        };
         if !glob_tokens_match(&tokens, &name) {
             continue;
         }

@@ -9251,11 +9251,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             // SAFETY: as above, the source slot and any
                             // Reference target remain live for this opcode.
                             let source = unsafe {
-                                let source = &*(*frame).get_op_ptr(
-                                    opline.result as u32,
-                                    opline.result_type,
-                                    op_array,
-                                );
+                                // A literal needs no frame-slot dispatch.
+                                // Other operand kinds keep the canonical
+                                // resolver, including CV reference following.
+                                let source = if opline.result_type == OpType::Const {
+                                    &op_array.literals()[opline.result as usize]
+                                } else {
+                                    &*(*frame).get_op_ptr(
+                                        opline.result as u32,
+                                        opline.result_type,
+                                        op_array,
+                                    )
+                                };
                                 if source.is_reference() {
                                     &*source.as_ref_ptr()
                                 } else {

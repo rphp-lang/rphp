@@ -13638,6 +13638,8 @@ impl Compiler {
                     self.push_instruction_at_line(ensure, *line);
                 }
 
+                let literal_instance_method =
+                    !*static_syntax && matches!(member.as_ref(), Expr::StringLiteral(_));
                 let (member, member_type) = self.compile_expr(member);
                 let mut member_element = Instruction::new(OpCode::AddArrayElement);
                 member_element.op1 = callable;
@@ -13657,6 +13659,9 @@ impl Compiler {
                 }
                 if *static_syntax {
                     create._pad |= crate::vm::instruction::FIRST_CLASS_CALLABLE_CLASS_PRELOADED;
+                }
+                if literal_instance_method {
+                    create._pad |= crate::vm::instruction::FIRST_CLASS_CALLABLE_LITERAL_METHOD;
                 }
                 self.push_instruction_at_line(create, *line);
                 (result, OpType::Tmp)

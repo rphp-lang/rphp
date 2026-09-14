@@ -5408,6 +5408,17 @@ fn op_init_method_call<'a>(
             drop(obj); // release borrow before lookup
             let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
             let method = method_name.as_str().unwrap_or("");
+            // Glob's uncached get_method policy checks instance readiness,
+            // including user overrides, before arguments. PHP's resolved
+            // literal-method cache bypasses that hook on later same-class
+            // calls, so retain the existing cache publication/hit semantics.
+            let state_dependent_lookup = eg.class_is_a(&target_class_name, "GlobIterator");
+            if state_dependent_lookup && !method.eq_ignore_ascii_case("__construct")
+                && !crate::stdlib::glob_method_state_ready(obj_val)
+            {
+                return throw_located_call_error(eg, frame, op_array, ip,
+                    "The parent constructor was not called: the object is in an invalid state");
+            }
             let caller_class = get_caller_class(frame, eg);
 
             let dispatch_class = eg.method_dispatch_class(&target_class_name, method, caller_class.as_deref());
@@ -7637,6 +7648,13 @@ fn op_init_dynamic_call<'a>(
                 }
                 ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
             });
+        }
+        if callback_owner.as_object().is_some_and(|object| eg.class_is_a(&object.class_name, "GlobIterator"))
+            && !callback_method.as_str().unwrap().eq_ignore_ascii_case("__construct")
+            && !crate::stdlib::glob_method_state_ready(callback_owner)
+        {
+            return throw_located_call_error(eg, frame, op_array, instruction_index,
+                "The parent constructor was not called: the object is in an invalid state");
         }
         let class_name = callback_method
             .as_str()

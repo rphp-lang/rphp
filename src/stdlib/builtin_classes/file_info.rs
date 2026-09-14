@@ -9,6 +9,7 @@ mod directory;
 mod file_object;
 pub(crate) use directory::prepare_clone;
 pub(super) use directory::register as register_directory_iterators;
+pub(super) use directory::register_recursive_glob;
 pub(super) use file_object::register as register_file_object;
 pub(super) use file_object::register_temporary as register_temp_file_object;
 
@@ -128,6 +129,25 @@ fn string_argument(
         ed, eg, &argument, method, 0, parameter, "string", "string",
     )?;
     Ok(value.and_then(|value| value.php_string_bytes().map(|bytes| bytes.into_owned())))
+}
+
+/// State-dependent direct lookup is distinct from internal Countable calls.
+pub(crate) fn glob_method_state_ready(receiver: &Value) -> bool {
+    receiver.as_object().is_some_and(|object| {
+        object
+            .native_file_info()
+            .and_then(|s| s.directory.as_deref())
+            .is_some_and(|s| s.is_glob())
+    })
+}
+
+fn exhausted_glob(receiver: &Value) -> bool {
+    receiver.as_object().is_some_and(|object| {
+        object
+            .native_file_info()
+            .and_then(|s| s.directory.as_deref())
+            .is_some_and(|s| s.is_glob() && s.filename.is_empty())
+    })
 }
 
 #[cold]
@@ -264,6 +284,9 @@ fn stat_field(
     let Some(path) = path(arg!(ed, 0), eg) else {
         return Ok(());
     };
+    if path.is_empty() && exhausted_glob(arg!(ed, 0)) {
+        ret!(rv, Value::bool(false));
+    }
     let value = filesystem::file_info_stat(eg, &path, false, false)?;
     if eg.exception.is_some() {
         return Ok(());
@@ -310,6 +333,9 @@ fn mode(
     let Some(path) = path(arg!(ed, 0), eg) else {
         return Ok(());
     };
+    if path.is_empty() && exhausted_glob(arg!(ed, 0)) {
+        ret!(rv, Value::bool(false));
+    }
     let value = filesystem::file_info_stat(eg, &path, kind == 0 || kind == 0o120000, kind != 0)?;
     if eg.exception.is_some() {
         return Ok(());
@@ -420,6 +446,9 @@ fn get_real_path(
                 && directory.is_projected()
                 && directory.filename.is_empty()
             {
+                if directory.is_glob() {
+                    return Some(std::borrow::Cow::Borrowed(b".".as_slice()));
+                }
                 return Some(if directory.is_open() {
                     std::borrow::Cow::Borrowed(directory.base())
                 } else {
@@ -489,11 +518,17 @@ fn debug_info(
                 php_byte_result(filename.to_vec(), false),
             );
         }
-        if directory.is_some() {
-            properties.set_str("\0DirectoryIterator\0glob", Value::bool(false));
+        if let Some(directory) = directory {
+            properties.set_str(
+                "\0DirectoryIterator\0glob",
+                directory.glob_pattern().map_or_else(
+                    || Value::bool(false),
+                    |p| php_byte_result(p.to_vec(), false),
+                ),
+            );
             properties.set_str(
                 "\0RecursiveDirectoryIterator\0subPathName",
-                Value::string(""),
+                php_byte_result(directory.subpath().to_vec(), false),
             );
         }
     }
@@ -801,6 +836,7 @@ fn register_method(
     let pointer = &function.common as *const FunctionCommon;
     eg.function_table
         .insert(internal_method_lookup_name("SplFileInfo", name), pointer);
+    eg.bind_latest_internal_method_body("SplFileInfo", name, pointer);
     eg.method_declaring_class
         .insert(pointer, "SplFileInfo".into());
     eg.register_internal_function_display_name(

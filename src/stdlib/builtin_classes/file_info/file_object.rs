@@ -748,6 +748,7 @@ pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         let pointer = &function.common as *const FunctionCommon;
         eg.function_table
             .insert(internal_method_lookup_name("SplFileObject", name), pointer);
+        eg.bind_latest_internal_method_body("SplFileObject", name, pointer);
         eg.method_declaring_class
             .insert(pointer, "SplFileObject".into());
         eg.register_internal_function_display_name(

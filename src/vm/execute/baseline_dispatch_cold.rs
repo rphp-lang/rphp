@@ -5963,18 +5963,38 @@ fn op_create_first_class_callable<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    // SAFETY: the active opline operands and result identify compiler slots in
+    // SAFETY: this active instruction's operands identify valid compiler slots in
     // this live frame; the read is cloned before callback resolution mutates
-    // VM state, and the same instruction index owns its live cache entry.
-    let (callable, instruction_index, cache_slot) = unsafe {
+    // VM state. Its instruction index addresses an initialized live cache entry,
+    // so reading that entry's class_id cannot observe freed receiver storage.
+    let (callable, instruction_index, cache_slot, cached_method_class) = unsafe {
         let instruction_index =
             (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
         let cache_slot = op_array.cache.as_ptr().add(instruction_index)
             as *mut crate::vm::instruction::InlineCache;
         let callable =
             (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)).clone();
-        (callable, instruction_index, cache_slot)
+        (callable, instruction_index, cache_slot, (*cache_slot).class_id)
     };
+    // Validate callback shape before instance-specific get_method hooks or
+    // autoload, just as direct array calls do. No receiver can run here.
+    let malformed_array = callable.as_array().and_then(|array| {
+        if array.len() != 2 {
+            Some("Array callback must have exactly two elements")
+        } else if !array.get_value_at(0).is_some_and(|owner| {
+            owner.as_str().is_some() || owner.as_object().is_some()
+                || owner.value_type() == ValueType::Closure
+        }) {
+            Some("First array member is not a valid class name or object")
+        } else if array.get_value_at(1).and_then(Value::as_str).is_none() {
+            Some("Second array member is not a valid method")
+        } else {
+            None
+        }
+    });
+    if let Some(message) = malformed_array {
+        return throw_first_class_callable_error(eg, frame, op_array, instruction_index, message);
+    }
     let existing_closure = if callable.value_type() == ValueType::Closure {
         Some(callable.clone())
     } else {
@@ -6034,6 +6054,24 @@ fn op_create_first_class_callable<'a>(
     let prefer_global = opline._pad
         & crate::vm::instruction::FIRST_CLASS_CALLABLE_PREFER_GLOBAL_FALLBACK
         != 0;
+    // A resolved literal method capture shares PHP's get_method cache
+    // bypass. Fresh/dynamic captures still check Glob's instance state.
+    let literal_method = opline._pad & crate::vm::instruction::FIRST_CLASS_CALLABLE_LITERAL_METHOD != 0;
+    let glob_receiver_class = callable.as_array().and_then(|array| {
+        let receiver = array.get_value_at(0)?;
+        let object = receiver.as_object()?;
+        eg.class_is_a(&object.class_name, "GlobIterator").then_some(object.class_id)
+    });
+    if !(literal_method && glob_receiver_class == Some(cached_method_class)) && callable.as_array().is_some_and(|array| {
+        let Some(receiver) = array.get_value_at(0) else { return false; };
+        let Some(method) = array.get_value_at(1).and_then(Value::as_str) else { return false; };
+        receiver.as_object().is_some_and(|object| eg.class_is_a(&object.class_name, "GlobIterator"))
+            && !method.eq_ignore_ascii_case("__construct")
+            && !crate::stdlib::glob_method_state_ready(receiver)
+    }) {
+        return throw_first_class_callable_error(eg, frame, op_array, instruction_index,
+            "The parent constructor was not called: the object is in an invalid state");
+    }
     let resolve = |value: &Value, eg: &ExecutorGlobals| {
         crate::stdlib::resolve_callback_with_cache(
             value,
@@ -6093,11 +6131,21 @@ fn op_create_first_class_callable<'a>(
         }
     }
 
+    let cacheable_method = !resolved.is_magic_call;
     let closure = crate::stdlib::resolved_callback_into_closure(resolved, eg);
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-    // SAFETY: `get_op_mut` returned the prepared compiler-owned result slot for
-    // this frame; it is initialized exactly once with the newly owned closure.
-    unsafe { frame_tmp_set(frame, result_ptr, closure) };
+    // SAFETY: the live frame's compiler-owned result slot is initialized once.
+    // cache_slot still addresses this opcode's live entry across resolution;
+    // only the integer class guard is written, without retaining PHP storage.
+    unsafe {
+        // Literal member FCC operands are always arrays, so this slot never
+        // stores a retained callback-string pointer. Record successful class
+        // resolution without retaining the receiver or changing cache layout.
+        if literal_method && cacheable_method && let Some(class_id) = glob_receiver_class {
+            (*cache_slot).class_id = class_id;
+        }
+        frame_tmp_set(frame, result_ptr, closure)
+    };
     Ok(ColdResult::Done)
 }
 

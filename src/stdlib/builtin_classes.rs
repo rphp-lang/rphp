@@ -35,6 +35,7 @@ pub(crate) use array_object::{
     property_uses_dimension as array_object_property_uses_dimension,
 };
 pub(crate) use deque::consumer as prepare_native_deque_consumer;
+pub(crate) use file_info::glob_method_state_ready;
 pub(crate) use file_info::prepare_clone as prepare_file_info_clone;
 pub(crate) use iterator_delegate::resolve_method as resolve_iterator_delegated_method;
 pub(crate) use recursive_iterator::validate_start as validate_recursive_iterator_start;
@@ -3171,11 +3172,14 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         file.constants
             .push(recursive_iterator::constant("SplFileObject", name, value));
     }
-    eg.register_class(file).unwrap();
+    // Every file-family parent publishes complete descriptors and real bodies
+    // before its children are registered; user declarations use the full scan.
+    eg.register_class_with_complete_native_parent(file).unwrap();
     funcs.extend(file_info::register_file_object(eg));
     let mut temporary = empty_internal_type("SplTempFileObject", vec![], false, false);
     temporary.parent = Some("SplFileObject".into());
-    eg.register_class(temporary).unwrap();
+    eg.register_class_with_complete_native_parent(temporary)
+        .unwrap();
     funcs.extend(file_info::register_temp_file_object(eg));
     for (name, parent) in [
         ("DirectoryIterator", "SplFileInfo"),
@@ -3208,13 +3212,23 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                     .push(recursive_iterator::constant(name, constant, value));
             }
         }
-        eg.register_class(class)
+        eg.register_class_with_complete_native_parent(class)
             .expect("valid native directory inheritance");
         // Publish this parent's real bodies before a child inherits aliases.
         funcs.extend(file_info::register_directory_iterators(
             eg,
             name == "FilesystemIterator",
         ));
+    }
+    for (name, interface, glob) in [
+        ("RecursiveDirectoryIterator", "RecursiveIterator", false),
+        ("GlobIterator", "Countable", true),
+    ] {
+        let mut class = empty_internal_type(name, vec![interface.into()], false, false);
+        class.parent = Some("FilesystemIterator".into());
+        eg.register_class_with_complete_native_parent(class)
+            .expect("valid filesystem cursor inheritance");
+        funcs.extend(file_info::register_recursive_glob(eg, glob));
     }
     let spl_object_storage = empty_internal_type(
         "SplObjectStorage",
