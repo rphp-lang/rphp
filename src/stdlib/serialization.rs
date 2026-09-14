@@ -39,6 +39,22 @@ struct SerializeState {
     references: HashMap<usize, usize>,
 }
 
+/// Explicit iterator method calls may delegate to their input. Serialization
+/// only invokes hooks declared on the object being serialized, not that input.
+#[cold]
+fn resolve_serialization_hook(
+    eg: &ExecutorGlobals,
+    receiver: &Value,
+    method: &str,
+) -> Option<crate::stdlib::ResolvedCallback> {
+    crate::stdlib::resolve_object_public_method(eg, receiver, method).filter(|resolved| {
+        resolved
+            .prepend_args
+            .first()
+            .is_some_and(|target| target.object_identity() == receiver.object_identity())
+    })
+}
+
 /// Serialized PHP values are byte streams, not UTF-8 text. Keep the builder
 /// byte-oriented so strings and array keys never pass through the runtime's
 /// lossless Latin-1 storage bridge a second time.
@@ -315,11 +331,8 @@ fn serialize_value(
         ValueType::Object => {
             let existing_lazy_target = eg.lazy_proxy_instance(value);
             let initial_hook_receiver = existing_lazy_target.as_ref().unwrap_or(value);
-            let serialize_hook = crate::stdlib::resolve_object_public_method(
-                eg,
-                initial_hook_receiver,
-                "__serialize",
-            );
+            let serialize_hook =
+                resolve_serialization_hook(eg, initial_hook_receiver, "__serialize");
             // __serialize() is allowed to inspect no object state at all. In
             // that case Zend serializes its return value without realizing a
             // lazy ghost or proxy. Ordinary serialization and __sleep() keep
@@ -454,7 +467,7 @@ fn serialize_value(
                 };
                 properties
             } else if let Some(sleep_hook) =
-                crate::stdlib::resolve_object_public_method(eg, hook_receiver, "__sleep")
+                resolve_serialization_hook(eg, hook_receiver, "__sleep")
             {
                 let sleep_declaring_class = hook_receiver
                     .as_object()

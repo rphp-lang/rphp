@@ -593,7 +593,10 @@ pub(super) fn write_stream_bytes(
     Ok(native)
 }
 
-#[inline]
+// Like the write projection, keep the small native adapter in its caller.
+// This avoids materializing an extra Result/Option boundary for every line;
+// registry/filter handling still takes its existing conditional fallback.
+#[inline(always)]
 pub(super) fn read_stream_line(
     eg: &mut ExecutorGlobals,
     _frame: *mut ExecuteData,

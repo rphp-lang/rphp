@@ -8,71 +8,79 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
-`spl-temp-file-object-stream-contracts`, against `fb21f5b2`:
-**+22/-0** SPL passes, independently confirmed by PHP 8.5.10. SPL reaches
-**594 pass / 151 fail / 31 unsupported / 8 skip / 1 XFAIL**. Core retains
+`recursive-caching-tree-projection-contracts`, against `0cbbf305`:
+**+13/-0** SPL passes, independently confirmed by PHP 8.5.10. SPL reaches
+**607 pass / 138 fail / 31 unsupported / 8 skip / 1 XFAIL**. Core retains
 **6,446 pass / 335 fail / 182 skip / 211 unsupported** and exact pass sets.
-Selected coverage is **7,959 cases: 7,040 pass / 486 fail**, plus 190 skips,
+Selected coverage is **7,959 cases: 7,053 pass / 473 fail**, plus 190 skips,
 242 unsupported and one XFAIL; this is not complete PHP coverage.
 
-SplTempFileObject reuses the existing memory/temp/spill stream backends and
-sparse traced file state. Constructor threshold, path/debug projections,
-inherited Reflection metadata, fwrite/fflush/ftruncate/flock/fstat and native
-or user-wrapper mutation preserve cached records, logical keys, reference/COW,
-callback/exception order and lifetime. Native writes borrow converted bytes;
-nested temporary-reader EOF respects unread outer buffering. The existing
-truncate backend is available in every feature configuration for SPL methods;
-procedural ftruncate registration remains gated. No opcode, JIT admission,
-dependency, Value/VM field or unsafe-ceiling change was introduced.
+RecursiveCachingIterator caches stable child lookahead and RecursiveTreeIterator
+decorates the existing recursive traversal. Sparse traced state preserves
+prefix/entry/postfix and BYPASS flags, callback/exception ordering, repeated
+construction, reference/COW and retirement. Serialization uses the actual
+receiver's hooks rather than delegated input hooks. Clone and internal
+Stringable ancestry follow the canonical native boundaries.
 
-All **859 focused tests**, including **719 library tests** and **21 original
-CLI cases**, pass; the CLI runs normal and JIT-disabled paths. One frozen
-checked matrix passes **5,440/5,108/5,511/5,533/5,584** tests
+Profile-backed prerequisites remove redundant registration allocations and
+searches: unique layout reuse, immutable empty defaults and literal display
+names, finite internal-pointer metadata hashing and exact owner filtering.
+Static calls reuse only an already admitted scalar plan before cached-name
+materialization; all failed guards keep the original once-only fallback.
+No common Value/VM layout, opcode, JIT admission, dependency or unsafe-ceiling
+change was introduced. Source changes, rejected measurements and the unchanged
+fixed anchors are retained in the complete technical record.
+
+All **1,080 focused tests**, including **727 library tests** and **32 original
+CLI cases**, pass; the CLI exercises normal and JIT-disabled paths. One frozen
+checked matrix passes **5,480/5,148/5,551/5,573/5,624** tests
 (13/13/13/13/16 ignored, none filtered), plus all-features/all-targets.
-Twenty of 21 admitted PHPT pass;
-two adjacent gains bring the total to 22. Exact core/SPL no-loss, independent
-PHP gain checks, prior original oracles, Composer/Symfony S0-S3, runner/unsafe
-self-tests, formatting and public hygiene pass. Unsafe stays **1,622/289**.
-There is no lost pass, new process hazard or changed expectation. The single
-moved failure, `SplFileObject/bug79710.phpt`, now reaches the separate
-creation-order request-shutdown retirement boundary; it remains a visible
-failure, not a pass or an exclusion. General shutdown redesign stays outside.
+All twelve admission PHPT pass; one adjacent gain brings the total to thirteen.
+Exact core/SPL no-loss, independent PHP gain checks, prior original oracles,
+Composer/Symfony S0-S3, runner/unsafe self-tests, formatting and public hygiene
+pass. Unsafe stays **1,622/289**. No pass was lost, no process hazard or
+failure-stage movement appeared, and no expected output changed.
 
-All **97 established 32-pair controls** have exact outputs and meet unchanged
+All **101 established 32-pair controls** have exact outputs and meet unchanged
 user fixed cumulative common **+1.65%** / pay-use **+5%** limits. Against
-`9cddc39c`, common peaks at **+1.281%**, pay-use at
-**+2.565%**. Nominal +1% findings: primary/ordinary-declared-property +1.217%;
-primary/startup +1.281%. Immediate-parent diagnostic findings over +1%:
-primary/resource-alias +1.801%; coercion/boolean +4.364%;
-coercion/numeric-string +3.146%. These do not
-create a moving budget. First-present read/Regex/Caching/Append anchors remain
-fixed; no unchanged failed timing reroll was used.
+`9cddc39c`, common peaks at **+1.291%**, pay-use at
+**+2.829%**. Nominal +1% findings: holdout/closure-service +1.015%;
+primary/object-lifecycle +1.291%; primary/startup +1.131%.
+8 immediate-parent common findings exceed +1%
+(maximum +5.444%); their complete per-control values remain in the reviewed
+performance record. These do not create a moving budget. First-present
+read/Regex/Caching/Append/Temp anchors stay fixed; no unchanged failed timing
+reroll was used.
 
-New API candidate/PHP cost ratios (eight pairs): temp-file-api/memory 0.757;
-temp-file-api/spill 0.724; temp-file-api/cached 1.156;
-temp-file-api/truncate 0.900.
+New API candidate/PHP cost ratios (eight pairs):
+recursive-tree-api/cache-lookahead 9.459;
+recursive-tree-api/cache-children 19.284;
+recursive-tree-api/tree-flat 11.882; recursive-tree-api/tree-branch 22.790.
 These are absolute new-API costs, not absent-parent regressions or PHP-speed
 parity. Shared-host guards are diagnostic; no private host was configured.
 Cleanup runs between configurations and after all full/release/perf gates.
 
 SHA-256 evidence:
 
-- Release: `4385f0e43689945331413f1c841d7d9015c189b330adad8d642700312a35c31c`.
-- Complete technical record: `b4202923d55ce328df0e95d1a2c9a44a6f110ae6ddca312bb4c0617f56e89a4d`.
-- Matrix: `435bcc9fde76b5981814abc586247f5a19fef575169d0a8f105e1103abff2f15`.
-- SPL manifest / pass set: `47cef14494660614089b5d40d7ae83697af04121a4c7a0edf63acf91facd9d3c` / `2cebc0313116743d8f4d326075ab37c55d709896e9387e23ed323d70f064923f`.
-- Zend/lang manifest / pass set: `a7d7eff1b483862ab2252e434a822cef3bb74d18924b22291b20a7459efb618b` / `b99f862eabc6857b7347b6f378368ce342ff70acec02d7d2732e8f20daa5fde3`.
-- Strings/array manifest / pass set: `8d1413d7a0fd6f2802eb3091fc35bc2dee4e72369644a382a514d7a5eead1ebe` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
-- Reviewed performance / raw timing: `239ce6ef87bfe0b6912933fca4e18e8737175217585263d3cd21e48cfbbd0c87` / `e8522c13bf3ddbb1d18a11027acd845b4a6d70cca9a3237e0708325ac9dee703`.
+- Release: `0c55cffb0c51e194d9b12f0c338b9834afda123a1973571e62cbb55fbc76f067`.
+- Complete technical record: `c73c17bb8ace3852bb9cc4c1e608a86623aaa11871cdb1ceb082a53c0c8ad7d1`.
+- Matrix: `5c81d4de3a23127e910da5fc745655cb89e441b4f64a62e2c5649991147cafd2`.
+- SPL manifest / pass set: `277e71c02338c4076d97b0866def365709fa2d94066cf2fad1f64c7e389437cb` / `cf9dee74152eb2a5ad996e8b22509657a4ed4235e5a4b581c8ab1bc7365b0801`.
+- Zend/lang manifest / pass set: `b3a6c8879112bd547b7f4498e9f28131da6cf42a364d9de11dfedacc2e19736b` / `b99f862eabc6857b7347b6f378368ce342ff70acec02d7d2732e8f20daa5fde3`.
+- Strings/array manifest / pass set: `9536b8e0de334733e7524fb9706b30b14662e7c111415bc1653a455f86901073` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+- Reviewed performance / raw timing: `358f241e9bfccce4f27b9f9faad47fb1b987caa90bbeba47407aef2a67084e60` / `a61c356f30e1c152e309e7b6f0533e85a53215a19e858a99017e101f5425f1f1`.
 
-General filesystem expansion, recursive iterator families, 32-bit/OOM and
-whole-class/PHP coverage are not claimed. Next read-only admission finds
-12 PHP-pass/current-fail recursive caching/tree projection cases
-(`a1ce7168899be2216db17fb1e79650ee9ad61ee850db3feeb6e0d59ad56f273a`).
-Child lookahead and prefix/entry/postfix behavior must
-reuse existing recursive traversal and traced ownership; registration alone
-cannot claim their yield. Original oracles and at least ten reachable
-shared-cause gains precede the next implementation.
+Unrelated recursive-directory/filter families, general shutdown, suspension,
+32-bit/OOM and whole-class/PHP coverage remain separate. Read-only next
+admission confirms 14 PHP-pass/current-fail RecursiveDirectoryIterator/GlobIterator
+cases (`3739117351c80b57a946c1d1baf9b2a73316f6b9307442c8969c346fffcdb9c8`).
+Child/subpath and pattern-cursor projections
+must reuse existing directory storage, with original boundary oracles and
+at least ten reachable shared-cause gains before the next implementation.
+
+The preceding SplTempFileObject checkpoint added 22 SPL passes; its complete
+technical record remains
+`b4202923d55ce328df0e95d1a2c9a44a6f110ae6ddca312bb4c0617f56e89a4d`.
 
 The preceding AppendIterator checkpoint added twelve SPL passes; its complete
 technical record remains

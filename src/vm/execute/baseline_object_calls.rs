@@ -6047,6 +6047,49 @@ fn resolve_static_call_target<'a>(
     ))
 }
 
+// A resolved static scalar call uses the same pre-existing scalar plan and
+// guarded Send sequence. Failure is read-only: the canonical call is untouched.
+#[inline]
+fn try_complete_static_scalar_call(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    user: &UserFunction,
+) -> bool {
+    let common = &user.common;
+    if common.plan.needs_trait_class_scope()
+        || opline.extended_value != common.sig.public_arity()
+    {
+        return false;
+    }
+    let Some(plan) = user.scalar_long_plan.as_deref() else {
+        return false;
+    };
+    // SAFETY: the caller supplies its live instruction and the immutable
+    // resolved user descriptor; the public arity is checked above. The shared
+    // plan evaluator guards operand tags, Send shape and checked arithmetic.
+    let Some((result, do_fcall_ptr)) = (unsafe {
+        try_execute_direct_scalar_long_call(
+            frame,
+            op_array,
+            (opline as *const Instruction).add(1),
+            common,
+            plan,
+        )
+    }) else {
+        return false;
+    };
+    stats::inc_do_fcall_fast();
+    stats::inc_return_fast();
+    let count = common.call_count.get();
+    if count < u32::MAX {
+        common.call_count.set(count + 1);
+    }
+    // SAFETY: successful evaluation returns this caller's matching DoFcall.
+    unsafe { complete_direct_scalar_long_call(frame, do_fcall_ptr.as_ptr(), result) };
+    true
+}
+
 // Keep owned name cleanup and the resolution result in this activation,
 // rather than extending their unwind state across the main dispatch loop.
 #[inline(never)]
@@ -6060,13 +6103,37 @@ fn op_init_static_call<'a>(
     // Inline cache: static calls have constant class+method — cache resolved func_ptr.
     // Visibility is checked on first resolve only (same instruction = same caller context).
     let dynamic_scope = opline._pad & CALL_FLAG_DYNAMIC_STATIC_SCOPE != 0;
-    let (class_name, method_name, ip) = unsafe {
+    // SAFETY: dispatch supplies a live frame and its instruction; this cache
+    // belongs to the same immutable op array. Non-null, untagged cached user
+    // descriptors stay request-owned, and fn_type guards the UserFunction cast.
+    let (class_name, method_name, ip, cached_scalar_user) = unsafe {
+        let ip = (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
+        let cache = &op_array.cache[ip];
+        // A concrete ID proves immutable constant class/method operands and a
+        // completed visibility check. Tagged instance/trait calls, relative or
+        // dynamic scopes and magic resolution retain the canonical path.
+        let cached_scalar_user = if !dynamic_scope
+            && cache.static_call_class_id() != 0
+            && !cache.func.is_null()
+            && cache.func as usize & STATIC_CALL_TAG_MASK == 0
+            && (*cache.func).fn_type == FunctionType::User
+        {
+            Some(&*(cache.func as *const UserFunction))
+        } else {
+            None
+        };
         (
             &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
             &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
-            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
+            ip,
+            cached_scalar_user,
         )
     };
+    if let Some(user) = cached_scalar_user
+        && try_complete_static_scalar_call(frame, op_array, opline, user)
+    {
+        return Ok(ColdResult::Continue);
+    }
     // Literal strings belong to this immutable live op array, even across
     // autoload or diagnostic callbacks. Runtime operands still need snapshots.
     let raw_class = if opline.op1_type == OpType::Const {
@@ -6357,31 +6424,14 @@ fn op_init_static_call<'a>(
             )?);
         }
     }
-    if magic_method.is_none()
+    if cached_scalar_user.is_none()
+        && magic_method.is_none()
         && !common.plan.needs_trait_class_scope()
         && common.fn_type == FunctionType::User
         && num_args == common.sig.public_arity()
     {
         let user = unsafe { &*(func_ptr as *const UserFunction) };
-        if let Some(plan) = user.scalar_long_plan.as_deref()
-            && let Some((result, do_fcall_ptr)) = unsafe {
-                try_execute_direct_scalar_long_call(
-                    frame,
-                    op_array,
-                    (opline as *const Instruction).add(1),
-                    common,
-                    plan,
-                )
-            }
-        {
-            let do_fcall_ptr = do_fcall_ptr.as_ptr();
-            stats::inc_do_fcall_fast();
-            stats::inc_return_fast();
-            let count = common.call_count.get();
-            if count < u32::MAX {
-                common.call_count.set(count + 1);
-            }
-            unsafe { complete_direct_scalar_long_call(frame, do_fcall_ptr, result) };
+        if try_complete_static_scalar_call(frame, op_array, opline, user) {
             return Ok(ColdResult::Continue);
         }
     }

@@ -25,7 +25,7 @@ fn reject_child(child: Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     Ok(())
 }
 
-fn initialized(receiver: &Value, eg: &mut ExecutorGlobals) -> bool {
+pub(super) fn initialized(receiver: &Value, eg: &mut ExecutorGlobals) -> bool {
     let object = receiver.as_object().expect("recursive method receiver");
     if object
         .native_iterator_delegate()
@@ -134,7 +134,7 @@ fn recursive_protocol(
 /// A callback may replace the driver's complete stack. Retain its active
 /// iterator only through the protocol call, then retire that temporary through
 /// PHP's destructor boundary instead of silently dropping the last Rust owner.
-fn inner_protocol(
+pub(super) fn inner_protocol(
     receiver: &Value,
     name: &str,
     eg: &mut ExecutorGlobals,
@@ -387,6 +387,22 @@ fn construct(
         };
         iterator = next;
     }
+    initialize(&receiver, iterator, mode, flags, eg)?;
+    ret!(rv, Value::null());
+}
+
+/// Shared traversal publication for recursive drivers and tree projections.
+/// Callers finish parameter/iterator validation before replacing the stack.
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+pub(super) fn initialize(
+    receiver: &Value,
+    iterator: Value,
+    mode: i64,
+    flags: i64,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     // Retain old edges before replacing native state so callbacks can only see
     // the fully published replacement, never a partially initialized stack.
     let mut retired = Vec::new();
@@ -408,7 +424,7 @@ fn construct(
             iterator,
             phase: RecursivePhase::Check,
         }],
-        mode,
+        mode: if matches!(mode, 1 | 2) { mode } else { 0 },
         flags,
         max_depth: -1,
         in_iteration: false,
@@ -421,7 +437,7 @@ fn construct(
     for value in retired.into_iter().rev() {
         iterator_delegate::discard(value, eg)?;
     }
-    ret!(rv, Value::null());
+    Ok(())
 }
 
 /// Native get-iterator admission precedes public rewind, including an override
@@ -804,16 +820,22 @@ pub(super) fn register_method(
     eg.register_internal_function_display_name(pointer, internal_method_display_name(owner, name));
     eg.register_internal_function_reflection_metadata(
         pointer,
-        defaults
-            .iter()
-            .map(|value| {
-                value.map(|value| match value {
-                    "null" => Value::null(),
-                    "-1" => Value::long(-1),
-                    _ => Value::long(0),
+        // Reflection uses optional indexing: an all-absent default table is
+        // equivalent to no table. Retain indices when any default is present.
+        if defaults.iter().any(Option::is_some) {
+            defaults
+                .iter()
+                .map(|value| {
+                    value.map(|value| match value {
+                        "null" => Value::null(),
+                        "-1" => Value::long(-1),
+                        _ => Value::long(0),
+                    })
                 })
-            })
-            .collect(),
+                .collect()
+        } else {
+            Vec::new()
+        },
         "SPL",
     );
     functions.push(function);
@@ -823,6 +845,13 @@ pub(super) fn register_method(
 #[inline(never)]
 pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     use ParamTypeHint::{Bool, ClassName, Int, Mixed, Nullable, Void};
+    for (owner, count) in [
+        ("RecursiveIterator", 2),
+        ("RecursiveArrayIterator", 2),
+        ("RecursiveIteratorIterator", 18),
+    ] {
+        eg.reserve_internal_method_contracts(owner, count);
+    }
     let mut functions = Vec::with_capacity(22);
     macro_rules! method {
         ($owner:expr, $name:expr, $handler:expr, $result:expr) => {

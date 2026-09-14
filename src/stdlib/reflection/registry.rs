@@ -392,11 +392,30 @@ fn register_property_hook_type(eg: &mut ExecutorGlobals) {
 }
 
 pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
-    use crate::stdlib::builtin_classes::internal_method_display_name;
+    use crate::stdlib::builtin_classes::{
+        internal_method_display_name, internal_method_lookup_name,
+    };
     let mut functions = Vec::new();
 
+    // Literal labels need no owned copy. Registrations selected in a loop keep
+    // their owned display spelling, independently of the mutable lookup key.
+    macro_rules! register_display_name {
+        ($pointer:expr, $class:literal, $method:literal) => {
+            eg.register_internal_function_static_display_name(
+                $pointer,
+                concat!($class, "::", $method),
+            )
+        };
+        ($pointer:expr, $class:expr, $method:expr) => {
+            eg.register_internal_function_display_name(
+                $pointer,
+                internal_method_display_name($class, $method),
+            )
+        };
+    }
+
     macro_rules! register_method {
-        ($class:expr, $method:expr, $handler:expr, $num_args:expr, $min_args:expr, [$($name:expr),*]) => {{
+        ($class:tt, $method:tt, $handler:expr, $num_args:expr, $min_args:expr, [$($name:expr),*]) => {{
             let function = Box::new(make_internal_method(
                 $handler,
                 $num_args,
@@ -404,12 +423,11 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
                 vec![$($name.to_string()),*],
             ));
             let pointer = &function.common as *const FunctionCommon;
-            let registered_name = internal_method_display_name($class, $method);
             eg.function_table.insert(
-                registered_name.to_ascii_lowercase(),
+                internal_method_lookup_name($class, $method),
                 pointer,
             );
-            eg.register_internal_function_display_name(pointer, registered_name);
+            register_display_name!(pointer, $class, $method);
             eg.method_declaring_class
                 .insert(pointer, $class.into());
             functions.push(function);
@@ -417,7 +435,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     }
 
     macro_rules! register_static_method {
-        ($class:expr, $method:expr, $handler:expr, $num_args:expr, $min_args:expr, [$($name:expr),*]) => {{
+        ($class:tt, $method:tt, $handler:expr, $num_args:expr, $min_args:expr, [$($name:expr),*]) => {{
             // Static method calls reserve CV 0 for the called-class slot just
             // like user methods do; public arguments therefore begin at CV 1.
             let function = Box::new(make_internal_method(
@@ -427,9 +445,8 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
                 vec![$($name.to_string()),*],
             ));
             let pointer = &function.common as *const FunctionCommon;
-            let registered_name = internal_method_display_name($class, $method);
-            eg.function_table.insert(registered_name.to_ascii_lowercase(), pointer);
-            eg.register_internal_function_display_name(pointer, registered_name);
+            eg.function_table.insert(internal_method_lookup_name($class, $method), pointer);
+            register_display_name!(pointer, $class, $method);
             eg.method_declaring_class.insert(pointer, $class.into());
             eg.register_internal_static_method(pointer);
             functions.push(function);
@@ -437,17 +454,16 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     }
 
     macro_rules! register_variadic_method {
-        ($class:expr, $method:expr, $handler:expr, $required:expr, [$($name:expr),*]) => {{
+        ($class:tt, $method:tt, $handler:expr, $required:expr, [$($name:expr),*]) => {{
             let function = Box::new(make_internal_method_variadic(
                 $handler,
                 $required,
                 vec![$($name.to_string()),*],
             ));
             let pointer = &function.common as *const FunctionCommon;
-            let registered_name = internal_method_display_name($class, $method);
             eg.function_table
-                .insert(registered_name.to_ascii_lowercase(), pointer);
-            eg.register_internal_function_display_name(pointer, registered_name);
+                .insert(internal_method_lookup_name($class, $method), pointer);
+            register_display_name!(pointer, $class, $method);
             eg.method_declaring_class
                 .insert(pointer, $class.into());
             functions.push(function);
@@ -455,7 +471,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     }
 
     macro_rules! register_variadic_method_raw {
-        ($class:expr, $method:expr, $handler:expr, $raw_handler:expr, $required:expr, [$($name:expr),*]) => {{
+        ($class:tt, $method:tt, $handler:expr, $raw_handler:expr, $required:expr, [$($name:expr),*]) => {{
             let function = Box::new(make_internal_method_variadic_raw(
                 $handler,
                 $raw_handler,
@@ -463,10 +479,9 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
                 vec![$($name.to_string()),*],
             ));
             let pointer = &function.common as *const FunctionCommon;
-            let registered_name = internal_method_display_name($class, $method);
             eg.function_table
-                .insert(registered_name.to_ascii_lowercase(), pointer);
-            eg.register_internal_function_display_name(pointer, registered_name);
+                .insert(internal_method_lookup_name($class, $method), pointer);
+            register_display_name!(pointer, $class, $method);
             eg.method_declaring_class
                 .insert(pointer, $class.into());
             functions.push(function);

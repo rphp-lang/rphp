@@ -1,0 +1,6 @@
+{
+  "values": "2\n3\n4\n[\"TypeError\",\"CachedScalarBase::step(): Argument #1 ($value) must be of type int, array given, called in source.php on line 19\"]\n[\"TypeError\",\"CachedScalarBase::step(): Return value must be of type int, float returned\"]\n5\n6\n[\"TypeError\",\"CachedScalarBase::step(): Argument #1 ($value) must be of type int, string given, called in source.php(20) : eval()'d code on line 1\"]\n8\n",
+  "scope": "[2,2,\"CachedScalarChild\"]\n[3,3,\"CachedScalarChild\"]\n[4,4,\"CachedScalarChild\"]\n5\n6\n[\"Error\",\"Non-static method CachedScalarBase::instance() cannot be called statically\"]\n[\"Error\",\"Non-static method CachedScalarBase::instance() cannot be called statically\"]\n",
+  "arguments": "[11,11,11]\n[12,12,12]\n[13,13,13]\n20\n30\n21\n31\n22\n32\n[9,1]\n[9,2]\n[9,3]\n",
+  "fallback": "[\"step\",[0]]\n[\"step\",[1]]\n[\"step\",[2]]\n1\n2\n3\n[8192,\"Calling static trait method CachedScalarTrait::step is deprecated, it should only be called on a class using the trait\"]\n1\n[8192,\"Calling static trait method CachedScalarTrait::step is deprecated, it should only be called on a class using the trait\"]\n2\n10\n10\n"
+}

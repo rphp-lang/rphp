@@ -130,8 +130,10 @@ fn op_clone_obj<'a>(
                     .is_some_and(|class_def| {
                         class_def.is_enum
                             || class_def.name == "IteratorIterator"
+                            || class_def.name == "RecursiveIteratorIterator"
                             || (class_def.parent.is_some()
                                 && (eg.class_is_a(&class_def.name, "IteratorIterator")
+                                    || eg.class_is_a(&class_def.name, "RecursiveIteratorIterator")
                                     || eg.class_is_a(&class_def.name, "SplFileObject")))
                     });
             if uncloneable {

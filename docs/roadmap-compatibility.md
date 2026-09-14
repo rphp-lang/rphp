@@ -36,31 +36,33 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `spl-temp-file-object-stream-contracts` train adds 22 PHP 8.5
-SPL passes over `fb21f5b2`, without loss, new process hazards or expectation
-changes. SPL reaches 594/151/31 unsupported/8 skip/1 XFAIL; core retains
-6,446/335/182/211 and exact pass sets. Selected coverage is 7,959 cases:
-7,040 pass and 486 fail, not all PHP. The visible bug79710 shutdown-order
-holdout advances beyond missing-class failure but is not counted as passing.
+The accepted `recursive-caching-tree-projection-contracts` train adds thirteen
+PHP 8.5 SPL passes over `0cbbf305`, without loss, new process hazards,
+failure-stage movement or expectation changes. SPL reaches
+607/138/31 unsupported/8 skip/1 XFAIL; core retains 6,446/335/182/211 and
+exact pass sets. Selected coverage is 7,959 cases: 7,053 pass and 473 fail,
+not all PHP.
 
-Sparse traced file state reuses memory/temp/spill backends. Mutation, cached
-cursor, EOF, path/debug/Reflection, wrapper callback and retirement boundaries
-have original positive/negative regressions. Backend truncate is shared across
-features; the procedural API remains gated. One frozen checked five-config
-matrix/all-targets, original/no-loss, S0-S3 and unsafe/public-hygiene gates pass.
+Stable recursive child lookahead and tree decorations reuse the existing
+traversal with sparse traced ownership. Original positive/negative regressions
+cover metadata, flags, callbacks, repeated state, reference/COW and retirement.
+One frozen checked five-config matrix/all-targets, exact no-loss, S0-S3 and
+unsafe/public-hygiene gates pass. Common fields and optimized-plan admission
+remain unchanged; profile-backed registration and cached-call prerequisites
+remove redundant work rather than changing PHP behavior.
 
-All 97 established controls meet fixed cumulative common <=1.65% against
-`9cddc39c`, pay-use <=5%; peaks +1.281%/+2.565%.
+All 101 established controls meet fixed cumulative common <=1.65% against
+`9cddc39c`, pay-use <=5%; peaks +1.291%/+2.829%.
 Nominal/incremental findings, fixed first-present anchors, new API absolute
 costs and shared-host limitations remain explicit in `compatibility.md`.
 Cleanup remains automatic; no unchanged failed timing reroll was used.
 
-Next read-only admission confirms 12 PHP-passing failures first blocked by
-RecursiveCachingIterator/RecursiveTreeIterator. Normalize child lookahead and
-tree projections over existing recursive traversal; require original oracles
-and at least ten reachable shared-cause gains. Retain all controls, including
-now-present temporary-file APIs. General shutdown, unrelated recursive
-directory/filter families, suspension, 32-bit/OOM and whole-PHP claims remain
+Next read-only admission confirms 14 PHP-passing failures first blocked by
+RecursiveDirectoryIterator/GlobIterator. Normalize child/subpath and pattern
+cursor projections over existing native directory storage; require original
+oracles and at least ten reachable shared-cause gains before implementation.
+Retain all controls, including now-present tree APIs. General shutdown,
+unrelated recursive filters, suspension, 32-bit/OOM and whole-PHP claims remain
 separate. No second implementation before current acceptance.
 
 ### Preceding directory cursor checkpoint

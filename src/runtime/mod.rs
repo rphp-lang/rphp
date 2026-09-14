@@ -165,11 +165,43 @@ type InternalFunctionReflectionMetadata = (
     Option<&'static str>,
 );
 
+/// Only engine-created internal function addresses enter these cold maps.
+/// They are opaque identity keys, never names or bytes supplied by PHP. Mix
+/// the whole address (including its aligned low bits) instead of applying the
+/// string table's keyed SipHash to each registration and Reflection lookup.
+/// HashMap still compares the full pointer when hash values collide.
+#[derive(Default)]
+struct InternalFunctionHasher(u64);
+
+impl std::hash::Hasher for InternalFunctionHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        let mut value = self.0;
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^ (value >> 31)
+    }
+
+    #[inline]
+    fn write_usize(&mut self, value: usize) {
+        self.0 = value as u64;
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = self.0.wrapping_mul(0x100_0000_01b3) ^ u64::from(*byte);
+        }
+    }
+}
+
+type InternalFunctionMap<T> =
+    HashMap<*const FunctionCommon, T, std::hash::BuildHasherDefault<InternalFunctionHasher>>;
+
 /// Sparse request-startup metadata for internal callables. Extending the
 /// existing boxed owner keeps ExecutorGlobals and every hot ABI layout stable.
 #[derive(Default)]
 struct InternalCallableMetadata {
-    functions: HashMap<*const FunctionCommon, InternalFunctionReflectionMetadata>,
+    functions: InternalFunctionMap<InternalFunctionReflectionMetadata>,
     // Only builtin declarations enter this table. Their immutable spellings
     // outlive every request; the signatures themselves remain request-owned.
     methods: HashMap<&'static str, Vec<InternalMethodContract>>,
@@ -744,7 +776,8 @@ pub struct ExecutorGlobals {
     pub method_declaring_class: HashMap<*const FunctionCommon, std::borrow::Cow<'static, str>>,
     /// Sparse canonical spellings for built-ins whose public name is not the
     /// lowercase lookup key. Most internal functions need no entry.
-    internal_function_display_names: Option<Box<HashMap<*const FunctionCommon, String>>>,
+    internal_function_display_names:
+        Option<Box<InternalFunctionMap<std::borrow::Cow<'static, str>>>>,
     /// Exact reflection defaults and link-only method contracts for sparse
     /// internal callables. Keeping the combined owner boxed preserves both
     /// the hot FunctionCommon descriptor and ExecutorGlobals field offsets.
@@ -1727,7 +1760,7 @@ impl ExecutorGlobals {
             .reserve(32usize.saturating_sub(metadata.methods.len()));
         let display_names = self
             .internal_function_display_names
-            .get_or_insert_with(|| Box::new(HashMap::new()));
+            .get_or_insert_with(|| Box::new(InternalFunctionMap::default()));
         // Heap callable display names cross the previous 448-entry envelope.
         // Allocate the final table once instead of rehashing during startup.
         display_names.reserve(512usize.saturating_sub(display_names.len()));
@@ -1747,7 +1780,8 @@ impl ExecutorGlobals {
         // FilterIterator and RegexIterator add two fixed declarations.
         // CachingIterator and AppendIterator add lookahead/list declarations.
         // SplTempFileObject shares the existing file cursor and stream backend.
-        let class_capacity = 119 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        // Recursive caching and tree projection add two cold declarations.
+        let class_capacity = 121 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;
@@ -2192,8 +2226,23 @@ impl ExecutorGlobals {
     ) {
         if name.bytes().any(|byte| byte.is_ascii_uppercase()) {
             self.internal_function_display_names
-                .get_or_insert_with(|| Box::new(HashMap::new()))
-                .insert(function, name);
+                .get_or_insert_with(|| Box::new(InternalFunctionMap::default()))
+                .insert(function, std::borrow::Cow::Owned(name));
+        }
+    }
+
+    // Literal registration spellings live for the process lifetime. Only the
+    // request-local pointer association needs storage; do not copy the label.
+    #[cold]
+    pub(crate) fn register_internal_function_static_display_name(
+        &mut self,
+        function: *const FunctionCommon,
+        name: &'static str,
+    ) {
+        if name.bytes().any(|byte| byte.is_ascii_uppercase()) {
+            self.internal_function_display_names
+                .get_or_insert_with(|| Box::new(InternalFunctionMap::default()))
+                .insert(function, std::borrow::Cow::Borrowed(name));
         }
     }
 
@@ -2216,7 +2265,7 @@ impl ExecutorGlobals {
         self.internal_function_display_names
             .as_deref()
             .and_then(|names| names.get(&function))
-            .map(String::as_str)
+            .map(|name| name.as_ref())
     }
 
     #[cold]
@@ -6738,6 +6787,22 @@ impl ExecutorGlobals {
         self.validate_abstract_method_contracts(class_def)
     }
 
+    /// Registry prefixes keep the existing Unicode normalization, but the
+    /// usual ASCII owner needs only one exact-sized allocation.
+    #[cold]
+    #[inline(never)]
+    fn canonical_method_owner_prefix(owner: &str) -> String {
+        let mut prefix = String::with_capacity(owner.len() + 2);
+        prefix.push_str(owner);
+        prefix.push_str("::");
+        if owner.is_ascii() {
+            prefix.make_ascii_lowercase();
+            prefix
+        } else {
+            prefix.to_lowercase()
+        }
+    }
+
     fn register_class_mode(
         &mut self,
         mut class_def: ClassDef,
@@ -7010,16 +7075,24 @@ impl ExecutorGlobals {
                     .iter()
                     .map(|(n, _, _, _, _)| n.to_lowercase())
                     .collect();
-                let parent_prefix = format!("{}::", parent_name).to_lowercase();
+                let parent_prefix = Self::canonical_method_owner_prefix(parent_name);
                 // The registry already stores canonical lowercase method
                 // suffixes. Build each destination key once, after deciding
                 // whether it is inherited, instead of allocating a suffix,
                 // formatting it, and lowercasing the full name again.
-                let child_prefix = format!("{}::", class_name).to_lowercase();
+                let child_prefix = Self::canonical_method_owner_prefix(&class_name);
                 let inherited: Vec<(String, *const FunctionCommon, bool)> = self
                     .function_table
                     .iter()
-                    .filter(|(k, _)| k.starts_with(&parent_prefix))
+                    .filter(|(k, _)| {
+                        // Most registry keys belong to another owner (or a
+                        // global function). Reject mismatched owner lengths
+                        // before comparing the whole potentially long prefix.
+                        // This is only a necessary condition; the exact
+                        // canonical prefix check still decides membership.
+                        k.as_bytes().get(parent_prefix.len() - 1) == Some(&b':')
+                            && k.starts_with(&parent_prefix)
+                    })
                     .filter_map(|(k, v)| {
                         let method_name = &k[parent_prefix.len()..];
                         let concrete_property_hook = method_name
@@ -7590,22 +7663,32 @@ impl ExecutorGlobals {
                 }
             })
             .collect();
-        class_def.property_layout =
-            std::rc::Rc::new(ObjectLayout::new(class_name.as_str(), property_keys));
-        class_def.property_defaults = class_def
-            .properties
-            .iter()
-            .map(|property| {
-                property.default.clone().unwrap_or_else(|| {
-                    if property.is_typed() {
-                        crate::value::Value::undef()
-                    } else {
-                        crate::value::Value::null()
-                    }
+        if let Some(storage) = std::rc::Rc::get_mut(&mut class_def.property_layout) {
+            // A fresh declaration's placeholder is normally unshared. Reuse
+            // its allocation; compiled/shared layouts retain copy-on-write.
+            storage.rebuild(class_name.as_str(), property_keys);
+        } else {
+            class_def.property_layout =
+                std::rc::Rc::new(ObjectLayout::new(class_name.as_str(), property_keys));
+        }
+        // Most internal declarations have no PHP property slots. An existing
+        // empty immutable template is already exact and needs no replacement.
+        if !class_def.properties.is_empty() || !class_def.property_defaults.is_empty() {
+            class_def.property_defaults = class_def
+                .properties
+                .iter()
+                .map(|property| {
+                    property.default.clone().unwrap_or_else(|| {
+                        if property.is_typed() {
+                            crate::value::Value::undef()
+                        } else {
+                            crate::value::Value::null()
+                        }
+                    })
                 })
-            })
-            .collect::<Vec<_>>()
-            .into();
+                .collect::<Vec<_>>()
+                .into();
+        }
 
         deferred_instance_defaults.retain_mut(|deferred| {
             let Some((property_index, _)) =
@@ -8413,6 +8496,25 @@ impl ExecutorGlobals {
         let parent = class.parent.clone();
         let interfaces = class.implements.clone();
         let contributes_stringable = self.class_contributes_stringable(class);
+
+        // An internal class's own __toString is registered before its explicit
+        // interfaces; inherited copies still follow the ordinary reversed
+        // parent table. Native methods live outside ClassDef::methods.
+        if self.class_id_is_internal(class.class_id)
+            && self
+                .function_table
+                .get(&format!(
+                    "{}::__tostring",
+                    canonical_owner.to_ascii_lowercase()
+                ))
+                .and_then(|function| self.method_declaring_class.get(function))
+                .is_some_and(|declaring| declaring.eq_ignore_ascii_case(&canonical_owner))
+            && !names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("Stringable"))
+        {
+            names.push("Stringable".into());
+        }
 
         // PHP projects each inherited interface table in reverse order. All
         // directly declared interfaces precede their inherited ancestors.
@@ -10966,6 +11068,176 @@ mod stdlib_capacity_tests {
     }
 
     #[test]
+    fn recursive_internal_inheritance_keeps_aliased_and_overridden_methods() {
+        let mut eg = ExecutorGlobals::new();
+        let _functions = crate::stdlib::register_stdlib(&mut eg);
+        for (child, parent) in [
+            (
+                "RecursiveTreeIterator::getDepth",
+                "RecursiveIteratorIterator::getDepth",
+            ),
+            (
+                "RecursiveTreeIterator::rewind",
+                "RecursiveIteratorIterator::rewind",
+            ),
+            (
+                "RecursiveCachingIterator::current",
+                "CachingIterator::current",
+            ),
+            (
+                "RecursiveCachingIterator::getInnerIterator",
+                "IteratorIterator::getInnerIterator",
+            ),
+        ] {
+            let child = eg.find_function(child).expect("inherited method");
+            let parent = eg.find_function(parent).expect("parent method");
+            assert_eq!(child, parent);
+        }
+        for (child, parent) in [
+            (
+                "RecursiveTreeIterator::current",
+                "RecursiveIteratorIterator::current",
+            ),
+            (
+                "RecursiveCachingIterator::__construct",
+                "CachingIterator::__construct",
+            ),
+        ] {
+            assert_ne!(
+                eg.find_function(child).unwrap(),
+                eg.find_function(parent).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn class_layout_publication_reuses_only_unique_storage_and_exact_empty_defaults() {
+        use std::rc::Rc;
+        let source = "<?php class UniqueEmpty {} class SharedEmpty {} class WeakEmpty {} class ScalarSlots { public int $value = 7; } class InheritedSlots extends ScalarSlots {}";
+        let tokens = crate::lexer::Lexer::new(source).tokenize().unwrap();
+        let statements = crate::parser::Parser::new(tokens).parse().unwrap();
+        let compiled = crate::compiler::compile::Compiler::new()
+            .compile(&statements)
+            .unwrap();
+        let mut eg = ExecutorGlobals::new();
+        let mut count = 0;
+        for mut definition in compiled
+            .class_defs
+            .into_iter()
+            .chain(compiled.runtime_class_defs.into_iter().map(|(_, c)| c))
+        {
+            let name = definition.name.clone();
+            definition.property_layout = Rc::new(crate::value::ObjectLayout::new(
+                "PreviousLayout",
+                vec!["obsolete".into()],
+            ));
+            definition.property_defaults = Rc::from([]);
+            let before = Rc::as_ptr(&definition.property_layout);
+            let shared = (name == "SharedEmpty").then(|| definition.property_layout.clone());
+            let weak = (name == "WeakEmpty").then(|| Rc::downgrade(&definition.property_layout));
+            let defaults = definition.property_defaults.clone();
+            eg.register_class(definition).unwrap();
+            let registered = eg.find_class(&name).unwrap();
+            assert_eq!(registered.property_layout.class_name().as_ref(), name);
+            assert_eq!(registered.property_layout.slot("obsolete"), None);
+            if shared.is_some() || weak.is_some() {
+                assert_ne!(Rc::as_ptr(&registered.property_layout), before);
+            } else {
+                assert_eq!(Rc::as_ptr(&registered.property_layout), before);
+            }
+            if let Some(shared) = shared {
+                assert_eq!(shared.len(), 1);
+                assert_eq!(shared.slot("obsolete"), Some(0));
+                assert_eq!(shared.class_name().as_ref(), "PreviousLayout");
+            }
+            if let Some(weak) = weak {
+                assert!(weak.upgrade().is_none());
+            }
+            if name.ends_with("Empty") {
+                assert_eq!(registered.property_layout.len(), 0);
+                assert!(Rc::ptr_eq(&registered.property_defaults, &defaults));
+            } else {
+                assert_eq!(registered.property_layout.slot("value"), Some(0));
+                assert_eq!(registered.property_defaults[0].to_long_val(), 7);
+                assert!(!Rc::ptr_eq(&registered.property_defaults, &defaults));
+            }
+            count += 1;
+        }
+        assert_eq!(count, 5);
+    }
+
+    #[test]
+    fn method_owner_prefix_matches_existing_unicode_normalization() {
+        for name in [
+            "",
+            "NativeOwner",
+            "NATIVEOWNER",
+            "Space\\Owner",
+            "Owner\0anonymous",
+            "\u{c9}Owner",
+            "\u{130}Owner",
+            "\u{39f}\u{3a3}",
+        ] {
+            assert_eq!(
+                ExecutorGlobals::canonical_method_owner_prefix(name),
+                format!("{name}::").to_lowercase()
+            );
+        }
+    }
+
+    #[test]
+    fn inherited_method_prefix_guard_preserves_exact_registry_membership() {
+        let mut eg = ExecutorGlobals::new();
+        let _functions = crate::stdlib::register_stdlib(&mut eg);
+        let pointer = eg.find_function("IteratorIterator::current").unwrap();
+        for key in [
+            "x",
+            "iteratoriterator",
+            "iteratoriteratorx::not_inherited",
+            "iterato:iterator::not_inherited",
+            "unrelated_______::not_inherited",
+        ] {
+            eg.function_table.insert(key.into(), pointer);
+        }
+        let mut expected: Vec<_> = eg
+            .function_table
+            .iter()
+            .filter_map(|(key, pointer)| {
+                key.strip_prefix("iteratoriterator::")
+                    .map(|name| (name.to_owned(), *pointer))
+            })
+            .collect();
+        expected.sort_by(|a, b| a.0.cmp(&b.0));
+        let source = "<?php class NativePrefixChild extends IteratorIterator {} class \u{e9}NativePrefixChild extends IteratorIterator {}";
+        let tokens = crate::lexer::Lexer::new(source).tokenize().unwrap();
+        let statements = crate::parser::Parser::new(tokens).parse().unwrap();
+        let compiled = crate::compiler::compile::Compiler::new()
+            .compile(&statements)
+            .unwrap();
+        let children: Vec<_> = compiled
+            .class_defs
+            .into_iter()
+            .chain(compiled.runtime_class_defs.into_iter().map(|(_, c)| c))
+            .collect();
+        assert_eq!(children.len(), 2);
+        for child in children {
+            let name = child.name.clone();
+            eg.register_class(child).unwrap();
+            let prefix = format!("{}::", name.to_lowercase());
+            let mut actual: Vec<_> = eg
+                .function_table
+                .iter()
+                .filter_map(|(key, pointer)| {
+                    key.strip_prefix(&prefix)
+                        .map(|name| (name.to_owned(), *pointer))
+                })
+                .collect();
+            actual.sort_by(|a, b| a.0.cmp(&b.0));
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
     fn internal_display_names_retain_only_ascii_case_changes() {
         for name in [
             "plain",
@@ -10985,6 +11257,44 @@ mod stdlib_capacity_tests {
                 (name != name.to_ascii_lowercase()).then_some(name),
             );
         }
+    }
+
+    #[test]
+    fn internal_display_name_storage_borrows_only_static_labels() {
+        use std::borrow::Cow;
+        let mut eg = ExecutorGlobals::new();
+        let function = std::ptr::null();
+        eg.register_internal_function_static_display_name(function, "lowercase");
+        assert!(eg.internal_function_display_names.is_none());
+        eg.register_internal_function_static_display_name(function, "StaticOwner::Method");
+        assert!(matches!(
+            &eg.internal_function_display_names.as_ref().unwrap()[&function],
+            Cow::Borrowed("StaticOwner::Method")
+        ));
+        eg.register_internal_function_display_name(function, ["DynamicOwner", "::Method"].concat());
+        assert!(matches!(
+            &eg.internal_function_display_names.as_ref().unwrap()[&function],
+            Cow::Owned(_)
+        ));
+        assert_eq!(
+            eg.internal_function_display_name(function),
+            Some("DynamicOwner::Method")
+        );
+        eg.register_internal_function_static_display_name(function, "Replacement::Method");
+        eg.register_internal_function_static_display_name(function, "lowercase");
+        assert_eq!(
+            eg.internal_function_display_name(function),
+            Some("Replacement::Method")
+        );
+        assert!(matches!(
+            &eg.internal_function_display_names.as_ref().unwrap()[&function],
+            Cow::Borrowed("Replacement::Method")
+        ));
+        assert!(
+            ExecutorGlobals::new()
+                .internal_function_display_names
+                .is_none()
+        );
     }
 
     #[test]
@@ -11250,6 +11560,40 @@ mod stdlib_capacity_tests {
             "fixed stdlib registration must not grow a reserved registry"
         );
         assert!(!functions.is_empty());
+    }
+
+    #[test]
+    fn internal_pointer_metadata_matches_exact_hashmap_identity_and_replacement() {
+        let mut actual = super::InternalFunctionMap::default();
+        let mut expected = std::collections::HashMap::new();
+        let keys: Vec<*const crate::vm::function::FunctionCommon> = (0..4096usize)
+            .map(|index| std::ptr::without_provenance(index.wrapping_mul(256)))
+            .chain([
+                std::ptr::without_provenance(usize::MAX),
+                std::ptr::without_provenance(usize::MAX / 2),
+                std::ptr::without_provenance(1),
+            ])
+            .collect();
+        for (index, &key) in keys.iter().enumerate() {
+            assert_eq!(actual.insert(key, index), expected.insert(key, index));
+        }
+        for (index, &key) in keys.iter().enumerate().rev() {
+            assert_eq!(actual.get(&key), expected.get(&key));
+            assert_eq!(
+                actual.insert(key, index + 4096),
+                expected.insert(key, index + 4096)
+            );
+        }
+        for &key in keys.iter().step_by(3) {
+            assert_eq!(actual.remove(&key), expected.remove(&key));
+            assert_eq!(actual.remove(&key), None);
+        }
+        actual.reserve(8192);
+        assert_eq!(actual.len(), expected.len());
+        for &key in &keys {
+            assert_eq!(actual.get(&key), expected.get(&key));
+        }
+        assert_eq!(actual.get(&std::ptr::without_provenance(3)), None);
     }
 
     #[test]

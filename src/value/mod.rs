@@ -310,6 +310,19 @@ impl ObjectLayout {
         }
     }
 
+    /// Rebuild uniquely owned declaration storage without replacing its
+    /// existing slot table. Already published/shared layouts use a new owner.
+    #[cold]
+    pub(crate) fn rebuild(&mut self, class_name: impl Into<Rc<str>>, keys: Vec<String>) {
+        self.slots.clear();
+        self.slots.reserve(keys.len());
+        for (slot, key) in keys.iter().enumerate() {
+            self.slots.insert(key.clone(), slot);
+        }
+        self.class_name = Some(class_name.into());
+        self.keys = keys;
+    }
+
     #[inline]
     pub fn class_name(&self) -> Rc<str> {
         self.class_name
@@ -1480,12 +1493,14 @@ impl ObjectHandleState {
             self.stale.remove(position);
             return;
         }
-        if self.before_request.contains(&identity) {
-            let position = self
-                .before_request
-                .iter()
-                .position(|candidate| *candidate == identity)
-                .expect("pre-request identity exists");
+        // Locate once rather than running a membership search and then
+        // repeating it to obtain the position. Ordinary request objects have
+        // no pre-request entry and take the empty-slice exit directly.
+        if let Some(position) = self
+            .before_request
+            .iter()
+            .position(|candidate| *candidate == identity)
+        {
             self.before_request.swap_remove(position);
         }
         self.released.push(handle);
@@ -1495,6 +1510,24 @@ impl ObjectHandleState {
 #[cfg(test)]
 mod object_handle_state_tests {
     use super::ObjectHandleState;
+
+    #[test]
+    fn pre_request_release_uses_one_exact_match_and_preserves_lifo() {
+        let mut state = ObjectHandleState::default();
+        state.before_request.extend([20, 40, 60]);
+        state.release(40, 2);
+        assert_eq!(state.before_request, [20, 60]);
+        state.release(99, 4);
+        assert_eq!(state.before_request, [20, 60]);
+        state.release(20, 1);
+        state.release(60, 3);
+        assert!(state.before_request.is_empty());
+        state.release(100, 5);
+        assert_eq!(state.released, [2, 4, 1, 3, 5]);
+        assert_eq!(state.allocate(), 5);
+        assert_eq!(state.allocate(), 3);
+        assert_eq!(state.allocate(), 1);
+    }
 
     #[test]
     fn retained_identity_range_misses_keep_exact_interior_and_lifo_semantics() {

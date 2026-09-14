@@ -21,6 +21,7 @@ mod heap;
 pub(super) mod iterator_delegate;
 pub(super) mod object_storage;
 mod recursive_iterator;
+mod recursive_tree;
 mod regex_iterator;
 pub(crate) use array_object::cursor::{
     Move as NativeIteratorMove, Projection as NativeIteratorProjection,
@@ -39,6 +40,13 @@ pub(crate) use iterator_delegate::resolve_method as resolve_iterator_delegated_m
 pub(crate) use recursive_iterator::validate_start as validate_recursive_iterator_start;
 
 const ROUNDING_MODE_CLASS: &str = "RoundingMode";
+thread_local! {
+    // These immutable templates have no elements and therefore no PHP-owned
+    // edges. Native declarations can share one allocation per thread; a class
+    // with actual properties receives its own populated template at linking.
+    static EMPTY_NATIVE_PROPERTY_DEFAULTS: std::rc::Rc<[Value]> = std::rc::Rc::from([]);
+}
+
 #[cold]
 fn empty_internal_type(
     name: &str,
@@ -67,7 +75,7 @@ fn empty_internal_type(
         static_properties: vec![],
         constants: vec![],
         property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
-        property_defaults: std::rc::Rc::from([]),
+        property_defaults: EMPTY_NATIVE_PROPERTY_DEFAULTS.with(std::rc::Rc::clone),
         readonly_props: vec![],
         methods: vec![],
         abstract_methods: vec![],
@@ -1903,7 +1911,7 @@ fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] 
 // are ASCII; retain the original Unicode conversion for any other caller.
 #[cold]
 #[inline(never)]
-fn internal_method_lookup_name(owner: &str, method: &str) -> String {
+pub(super) fn internal_method_lookup_name(owner: &str, method: &str) -> String {
     let mut name = internal_method_display_name(owner, method);
     if internal_method_spelling_is_ascii(&name) {
         name.make_ascii_lowercase();
@@ -1943,6 +1951,25 @@ fn internal_method_spelling_is_ascii(name: &str) -> bool {
 
 #[cfg(test)]
 mod method_lookup_name_tests {
+    #[test]
+    fn empty_native_defaults_share_no_php_edges_and_detach_populated_storage() {
+        use std::rc::Rc;
+        let first = super::empty_internal_type("EmptyNativeFirst", vec![], false, false);
+        let mut second = super::empty_internal_type("EmptyNativeSecond", vec![], false, false);
+        assert!(first.property_defaults.is_empty());
+        assert!(Rc::ptr_eq(
+            &first.property_defaults,
+            &second.property_defaults
+        ));
+        let retained = first.property_defaults.clone();
+        drop(first);
+        second.property_defaults = Rc::from([crate::value::Value::long(9)]);
+        assert_eq!(second.property_defaults[0].to_long_val(), 9);
+        assert!(retained.is_empty());
+        let third = super::empty_internal_type("EmptyNativeThird", vec![], false, false);
+        assert!(Rc::ptr_eq(&retained, &third.property_defaults));
+    }
+
     #[test]
     fn display_spelling_preserves_bytes_case_and_exact_capacity() {
         for owner in [
@@ -3082,6 +3109,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     funcs.extend(iterator_delegate::register(eg));
     funcs.extend(regex_iterator::register(eg));
     funcs.extend(caching_iterator::register(eg));
+    funcs.extend(caching_iterator::register_recursive(eg));
     funcs.extend(append_iterator::register(eg));
     let mut recursive_array = empty_internal_type(
         "RecursiveArrayIterator",
@@ -3118,6 +3146,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     }
     eg.register_class(recursive_driver).unwrap();
     funcs.extend(recursive_iterator::register(eg));
+    funcs.extend(recursive_tree::register(eg));
     eg.register_class(empty_internal_type(
         "SplFileInfo",
         vec!["Stringable".into()],

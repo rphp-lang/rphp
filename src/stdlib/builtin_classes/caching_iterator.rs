@@ -14,6 +14,9 @@ struct State {
     flags: i64,
     text: Value,
     cache: Value,
+    // Only recursive caches allocate a child slot. Ordinary caches keep their
+    // existing delegate, with no additional edges in the common Value layout.
+    child: Option<Box<Value>>,
 }
 
 impl Default for State {
@@ -26,6 +29,7 @@ impl Default for State {
             flags: 0,
             text: Value::undef(),
             cache: Value::undef(),
+            child: None,
         }
     }
 }
@@ -50,6 +54,7 @@ impl NativeObjectState for State {
             flags: self.flags,
             text: self.text.clone(),
             cache: self.cache.clone(),
+            child: self.child.clone(),
         })
     }
     #[cold]
@@ -82,6 +87,9 @@ impl NativeObjectState for State {
     fn for_each_value(&self, visit: &mut dyn FnMut(&Value)) {
         visit(&self.text);
         visit(&self.cache);
+        if let Some(child) = &self.child {
+            visit(child);
+        }
         self.delegate.for_each_value(visit);
     }
     #[cold]
@@ -98,6 +106,9 @@ impl NativeObjectState for State {
             &mut self.delegate.current,
         ] {
             pending.push(std::mem::replace(value, Value::undef()));
+        }
+        if let Some(child) = self.child.take() {
+            pending.push(*child);
         }
     }
 }
@@ -164,6 +175,39 @@ fn construct(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    construct_kind(ed, rv, eg, false)
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+fn construct_recursive(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    construct_kind(ed, rv, eg, true)
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+fn construct_kind(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    recursive: bool,
+) -> Result<(), VmError> {
+    let owner = if recursive {
+        "RecursiveCachingIterator"
+    } else {
+        "CachingIterator"
+    };
+    let method = if recursive {
+        "RecursiveCachingIterator::__construct"
+    } else {
+        "CachingIterator::__construct"
+    };
     let receiver = owned_argument(ed, 0);
     if receiver
         .as_object()
@@ -174,69 +218,116 @@ fn construct(
         error(
             eg,
             "BadMethodCallException",
-            "CachingIterator::getIterator() must be called exactly once per instance",
+            &format!("{owner}::getIterator() must be called exactly once per instance"),
         );
         return Ok(());
     }
     let inner = owned_argument(ed, 1);
+    let protocol = if recursive {
+        "RecursiveIterator"
+    } else {
+        "Iterator"
+    };
     if !inner
         .as_object()
-        .is_some_and(|o| eg.class_is_a(&o.class_name, "Iterator"))
+        .is_some_and(|o| eg.class_is_a(&o.class_name, protocol))
     {
-        typed_internal_argument_error(
-            eg,
-            "CachingIterator::__construct",
-            &inner,
-            1,
-            "iterator",
-            "Iterator",
-        );
+        typed_internal_argument_error(eg, method, &inner, 1, "iterator", protocol);
         return Ok(());
     }
     let mut options = 1;
     if arg_opt!(ed, 2).is_some() {
         let value = owned_argument(ed, 2);
-        let Some(value) = typed_internal_int_value_argument_expected(
-            ed,
-            eg,
-            &value,
-            "CachingIterator::__construct",
-            1,
-            "flags",
-            "int",
-        )?
+        let Some(value) =
+            typed_internal_int_value_argument_expected(ed, eg, &value, method, 1, "flags", "int")?
         else {
             return Ok(());
         };
         options = value;
     }
-    if !validate_flags(options, "CachingIterator::__construct", 2, eg) {
+    if !validate_flags(options, method, 2, eg) {
         return Ok(());
     }
-    let iterator = super::deque::consumer(&inner, eg).unwrap_or_else(|| inner.clone());
-    let state = State {
-        delegate: NativeIteratorDelegate::new(inner, iterator, 0, -1),
-        flags: options & 0xffff,
-        text: Value::string(""),
-        cache: Value::array(PhpArray::new()),
-    };
-    *receiver
-        .as_object_mut()
-        .unwrap()
-        .native_object_state_mut::<State>() = state;
+    initialize(&receiver, inner, options, recursive, eg);
     ret!(rv, Value::null());
 }
 
 #[cold]
 #[inline(never)]
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+fn initialize(
+    receiver: &Value,
+    inner: Value,
+    options: i64,
+    recursive: bool,
+    eg: &mut ExecutorGlobals,
+) {
+    let iterator = super::deque::consumer(&inner, eg).unwrap_or_else(|| inner.clone());
+    let state = State {
+        delegate: NativeIteratorDelegate::new(inner, iterator, 0, -1),
+        flags: options & 0xffff,
+        text: Value::string(""),
+        cache: Value::array(PhpArray::new()),
+        child: recursive.then(|| Box::new(Value::null())),
+    };
+    *receiver
+        .as_object_mut()
+        .unwrap()
+        .native_object_state_mut::<State>() = state;
+}
+
+/// Children are base RecursiveCachingIterator objects, never copies of a
+/// user subclass. Publishing their state does not execute a user constructor.
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+pub(super) fn recursive_wrapper(inner: &Value, options: i64, eg: &mut ExecutorGlobals) -> Value {
+    if !inner
+        .as_object()
+        .is_some_and(|o| eg.class_is_a(&o.class_name, "RecursiveIterator"))
+    {
+        typed_internal_argument_error(
+            eg,
+            "RecursiveCachingIterator::__construct",
+            inner,
+            1,
+            "iterator",
+            "RecursiveIterator",
+        );
+        return Value::null();
+    }
+    if !validate_flags(options, "RecursiveCachingIterator::__construct", 2, eg) {
+        return Value::null();
+    }
+    let class = eg
+        .find_class("RecursiveCachingIterator")
+        .expect("registered recursive cache");
+    let receiver = Value::object(PhpObject::with_layout_from_defaults(
+        class.class_id,
+        class.property_layout.clone(),
+        class.property_defaults.as_ref(),
+    ));
+    initialize(&receiver, inner.clone(), options, true, eg);
+    receiver
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
 fn reset_projection(receiver: &Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let text = {
+    let (text, child) = {
         let mut object = receiver.as_object_mut().unwrap();
         let cache = object.native_object_state_mut::<State>();
         cache.flags &= !VALID;
-        std::mem::replace(&mut cache.text, Value::string(""))
+        let child = cache
+            .child
+            .as_mut()
+            .map(|value| std::mem::replace(&mut **value, Value::null()));
+        (std::mem::replace(&mut cache.text, Value::string("")), child)
     };
+    if let Some(child) = child {
+        iterator_delegate::discard(child, eg)?;
+    }
     iterator_delegate::clear(receiver, eg)?;
     iterator_delegate::discard(text, eg)
 }
@@ -256,7 +347,7 @@ fn empty_cache(receiver: &Value, eg: &mut ExecutorGlobals) -> Result<(), VmError
 #[cold]
 #[inline(never)]
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
-fn string_value(
+pub(super) fn string_value(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
     source: &Value,
@@ -337,35 +428,15 @@ fn advance(
     if eg.exception.is_some() {
         return Ok(());
     }
-    {
+    let recursive = {
         let mut object = receiver.as_object_mut().unwrap();
         let state = object.native_object_state_mut::<State>();
         state.delegate.key = key;
         state.flags |= VALID;
-    }
-    let mode = flags(&receiver) & 15;
-    if mode == 1 || mode == 8 {
-        let source = if mode == 8 {
-            inner.clone()
-        } else {
-            receiver
-                .as_object()
-                .unwrap()
-                .native_iterator_delegate()
-                .unwrap()
-                .current
-                .clone()
-        };
-        let text = string_value(ed, eg, &source)?;
-        if eg.exception.is_some() {
-            return Ok(());
-        }
-        receiver
-            .as_object_mut()
-            .unwrap()
-            .native_object_state_mut::<State>()
-            .text = text;
-    }
+        state.child.is_some()
+    };
+    // FULL_CACHE is committed before child acquisition or string conversion.
+    // Both callbacks can throw or reenter and must observe that publication.
     if flags(&receiver) & FULL != 0 {
         let (key, value) = {
             let object = receiver.as_object().unwrap();
@@ -390,8 +461,118 @@ fn advance(
             return Ok(());
         }
     }
-    iterator_delegate::protocol(eg, &inner, "next")?;
+    if recursive {
+        capture_child(&receiver, &inner, eg)?;
+    }
+    if eg.exception.is_none() {
+        let mode = flags(&receiver) & 15;
+        if mode == 1 || mode == 8 {
+            let source = if mode == 8 {
+                inner.clone()
+            } else {
+                receiver
+                    .as_object()
+                    .unwrap()
+                    .native_iterator_delegate()
+                    .unwrap()
+                    .current
+                    .clone()
+            };
+            let text = string_value(ed, eg, &source)?;
+            if eg.exception.is_none() {
+                receiver
+                    .as_object_mut()
+                    .unwrap()
+                    .native_object_state_mut::<State>()
+                    .text = text;
+            }
+        }
+    }
+    // Native cursor movement still completes with a pending conversion error.
+    // Do not enter a fresh user call frame, which would replace that error.
+    if eg.exception.is_none() || array_object::cursor::native_protocol(&inner, eg) {
+        iterator_delegate::protocol(eg, &inner, "next")?;
+    }
     ret!(rv, Value::null());
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+fn capture_child(receiver: &Value, inner: &Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let has = call_object_protocol_method(eg, inner, "RecursiveIterator", "hasChildren", &[])?;
+    if eg.exception.is_none() && has.is_some_and(|value| value.is_truthy()) {
+        let child =
+            call_object_protocol_method(eg, inner, "RecursiveIterator", "getChildren", &[])?
+                .unwrap_or_else(Value::null);
+        if eg.exception.is_none() {
+            let cached = recursive_wrapper(&child, flags(receiver), eg);
+            if eg.exception.is_none() {
+                let retired = {
+                    let mut object = receiver.as_object_mut().unwrap();
+                    let slot = object
+                        .native_object_state_mut::<State>()
+                        .child
+                        .as_mut()
+                        .expect("recursive cache");
+                    std::mem::replace(&mut **slot, cached)
+                };
+                iterator_delegate::discard(retired, eg)?;
+            }
+        }
+        iterator_delegate::discard(child, eg)?;
+    }
+    if eg.exception.is_some() && flags(receiver) & 16 != 0 {
+        let exception = eg.exception.take().expect("child exception");
+        iterator_delegate::discard(exception, eg)?;
+    }
+    Ok(())
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+fn has_children(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = owned_argument(ed, 0);
+    if !initialized(&receiver, eg) {
+        return Ok(());
+    }
+    let has = receiver
+        .as_object()
+        .unwrap()
+        .native_object_state::<State>()
+        .unwrap()
+        .child
+        .as_ref()
+        .is_some_and(|value| value.value_type() == ValueType::Object);
+    ret!(rv, Value::bool(has));
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+fn get_children(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = owned_argument(ed, 0);
+    if !initialized(&receiver, eg) {
+        return Ok(());
+    }
+    let child = receiver
+        .as_object()
+        .unwrap()
+        .native_object_state::<State>()
+        .unwrap()
+        .child
+        .as_ref()
+        .map_or_else(Value::null, |value| (**value).clone());
+    ret!(rv, child);
 }
 
 #[cold]
@@ -763,6 +944,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             .push(recursive_iterator::constant("CachingIterator", name, value));
     }
     eg.register_class(class).unwrap();
+    eg.reserve_internal_method_contracts("CachingIterator", 14);
     let mut functions = Vec::with_capacity(14);
     let entries: &[(&str, InternalFunctionHandler, &[&str])] = &[
         ("rewind", rewind, &[]),
@@ -849,6 +1031,60 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         vec![None, Mixed],
         &[Option::None, Option::None],
         Void,
+    );
+    functions
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+pub(super) fn register_recursive(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
+    use ParamTypeHint::{Bool, ClassName, Int, Nullable};
+    let owner = "RecursiveCachingIterator";
+    let mut class = empty_internal_type(owner, vec!["RecursiveIterator".into()], false, false);
+    class.parent = Some("CachingIterator".into());
+    eg.register_class(class).unwrap();
+    eg.reserve_internal_method_contracts(owner, 3);
+    let mut functions = Vec::with_capacity(3);
+    recursive_iterator::register_method(
+        eg,
+        &mut functions,
+        owner,
+        "__construct",
+        construct_recursive,
+        &["iterator", "flags"],
+        vec![ClassName("Iterator".into()), Int],
+        &[None, Some("RecursiveCachingIterator::CALL_TOSTRING")],
+        ParamTypeHint::None,
+    );
+    let pointer = &functions.last().unwrap().common as *const FunctionCommon;
+    eg.register_internal_function_reflection_metadata_with_diagnostics(
+        pointer,
+        vec![None, Some(Value::long(1))],
+        &[None, Some("RecursiveCachingIterator::CALL_TOSTRING")],
+        "SPL",
+    );
+    recursive_iterator::register_method(
+        eg,
+        &mut functions,
+        owner,
+        "hasChildren",
+        has_children,
+        &[],
+        vec![],
+        &[],
+        Bool,
+    );
+    recursive_iterator::register_method(
+        eg,
+        &mut functions,
+        owner,
+        "getChildren",
+        get_children,
+        &[],
+        vec![],
+        &[],
+        Nullable(Box::new(ClassName(owner.into()))),
     );
     functions
 }
