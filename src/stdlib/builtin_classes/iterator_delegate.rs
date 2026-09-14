@@ -65,7 +65,7 @@ fn error(eg: &mut ExecutorGlobals, kind: &str, message: &str) {
     eg.exception = Some(make_error_value(kind, message));
 }
 
-fn initialized(receiver: &Value, eg: &mut ExecutorGlobals) -> bool {
+pub(super) fn initialized(receiver: &Value, eg: &mut ExecutorGlobals) -> bool {
     if receiver
         .as_object()
         .is_some_and(|o| o.native_iterator_delegate().is_some())
@@ -80,7 +80,7 @@ fn initialized(receiver: &Value, eg: &mut ExecutorGlobals) -> bool {
     false
 }
 
-fn inner(receiver: &Value) -> Value {
+pub(super) fn inner(receiver: &Value) -> Value {
     receiver
         .as_object()
         .expect("method receiver")
@@ -100,7 +100,7 @@ pub(in crate::stdlib) fn discard(value: Value, eg: &mut ExecutorGlobals) -> Resu
     run_prepared_value_destructor(eg, release)
 }
 
-fn clear(receiver: &Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+pub(super) fn clear(receiver: &Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let (current, key) = {
         let mut object = receiver.as_object_mut().expect("method receiver");
         let state = object.native_iterator_delegate_mut().expect("initialized");
@@ -149,7 +149,7 @@ pub(super) fn protocol(
     )
 }
 
-fn fetch(receiver: &Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+pub(super) fn fetch(receiver: &Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let iterator = inner(receiver);
     let valid = protocol(eg, &iterator, "valid")?;
     if eg.exception.is_some() || !valid.is_truthy() {

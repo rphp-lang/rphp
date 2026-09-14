@@ -1723,7 +1723,8 @@ impl ExecutorGlobals {
             .reserve(448usize.saturating_sub(metadata.functions.len()));
         metadata
             .methods
-            .reserve(28usize.saturating_sub(metadata.methods.len()));
+            // FilterIterator/RegexIterator cross the 28-owner envelope.
+            .reserve(32usize.saturating_sub(metadata.methods.len()));
         let display_names = self
             .internal_function_display_names
             .get_or_insert_with(|| Box::new(HashMap::new()));
@@ -1743,7 +1744,8 @@ impl ExecutorGlobals {
         // Deque, stack and queue share one native container implementation.
         // Abstract heap, min heap and max heap add three fixed declarations.
         // SplFileObject adds one line-cursor declaration to that fixed set.
-        let class_capacity = 114 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        // FilterIterator and RegexIterator add two fixed declarations.
+        let class_capacity = 116 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;

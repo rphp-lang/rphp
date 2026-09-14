@@ -762,7 +762,7 @@ pub(super) fn constant(owner: &str, name: &str, value: i64) -> ClassConstantDefi
 /// table whose contents would immediately be moved into runtime metadata.
 #[cold]
 #[inline(never)]
-fn register_method(
+pub(super) fn register_method(
     eg: &mut ExecutorGlobals,
     functions: &mut Vec<Box<InternalFunction>>,
     owner: &'static str,

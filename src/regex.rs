@@ -272,6 +272,16 @@ impl CaptureView<'_> {
 }
 
 impl Regex {
+    /// Projection consumers need the declared slots even when there is no
+    /// match. This exposes metadata only, not another matching path.
+    pub(crate) fn capture_count(&self) -> usize {
+        self.num_groups + 1
+    }
+
+    pub(crate) fn capture_names(&self) -> &HashMap<String, usize> {
+        &self.named_groups
+    }
+
     /// Compile a regex pattern with given flags.
     pub fn new(pattern: &str, flags: RegexFlags) -> Result<Self, String> {
         let mut parser = Parser::new(pattern, flags);

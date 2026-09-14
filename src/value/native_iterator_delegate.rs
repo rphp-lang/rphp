@@ -12,6 +12,20 @@ pub(crate) struct NativeIteratorDelegate {
     pub offset: i64,
     pub limit: i64,
     pub recursive: Option<Box<RecursiveTraversal>>,
+    pub regex: Option<Box<RegexIteratorState>>,
+}
+
+/// Only native regex filters allocate this configuration. All PHP-owned
+/// projections remain in the delegate's traced current/key/inner fields;
+/// replacement stays an ordinary declared PHP property.
+pub(crate) struct RegexIteratorState {
+    pub pattern: String,
+    pub pattern_is_binary: bool,
+    pub compiled: std::rc::Rc<crate::regex::Regex>,
+    pub unicode: bool,
+    pub mode: i64,
+    pub flags: i64,
+    pub preg_flags: i64,
 }
 
 #[derive(Clone, Copy)]
@@ -49,6 +63,7 @@ impl NativeIteratorDelegate {
             offset,
             limit,
             recursive: None,
+            regex: None,
         }
     }
 

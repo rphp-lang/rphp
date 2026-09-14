@@ -19,6 +19,7 @@ mod heap;
 pub(super) mod iterator_delegate;
 pub(super) mod object_storage;
 mod recursive_iterator;
+mod regex_iterator;
 pub(crate) use array_object::cursor::{
     Move as NativeIteratorMove, Projection as NativeIteratorProjection,
     consume_array as consume_native_iterator_array, entry as native_iterator_entry,
@@ -3077,6 +3078,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         eg.register_class(class).unwrap();
     }
     funcs.extend(iterator_delegate::register(eg));
+    funcs.extend(regex_iterator::register(eg));
     let mut recursive_array = empty_internal_type(
         "RecursiveArrayIterator",
         vec!["RecursiveIterator".into()],

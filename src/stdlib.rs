@@ -31248,8 +31248,22 @@ fn fn_preg_match_all(
     let count = count.unwrap();
 
     let mut out = PhpArray::new();
-    for array in result_arrays.unwrap_or_else(|| vec![PhpArray::new()]) {
-        out.push(Value::array(array));
+    for (index, array) in result_arrays
+        .unwrap_or_else(|| (0..re.capture_count()).map(|_| PhpArray::new()).collect())
+        .into_iter()
+        .enumerate()
+    {
+        let value = Value::array(array);
+        // No match visits the capture buffer, but the declared groups still
+        // define every empty column (including each named alias).
+        if count == 0 {
+            for (name, slot) in re.capture_names() {
+                if *slot == index {
+                    out.set_str(name, value.clone());
+                }
+            }
+        }
+        out.push(value);
     }
     for (name, _, array) in named_arrays {
         out.set_str(&name, Value::array(array));

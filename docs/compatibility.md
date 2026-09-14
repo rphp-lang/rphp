@@ -8,70 +8,79 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
-`spl-file-object-physical-read-position-contracts`, against `9cddc39c`:
-**+12/-0** SPL passes. SPL reaches **523 pass / 222 fail / 31 unsupported /
-8 skip / 1 XFAIL**. Core retains **6,446 pass / 335 fail / 182 skip /
-211 unsupported**, with identical pass sets. The selected 7,959 cases have
-**6,969 passes and 557 failures**, plus 190 skips, 242 unsupported and one
-XFAIL; this is not complete PHP coverage. Every gain independently passes
-PHP 8.5.10. No previous pass, expectation, failure stage or process-safety
-result is lost.
+`regex-iterator-filter-projection-contracts`, against `ed220dee`: **+22/-0**
+SPL passes, independently confirmed by PHP 8.5.10. SPL reaches **545 pass /
+200 fail / 31 unsupported / 8 skip / 1 XFAIL**. Core retains **6,446 pass /
+335 fail / 182 skip / 211 unsupported** and identical pass sets. The selected
+7,959 cases have **6,991 passes and 535 failures**, plus 190 skips,
+242 unsupported and one XFAIL; this is not complete PHP coverage.
 
-SplFileObject ftell/fgets/fread/fgetc reuse the sparse traced file owner and
-existing native/wrapper backend. Physical position stays distinct from cached
-lines and logical keys; EOF, READ_AHEAD/READ_CSV, raw bytes, signed wrapper
-positions, validation order and failure/reentry lifetimes are covered. No
-native-state borrow crosses PHP callbacks. General fwrite/ftruncate,
-SplTempFileObject, broader debug/path metadata, suspension, 32-bit and OOM
-equivalence remain outside this checkpoint.
+FilterIterator and RegexIterator reuse native delegation and the existing regex
+engine. Five projection modes, current/key, mutable flags and reference-backed
+replacement, named/offset captures, raw bytes, validation, override ordering,
+conversion reentry and retirement are covered. Compiled regex configuration is
+sparse; PHP values remain in existing traced slots and the declared replacement
+property. No native-state borrow crosses PHP callbacks. The shared zero-match
+preg_match_all projection now retains all declared empty capture columns.
+There is no new dependency, opcode, JIT admission or hidden GC edge; unsafe
+remains **1,622 blocks / 289 functions**, with unchanged ceilings.
 
-Profile-backed prerequisites remove redundant primitive snapshot/TMP ownership
-work and transfer only the retired resource payload beyond the registry borrow.
-Non-primitive/reference/unpack fallback, compact/large-frame retirement and
-destructor reentry remain covered. There is no new Value/VM field, resource
-representation, opcode, dependency or JIT admission. Unsafe remains
-**1,622 blocks / 289 functions**. Rejected hypotheses and failed timing
-markers remain in the evidence; unchanged failed timings were not rerolled.
-
-All **977 focused tests** and 70 no-default focused tests pass. Twenty original
-read cases and nine primitive snapshot cases pass byte-exact both normally and
-with JIT disabled (40 and 18 runs); prior CSV/cursor/storage/lifetime oracles
-remain green. The final checked matrix passes
-**5,351/5,022/5,422/5,444/5,495** tests (13/13/13/13/16 ignored, none filtered),
+All **714 library tests** and **21 original E2E tests** pass; each E2E runs
+normally and with JIT disabled. Prior primitive/read/CSV/cursor/storage/lifetime
+oracles remain green. One frozen checked matrix passes
+**5,372/5,043/5,443/5,465/5,516** tests (13/13/13/13/16 ignored, none filtered),
 plus all-features/all-targets. Exact no-loss, Composer/Symfony S0-S3,
 runner/unsafe self-tests, formatting and public hygiene pass. Cleanup runs
-between configurations and preserves sources and exact active binaries.
+between configurations, retaining sources and active exact binaries.
 
-All **81 fixed-parent 32-pair controls** have exact results. **77** meet the
-original common +1% / pay-use +5% limits. Four common-control costs are deferred
-explicitly: static-reference **+1.650%**, native-cycle **+1.547%**, startup
-**+1.904%**, object-lifecycle **+2.496%**. The user explicitly accepted the
-observed +1.65% and prioritized compatibility; the disclosed working
-interpretation defers modest costs up to 3% for this candidate, not a claim of
-explicit approval of each later number. The raw nominal failures are retained.
-The exact `9cddc39c` baseline remains the cumulative optimization-debt anchor;
-this does not silently grant another checkpoint a fresh budget. Pay-use stays
-below +5% (highest +3.412%); ordinary calls improve 4.124%. New tell/byte/block/
-line candidate/PHP ratios are **7.035/2.325/0.815/2.685** (eight pairs), not
-absent-parent deltas or PHP speed parity. The authorized shared-host guard
-records two background events, not exclusive-host evidence.
+The supplying set is 18/20. RecursiveRegexIterator remains missing;
+iterator_052 moves from missing-class runtime failure to a known independent
+array-to-string warning-suppression output failure. Every other output byte
+matches PHP; the warnings, failed status and original expectations remain.
+General PCRE/invalid-UTF8 diagnostics, malformed ancestor-constructor crash
+equivalence, recursive iterators, 32-bit/OOM and whole-class/PHP claims remain
+outside this checkpoint. No prior pass or process-safety result is lost.
+
+All **85 established 32-pair controls** and four new eight-pair API cost lanes
+have exact results. Against the unchanged `9cddc39c` cumulative anchor,
+**78/81** older controls meet nominal common +1% / pay-use +5% limits.
+Deferred common costs are static-reference **+1.251%**, serialization
+**+1.393%**, dynamic clone **+1.416%**; all are within the user's accepted
++1.65% compatibility-first tolerance. Pay-use peaks at **+2.031%**. Four
+now-present physical-read controls compare against `ed220dee` and range from
+**-2.214% to +0.312%**; their absent earlier baseline is not invented.
+
+The agent-added extra per-commit +1% condition is explicitly superseded by the
+user's fixed-cumulative-baseline instruction, not reported as passed. Raw exit
+1 and all three incremental findings remain: boolean **+4.211%** (cumulative
+**-9.896%**), arithmetic **+1.111%** (**-1.297%**), serialization **+1.819%**
+(**+1.393%**). No failed timing was rerolled and no fresh micro-baseline budget
+was granted. New match/capture/split/replace candidate/PHP ratios are
+**4.514/4.812/4.986/4.601**, not absent-parent deltas or speed-parity claims.
+The authorized shared-host guard is diagnostic, not exclusive-host evidence.
 
 SHA-256 evidence:
 
-- Release: `b5a12455edaab4726ede035afd147837293ff9de6118e954b71f94f226fa58e5`.
-- Complete technical record: `7e622c0d72db8a50fe2a955b5404996895f431aeae9b28ad4277ded5e1954aaf`.
-- Matrix: `e6d30c286f573bf79d0189eea74c28dc07bdf46fb43eacbdef34832c8669e125`.
-- SPL manifest / pass set: `ec06a8ce33aa97df25a149f03c878e40af5c25c783172154f59d455480a3f67f` / `fc046088cd74bd14d7d1c9d4898cd6bfd869998cc419c0ffc4df60e68b93d282`.
-- Zend/lang manifest / pass set: `fdc859122ad7f3beedc39bacfea53dd8f965d5618ffa05f2bfcaa776e6dfe7fe` / `b99f862eabc6857b7347b6f378368ce342ff70acec02d7d2732e8f20daa5fde3`.
-- Strings/array manifest / pass set: `d7ace5eebd276c61bb0e950fb05cfd831198dedbf07e97e2d15e4330748b4886` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
-- Reviewed performance, including nominal failures: `397e77b29b1a400e4dbf474c32320a7e7d8496fd4f953db09d47b833752a4560`.
+- Release: `248b34e0f3eb62eb1787d7572733b7a27a5c9f5e86c7c827b45b212eb8de3837`.
+- Complete technical record: `92d38b33c994ecb0727cb380a2864e74ab7056e793240df45b5a8cb2b3720c79`.
+- Matrix: `c06b2ac3ebce50ba6dba1578f823a14f6675f6fd7702cc79bb3ea0a705706c15`.
+- SPL manifest / pass set: `44061f3bd790a640a2fbc863a3aa6cd3f1bac1ae9244d3267221981ef2fd0727` / `5df2188a84d610b6c6ef72f1b566f5eff46ddb424c8b3a4bcc12c2d7c6408863`.
+- Zend/lang manifest / pass set: `08254d0d9425abe57898e6ee8631fe3f5f65af2f7810b88a6f7810c9287d1930` / `b99f862eabc6857b7347b6f378368ce342ff70acec02d7d2732e8f20daa5fde3`.
+- Strings/array manifest / pass set: `a5a30841e3b1d65444013030b124ee44ed22ca3c6562e7f07f58396d73e9a1c9` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+- Reviewed performance, including raw failures: `9b24ce857f463238901b51d6726ec45178d311769b162507e3af7504447e99ae`.
+- Raw timing results: `ec680c429b8a7c005c72bce077f2701f21ab12749aec48099bf5622fa7b74031`.
 
-Next read-only triage finds **20** failures first blocked by RegexIterator
-(`04d9e03b95118df2cfad83e4abd76d23d02eb05f5510f8d7ccbef3f6435c54f7`).
-This is not yet PHP-pass admission: require at least ten reachable shared-cause
-gains before implementation. Reuse the existing iterator, regex and traced
-ownership paths; recursive/glob/tree families and general regex redesign are
-separate contracts. Preserve all existing controls and the recorded debt anchor.
+Next read-only triage finds **14** failures first blocked by CachingIterator
+(`7433f1b3ed1a5fa6ecf6680ce8c5e710d4693af44eceb9e363eb7c15c2b0f88d`).
+Require at least ten reachable PHP-pass/current-fail cases before implementation;
+reuse traced delegation for lookahead, string/cache flags and retirement.
+SplTempFileObject's 21 first blockers also require independent write/debug
+boundaries, so they are not assumed constructor-only. Preserve all controls
+and the fixed cumulative debt anchor.
+
+The preceding physical-read checkpoint added 12 SPL passes; its complete
+technical record, including its explicit performance debt, remains
+`7e622c0d72db8a50fe2a955b5404996895f431aeae9b28ad4277ded5e1954aaf`.
 
 The preceding CSV-record checkpoint added 21 SPL passes; its complete
 technical record remains

@@ -13,7 +13,7 @@ pub(crate) use native_array_iteration::{
     NativeArrayBuckets, NativeArrayCursor, NativeArrayIteration,
 };
 pub(crate) use native_iterator_delegate::{
-    NativeIteratorDelegate, RecursiveFrame, RecursivePhase, RecursiveTraversal,
+    NativeIteratorDelegate, RecursiveFrame, RecursivePhase, RecursiveTraversal, RegexIteratorState,
 };
 
 #[cold]
