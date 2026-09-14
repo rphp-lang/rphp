@@ -36,33 +36,34 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `caching-iterator-lookahead-projection-contracts` train adds
-15 PHP 8.5 SPL passes over `6c6d250e`, without loss, new process hazards,
-expectation changes or moved failure stages. SPL reaches 560/185/31
+The accepted `append-iterator-list-cursor-contracts` train adds twelve
+PHP 8.5 SPL passes over `20438304`, without loss, new process hazards,
+expectation changes or moved failure stages. SPL reaches 572/173/31
 unsupported/8 skip/1 XFAIL; core retains 6,446/335/182/211 and identical pass
-sets. Selected coverage is 7,959 cases: 7,006 pass and 520 fail, not all PHP.
+sets. Selected coverage is 7,959 cases: 7,018 pass and 508 fail, not all PHP.
 
-Lookahead, mutable string/cache flags, projection, offsets, reference/COW,
-callback ordering and traced retirement share one sparse opaque native owner.
-Profile-backed scope-cache reuse, cold destructor identity recovery and weak-root
-tail deduplication remove repeated work without new common fields, opcode,
-scalar-plan admission or unsafe blocks. One frozen checked five-configuration matrix,
-all-targets, original/no-loss, S0-S3 and unsafe/static/public-hygiene gates pass.
+Mutable public list and selected inner cursor remain independent, with sparse
+traced ownership, reference/COW, callback/reentry and retirement regressions.
+A general cold over-arity trace boundary preserves actual pending arguments
+before cleanup. No common fields, opcode, JIT admission or unsafe-ceiling change.
+One frozen checked five-configuration matrix/all-targets, original/no-loss,
+S0-S3 and unsafe/static/public-hygiene gates pass.
 
-All 89 established controls have exact outputs and meet the unchanged user
-policy: cumulative common <=1.65% against `9cddc39c`, pay-use <=5%.
-The respective peaks are +0.707% and +3.069%. Nominal and incremental findings and
-rejected candidates remain visible; no moving micro-baseline or failed timing
-reroll. Exact records, four new API cost ratios and shared-host limitations are
-in `compatibility.md`. Cleanup remains mandatory.
+All 93 established controls meet unchanged user cumulative common <=1.65%
+against `9cddc39c`, pay-use <=5%; peaks +1.311%/+2.193%.
+Nominal +1% and incremental findings, including the explicit memory-I/O debt,
+remain visible. New Append API cost ratios are separate, not speed-parity
+claims. Exact records and shared-host limitations are in `compatibility.md`;
+cleanup remains automatic.
 
-Next read-only admission finds twelve PHP-passing failures first blocked by
-AppendIterator. Refresh against the accepted parent, then target mutable public
-list/selected cursor, forwarding, order/reentry/reference and traced retirement
-as one train. Require at least ten reachable shared-cause gains and preserve
-all controls. SplTempFileObject additionally needs independent write/debug
-contracts; recursive families, suspension, 32-bit/OOM and whole-PHP claims stay
-separate.
+Next read-only admission confirms 21 PHP-passing failures first blocked by
+SplTempFileObject. Normalize temporary-backed file lifecycle plus required
+write/cache/path/debug behavior; registration alone is insufficient. Reuse
+existing native stream ownership and do not change common resource layout.
+Original oracle precedes code; require at least ten reachable shared-cause
+gains and preserve all controls, including now-present Append APIs. General
+filesystem expansion, recursive families, suspension, 32-bit/OOM and whole-PHP
+claims remain separate. No second implementation before current acceptance.
 
 ### Preceding directory cursor checkpoint
 

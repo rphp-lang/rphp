@@ -11,6 +11,7 @@ use crate::vm::instruction::{
     FETCH_DIM_COMPOUND, FETCH_DIM_EMPTY, FETCH_DIM_MUTABLE, FETCH_DIM_UNSET,
 };
 
+mod append_iterator;
 pub(super) mod array_object;
 mod caching_iterator;
 pub(super) mod deque;
@@ -3081,6 +3082,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     funcs.extend(iterator_delegate::register(eg));
     funcs.extend(regex_iterator::register(eg));
     funcs.extend(caching_iterator::register(eg));
+    funcs.extend(append_iterator::register(eg));
     let mut recursive_array = empty_internal_type(
         "RecursiveArrayIterator",
         vec!["RecursiveIterator".into()],

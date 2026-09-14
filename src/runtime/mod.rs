@@ -1745,8 +1745,8 @@ impl ExecutorGlobals {
         // Abstract heap, min heap and max heap add three fixed declarations.
         // SplFileObject adds one line-cursor declaration to that fixed set.
         // FilterIterator and RegexIterator add two fixed declarations.
-        // CachingIterator adds one lookahead declaration.
-        let class_capacity = 117 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        // CachingIterator and AppendIterator add lookahead/list declarations.
+        let class_capacity = 118 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;

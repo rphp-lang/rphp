@@ -3947,6 +3947,10 @@ fn execute_full_call<'a>(
             num_args,
             exact_arity_diagnostics,
         );
+        // Arity validation rejects entry, not the pending call's trace.
+        // Retain its actual supplied arguments before frame cleanup, just as
+        // synchronous internal-handler errors do on their cold error path.
+        attach_internal_call_trace_if_missing(&error, call, frame, eg);
         // SAFETY: `call` is the live pending call owned by `frame`; its
         // compiler-sized slots were initialized by the preceding sends.
         unsafe { cleanup_frame_slots(call) };
