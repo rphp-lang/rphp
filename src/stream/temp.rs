@@ -90,8 +90,10 @@ enum Storage {
 pub(super) struct TempStream {
     storage: Storage,
     max_memory: usize,
-    #[cfg(feature = "stream-truncate")]
     append_after_truncate: bool,
+    // Temp wraps another finite reader. Preserve its short-read EOF until
+    // the outer stream consumes the prefetched suffix (memory is unwrapped).
+    read_eof: bool,
 }
 
 impl TempStream {
@@ -99,8 +101,8 @@ impl TempStream {
         Self {
             storage: Storage::Memory(Cursor::new(Vec::new())),
             max_memory,
-            #[cfg(feature = "stream-truncate")]
             append_after_truncate: false,
+            read_eof: false,
         }
     }
 
@@ -117,17 +119,26 @@ impl TempStream {
     }
 
     pub(super) fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        match &mut self.storage {
+        let count = match &mut self.storage {
             Storage::Memory(memory) => memory.read(buffer),
             Storage::File(file) => file.file_mut().read(buffer),
+        }?;
+        if !buffer.is_empty() {
+            self.read_eof = count < buffer.len();
         }
+        Ok(count)
+    }
+
+    pub(super) fn is_eof(&self) -> bool {
+        self.read_eof
     }
 
     pub(super) fn write(&mut self, buffer: &[u8], append: bool) -> io::Result<usize> {
+        self.read_eof = false;
         if append {
             self.seek(SeekFrom::End(0))?;
         }
-        #[cfg(feature = "stream-truncate")]
+
         if self.append_after_truncate && !append {
             return self.write_after_memory_truncate(buffer);
         }
@@ -165,32 +176,24 @@ impl TempStream {
         }
     }
 
+    pub(super) fn lock_file(&self) -> Option<&File> {
+        match &self.storage {
+            Storage::File(file) => Some(file.file()),
+            Storage::Memory(_) => None,
+        }
+    }
+
     pub(super) fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
-        #[cfg(feature = "stream-truncate")]
-        {
-            self.append_after_truncate = false;
-            return self.seek_without_reset(position);
-        }
-        #[cfg(not(feature = "stream-truncate"))]
-        match &mut self.storage {
-            Storage::Memory(memory) => memory.seek(position),
-            Storage::File(file) => file.file_mut().seek(position),
-        }
+        let position = self.seek_without_reset(position)?;
+        self.append_after_truncate = false;
+        self.read_eof = false;
+        Ok(position)
     }
 
     pub(super) fn position(&mut self) -> io::Result<u64> {
-        #[cfg(feature = "stream-truncate")]
-        {
-            return self.position_without_reset();
-        }
-        #[cfg(not(feature = "stream-truncate"))]
-        match &mut self.storage {
-            Storage::Memory(memory) => Ok(memory.position()),
-            Storage::File(file) => file.file_mut().stream_position(),
-        }
+        self.position_without_reset()
     }
 
-    #[cfg(feature = "stream-truncate")]
     pub(super) fn truncate(&mut self, length: u64) -> io::Result<()> {
         match &mut self.storage {
             Storage::Memory(memory) => {
@@ -218,7 +221,6 @@ impl TempStream {
         }
     }
 
-    #[cfg(feature = "stream-truncate")]
     fn write_after_memory_truncate(&mut self, buffer: &[u8]) -> io::Result<usize> {
         let logical_position = self.position_without_reset()?;
         let current_length = self.length()?;
@@ -247,7 +249,6 @@ impl TempStream {
         }
     }
 
-    #[cfg(feature = "stream-truncate")]
     fn length(&mut self) -> io::Result<u64> {
         match &mut self.storage {
             Storage::Memory(memory) => Ok(memory.get_ref().len() as u64),
@@ -255,7 +256,6 @@ impl TempStream {
         }
     }
 
-    #[cfg(feature = "stream-truncate")]
     fn position_without_reset(&mut self) -> io::Result<u64> {
         match &mut self.storage {
             Storage::Memory(memory) => Ok(memory.position()),
@@ -263,7 +263,6 @@ impl TempStream {
         }
     }
 
-    #[cfg(feature = "stream-truncate")]
     fn seek_without_reset(&mut self, position: SeekFrom) -> io::Result<u64> {
         match &mut self.storage {
             Storage::Memory(memory) => memory.seek(position),

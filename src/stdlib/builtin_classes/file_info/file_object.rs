@@ -6,6 +6,7 @@ use crate::stdlib::stream::PhpStream;
 use std::cell::RefCell;
 
 mod csv_records;
+mod mutation;
 mod read_position;
 
 const DROP_NEW_LINE: u32 = 1;
@@ -29,12 +30,44 @@ pub(super) struct FileState {
     flags: u32,
     eof: bool,
     override_line: bool,
+    pub(super) temporary: bool,
     csv: csv_records::Controls,
     csv_read_failed: bool,
     csv_line: Option<Vec<u8>>,
 }
 
 impl FileState {
+    #[cold]
+    pub(super) fn append_debug_properties(
+        &self,
+        eg: &mut ExecutorGlobals,
+        properties: &mut PhpArray,
+    ) {
+        let mode = if self.temporary {
+            Value::string("wb")
+        } else {
+            match &self.backend {
+                Backend::Native(stream) => Value::string(stream.borrow().metadata().mode),
+                #[cfg(feature = "stream-registry")]
+                Backend::Wrapper(value) => crate::stdlib::streams::user_wrapper::file_object_mode(
+                    eg,
+                    value.as_resource_id().unwrap(),
+                ),
+            }
+        };
+        #[cfg(not(feature = "stream-registry"))]
+        let _ = eg;
+        properties.set_str("\0SplFileObject\0openMode", mode);
+        properties.set_str(
+            "\0SplFileObject\0delimiter",
+            php_byte_result(vec![self.csv.separator], false),
+        );
+        properties.set_str(
+            "\0SplFileObject\0enclosure",
+            php_byte_result(vec![self.csv.enclosure], false),
+        );
+    }
+
     pub(super) fn for_each_value(&self, visit: &mut dyn FnMut(&Value)) {
         if let Some(value) = &self.cache {
             visit(value);
@@ -169,7 +202,19 @@ fn construct(
     let Some(backend) = backend else {
         return Ok(());
     };
-    let override_line = resolve_object_public_method(eg, &receiver, "getCurrentLine")
+    initialize(&receiver, eg, path, backend, false);
+    ret!(rv, Value::null());
+}
+
+#[cold]
+fn initialize(
+    receiver: &Value,
+    eg: &ExecutorGlobals,
+    path: Vec<u8>,
+    backend: Backend,
+    temporary: bool,
+) {
+    let override_line = resolve_object_public_method(eg, receiver, "getCurrentLine")
         .is_some_and(|method| method.common().fn_type == FunctionType::User);
     let mut object = receiver.as_object_mut().unwrap();
     let state = object.native_file_info_mut();
@@ -182,11 +227,11 @@ fn construct(
         flags: 0,
         eof: false,
         override_line,
+        temporary,
         csv: csv_records::Controls::default(),
         csv_read_failed: false,
         csv_line: None,
     }));
-    ret!(rv, Value::null());
 }
 
 #[cold]
@@ -665,8 +710,8 @@ fn set_max_line_len(
 #[inline(never)]
 pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     use ParamTypeHint::{Array, Bool, ClassName, Int, String, Union, Void};
-    let mut functions = Vec::with_capacity(24);
-    eg.reserve_internal_method_contracts("SplFileObject", 24);
+    let mut functions = Vec::with_capacity(30);
+    eg.reserve_internal_method_contracts("SplFileObject", 30);
     let mut method = |name,
                       handler,
                       names: &[&str],
@@ -693,6 +738,10 @@ pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ));
         function.handler_validates_types = true;
         function.common.sig.param_type_hints = hints;
+        if name == "flock" {
+            function.common.sig.ref_args = 1 << 1;
+            eg.register_internal_method_reference_arguments("SplFileObject", name, 1 << 1);
+        }
         if name == "__toString" {
             function.common.sig.return_type_hint = String;
         }
@@ -827,6 +876,55 @@ pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         vec![Int],
         &[None],
         Union(vec![String, ClassName("false".into())]),
+    );
+    method("fflush", mutation::flush, &[], vec![], &[], Bool);
+    method("fstat", mutation::stat, &[], vec![], &[], Array);
+    method(
+        "ftruncate",
+        mutation::truncate,
+        &["size"],
+        vec![Int],
+        &[None],
+        Bool,
+    );
+    method(
+        "fwrite",
+        mutation::bytes,
+        &["data", "length"],
+        vec![String, ParamTypeHint::Nullable(Box::new(Int))],
+        &[None, Some("null")],
+        Union(vec![Int, ClassName("false".into())]),
+    );
+    method(
+        "flock",
+        mutation::lock,
+        &["operation", "wouldBlock"],
+        vec![Int, ParamTypeHint::None],
+        &[None, Some("null")],
+        Bool,
+    );
+    functions
+}
+
+#[cold]
+pub(crate) fn register_temporary(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
+    let mut functions = Vec::with_capacity(1);
+    eg.reserve_internal_method_contracts("SplTempFileObject", 1);
+    recursive_iterator::register_method(
+        eg,
+        &mut functions,
+        "SplTempFileObject",
+        "__construct",
+        mutation::construct_temporary,
+        &["maxMemory"],
+        vec![ParamTypeHint::Int],
+        &[Some("2097152")],
+        ParamTypeHint::None,
+    );
+    eg.register_internal_function_reflection_metadata(
+        &functions[0].common,
+        vec![Some(Value::long(2097152))],
+        "SPL",
     );
     functions
 }

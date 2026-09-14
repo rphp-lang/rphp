@@ -21,8 +21,9 @@ mod csv;
 mod get_line;
 #[path = "stream/temp.rs"]
 mod temp;
-#[cfg(feature = "stream-truncate")]
 #[path = "stream/truncate.rs"]
+// The backend capability is shared with always-available SplFileObject methods;
+// the optional procedural ftruncate registration remains feature-gated.
 mod truncate;
 
 #[cfg(not(target_vendor = "apple"))]
@@ -158,7 +159,6 @@ pub struct PhpStream {
     eof: bool,
     read_buffer: Option<Box<ReadBuffer>>,
     plain_file_io: bool,
-    #[cfg(feature = "stream-truncate")]
     memory_append_after_truncate: bool,
     #[cfg(feature = "stream-context")]
     context: Option<Box<StreamContext>>,
@@ -249,7 +249,6 @@ impl PhpStream {
             eof: false,
             read_buffer: None,
             plain_file_io: false,
-            #[cfg(feature = "stream-truncate")]
             memory_append_after_truncate: false,
             #[cfg(feature = "stream-context")]
             context: None,
@@ -269,7 +268,6 @@ impl PhpStream {
                 eof: false,
                 read_buffer: None,
                 plain_file_io: false,
-                #[cfg(feature = "stream-truncate")]
                 memory_append_after_truncate: false,
                 #[cfg(feature = "stream-context")]
                 context: None,
@@ -285,7 +283,6 @@ impl PhpStream {
                 eof: false,
                 read_buffer: None,
                 plain_file_io: false,
-                #[cfg(feature = "stream-truncate")]
                 memory_append_after_truncate: false,
                 #[cfg(feature = "stream-context")]
                 context: None,
@@ -333,7 +330,6 @@ impl PhpStream {
             eof: false,
             read_buffer: None,
             plain_file_io: false,
-            #[cfg(feature = "stream-truncate")]
             memory_append_after_truncate: false,
             #[cfg(feature = "stream-context")]
             context: None,
@@ -354,7 +350,6 @@ impl PhpStream {
             eof: false,
             read_buffer: None,
             plain_file_io: false,
-            #[cfg(feature = "stream-truncate")]
             memory_append_after_truncate: false,
             #[cfg(feature = "stream-context")]
             context: None,
@@ -401,6 +396,7 @@ impl PhpStream {
     #[inline]
     pub fn is_eof(&self) -> bool {
         self.eof
+            || matches!(&self.backend, StreamBackend::Temp(temp) if temp.is_eof() && self.unread_len() == 0)
     }
 
     fn read_backend(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
@@ -854,10 +850,7 @@ impl PhpStream {
         // An ordinary finite-memory write cannot be interrupted and needs
         // neither backend dispatch nor prefetch reconciliation. Keep unusual
         // append/truncate modes and native I/O on the canonical slow path.
-        #[cfg(feature = "stream-truncate")]
         let ordinary_position = !self.memory_append_after_truncate;
-        #[cfg(not(feature = "stream-truncate"))]
-        let ordinary_position = true;
         if self.is_writable()
             && !self.mode.append
             && ordinary_position
@@ -893,7 +886,6 @@ impl PhpStream {
                     if self.mode.append {
                         memory.seek(SeekFrom::End(0))?;
                     }
-                    #[cfg(feature = "stream-truncate")]
                     if self.memory_append_after_truncate && !self.mode.append {
                         let logical_position = memory.position();
                         memory.set_position(memory.get_ref().len() as u64);
@@ -907,8 +899,6 @@ impl PhpStream {
                     } else {
                         Self::write_memory(memory, buffer)
                     }
-                    #[cfg(not(feature = "stream-truncate"))]
-                    Self::write_memory(memory, buffer)
                 }
                 StreamBackend::Temp(temp) => temp.write(buffer, self.mode.append),
                 StreamBackend::Standard(StandardStream::Output) => {
@@ -969,7 +959,12 @@ impl PhpStream {
         // ignored after LOCK_NB is observed, so -1 is the same unlock action
         // as LOCK_UN.
         let operation = operation & 3;
-        let StreamBackend::File(file) = &self.backend else {
+        let file = match &self.backend {
+            StreamBackend::File(file) => Some(file),
+            StreamBackend::Temp(temp) => temp.lock_file(),
+            _ => None,
+        };
+        let Some(file) = file else {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "file locks require a regular file",
@@ -1039,10 +1034,7 @@ impl PhpStream {
         if succeeded {
             self.discard_prefetched();
             self.eof = false;
-            #[cfg(feature = "stream-truncate")]
-            {
-                self.memory_append_after_truncate = false;
-            }
+            self.memory_append_after_truncate = false;
         }
         succeeded
     }
@@ -1059,10 +1051,7 @@ impl PhpStream {
         let position = self.seek_backend(position)?;
         self.discard_prefetched();
         self.eof = false;
-        #[cfg(feature = "stream-truncate")]
-        {
-            self.memory_append_after_truncate = false;
-        }
+        self.memory_append_after_truncate = false;
         Ok(position)
     }
 

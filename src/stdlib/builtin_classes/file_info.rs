@@ -10,6 +10,7 @@ mod file_object;
 pub(crate) use directory::prepare_clone;
 pub(super) use directory::register as register_directory_iterators;
 pub(super) use file_object::register as register_file_object;
+pub(super) use file_object::register_temporary as register_temp_file_object;
 
 /// Path-only objects carry no PHP edges. File cursors expose their cached
 /// value and owned wrapper resource to the existing native-state visitor.
@@ -199,12 +200,23 @@ fn lexical(
         .filter(|directory| directory.is_projected());
     let filename = if let Some(directory) = directory {
         &directory.filename
-    } else if path == b"/" {
+    } else if path == b"/"
+        || state
+            .and_then(|s| s.file.as_ref())
+            .is_some_and(|f| f.temporary)
+    {
         path
     } else {
         &path[separator.map_or(0, |position| position + 1)..]
     };
     let result = match projection {
+        Projection::Path
+            if state
+                .and_then(|s| s.file.as_ref())
+                .is_some_and(|f| f.temporary) =>
+        {
+            Vec::new()
+        }
         Projection::Path => directory.map_or_else(
             || path[..separator.unwrap_or(0)].to_vec(),
             |directory| directory.base().to_vec(),
@@ -436,6 +448,16 @@ fn debug_info(
     let mut properties = array_object::member_properties(arg!(ed, 0), eg);
     let object = arg!(ed, 0).as_object().expect("file-info receiver");
     let state = object.native_file_info();
+    if state.and_then(|state| state.file.as_ref()).is_none()
+        && eg.class_is_a(&object.class_name, "SplFileObject")
+    {
+        error(
+            eg,
+            "Error",
+            "The parent constructor was not called: the object is in an invalid state",
+        );
+        return Ok(());
+    }
     let path = state.and_then(|state| state.path.as_deref());
     properties.set_str(
         "\0SplFileInfo\0pathName",
@@ -447,7 +469,11 @@ fn debug_info(
             .filter(|directory| directory.is_projected());
         let filename = if let Some(directory) = directory {
             &directory.filename
-        } else if path == b"/" {
+        } else if path == b"/"
+            || state
+                .and_then(|s| s.file.as_ref())
+                .is_some_and(|f| f.temporary)
+        {
             path
         } else {
             &path[path
@@ -470,6 +496,9 @@ fn debug_info(
                 Value::string(""),
             );
         }
+    }
+    if let Some(file) = state.and_then(|state| state.file.as_ref()) {
+        file.append_debug_properties(eg, &mut properties);
     }
     ret!(rv, Value::array(properties));
 }
@@ -632,10 +661,15 @@ fn factory_projection(
         )
     };
     let method = if parent { "getPathInfo" } else { "getFileInfo" };
-    let base = eg
-        .class_by_id(selected)
-        .map_or("SplFileInfo", |class| class.name.as_str())
-        .to_owned();
+    // Explicit parent projections are bounded by SplFileInfo itself; only
+    // getFileInfo narrows an explicit selection to the configured info class.
+    let base = if parent {
+        "SplFileInfo"
+    } else {
+        eg.class_by_id(selected)
+            .map_or("SplFileInfo", |class| class.name.as_str())
+    }
+    .to_owned();
     let class_id = if accepts_class {
         let Some(class_id) = class_argument(ed, eg, method, &base, true)? else {
             return Ok(());

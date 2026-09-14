@@ -716,6 +716,7 @@ pub(crate) fn write_file_object_record(
     ed: *mut ExecuteData,
     resource: i64,
     bytes: &[u8],
+    method: &str,
 ) -> Result<Option<usize>, VmError> {
     let Some(stream) = shared_stream(eg, resource) else {
         return Ok(None);
@@ -745,6 +746,16 @@ pub(crate) fn write_file_object_record(
                 false,
             )],
         )?;
+        if value.is_none() && eg.exception.is_none() {
+            let class = object.as_object().unwrap().class_name.to_string();
+            crate::stdlib::report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("{method}(): {class}::stream_write is not implemented!"),
+            )?;
+        }
         let count = value.as_ref().map_or(-1, |value| {
             if value.value_type() == ValueType::False {
                 -1
@@ -778,7 +789,7 @@ pub(crate) fn write_file_object_record(
                 2,
                 "Warning",
                 &format!(
-                    "SplFileObject::fputcsv(): {class}::stream_write wrote {} bytes more data than requested ({count} written, {remaining} max)",
+                    "{method}(): {class}::stream_write wrote {} bytes more data than requested ({count} written, {remaining} max)",
                     count as usize - remaining,
                 ),
             )?;
@@ -993,13 +1004,58 @@ pub(crate) fn flush(eg: &mut ExecutorGlobals, resource: i64) -> Result<Option<bo
     let Some(stream) = shared_stream(eg, resource) else {
         return Ok(None);
     };
-    let object = stream.borrow().object.clone();
+    let object = {
+        let mut state = stream.borrow_mut();
+        // An explicit attempt consumes the pending flush even on false or
+        // exception. A reentrant write may independently make it pending again.
+        state.write_pending = false;
+        state.object.clone()
+    };
     let success = invoke_callback(eg, &object, "stream_flush", vec![])?
         .is_some_and(|value| value.is_truthy());
-    if success {
-        stream.borrow_mut().write_pending = false;
-    }
     Ok(Some(success))
+}
+
+#[cold]
+pub(crate) fn file_object_mode(eg: &mut ExecutorGlobals, resource: i64) -> Value {
+    shared_stream(eg, resource).map_or_else(
+        || Value::string(""),
+        |stream| Value::string(stream.borrow().mode.clone()),
+    )
+}
+
+#[cold]
+pub(crate) fn file_object_lock(
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    resource: i64,
+    operation: i64,
+) -> Result<bool, VmError> {
+    let value = invoke_on_stream(eg, resource, "stream_lock", vec![Value::long(operation)])?;
+    if value.is_none() && eg.exception.is_none() {
+        if let Some(stream) = shared_stream(eg, resource) {
+            let object = stream.borrow().object.clone();
+            let class = object.as_object().unwrap().class_name.to_string();
+            crate::stdlib::report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("SplFileObject::flock(): {class}::stream_lock is not implemented!"),
+            )?;
+        }
+    }
+    Ok(value.is_some_and(|v| v.is_truthy()))
+}
+
+#[cold]
+pub(crate) fn file_object_truncate(
+    eg: &mut ExecutorGlobals,
+    resource: i64,
+    size: i64,
+) -> Result<Option<bool>, VmError> {
+    let value = invoke_on_stream(eg, resource, "stream_truncate", vec![Value::long(size)])?;
+    Ok(value.map(|v| v.is_truthy()))
 }
 
 pub(crate) fn metadata(eg: &mut ExecutorGlobals, resource: i64) -> Result<Option<Value>, VmError> {
@@ -1030,6 +1086,16 @@ pub(crate) fn stat(
     execute_data: *mut ExecuteData,
     resource: i64,
 ) -> Result<Option<Value>, VmError> {
+    stat_for(eg, execute_data, resource, "fstat")
+}
+
+#[cold]
+pub(crate) fn stat_for(
+    eg: &mut ExecutorGlobals,
+    execute_data: *mut ExecuteData,
+    resource: i64,
+    method: &str,
+) -> Result<Option<Value>, VmError> {
     let Some(stream) = shared_stream(eg, resource) else {
         return Ok(None);
     };
@@ -1048,7 +1114,7 @@ pub(crate) fn stat(
             execute_data,
             2,
             "Warning",
-            &format!("fstat(): {class}::stream_stat is not implemented!"),
+            &format!("{method}(): {class}::stream_stat is not implemented!"),
         )?;
     }
     Ok(value)

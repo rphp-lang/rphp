@@ -489,7 +489,7 @@ fn optional_argument<'a>(execute_data: *mut ExecuteData, index: u32) -> Option<&
 }
 
 #[inline]
-fn set_argument(execute_data: *mut ExecuteData, index: u32, value: Value) {
+pub(in crate::stdlib) fn set_argument(execute_data: *mut ExecuteData, index: u32, value: Value) {
     // SAFETY: the registered signature reserves this CV, and a reference CV's
     // payload remains live for the duration of the internal call.
     unsafe {
@@ -1193,7 +1193,7 @@ fn fn_flock(
     return_value(return_pointer, Value::bool(locked))
 }
 
-fn virtual_stream_stat_fields(size: u64, writable: bool) -> [i64; 13] {
+pub(in crate::stdlib) fn virtual_stream_stat_fields(size: u64, writable: bool) -> [i64; 13] {
     [
         12,
         0,

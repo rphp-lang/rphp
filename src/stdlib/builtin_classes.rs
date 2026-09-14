@@ -3144,6 +3144,10 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     }
     eg.register_class(file).unwrap();
     funcs.extend(file_info::register_file_object(eg));
+    let mut temporary = empty_internal_type("SplTempFileObject", vec![], false, false);
+    temporary.parent = Some("SplFileObject".into());
+    eg.register_class(temporary).unwrap();
+    funcs.extend(file_info::register_temp_file_object(eg));
     for (name, parent) in [
         ("DirectoryIterator", "SplFileInfo"),
         ("FilesystemIterator", "DirectoryIterator"),

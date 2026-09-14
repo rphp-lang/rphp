@@ -1746,7 +1746,8 @@ impl ExecutorGlobals {
         // SplFileObject adds one line-cursor declaration to that fixed set.
         // FilterIterator and RegexIterator add two fixed declarations.
         // CachingIterator and AppendIterator add lookahead/list declarations.
-        let class_capacity = 118 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        // SplTempFileObject shares the existing file cursor and stream backend.
+        let class_capacity = 119 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;
@@ -2402,7 +2403,6 @@ impl ExecutorGlobals {
     /// Kept in the existing sparse metadata owner, without changing frame or
     /// executor layouts. The callable's own signature is registered separately.
     #[cold]
-    #[cfg(feature = "stream-registry")]
     pub(crate) fn register_internal_method_reference_arguments(
         &mut self,
         owner: &str,

@@ -5,8 +5,8 @@ use crate::stdlib::stream::{CsvEncoder, CsvParser};
 
 #[derive(Clone, Copy)]
 pub(super) struct Controls {
-    separator: u8,
-    enclosure: u8,
+    pub(super) separator: u8,
+    pub(super) enclosure: u8,
     escape: Option<u8>,
     explicit_escape: bool,
 }
@@ -445,6 +445,7 @@ pub(super) fn put_record(
                 ed,
                 resource.as_resource_id().unwrap(),
                 &bytes,
+                method,
             )?
         }
     };
