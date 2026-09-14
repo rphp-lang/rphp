@@ -513,8 +513,8 @@ fn return_value(pointer: *mut Value, value: Value) -> Result<(), VmError> {
     Ok(())
 }
 
-#[cold]
 #[cfg(feature = "resource-lifetime")]
+#[inline(always)]
 fn insert_stream(eg: &mut ExecutorGlobals, stream: PhpStream) -> Value {
     super::resource::insert_value_for_request(eg, "stream", stream)
 }
@@ -709,17 +709,19 @@ fn fn_fopen(
         }
         user_wrapper::OpenResult::NotRegistered => {}
     }
-    let value = match PhpStream::open(path.as_ref(), mode.as_ref()) {
-        Ok(stream) => {
-            if stream.is_plain_file() {
-                super::filesystem::clear_filesystem_stat_cache(eg);
-            }
-            #[cfg(feature = "resource-lifetime")]
-            let value = insert_stream(eg, stream);
-            #[cfg(not(feature = "resource-lifetime"))]
-            let value = Value::resource(insert_stream(eg, stream));
-            value
-        }
+    let opened = PhpStream::open(path.as_ref(), mode.as_ref());
+    // Inspect the owner in its result slot before moving it into the registry.
+    // This keeps a second full stream copy out of the cache-clear boundary.
+    if opened.as_ref().is_ok_and(PhpStream::is_plain_file) {
+        super::filesystem::clear_filesystem_stat_cache(eg);
+    }
+    #[cfg(feature = "resource-lifetime")]
+    let opened = super::resource::insert_result_for_request(eg, "stream", opened);
+    let value = match opened {
+        #[cfg(feature = "resource-lifetime")]
+        Ok(value) => value,
+        #[cfg(not(feature = "resource-lifetime"))]
+        Ok(stream) => Value::resource(insert_stream(eg, stream)),
         Err(error) => {
             let reason = match error.kind() {
                 std::io::ErrorKind::NotFound => "No such file or directory".to_string(),
@@ -821,10 +823,7 @@ fn fn_fread(
         stream.read_into_vec(&mut bytes, length)
     });
     match result {
-        Some(Ok(read)) => {
-            bytes.truncate(read);
-            return_value(return_pointer, super::php_byte_result(bytes, false))
-        }
+        Some(Ok(_)) => return_value(return_pointer, super::php_byte_result(bytes, false)),
         Some(Err(error)) => {
             if let Some(message) = read_error_message("fread", &error) {
                 super::report_internal_diagnostic(eg, execute_data, 8, "Notice", &message)?;

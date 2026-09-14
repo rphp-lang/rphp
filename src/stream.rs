@@ -472,6 +472,8 @@ impl PhpStream {
     /// Fill an owned result without first zeroing bytes that an unbuffered
     /// memory cursor will replace. Callers reserve the requested capacity
     /// before resource projection, preserving allocation/validation order.
+    /// On success the returned count is also the final buffer length.
+    #[inline(always)]
     pub(crate) fn read_into_vec(
         &mut self,
         buffer: &mut Vec<u8>,
@@ -486,14 +488,23 @@ impl PhpStream {
             let start = usize::try_from(position)
                 .unwrap_or(usize::MAX)
                 .min(memory.get_ref().len());
-            let count = length.min(memory.get_ref().len() - start);
-            buffer.extend_from_slice(&memory.get_ref()[start..start + count]);
+            let remaining = &memory.get_ref()[start..];
+            let count = length.min(remaining.len());
+            buffer.extend_from_slice(&remaining[..count]);
             memory.set_position(position + count as u64);
             if length != 0 {
                 self.eof = count < length;
             }
             return Ok(count);
         }
+        self.read_into_vec_buffered(buffer, length)
+    }
+
+    // Keep general backend reads and zero-filling out of the native memory
+    // projection while preserving allocation, error and prefetch semantics.
+    #[cold]
+    #[inline(never)]
+    fn read_into_vec_buffered(&mut self, buffer: &mut Vec<u8>, length: usize) -> io::Result<usize> {
         buffer.resize(length, 0);
         let count = self.read(buffer)?;
         buffer.truncate(count);
@@ -838,7 +849,30 @@ impl PhpStream {
         }
     }
 
+    #[inline(always)]
     pub fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        // An ordinary finite-memory write cannot be interrupted and needs
+        // neither backend dispatch nor prefetch reconciliation. Keep unusual
+        // append/truncate modes and native I/O on the canonical slow path.
+        #[cfg(feature = "stream-truncate")]
+        let ordinary_position = !self.memory_append_after_truncate;
+        #[cfg(not(feature = "stream-truncate"))]
+        let ordinary_position = true;
+        if self.is_writable()
+            && !self.mode.append
+            && ordinary_position
+            && self.unread_len() == 0
+            && let StreamBackend::Memory(memory) = &mut self.backend
+        {
+            self.eof = false;
+            return Self::write_memory(memory, buffer);
+        }
+        self.write_buffered(buffer)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn write_buffered(&mut self, buffer: &[u8]) -> io::Result<usize> {
         if !self.is_writable() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -898,13 +932,16 @@ impl PhpStream {
         // An overwrite within initialized storage cannot grow the vector or
         // create a gap. Keep growth, far cursors and overflow on Cursor's
         // existing allocation/error path instead of duplicating those rules.
-        if let Ok(start) = usize::try_from(memory.position())
-            && let Some(end) = start.checked_add(buffer.len())
-            && end <= memory.get_ref().len()
-        {
-            memory.get_mut()[start..end].copy_from_slice(buffer);
-            memory.set_position(end as u64);
-            return Ok(buffer.len());
+        let position = memory.position();
+        if position <= memory.get_ref().len() as u64 {
+            let start = position as usize;
+            let remaining = &mut memory.get_mut()[start..];
+            if buffer.len() <= remaining.len() {
+                remaining[..buffer.len()].copy_from_slice(buffer);
+                // The suffix bound proves the sum fits the existing vector.
+                memory.set_position((start + buffer.len()) as u64);
+                return Ok(buffer.len());
+            }
         }
         memory.write(buffer)
     }

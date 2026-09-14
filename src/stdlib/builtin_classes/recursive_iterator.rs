@@ -774,6 +774,7 @@ pub(super) fn register_method(
     result: ParamTypeHint,
 ) {
     let required = defaults.iter().filter(|value| value.is_none()).count() as u32;
+    let enforced_return = (name == "__toString").then(|| result.clone());
     eg.register_internal_method_contract(
         owner,
         name,
@@ -783,7 +784,7 @@ pub(super) fn register_method(
         hints.clone(),
         result,
         defaults,
-        name != "__construct",
+        !matches!(name, "__construct" | "__toString"),
     );
     let mut function = Box::new(make_internal_method(
         handler,
@@ -792,6 +793,9 @@ pub(super) fn register_method(
         names.iter().map(|name| name.to_string()).collect(),
     ));
     function.common.sig.param_type_hints = hints;
+    if let Some(result) = enforced_return {
+        function.common.sig.return_type_hint = result;
+    }
     function.handler_validates_types = true;
     let pointer = &function.common as *const FunctionCommon;
     eg.function_table

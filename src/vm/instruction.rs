@@ -1118,6 +1118,19 @@ impl InlineCache {
         !self.func.is_null() && self.class_id == 0 && class_id != 0 && self.prop_info == class_id
     }
 
+    /// InitStaticCall has no property/method flags in this word. A constant
+    /// concrete class may retain its called-class ID alongside the separately
+    /// cached trait-composition ID. Relative/dynamic sites leave zero here.
+    #[inline]
+    pub fn set_static_call_class_id(&mut self, class_id: u32) {
+        self.prop_info = class_id;
+    }
+
+    #[inline]
+    pub fn static_call_class_id(&self) -> u32 {
+        self.prop_info
+    }
+
     /// Trait-scope methods use the method-cache flags word for the exact
     /// composition class selected by this monomorphic receiver site.
     #[inline(always)]

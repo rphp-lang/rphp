@@ -190,17 +190,17 @@ pub(super) fn fn_fopen(
         }
         super::user_wrapper::OpenResult::NotRegistered => {}
     }
-    let value = match PhpStream::open(open_path, mode.as_ref()) {
-        Ok(stream) => {
-            if stream.is_plain_file() {
-                super::super::filesystem::clear_filesystem_stat_cache(eg);
-            }
-            #[cfg(feature = "resource-lifetime")]
-            let value = insert_stream(eg, stream);
-            #[cfg(not(feature = "resource-lifetime"))]
-            let value = Value::resource(insert_stream(eg, stream));
-            value
-        }
+    let opened = PhpStream::open(open_path, mode.as_ref());
+    if opened.as_ref().is_ok_and(PhpStream::is_plain_file) {
+        super::super::filesystem::clear_filesystem_stat_cache(eg);
+    }
+    #[cfg(feature = "resource-lifetime")]
+    let opened = super::super::resource::insert_result_for_request(eg, "stream", opened);
+    let value = match opened {
+        #[cfg(feature = "resource-lifetime")]
+        Ok(value) => value,
+        #[cfg(not(feature = "resource-lifetime"))]
+        Ok(stream) => Value::resource(insert_stream(eg, stream)),
         Err(error) => {
             let reason = match error.kind() {
                 std::io::ErrorKind::NotFound => "No such file or directory".to_string(),

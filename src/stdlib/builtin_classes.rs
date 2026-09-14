@@ -12,6 +12,7 @@ use crate::vm::instruction::{
 };
 
 pub(super) mod array_object;
+mod caching_iterator;
 pub(super) mod deque;
 mod file_info;
 pub(super) mod fixed_array;
@@ -3079,6 +3080,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     }
     funcs.extend(iterator_delegate::register(eg));
     funcs.extend(regex_iterator::register(eg));
+    funcs.extend(caching_iterator::register(eg));
     let mut recursive_array = empty_internal_type(
         "RecursiveArrayIterator",
         vec!["RecursiveIterator".into()],

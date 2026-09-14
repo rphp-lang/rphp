@@ -1745,7 +1745,8 @@ impl ExecutorGlobals {
         // Abstract heap, min heap and max heap add three fixed declarations.
         // SplFileObject adds one line-cursor declaration to that fixed set.
         // FilterIterator and RegexIterator add two fixed declarations.
-        let class_capacity = 116 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        // CachingIterator adds one lookahead declaration.
+        let class_capacity = 117 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;
@@ -7929,8 +7930,8 @@ impl ExecutorGlobals {
     }
 
     /// Resolve and cache whether a stable runtime class inherits a live user
-    /// destructor. Dynamic class-id-zero objects retain the general lookup
-    /// because their names do not share one class identity.
+    /// destructor. Dynamic class-id-zero objects resolve their registered
+    /// identity on the cold path; unknown names retain general lookup.
     #[inline(always)]
     pub(crate) fn class_has_destructor(&self, class_id: u32, class_name: &str) -> bool {
         if class_id != 0
@@ -7951,6 +7952,28 @@ impl ExecutorGlobals {
     #[cold]
     #[inline(never)]
     fn resolve_class_destructor_flag(&self, class_id: u32, class_name: &str) -> bool {
+        // Internal dynamic objects may omit the ID while retaining the exact
+        // name of an immutable registered class. Share its existing destructor
+        // result instead of repeatedly traversing missing inherited methods.
+        // Unknown/noncanonical spellings deliberately keep the old resolver:
+        // an unsuccessful lookup must never suppress later class registration.
+        let class_id = if class_id == 0 {
+            self.class_table
+                .get(class_name)
+                .map_or(0, |class| class.class_id)
+        } else {
+            class_id
+        };
+        if class_id != 0
+            && let Some(flag) = self
+                .class_destructor_flags
+                .borrow()
+                .get(class_id as usize)
+                .copied()
+            && flag != 0
+        {
+            return flag == 2;
+        }
         let has_destructor = self.find_method_info(class_name, "__destruct").is_some();
         if class_id != 0 {
             let mut flags = self.class_destructor_flags.borrow_mut();
@@ -10742,6 +10765,50 @@ mod stdlib_capacity_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn dynamic_object_destructor_lookup_reuses_only_registered_request_identity() {
+        use crate::compiler::compile::Compiler;
+        use crate::lexer::Lexer;
+        use crate::parser::Parser;
+
+        let source =
+            "<?php class QuietOwner {} class LoudOwner { public function __destruct() {} }";
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        let compiled = Compiler::new().compile(&statements).unwrap();
+        let mut eg = ExecutorGlobals::new();
+        assert!(!eg.class_has_destructor(0, "LoudOwner"));
+        assert!(eg.class_destructor_flags.borrow().is_empty());
+        for definition in compiled.class_defs.into_iter().chain(
+            compiled
+                .runtime_class_defs
+                .into_iter()
+                .map(|(_, class)| class),
+        ) {
+            eg.register_class(definition).unwrap();
+        }
+        for (name, expected, flag) in [("QuietOwner", false, 1), ("LoudOwner", true, 2)] {
+            let id = eg.class_id_of(name);
+            assert_ne!(id, 0);
+            for _ in 0..3 {
+                assert_eq!(eg.class_has_destructor(0, name), expected);
+                assert_eq!(
+                    eg.class_destructor_flags.borrow().get(id as usize),
+                    Some(&flag)
+                );
+                assert_eq!(eg.class_has_destructor(id, name), expected);
+                assert_eq!(
+                    eg.class_has_destructor(0, &name.to_ascii_lowercase()),
+                    expected
+                );
+            }
+        }
+        assert!(!eg.class_has_destructor(0, "StillUnknown"));
+        let other_request = ExecutorGlobals::new();
+        assert!(!other_request.class_has_destructor(0, "LoudOwner"));
+        assert!(other_request.class_destructor_flags.borrow().is_empty());
     }
 
     #[test]

@@ -580,6 +580,14 @@ pub(crate) trait NativeObjectState: std::any::Any {
     fn clone_state(&self) -> Box<dyn NativeObjectState>;
     fn as_any(&self) -> &dyn std::any::Any;
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+    /// Optional borrowed protocol views keep extended iterator payloads opaque
+    /// to common Value clone/drop code. Their owner still traces every edge.
+    fn iterator_delegate(&self) -> Option<&NativeIteratorDelegate> {
+        None
+    }
+    fn iterator_delegate_mut(&mut self) -> Option<&mut NativeIteratorDelegate> {
+        None
+    }
     fn for_each_value(&self, _visit: &mut dyn FnMut(&Value)) {}
     /// Some PHP internal iterators retain their source outside cyclic GC.
     /// Ownership walkers still see every edge for safe release and diagnostics.
@@ -1215,6 +1223,17 @@ fn register_cycle_candidate(candidate: CycleCandidate) {
             return;
         }
         let identity = candidate.identity();
+        // Repeated releases of one shared receiver already have their weak
+        // root at the tail. Reuse that exact identity before hashing it again;
+        // other roots retain the existing indexed lookup and insertion order.
+        if let Some(last) = state.candidates.last_mut()
+            && last.identity() == identity
+        {
+            if last.strong_count() == 0 {
+                *last = candidate;
+            }
+            return;
+        }
         if let Some(&index) = state.indices.get(&identity) {
             if state.candidates[index].strong_count() == 0 {
                 state.candidates[index] = candidate;
@@ -1225,6 +1244,56 @@ fn register_cycle_candidate(candidate: CycleCandidate) {
         state.indices.insert(identity, index);
         state.candidates.push(candidate);
     });
+}
+
+#[cfg(test)]
+mod repeated_cycle_root_tests {
+    use super::*;
+
+    #[test]
+    fn repeated_roots_preserve_order_pruning_and_request_isolation() {
+        std::thread::spawn(|| {
+            let first = Rc::new(PhpArray::new());
+            let second = Rc::new(PhpArray::new());
+            let first_root = CycleCandidate::Array(Rc::downgrade(&first));
+            let second_root = CycleCandidate::Array(Rc::downgrade(&second));
+            register_cycle_candidate(first_root.clone());
+            assert_eq!(cycle_collection_status().roots, 0);
+            CYCLE_ROOTS.with_borrow_mut(|state| state.active = true);
+            for _ in 0..4 {
+                register_cycle_candidate(first_root.clone());
+            }
+            register_cycle_candidate(second_root.clone());
+            register_cycle_candidate(first_root.clone());
+            register_cycle_candidate(second_root.clone());
+            CYCLE_ROOTS.with_borrow(|state| {
+                assert_eq!(state.candidates.len(), 2);
+                assert_eq!(state.indices.len(), 2);
+                assert_eq!(state.candidates[0].identity(), first_root.identity());
+                assert_eq!(state.candidates[1].identity(), second_root.identity());
+            });
+            drop(second);
+            assert_eq!(cycle_collection_status().roots, 1);
+            register_cycle_candidate(first_root.clone());
+            assert_eq!(cycle_collection_status().roots, 1);
+            let guard = begin_cycle_collection().unwrap();
+            let third = Rc::new(PhpArray::new());
+            register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&third)));
+            assert_eq!(cycle_collection_status().roots, 1);
+            drop(guard);
+            drop(first);
+            assert_eq!(cycle_collection_status().roots, 0);
+            CYCLE_ROOTS.with_borrow_mut(|state| *state = CycleRootState::default());
+            register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&third)));
+            assert_eq!(cycle_collection_status().roots, 0);
+            CYCLE_ROOTS.with_borrow_mut(|state| state.active = true);
+            register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&third)));
+            assert_eq!(cycle_collection_status().roots, 1);
+            CYCLE_ROOTS.with_borrow_mut(|state| *state = CycleRootState::default());
+        })
+        .join()
+        .unwrap();
+    }
 }
 
 /// Guards one explicit collector pass against recursive collection and keeps
@@ -1842,22 +1911,26 @@ impl PhpObject {
 
     #[cold]
     pub(crate) fn native_iterator_delegate(&self) -> Option<&NativeIteratorDelegate> {
-        self.dynamic_properties
-            .as_ref()?
-            .auxiliary
-            .as_ref()?
-            .native_iterator_delegate
-            .as_deref()
+        let auxiliary = self.dynamic_properties.as_ref()?.auxiliary.as_ref()?;
+        if let Some(delegate) = auxiliary.native_iterator_delegate.as_deref() {
+            return Some(delegate);
+        }
+        auxiliary
+            .native_object_state
+            .as_deref()?
+            .iterator_delegate()
     }
 
     #[cold]
     pub(crate) fn native_iterator_delegate_mut(&mut self) -> Option<&mut NativeIteratorDelegate> {
-        self.dynamic_properties
-            .as_mut()?
-            .auxiliary
-            .as_mut()?
-            .native_iterator_delegate
-            .as_deref_mut()
+        let auxiliary = self.dynamic_properties.as_mut()?.auxiliary.as_mut()?;
+        if auxiliary.native_iterator_delegate.is_some() {
+            return auxiliary.native_iterator_delegate.as_deref_mut();
+        }
+        auxiliary
+            .native_object_state
+            .as_deref_mut()?
+            .iterator_delegate_mut()
     }
 
     #[cold]

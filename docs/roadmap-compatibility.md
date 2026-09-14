@@ -36,33 +36,33 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `regex-iterator-filter-projection-contracts` train adds 22 PHP 8.5
-SPL passes over `ed220dee`, without lost passes or new process hazards. SPL
-reaches 545/200/31 unsupported/8 skip/1 XFAIL; core retains 6,446/335/182/211 and
-identical pass sets. Selected coverage is 7,959 cases: 6,991 pass, 535 fail,
-not the complete PHP suite. One independently explained warning-suppression
-failure moves from runtime to output and remains a failure.
+The accepted `caching-iterator-lookahead-projection-contracts` train adds
+15 PHP 8.5 SPL passes over `6c6d250e`, without loss, new process hazards,
+expectation changes or moved failure stages. SPL reaches 560/185/31
+unsupported/8 skip/1 XFAIL; core retains 6,446/335/182/211 and identical pass
+sets. Selected coverage is 7,959 cases: 7,006 pass and 520 fail, not all PHP.
 
-Regex filtering/projection reuses native delegation and the regex engine;
-current/key, mutable flags/replacement, bytes, reference/COW, callback order and
-traced retirement are covered. One frozen checked five-configuration matrix,
-all-targets, original/no-loss, S0-S3 and unsafe/static gates pass. All 85
-established controls have exact outputs. Cumulative common costs peak at
-+1.416% against unchanged `9cddc39c`, within the user's accepted +1.65%
-compatibility-first tolerance; pay-use peaks at +2.031%. Nominal +1% failures
-and the agent-added per-commit +1% failures remain visible. That extra moving
-baseline condition is explicitly superseded by the user's cumulative-baseline
-instruction, not claimed passed. No new micro-baseline budget or timing reroll.
-Exact numbers, new API costs and shared-host limits are in `compatibility.md`.
-Cleanup remains mandatory.
+Lookahead, mutable string/cache flags, projection, offsets, reference/COW,
+callback ordering and traced retirement share one sparse opaque native owner.
+Profile-backed scope-cache reuse, cold destructor identity recovery and weak-root
+tail deduplication remove repeated work without new common fields, opcode,
+scalar-plan admission or unsafe blocks. One frozen checked five-configuration matrix,
+all-targets, original/no-loss, S0-S3 and unsafe/static/public-hygiene gates pass.
 
-Next read-only triage finds 14 current failures first blocked by CachingIterator.
-Require at least ten reference-passing reachable cases sharing lookahead,
-string/cache flags and traced projection ownership before implementation.
-Reuse native delegation, preserve all controls and the fixed cumulative anchor.
-SplTempFileObject needs additional independent write/debug contracts; recursive
-families, general regex redesign, suspension, 32-bit/OOM and whole-PHP claims
-remain separate.
+All 89 established controls have exact outputs and meet the unchanged user
+policy: cumulative common <=1.65% against `9cddc39c`, pay-use <=5%.
+The respective peaks are +0.707% and +3.069%. Nominal and incremental findings and
+rejected candidates remain visible; no moving micro-baseline or failed timing
+reroll. Exact records, four new API cost ratios and shared-host limitations are
+in `compatibility.md`. Cleanup remains mandatory.
+
+Next read-only admission finds twelve PHP-passing failures first blocked by
+AppendIterator. Refresh against the accepted parent, then target mutable public
+list/selected cursor, forwarding, order/reentry/reference and traced retirement
+as one train. Require at least ten reachable shared-cause gains and preserve
+all controls. SplTempFileObject additionally needs independent write/debug
+contracts; recursive families, suspension, 32-bit/OOM and whole-PHP claims stay
+separate.
 
 ### Preceding directory cursor checkpoint
 

@@ -96,9 +96,17 @@ enum ResourcePayload {
 }
 
 impl ResourcePayload {
-    #[cold]
+    #[inline(always)]
     fn new<T: 'static>(payload: T) -> Self {
-        match (Box::new(payload) as Box<dyn Any>).downcast::<PhpStream>() {
+        // Allocate before moving into the box, so the caller need not retain
+        // another whole backend copy for the allocation's unwind boundary.
+        let payload = Box::write(Box::new_uninit(), payload);
+        Self::from_box(payload)
+    }
+
+    #[inline(always)]
+    fn from_box<T: 'static>(payload: Box<T>) -> Self {
+        match (payload as Box<dyn Any>).downcast::<PhpStream>() {
             Ok(stream) => Self::Stream(stream),
             Err(other) => Self::Other(other),
         }
@@ -187,15 +195,27 @@ impl ResourceEntries {
     // through an extra call for every read/write.
     #[inline(always)]
     fn get_mut(&mut self, id: &i64) -> Option<&mut ResourceEntry> {
-        match self {
-            Self::Small { entries, overflow } => {
-                let index = usize::try_from(*id).ok()?.wrapping_sub(1);
-                if index < entries.len() {
-                    return entries[index].as_mut();
-                }
-                let (stored_id, entry) = overflow.as_deref_mut()?.as_mut()?;
-                (*stored_id == *id).then_some(entry)
+        if let Self::Small { entries, overflow } = self {
+            // The bounded prefix contains only positive IDs. Unsigned
+            // subtraction places zero and negative IDs above that prefix,
+            // so the length check also validates the index before casting.
+            let index = (*id as u64).wrapping_sub(1);
+            if index < entries.len() as u64 {
+                return entries[index as usize].as_mut();
             }
+            let (stored_id, entry) = overflow.as_deref_mut()?.as_mut()?;
+            return (*stored_id == *id).then_some(entry);
+        }
+        self.get_mut_promoted(id)
+    }
+
+    // Keep binary search and general hashing out of each typed native I/O
+    // projection. Promotion still owns the same entries and borrow lifetime.
+    #[cold]
+    #[inline(never)]
+    fn get_mut_promoted(&mut self, id: &i64) -> Option<&mut ResourceEntry> {
+        match self {
+            Self::Small { .. } => unreachable!("small resources use direct projection"),
             Self::Compact(entries) => entries
                 .binary_search_by_key(id, |(stored_id, _)| *stored_id)
                 .ok()
@@ -538,24 +558,32 @@ pub(crate) fn with_payload_mut<T: 'static, R>(
     if scope == 0 {
         return None;
     }
-    REQUEST_RESOURCES.with(|registries| {
-        let mut registries = registries.borrow_mut();
-        // The single-request projection needs only its scope comparison.
-        // Keep that check beside the typed payload projection instead of
-        // making every native operation call the general registry resolver.
-        // Nested requests still use the same table lookup; neither the borrow
-        // lifetime nor the concrete payload/type checks change.
-        let registry = match &mut *registries {
-            RequestRegistries::Single(registered_scope, registry) => {
-                if *registered_scope != scope {
-                    return None;
-                }
-                registry
+    REQUEST_RESOURCES.with(|registries| project_payload(registries, scope, id, operation))
+}
+
+// A small TLS closure can retain direct access to its known thread-local key.
+// Keep the typed operation in a separate frame instead of expanding the whole
+// registry walk into LocalKey::with and passing scope/ID via captured pointers.
+// Locals release the borrow before an unconsumed operation is dropped; moving
+// it into with_payload_mut preserves the inside-borrow ID/type failure paths.
+#[inline(never)]
+fn project_payload<T: 'static, R>(
+    registries: &RefCell<RequestRegistries>,
+    scope: u32,
+    id: i64,
+    operation: impl FnOnce(&mut T) -> R,
+) -> Option<R> {
+    let mut registries = registries.borrow_mut();
+    let registry = match &mut *registries {
+        RequestRegistries::Single(registered_scope, registry) => {
+            if *registered_scope != scope {
+                return None;
             }
-            other => registry_for_scope_mut(other, scope)?,
-        };
-        registry.with_payload_mut::<T, _>(id, operation)
-    })
+            registry
+        }
+        other => registry_for_scope_mut(other, scope)?,
+    };
+    registry.with_payload_mut::<T, _>(id, operation)
 }
 
 #[cold]
@@ -672,7 +700,7 @@ pub(crate) fn insert_for_request<T: 'static>(
 }
 
 #[cfg(feature = "resource-lifetime")]
-#[cold]
+#[inline(always)]
 pub(crate) fn insert_value_for_request<T: 'static>(
     eg: &mut ExecutorGlobals,
     resource_type: &'static str,
@@ -687,6 +715,44 @@ pub(crate) fn insert_value_for_request<T: 'static>(
     // through the TLS closure and insertion frame; its concrete Any type and
     // allocation count are unchanged. No PHP callback runs at this boundary.
     let payload = ResourcePayload::new(payload);
+    insert_payload_for_scope(scope, resource_type, payload)
+}
+
+// Keep a successful backend in its Result slot while preparing scope and
+// storage. Only then extract it directly into its final allocation. Errors
+// leave the lazy request scope untouched and retain their original owner.
+#[cfg(feature = "resource-lifetime")]
+#[inline(always)]
+pub(crate) fn insert_result_for_request<T: 'static, E>(
+    eg: &mut ExecutorGlobals,
+    resource_type: &'static str,
+    result: Result<T, E>,
+) -> Result<Value, E> {
+    let prepared = result.as_ref().ok().map(|_| {
+        let scope = ensure_request_scope(eg);
+        (scope, Box::<T>::new_uninit())
+    });
+    match result {
+        Ok(payload) => {
+            let (scope, storage) = prepared.expect("successful resource has prepared storage");
+            let payload = ResourcePayload::from_box(Box::write(storage, payload));
+            Ok(insert_payload_for_scope(scope, resource_type, payload))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+// Inline only the conversion from the caller's owned backend to its final
+// allocation. Passing the small erased owner keeps large stream values from
+// being copied through the registry/TLS entry frames on every open.
+#[cfg(feature = "resource-lifetime")]
+#[cold]
+#[inline(never)]
+fn insert_payload_for_scope(
+    scope: u32,
+    resource_type: &'static str,
+    payload: ResourcePayload,
+) -> Value {
     REQUEST_RESOURCES.with(|registries| {
         // Repeated opens belong to the same request as subsequent I/O. Reuse
         // its bounded lookup; only the first insertion creates a registry.
@@ -810,14 +876,15 @@ mod tests {
         }
         let drops = Rc::new(Cell::new(0));
         let mut first = ExecutorGlobals::new();
-        let value = insert_value_for_request(
+        let value = super::insert_result_for_request::<_, ()>(
             &mut first,
             "wide",
-            WideProbe {
+            Ok(WideProbe {
                 bytes: [0xa5; 4096],
                 drops: drops.clone(),
-            },
-        );
+            }),
+        )
+        .unwrap();
         let id = value.as_resource_id().unwrap();
         let alias = value.clone();
         let mut second = ExecutorGlobals::new();
@@ -844,6 +911,42 @@ mod tests {
         );
         drop(value);
         drop(alias);
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    #[cfg(feature = "resource-lifetime")]
+    fn result_insertion_keeps_errors_lazy_and_successes_typed_and_owned() {
+        let drops = Rc::new(Cell::new(0));
+        let mut executor = ExecutorGlobals::new();
+        let error = super::insert_result_for_request::<(), _>(
+            &mut executor,
+            "unit",
+            Err(DropProbe(drops.clone())),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(executor.resource_scope, 0);
+        assert_eq!(drops.get(), 0);
+        drop(error);
+        assert_eq!(drops.get(), 1);
+        let value =
+            super::insert_result_for_request::<_, ()>(&mut executor, "unit", Ok(())).unwrap();
+        let id = value.as_resource_id().unwrap();
+        let alias = value.clone();
+        assert_eq!(id, 1);
+        assert!(!close_for_request::<Box<()>>(&mut executor, id));
+        drop(value);
+        assert!(is_open_for_request(&executor, id));
+        let scope = executor.resource_scope;
+        assert_eq!(
+            super::insert_result_for_request::<(), _>(&mut executor, "unit", Err("unchanged"))
+                .err(),
+            Some("unchanged")
+        );
+        assert_eq!(executor.resource_scope, scope);
+        drop(alias);
+        assert!(!is_open_for_request(&executor, id));
         assert_eq!(drops.get(), 1);
     }
 
@@ -1104,7 +1207,7 @@ mod tests {
                 .map(|value| registry.insert("number", value as u64))
                 .collect();
             let calls = Cell::new(0);
-            for missing in [0, -1, i64::MIN, i64::MAX] {
+            for missing in [0, -1, i64::MIN, i64::MIN + 1, u32::MAX as i64 + 1, i64::MAX] {
                 assert_eq!(
                     registry.with_payload_mut::<u64, _>(missing, |_| calls.set(1)),
                     None,

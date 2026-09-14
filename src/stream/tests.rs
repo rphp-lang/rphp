@@ -50,6 +50,46 @@ fn retained_readahead_never_exposes_stale_suffixes_after_seek_short_read_or_erro
 }
 
 #[test]
+fn memory_write_projection_preserves_fallback_state_and_errors() {
+    for mode in ["w+", "r", "a+"] {
+        for position in [0, 1, 5, 12] {
+            for count in [0, 1, 6, 64] {
+                for prefetched in [false, true] {
+                    let mut fast = PhpStream::open("php://memory", mode).unwrap();
+                    let mut slow = PhpStream::open("php://memory", mode).unwrap();
+                    for stream in [&mut fast, &mut slow] {
+                        let super::StreamBackend::Memory(memory) = &mut stream.backend else {
+                            unreachable!();
+                        };
+                        memory.get_mut().extend_from_slice(b"abcdef");
+                        memory.set_position(position);
+                        stream.eof = true;
+                        if prefetched {
+                            stream.put_back(b"XY");
+                        }
+                    }
+                    let bytes = vec![0xff; count];
+                    assert_eq!(
+                        fast.write(&bytes).map_err(|e| e.kind()),
+                        slow.write_buffered(&bytes).map_err(|e| e.kind())
+                    );
+                    assert_eq!(fast.eof, slow.eof);
+                    assert_eq!(fast.unread_len(), slow.unread_len());
+                    let super::StreamBackend::Memory(fast) = fast.backend else {
+                        unreachable!();
+                    };
+                    let super::StreamBackend::Memory(slow) = slow.backend else {
+                        unreachable!();
+                    };
+                    assert_eq!(fast.position(), slow.position());
+                    assert_eq!(fast.into_inner(), slow.into_inner());
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn memory_overwrite_matches_cursor_for_empty_bounds_growth_and_gaps() {
     use std::io::{Cursor, Write};
     for size in [0, 1, 63, 64, 65, 129] {
@@ -109,6 +149,32 @@ fn owned_read_matches_slice_read_with_prefetch_empty_eof_and_far_cursors() {
             }
         }
     }
+}
+
+#[test]
+fn owned_read_reuses_destination_after_native_error_and_short_read() {
+    let path = std::env::temp_dir().join(format!("rphp-owned-read-error-{}", std::process::id()));
+    let mut stream = PhpStream::open(path.to_str().unwrap(), "w").unwrap();
+    stream.write(b"\x00\xffend").unwrap();
+    assert!(stream.rewind());
+    let mut bytes = vec![0xaa; 17];
+    bytes.reserve(32);
+    assert!(stream.read_into_vec(&mut bytes, 9).is_err());
+    assert_eq!(stream.position().unwrap(), 0);
+    drop(stream);
+    let mut stream = PhpStream::open(path.to_str().unwrap(), "r").unwrap();
+    for (length, expected) in [
+        (2, &b"\x00\xff"[..]),
+        (9, &b"end"[..]),
+        (1, &b""[..]),
+        (0, &b""[..]),
+    ] {
+        let count = stream.read_into_vec(&mut bytes, length).unwrap();
+        assert_eq!(count, bytes.len());
+        assert_eq!(bytes, expected);
+    }
+    drop(stream);
+    std::fs::remove_file(path).unwrap();
 }
 
 #[test]

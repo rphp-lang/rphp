@@ -6079,13 +6079,20 @@ fn op_init_static_call<'a>(
     } else {
         Cow::Owned(method_name.as_str().unwrap_or("").to_string())
     };
-    let relative_scope = raw_class.eq_ignore_ascii_case("self")
-        || raw_class.eq_ignore_ascii_case("parent")
-        || raw_class.eq_ignore_ascii_case("static");
+    // A populated concrete ID also proves this immutable operand is not a
+    // relative scope. Reuse that proof instead of classifying its spelling
+    // again on every warmed call; dynamic and relative sites retain zero.
+    let relative_scope = op_array.cache[ip].static_call_class_id() == 0
+        && (raw_class.eq_ignore_ascii_case("self")
+            || raw_class.eq_ignore_ascii_case("parent")
+            || raw_class.eq_ignore_ascii_case("static"));
     let resolved_class = relative_scope
         .then(|| resolve_static_call_class(eg, frame, &raw_class, dynamic_scope))
         .flatten();
-    if raw_class.eq_ignore_ascii_case("parent") && resolved_class.is_none() {
+    if relative_scope
+        && raw_class.eq_ignore_ascii_case("parent")
+        && resolved_class.is_none()
+    {
         let error = make_error_value(
             "Error",
             "Cannot use \"parent\" when current class scope has no parent",
@@ -6166,7 +6173,8 @@ fn op_init_static_call<'a>(
         // arity and property diagnostics here on the cold static-call path;
         // explicit user hooks retain normal user-function surplus-argument
         // semantics.
-        if raw_class.eq_ignore_ascii_case("parent")
+        if relative_scope
+            && raw_class.eq_ignore_ascii_case("parent")
             && let Some((property, accessor)) = method
                 .strip_prefix('$')
                 .and_then(|name| name.rsplit_once("::"))
@@ -6285,6 +6293,16 @@ fn op_init_static_call<'a>(
                     | usize::from(direct_trait_call) * STATIC_CALL_DIRECT_TRAIT)
                     as *const FunctionCommon;
                 cache.class_id = trait_scope_class_id;
+                // The immutable concrete operand and resolved function share
+                // one request lifetime. Reuse the otherwise-idle flags word;
+                // self/parent/static and dynamic sites must recover scope on
+                // every call, and retain the zero fallback sentinel.
+                if !relative_scope
+                    && opline.op1_type == OpType::Const
+                    && opline.op2_type == OpType::Const
+                {
+                    cache.set_static_call_class_id(eg.class_id_of(&class));
+                }
             }
         }
         (
@@ -6307,6 +6325,7 @@ fn op_init_static_call<'a>(
         let target_is_instance = method_is_non_static
             || (common.fn_type == FunctionType::Internal
                 && common.sig.this_offset == 1
+                && relative_scope
                 && (raw_class.eq_ignore_ascii_case("self")
                     || raw_class.eq_ignore_ascii_case("parent")));
         let direct_receiver = if target_is_instance && (*(*frame).func).sig.this_offset == 1 {
@@ -6402,8 +6421,9 @@ fn op_init_static_call<'a>(
     }
     let called_scope_class_id = if let Some(receiver) = live_receiver.and_then(Value::as_object) {
         receiver.class_id
-    } else if raw_class.eq_ignore_ascii_case("self")
-        || raw_class.eq_ignore_ascii_case("parent")
+    } else if relative_scope
+        && (raw_class.eq_ignore_ascii_case("self")
+            || raw_class.eq_ignore_ascii_case("parent"))
     {
         let forwarding = late_static_call_class_id(eg, frame);
         if forwarding != 0 {
@@ -6412,7 +6432,12 @@ fn op_init_static_call<'a>(
             eg.class_id_of(&class)
         }
     } else {
-        eg.class_id_of(&class)
+        let cached_class_id = op_array.cache[ip].static_call_class_id();
+        if cached_class_id != 0 {
+            cached_class_id
+        } else {
+            eg.class_id_of(&class)
+        }
     };
     if called_scope_class_id != 0 {
         publish_late_static_call_class_id(eg, call, called_scope_class_id);
