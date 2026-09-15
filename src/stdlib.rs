@@ -49,6 +49,7 @@ use crate::vm::function::{Function, FunctionCommon, FunctionType, ParamTypeHint,
 use crate::vm::instruction::{InlineCache, OpType};
 use crate::vm::opcode::OpCode;
 
+pub(crate) mod crypt;
 #[cfg(feature = "include-path")]
 pub(crate) mod include_path;
 mod json_decode;
@@ -17351,8 +17352,11 @@ fn trace_parameter_is_sensitive(
     user: Option<&UserFunction>,
     common: &FunctionCommon,
     index: u32,
+    eg: &ExecutorGlobals,
 ) -> bool {
-    let Some(user) = user else { return false };
+    let Some(user) = user else {
+        return eg.internal_parameter_is_sensitive(common, index);
+    };
     let parameter = if index < common.sig.public_arity() {
         Some(index as usize)
     } else if common.sig.is_variadic {
@@ -17378,7 +17382,7 @@ fn redact_trace_argument(
     argument: Value,
     eg: &ExecutorGlobals,
 ) -> Value {
-    if trace_parameter_is_sensitive(user, common, index) {
+    if trace_parameter_is_sensitive(user, common, index, eg) {
         builtin_classes::sensitive_parameter_value(eg, argument)
     } else {
         argument

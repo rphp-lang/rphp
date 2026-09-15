@@ -4639,6 +4639,23 @@ fn parameter_get_attributes(
         .and_then(|(function, position)| function.parameter_attributes.get(position))
         .cloned()
         .unwrap_or_default();
+    if reflected_function(ed)
+        .zip(position)
+        .is_some_and(|(function, position)| {
+            u32::try_from(position)
+                .is_ok_and(|position| eg.internal_parameter_is_sensitive(function, position))
+        })
+    {
+        attributes.push(AttributeDefinition {
+            name: "SensitiveParameter".into(),
+            arguments: Vec::new(),
+            evaluation_scope: Rc::new(AttributeEvaluationScope::default()),
+            target: 32,
+            source_file: String::new(),
+            source_line: 0,
+            strict_types: false,
+        });
+    }
     let called_class = with_argument(ed, 0, |receiver| {
         eg.reflection_parameter_scope(receiver).map(str::to_owned)
     });

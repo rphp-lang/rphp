@@ -26,6 +26,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+      - uses: ./.github/actions/setup-native-dependencies
       - name: Toolchain versions
         run: |
           rustc --version --verbose
@@ -68,6 +69,7 @@ jobs:
             command: cargo test --locked --profile test-fast --all-features
     steps:
       - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-native-dependencies
       - name: Run test configuration
         run: ${{ matrix.command }}
 
@@ -77,6 +79,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-native-dependencies
       - name: Run pinned Composer autoload gate
         run: scripts/test-composer-s0.sh
 
@@ -86,6 +89,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-native-dependencies
       - name: Run pinned Symfony EventDispatcher gate
         run: scripts/test-symfony-event-dispatcher-s1.sh
 
@@ -95,6 +99,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-native-dependencies
       - name: Run pinned Symfony HttpFoundation gate
         run: scripts/test-symfony-http-foundation-s1.sh
 
@@ -104,6 +109,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-native-dependencies
       - name: Run pinned Symfony Routing gate
         run: scripts/test-symfony-routing-s1.sh
 
@@ -113,6 +119,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-native-dependencies
       - name: Run pinned Symfony DependencyInjection gate
         run: scripts/test-symfony-dependency-injection-s1.sh
 
@@ -122,6 +129,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-native-dependencies
       - name: Install PHP 8.5 oracle
         uses: shivammathur/setup-php@v2
         with:

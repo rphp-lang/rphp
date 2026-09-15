@@ -36,34 +36,37 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `source-lexical-admission` checkpoint adds 11 monitored PHP 8.5
-passes over `9c82676e`, plus two separately targeted class-object cases,
-without loss, process hazards or changed expectations. Selected coverage is
-7,959 cases: 7,119 pass / 407 fail; core 6,459/322/182/211;
-SPL 660/85/31 unsupported/8 skip/1 XFAIL. This is not all PHP.
+The accepted `crypt-callable-salt-contracts` checkpoint adds fourteen PHP 8.5
+passes over `0eb4d504`, without loss, process hazards, changed expectations or
+moved failure stages. Selected coverage is 7,959 cases: **7,133 pass / 393 fail**;
+core 6,473/308/182/211; SPL 660/85/31 unsupported/8 skip/1 XFAIL.
+This is not all PHP.
 
-Canonical file-segment admission and case-insensitive grammar preserve source
-spelling, lines and offsets. Original dual-JIT/negative/storage tests,
-1,311 focused tests, one frozen checked five-configuration matrix/all-targets,
-exact no-loss/fresh gain oracles, unchanged Reflection inventory, S0-S3 and
-unsafe/hygiene pass. Five existing parse failures reach explicitly separate
-runtime/debug/missing-method holdouts and remain failures.
+Independent hashing implementations plus original salt/rounds/byte policy
+preserve the callable contract, sensitive traces and Reflection. Reentrant
+bcrypt uses a trusted, lazy system-library owner and call-local allocations;
+pure-Rust families do not load it. Sparse native descriptors avoid ordinary-call
+fields and a new hash table. The explicit three-block unsafe addition
+(1,623 -> 1,626; 289 functions unchanged), native prerequisites, licensing and
+unvalidated security/platform claims are documented in `crypt-boundary.md`.
 
-Static native parameter labels reduce allocation work while user labels remain
-owned; explicit inlining preserves the existing guarded constructor transaction.
-No new opcode, unsafe ceiling, resource identity or common-layout change.
-All 126 fixed 32-pair controls pass common <=1.65%, pay-use/first-present <=5%,
-maxima +1.197%/+3.340%. Two new syntax costs have
-eight-pair absolute PHP comparisons, not invented absent-parent regressions.
+Original byte-exact dual-JIT, reentrancy, descriptor and loader tests, one frozen
+checked five-configuration matrix/all-targets, exact no-loss/fresh gain oracles,
+prior original suites, Reflection inventory, S0-S3 and unsafe/hygiene pass.
+Crypt is an exact new builtin; every prior Reflection inventory row is unchanged.
+All 128 fixed 32-pair controls pass common <=1.65%, pay-use/first-present <=5%,
+maxima +1.154%/+3.883%. Six new API costs have eight-pair absolute PHP comparisons.
 Exact hashes, rejected candidates and shared-host limits are in
 `compatibility.md`; automatic cleanup remains mandatory.
 
-Next read-only admission targets thirteen string failures sharing missing
-`crypt()`. Prove >=10 reachable common-cause gains, safe independent backend
-provenance and original salt/byte/error/call-shape oracles before production,
-otherwise reselect. The mixed ArrayObject projection admission was rejected.
-General trace/serialization/deep-drop, suspension, 32-bit/OOM and blanket
-security/platform claims remain separate. One active implementation only.
+Next read-only admission checks seventeen candidates for missing `decoct`,
+`bindec`, `hexdec` and `octdec`, sharing scalar radix conversion/callable policy.
+Require at least ten PHP-pass/current-fail cases before implementation. Reuse
+existing base-conversion primitives; retain strict/weak/named/callback, invalid
+digit, byte/NUL, overflow and adjacent base_convert/decbin/dechex coverage.
+Reselect if the common-cause threshold is not met. Platform skips are not gains;
+general arithmetic/VM expansion, 32-bit/OOM and blanket claims remain separate.
+One active implementation only.
 
 ### Preceding directory cursor checkpoint
 

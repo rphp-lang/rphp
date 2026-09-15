@@ -46,6 +46,18 @@ guarantee.
 Install [Rustup](https://rustup.rs/) and clone the repository. Rustup will use
 the toolchain pinned in `rust-toolchain.toml`.
 
+Native bcrypt compatibility requires dynamically linked
+[libxcrypt](https://github.com/besser82/libxcrypt) >= 4.4 and `pkg-config`.
+On Debian/Ubuntu install `libcrypt-dev pkg-config`. On macOS install
+`libxcrypt pkgconf` with Homebrew and add
+`$(brew --prefix libxcrypt)/lib/pkgconfig` to `PKG_CONFIG_PATH` (the formula
+is keg-only). Do not substitute the platform's non-reentrant `crypt()` API.
+The library is loaded on first bcrypt use or capability query. Keep the
+build-selected shared-library link installed when running the binary; rebuild
+when deploying to a different native installation.
+See [the crypt boundary review](docs/crypt-boundary.md) for ownership,
+distribution and validation limits.
+
 ```sh
 cargo build --profile max-perf
 ./target/max-perf/rphp -r 'echo "Hello from RPHP\n";'

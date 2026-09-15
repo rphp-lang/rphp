@@ -1,0 +1,15 @@
+name: Native dependencies
+description: Install the reentrant libxcrypt ABI required by crypt compatibility
+runs:
+  using: composite
+  steps:
+    - if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install --no-install-recommends -y libcrypt-dev pkg-config
+    - if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        brew install libxcrypt pkgconf
+        echo "PKG_CONFIG_PATH=$(brew --prefix libxcrypt)/lib/pkgconfig" >> "$GITHUB_ENV"

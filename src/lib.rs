@@ -216,6 +216,13 @@ pub(crate) const BUILTIN_CONSTANT_NAMES: &[&str] = &[
     "LOCK_UN",
     "LOCK_NB",
     "HASH_HMAC",
+    "CRYPT_SALT_LENGTH",
+    "CRYPT_STD_DES",
+    "CRYPT_EXT_DES",
+    "CRYPT_MD5",
+    "CRYPT_BLOWFISH",
+    "CRYPT_SHA256",
+    "CRYPT_SHA512",
     "JSON_ERROR_NONE",
     "JSON_ERROR_DEPTH",
     "JSON_ERROR_STATE_MISMATCH",
@@ -526,6 +533,13 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "LOCK_UN" => Some(value::Value::long(3)),
         "LOCK_NB" => Some(value::Value::long(4)),
         "HASH_HMAC" => Some(value::Value::long(1)),
+        "CRYPT_SALT_LENGTH" => Some(value::Value::long(123)),
+        "CRYPT_STD_DES" | "CRYPT_EXT_DES" | "CRYPT_MD5" | "CRYPT_SHA256" | "CRYPT_SHA512" => {
+            Some(value::Value::long(1))
+        }
+        "CRYPT_BLOWFISH" => Some(value::Value::long(i64::from(
+            stdlib::crypt::bcrypt_available(),
+        ))),
         "JSON_ERROR_NONE" => Some(value::Value::long(0)),
         "JSON_ERROR_DEPTH" => Some(value::Value::long(1)),
         "JSON_ERROR_STATE_MISMATCH" => Some(value::Value::long(2)),

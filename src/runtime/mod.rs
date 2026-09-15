@@ -303,6 +303,11 @@ type InternalDeclarationMap<T> =
 #[derive(Default)]
 struct InternalCallableMetadata {
     functions: InternalFunctionMap<InternalFunctionReflectionMetadata>,
+    // Only explicitly sensitive native declarations enter this small list.
+    // Traces/Reflection scan it on demand; ordinary calls never consult it.
+    // Avoid a separate hash table's buckets, hashing and drop traversal for
+    // a sparse inventory of immutable descriptors.
+    sensitive_parameters: Vec<(*const FunctionCommon, &'static [u32])>,
     // Only builtin declarations enter this table. Their immutable spellings
     // outlive every request; the signatures themselves remain request-owned.
     methods: InternalDeclarationMap<Vec<InternalMethodContract>>,
@@ -2478,6 +2483,44 @@ impl ExecutorGlobals {
             .as_deref()
             .and_then(|metadata| metadata.functions.get(&function))
             .and_then(|(_, _, extension)| *extension)
+    }
+
+    /// Only native registration writes this sparse list. It adds no state to
+    /// FunctionCommon, InternalFunction or the ordinary argument/call path.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn register_internal_sensitive_parameters(
+        &mut self,
+        function: *const FunctionCommon,
+        parameters: &'static [u32],
+    ) {
+        let entries = &mut self
+            .internal_callable_metadata
+            .get_or_insert_with(|| Box::new(InternalCallableMetadata::default()))
+            .sensitive_parameters;
+        if let Some((_, prior)) = entries.iter_mut().find(|(key, _)| *key == function) {
+            *prior = parameters;
+        } else {
+            entries.push((function, parameters));
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn internal_parameter_is_sensitive(
+        &self,
+        function: *const FunctionCommon,
+        parameter: u32,
+    ) -> bool {
+        self.internal_callable_metadata
+            .as_deref()
+            .and_then(|metadata| {
+                metadata
+                    .sensitive_parameters
+                    .iter()
+                    .find(|(key, _)| *key == function)
+            })
+            .is_some_and(|(_, parameters)| parameters.contains(&parameter))
     }
 
     /// Reserve a known native method batch without reallocating its already
@@ -11056,6 +11099,47 @@ mod sparse_call_cleanup_tests {
 #[cfg(test)]
 mod stdlib_capacity_tests {
     use super::ExecutorGlobals;
+
+    #[test]
+    fn internal_sensitive_parameter_descriptors_are_sparse_and_request_local() {
+        fn handler(
+            _: *mut crate::vm::frame::ExecuteData,
+            _: *mut crate::value::Value,
+            _: &mut ExecutorGlobals,
+        ) -> Result<(), crate::vm::execute::VmError> {
+            Ok(())
+        }
+        let first = crate::compiler::make_internal_function(handler, 2, 2, vec![]);
+        let second = crate::compiler::make_internal_function(handler, 3, 1, vec![]);
+        let first = &first.common as *const _;
+        let second = &second.common as *const _;
+        let mut request = ExecutorGlobals::new();
+        let other = ExecutorGlobals::new();
+        assert!(!request.internal_parameter_is_sensitive(first, 0));
+        assert!(request.internal_callable_metadata.is_none());
+        request.register_internal_sensitive_parameters(first, &[0]);
+        request.register_internal_sensitive_parameters(second, &[1, 2]);
+        assert!(request.internal_parameter_is_sensitive(first, 0));
+        assert!(!request.internal_parameter_is_sensitive(first, 1));
+        assert!(request.internal_parameter_is_sensitive(second, 1));
+        assert!(request.internal_parameter_is_sensitive(second, 2));
+        assert!(!other.internal_parameter_is_sensitive(first, 0));
+        request.register_internal_sensitive_parameters(first, &[1]);
+        assert!(!request.internal_parameter_is_sensitive(first, 0));
+        assert!(request.internal_parameter_is_sensitive(first, 1));
+        assert_eq!(
+            request
+                .internal_callable_metadata
+                .as_ref()
+                .unwrap()
+                .sensitive_parameters
+                .len(),
+            2
+        );
+        request.register_internal_sensitive_parameters(first, &[]);
+        assert!(!request.internal_parameter_is_sensitive(first, 1));
+        assert!(other.internal_callable_metadata.is_none());
+    }
 
     #[test]
     fn function_registration_keeps_first_declaration_and_alias_error_priority() {

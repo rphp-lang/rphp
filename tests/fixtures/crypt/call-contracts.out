@@ -1,0 +1,54 @@
+zero
+ArgumentCountError:crypt() expects exactly 2 arguments, 0 given
+crypt-args:[]
+one
+ArgumentCountError:crypt() expects exactly 2 arguments, 1 given
+crypt-args:["SensitiveParameterValue"]
+three
+ArgumentCountError:crypt() expects exactly 2 arguments, 3 given
+crypt-args:["SensitiveParameterValue","string","boolean"]
+unknown-name
+Error:Unknown named parameter $extra
+reversed-named
+"kLWXwqGR2fNlU"
+integer
+"kLPnFKkWGT0cg"
+float
+"kLeiQ8lWV9Whw"
+boolean
+"kLw5CZcvLykA2"
+null-string
+notice:8192:crypt(): Passing null to parameter #1 ($string) of type string is deprecated
+"kLHIf48rYCAPY"
+null-salt
+notice:8192:crypt(): Passing null to parameter #2 ($salt) of type string is deprecated
+"*0"
+array-string
+TypeError:crypt(): Argument #1 ($string) must be of type string, array given
+crypt-args:["SensitiveParameterValue","string"]
+array-salt
+TypeError:crypt(): Argument #2 ($salt) must be of type string, array given
+crypt-args:["SensitiveParameterValue","array"]
+object-string
+convert
+"kLWXwqGR2fNlU"
+two-objects
+convert
+convert
+"sp9ty6KIusfPQ"
+call-user
+"kLWXwqGR2fNlU"
+first-class
+"kLWXwqGR2fNlU"
+unpack
+"kLWXwqGR2fNlU"
+strict
+TypeError:crypt(): Argument #1 ($string) must be of type string, int given
+crypt-args:["SensitiveParameterValue","string"]
+strict-object
+TypeError:crypt(): Argument #1 ($string) must be of type string, StringSpecimen given
+crypt-args:["SensitiveParameterValue","string"]
+reflection
+["crypt",2,2,"string",[["string","string",false,false,["SensitiveParameter"]],["salt","string",false,false,[]]]]
+constants
+[123,1,1,1,1,1,1]

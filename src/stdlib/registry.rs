@@ -603,6 +603,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         eg.register_function("unpack", pointer).unwrap();
         funcs.push(function);
     }
+    funcs.push(crypt::register(eg));
     reg_typed!(
         "md5",
         fn_md5,
