@@ -1,0 +1,25 @@
+diagnostic:8192:Use of "self" in callables is deprecated
+diagnostic:8192:Use of "self" in callables is deprecated
+ap_function
+ApBase::Fetch
+ApChild::Fetch
+ApObject::Fetch
+object:ApObject
+object:Closure
+function:ApFirstMissing
+static:ApBase:ApFirstMissing
+static:ApChild:ApFirstMissing
+object:ApFirstMissing
+invoke:ApFirstMissing
+closure:1:ApFirstMissing
+bool(true)
+bool(true)
+ApChild::Fetch
+ApObject::Fetch
+object:ApObject
+object:Closure
+static:ApChild:ApSecondMissing
+object:ApSecondMissing
+invoke:ApSecondMissing
+closure:2:ApSecondMissing
+int(2)

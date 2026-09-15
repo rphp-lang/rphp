@@ -1,0 +1,56 @@
+mutate:ApLiveOne
+mutate:ApLiveOne
+added:ApLiveOne
+second
+front:ApLiveTwo
+mutate:ApLiveTwo
+added:ApLiveTwo
+self:ApSelf
+added:ApSelf
+clear:ApClear
+diagnostic:8192:spl_autoload_unregister(): Using spl_autoload_call() as a callback for spl_autoload_unregister() is deprecated, to remove all registered autoloaders, call spl_autoload_unregister() for all values returned from spl_autoload_functions()
+after-clear
+added:ApAfterClear
+enter:ApRecursive:0
+enter:ApNested:1
+tail:ApNested
+Exception:load interrupted
+enter:ApRecursive:0
+enter:ApNested:1
+tail:ApNested
+Exception:load interrupted
+array(4) {
+  [0]=>
+  string(11) "ApRecursive"
+  [1]=>
+  string(8) "ApNested"
+  [2]=>
+  string(11) "ApRecursive"
+  [3]=>
+  string(8) "ApNested"
+}
+int(0)
+scenario:previous
+a:previous
+b:previous
+c:previous
+d:previous
+scenario:self
+a:self
+b:self
+d:self
+scenario:next
+a:next
+b:next
+d:next
+scenario:remove-readd
+a:remove-readd
+b:remove-readd
+d:remove-readd
+c:remove-readd
+scenario:append
+a:append
+b:append
+c:append
+d:append
+added:append

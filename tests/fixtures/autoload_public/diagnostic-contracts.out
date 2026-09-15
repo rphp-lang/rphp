@@ -1,0 +1,109 @@
+case:clear-empty
+diagnostic:8192:spl_autoload_unregister(): Using spl_autoload_call() as a callback for spl_autoload_unregister() is deprecated, to remove all registered autoloaders, call spl_autoload_unregister() for all values returned from spl_autoload_functions()
+bool(true)
+case:invalid-before-notice
+TypeError:spl_autoload_register(): Argument #1 ($callback) must be a valid callback or null, function "ap_missing_loader" not found or invalid function name
+case:forbidden-before-notice
+diagnostic:8:spl_autoload_register(): Argument #2 ($do_throw) has been ignored, spl_autoload_register() will always throw
+ValueError:spl_autoload_register(): Argument #1 ($callback) must not be the spl_autoload_call() function
+case:false-throw
+diagnostic:8:spl_autoload_register(): Argument #2 ($do_throw) has been ignored, spl_autoload_register() will always throw
+bool(true)
+case:bad-throw
+TypeError:spl_autoload_register(): Argument #2 ($throw) must be of type bool, array given
+case:bad-prepend
+TypeError:spl_autoload_register(): Argument #3 ($prepend) must be of type bool, array given
+case:named
+bool(true)
+array(1) {
+  [0]=>
+  string(9) "ap_loader"
+}
+case:class_implements:type
+TypeError:class_implements(): Argument #1 ($object_or_class) must be of type object|string, int given
+case:class_implements:true
+TypeError:class_implements(): Argument #1 ($object_or_class) must be of type object|string, true given
+case:class_implements:false
+TypeError:class_implements(): Argument #1 ($object_or_class) must be of type object|string, false given
+case:class_implements:no-load
+diagnostic:2:class_implements(): Class ApAbsent does not exist
+bool(false)
+case:class_implements:load
+load:ApAbsent
+diagnostic:2:class_implements(): Class ApAbsent does not exist and could not be loaded
+bool(false)
+case:class_implements:bad-flag
+TypeError:class_implements(): Argument #2 ($autoload) must be of type bool, array given
+case:class_uses:type
+TypeError:class_uses(): Argument #1 ($object_or_class) must be of type object|string, int given
+case:class_uses:true
+TypeError:class_uses(): Argument #1 ($object_or_class) must be of type object|string, true given
+case:class_uses:false
+TypeError:class_uses(): Argument #1 ($object_or_class) must be of type object|string, false given
+case:class_uses:no-load
+diagnostic:2:class_uses(): Class ApAbsent does not exist
+bool(false)
+case:class_uses:load
+load:ApAbsent
+diagnostic:2:class_uses(): Class ApAbsent does not exist and could not be loaded
+bool(false)
+case:class_uses:bad-flag
+TypeError:class_uses(): Argument #2 ($autoload) must be of type bool, array given
+case:class_parents:type
+TypeError:class_parents(): Argument #1 ($object_or_class) must be of type object|string, int given
+case:class_parents:true
+TypeError:class_parents(): Argument #1 ($object_or_class) must be of type object|string, true given
+case:class_parents:false
+TypeError:class_parents(): Argument #1 ($object_or_class) must be of type object|string, false given
+case:class_parents:no-load
+diagnostic:2:class_parents(): Class ApAbsent does not exist
+bool(false)
+case:class_parents:load
+load:ApAbsent
+diagnostic:2:class_parents(): Class ApAbsent does not exist and could not be loaded
+bool(false)
+case:class_parents:bad-flag
+TypeError:class_parents(): Argument #2 ($autoload) must be of type bool, array given
+case:named-notice-transaction
+throwing:8:1
+Exception:diagnostic interrupted
+string(9) "untouched"
+array(2) {
+  [0]=>
+  string(9) "ap_loader"
+  [1]=>
+  string(15) "ap_other_loader"
+}
+case:notice-transaction
+throwing:8:2
+Exception:diagnostic interrupted
+string(9) "untouched"
+array(3) {
+  [0]=>
+  string(9) "ap_loader"
+  [1]=>
+  string(15) "ap_other_loader"
+  [2]=>
+  string(12) "spl_autoload"
+}
+case:clear-transaction
+throwing:8192:3
+Exception:diagnostic interrupted
+string(9) "untouched"
+array(3) {
+  [0]=>
+  string(9) "ap_loader"
+  [1]=>
+  string(15) "ap_other_loader"
+  [2]=>
+  string(12) "spl_autoload"
+}
+case:probe-transaction
+throwing:2:3
+Exception:diagnostic interrupted
+string(9) "untouched"
+case:clear-populated
+diagnostic:8192:spl_autoload_unregister(): Using spl_autoload_call() as a callback for spl_autoload_unregister() is deprecated, to remove all registered autoloaders, call spl_autoload_unregister() for all values returned from spl_autoload_functions()
+bool(true)
+array(0) {
+}

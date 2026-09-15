@@ -2,8 +2,8 @@
 //!
 //! Callback resolution is performed once at registration. Missing-symbol
 //! probes stay allocation-free when no autoloader has ever been registered;
-//! active stacks take a snapshot so callbacks may register or unregister
-//! loaders while the VM is re-entered.
+//! active walks retain only the currently invoked snapshot and reread the live
+//! registry after each callback. Registry mutation preserves closure cells.
 
 use crate::runtime::{AutoloadEntry, AutoloadState, ExecutorGlobals};
 use crate::value::{PhpArray, Value, ValueType, make_error_value, php_byte_string_bytes};
@@ -12,7 +12,7 @@ use crate::vm::frame::ExecuteData;
 use std::borrow::Cow;
 
 use super::{
-    ResolvedCallback, call_resolved_with_values, resolve_callback_at_callsite,
+    ResolvedCallback, call_resolved_with_values, resolve_callback_at_callsite_checked,
     typed_internal_bool_argument, typed_internal_string_value_argument_expected,
 };
 
@@ -68,7 +68,73 @@ pub(crate) fn ensure_symbol_loaded(eg: &mut ExecutorGlobals, name: &str) -> Resu
     if eg.runtime_class_link_is_active(name) {
         return Ok(false);
     }
-    exists_with_autoload(eg, name, SymbolKind::Any, true, false)
+    exists_with_autoload(eg, name, SymbolKind::Any, true, false, None)
+}
+
+/// The SPL ancestry probes accept objects or literal class names without
+/// scalar/Stringable coercion, then share one diagnostic/autoload boundary.
+#[cold]
+#[inline(never)]
+pub(super) fn class_probe_name(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+) -> Result<Option<String>, VmError> {
+    let value = arg!(ed, 0);
+    let class_name = if value.value_type() == ValueType::Closure {
+        "Closure".to_string()
+    } else if let Some(object) = value.as_object() {
+        object.class_name.to_string()
+    } else if let Some(name) = value.as_str() {
+        name.to_string()
+    } else {
+        let actual = match value.value_type() {
+            ValueType::True => "true".into(),
+            ValueType::False => "false".into(),
+            _ => value.diagnostic_type_name(),
+        };
+        eg.exception = Some(make_error_value(
+            "TypeError",
+            &format!(
+                "{function}(): Argument #1 ($object_or_class) must be of type object|string, {} given",
+                actual
+            ),
+        ));
+        return Ok(None);
+    };
+    let autoload = match arg_opt!(ed, 1) {
+        None => true,
+        Some(value) if value.value_type() == ValueType::True => true,
+        Some(value) if value.value_type() == ValueType::False => false,
+        Some(_) => {
+            let Some(flag) = typed_internal_bool_argument(ed, eg, function, 1, "autoload")? else {
+                return Ok(None);
+            };
+            flag
+        }
+    };
+    if eg.find_public_class(&class_name).is_some()
+        || (autoload
+            && !eg.runtime_class_link_is_active(&class_name)
+            && exists_with_autoload(eg, &class_name, SymbolKind::Any, true, false, Some(ed))?)
+    {
+        return Ok(Some(class_name));
+    }
+    if eg.exception.is_none() {
+        let suffix = if autoload {
+            " and could not be loaded"
+        } else {
+            ""
+        };
+        super::report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!("{function}(): Class {class_name} does not exist{suffix}"),
+        )?;
+    }
+    Ok(None)
 }
 
 fn callback_equal(left: &Value, right: &Value) -> bool {
@@ -116,14 +182,96 @@ fn callback_equal(left: &Value, right: &Value) -> bool {
 }
 
 fn invalid_callback(function: &str, callback: &Value, nullable: bool, eg: &mut ExecutorGlobals) {
-    let description = callback.echo_to_string();
+    let description = super::ordinary_callback_invalid_reason(callback, eg);
     let nullable = if nullable { " or null" } else { "" };
     eg.exception = Some(make_error_value(
         "TypeError",
         &format!(
-            "{function}(): Argument #1 ($callback) must be a valid callback{nullable}, function \"{description}\" not found or not callable"
+            "{function}(): Argument #1 ($callback) must be a valid callback{nullable}, {description}"
         ),
     ));
+}
+
+#[inline]
+fn canonical_callback(callback: Value, resolved: &ResolvedCallback, eg: &ExecutorGlobals) -> Value {
+    // An ordinary function's immutable name is already the public callable
+    // representation. Keep that no-op out of the allocating method/legacy
+    // projection path, including when unregister validates the same string.
+    if resolved.called_scope_class_id == 0
+        && let Some(name) = callback.as_str()
+        && let Some(op_array) = resolved.metadata().1
+        && name == op_array.name
+    {
+        return callback;
+    }
+    canonical_callback_slow(callback, resolved, eg)
+}
+
+#[cold]
+#[inline(never)]
+fn canonical_callback_slow(
+    callback: Value,
+    resolved: &ResolvedCallback,
+    eg: &ExecutorGlobals,
+) -> Value {
+    if matches!(
+        callback.value_type(),
+        ValueType::Closure | ValueType::Object
+    ) {
+        return callback;
+    }
+    // Callable identity uses the immutable declaration spelling, not a
+    // diagnostic display name. Borrow it and retain an already canonical
+    // string instead of allocating two fresh strings on every registration
+    // and unregistration. Anonymous/object callbacks returned above keep
+    // their distinct identities; method receivers are projected below.
+    let name = resolved
+        .metadata()
+        .1
+        .map(|op_array| Cow::Borrowed(op_array.name.as_str()))
+        .or_else(|| {
+            eg.internal_function_display_name(resolved.func_ptr)
+                .map(Cow::Borrowed)
+        })
+        .unwrap_or_else(|| {
+            Cow::Owned(crate::vm::execute::displayed_function_name(
+                eg,
+                resolved.func_ptr,
+            ))
+        });
+    if resolved.called_scope_class_id == 0 {
+        if callback.as_str() == Some(name.as_ref()) {
+            return callback;
+        }
+        return Value::string(name.into_owned());
+    }
+    let Some(class) = eg.class_by_id(resolved.called_scope_class_id) else {
+        return callback;
+    };
+    let method = if resolved.is_magic_call {
+        resolved
+            .use_vars
+            .first()
+            .and_then(Value::as_str)
+            .unwrap_or(&name)
+    } else {
+        name.rsplit("::").next().unwrap_or(&name)
+    };
+    let receiver = resolved
+        .bound_this
+        .clone()
+        .or_else(|| {
+            resolved
+                .prepend_args
+                .first()
+                .filter(|value| value.as_object().is_some())
+                .cloned()
+        })
+        .unwrap_or_else(|| Value::string(&class.name));
+    let mut pair = PhpArray::with_packed_capacity(2);
+    pair.push(receiver);
+    pair.push(Value::string(method));
+    Value::array(pair)
 }
 
 #[cold]
@@ -327,6 +475,7 @@ fn invoke_entry(
     eg: &mut ExecutorGlobals,
     entry: &AutoloadEntry,
     class_name: &Value,
+    internal_caller: Option<*mut ExecuteData>,
 ) -> Result<(), VmError> {
     let resolved = ResolvedCallback {
         func_ptr: entry.func_ptr,
@@ -348,7 +497,17 @@ fn invoke_entry(
     let caller = eg.current_execute_data.get();
     let source_origin =
         user_frame_source(caller, UserFrameLookup::Current).filter(|source| source.line != 0);
-    let _ = if let Some(source) = source_origin {
+    let _ = if let Some(internal) = internal_caller.filter(|frame| !frame.is_null()) {
+        super::with_internal_trace_origin(internal, eg, |eg| {
+            super::call_resolved_with_values_from_internal(
+                internal,
+                eg,
+                &resolved,
+                std::slice::from_ref(class_name),
+                true,
+            )
+        })?
+    } else if let Some(source) = source_origin {
         super::call_resolved_with_values_from(
             eg,
             &resolved,
@@ -368,6 +527,7 @@ fn invoke_autoload_stack(
     eg: &mut ExecutorGlobals,
     name: &str,
     binary_name: bool,
+    internal_caller: Option<*mut ExecuteData>,
 ) -> Result<(), VmError> {
     if eg
         .autoload
@@ -391,16 +551,13 @@ fn invoke_autoload_stack(
         return Ok(());
     }
 
-    let entries = eg
+    let state = eg
         .autoload
-        .as_ref()
-        .map(|state| state.entries.clone())
-        .unwrap_or_default();
-    eg.autoload
         .as_mut()
-        .expect("autoload state disappeared before invocation")
-        .active_classes
-        .insert(guard_key.clone());
+        .expect("autoload state disappeared before invocation");
+    state.active_classes.insert(guard_key.clone());
+    let position = state.active_positions.len();
+    state.active_positions.push(0);
 
     let class_name = if binary_name {
         Value::binary_string_from_storage(normalized.to_string())
@@ -408,8 +565,16 @@ fn invoke_autoload_stack(
         Value::string(normalized)
     };
     let mut invocation_result = Ok(());
-    for entry in entries.iter() {
-        invocation_result = invoke_entry(eg, entry, &class_name);
+    loop {
+        let Some(state) = eg.autoload.as_ref() else {
+            break;
+        };
+        let index = state.active_positions[position];
+        let entries = state.entries.clone();
+        let Some(entry) = entries.get(index) else {
+            break;
+        };
+        invocation_result = invoke_entry(eg, entry, &class_name, internal_caller);
         if invocation_result.is_err()
             || eg.exception.is_some()
             || lookup_name
@@ -418,9 +583,13 @@ fn invoke_autoload_stack(
         {
             break;
         }
+        if let Some(state) = eg.autoload.as_mut() {
+            state.active_positions[position] = state.active_positions[position].saturating_add(1);
+        }
     }
 
     if let Some(state) = eg.autoload.as_mut() {
+        state.active_positions.pop();
         state.active_classes.remove(&guard_key);
     }
     invocation_result
@@ -432,6 +601,7 @@ fn exists_with_autoload(
     kind: SymbolKind,
     autoload: bool,
     binary_name: bool,
+    internal_caller: Option<*mut ExecuteData>,
 ) -> Result<bool, VmError> {
     let lookup_name = symbol_lookup_name(name, binary_name);
     // A symbol of another class-like kind still owns this name. PHP returns
@@ -464,7 +634,7 @@ fn exists_with_autoload(
     // Loaded/no-autoload probes above stay allocation-free; only the actual
     // autoload boundary snapshots the requested name.
     let stable_name = name.to_string();
-    invoke_autoload_stack(eg, &stable_name, binary_name)?;
+    invoke_autoload_stack(eg, &stable_name, binary_name, internal_caller)?;
     Ok(eg.exception.is_none()
         && symbol_lookup_name(&stable_name, binary_name)
             .as_deref()
@@ -508,7 +678,7 @@ fn symbol_exists_handler(
             autoload
         }
     };
-    let exists = exists_with_autoload(eg, name, kind, autoload, binary_name)?;
+    let exists = exists_with_autoload(eg, name, kind, autoload, binary_name, Some(ed))?;
     if eg.exception.is_none() {
         ret!(rv, Value::bool(exists));
     }
@@ -572,7 +742,9 @@ pub(crate) fn fn_class_alias(
     let autoload = arg_opt!(ed, 2).is_none_or(Value::is_truthy);
 
     if !symbol_exists(eg, &original, SymbolKind::Any) {
-        if !autoload || !exists_with_autoload(eg, &original, SymbolKind::Any, true, false)? {
+        if !autoload
+            || !exists_with_autoload(eg, &original, SymbolKind::Any, true, false, Some(ed))?
+        {
             if eg.exception.is_some() {
                 return Ok(());
             }
@@ -657,16 +829,60 @@ pub(crate) fn fn_spl_autoload_register(
         Some(value) if value.value_type() == ValueType::Null => Value::string("spl_autoload"),
         Some(value) => value.clone(),
     };
-    if arg_opt!(ed, 1).is_some_and(|value| !value.is_truthy()) {
-        eg.write_output(
-            b"Notice: spl_autoload_register(): Argument #2 ($do_throw) has been ignored, spl_autoload_register() will always throw\n",
-        );
-    }
-    let Some(resolved) = resolve_callback_at_callsite(&callback, eg, ed) else {
-        invalid_callback("spl_autoload_register", &callback, true, eg);
+    let Some(resolved) = resolve_callback_at_callsite_checked(&callback, eg, ed)? else {
+        if eg.exception.is_none() {
+            invalid_callback("spl_autoload_register", &callback, true, eg);
+        }
         return Ok(());
     };
-    let prepend = arg_opt!(ed, 2).is_some_and(Value::is_truthy);
+    let do_throw = match arg_opt!(ed, 1) {
+        None => true,
+        Some(value) if value.value_type() == ValueType::True => true,
+        Some(value) if value.value_type() == ValueType::False => false,
+        Some(_) => {
+            let Some(flag) =
+                typed_internal_bool_argument(ed, eg, "spl_autoload_register", 1, "throw")?
+            else {
+                return Ok(());
+            };
+            flag
+        }
+    };
+    let prepend = match arg_opt!(ed, 2) {
+        None => false,
+        Some(value) if value.value_type() == ValueType::True => true,
+        Some(value) if value.value_type() == ValueType::False => false,
+        Some(_) => {
+            let Some(flag) =
+                typed_internal_bool_argument(ed, eg, "spl_autoload_register", 2, "prepend")?
+            else {
+                return Ok(());
+            };
+            flag
+        }
+    };
+    if !do_throw {
+        // PHP finishes registration after this notice even when its user
+        // handler throws; only result publication is suppressed below.
+        super::report_internal_diagnostic(
+            eg,
+            ed,
+            8,
+            "Notice",
+            "spl_autoload_register(): Argument #2 ($do_throw) has been ignored, spl_autoload_register() will always throw",
+        )?;
+    }
+    let callback = canonical_callback(callback, &resolved, eg);
+    if callback
+        .as_str()
+        .is_some_and(|name| name.eq_ignore_ascii_case("spl_autoload_call"))
+    {
+        eg.exception = Some(make_error_value(
+            "ValueError",
+            "spl_autoload_register(): Argument #1 ($callback) must not be the spl_autoload_call() function",
+        ));
+        return Ok(());
+    }
     let state = eg
         .autoload
         .get_or_insert_with(|| Box::new(AutoloadState::default()));
@@ -679,18 +895,25 @@ pub(crate) fn fn_spl_autoload_register(
         .iter()
         .any(|entry| callback_equal(&entry.callback, &callback))
     {
-        ret!(rv, Value::bool(true));
+        if eg.exception.is_none() {
+            ret!(rv, Value::bool(true));
+        }
+        return Ok(());
     }
 
     let entry = resolved_entry(callback, resolved);
-    let mut entries = state.entries.to_vec();
+    // Active callbacks retain a snapshot; idle registry edits can reuse the
+    // vector without cloning captures or allocating a replacement snapshot.
+    let entries = std::rc::Rc::make_mut(&mut state.entries);
     if prepend {
         entries.insert(0, entry);
     } else {
         entries.push(entry);
     }
-    state.entries = entries.into();
-    ret!(rv, Value::bool(true));
+    if eg.exception.is_none() {
+        ret!(rv, Value::bool(true));
+    }
+    Ok(())
 }
 
 pub(crate) fn fn_spl_autoload_call(
@@ -699,7 +922,7 @@ pub(crate) fn fn_spl_autoload_call(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let class_name = arg!(ed, 0).echo_to_string();
-    invoke_autoload_stack(eg, &class_name, false)?;
+    invoke_autoload_stack(eg, &class_name, false, Some(ed))?;
     if eg.exception.is_none() {
         ret!(rv, Value::null());
     }
@@ -712,35 +935,46 @@ pub(crate) fn fn_spl_autoload_unregister(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let callback = arg!(ed, 0).clone();
+    let Some(resolved) = resolve_callback_at_callsite_checked(&callback, eg, ed)? else {
+        if eg.exception.is_none() {
+            invalid_callback("spl_autoload_unregister", &callback, false, eg);
+        }
+        return Ok(());
+    };
+    let callback = canonical_callback(callback, &resolved, eg);
     if callback
         .as_str()
         .is_some_and(|name| name.eq_ignore_ascii_case("spl_autoload_call"))
     {
-        eg.write_output(
-            b"Deprecated: spl_autoload_unregister(): Using spl_autoload_call() as a callback for spl_autoload_unregister() is deprecated, to remove all registered autoloaders, call spl_autoload_unregister() for all values returned from spl_autoload_functions()\n",
-        );
-        let removed = eg.autoload.as_mut().is_some_and(|state| {
-            if state.entries.is_empty() {
-                return false;
-            }
+        super::report_internal_deprecation(
+            eg,
+            ed,
+            "spl_autoload_unregister(): Using spl_autoload_call() as a callback for spl_autoload_unregister() is deprecated, to remove all registered autoloaders, call spl_autoload_unregister() for all values returned from spl_autoload_functions()",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        if let Some(state) = eg.autoload.as_mut() {
             state.entries = Default::default();
-            true
-        });
-        ret!(rv, Value::bool(removed));
-    }
-    if resolve_callback_at_callsite(&callback, eg, ed).is_none() {
-        invalid_callback("spl_autoload_unregister", &callback, false, eg);
-        return Ok(());
+            state.active_positions.fill(usize::MAX);
+        }
+        ret!(rv, Value::bool(true));
     }
 
     let removed = eg.autoload.as_mut().is_some_and(|state| {
-        let mut entries = state.entries.to_vec();
-        let old_len = entries.len();
-        entries.retain(|entry| !callback_equal(&entry.callback, &callback));
-        if entries.len() == old_len {
+        let Some(index) = state
+            .entries
+            .iter()
+            .position(|entry| callback_equal(&entry.callback, &callback))
+        else {
             return false;
+        };
+        for position in &mut state.active_positions {
+            if *position != usize::MAX && index < *position {
+                *position -= 1;
+            }
         }
-        state.entries = entries.into();
+        std::rc::Rc::make_mut(&mut state.entries).remove(index);
         true
     });
     ret!(rv, Value::bool(removed));

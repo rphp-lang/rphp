@@ -36,31 +36,31 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `scalar-float-special-function-contracts` checkpoint adds thirteen
-PHP 8.5 passes over `760ee022`, without losses, changed expectations, process
-hazards or moved failure stages. Previous 7,975-case counts stay 7,150/392;
-thirteen new math cases expand coverage to **7,988: 7,163 pass / 392 fail**,
-plus 190 skips, 242 unsupported and one XFAIL. This is not all PHP.
+The accepted `spl-autoload-public-boundaries` checkpoint adds thirteen PHP 8.5
+passes over `d5fdbc5a`, without losses, changed expectations, process hazards or
+moved failure stages. The same **7,988 cases reach 7,176 pass / 379 fail**,
+plus 190 skips, 242 unsupported and one XFAIL; SPL reaches 674/71. Core and both
+math-family pass sets are unchanged. This is not all PHP.
 
-Five scalar functions share typed arguments and cold registration. Original
-dual-JIT oracles preserve exact bits, domain/NaN/INF, diagnostics, callable
-metadata, reentry and references/COW. A rejected Rust-only implementation led
-to three safe C99 libm declarations; the new unsafe external boundary and
-unvalidated platforms are explicit in `scalar-float-boundary.md`. No common
-VM/Value layout or Cargo dependency change; counted unsafe remains 1,626/289.
+Canonical callback identity, reference captures, live registry walks and
+diagnostic transactions share a cold autoload boundary. Four original dual-JIT
+oracles cover ordering, reentry, state preservation and trace origins. The
+existing boxed autoload state changes to a copy-on-write vector with live walk
+positions; ordinary VM/Value layouts, compiler and Cargo dependencies do not
+change. No new unsafe boundary; counted unsafe remains 1,626/289.
 
 One frozen checked five-configuration matrix/all-targets, exact no-loss/fresh
-oracles, prior original suites, inventory, S0-S3 and hygiene pass. All 142 fixed
+oracles, prior original suites, inventory, S0-S3 and hygiene pass. All 151 fixed
 32-pair controls meet user limits common <=1.65%, pay-use/first-present <=5%,
-maxima +1.570%/+3.378%. Five new API costs have exact
-eight-pair PHP comparisons. Nominal findings, hashes and shared-host limits
-remain in `compatibility.md`; cleanup is mandatory.
+maxima +1.253%/+3.176%. Nominal findings, rejected registry variants, hashes
+and shared-host limits remain in `compatibility.md`; cleanup is mandatory.
 
-Next read-only admission examines twelve current SPL autoload/probe failures.
-Prove at least ten shared PHP-pass/current-fail cases before implementation;
-otherwise reselect. Keep registration identity/live mutation, diagnostics and
-exception ordering explicit; do not absorb general class-link/VM redesign.
-Retain the full expanded 7,988-case ledger and one active implementation.
+Next read-only admission ranks fourteen ArrayObject native-property/projection
+failures ahead of ten fixed-array materialization failures. Prove at least ten
+shared PHP-pass/current-fail cases before implementation; otherwise reselect.
+Do not combine independent debug-hook or mutation-lifetime fixes merely to meet
+the threshold. Retain all 7,988 ledger cases, fixed anchors and one active
+implementation.
 
 ### Preceding directory cursor checkpoint
 

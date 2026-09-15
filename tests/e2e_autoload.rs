@@ -428,7 +428,7 @@ fn false_throw_argument_is_ignored_with_php_notice() {
             "<?php function loader($name) {} var_dump(spl_autoload_register('loader', false));"
         ),
         concat!(
-            "Notice: spl_autoload_register(): Argument #2 ($do_throw) has been ignored, spl_autoload_register() will always throw\n",
+            "\nNotice: spl_autoload_register(): Argument #2 ($do_throw) has been ignored, spl_autoload_register() will always throw in <main> on line 1\n",
             "bool(true)\n"
         )
     );
@@ -479,7 +479,7 @@ var_dump(spl_autoload_functions());
 "#,
         ),
         concat!(
-            "Deprecated: spl_autoload_unregister(): Using spl_autoload_call() as a callback for spl_autoload_unregister() is deprecated, to remove all registered autoloaders, call spl_autoload_unregister() for all values returned from spl_autoload_functions()\n",
+            "\nDeprecated: spl_autoload_unregister(): Using spl_autoload_call() as a callback for spl_autoload_unregister() is deprecated, to remove all registered autoloaders, call spl_autoload_unregister() for all values returned from spl_autoload_functions() in <main> on line 5\n",
             "bool(true)\n",
             "array(0) {\n}\n"
         )

@@ -13690,25 +13690,12 @@ fn fn_class_implements(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let value = arg!(ed, 0);
-    let class_name = if value.value_type() == ValueType::Closure {
-        "Closure".to_string()
-    } else if let Some(object) = value.as_object() {
-        object.class_name.to_string()
-    } else if let Some(name) = value.as_str() {
-        name.to_string()
-    } else {
-        ret!(rv, Value::bool(false));
-    };
-    let autoload_enabled = arg_opt!(ed, 1).is_none_or(Value::is_truthy);
-    if eg.find_public_class(&class_name).is_none()
-        && (!autoload_enabled || !autoload::ensure_symbol_loaded(eg, &class_name)?)
-    {
+    let Some(class_name) = autoload::class_probe_name(ed, eg, "class_implements")? else {
         if eg.exception.is_none() {
             ret!(rv, Value::bool(false));
         }
         return Ok(());
-    }
+    };
 
     let mut project_stringable = false;
     let mut result = PhpArray::new();
@@ -13748,25 +13735,12 @@ fn fn_class_parents(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let value = arg!(ed, 0);
-    let class_name = if value.value_type() == ValueType::Closure {
-        "Closure".to_string()
-    } else if let Some(object) = value.as_object() {
-        object.class_name.to_string()
-    } else if let Some(name) = value.as_str() {
-        name.to_string()
-    } else {
-        ret!(rv, Value::bool(false));
-    };
-    let autoload_enabled = arg_opt!(ed, 1).is_none_or(Value::is_truthy);
-    if eg.find_public_class(&class_name).is_none()
-        && (!autoload_enabled || !autoload::ensure_symbol_loaded(eg, &class_name)?)
-    {
+    let Some(class_name) = autoload::class_probe_name(ed, eg, "class_parents")? else {
         if eg.exception.is_none() {
             ret!(rv, Value::bool(false));
         }
         return Ok(());
-    }
+    };
 
     let mut result = PhpArray::new();
     let mut current = eg
@@ -13789,25 +13763,12 @@ fn fn_class_uses(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let value = arg!(ed, 0);
-    let class_name = if value.value_type() == ValueType::Closure {
-        "Closure".to_string()
-    } else if let Some(object) = value.as_object() {
-        object.class_name.to_string()
-    } else if let Some(name) = value.as_str() {
-        name.to_string()
-    } else {
-        ret!(rv, Value::bool(false));
-    };
-    let autoload_enabled = arg_opt!(ed, 1).is_none_or(Value::is_truthy);
-    if eg.find_public_class(&class_name).is_none()
-        && (!autoload_enabled || !autoload::ensure_symbol_loaded(eg, &class_name)?)
-    {
+    let Some(class_name) = autoload::class_probe_name(ed, eg, "class_uses")? else {
         if eg.exception.is_none() {
             ret!(rv, Value::bool(false));
         }
         return Ok(());
-    }
+    };
 
     let mut result = PhpArray::new();
     if let Some(class) = eg.find_class(&class_name) {

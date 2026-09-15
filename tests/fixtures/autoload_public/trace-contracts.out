@@ -1,0 +1,11 @@
+mode:0
+unavailable:ApTraceMissing
+internal:ap_trace_loader:ApTraceMissing
+user:class_exists:ApTraceMissing
+mode:1
+unavailable:ApTraceMissing
+internal:ap_trace_loader:ApTraceMissing
+user:spl_autoload_call:ApTraceMissing
+mode:2
+unavailable:ApTraceMissing
+user:ap_trace_loader:ApTraceMissing

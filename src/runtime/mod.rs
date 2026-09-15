@@ -479,7 +479,6 @@ fn qualified_constant_name_matches(registered: &str, requested: &str) -> bool {
 /// One callback in the request-local SPL autoload stack. Callback resolution
 /// happens at registration time so visibility and callable identity do not
 /// depend on the later class lookup's lexical scope.
-#[derive(Clone)]
 pub(crate) struct AutoloadEntry {
     pub(crate) callback: Value,
     pub(crate) func_ptr: *const FunctionCommon,
@@ -492,14 +491,39 @@ pub(crate) struct AutoloadEntry {
     pub(crate) is_magic_call: bool,
 }
 
+impl Clone for AutoloadEntry {
+    fn clone(&self) -> Self {
+        Self {
+            callback: self.callback.clone(),
+            func_ptr: self.func_ptr,
+            prepend_args: self.prepend_args.clone(),
+            use_vars: self
+                .use_vars
+                .iter()
+                .map(Value::clone_closure_capture)
+                .collect(),
+            called_scope_class_id: self.called_scope_class_id,
+            closure_scope_class_id: self.closure_scope_class_id,
+            bound_this: self.bound_this.clone(),
+            closure_static_vars: self.closure_static_vars.clone(),
+            is_magic_call: self.is_magic_call,
+        }
+    }
+}
+
 /// Cold request-local SPL state. Executors that never register an autoloader
 /// keep this behind a null `Option<Box<_>>` and allocate nothing.
 #[derive(Default)]
 pub(crate) struct AutoloadState {
     /// Immutable callback snapshot. Lookups clone one `Rc` without allocating;
-    /// the rare register/unregister operation publishes a replacement slice.
-    pub(crate) entries: std::rc::Rc<[AutoloadEntry]>,
+    /// mutation copies only while an active invocation retains a snapshot.
+    /// Otherwise registry edits reuse the allocated vector capacity.
+    pub(crate) entries: std::rc::Rc<Vec<AutoloadEntry>>,
     pub(crate) active_classes: std::collections::HashSet<String>,
+    /// Live logical positions for reentrant autoload walks. Registry removal
+    /// before a position shifts it left; removal at it advances on return.
+    /// Clearing the whole registry retires every currently active walk.
+    pub(crate) active_positions: Vec<usize>,
     /// Request-local suffix list used by the built-in `spl_autoload()`
     /// callback. `None` keeps the PHP default without allocating state.
     pub(crate) extensions: Option<std::rc::Rc<str>>,

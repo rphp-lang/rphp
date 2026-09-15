@@ -8,64 +8,66 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 Unix PHP 8.5 checkpoint is
-`scalar-float-special-function-contracts`, against `760ee022`: **+13/-0**,
-confirmed by PHP 8.5.10. The previous 7,975 cases remain **7,150 pass / 392 fail**;
-thirteen newly tracked math cases expand coverage to **7,988 cases: 7,163 pass /
-392 fail**, plus 190 skips, 242 unsupported and one XFAIL. Core and SPL retain
-their exact previous pass sets. This is not complete PHP coverage or thirteen
-fewer failures in the old ledger.
+`spl-autoload-public-boundaries`, against `d5fdbc5a`: **+13/-0**, confirmed
+by PHP 8.5.10. The same **7,988 cases reach 7,176 pass / 379 fail**, plus
+190 skips, 242 unsupported and one XFAIL. SPL reaches 674 pass / 71 fail;
+core and both math families retain their exact previous pass sets. This is
+tested-subset evidence, not complete PHP coverage.
 
-`acosh`, `asinh`, `atanh`, `expm1` and `log1p` use canonical typed
-arguments and cold batched registration. Three original programs cover exact
-bits, signed zero, subnormals, domain/NaN/INF, strict/weak/named/callback calls,
-Reflection, diagnostics, reentry and reference/COW state. PHP and both runtime
-JIT modes agree byte-exactly; all thirteen supplying PHPT pass unmodified.
+Canonical autoload callbacks now preserve callable identity, closure reference
+cells, live registry mutation and reentry. Diagnostic transactions retain PHP's
+validation, handler-exception and publication order; ancestry probes and
+explicit autoload calls preserve their internal trace origins. Four original
+programs agree byte-exactly with PHP in both runtime JIT modes. Twelve supplying
+PHPT and one adjacent class-probe case gain passes without changed expectations.
 
-One frozen checked five-configuration matrix passes **5,683/5,351/5,754/5,776/5,827** tests
+One frozen checked five-configuration matrix passes **5,687/5,355/5,758/5,780/5,831** tests
 (13/13/13/13/16 ignored, none filtered), plus all-features/all-targets.
 Exact no-loss, fresh gain oracles, prior original suites, Composer/Symfony S0-S3,
 unsafe and public-data checks pass. No lost pass, timeout, crash or changed
 failure stage. The global-function audit reaches **517 present / 684 missing /
-0 call-shape mismatch / 350 metadata mismatch / 167 exact**; all five additions
-are exact and every prior function/method inventory row is unchanged.
+0 call-shape mismatch / 350 metadata mismatch / 167 exact**; every prior
+function/method inventory row is unchanged.
 
-All **142 fixed-anchor 32-pair controls** pass common **<=1.65%** and
+All **151 fixed-anchor 32-pair controls** pass common **<=1.65%** and
 pay-use/first-present **<=5%** limits, with maxima
-**+1.570%/+3.378%**.
-Nominal +1% findings remain in the technical record. Five new API workloads have
-exact eight-pair absolute PHP comparisons, candidate/PHP ratios
-**0.756x–0.799x**. These are not
-absent-parent regressions or a general speed claim. The user-authorized
-shared-host guard is diagnostic, not proof of exclusive-host causality.
+**+1.253%/+3.176%**. The nominal +1% closure-service finding remains explicit
+(+1.253% cumulative, -0.009% versus the immediate parent). Registration's
+rejected +67.805%, +19.616%, +6.206%, +6.295% and +7.760% candidates remain in
+the record; copy-on-write registry capacity reuse reduces the final result to
++1.482%. No unchanged failed candidate was rerolled into acceptance. The
+user-authorized shared-host guard is diagnostic, not proof of isolated timing.
 
-The rejected Rust-only inverse-hyperbolic implementation differed in 21 original
-bit/value results, including finite-to-infinity intermediate overflow.
-Expectations were retained. Three safe scalar C99 libm declarations now supply
-the host math behavior: one real unsafe external trust boundary, with no new
-unsafe blocks/functions or inventory-ceiling change (**1,626/289**). See the
-[scalar floating-point boundary](scalar-float-boundary.md) for ABI review and
-platform prerequisites. Compiler/VM/Value layouts and Cargo dependencies are
-unchanged. Non-Unix fallback, other libm revisions, non-default rounding/traps,
-32-bit and OOM equivalence remain unvalidated. Cleanup retains exact anchors
-and removes only reproducible intermediates.
+The existing boxed cold autoload state now owns a copy-on-write vector and live
+walk positions. Ordinary executor/VM/Value layouts, compiler and Cargo
+dependencies are unchanged. No new unsafe boundary; counted unsafe remains
+**1,626/289**. Other autoload argument contracts, broader SPL, 32-bit and OOM
+equivalence remain separate. Cleanup retains every exact fixed anchor and
+current candidate; rejected builds and reproducible intermediates are disposable.
 
 SHA-256 evidence:
 
-- Release: `cd9b11b70226283cc19bce5ed73ff5f56653d615fa5bba7cae2f87b7f85e3c89`.
-- Complete technical record: `73923afef76b36b41d1b153af15b12c09f73fd2089a55caac493b806b4867b76`.
-- Matrix: `2ddce33f0ebd03a3049999880e52422a352619a3f4eb1ca2ffdb798d7fc895cd`.
-- Supplying PHPT: `7a598481d98d146e54f4aac6e22606de9f9e0f4d4d4d8c1a3a76e4efec1c4be6`.
-- SPL manifest / pass set: `36119d8bff3a8d740545e144947ef2623a23141836842fa46bb9bead6ef96f51` / `fe051a234b3eeeaef9600c06deedcd09dbc57a5c88b55dc4072e8aec39388c6a`.
-- Zend/lang manifest / pass set: `27fd9c41067dfd83e588a2a33909d838eee6d98f32df863128631c3ee0c64131` / `efd0f4684602a167bd888a7043303d3270b198c12d348af26eda1b14302b319b`.
-- Strings/array manifest / pass set: `671f5bedea9e43836220e6fb9d99e71751f71154fe3a4a84745894b8bbe896de` / `482d95e26cbbd4c66abd2b34435b39c6042e65340215b02697de5fb9851aaa06`.
-- Retained radix-math manifest / pass set: `3f07167eb11e0579f8999ea67ae26101cff85b4ccca296dfb86edcd070c311b8` / `286261b3604e77cb9248277961e6091502710c16c69bcee23e0afb479f3b70e9`.
-- Performance decision / raw timing: `80433c19a3f5e9ac46ef7c7934350173c4090a5bdc62c0bc4af577656b77e1fa` / `0a7eb7b7acd7db3ca20528bf6c652a250ac88404fdc375de24355d4c2b1675e9`.
+- Release: `1418364f024e83bd4c8686bde4def01f29809d10268154d6ad2c9e21ca85578c`.
+- Complete technical record: `bad01b03cb0f29bb52fc0b815f9b0997b47e94494fd70be09b9d4e65a27605de`.
+- Matrix: `9e0d7da7be4f8c7947f7ba22068322a8b7dc9e509790ef102923e1f48513a4d1`.
+- Supplying PHPT manifest: `22ba898c2b75cff10828bb83e42edea400dec5e0693eaea1d79b9dc0e080be9e`.
+- SPL manifest / pass set: `e95002a0e5924eb7dcb56b8cdae93b0cd0841e0944ec1787e85d53282bf2b1c2` / `712be8e30baa20a29ca8b1ef595b921c8f645e7ebcbe654d074efe654978ec36`.
+- Zend/lang manifest / pass set: `3f3f47650cb38fa36696a45289dd107c9c15e521de7d1f5496bc284fc1dae7f8` / `efd0f4684602a167bd888a7043303d3270b198c12d348af26eda1b14302b319b`.
+- Strings/array manifest / pass set: `0ecf59dd50b29505c2ee7c887aac5cb92e1ed762901063027b7821843d0ccf4d` / `482d95e26cbbd4c66abd2b34435b39c6042e65340215b02697de5fb9851aaa06`.
+- Retained radix-math / scalar-float pass sets: `286261b3604e77cb9248277961e6091502710c16c69bcee23e0afb479f3b70e9` / `4a97876d297c5aa4f8727a46bea2f2c0cbd200da0bc1f1e6e99a96c04b5825a5`.
+- Performance decision / raw timing: `3a68601687c8f61b651bb4ae638d590304723fac8756d88ee0bd1037a8e79201` / `314eca24d5de5cbc785ca8142e9a83b63e7225d9a88efda30efb871f711edd89`.
 
-Next read-only admission examines twelve existing SPL autoload/probe failures.
-Require ten fresh PHP-pass/current-fail cases sharing the public registry and
-diagnostic boundary before editing; reject or reselect if that hypothesis fails.
-Preserve all 7,988 ledger cases, including both new math sets. No generic VM,
-class-link or relative-callable expansion without separate evidence.
+Next read-only admission ranks fourteen ArrayObject property/projection failures
+ahead of ten fixed-array materialization failures. Require ten fresh
+PHP-pass/current-fail cases with a demonstrated shared cause before editing;
+reselect if projection, debug hooks or mutation lifetimes need independent fixes.
+Preserve the full 7,988-case ledger and all fixed performance anchors.
+
+The preceding scalar-float checkpoint added thirteen newly tracked math passes;
+its technical record is
+`73923afef76b36b41d1b153af15b12c09f73fd2089a55caac493b806b4867b76`.
+Its C99 libm trust boundary and unvalidated platforms remain explicit in the
+[scalar floating-point boundary](scalar-float-boundary.md).
 
 The preceding radix checkpoint added seventeen passes; its technical record is
 `fff26a88b94f818a407e20919640c7e9c2c15cb5852884f4ae8fdc06617f031c`.
