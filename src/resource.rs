@@ -120,7 +120,7 @@ impl ResourcePayload {
         }
     }
 
-    #[cold]
+    #[inline]
     fn backend_type_id(&self) -> TypeId {
         match self {
             Self::Stream(_) => TypeId::of::<PhpStream>(),
@@ -285,34 +285,48 @@ impl ResourceEntries {
         entries.insert(id, entry)
     }
 
+    // Keep the bounded slot projection beside its consumer. On close the
+    // caller needs only the payload, so an out-of-line whole-entry return
+    // needlessly transfers its label and Weak owner through another frame.
+    // Promoted tables retain one shared, non-generic traversal below.
+    #[inline]
+    fn remove_matching(&mut self, id: i64, expected_type: Option<TypeId>) -> Option<ResourceEntry> {
+        let matches = |entry: &ResourceEntry| {
+            expected_type.is_none_or(|expected| entry.payload.backend_type_id() == expected)
+        };
+        if let Self::Small { entries, overflow } = self {
+            let index = usize::try_from(id).ok()?.wrapping_sub(1);
+            if index < entries.len() {
+                let slot = &mut entries[index];
+                return if matches(slot.as_ref()?) {
+                    slot.take()
+                } else {
+                    None
+                };
+            }
+            let spare = overflow.as_deref_mut()?;
+            let (stored_id, entry) = spare.as_ref()?;
+            return if *stored_id == id && matches(entry) {
+                spare.take().map(|(_, entry)| entry)
+            } else {
+                None
+            };
+        }
+        self.remove_matching_promoted(id, expected_type)
+    }
+
     #[cold]
     #[inline(never)]
-    fn remove_matching(&mut self, id: i64, expected_type: Option<TypeId>) -> Option<ResourceEntry> {
-        // The table walk is identical for all concrete backends. Carry only
-        // their exact type identity rather than cloning this whole walk into
-        // every typed-close caller. None is the native untyped release path.
+    fn remove_matching_promoted(
+        &mut self,
+        id: i64,
+        expected_type: Option<TypeId>,
+    ) -> Option<ResourceEntry> {
         let matches = |entry: &ResourceEntry| {
             expected_type.is_none_or(|expected| entry.payload.backend_type_id() == expected)
         };
         match self {
-            Self::Small { entries, overflow } => {
-                let index = usize::try_from(id).ok()?.wrapping_sub(1);
-                if index < entries.len() {
-                    let slot = &mut entries[index];
-                    return if matches(slot.as_ref()?) {
-                        slot.take()
-                    } else {
-                        None
-                    };
-                }
-                let spare = overflow.as_deref_mut()?;
-                let (stored_id, entry) = spare.as_ref()?;
-                if *stored_id == id && matches(entry) {
-                    spare.take().map(|(_, entry)| entry)
-                } else {
-                    None
-                }
-            }
+            Self::Small { .. } => unreachable!("small resources use direct removal"),
             Self::Compact(entries) => {
                 let index = entries
                     .binary_search_by_key(&id, |(stored_id, _)| *stored_id)
@@ -533,18 +547,28 @@ pub(crate) fn insert<T: 'static>(scope: u32, resource_type: &'static str, payloa
     })
 }
 
+#[inline]
+fn registry_for_scope_mut(
+    registries: &mut RequestRegistries,
+    scope: u32,
+) -> Option<&mut ResourceRegistry> {
+    if let RequestRegistries::Single(registered_scope, registry) = registries {
+        return (*registered_scope == scope).then_some(registry);
+    }
+    registry_for_promoted_scope_mut(registries, scope)
+}
+
+#[cold]
 #[inline(never)]
 // SAFETY: compiler-generated executable code; placement does not change ABI.
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
-fn registry_for_scope_mut(
+fn registry_for_promoted_scope_mut(
     registries: &mut RequestRegistries,
     scope: u32,
 ) -> Option<&mut ResourceRegistry> {
     match registries {
         RequestRegistries::Empty => None,
-        RequestRegistries::Single(registered_scope, registry) => {
-            (*registered_scope == scope).then_some(registry)
-        }
+        RequestRegistries::Single(..) => unreachable!("single request uses direct projection"),
         RequestRegistries::Multiple(registries) => registries.get_mut(&scope),
     }
 }
@@ -2111,6 +2135,11 @@ mod tests {
             id.set(value.as_resource_id().unwrap());
             value.set_vm_resource_release(|_, _| panic!("retired callback"));
             *alias.borrow_mut() = Some(value.clone());
+            for missing in [i64::MIN, -1, 0, i64::MAX] {
+                assert!(!close_for_request::<InspectDrop>(&mut executor, missing));
+                assert!(value.needs_vm_resource_release());
+                assert_eq!(drops.get(), 0);
+            }
             assert!(!close_for_request::<u64>(&mut executor, id.get()));
             assert!(value.needs_vm_resource_release());
             assert_eq!(drops.get(), 0);

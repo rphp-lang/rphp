@@ -18,6 +18,7 @@ pub(super) mod deque;
 mod file_info;
 pub(super) mod fixed_array;
 mod heap;
+pub(super) mod iterator_cursor;
 pub(super) mod iterator_delegate;
 pub(super) mod object_storage;
 mod recursive_filter;
@@ -2037,7 +2038,9 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     use crate::compiler::compile::ClassDef;
     use crate::parser::Visibility;
 
-    let mut funcs: Vec<Box<InternalFunction>> = Vec::with_capacity(64);
+    // The native method inventory occupies this envelope already. Reserving
+    // its final pointer capacity avoids repeated growth during registration.
+    let mut funcs: Vec<Box<InternalFunction>> = Vec::with_capacity(1024);
 
     // Helper: register an internal method and return its func pointer
     macro_rules! reg_method {
@@ -3117,6 +3120,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         eg.register_class(class).unwrap();
     }
     funcs.extend(iterator_delegate::register(eg));
+    funcs.extend(iterator_cursor::register(eg));
     funcs.extend(regex_iterator::register(eg));
     funcs.extend(caching_iterator::register(eg));
     funcs.extend(caching_iterator::register_recursive(eg));

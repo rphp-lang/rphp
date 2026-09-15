@@ -177,7 +177,7 @@ pub(super) fn fetch(receiver: &Value, eg: &mut ExecutorGlobals) -> Result<(), Vm
     Ok(())
 }
 
-fn construct(
+pub(super) fn construct(
     ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
@@ -714,237 +714,181 @@ abstract_method!(abstract_valid, "Iterator::valid");
 abstract_method!(abstract_rewind, "Iterator::rewind");
 abstract_method!(abstract_inner, "OuterIterator::getInnerIterator");
 
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
 pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     use ParamTypeHint::{Bool, ClassName, Int, Mixed, Nullable, String, Void};
     let nullable_iterator = Nullable(Box::new(ClassName("Iterator".into())));
-    let mut functions = Vec::new();
-    for (owner, name, handler, names, hints, defaults, result) in [
+    // The closed native batch has known owner and descriptor counts. Borrow
+    // transient names/defaults and reserve only the published state once.
+    let mut functions = Vec::with_capacity(25);
+    for (owner, count) in [
+        ("Iterator", 5),
+        ("OuterIterator", 1),
+        ("IteratorIterator", 7),
+        ("LimitIterator", 6),
+        ("NoRewindIterator", 6),
+    ] {
+        eg.reserve_internal_method_contracts(owner, count);
+    }
+    type Row = (
+        &'static str,
+        &'static str,
+        InternalFunctionHandler,
+        &'static [&'static str],
+        Vec<ParamTypeHint>,
+        &'static [Option<&'static str>],
+        ParamTypeHint,
+    );
+    let rows: [Row; 25] = [
         (
             "Iterator",
             "current",
             abstract_current as InternalFunctionHandler,
+            &[],
             vec![],
-            vec![],
-            vec![],
+            &[],
             Mixed,
         ),
-        (
-            "Iterator",
-            "next",
-            abstract_next,
-            vec![],
-            vec![],
-            vec![],
-            Void,
-        ),
-        (
-            "Iterator",
-            "key",
-            abstract_key,
-            vec![],
-            vec![],
-            vec![],
-            Mixed,
-        ),
-        (
-            "Iterator",
-            "valid",
-            abstract_valid,
-            vec![],
-            vec![],
-            vec![],
-            Bool,
-        ),
+        ("Iterator", "next", abstract_next, &[], vec![], &[], Void),
+        ("Iterator", "key", abstract_key, &[], vec![], &[], Mixed),
+        ("Iterator", "valid", abstract_valid, &[], vec![], &[], Bool),
         (
             "Iterator",
             "rewind",
             abstract_rewind,
+            &[],
             vec![],
-            vec![],
-            vec![],
+            &[],
             Void,
         ),
         (
             "OuterIterator",
             "getInnerIterator",
             abstract_inner,
+            &[],
             vec![],
-            vec![],
-            vec![],
+            &[],
             nullable_iterator.clone(),
         ),
         (
             "IteratorIterator",
             "__construct",
             construct_iterator as InternalFunctionHandler,
-            vec!["iterator", "class"],
+            &["iterator", "class"],
             vec![ClassName("Traversable".into()), Nullable(Box::new(String))],
-            vec![None, Some("null")],
+            &[None, Some("null")],
             ParamTypeHint::None,
         ),
         (
             "IteratorIterator",
             "getInnerIterator",
             get_inner,
+            &[],
             vec![],
-            vec![],
-            vec![],
+            &[],
             nullable_iterator,
         ),
-        (
-            "IteratorIterator",
-            "rewind",
-            rewind,
-            vec![],
-            vec![],
-            vec![],
-            Void,
-        ),
-        (
-            "IteratorIterator",
-            "valid",
-            valid,
-            vec![],
-            vec![],
-            vec![],
-            Bool,
-        ),
-        (
-            "IteratorIterator",
-            "key",
-            key,
-            vec![],
-            vec![],
-            vec![],
-            Mixed,
-        ),
+        ("IteratorIterator", "rewind", rewind, &[], vec![], &[], Void),
+        ("IteratorIterator", "valid", valid, &[], vec![], &[], Bool),
+        ("IteratorIterator", "key", key, &[], vec![], &[], Mixed),
         (
             "IteratorIterator",
             "current",
             current,
+            &[],
             vec![],
-            vec![],
-            vec![],
+            &[],
             Mixed,
         ),
-        (
-            "IteratorIterator",
-            "next",
-            next,
-            vec![],
-            vec![],
-            vec![],
-            Void,
-        ),
+        ("IteratorIterator", "next", next, &[], vec![], &[], Void),
         (
             "LimitIterator",
             "__construct",
             construct_limit,
-            vec!["iterator", "offset", "limit"],
+            &["iterator", "offset", "limit"],
             vec![ClassName("Iterator".into()), Int, Int],
-            vec![None, Some("0"), Some("-1")],
+            &[None, Some("0"), Some("-1")],
             ParamTypeHint::None,
         ),
         (
             "LimitIterator",
             "rewind",
             limit_rewind,
+            &[],
             vec![],
-            vec![],
-            vec![],
+            &[],
             Void,
         ),
-        (
-            "LimitIterator",
-            "valid",
-            valid,
-            vec![],
-            vec![],
-            vec![],
-            Bool,
-        ),
-        (
-            "LimitIterator",
-            "next",
-            limit_next,
-            vec![],
-            vec![],
-            vec![],
-            Void,
-        ),
+        ("LimitIterator", "valid", valid, &[], vec![], &[], Bool),
+        ("LimitIterator", "next", limit_next, &[], vec![], &[], Void),
         (
             "LimitIterator",
             "seek",
             seek,
-            vec!["offset"],
+            &["offset"],
             vec![Int],
-            vec![None],
+            &[None],
             Int,
         ),
         (
             "LimitIterator",
             "getPosition",
             position,
+            &[],
             vec![],
-            vec![],
-            vec![],
+            &[],
             Int,
         ),
         (
             "NoRewindIterator",
             "__construct",
             construct_no_rewind,
-            vec!["iterator"],
+            &["iterator"],
             vec![ClassName("Iterator".into())],
-            vec![None],
+            &[None],
             ParamTypeHint::None,
         ),
         (
             "NoRewindIterator",
             "rewind",
             no_rewind,
+            &[],
             vec![],
-            vec![],
-            vec![],
+            &[],
             Void,
         ),
         (
             "NoRewindIterator",
             "valid",
             live_valid,
+            &[],
             vec![],
-            vec![],
-            vec![],
+            &[],
             Bool,
         ),
-        (
-            "NoRewindIterator",
-            "key",
-            live_key,
-            vec![],
-            vec![],
-            vec![],
-            Mixed,
-        ),
+        ("NoRewindIterator", "key", live_key, &[], vec![], &[], Mixed),
         (
             "NoRewindIterator",
             "current",
             lazy_current,
+            &[],
             vec![],
-            vec![],
-            vec![],
+            &[],
             Mixed,
         ),
         (
             "NoRewindIterator",
             "next",
             live_next,
+            &[],
             vec![],
-            vec![],
-            vec![],
+            &[],
             Void,
         ),
-    ] {
+    ];
+    for (owner, name, handler, names, hints, defaults, result) in rows {
         let required = defaults.iter().filter(|d| d.is_none()).count() as u32;
         eg.register_internal_method_contract(
             owner,
@@ -966,10 +910,8 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         function.common.sig.param_type_hints = hints;
         function.handler_validates_types = true;
         let pointer = &function.common as *const FunctionCommon;
-        eg.function_table.insert(
-            internal_method_display_name(owner, name).to_ascii_lowercase(),
-            pointer,
-        );
+        eg.function_table
+            .insert(internal_method_lookup_name(owner, name), pointer);
         if owner == "IteratorIterator" {
             eg.bind_latest_internal_method_body(owner, name, pointer);
         }
@@ -978,17 +920,21 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             pointer,
             internal_method_display_name(owner, name),
         );
-        let values = defaults
-            .iter()
-            .map(|d| {
-                d.map(|d| match d {
-                    "null" => Value::null(),
-                    "0" => Value::long(0),
-                    "-1" => Value::long(-1),
-                    _ => unreachable!(),
+        let values = if defaults.iter().any(Option::is_some) {
+            defaults
+                .iter()
+                .map(|d| {
+                    d.map(|d| match d {
+                        "null" => Value::null(),
+                        "0" => Value::long(0),
+                        "-1" => Value::long(-1),
+                        _ => unreachable!(),
+                    })
                 })
-            })
-            .collect();
+                .collect()
+        } else {
+            Vec::new()
+        };
         eg.register_internal_function_reflection_metadata(pointer, values, "SPL");
         functions.push(function);
     }

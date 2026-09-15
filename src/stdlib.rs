@@ -22705,6 +22705,9 @@ pub(crate) fn call_object_protocol_method(
     let class_name = object.class_name.to_string();
     drop(object);
     if !eg.class_is_a(&class_name, interface) {
+        if interface == "ArrayAccess" && eg.class_is_a(&class_name, "MultipleIterator") {
+            return builtin_classes::iterator_cursor::dimension(eg, receiver, method, args);
+        }
         return Ok(None);
     }
     if class_name == "WeakMap" && interface == "ArrayAccess" {

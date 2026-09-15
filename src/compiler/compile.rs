@@ -6844,6 +6844,9 @@ impl Compiler {
         lexical_property: Option<&str>,
         _dynamic_scope: bool,
     ) -> Vec<AttributeDefinition> {
+        if attributes.is_empty() {
+            return Vec::new();
+        }
         let evaluation_scope = Rc::new(AttributeEvaluationScope {
             namespace: self.current_namespace.clone(),
             class_imports: self.use_map.clone(),

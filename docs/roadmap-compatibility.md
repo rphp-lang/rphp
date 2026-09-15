@@ -36,35 +36,35 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `constructor-preargument-allocation-order` checkpoint adds
-7 exact PHP 8.5 passes over `36f09c7a`, without loss, process hazards,
+The accepted `native-iterator-cursor-policies` checkpoint adds
+13 exact PHP 8.5 passes over `4436a41c`, without loss, process hazards,
 expectation changes or moved failure stages. Selected coverage is 7,959 cases:
-7,095 pass / 431 fail; core 6,451/330/182/211;
-SPL 644/101/31 unsupported/8 skip/1 XFAIL. This is not all PHP.
+7,108 pass / 418 fail; core 6,455/326/182/211;
+SPL 653/92/31 unsupported/8 skip/1 XFAIL. This is not all PHP.
 
-Actual allocation precedes constructor arguments. Writable reference sources,
-snapshots, validation, callbacks, failure cleanup and nested default ownership
-remain distinct. Argument-subexpression cleanup cannot replace whole-statement
-unwind. Property storage retires before identity reuse, without remapping IDs
-or changing common layouts. Nineteen original cases, adjacent cleanup regressions,
-one frozen checked five-config matrix/all-targets, exact no-loss, S0-S3 and
-unsafe/hygiene gates pass.
+Empty exhaustion, infinite rewind and parallel child projection use sparse
+traced native ownership. Live membership/flags, callback/error order,
+reference/COW, clone and retirement match 28 original cases in both JIT modes.
+All 1,215 focused tests plus 35 resource regressions, one frozen checked
+five-configuration matrix/all-targets, exact no-loss, fresh reference checks,
+S0-S3 and unsafe/hygiene pass. Profile-backed registration, traversal and
+resource lookup remove work without changing public IDs, resource storage,
+common layouts or unsafe ceilings. The admission holdout `bug69264` remains
+an ArrayObject debug-projection failure.
 
-The initial >=10 forecast was rejected: five failures concern native iterator
-owners, not nested construction. The accepted seven-gain exception fixes a
-core allocation/reference/lifetime boundary; it is not a quota-driven expansion.
-All 118 controls retain the nine fixed/first-present anchors and meet cumulative
-common <=1.65%, pay-use/first-present <=5%; maxima
-+1.264%/+2.792%/+2.741%.
-Nominal/incremental findings and rejected candidates remain explicit in
+All 118 established controls retain nine fixed/first-present anchors and meet
+cumulative common <=1.65%, pay-use/first-present <=5%; maxima
++1.537%/+4.653%/+3.010%. Six new APIs have eight-pair absolute PHP comparisons,
+not invented absent-parent regressions. Nominal/incremental findings,
+2.75-41.21x API ratios, rejected candidates and exact evidence hashes remain in
 `compatibility.md`. Automatic cleanup and the shared-host limitation remain.
 
-Next read-only admission targets EmptyIterator/InfiniteIterator/MultipleIterator
-cursor policies in fourteen current failures. Prove >=10 reachable shared-cause
-gains and original callback/ownership/error oracles before production, otherwise
-reselect. Native iterator IDs, general trace retention, nested array-unpack
-aliases, deep-drop identity ordering, custom generic ordering and 32-bit/OOM
-remain separate. One active implementation only.
+Next read-only admission targets twelve ArrayObject native property/dimension
+projection failures. Prove >=10 reachable shared-cause gains and original
+callback/visibility/reference/COW/error oracles before production, otherwise
+reselect. General trace retention, nested unpack aliases, deep-drop identity
+ordering, typed-property references, serialization, generic ordering and
+32-bit/OOM remain separate. One active implementation only.
 
 ### Preceding directory cursor checkpoint
 

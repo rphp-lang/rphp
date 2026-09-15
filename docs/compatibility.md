@@ -7,69 +7,69 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 PHP 8.5 checkpoint is
-`constructor-preargument-allocation-order`, against `36f09c7a`:
-**+7/-0**, independently confirmed by PHP 8.5.10. SPL reaches
-**644 pass / 101 fail / 31 unsupported / 8 skip / 1 XFAIL**;
-core reaches **6,451 pass / 330 fail / 182 skip / 211 unsupported**.
-Selected coverage is **7,959 cases: 7,095 pass / 431 fail**,
+The latest measured AMD64 PHP 8.5 checkpoint is `native-iterator-cursor-policies`,
+against `4436a41c`: **+13/-0**, independently confirmed by PHP 8.5.10.
+SPL reaches **653 pass / 92 fail / 31 unsupported / 8 skip / 1 XFAIL**;
+core reaches **6,455 pass / 326 fail / 182 skip / 211 unsupported**.
+Selected coverage is **7,959 cases: 7,108 pass / 418 fail**,
 plus 190 skips, 242 unsupported and one XFAIL. This is not complete PHP coverage.
 
-Real constructor receivers are allocated and validated before effectful
-arguments, without a half-open call frame. Named/reference arguments retain
-their writable source alongside value snapshots; unpacking, nested defaults,
-callbacks and suspension preserve ownership and ordering. Failed construction
-retires before catch and cannot run its destructor. Consumed argument aliases
-are released separately from whole-statement exception cleanup. Final object
-storage retires before its identity can be reused; visible IDs are never remapped.
+EmptyIterator exhaustion, InfiniteIterator rewind and MultipleIterator parallel
+projection now use native cursor policies. Traced sparse state preserves live
+membership/flag changes, callback order, exception ownership, references/COW,
+clone and retirement. Native dimension writes do not invent an ArrayAccess
+interface. The remaining admission holdout, `bug69264`, concerns ArrayObject
+debug projection, not these cursor policies.
 
-The initial ten-case forecast conflated allocation with native iterator owners.
-Five such holdouts remain debt. This seven-gain checkpoint is a core
-allocation/reference/lifetime correctness exception to the usual train size,
-proved by 19 original cases rather than widening scope to satisfy a quota.
-No common Value/PhpObject/VM/Instruction layout or opcode was added.
+All **1,215 focused tests** plus **35 resource regressions** pass. The 28 new
+original cases match PHP with JIT enabled and disabled. One frozen checked
+five-configuration matrix passes **5,628/5,296/5,699/5,721/5,772** tests
+(13/13/13/13/16 ignored, none filtered), plus all-features/all-targets.
+Exact no-loss, fresh reference gain checks, previous originals,
+Composer/Symfony S0-S3, runner/unsafe and public hygiene pass. No lost pass,
+process hazard, expectation change or moved failure stage. Unsafe remains
+**1,623 blocks / 289 functions** within unchanged ceilings.
 
-All **872 focused tests**, including the 19 new originals and
-adjacent finally/foreach retirement tests, pass. The originals agree with PHP
-with JIT enabled and disabled. One frozen checked five-configuration matrix
-passes **5,598/5,266/5,669/5,691/5,742** tests (13/13/13/13/16 ignored, none filtered),
-plus all-features/all-targets. Exact no-loss, independent reference gain checks,
-prior originals, Composer/Symfony S0-S3, runner/unsafe self-tests and public
-hygiene pass. No lost pass, process hazard, changed expectation or moved failure
-stage. Existing no-default compiler warnings remain unchanged. Unsafe is
-**1,623/289** within unchanged ceilings.
+All **118 established 32-pair controls** pass against nine unchanged
+fixed/first-present anchors. Cumulative common **<=1.65%**, pay-use/first-present
+**<=5%**: maxima **+1.537%/+4.653%/+3.010%**. Nominal +1% findings remain:
+constructor pipeline +1.050%, startup +1.499%, array +1.537%. Immediate-parent
+resource-alias/held-resources findings are +1.001%/+2.569%, while cumulative
+results are -4.289%/-1.144%. Six new API lanes have exact outputs over eight
+pairs; absolute candidate/PHP ratios range **2.75-41.21x**, not absent-parent
+regressions. No claim of PHP-equivalent speed is made.
 
-All **118 32-pair controls** pass: 113 established workloads, three new
-constructor costs and two guarded application pipelines, with exact outputs and nine unchanged fixed/first-present
-anchors. Fixed cumulative common **+1.65%** / pay-use **+5%** gates pass:
-maxima **+1.264%/+2.792%**, first-present maximum
-**+2.741%**. Nominal +1% findings: primary/startup +1.011%; primary/ordinary-dynamic-clone +1.264%; primary/array +1.118%.
-Immediate-parent findings above +1%: primary/object-lifecycle +1.628% incremental / -0.134% cumulative; primary/native-cycle +1.245% incremental / -0.586% cumulative; primary/memory-io +1.176% incremental / -0.852% cumulative; static-dispatch/static-reference +1.236% incremental / -9.560% cumulative; primary/ordinary-call +1.963% incremental / -3.974% cumulative.
-Rejected timing packets remain evidence. Final-object teardown is outlined,
-prepared construction reuses its validated cache, and heap-free finally returns
-skip an unnecessary cleanup-marker scan; live heap/callback paths are unchanged.
-Prepared scalar pipelines retain the prior native region only after snapshot,
-positive-modulo, escape and runtime type proofs; side exits replay allocation.
-The user-authorized shared-host guard records 2 background events,
-not exclusive-host evidence. No private host was configured. No unchanged failed
-timing reroll was used. Cleanup runs between configurations and after gates.
+Profile-backed registration, interface traversal and resource lookup work
+removal offsets the new surface. Resource IDs, storage, retirement order,
+common layouts and public symbol hashing are unchanged. Instruction profiles
+do not establish a unique hardware timing cause. Rejected packets remain
+evidence, with no unchanged failed timing reroll or rolling baseline.
+The user-authorized shared-host guard records two background events, not
+exclusive-host evidence; no private host was configured. Automatic cleanup
+runs between configurations and after gates. An initial disk guard stopped
+before compilation; lossless diagnostic compression restored the reserve,
+then the same source fingerprint completed all configurations.
 
 SHA-256 evidence:
 
-- Release: `2601cdd08205a033fbc68a5d449dbae551361165b955c4cd3d338adaf75fa08b`.
-- Complete technical record: `1ddca7b5cba17e26a55f2d3db7ea3624063e8a66506311036f62a71a68f2f425`.
-- Matrix: `41c2c725f3a3b83c2808001d6d3fde2fc6a446a0c3828b1b3c232d1e6c6c94bc`.
-- SPL manifest / pass set: `48eaafc4e673b4363308bc66fa182c3361fd9b26c2e83dc83bca0201e227ae76` / `486c249fef690a14b6e98cb3f5d1437c99832d45b52fed37d21ee66e35535f2d`.
-- Zend/lang manifest / pass set: `a0250405b468feb7942575a810ffa90a3113cfc7ac17be7a4b165db901aceab1` / `92e29c209c44e52790fb8b1a6ec423279b1e473635695529d820c5a8dd473f13`.
-- Strings/array manifest / pass set: `6d2a472a4d164b8ffa9746b016c5c20a4b38f9d55bab2ae6c9a713febda3386f` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
-- Reviewed performance / raw timing: `caf52c363d1e0c4595336b6e505a0e735a578caebc657f48d16cfc20b979a8ac` / `89fe30e581eacce20dc49a36922ae211e667999331833deba3d5af37acc2279f`.
+- Release: `2df1bb683e349e4986826550f2cfd8c637eb9d8eab45061ca53cdcaf4f8218b0`.
+- Complete technical record: `d0cffbbed4100c98f9945d546a251cb52bac54251e2ebf216dfa9eca5d0df80d`.
+- Matrix: `5cbc9cc646ce9ff0358cbc44c791a7ff3b6c1deb11f3513695229d10c7d6b791`.
+- SPL manifest / pass set: `42f6c2729ef64fd3cafe833288f2d80474123a98f99c3d7e9bce673a497f2b91` / `0913d44b9a7feb1e60a9fb2689662334a1ce4267e64896f10c27e99009821bc7`.
+- Zend/lang manifest / pass set: `267a95a66f70d16beece51f134cd7a2c8a11639e123554561b4dca4fd7c773a0` / `daefc866b4a0961c44943c75b80525346de9447d64f3b200e32724b12512396f`.
+- Strings/array manifest / pass set: `e064c5f710f795bad1900615cf52eceac008f70051620af8b65c521c2d7601f9` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+- Reviewed performance / raw timing: `120a681563eb26f9d7d15a774a37010e13b2e220c21fae4bb9332c17c954b70a` / `20f5162685bab84a5b627a01ffdffb552274e7f319c6bda3505a65de05e69230`.
 
-Native iterator identities, general Throwable trace ownership, nested array
-unpack aliases, custom generic-construction ordering, deep iterative-drop
-identity order and 32-bit/OOM equivalence remain non-claims. Next read-only
-admission tests remaining EmptyIterator/InfiniteIterator/MultipleIterator cursor
-policies against fourteen current failures; prove at least ten reachable common
-gains with fresh reference/parent evidence before implementation, or reselect.
+ArrayObject debug/property projection, general trace ownership, nested unpack
+aliases, custom generic-construction ordering, deep-drop identity order and
+32-bit/OOM equivalence remain separate. Next read-only admission checks twelve
+ArrayObject projection failures; require ten reachable common-cause gains and
+fresh callback/visibility/reference/COW/error oracles before implementation,
+otherwise reselect.
+
+The preceding constructor-allocation checkpoint added seven passes;
+its complete technical record remains
+`1ddca7b5cba17e26a55f2d3db7ea3624063e8a66506311036f62a71a68f2f425`.
 
 The preceding ArrayObject raw-backing checkpoint added ten passes;
 its complete technical record remains

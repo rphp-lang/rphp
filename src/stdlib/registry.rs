@@ -72,11 +72,10 @@ fn register_touch(eg: &mut ExecutorGlobals) -> Box<InternalFunction> {
 /// The returned Vec must live as long as the EG (owns the InternalFunction structs).
 pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     eg.reserve_stdlib_capacity();
-    // The fixed PHP 8.5 surface currently owns fewer than 512 descriptors in
-    // every feature configuration. Reserve that stable envelope up front so
-    // cold registration does not repeatedly move the raw-pointer owners while
-    // growing through the legacy 128- and 256-entry capacities.
-    let mut funcs: Vec<Box<InternalFunction>> = Vec::with_capacity(512);
+    // Native method and global descriptors share this owner. Their fixed
+    // inventory already reaches the 2,048-entry Vec growth envelope; allocate
+    // it once rather than repeatedly copying the boxed-function pointers.
+    let mut funcs: Vec<Box<InternalFunction>> = Vec::with_capacity(2048);
 
     // Register built-in exception classes first (Throwable, Error, TypeError, Exception)
     let class_funcs = register_builtin_classes(eg);

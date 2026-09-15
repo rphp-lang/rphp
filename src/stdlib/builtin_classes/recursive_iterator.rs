@@ -833,6 +833,7 @@ pub(super) fn register_method(
                     value.map(|value| match value {
                         "null" => Value::null(),
                         "-1" => Value::long(-1),
+                        "1" => Value::long(1),
                         _ => Value::long(0),
                     })
                 })

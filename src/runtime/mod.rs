@@ -200,6 +200,69 @@ impl std::hash::Hasher for InternalFunctionHasher {
 type InternalFunctionMap<T> =
     HashMap<*const FunctionCommon, T, std::hash::BuildHasherDefault<InternalFunctionHasher>>;
 
+/// Request-local hashing for engine-created function identities. Public PHP
+/// symbol names continue to use their keyed string tables. The two seeds keep
+/// this owner the same size as RandomState without adding executor fields.
+#[doc(hidden)]
+pub struct FunctionIdentityBuildHasher([u64; 2]);
+
+impl Default for FunctionIdentityBuildHasher {
+    fn default() -> Self {
+        use std::hash::BuildHasher;
+        let random = std::collections::hash_map::RandomState::new();
+        Self([random.hash_one(0u64), random.hash_one(1u64)])
+    }
+}
+
+#[doc(hidden)]
+pub struct FunctionIdentityHasher {
+    value: u64,
+    finish_seed: u64,
+}
+
+impl std::hash::BuildHasher for FunctionIdentityBuildHasher {
+    type Hasher = FunctionIdentityHasher;
+
+    #[inline]
+    fn build_hasher(&self) -> Self::Hasher {
+        FunctionIdentityHasher {
+            value: self.0[0],
+            finish_seed: self.0[1],
+        }
+    }
+}
+
+impl std::hash::Hasher for FunctionIdentityHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        InternalFunctionHasher(self.value ^ self.finish_seed).finish()
+    }
+
+    #[inline]
+    fn write_usize(&mut self, value: usize) {
+        self.value = self.value.wrapping_add(value as u64);
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.value = self.value.wrapping_mul(0x100_0000_01b3) ^ u64::from(*byte);
+        }
+    }
+}
+
+type FunctionIdentityMap<T> = HashMap<*const FunctionCommon, T, FunctionIdentityBuildHasher>;
+
+const _: () = {
+    assert!(
+        std::mem::size_of::<FunctionIdentityMap<usize>>()
+            == std::mem::size_of::<HashMap<*const FunctionCommon, usize>>()
+    );
+    assert!(
+        std::mem::align_of::<FunctionIdentityMap<usize>>()
+            == std::mem::align_of::<HashMap<*const FunctionCommon, usize>>()
+    );
+};
+
 /// This table accepts only engine-owned declaration names, never PHP-provided
 /// insertions. Hash complete words without the public symbol tables' keyed
 /// hashing cost. Arbitrary lookup bytes still require exact key equality;
@@ -811,7 +874,7 @@ pub struct ExecutorGlobals {
     /// Reverse map: func_ptr → declaring class name (for visibility scope resolution)
     /// Builtin owner spellings are immutable static data; user declarations
     /// retain owned names independently of their source/registration buffers.
-    pub method_declaring_class: HashMap<*const FunctionCommon, std::borrow::Cow<'static, str>>,
+    pub method_declaring_class: FunctionIdentityMap<std::borrow::Cow<'static, str>>,
     /// Sparse canonical spellings for built-ins whose public name is not the
     /// lowercase lookup key. Most internal functions need no entry.
     internal_function_display_names:
@@ -1773,15 +1836,17 @@ impl ExecutorGlobals {
     /// normal executors avoid repeated hash-table growth while installing the
     /// fixed built-in class and function set.
     pub(crate) fn reserve_stdlib_capacity(&mut self) {
-        // The fixed PHP 8.5 surface, including the synchronous process helper
-        // batch, occupies the next hash-table envelope even under default
-        // features. Reserve it up front so registration never rehashes stored
-        // function pointers; optional I/O/resource functions still fit inside
-        // the same envelope.
+        // Reserve the fixed native surface, not the later user declaration
+        // set. Larger requests can grow the index without moving its boxed
+        // function descriptors; empty requests do not pay for that headroom.
         self.function_table.reserve(900);
         // The heap family crosses the old 112-class hash-table envelope.
         self.class_table.reserve(113);
-        self.method_declaring_class.reserve(512);
+        // Native iterator methods leave only one slot in the old 896-entry
+        // envelope. The next ordinary method declaration would rehash every
+        // native owner. Reserve the next envelope before publishing pointers;
+        // executors that do not install stdlib still allocate nothing here.
+        self.method_declaring_class.reserve(900);
         // Reflection/display metadata reaches these same table envelopes
         // through repeated growth with default and all features. Reserve the
         // final capacities once; executors without stdlib keep both owners
@@ -1823,7 +1888,8 @@ impl ExecutorGlobals {
         // Recursive caching and tree projection add two cold declarations.
         // RecursiveDirectoryIterator and GlobIterator reuse the native cursor.
         // Callback and recursive filter policies add four native children.
-        let class_capacity = 127 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        // Empty, infinite and parallel cursor policies add three declarations.
+        let class_capacity = 130 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;
@@ -1908,7 +1974,7 @@ impl ExecutorGlobals {
             exception_handler_stack: Vec::new(),
             shutdown_functions: None,
             weak_objects: None,
-            method_declaring_class: HashMap::new(),
+            method_declaring_class: FunctionIdentityMap::default(),
             internal_function_display_names: None,
             internal_callable_metadata: None,
             internal_static_methods: None,
@@ -2037,7 +2103,7 @@ impl ExecutorGlobals {
             exception_handler_stack: Vec::new(),
             shutdown_functions: None,
             weak_objects: None,
-            method_declaring_class: HashMap::new(),
+            method_declaring_class: FunctionIdentityMap::default(),
             internal_function_display_names: None,
             internal_callable_metadata: None,
             internal_static_methods: None,
@@ -4047,14 +4113,15 @@ impl ExecutorGlobals {
             &mut requirements,
             &mut std::collections::HashSet::new(),
         );
-        let mut interface_roots = class_def.implements.clone();
+        let mut interface_roots: Vec<&str> =
+            class_def.implements.iter().map(String::as_str).collect();
         if let Some(parent) = &class_def.parent {
             interface_roots.extend(self.collect_all_interfaces(parent));
         }
         let mut seen_interfaces = std::collections::HashSet::new();
         for interface in interface_roots {
             if seen_interfaces.insert(interface.to_ascii_lowercase()) {
-                requirements.extend(self.collect_interface_methods(&interface));
+                requirements.extend(self.collect_interface_methods(interface));
             }
         }
         for required in requirements {
@@ -5006,14 +5073,15 @@ impl ExecutorGlobals {
             &mut requirements,
             &mut std::collections::HashSet::new(),
         );
-        let mut interface_roots = class_def.implements.clone();
+        let mut interface_roots: Vec<&str> =
+            class_def.implements.iter().map(String::as_str).collect();
         if let Some(parent) = &class_def.parent {
             interface_roots.extend(self.collect_all_interfaces(parent));
         }
         let mut seen_interfaces = std::collections::HashSet::new();
         for interface in interface_roots {
             if seen_interfaces.insert(interface.to_ascii_lowercase()) {
-                requirements.extend(self.collect_interface_methods(&interface));
+                requirements.extend(self.collect_interface_methods(interface));
             }
         }
         let mut missing = Vec::new();
@@ -5655,22 +5723,29 @@ impl ExecutorGlobals {
     #[cold]
     fn interface_closure_for_roots<'a>(&'a self, roots: &[&'a str]) -> Vec<&'a str> {
         let mut closure = Vec::new();
-        let mut stack = roots.iter().rev().copied().collect::<Vec<_>>();
+        let mut roots = roots.iter().copied();
+        let mut stack = Vec::new();
+        let mut next = roots.next();
         let mut seen = ClassNameTraversalSet::new();
-        while let Some(name) = stack.pop() {
+        while let Some(name) = next {
             let definition = self.find_class(name);
             // The immutable query keeps registry and input spellings alive;
             // only large visited sets need owned ASCII-case-folded keys.
             let canonical = definition.map_or(name, |interface| interface.name.as_str());
-            if !seen.insert(canonical) {
-                continue;
+            if seen.insert(canonical) {
+                closure.push(canonical);
+                if let Some(interface) = definition
+                    && interface.is_interface
+                    && let Some((first, rest)) = interface.implements.split_first()
+                {
+                    // Leaves and single-parent chains need no pending stack.
+                    // Branch siblings still precede later roots in DFS order.
+                    stack.extend(rest.iter().rev().map(String::as_str));
+                    next = Some(first.as_str());
+                    continue;
+                }
             }
-            closure.push(canonical);
-            if let Some(interface) = definition
-                && interface.is_interface
-            {
-                stack.extend(interface.implements.iter().rev().map(String::as_str));
-            }
+            next = stack.pop().or_else(|| roots.next());
         }
         closure
     }
@@ -5740,6 +5815,19 @@ impl ExecutorGlobals {
             return self.validate_interface_method_contracts(class_def);
         }
         if class_def.is_trait {
+            return Ok(());
+        }
+        // With no new interface edge, a non-enum only inherits the already
+        // validated relation set of its concrete parent. Abstract parents
+        // still require the walk: they may defer the Traversable protocol.
+        // Method/property obligations are checked by their separate passes.
+        if !class_def.is_enum
+            && class_def.implements.is_empty()
+            && class_def.parent.as_deref().is_none_or(|name| {
+                self.find_class(name)
+                    .is_some_and(|parent| !parent.is_abstract)
+            })
+        {
             return Ok(());
         }
         let location = class_def
@@ -5931,6 +6019,7 @@ impl ExecutorGlobals {
 
     #[cold]
     #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
     fn native_parent_body_aliases(
         &self,
         child: &ClassDef,
@@ -7216,13 +7305,15 @@ impl ExecutorGlobals {
                 // suffixes. Build each destination key once, after deciding
                 // whether it is inherited, instead of allocating a suffix,
                 // formatting it, and lowercasing the full name again.
-                let child_prefix = Self::canonical_method_owner_prefix(&class_name);
+                let mut child_prefix = None;
                 let inherited = if let Some(aliases) = native_parent_aliases {
                     aliases
                 } else {
                     // Complete native aliases already contain the final
                     // inherited methods. Build search-only state solely for
                     // the canonical discovery path that consumes it.
+                    let child_prefix =
+                        child_prefix.insert(Self::canonical_method_owner_prefix(&class_name));
                     let child_method_names: std::collections::HashSet<String> = class_def
                         .methods
                         .iter()
@@ -7280,6 +7371,9 @@ impl ExecutorGlobals {
                 };
                 for (child_full, func_ptr, replaces_synthetic_property_accessor) in inherited {
                     if replaces_synthetic_property_accessor {
+                        let child_prefix = child_prefix.get_or_insert_with(|| {
+                            Self::canonical_method_owner_prefix(&class_name)
+                        });
                         inherited_concrete_property_hooks
                             .insert(child_full[child_prefix.len()..].to_owned());
                     }
@@ -8062,7 +8156,7 @@ impl ExecutorGlobals {
             return Ok(());
         }
         for interface_name in self.collect_all_interfaces(class_name) {
-            let Some(interface) = self.class_table.get(&interface_name) else {
+            let Some(interface) = self.class_table.get(interface_name) else {
                 continue;
             };
             for required in &interface.properties {
@@ -9210,13 +9304,18 @@ impl ExecutorGlobals {
     }
 
     /// Collect all interfaces for a class (direct + inherited from parents).
-    fn collect_all_interfaces(&self, class_name: &str) -> Vec<String> {
+    fn collect_all_interfaces(&self, class_name: &str) -> Vec<&str> {
         let mut result = Vec::new();
-        if let Some(class_def) = self.class_table.get(class_name) {
-            result.extend(class_def.implements.clone());
-            if let Some(parent) = &class_def.parent {
-                result.extend(self.collect_all_interfaces(parent));
-            }
+        let mut current = self.class_table.get(class_name);
+        // Linking has already validated the parent chain. Borrow declaration
+        // spellings into one result, preserving direct-first order and repeats
+        // without cloning strings or allocating a vector for every ancestor.
+        while let Some(class_def) = current {
+            result.extend(class_def.implements.iter().map(String::as_str));
+            current = class_def
+                .parent
+                .as_deref()
+                .and_then(|parent| self.class_table.get(parent));
         }
         result
     }
@@ -9239,10 +9338,10 @@ impl ExecutorGlobals {
         let all_ifaces = self.collect_all_interfaces(class_name);
         let mut seen = std::collections::HashSet::new();
         for iface_name in all_ifaces {
-            if !seen.insert(iface_name.clone()) {
+            if !seen.insert(iface_name) {
                 continue;
             }
-            for requirement in self.collect_interface_methods(&iface_name) {
+            for requirement in self.collect_interface_methods(iface_name) {
                 if self.concrete_property_implements_hook(class_def, requirement.name) {
                     continue;
                 }
@@ -11148,6 +11247,103 @@ mod stdlib_capacity_tests {
     }
 
     #[test]
+    fn inherited_relation_reuse_keeps_abstract_and_new_edge_validation() {
+        use crate::compiler::compile::{ClassDef, Compiler};
+        use crate::lexer::Lexer;
+        use crate::parser::Parser;
+
+        fn definition(source: &str) -> ClassDef {
+            let tokens = Lexer::new(source).tokenize().unwrap();
+            let statements = Parser::new(tokens).parse().unwrap();
+            let compiled = Compiler::new().compile(&statements).unwrap();
+            compiled
+                .class_defs
+                .into_iter()
+                .chain(
+                    compiled
+                        .runtime_class_defs
+                        .into_iter()
+                        .map(|(_, class)| class),
+                )
+                .next()
+                .unwrap()
+        }
+
+        let mut eg = ExecutorGlobals::new();
+        let _functions = crate::stdlib::register_stdlib(&mut eg);
+        for source in [
+            "<?php class ReusesCursor extends EmptyIterator {}",
+            "<?php class ReusesChild extends ReusesCursor {}",
+            "<?php abstract class DeferredCursor implements Traversable {}",
+            "<?php abstract class DeferredChild extends DeferredCursor {}",
+        ] {
+            eg.register_class(definition(source)).unwrap();
+        }
+        let error = eg
+            .register_class(definition(
+                "<?php class ConcreteChild extends DeferredChild {}",
+            ))
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "Class ConcreteChild must implement interface Traversable as part of either Iterator or IteratorAggregate in Unknown on line 0"
+        );
+        let error = eg.register_class(definition(
+            "<?php abstract class ConflictingChild extends ReusesChild implements IteratorAggregate {}",
+        )).unwrap_err();
+        assert!(error.starts_with("Class ConflictingChild cannot implement both Iterator and IteratorAggregate at the same time"), "{error}");
+        assert!(eg.class_is_a("ReusesChild", "Iterator"));
+        assert!(eg.find_public_class("ConcreteChild").is_none());
+        assert!(eg.find_public_class("ConflictingChild").is_none());
+    }
+
+    #[test]
+    fn inherited_interface_collection_borrows_names_in_direct_first_order() {
+        use crate::compiler::compile::Compiler;
+        use crate::lexer::Lexer;
+        use crate::parser::Parser;
+        use std::rc::Rc;
+
+        let tokens = Lexer::new("<?php class Leaf {} class Middle {} class Root {}")
+            .tokenize()
+            .unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        let compiled = Compiler::new().compile(&statements).unwrap();
+        let mut eg = ExecutorGlobals::new();
+        for mut definition in compiled
+            .class_defs
+            .into_iter()
+            .chain(compiled.runtime_class_defs.into_iter().map(|(_, c)| c))
+        {
+            let (parent, names): (Option<&str>, &[&str]) = match definition.name.as_str() {
+                "Leaf" => (Some("Middle"), &["Direct", "Repeat"]),
+                "Middle" => (Some("Root"), &["Inherited", "repeat"]),
+                "Root" => (Some("Unknown"), &["Repeat", "Last"]),
+                _ => unreachable!(),
+            };
+            definition.parent = parent.map(str::to_owned);
+            definition.implements = names.iter().map(|name| (*name).to_owned()).collect();
+            eg.class_table
+                .insert(definition.name.clone(), Rc::new(definition));
+        }
+        let names = eg.collect_all_interfaces("Leaf");
+        assert_eq!(
+            names,
+            ["Direct", "Repeat", "Inherited", "repeat", "Repeat", "Last"]
+        );
+        for (index, owner) in ["Leaf", "Middle", "Root"].into_iter().enumerate() {
+            for (offset, stored) in eg.class_table[owner].implements.iter().enumerate() {
+                assert_eq!(names[index * 2 + offset].as_ptr(), stored.as_ptr());
+            }
+        }
+        assert_eq!(eg.collect_all_interfaces("Root"), ["Repeat", "Last"]);
+        assert!(eg.collect_all_interfaces("Unknown").is_empty());
+        // The internal registry keys are canonical; this collector must not
+        // silently replace the existing exact-key lookup with case folding.
+        assert!(eg.collect_all_interfaces("leaf").is_empty());
+    }
+
+    #[test]
     fn declaring_class_names_borrow_static_owners_and_own_runtime_spellings() {
         use std::borrow::Cow;
         assert_eq!(
@@ -11389,6 +11585,21 @@ mod stdlib_capacity_tests {
             for (name, body, _) in &expected {
                 assert_eq!(projected.get(name), Some(body));
             }
+            for owner in ["UPPERChild", "\u{130}Owner", "\u{39f}\u{3a3}"] {
+                child.name = owner.into();
+                let prefix = ExecutorGlobals::canonical_method_owner_prefix(owner);
+                let aliases = eg.native_parent_body_aliases(&child).unwrap();
+                assert_eq!(aliases.len(), expected.len());
+                for (key, body, hook) in aliases {
+                    assert!(!hook);
+                    let suffix = key.strip_prefix(&prefix).unwrap();
+                    assert_eq!(
+                        projected.get(&format!("descriptorchild::{suffix}")),
+                        Some(&body)
+                    );
+                }
+            }
+            child.name = "DescriptorChild".into();
             child.source_file = Some("/virtual/user.php".into());
             assert!(eg.native_parent_body_aliases(&child).is_none());
             child.source_file = None;
@@ -11815,11 +12026,30 @@ mod stdlib_capacity_tests {
             "fixed stdlib registration must not grow a reserved registry"
         );
         assert!(!functions.is_empty());
+        assert!(
+            eg.method_declaring_class.capacity() - eg.method_declaring_class.len() >= 32,
+            "native owners must leave room for an ordinary user method batch"
+        );
+        assert_eq!(
+            functions.capacity(),
+            2048,
+            "fixed callable owners must fit their one-shot reservation"
+        );
+        let published = eg.function_table.clone();
+        eg.function_table.reserve(64);
+        for (name, function) in published {
+            assert_eq!(
+                eg.function_table.get(&name),
+                Some(&function),
+                "user declaration headroom must preserve every native descriptor"
+            );
+        }
     }
 
     #[test]
     fn internal_pointer_metadata_matches_exact_hashmap_identity_and_replacement() {
         let mut actual = super::InternalFunctionMap::default();
+        let mut seeded = super::FunctionIdentityMap::default();
         let mut expected = std::collections::HashMap::new();
         let keys: Vec<*const crate::vm::function::FunctionCommon> = (0..4096usize)
             .map(|index| std::ptr::without_provenance(index.wrapping_mul(256)))
@@ -11830,9 +12060,15 @@ mod stdlib_capacity_tests {
             ])
             .collect();
         for (index, &key) in keys.iter().enumerate() {
+            assert_eq!(seeded.insert(key, index), expected.get(&key).copied());
             assert_eq!(actual.insert(key, index), expected.insert(key, index));
         }
         for (index, &key) in keys.iter().enumerate().rev() {
+            assert_eq!(seeded.get(&key), expected.get(&key));
+            assert_eq!(
+                seeded.insert(key, index + 4096),
+                expected.get(&key).copied()
+            );
             assert_eq!(actual.get(&key), expected.get(&key));
             assert_eq!(
                 actual.insert(key, index + 4096),
@@ -11840,15 +12076,21 @@ mod stdlib_capacity_tests {
             );
         }
         for &key in keys.iter().step_by(3) {
+            assert_eq!(seeded.remove(&key), expected.get(&key).copied());
+            assert_eq!(seeded.remove(&key), None);
             assert_eq!(actual.remove(&key), expected.remove(&key));
             assert_eq!(actual.remove(&key), None);
         }
         actual.reserve(8192);
+        seeded.reserve(8192);
+        assert_eq!(seeded.len(), expected.len());
         assert_eq!(actual.len(), expected.len());
         for &key in &keys {
+            assert_eq!(seeded.get(&key), expected.get(&key));
             assert_eq!(actual.get(&key), expected.get(&key));
         }
         assert_eq!(actual.get(&std::ptr::without_provenance(3)), None);
+        assert_eq!(seeded.get(&std::ptr::without_provenance(3)), None);
     }
 
     #[test]
