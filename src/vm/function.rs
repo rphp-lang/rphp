@@ -1279,8 +1279,9 @@ pub struct SignatureInfo {
     /// Empty vec = no type hints declared.
     pub param_type_hints: Vec<ParamTypeHint>,
     /// Per-parameter names (indexed by public param position, 0-based).
-    /// Used for named argument resolution.
-    pub param_names: Vec<std::string::String>,
+    /// Builtin literals can borrow their process-lifetime spelling; names
+    /// compiled from PHP source retain independent owned storage.
+    pub param_names: Vec<std::borrow::Cow<'static, str>>,
     /// Declared return type hint (None = no return type declared).
     pub return_type_hint: ParamTypeHint,
 }
@@ -1325,7 +1326,7 @@ impl SignatureInfo {
         if self.is_variadic && idx >= self.public_arity() {
             None
         } else {
-            self.param_names.get(idx as usize).map(String::as_str)
+            self.param_names.get(idx as usize).map(|name| name.as_ref())
         }
     }
 
@@ -2063,9 +2064,124 @@ pub struct InternalFunction {
 }
 
 impl InternalFunction {
+    /// Install literal parameter labels without copying each label per request.
+    /// Dynamic-source constructors continue to transfer owned strings.
+    pub(crate) fn with_static_parameter_names(mut self, names: &[&'static str]) -> Self {
+        self.common.sig.param_names = names
+            .iter()
+            .map(|name| std::borrow::Cow::Borrowed(*name))
+            .collect();
+        self
+    }
+
     pub fn set_deprecation(&mut self, deprecation: &'static InternalFunctionDeprecation) {
         self.deprecation = Some(deprecation);
         self.common.plan.call = CallStrategy::Full;
+    }
+}
+
+#[cfg(test)]
+mod parameter_spelling_tests {
+    use super::*;
+    use std::borrow::Cow;
+
+    fn unused_handler(
+        _: *mut ExecuteData,
+        _: *mut Value,
+        _: &mut ExecutorGlobals,
+    ) -> Result<(), crate::vm::execute::VmError> {
+        unreachable!("metadata-only test")
+    }
+
+    #[test]
+    fn static_parameter_spelling_keeps_layout_and_detaches_mutation() {
+        assert_eq!(
+            std::mem::size_of::<Cow<'static, str>>(),
+            std::mem::size_of::<String>()
+        );
+        assert_eq!(
+            std::mem::align_of::<Cow<'static, str>>(),
+            std::mem::align_of::<String>()
+        );
+        assert_eq!(
+            std::mem::size_of::<Vec<Cow<'static, str>>>(),
+            std::mem::size_of::<Vec<String>>()
+        );
+        let original = crate::compiler::make_internal_function(unused_handler, 2, 1, vec![])
+            .with_static_parameter_names(&["CaseName", "\u{3b2}eta"]);
+        assert!(
+            original
+                .common
+                .sig
+                .param_names
+                .iter()
+                .all(|name| matches!(name, Cow::Borrowed(_)))
+        );
+        let mut cloned = original.common.sig.param_names.clone();
+        cloned[0].to_mut().push('x');
+        assert_eq!(original.common.sig.param_names[0], "CaseName");
+        assert_eq!(cloned[0], "CaseNamex");
+        assert_eq!(original.common.sig.num_args, 2);
+        assert_eq!(original.common.sig.required_num_args, 1);
+    }
+
+    #[test]
+    fn owned_parameter_spelling_survives_source_and_preserves_bytes() {
+        let source = String::from("Case\0\u{3b2}");
+        let original =
+            crate::compiler::make_internal_function(unused_handler, 1, 1, vec![source.clone()]);
+        drop(source);
+        assert!(matches!(&original.common.sig.param_names[0], Cow::Owned(_)));
+        assert_eq!(&*original.common.sig.param_names[0], "Case\0\u{3b2}");
+        let cloned = original.common.sig.param_names.clone();
+        drop(original);
+        assert_eq!(&*cloned[0], "Case\0\u{3b2}");
+    }
+
+    #[test]
+    fn parameter_storage_preserves_signature_offsets() {
+        #[allow(dead_code)]
+        struct OwnedSignatureLayout {
+            num_args: u32,
+            required_num_args: u32,
+            is_variadic: bool,
+            variadic_cv_index: u32,
+            ref_args: u64,
+            prefer_ref_args: u64,
+            returns_reference: bool,
+            needs_bound_type_scope: bool,
+            this_offset: u32,
+            param_type_hints: Vec<ParamTypeHint>,
+            param_names: Vec<String>,
+            return_type_hint: ParamTypeHint,
+        }
+        assert_eq!(
+            std::mem::size_of::<SignatureInfo>(),
+            std::mem::size_of::<OwnedSignatureLayout>()
+        );
+        assert_eq!(
+            std::mem::align_of::<SignatureInfo>(),
+            std::mem::align_of::<OwnedSignatureLayout>()
+        );
+        macro_rules! same_offset {
+            ($($field:ident),*) => {$({
+                assert_eq!(std::mem::offset_of!(SignatureInfo, $field), std::mem::offset_of!(OwnedSignatureLayout, $field), stringify!($field));
+            })*};
+        }
+        same_offset!(
+            num_args,
+            required_num_args,
+            is_variadic,
+            variadic_cv_index,
+            ref_args,
+            prefer_ref_args,
+            returns_reference,
+            needs_bound_type_scope,
+            this_offset,
+            param_type_hints,
+            param_names,
+            return_type_hint
+        );
     }
 }
 

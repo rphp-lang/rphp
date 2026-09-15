@@ -2505,7 +2505,7 @@ impl ExecutorGlobals {
         name: &'static str,
         is_static: bool,
         required_num_args: u32,
-        param_names: &[&str],
+        param_names: &[&'static str],
         param_type_hints: Vec<ParamTypeHint>,
         return_type_hint: ParamTypeHint,
         parameter_default_diagnostics: &[Option<&str>],
@@ -2543,7 +2543,10 @@ impl ExecutorGlobals {
                 needs_bound_type_scope: false,
                 this_offset: 0,
                 param_type_hints,
-                param_names: param_names.iter().map(|name| (*name).to_string()).collect(),
+                param_names: param_names
+                    .iter()
+                    .map(|name| std::borrow::Cow::Borrowed(*name))
+                    .collect(),
                 return_type_hint,
             },
             parameter_default_diagnostics,
@@ -4471,7 +4474,7 @@ impl ExecutorGlobals {
                 signature
                     .param_names
                     .get(index)
-                    .map(String::as_str)
+                    .map(|name| &**name)
                     .unwrap_or("arg"),
             );
             if let Some(default) = declaration

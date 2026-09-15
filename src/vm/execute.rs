@@ -3709,7 +3709,7 @@ fn argument_type_error(
         .sig
         .param_names
         .get(parameter_index)
-        .map(String::as_str)
+        .map(|name| &**name)
         .unwrap_or("unknown");
     let parameter = if common.fn_type == FunctionType::User
         && common.sig.is_variadic
@@ -4281,7 +4281,7 @@ fn execute_full_call<'a>(
                 .sig
                 .param_names
                 .get(i as usize)
-                .map(String::as_str)
+                .map(|name| &**name)
                 .unwrap_or("unknown");
             let error = make_error_value(
                 "ArgumentCountError",

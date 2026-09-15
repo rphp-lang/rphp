@@ -595,6 +595,14 @@ impl Parser {
                 let mut const_line = 0;
                 loop {
                     let (name, line) = match self.advance() {
+                        Token::Identifier(name, line)
+                            if ["null", "true", "false"].iter().any(|word| name.eq_ignore_ascii_case(word)) => {
+                            self.compile_error(
+                                format!("Cannot redeclare constant '{}'", name.to_ascii_uppercase()),
+                                line,
+                            );
+                            (name, line)
+                        }
                         Token::Identifier(ref name, line) if Self::reserved_identifier(name).is_some() => {
                             return Err(self.unexpected_token_error(&self.tokens[self.pos - 1], "identifier", line));
                         }

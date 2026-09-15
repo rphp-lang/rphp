@@ -88,7 +88,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     macro_rules! reg {
         ($name:expr, $handler:expr, $max_args:expr, $min_args:expr, $($pnames:expr),*) => {{
-            let f = Box::new(make_internal_function($handler, $max_args, $min_args, pn![$($pnames),*]));
+            let f = Box::new(make_internal_function($handler, $max_args, $min_args, vec![]).with_static_parameter_names(&[$($pnames),*]));
             let ptr = &f.common as *const FunctionCommon;
             eg.register_function($name, ptr).unwrap();
             funcs.push(f);
@@ -115,8 +115,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 $handler,
                 $max_args,
                 $min_args,
-                pn![$($pname),*],
-            ));
+                vec![],
+            ).with_static_parameter_names(&[$($pname),*]));
             function.common.sig.param_type_hints = vec![$($hint),*];
             function.common.sig.return_type_hint = $return_hint;
             function.handler_validates_types = true;
@@ -139,8 +139,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 $direct,
                 $max_args,
                 $min_args,
-                pn![$($pnames),*],
-            ));
+                vec![],
+            ).with_static_parameter_names(&[$($pnames),*]));
             let ptr = &f.common as *const FunctionCommon;
             eg.register_function($name, ptr).unwrap();
             funcs.push(f);
@@ -167,7 +167,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     macro_rules! reg_ref {
         ($name:expr, $handler:expr, $max_args:expr, $min_args:expr, $ref_args:expr, $($pnames:expr),*) => {{
-            let f = Box::new(make_internal_function_ref($handler, $max_args, $min_args, $ref_args, pn![$($pnames),*]));
+            let f = Box::new(make_internal_function_ref($handler, $max_args, $min_args, $ref_args, vec![]).with_static_parameter_names(&[$($pnames),*]));
             let ptr = &f.common as *const FunctionCommon;
             eg.register_function($name, ptr).unwrap();
             funcs.push(f);
@@ -196,8 +196,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 $max_args,
                 $min_args,
                 $ref_args,
-                pn![$($pname),*],
-            ));
+                vec![],
+            ).with_static_parameter_names(&[$($pname),*]));
             function.common.sig.param_type_hints = vec![$($hint),*];
             function.common.sig.return_type_hint = $return_hint;
             function.handler_validates_types = true;
@@ -209,7 +209,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     macro_rules! reg_var {
         ($name:expr, $handler:expr, $min_args:expr, $($pnames:expr),*) => {{
-            let f = Box::new(make_internal_function_variadic($handler, $min_args, pn![$($pnames),*]));
+            let f = Box::new(make_internal_function_variadic($handler, $min_args, vec![]).with_static_parameter_names(&[$($pnames),*]));
             let ptr = &f.common as *const FunctionCommon;
             eg.register_function($name, ptr).unwrap();
             funcs.push(f);
@@ -234,8 +234,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             let mut function = Box::new(make_internal_function_variadic(
                 $handler,
                 $min_args,
-                pn![$($pname),*],
-            ));
+                vec![],
+            ).with_static_parameter_names(&[$($pname),*]));
             function.common.sig.param_type_hints = vec![$($hint),*];
             function.common.sig.return_type_hint = $return_hint;
             function.handler_validates_types = true;
@@ -251,8 +251,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 $handler,
                 $raw_handler,
                 $min_args,
-                pn![$($pnames),*],
-            ));
+                vec![],
+            ).with_static_parameter_names(&[$($pnames),*]));
             let ptr = &f.common as *const FunctionCommon;
             eg.register_function($name, ptr).unwrap();
             funcs.push(f);
@@ -264,8 +264,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             let f = Box::new(make_internal_function_variadic_prefer_ref(
                 $handler,
                 $min_args,
-                pn![$($pnames),*],
-            ));
+                vec![],
+            ).with_static_parameter_names(&[$($pnames),*]));
             let ptr = &f.common as *const FunctionCommon;
             eg.register_function($name, ptr).unwrap();
             funcs.push(f);
@@ -279,8 +279,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 $raw_handler,
                 $min_args,
                 $ref_args,
-                pn![$($pnames),*],
-            ));
+                vec![],
+            ).with_static_parameter_names(&[$($pnames),*]));
             let ptr = &f.common as *const FunctionCommon;
             eg.register_function($name, ptr).unwrap();
             funcs.push(f);
@@ -295,8 +295,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 $raw_handler,
                 $min_args,
                 $ref_args,
-                pn![$($pnames),*],
-            ));
+                vec![],
+            ).with_static_parameter_names(&[$($pnames),*]));
             let ptr = &f.common as *const FunctionCommon;
             eg.register_function($name, ptr).unwrap();
             funcs.push(f);
@@ -2249,12 +2249,12 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     ] {
         let mut function = Box::new(make_internal_function(handler, 1, 1, pn!["filename"]));
         if matches!(name, "realpath" | "linkinfo") {
-            function.common.sig.param_names[0] = "path".to_string();
+            function.common.sig.param_names[0] = "path".into();
         } else if matches!(
             name,
             "disk_free_space" | "diskfreespace" | "disk_total_space"
         ) {
-            function.common.sig.param_names[0] = "directory".to_string();
+            function.common.sig.param_names[0] = "directory".into();
         }
         function.common.sig.param_type_hints = vec![ParamTypeHint::String];
         function.common.sig.return_type_hint = return_type;

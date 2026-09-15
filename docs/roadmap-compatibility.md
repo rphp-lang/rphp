@@ -36,35 +36,34 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `native-iterator-cursor-policies` checkpoint adds
-13 exact PHP 8.5 passes over `4436a41c`, without loss, process hazards,
-expectation changes or moved failure stages. Selected coverage is 7,959 cases:
-7,108 pass / 418 fail; core 6,455/326/182/211;
-SPL 653/92/31 unsupported/8 skip/1 XFAIL. This is not all PHP.
+The accepted `source-lexical-admission` checkpoint adds 11 monitored PHP 8.5
+passes over `9c82676e`, plus two separately targeted class-object cases,
+without loss, process hazards or changed expectations. Selected coverage is
+7,959 cases: 7,119 pass / 407 fail; core 6,459/322/182/211;
+SPL 660/85/31 unsupported/8 skip/1 XFAIL. This is not all PHP.
 
-Empty exhaustion, infinite rewind and parallel child projection use sparse
-traced native ownership. Live membership/flags, callback/error order,
-reference/COW, clone and retirement match 28 original cases in both JIT modes.
-All 1,215 focused tests plus 35 resource regressions, one frozen checked
-five-configuration matrix/all-targets, exact no-loss, fresh reference checks,
-S0-S3 and unsafe/hygiene pass. Profile-backed registration, traversal and
-resource lookup remove work without changing public IDs, resource storage,
-common layouts or unsafe ceilings. The admission holdout `bug69264` remains
-an ArrayObject debug-projection failure.
+Canonical file-segment admission and case-insensitive grammar preserve source
+spelling, lines and offsets. Original dual-JIT/negative/storage tests,
+1,311 focused tests, one frozen checked five-configuration matrix/all-targets,
+exact no-loss/fresh gain oracles, unchanged Reflection inventory, S0-S3 and
+unsafe/hygiene pass. Five existing parse failures reach explicitly separate
+runtime/debug/missing-method holdouts and remain failures.
 
-All 118 established controls retain nine fixed/first-present anchors and meet
-cumulative common <=1.65%, pay-use/first-present <=5%; maxima
-+1.537%/+4.653%/+3.010%. Six new APIs have eight-pair absolute PHP comparisons,
-not invented absent-parent regressions. Nominal/incremental findings,
-2.75-41.21x API ratios, rejected candidates and exact evidence hashes remain in
-`compatibility.md`. Automatic cleanup and the shared-host limitation remain.
+Static native parameter labels reduce allocation work while user labels remain
+owned; explicit inlining preserves the existing guarded constructor transaction.
+No new opcode, unsafe ceiling, resource identity or common-layout change.
+All 126 fixed 32-pair controls pass common <=1.65%, pay-use/first-present <=5%,
+maxima +1.197%/+3.340%. Two new syntax costs have
+eight-pair absolute PHP comparisons, not invented absent-parent regressions.
+Exact hashes, rejected candidates and shared-host limits are in
+`compatibility.md`; automatic cleanup remains mandatory.
 
-Next read-only admission targets twelve ArrayObject native property/dimension
-projection failures. Prove >=10 reachable shared-cause gains and original
-callback/visibility/reference/COW/error oracles before production, otherwise
-reselect. General trace retention, nested unpack aliases, deep-drop identity
-ordering, typed-property references, serialization, generic ordering and
-32-bit/OOM remain separate. One active implementation only.
+Next read-only admission targets thirteen string failures sharing missing
+`crypt()`. Prove >=10 reachable common-cause gains, safe independent backend
+provenance and original salt/byte/error/call-shape oracles before production,
+otherwise reselect. The mixed ArrayObject projection admission was rejected.
+General trace/serialization/deep-drop, suspension, 32-bit/OOM and blanket
+security/platform claims remain separate. One active implementation only.
 
 ### Preceding directory cursor checkpoint
 

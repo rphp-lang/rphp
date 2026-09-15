@@ -7,65 +7,68 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 PHP 8.5 checkpoint is `native-iterator-cursor-policies`,
-against `4436a41c`: **+13/-0**, independently confirmed by PHP 8.5.10.
-SPL reaches **653 pass / 92 fail / 31 unsupported / 8 skip / 1 XFAIL**;
-core reaches **6,455 pass / 326 fail / 182 skip / 211 unsupported**.
-Selected coverage is **7,959 cases: 7,108 pass / 418 fail**,
+The latest measured AMD64 PHP 8.5 checkpoint is `source-lexical-admission`,
+against `9c82676e`: **+11/-0** in the monitored corpus, plus two separate
+class-object targets (**13 unique gains**), confirmed by PHP 8.5.10.
+SPL reaches **660 pass / 85 fail / 31 unsupported / 8 skip / 1 XFAIL**;
+core reaches **6,459 pass / 322 fail / 182 skip / 211 unsupported**.
+Selected coverage is **7,959 cases: 7,119 pass / 407 fail**,
 plus 190 skips, 242 unsupported and one XFAIL. This is not complete PHP coverage.
 
-EmptyIterator exhaustion, InfiniteIterator rewind and MultipleIterator parallel
-projection now use native cursor policies. Traced sparse state preserves live
-membership/flag changes, callback order, exception ownership, references/COW,
-clone and retirement. Native dimension writes do not invent an ArrayAccess
-interface. The remaining admission holdout, `bug69264`, concerns ArrayObject
-debug projection, not these cursor policies.
+Primary scripts and included files share file-segment admission: long tags and
+grammar words are ASCII-case-insensitive; initial text and shebang handling
+preserve source lines and offsets. Member, namespace, argument and constant
+spellings remain distinct, including reserved exit/die diagnostics. The 35
+original positive programs match PHP in both JIT modes, with negative declaration
+tests and original lexer/storage tests. All **1,311 focused tests** pass.
 
-All **1,215 focused tests** plus **35 resource regressions** pass. The 28 new
-original cases match PHP with JIT enabled and disabled. One frozen checked
-five-configuration matrix passes **5,628/5,296/5,699/5,721/5,772** tests
+One frozen checked five-configuration matrix passes **5,670/5,338/5,741/5,763/5,814** tests
 (13/13/13/13/16 ignored, none filtered), plus all-features/all-targets.
-Exact no-loss, fresh reference gain checks, previous originals,
-Composer/Symfony S0-S3, runner/unsafe and public hygiene pass. No lost pass,
-process hazard, expectation change or moved failure stage. Unsafe remains
-**1,623 blocks / 289 functions** within unchanged ceilings.
+Exact no-loss, fresh gain oracles, prior original suites, unchanged complete
+Reflection inventory, Composer/Symfony S0-S3 and unsafe/hygiene pass. No lost
+pass, timeout, crash or expected-output edit. Five prior parse failures now
+reach separately identified runtime/debug/missing-method holdouts and remain
+failures. Unsafe remains **1,623 blocks / 289 functions**, unchanged ceilings.
 
-All **118 established 32-pair controls** pass against nine unchanged
-fixed/first-present anchors. Cumulative common **<=1.65%**, pay-use/first-present
-**<=5%**: maxima **+1.537%/+4.653%/+3.010%**. Nominal +1% findings remain:
-constructor pipeline +1.050%, startup +1.499%, array +1.537%. Immediate-parent
-resource-alias/held-resources findings are +1.001%/+2.569%, while cumulative
-results are -4.289%/-1.144%. Six new API lanes have exact outputs over eight
-pairs; absolute candidate/PHP ratios range **2.75-41.21x**, not absent-parent
-regressions. No claim of PHP-equivalent speed is made.
+All **126 established/newly-present 32-pair controls** retain their fixed
+anchors and pass common **<=1.65%**, pay-use/first-present **<=5%** limits.
+Maxima are **+1.197%/+3.340%**;
+nominal +1% findings remain in the exact evidence.
+Two newly admitted syntax workloads have exact eight-pair comparisons with
+PHP, with absolute candidate/PHP ratios **15.67x/9.82x**;
+these are not absent-parent regressions or PHP-equivalent-speed claims.
 
-Profile-backed registration, interface traversal and resource lookup work
-removal offsets the new surface. Resource IDs, storage, retirement order,
-common layouts and public symbol hashing are unchanged. Instruction profiles
-do not establish a unique hardware timing cause. Rejected packets remain
-evidence, with no unchanged failed timing reroll or rolling baseline.
-The user-authorized shared-host guard records two background events, not
+Profile-backed static native parameter labels avoid per-request string copies,
+while user labels remain owned. Explicit inlining restores the existing
+single-caller guarded constructor transaction; guards and writes are unchanged.
+No new opcode, unsafe boundary, resource identity or common field layout.
+Instruction/cache models explain candidate selection, not exclusive hardware
+causality. Rejected timing variants and the earlier canonical-exit correctness
+failure remain recorded; no unchanged failed timing reroll or moving anchor.
+The authorized shared-host guard records 2 background events, not
 exclusive-host evidence; no private host was configured. Automatic cleanup
-runs between configurations and after gates. An initial disk guard stopped
-before compilation; lossless diagnostic compression restored the reserve,
-then the same source fingerprint completed all configurations.
+reclaims build intermediates between configurations, retaining exact binaries.
 
 SHA-256 evidence:
 
-- Release: `2df1bb683e349e4986826550f2cfd8c637eb9d8eab45061ca53cdcaf4f8218b0`.
-- Complete technical record: `d0cffbbed4100c98f9945d546a251cb52bac54251e2ebf216dfa9eca5d0df80d`.
-- Matrix: `5cbc9cc646ce9ff0358cbc44c791a7ff3b6c1deb11f3513695229d10c7d6b791`.
-- SPL manifest / pass set: `42f6c2729ef64fd3cafe833288f2d80474123a98f99c3d7e9bce673a497f2b91` / `0913d44b9a7feb1e60a9fb2689662334a1ce4267e64896f10c27e99009821bc7`.
-- Zend/lang manifest / pass set: `267a95a66f70d16beece51f134cd7a2c8a11639e123554561b4dca4fd7c773a0` / `daefc866b4a0961c44943c75b80525346de9447d64f3b200e32724b12512396f`.
-- Strings/array manifest / pass set: `e064c5f710f795bad1900615cf52eceac008f70051620af8b65c521c2d7601f9` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
-- Reviewed performance / raw timing: `120a681563eb26f9d7d15a774a37010e13b2e220c21fae4bb9332c17c954b70a` / `20f5162685bab84a5b627a01ffdffb552274e7f319c6bda3505a65de05e69230`.
+- Release: `83fe61afe34f2ebf72cc1224e7734656303c706fea67dab2df58ae234bd1d82e`.
+- Complete technical record: `cebd7936458c7a256a7b599891de21079b58f377d54b42dfdbd7c6f4e396b913`.
+- Matrix: `d8ca4d55244022b15de5bdc1c56c31cd01ec969a6ca68479e61630390a944706`.
+- SPL manifest / pass set: `c820eaec82b0d133ceeddc1f9844ab77088881d41a392177df8b1d4e451df78c` / `91abc59eb1022e2c3d182009339865702a7ebfe9f0a45f3299d0440e09dabf0c`.
+- Zend/lang manifest / pass set: `d7b8a76ae73e63d95cc7c0b5e5d2eab34f147fbfac2559dfbf685769a5aee908` / `efd0f4684602a167bd888a7043303d3270b198c12d348af26eda1b14302b319b`.
+- Strings/array manifest / pass set: `02fb3d182302f467764c9f6538ce418b0065c10af16bad10c0f9d0aafd13247c` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+- Performance decision / raw timing: `9e8542e016e8c0b85b0284c11fbc54981878eacb7297eef3f2143aed272228cb` / `735ac901adbf5aee836f7a000fc245504bcf63782abda15ba7076bb972c3445f`.
 
-ArrayObject debug/property projection, general trace ownership, nested unpack
-aliases, custom generic-construction ordering, deep-drop identity order and
-32-bit/OOM equivalence remain separate. Next read-only admission checks twelve
-ArrayObject projection failures; require ten reachable common-cause gains and
-fresh callback/visibility/reference/COW/error oracles before implementation,
-otherwise reselect.
+Short tags, general backtick/interpolation runtime, ArrayObject debug projection,
+full builtin behavior and 32-bit/OOM equivalence remain separate. The mixed
+ArrayObject admission was rejected. Next read-only admission checks thirteen
+string failures sharing missing `crypt()`: require ten reachable common-cause
+gains, an independently audited backend and original salt/byte/error/callable
+oracles before implementation, otherwise reselect. No security/platform claim.
+
+The preceding native iterator cursor checkpoint added thirteen passes;
+its complete technical record remains
+`d0cffbbed4100c98f9945d546a251cb52bac54251e2ebf216dfa9eca5d0df80d`.
 
 The preceding constructor-allocation checkpoint added seven passes;
 its complete technical record remains

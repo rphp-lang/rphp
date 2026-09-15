@@ -3185,7 +3185,7 @@ pub(crate) fn initialize_suspended_callback_frame(
                     .sig
                     .param_names
                     .get(index)
-                    .map(String::as_str)
+                    .map(|name| &**name)
                     .unwrap_or("unknown");
                 argument_error = Some(make_error_value(
                     "TypeError",

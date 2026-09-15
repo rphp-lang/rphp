@@ -1312,7 +1312,10 @@ pub(crate) fn make_user_function_typed_with_return_mode(
                 needs_bound_type_scope,
                 this_offset: 0,
                 param_type_hints,
-                param_names,
+                param_names: param_names
+                    .into_iter()
+                    .map(std::borrow::Cow::Owned)
+                    .collect(),
                 return_type_hint,
             },
             frame: FrameLayout {
@@ -6029,7 +6032,10 @@ pub fn make_internal_function(
                 needs_bound_type_scope: false,
                 this_offset: 0,
                 param_type_hints: vec![],
-                param_names,
+                param_names: param_names
+                    .into_iter()
+                    .map(std::borrow::Cow::Owned)
+                    .collect(),
                 return_type_hint: ParamTypeHint::None,
             },
             frame: FrameLayout {
@@ -6360,7 +6366,10 @@ pub fn make_internal_method(
                 needs_bound_type_scope: false,
                 this_offset: 1,
                 param_type_hints: vec![],
-                param_names,
+                param_names: param_names
+                    .into_iter()
+                    .map(std::borrow::Cow::Owned)
+                    .collect(),
                 return_type_hint: ParamTypeHint::None,
             },
             frame: FrameLayout {
@@ -6412,7 +6421,10 @@ pub fn make_internal_method_variadic(
                 needs_bound_type_scope: false,
                 this_offset: 1,
                 param_type_hints: vec![],
-                param_names,
+                param_names: param_names
+                    .into_iter()
+                    .map(std::borrow::Cow::Owned)
+                    .collect(),
                 return_type_hint: ParamTypeHint::None,
             },
             frame: FrameLayout {
@@ -6476,7 +6488,10 @@ pub fn make_internal_function_ref(
                 needs_bound_type_scope: false,
                 this_offset: 0,
                 param_type_hints: vec![],
-                param_names,
+                param_names: param_names
+                    .into_iter()
+                    .map(std::borrow::Cow::Owned)
+                    .collect(),
                 return_type_hint: ParamTypeHint::None,
             },
             frame: FrameLayout {
@@ -6524,7 +6539,10 @@ pub fn make_internal_function_variadic(
                 needs_bound_type_scope: false,
                 this_offset: 0,
                 param_type_hints: vec![],
-                param_names,
+                param_names: param_names
+                    .into_iter()
+                    .map(std::borrow::Cow::Owned)
+                    .collect(),
                 return_type_hint: ParamTypeHint::None,
             },
             frame: FrameLayout {
@@ -6632,7 +6650,10 @@ pub fn make_internal_function_variadic_prefer_ref(
                 needs_bound_type_scope: false,
                 this_offset: 0,
                 param_type_hints: vec![],
-                param_names,
+                param_names: param_names
+                    .into_iter()
+                    .map(std::borrow::Cow::Owned)
+                    .collect(),
                 return_type_hint: ParamTypeHint::None,
             },
             frame: FrameLayout {

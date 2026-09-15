@@ -5424,17 +5424,23 @@ impl Compiler {
         builtin_ref_args(name)
     }
 
-    fn lookup_param_names(&self, name: &str) -> Option<&[String]> {
-        self.functions
+    fn lookup_param_index(&self, name: &str, parameter: &str) -> Option<usize> {
+        if let Some((_, function)) = self
+            .functions
             .iter()
             .find(|(function, _)| function.eq_ignore_ascii_case(name))
-            .map(|(_, function)| function.common.sig.param_names.as_slice())
-            .or_else(|| {
-                self.known_param_names
-                    .iter()
-                    .find(|(function, _)| function.eq_ignore_ascii_case(name))
-                    .map(|(_, names)| names.as_slice())
-            })
+        {
+            return function
+                .common
+                .sig
+                .param_names
+                .iter()
+                .position(|name| name == parameter);
+        }
+        self.known_param_names
+            .iter()
+            .find(|(function, _)| function.eq_ignore_ascii_case(name))
+            .and_then(|(_, names)| names.iter().position(|name| name == parameter))
     }
 
     fn lookup_variadic_ref_start(&self, name: &str) -> Option<usize> {
@@ -5455,10 +5461,7 @@ impl Compiler {
     }
 
     fn named_argument_is_known_reference(&self, function: &str, parameter: &str) -> bool {
-        let Some(index) = self
-            .lookup_param_names(function)
-            .and_then(|names| names.iter().position(|name| name == parameter))
-        else {
+        let Some(index) = self.lookup_param_index(function, parameter) else {
             return false;
         };
         index < u64::BITS as usize && self.lookup_ref_args(function) & (1_u64 << index) != 0
@@ -5736,7 +5739,16 @@ impl Compiler {
     fn build_known_param_names(&self) -> HashMap<String, Vec<String>> {
         let mut map = self.known_param_names.clone();
         for (name, function) in &self.functions {
-            map.insert(name.clone(), function.common.sig.param_names.clone());
+            map.insert(
+                name.clone(),
+                function
+                    .common
+                    .sig
+                    .param_names
+                    .iter()
+                    .map(|name| name.to_string())
+                    .collect(),
+            );
         }
         map
     }

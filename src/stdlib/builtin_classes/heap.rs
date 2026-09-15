@@ -688,7 +688,7 @@ fn register_method(
     owner: &'static str,
     name: &'static str,
     handler: InternalFunctionHandler,
-    names: &[&str],
+    names: &[&'static str],
     hints: &[ParamTypeHint],
     result: ParamTypeHint,
 ) -> Box<InternalFunction> {
@@ -704,12 +704,10 @@ fn register_method(
         &vec![None; names.len()],
         true,
     );
-    let mut function = Box::new(make_internal_method(
-        handler,
-        required + 1,
-        required,
-        names.iter().map(|name| name.to_string()).collect(),
-    ));
+    let mut function = Box::new(
+        make_internal_method(handler, required + 1, required, vec![])
+            .with_static_parameter_names(names),
+    );
     function.handler_validates_types = true;
     function.common.sig.param_type_hints = hints.to_vec();
     let pointer = &function.common as *const FunctionCommon;

@@ -3154,7 +3154,7 @@ fn instantiate_attribute_definition_at_use(
                 normalized[index] = value;
             }
             crate::vm::execute::CallArgumentPreparation::Invalid => {
-                let parameter = parameter_names.get(index).map_or("unknown", String::as_str);
+                let parameter = parameter_names.get(index).map_or("unknown", |name| &**name);
                 let call_site = if common.fn_type == FunctionType::Internal {
                     String::new()
                 } else {
@@ -3413,7 +3413,7 @@ fn function_get_parameters(
             .param_names
             .get(index as usize)
             .cloned()
-            .unwrap_or_else(|| format!("arg{}", index + 1));
+            .unwrap_or_else(|| format!("arg{}", index + 1).into());
         let hint = function
             .sig
             .param_type_hints
@@ -3834,7 +3834,7 @@ fn populate_reflection_parameter(
         .param_names
         .get(index as usize)
         .cloned()
-        .unwrap_or_else(|| format!("arg{}", index + 1));
+        .unwrap_or_else(|| format!("arg{}", index + 1).into());
     let hint = function
         .sig
         .param_type_hints
@@ -5283,7 +5283,7 @@ fn render_reflection_signature_parameter(
         .param_names
         .get(index as usize)
         .cloned()
-        .unwrap_or_else(|| format!("arg{}", index + 1));
+        .unwrap_or_else(|| format!("arg{}", index + 1).into());
     let hint = function
         .sig
         .param_type_hints

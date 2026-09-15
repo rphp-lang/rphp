@@ -621,7 +621,7 @@ fn method(
     functions: &mut Vec<Box<InternalFunction>>,
     name: &'static str,
     handler: InternalFunctionHandler,
-    names: &[&str],
+    names: &[&'static str],
     hints: Vec<ParamTypeHint>,
     defaults: &[Option<&str>],
     result: ParamTypeHint,
@@ -640,12 +640,10 @@ fn method(
         defaults,
         tentative,
     );
-    let mut function = Box::new(make_internal_method(
-        handler,
-        names.len() as u32 + 1,
-        required,
-        names.iter().map(|n| n.to_string()).collect(),
-    ));
+    let mut function = Box::new(
+        make_internal_method(handler, names.len() as u32 + 1, required, vec![])
+            .with_static_parameter_names(names),
+    );
     function.handler_validates_types = true;
     function.common.sig.param_type_hints = hints;
     if !tentative {

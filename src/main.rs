@@ -246,7 +246,7 @@ fn main() {
 
     let tokens = Lexer::new_bytes(&source)
         .with_source_offset_base(source_offset_base)
-        .tokenize()
+        .tokenize_included_source()
         .unwrap_or_else(|e| {
             eprintln!("Parse error: {}", e);
             std::process::exit(255);

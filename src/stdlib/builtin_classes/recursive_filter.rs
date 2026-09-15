@@ -234,7 +234,7 @@ fn prepare_arguments(
                     .sig
                     .param_names
                     .get(parameter)
-                    .map(String::as_str)
+                    .map(|name| &**name)
                     .unwrap_or("unknown");
                 let error = make_error_value(
                     "TypeError",

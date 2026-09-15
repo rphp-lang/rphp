@@ -1329,7 +1329,7 @@ fn reject_closure_invoke_nonreferenceable_arguments(
         let parameter = signature
             .param_names
             .get(reference_index)
-            .map(String::as_str)
+            .map(|name| &**name)
             .unwrap_or("unknown");
         eg.exception = Some(make_error_value(
             "Error",
@@ -2045,7 +2045,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     // Helper: register an internal method and return its func pointer
     macro_rules! reg_method {
         ($class:expr, $method:expr, $handler:expr, $num_args:expr, $min_args:expr, $($pnames:expr),*) => {{
-            let f = Box::new(make_internal_method($handler, $num_args, $min_args, vec![$($pnames.to_string()),*]));
+            let f = Box::new(make_internal_method($handler, $num_args, $min_args, vec![]).with_static_parameter_names(&[$($pnames),*]));
             let ptr = &f.common as *const FunctionCommon;
             let full_name = internal_method_lookup_name(&$class, &$method);
             eg.function_table.insert(full_name, ptr);
@@ -2066,7 +2066,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     // methods, so retain their dispatch kind in request-owned metadata.
     macro_rules! reg_static_method {
         ($class:expr, $method:expr, $handler:expr, $num_args:expr, $min_args:expr, $($pnames:expr),*) => {{
-            let f = Box::new(make_internal_method($handler, $num_args, $min_args, vec![$($pnames.to_string()),*]));
+            let f = Box::new(make_internal_method($handler, $num_args, $min_args, vec![]).with_static_parameter_names(&[$($pnames),*]));
             let ptr = &f.common as *const FunctionCommon;
             let full_name = internal_method_lookup_name(&$class, &$method);
             eg.function_table.insert(full_name, ptr);

@@ -389,7 +389,7 @@ fn validate_property_hook_setter_variance(
             .sig
             .param_names
             .first()
-            .map(String::as_str)
+            .map(|name| &**name)
             .unwrap_or("value");
         let location = if setter.op_array.source_file.is_empty() {
             String::new()

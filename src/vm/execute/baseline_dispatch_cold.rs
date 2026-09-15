@@ -2401,7 +2401,7 @@ fn op_check_default_type<'a>(
                 .sig
                 .param_names
                 .get(parameter_index)
-                .map(String::as_str)
+                .map(|name| &**name)
                 .unwrap_or("unknown");
             make_error_value(
                 "TypeError",

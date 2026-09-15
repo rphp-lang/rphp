@@ -13,6 +13,10 @@ fn internal_class_forbids_dynamic_properties(class_name: &str) -> bool {
     )
 }
 
+// This bounded transaction has one allocation-site caller. Inline its guards
+// with that site's established receiver/cache facts rather than duplicating
+// call setup and splitting the warmed constructor path across text sections.
+#[inline(always)]
 unsafe fn try_execute_property_init_constructor(
     eg: &ExecutorGlobals,
     caller: *mut ExecuteData,

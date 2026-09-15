@@ -784,7 +784,7 @@ pub(super) fn register_method(
     owner: &'static str,
     name: &'static str,
     handler: InternalFunctionHandler,
-    names: &[&str],
+    names: &[&'static str],
     hints: Vec<ParamTypeHint>,
     defaults: &[Option<&str>],
     result: ParamTypeHint,
@@ -802,12 +802,10 @@ pub(super) fn register_method(
         defaults,
         !matches!(name, "__construct" | "__toString"),
     );
-    let mut function = Box::new(make_internal_method(
-        handler,
-        names.len() as u32 + 1,
-        required,
-        names.iter().map(|name| name.to_string()).collect(),
-    ));
+    let mut function = Box::new(
+        make_internal_method(handler, names.len() as u32 + 1, required, vec![])
+            .with_static_parameter_names(names),
+    );
     function.common.sig.param_type_hints = hints;
     if let Some(result) = enforced_return {
         function.common.sig.return_type_hint = result;

@@ -714,7 +714,7 @@ pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     eg.reserve_internal_method_contracts("SplFileObject", 30);
     let mut method = |name,
                       handler,
-                      names: &[&str],
+                      names: &[&'static str],
                       hints: Vec<ParamTypeHint>,
                       defaults: &[Option<&str>],
                       result: ParamTypeHint| {
@@ -730,12 +730,10 @@ pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             defaults,
             name != "__construct" && name != "__toString",
         );
-        let mut function = Box::new(make_internal_method(
-            handler,
-            names.len() as u32 + 1,
-            required,
-            names.iter().map(|name| name.to_string()).collect(),
-        ));
+        let mut function = Box::new(
+            make_internal_method(handler, names.len() as u32 + 1, required, vec![])
+                .with_static_parameter_names(names),
+        );
         function.handler_validates_types = true;
         function.common.sig.param_type_hints = hints;
         if name == "flock" {

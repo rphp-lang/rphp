@@ -22748,7 +22748,7 @@ pub(crate) fn call_object_protocol_method(
                 .sig
                 .param_names
                 .first()
-                .map(String::as_str)
+                .map(|name| &**name)
                 .unwrap_or("offset");
             eg.exception = Some(crate::value::make_error_value(
                 "ArgumentCountError",
@@ -25001,7 +25001,7 @@ fn call_resolved_borrowed_with_php_array_at(
                 if let Some(idx) = lookup_name.as_deref().and_then(|lookup_name| {
                     param_names
                         .iter()
-                        .position(|parameter| parameter.as_str() == lookup_name)
+                        .position(|parameter| &**parameter == lookup_name)
                 }) {
                     if idx < num_params {
                         if !positional[idx].is_undef() {
@@ -25058,7 +25058,7 @@ fn call_resolved_borrowed_with_php_array_at(
             if sig.is_variadic && !named_variadic.is_empty() {
                 continue;
             }
-            let name = param_names.get(i).map(|s| s.as_str()).unwrap_or("?");
+            let name = param_names.get(i).map(|s| &**s).unwrap_or("?");
             let function = crate::vm::execute::displayed_function_name(eg, resolved.func_ptr);
             eg.exception = Some(crate::value::make_error_value(
                 "ArgumentCountError",
@@ -25297,7 +25297,7 @@ fn call_resolved_with_source_unpack(
                                 "Named parameter ${} overwrites previous argument",
                                 param_names
                                     .get(public_index)
-                                    .map(String::as_str)
+                                    .map(|name| &**name)
                                     .unwrap_or("unknown")
                             ),
                         ));
@@ -25315,7 +25315,7 @@ fn call_resolved_with_source_unpack(
                 if let Some(index) = lookup_name.as_deref().and_then(|lookup_name| {
                     param_names
                         .iter()
-                        .position(|parameter| parameter.as_str() == lookup_name)
+                        .position(|parameter| &**parameter == lookup_name)
                 }) {
                     if index < fixed_count {
                         if !fixed[index].is_undef() {
@@ -25414,7 +25414,7 @@ fn call_resolved_with_source_unpack(
         if fixed.get(index).is_none_or(Value::is_undef) {
             let parameter = param_names
                 .get(index)
-                .map(String::as_str)
+                .map(|name| &**name)
                 .unwrap_or("unknown");
             eg.exception = Some(crate::value::make_error_value(
                 "ArgumentCountError",
@@ -25766,7 +25766,7 @@ pub(crate) fn callback_reference_warning_messages(
                         signature
                             .param_names
                             .iter()
-                            .position(|parameter| parameter.as_str() == lookup_name)
+                            .position(|parameter| &**parameter == lookup_name)
                     })
                     .unwrap_or(public_arity)
             }
@@ -26311,7 +26311,7 @@ fn report_user_sort_reference_warnings(
         let parameter = signature
             .param_names
             .get(index as usize)
-            .map(String::as_str)
+            .map(|name| &**name)
             .unwrap_or("unknown");
         report_internal_diagnostic(
             eg,
@@ -26671,7 +26671,7 @@ fn report_array_walk_userdata_reference_warning(
         .signature()
         .param_names
         .get(2)
-        .map(String::as_str)
+        .map(|name| &**name)
         .unwrap_or("unknown");
     report_internal_diagnostic(
         eg,

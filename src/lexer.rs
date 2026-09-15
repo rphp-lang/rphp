@@ -2,6 +2,92 @@ mod diagnostics;
 /// Minimal PHP lexer — just enough tokens for the vertical slice.
 mod strings;
 
+// One grammar table expands directly into both dispatches: ordinary lowercase
+// tokens retain their direct push, while mixed spelling lives in a cold helper.
+macro_rules! push_keyword {
+    ($keyword:expr, $ident:ident, $line:ident, $tokens:ident, $otherwise:block) => {
+        match $keyword {
+            "echo" => {
+                $tokens.push(Token::Echo { line: $line });
+            }
+            "function" => $tokens.push(Token::Function($line)),
+            "return" => $tokens.push(Token::Return { line: $line }),
+            "if" => $tokens.push(Token::If),
+            "else" => $tokens.push(Token::Else),
+            "elseif" => $tokens.push(Token::ElseIf),
+            "endif" => $tokens.push(Token::EndIf),
+            "while" => $tokens.push(Token::While),
+            "endwhile" => $tokens.push(Token::EndWhile),
+            "for" => $tokens.push(Token::For),
+            "endfor" => $tokens.push(Token::EndFor),
+            "do" => $tokens.push(Token::Do),
+            "break" => $tokens.push(Token::Break { line: $line }),
+            "continue" => $tokens.push(Token::Continue { line: $line }),
+            "switch" => $tokens.push(Token::Switch),
+            "endswitch" => $tokens.push(Token::EndSwitch),
+            "case" => $tokens.push(Token::Case($line)),
+            "default" => $tokens.push(Token::Default($line)),
+            spelling if spelling.eq_ignore_ascii_case("null") => $tokens.push(Token::Null),
+            spelling if spelling.eq_ignore_ascii_case("true") => $tokens.push(Token::True),
+            spelling if spelling.eq_ignore_ascii_case("false") => $tokens.push(Token::False),
+            "array" => $tokens.push(Token::ArrayKw),
+            "foreach" => $tokens.push(Token::Foreach { line: $line }),
+            "endforeach" => $tokens.push(Token::EndForeach),
+            "as" => $tokens.push(Token::As($line)),
+            "insteadof" => $tokens.push(Token::Insteadof),
+            "isset" => $tokens.push(Token::Isset),
+            "empty" => $tokens.push(Token::Empty),
+            "unset" => $tokens.push(Token::Unset),
+            "match" => $tokens.push(Token::Match($line)),
+            "try" => $tokens.push(Token::Try),
+            "catch" => $tokens.push(Token::Catch),
+            "finally" => $tokens.push(Token::Finally),
+            "throw" => {
+                $tokens.push(Token::Throw(u32::try_from($line).unwrap_or(u32::MAX)));
+            }
+            "class" => $tokens.push(Token::Class),
+            "new" => {
+                $tokens.push(Token::New(u32::try_from($line).unwrap_or(u32::MAX)));
+            }
+            "public" => $tokens.push(Token::Public),
+            "protected" => $tokens.push(Token::Protected),
+            "private" => $tokens.push(Token::Private),
+            "extends" => $tokens.push(Token::Extends),
+            "static" => $tokens.push(Token::Static($line)),
+            "instanceof" => $tokens.push(Token::Instanceof),
+            "const" => $tokens.push(Token::Const),
+            "interface" => $tokens.push(Token::Interface),
+            "trait" => $tokens.push(Token::Trait),
+            "implements" => $tokens.push(Token::Implements),
+            "abstract" => $tokens.push(Token::Abstract($line)),
+            "final" => $tokens.push(Token::Final($line)),
+            spelling if spelling.eq_ignore_ascii_case("enum") => {
+                $tokens.push(Token::Enum {
+                    name: $ident.clone(),
+                    line: $line,
+                });
+            }
+            "declare" => $tokens.push(Token::Declare),
+            "namespace" => $tokens.push(Token::Namespace),
+            "yield" => $tokens.push(Token::Yield($line)),
+            "from" => $tokens.push(Token::From),
+            "fn" => $tokens.push(Token::Fn($line)),
+            "use" => $tokens.push(Token::Use($line)),
+            "print" => $tokens.push(Token::Print),
+            "global" => $tokens.push(Token::Global),
+            "clone" => $tokens.push(Token::Clone($line)),
+            "include" => $tokens.push(Token::Include),
+            "include_once" => $tokens.push(Token::IncludeOnce),
+            "require" => $tokens.push(Token::Require),
+            "require_once" => $tokens.push(Token::RequireOnce),
+            "and" => $tokens.push(Token::LogicalAnd),
+            "or" => $tokens.push(Token::LogicalOr),
+            "xor" => $tokens.push(Token::LogicalXor),
+            _ => $otherwise,
+        }
+    };
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     OpenTag, // <?php
@@ -452,23 +538,29 @@ impl<'a> Lexer<'a> {
         self
     }
 
-    /// Tokenize a filesystem or stream-backed source unit. Unlike a primary
-    /// CLI source, an included file may begin with inline HTML or consist only
-    /// of text; PHP emits those bytes before entering the first long PHP tag.
-    pub(crate) fn tokenize_included_source(&mut self) -> Result<Vec<Token>, String> {
-        let Some(open) = self.src.windows(5).position(|window| window == b"<?php") else {
+    /// Tokenize a filesystem or stream-backed source unit, including initial
+    /// text. Primary scripts and included files share the same segment policy.
+    pub fn tokenize_included_source(&mut self) -> Result<Vec<Token>, String> {
+        if self.pos == 0 && self.src.starts_with(b"#!") {
+            self.pos = self
+                .src
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(self.src.len(), |end| end + 1);
+        }
+        let initial_text = self.pos;
+        if self.is_long_open_tag(self.pos) {
+            return self.tokenize();
+        }
+        let Some(open) = self.next_long_open_tag(self.pos) else {
             let mut tokens = vec![Token::OpenTag];
-            self.emit_inline_html(&mut tokens, 0, self.src.len());
+            self.emit_inline_html(&mut tokens, initial_text, self.src.len());
             tokens.push(Token::Eof);
             self.pos = self.src.len();
             return Ok(tokens);
         };
-        if open == 0 {
-            return self.tokenize();
-        }
-
         let mut tokens = vec![Token::OpenTag];
-        self.emit_inline_html(&mut tokens, 0, open);
+        self.emit_inline_html(&mut tokens, initial_text, open);
         self.pos = open;
         let php_tokens = self.tokenize()?;
         tokens.extend(php_tokens.into_iter().skip(1));
@@ -483,7 +575,7 @@ impl<'a> Lexer<'a> {
         let _ = self.skip_whitespace().map_err(|error| error.message)?;
 
         // Expect <?php opening tag
-        if self.starts_with(b"<?php") {
+        if self.is_long_open_tag(self.pos) {
             self.pos += 5;
             tokens.push(Token::OpenTag);
         } else {
@@ -951,6 +1043,14 @@ impl<'a> Lexer<'a> {
                             Token::Backslash | Token::DoubleColon | Token::Arrow | Token::NullSafe
                         )
                     );
+                    let mixed_keyword =
+                        ident.len() <= 16 && ident.bytes().any(|byte| byte.is_ascii_uppercase());
+                    if mixed_keyword
+                        && self.preserve_keyword_spelling(&tokens, is_member_name, &ident)
+                    {
+                        tokens.push(Token::Identifier(ident, line));
+                        continue;
+                    }
                     if !is_member_name
                         && ident.eq_ignore_ascii_case("b")
                         && self.starts_with(b"<<<")
@@ -1021,85 +1121,13 @@ impl<'a> Lexer<'a> {
                         tokens.push(Token::Identifier(ident, line));
                         continue;
                     }
-                    match ident.as_str() {
-                        "echo" => {
-                            tokens.push(Token::Echo { line });
+                    push_keyword!(ident.as_str(), ident, line, tokens, {
+                        if mixed_keyword {
+                            Self::push_mixed_keyword(ident, line, &mut tokens);
+                        } else {
+                            tokens.push(Token::Identifier(ident, line));
                         }
-                        "function" => tokens.push(Token::Function(line)),
-                        "return" => tokens.push(Token::Return { line }),
-                        "if" => tokens.push(Token::If),
-                        "else" => tokens.push(Token::Else),
-                        "elseif" => tokens.push(Token::ElseIf),
-                        "endif" => tokens.push(Token::EndIf),
-                        "while" => tokens.push(Token::While),
-                        "endwhile" => tokens.push(Token::EndWhile),
-                        "for" => tokens.push(Token::For),
-                        "endfor" => tokens.push(Token::EndFor),
-                        "do" => tokens.push(Token::Do),
-                        "break" => tokens.push(Token::Break { line }),
-                        "continue" => tokens.push(Token::Continue { line }),
-                        "switch" => tokens.push(Token::Switch),
-                        "endswitch" => tokens.push(Token::EndSwitch),
-                        "case" => tokens.push(Token::Case(line)),
-                        "default" => tokens.push(Token::Default(line)),
-                        ident if ident.eq_ignore_ascii_case("null") => tokens.push(Token::Null),
-                        ident if ident.eq_ignore_ascii_case("true") => tokens.push(Token::True),
-                        ident if ident.eq_ignore_ascii_case("false") => tokens.push(Token::False),
-                        "array" => tokens.push(Token::ArrayKw),
-                        "foreach" => tokens.push(Token::Foreach { line }),
-                        "endforeach" => tokens.push(Token::EndForeach),
-                        "as" => tokens.push(Token::As(line)),
-                        "insteadof" => tokens.push(Token::Insteadof),
-                        "isset" => tokens.push(Token::Isset),
-                        "empty" => tokens.push(Token::Empty),
-                        "unset" => tokens.push(Token::Unset),
-                        "match" => tokens.push(Token::Match(line)),
-                        "try" => tokens.push(Token::Try),
-                        "catch" => tokens.push(Token::Catch),
-                        "finally" => tokens.push(Token::Finally),
-                        "throw" => {
-                            tokens.push(Token::Throw(u32::try_from(line).unwrap_or(u32::MAX)));
-                        }
-                        "class" => tokens.push(Token::Class),
-                        "new" => {
-                            tokens.push(Token::New(u32::try_from(line).unwrap_or(u32::MAX)));
-                        }
-                        "public" => tokens.push(Token::Public),
-                        "protected" => tokens.push(Token::Protected),
-                        "private" => tokens.push(Token::Private),
-                        "extends" => tokens.push(Token::Extends),
-                        "static" => tokens.push(Token::Static(line)),
-                        "instanceof" => tokens.push(Token::Instanceof),
-                        "const" => tokens.push(Token::Const),
-                        "interface" => tokens.push(Token::Interface),
-                        "trait" => tokens.push(Token::Trait),
-                        "implements" => tokens.push(Token::Implements),
-                        "abstract" => tokens.push(Token::Abstract(line)),
-                        "final" => tokens.push(Token::Final(line)),
-                        ident if ident.eq_ignore_ascii_case("enum") => {
-                            tokens.push(Token::Enum {
-                                name: ident.to_string(),
-                                line,
-                            });
-                        }
-                        "declare" => tokens.push(Token::Declare),
-                        "namespace" => tokens.push(Token::Namespace),
-                        "yield" => tokens.push(Token::Yield(line)),
-                        "from" => tokens.push(Token::From),
-                        "fn" => tokens.push(Token::Fn(line)),
-                        "use" => tokens.push(Token::Use(line)),
-                        "print" => tokens.push(Token::Print),
-                        "global" => tokens.push(Token::Global),
-                        "clone" => tokens.push(Token::Clone(line)),
-                        "include" => tokens.push(Token::Include),
-                        "include_once" => tokens.push(Token::IncludeOnce),
-                        "require" => tokens.push(Token::Require),
-                        "require_once" => tokens.push(Token::RequireOnce),
-                        "and" => tokens.push(Token::LogicalAnd),
-                        "or" => tokens.push(Token::LogicalOr),
-                        "xor" => tokens.push(Token::LogicalXor),
-                        _ => tokens.push(Token::Identifier(ident, line)),
-                    }
+                    });
                 }
                 b'^' => {
                     if self.peek_next() == Some(b'=') {
@@ -1643,10 +1671,7 @@ impl<'a> Lexer<'a> {
             inline_start += 1;
         }
 
-        let next_open = self.src[inline_start..]
-            .windows(5)
-            .position(|window| window == b"<?php")
-            .map(|offset| inline_start + offset);
+        let next_open = self.next_long_open_tag(inline_start);
         let inline_end = next_open.unwrap_or(self.src.len());
         self.emit_inline_html(tokens, inline_start, inline_end);
         self.pos = match next_open {
@@ -1654,6 +1679,141 @@ impl<'a> Lexer<'a> {
             None => self.src.len(),
         };
         Ok(())
+    }
+
+    #[inline]
+    fn is_long_open_tag(&self, position: usize) -> bool {
+        self.src
+            .get(position..position + 5)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case(b"<?php"))
+            && self
+                .src
+                .get(position + 5)
+                .is_none_or(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
+    }
+
+    #[cold]
+    fn next_long_open_tag(&self, start: usize) -> Option<usize> {
+        self.src[start..]
+            .windows(5)
+            .enumerate()
+            .find_map(|(offset, tag)| {
+                (tag[0] == b'<' && self.is_long_open_tag(start + offset)).then_some(start + offset)
+            })
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zlexical"))]
+    fn push_mixed_keyword(ident: String, line: usize, tokens: &mut Vec<Token>) {
+        debug_assert!(ident.len() <= 16);
+        let mut folded = [0u8; 16];
+        for (out, byte) in folded.iter_mut().zip(ident.bytes()) {
+            *out = byte.to_ascii_lowercase();
+        }
+        let keyword = std::str::from_utf8(&folded[..ident.len()]).unwrap_or(&ident);
+        push_keyword!(keyword, ident, line, tokens, {
+            tokens.push(Token::Identifier(ident, line));
+        });
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn preserve_keyword_spelling(&self, tokens: &[Token], member: bool, name: &str) -> bool {
+        if member {
+            return true;
+        }
+        // Exit already stores original spelling for relaxed identifier contexts
+        // and keeps canonical reserved-word diagnostics in declarations.
+        if name.eq_ignore_ascii_case("exit") || name.eq_ignore_ascii_case("die") {
+            return false;
+        }
+        let mut prior = tokens
+            .iter()
+            .rev()
+            .filter(|token| !matches!(token, Token::DocComment(_)));
+        let last = prior.next();
+        if matches!(
+            last,
+            Some(Token::Backslash | Token::DoubleColon | Token::Arrow | Token::NullSafe)
+        ) {
+            return true;
+        }
+        if matches!(
+            last,
+            Some(Token::Function(_) | Token::Const | Token::As(_) | Token::Namespace)
+        ) || (matches!(last, Some(Token::Ampersand(_)))
+            && matches!(prior.next(), Some(Token::Function(_))))
+        {
+            return true;
+        }
+        let after_type = matches!(
+            last,
+            Some(
+                Token::Identifier(_, _)
+                    | Token::ArrayKw
+                    | Token::Null
+                    | Token::True
+                    | Token::False
+                    | Token::RParen
+            )
+        );
+        if !after_type
+            && !matches!(
+                last,
+                Some(Token::LParen(_) | Token::Comma(_) | Token::Case(_))
+            )
+        {
+            return false;
+        }
+        let mut rest = &self.src[self.pos..];
+        loop {
+            while rest.first().is_some_and(u8::is_ascii_whitespace) {
+                rest = &rest[1..];
+            }
+            if rest.starts_with(b"/*") {
+                let Some(end) = rest[2..].windows(2).position(|part| part == b"*/") else {
+                    return false;
+                };
+                rest = &rest[end + 4..];
+            } else if rest.starts_with(b"//")
+                || (rest.starts_with(b"#") && !rest.starts_with(b"#["))
+            {
+                let Some(end) = rest.iter().position(|byte| matches!(byte, b'\r' | b'\n')) else {
+                    return false;
+                };
+                rest = &rest[end..];
+            } else {
+                if after_type {
+                    if !rest.starts_with(b"=") || rest.starts_with(b"==") || rest.starts_with(b"=>")
+                    {
+                        return false;
+                    }
+                    // A typed constant's identifier follows its type rather
+                    // than `const`. Do not confuse an array key with a name.
+                    for token in prior {
+                        match token {
+                            Token::Const => return true,
+                            Token::Semicolon(_) | Token::LBrace(_) | Token::RBrace => return false,
+                            _ => {}
+                        }
+                    }
+                    return false;
+                }
+                return match last {
+                    Some(Token::Case(_)) => {
+                        rest.starts_with(b";")
+                            || (rest.starts_with(b"=")
+                                && !rest.starts_with(b"==")
+                                && !rest.starts_with(b"=>"))
+                    }
+                    Some(Token::Comma(_)) if rest.starts_with(b"=") => {
+                        !rest.starts_with(b"==") && !rest.starts_with(b"=>")
+                    }
+                    _ => rest.starts_with(b":") && !rest.starts_with(b"::"),
+                };
+            }
+        }
     }
 
     fn emit_inline_html(&self, tokens: &mut Vec<Token>, inline_start: usize, inline_end: usize) {
@@ -1840,6 +2000,60 @@ mod tests {
                 Token::Eof,
             ]
         );
+    }
+
+    #[test]
+    fn lexical_source_long_tag_boundaries() {
+        for gap in ["", " ", "\t", "\r", "\n"] {
+            let source = format!("<?pHp{gap}");
+            assert_eq!(
+                Lexer::new(&source).tokenize_included_source().unwrap(),
+                vec![Token::OpenTag, Token::Eof]
+            );
+        }
+        for suffix in ["ish", "\u{b}", "\u{c}", "/*comment*/"] {
+            let source = format!("<?pHp{suffix}");
+            let tokens = Lexer::new(&source).tokenize_included_source().unwrap();
+            assert!(tokens.iter().any(|token| matches!(token,
+                Token::StringLiteral(text) if text == &source)));
+        }
+        let tokens = Lexer::new("\n<?PHP ECHO __LINE__; ?>\r\n<?php echo 2;")
+            .tokenize_included_source()
+            .unwrap();
+        assert!(tokens.contains(&Token::Echo { line: 2 }));
+        assert!(tokens.contains(&Token::Echo { line: 3 }));
+    }
+
+    #[test]
+    fn lexical_source_case_folding_keeps_names_and_keyword_boundaries() {
+        let tokens = Lexer::new("<?PHP IF (TRUE) { RETURN NEW Box; } ELSE { ECHO 'no'; }")
+            .tokenize()
+            .unwrap();
+        assert!(tokens.contains(&Token::If));
+        assert!(tokens.contains(&Token::Return { line: 1 }));
+        assert!(tokens.contains(&Token::New(1)));
+        assert!(tokens.contains(&Token::Else));
+        let tokens = Lexer::new("<?php $items = [TrUe => 1, FaLsE => 2, NuLl => 3];")
+            .tokenize()
+            .unwrap();
+        assert!(tokens.contains(&Token::True));
+        assert!(tokens.contains(&Token::False));
+        assert!(tokens.contains(&Token::Null));
+        let tokens = Lexer::new("<?php function TRUE() {} run(IF: 1, NULL: 2); $r-> /*x*/ NEW(); Terms::INTERFACE; enum E { case NEW; }")
+            .tokenize().unwrap();
+        for name in ["TRUE", "IF", "NULL", "NEW", "INTERFACE"] {
+            assert!(
+                tokens.iter().any(|token| matches!(token,
+                Token::Identifier(text, _) if text == name)),
+                "{name}"
+            );
+        }
+        let tokens = Lexer::new("<?php $IF = 'a'; $if = 'b'; InterfaceSuffix();")
+            .tokenize()
+            .unwrap();
+        assert!(tokens.contains(&Token::Variable("IF".into(), 1)));
+        assert!(tokens.contains(&Token::Variable("if".into(), 1)));
+        assert!(tokens.contains(&Token::Identifier("InterfaceSuffix".into(), 1)));
     }
 
     #[test]
@@ -2100,6 +2314,21 @@ mod tests {
                 Token::Eof,
             ]
         );
+    }
+
+    #[test]
+    fn mixed_exit_declarations_keep_the_canonical_keyword_token() {
+        let tokens = Lexer::new("<?php const DIE = 1; function ExIt() {} named(DiE: 1);")
+            .tokenize()
+            .unwrap();
+        let names: Vec<_> = tokens
+            .iter()
+            .filter_map(|token| match token {
+                Token::Exit { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, ["DIE", "ExIt", "DiE"]);
     }
 
     #[test]
