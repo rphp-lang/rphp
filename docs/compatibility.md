@@ -8,71 +8,68 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
-`recursive-directory-glob-cursor-projection-contracts`, against `67dc97cf`:
-**+13/-0** SPL passes, independently confirmed by PHP 8.5.10. SPL reaches
-**620 pass / 125 fail / 31 unsupported / 8 skip / 1 XFAIL**. Core retains
-**6,446 pass / 335 fail / 182 skip / 211 unsupported** and exact pass sets.
-Selected coverage is **7,959 cases: 7,066 pass / 460 fail**, plus 190 skips,
-242 unsupported and one XFAIL; this is not complete PHP coverage.
+`recursive-callback-filter-projection-contracts`, against `3bb992f1`:
+**+12/-0**, independently confirmed by PHP 8.5.10 (ten SPL, two Zend).
+SPL reaches **630 pass / 115 fail / 31 unsupported / 8 skip / 1 XFAIL**;
+core reaches **6,448 pass / 333 fail / 182 skip / 211 unsupported**.
+Selected coverage is **7,959 cases: 7,078 pass / 448 fail**, plus 190 skips,
+242 unsupported and one XFAIL. This is not complete PHP coverage.
 
-RecursiveDirectoryIterator reuses native directory cursors for child factories,
-subpaths, flags and symlink policy. GlobIterator retains an immutable raw-byte
-match snapshot with separate physical and visible positions. Original tests
-cover construction, clone, EOF, references/COW, retirement and direct/dynamic/
-first-class method lookup ordering, including malformed callbacks and magic
-methods. No PHP call or retirement occurs while native state is borrowed.
+CallbackFilterIterator, RecursiveFilterIterator, RecursiveCallbackFilterIterator
+and ParentIterator reuse the existing filter loop and traced delegate storage.
+Original oracles cover lazy selection, callable identity/scope, weak conversion,
+reference diagnostics, subclass child factories, reentry, COW, cycles and
+argument/result retirement, including destructor exceptions. No PHP call or
+retirement crosses a borrowed native state. Canonical unpack arity is preserved.
 
-Profile-backed prerequisites bind actual native method bodies in existing cold
-metadata instead of rescanning the registry for complete file-family parents;
-user declarations and incomplete descriptors keep canonical inheritance.
-Cached typed-int writes read literals directly, preserving other operands and
-reference handling. No common Value/VM layout, opcode, JIT admission,
-dependency or unsafe-ceiling change. Rejected hypotheses and timings remain
-in the technical record, without rerolling unchanged failed measurements.
+Profile-backed work removal covers native-parent alias discovery, exact native
+recursive cursor checks, primitive constructor/default projection and hashing
+of engine-only declaration names. Public symbol tables retain keyed hashing.
+No common Value/VM layout, opcode, JIT admission, dependency or unsafe-ceiling
+change. Rejected candidates remain recorded; no unchanged failed timing reroll.
 
-All **1,078 focused tests**, including **728 library tests** and **27 new
-original CLI cases**, pass with normal/JIT-disabled oracle agreement.
-One frozen checked matrix passes **5,509/5,177/5,580/5,602/5,653** tests
+All **1,160 focused tests** (729 library, 41 new original CLI cases plus
+adjacent suites) pass; originals agree with PHP with JIT enabled and disabled.
+One frozen checked matrix passes **5,551/5,219/5,622/5,644/5,695** tests
 (13/13/13/13/16 ignored, none filtered), plus all-features/all-targets.
-The supplying set has 11 passes and four explicit independent holdouts;
-two adjacent gains bring the total to thirteen. Exact no-loss, independent
-PHP gain checks, prior originals, Composer/Symfony S0-S3, runner/unsafe
-self-tests, formatting and public hygiene pass. Unsafe stays **1,622/289**.
-No pass was lost, no process hazard appeared and no expected output changed.
-Two known failures advance from runtime to output: `bug65069` needs general
-open_basedir enforcement; `gh12721` needs native foreach-consumer identity/
-retirement. Recursive filters and resource inventory remain separate holdouts.
+Exact no-loss, all twelve independent PHP gain checks, prior originals,
+Composer/Symfony S0-S3, runner/unsafe self-tests and public hygiene pass.
+Unsafe stays **1,622/289**. No lost pass, process hazard, changed expectation or
+moved failure stage. The validation-only stop on two unexpected Zend gains
+was resolved by confirming their callback-filter GC/reference boundary against
+PHP, without changing production sources or repeating successful gates.
 
-All **105 established 32-pair controls** have exact outputs and meet fixed
+All **109 established 32-pair controls** have exact outputs and meet fixed
 cumulative common **+1.65%** / pay-use **+5%** limits. Against `9cddc39c`,
-common peaks at **+1.020%**, pay-use at **+4.230%**. The only nominal +1%
-common finding is native-cycle +1.020%. Five immediate-parent common findings
-exceed +1% (maximum +4.389%); complete values remain in the performance record,
-not a moving budget. All seven first-present/fixed anchors remain unchanged.
-New API candidate/PHP ratios (eight pairs) are children **1.937**, subpaths
-**1.932**, glob snapshot **1.241**, glob rewind **1.679**: absolute costs,
-not absent-parent regressions or PHP-speed parity. The user-authorized shared
-host guard records two background events; this is not isolated-host evidence.
+common peaks at **+1.299%**, pay-use at **+3.335%**. Startup is the sole nominal
++1% common finding; two immediate-parent common findings exceed +1%
+(maximum +1.244%). All eight fixed/first-present anchors remain unchanged.
+New API candidate/PHP ratios (eight pairs) are callback **5.143**, recursive
+callback **10.776**, recursive override **10.960**, parent **5.106**: absolute
+costs, not absent-parent regressions or PHP-speed parity. The user-authorized
+shared-host guard records two background events, not isolated-host evidence.
 No private host was configured. Cleanup runs between configurations and after
-full/release/perf gates; superseded builds are removed after acceptance.
+full/release/perf gates; only regeneratable superseded builds are removed.
 
 SHA-256 evidence:
 
-- Release: `1e38377fbe99b267ed86d88916b3cb910301b6bb09525f366f9e47c3602f814d`.
-- Complete technical record: `b33bce483b312497cdd7c26f3cf4b21ff9ef208fdc1b736ad845a8f43961e1d4`.
-- Matrix: `2ea33c8991c9a2394b1167228ec78c40bcd6f9ef2324931ca9bfa9b022fdd979`.
-- SPL manifest / pass set: `9aa250b8294a4c1bcf668f5e41f9e5be349b2f280bca669a8f8aeba440095875` / `f34cdf2b53d1e4689978e9e8f5d2ec2b1ea1b42a7c988c2167df648a41854b6d`.
-- Zend/lang manifest / pass set: `af85c3ed48a5e4902174ff7a684969551ad5ce92d5aecf490a5b228a89158462` / `b99f862eabc6857b7347b6f378368ce342ff70acec02d7d2732e8f20daa5fde3`.
-- Strings/array manifest / pass set: `fc71cac0bf995de5884b0e1187aa44ef48dfd814fef423711d32c479d9e03e93` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
-- Reviewed performance / raw timing: `f859df059baf717b6012fe83bca032de84172626b8759cdc5d24715b1f6dcc9f` / `7047c98251601b6fb5c34c9c849188a00d01a0776702f0f74191d7aa19eb63d1`.
+- Release: `57fbcde7fbd83e502df99cf4513bdf2a5ba57dc7dd4ec8c67caffabd9692e66e`.
+- Complete technical record: `a4e4cc959901b95ae7db5c9db910c5f4987ce02116d60f7a1538b2cac1ab1cf1`.
+- Matrix: `9a719a082f9928855eba53f124dde67bc2539863309d0a8506607e7ae59ef9a5`.
+- SPL manifest / pass set: `dbbdb6ad7b8e66bace2bba71f5cf631a2e4e46f5495675a1f3b5826673fc8418` / `e43867911014d48a123a71c0f870c8cfa431286ed4c1c2a6961aa28d35674e2d`.
+- Zend/lang manifest / pass set: `4acbaa214d6021906519b87c5ecc8241e939e75bc52ba4ae3492e95098bf28d2` / `44e7000e60fa83566a9a4fe8d06e602486e2d063299a290f62c352a213f5f7f1`.
+- Strings/array manifest / pass set: `11ef353e249031e32b32b7dab1d2c8df7fd45005675fcec5d5a3e245786d7673` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+- Reviewed performance / raw timing: `d2c13cbed99942e9421068da251d3982925ef18df23bc0c2240c96955ec7f35d` / `d9432cdbeda134e90b3ef51b9b7b2be88421718d50044e48fd96020c741308aa`.
 
-Next read-only admission confirms ten shared-cause PHP-pass/current-fail
-callback/recursive-filter cases, with two independent broad/parser holdouts
-(`a70ec2251f330f0bb417ab7e4e05b3e6ef9d8b629ea28eca734da73459fb311b`).
-Reuse the existing filter loop and traced recursive delegate state; prove
-constructor/callback/child-factory, reference and cycle behavior with original
-oracles before implementation. General shutdown, unrelated iterators,
-suspension, 32-bit/OOM and whole-class/PHP claims remain separate.
+Next read-only admission confirms 21 PHP-pass/current-fail object-backed
+ArrayObject candidates (`2554e5c697d81112385229ff6eb61835b815c9748163604184732ecd89c446d6`).
+Prove a shared projection/commit boundary with original oracles and at least ten
+reachable gains before implementation; unrelated serialization, internal-class
+behavior, parser, shutdown, suspension and 32-bit/OOM remain separate.
+
+The preceding recursive-directory/glob checkpoint added thirteen SPL passes;
+its complete technical record remains
+`b33bce483b312497cdd7c26f3cf4b21ff9ef208fdc1b736ad845a8f43961e1d4`.
 
 The preceding recursive caching/tree checkpoint added thirteen SPL passes;
 its complete technical record remains

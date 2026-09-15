@@ -970,6 +970,9 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             internal_method_display_name(owner, name).to_ascii_lowercase(),
             pointer,
         );
+        if owner == "IteratorIterator" {
+            eg.bind_latest_internal_method_body(owner, name, pointer);
+        }
         eg.method_declaring_class.insert(pointer, owner.into());
         eg.register_internal_function_display_name(
             pointer,

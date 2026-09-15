@@ -816,6 +816,10 @@ pub(super) fn register_method(
     let pointer = &function.common as *const FunctionCommon;
     eg.function_table
         .insert(internal_method_lookup_name(owner, name), pointer);
+    // These registrations publish a real boxed body, not a declaration stub.
+    // Retain its identity for complete native-parent inheritance so a later
+    // child need not discover the same methods by scanning the whole table.
+    eg.bind_latest_internal_method_body(owner, name, pointer);
     eg.method_declaring_class.insert(pointer, owner.into());
     eg.register_internal_function_display_name(pointer, internal_method_display_name(owner, name));
     eg.register_internal_function_reflection_metadata(

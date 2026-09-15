@@ -970,7 +970,7 @@ fn report_scalar_coercion_diagnostic(
 }
 
 #[cold]
-fn report_scalar_coercion_diagnostic_at(
+pub(crate) fn report_scalar_coercion_diagnostic_at(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     source: &Value,

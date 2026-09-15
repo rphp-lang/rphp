@@ -418,7 +418,8 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     use ParamTypeHint::{ClassName, Int, Mixed, Nullable, Void};
     let mut class = empty_internal_type("AppendIterator", vec![], false, false);
     class.parent = Some("IteratorIterator".into());
-    eg.register_class(class).unwrap();
+    eg.register_class_with_complete_native_parent(class)
+        .unwrap();
     let mut functions = Vec::with_capacity(7);
     for (name, handler, result) in [
         (

@@ -20,6 +20,7 @@ pub(super) mod fixed_array;
 mod heap;
 pub(super) mod iterator_delegate;
 pub(super) mod object_storage;
+mod recursive_filter;
 mod recursive_iterator;
 mod recursive_tree;
 mod regex_iterator;
@@ -3147,6 +3148,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     }
     eg.register_class(recursive_driver).unwrap();
     funcs.extend(recursive_iterator::register(eg));
+    funcs.extend(recursive_filter::register(eg));
     funcs.extend(recursive_tree::register(eg));
     eg.register_class(empty_internal_type(
         "SplFileInfo",

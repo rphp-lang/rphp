@@ -200,6 +200,41 @@ impl std::hash::Hasher for InternalFunctionHasher {
 type InternalFunctionMap<T> =
     HashMap<*const FunctionCommon, T, std::hash::BuildHasherDefault<InternalFunctionHasher>>;
 
+/// This table accepts only engine-owned declaration names, never PHP-provided
+/// insertions. Hash complete words without the public symbol tables' keyed
+/// hashing cost. Arbitrary lookup bytes still require exact key equality;
+/// collisions cannot merge names or grow this bounded native registry.
+#[derive(Default)]
+struct InternalDeclarationHasher(u64);
+
+impl std::hash::Hasher for InternalDeclarationHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        let mut value = self.0;
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^ (value >> 31)
+    }
+
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        let mut value = self.0 ^ bytes.len() as u64;
+        let mut words = bytes.chunks_exact(8);
+        for word in &mut words {
+            value = value.rotate_left(5)
+                ^ u64::from_le_bytes(word.try_into().expect("complete name word"));
+            value = value.wrapping_mul(0x100_0000_01b3);
+        }
+        for &byte in words.remainder() {
+            value = (value ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3);
+        }
+        self.0 = value;
+    }
+}
+
+type InternalDeclarationMap<T> =
+    HashMap<&'static str, T, std::hash::BuildHasherDefault<InternalDeclarationHasher>>;
+
 /// Sparse request-startup metadata for internal callables. Extending the
 /// existing boxed owner keeps ExecutorGlobals and every hot ABI layout stable.
 #[derive(Default)]
@@ -207,7 +242,7 @@ struct InternalCallableMetadata {
     functions: InternalFunctionMap<InternalFunctionReflectionMetadata>,
     // Only builtin declarations enter this table. Their immutable spellings
     // outlive every request; the signatures themselves remain request-owned.
-    methods: HashMap<&'static str, Vec<InternalMethodContract>>,
+    methods: InternalDeclarationMap<Vec<InternalMethodContract>>,
 }
 
 #[derive(Clone)]
@@ -1756,7 +1791,9 @@ impl ExecutorGlobals {
             .get_or_insert_with(|| Box::new(InternalCallableMetadata::default()));
         metadata
             .functions
-            .reserve(448usize.saturating_sub(metadata.functions.len()));
+            // Callback/recursive filters cross the previous 448-entry
+            // envelope. Reserve the final table once, before publication.
+            .reserve(449usize.saturating_sub(metadata.functions.len()));
         metadata
             .methods
             // FilterIterator/RegexIterator cross the 28-owner envelope.
@@ -1785,7 +1822,8 @@ impl ExecutorGlobals {
         // SplTempFileObject shares the existing file cursor and stream backend.
         // Recursive caching and tree projection add two cold declarations.
         // RecursiveDirectoryIterator and GlobIterator reuse the native cursor.
-        let class_capacity = 123 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        // Callback and recursive filter policies add four native children.
+        let class_capacity = 127 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;
@@ -5919,7 +5957,10 @@ impl ExecutorGlobals {
                 return None;
             }
             count += contracts.len();
-            owners.push(contracts);
+            // One spelling classification per declaration batch, not per
+            // pair while looking for overridden ancestor methods below.
+            let ascii_names = contracts.iter().all(|method| method.name.is_ascii());
+            owners.push((contracts, ascii_names));
             owner = definition
                 .parent
                 .as_deref()
@@ -5927,10 +5968,22 @@ impl ExecutorGlobals {
         }
         let prefix = Self::canonical_method_owner_prefix(&child.name);
         let mut aliases = Vec::with_capacity(count);
-        // Ancestors first, then actual overrides: duplicate keys deliberately
-        // update the same canonical entry without a separate lookup or index.
-        for contracts in owners.into_iter().rev() {
-            for method in contracts {
+        // Ancestors first, but a nearer declaration already determines the
+        // final binding. Avoid allocating and hashing an alias only to replace
+        // it with that override during this same startup batch.
+        for (index, (contracts, ascii_names)) in owners.iter().enumerate().rev() {
+            for method in *contracts {
+                if owners[..index].iter().any(|(nearer, nearer_ascii)| {
+                    nearer.iter().any(|declaration| {
+                        if *ascii_names && *nearer_ascii {
+                            declaration.name.eq_ignore_ascii_case(method.name)
+                        } else {
+                            declaration.name.to_lowercase() == method.name.to_lowercase()
+                        }
+                    })
+                }) {
+                    continue;
+                }
                 let mut key = String::with_capacity(prefix.len() + method.name.len());
                 key.push_str(&prefix);
                 key.push_str(method.name);
@@ -7159,12 +7212,6 @@ impl ExecutorGlobals {
 
                 // Inherit methods: collect ALL parent::* entries from function_table
                 // (includes transitively inherited methods from grandparents)
-                let child_method_names: std::collections::HashSet<String> = class_def
-                    .methods
-                    .iter()
-                    .map(|(n, _, _, _, _)| n.to_lowercase())
-                    .collect();
-                let parent_prefix = Self::canonical_method_owner_prefix(parent_name);
                 // The registry already stores canonical lowercase method
                 // suffixes. Build each destination key once, after deciding
                 // whether it is inherited, instead of allocating a suffix,
@@ -7173,6 +7220,15 @@ impl ExecutorGlobals {
                 let inherited = if let Some(aliases) = native_parent_aliases {
                     aliases
                 } else {
+                    // Complete native aliases already contain the final
+                    // inherited methods. Build search-only state solely for
+                    // the canonical discovery path that consumes it.
+                    let child_method_names: std::collections::HashSet<String> = class_def
+                        .methods
+                        .iter()
+                        .map(|(n, _, _, _, _)| n.to_lowercase())
+                        .collect();
+                    let parent_prefix = Self::canonical_method_owner_prefix(parent_name);
                     let mut inherited = Vec::new();
                     self.function_table.iter().for_each(|(k, v)| {
                         // Most registry keys belong to another owner (or a
@@ -11278,7 +11334,7 @@ mod stdlib_capacity_tests {
     }
 
     #[test]
-    fn native_file_parent_inheritance_preserves_the_exact_registered_alias_set() {
+    fn native_parent_inheritance_preserves_the_exact_registered_alias_set() {
         let mut eg = ExecutorGlobals::new();
         let _functions = crate::stdlib::register_stdlib(&mut eg);
         for parent in [
@@ -11286,8 +11342,18 @@ mod stdlib_capacity_tests {
             "SplFileObject",
             "DirectoryIterator",
             "FilesystemIterator",
+            "IteratorIterator",
+            "FilterIterator",
+            "CallbackFilterIterator",
+            "RecursiveCallbackFilterIterator",
+            "ParentIterator",
+            "CachingIterator",
+            "RecursiveCachingIterator",
+            "AppendIterator",
+            "RecursiveIteratorIterator",
+            "RecursiveTreeIterator",
         ] {
-            let source = format!("<?php class DescriptorChild extends {parent} {{}}");
+            let source = format!("<?php abstract class DescriptorChild extends {parent} {{}}");
             let tokens = crate::lexer::Lexer::new(&source).tokenize().unwrap();
             let statements = crate::parser::Parser::new(tokens).parse().unwrap();
             let compiled = crate::compiler::compile::Compiler::new()
@@ -11311,6 +11377,7 @@ mod stdlib_capacity_tests {
                 })
                 .collect();
             let projected = eg.native_parent_body_aliases(&child).unwrap();
+            assert_eq!(projected.len(), expected.len(), "no redundant aliases");
             let projected: std::collections::HashMap<_, _> = projected
                 .into_iter()
                 .map(|(name, body, hook)| {
@@ -11782,6 +11849,57 @@ mod stdlib_capacity_tests {
             assert_eq!(actual.get(&key), expected.get(&key));
         }
         assert_eq!(actual.get(&std::ptr::without_provenance(3)), None);
+    }
+
+    #[test]
+    fn native_declaration_hash_preserves_exact_keys_and_borrowed_lookups() {
+        use std::hash::{BuildHasher, Hasher};
+        let mut actual = super::InternalDeclarationMap::default();
+        let mut expected = std::collections::HashMap::new();
+        for (index, key) in [
+            "",
+            "A",
+            "a",
+            "abcdefgh",
+            "abcdefghi",
+            "abcdefgh\0",
+            "abcdefgh\0\0",
+            "CallbackFilterIterator",
+            "RecursiveCallbackFilterIterator",
+            "ParentIterator",
+            "\u{3a3}",
+            "\u{3c3}",
+            "\u{130}",
+            "i",
+            "\0",
+            "\0\0",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(actual.insert(key, index), expected.insert(key, index));
+        }
+        actual.reserve(256);
+        for (&key, &value) in &expected {
+            let borrowed = key.to_owned();
+            assert_eq!(actual.get(borrowed.as_str()), Some(&value));
+            assert_eq!(actual.insert(key, value + 100), Some(value));
+            assert_eq!(actual.remove(borrowed.as_str()), Some(value + 100));
+        }
+        assert!(actual.is_empty());
+        // Hashing user-provided misses never changes the table. Exercise
+        // word/tail boundaries, NULs and raw bytes without unsafe loads.
+        let builder = std::hash::BuildHasherDefault::<super::InternalDeclarationHasher>::default();
+        for length in 0..65 {
+            let bytes: Vec<u8> = (0..length).map(|i| (i * 37) as u8).collect();
+            let mut first = builder.build_hasher();
+            let mut second = builder.build_hasher();
+            first.write(&bytes);
+            second.write(&bytes);
+            assert_eq!(first.finish(), second.finish());
+            assert_eq!(actual.get("UnknownDeclaration"), None);
+        }
+        assert_eq!(actual.len(), 0);
     }
 
     #[test]

@@ -943,7 +943,8 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             .constants
             .push(recursive_iterator::constant("CachingIterator", name, value));
     }
-    eg.register_class(class).unwrap();
+    eg.register_class_with_complete_native_parent(class)
+        .unwrap();
     eg.reserve_internal_method_contracts("CachingIterator", 14);
     let mut functions = Vec::with_capacity(14);
     let entries: &[(&str, InternalFunctionHandler, &[&str])] = &[
@@ -1043,7 +1044,8 @@ pub(super) fn register_recursive(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFu
     let owner = "RecursiveCachingIterator";
     let mut class = empty_internal_type(owner, vec!["RecursiveIterator".into()], false, false);
     class.parent = Some("CachingIterator".into());
-    eg.register_class(class).unwrap();
+    eg.register_class_with_complete_native_parent(class)
+        .unwrap();
     eg.reserve_internal_method_contracts(owner, 3);
     let mut functions = Vec::with_capacity(3);
     recursive_iterator::register_method(

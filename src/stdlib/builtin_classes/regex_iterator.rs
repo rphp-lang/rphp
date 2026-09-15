@@ -41,7 +41,7 @@ fn construct_filter(
 ) -> Result<(), VmError> {
     let receiver = owned_argument(ed, 0);
     let source = owned_argument(ed, 1);
-    if !validate_inner(&receiver, &source, eg, "FilterIterator") {
+    if !validate_inner(&receiver, &source, eg, "FilterIterator", "Iterator") {
         return Ok(());
     }
     install(&receiver, source, None, eg);
@@ -49,7 +49,13 @@ fn construct_filter(
 }
 
 #[cold]
-fn validate_inner(receiver: &Value, source: &Value, eg: &mut ExecutorGlobals, owner: &str) -> bool {
+pub(super) fn validate_inner(
+    receiver: &Value,
+    source: &Value,
+    eg: &mut ExecutorGlobals,
+    owner: &str,
+    expected: &str,
+) -> bool {
     if receiver
         .as_object()
         .is_some_and(|o| o.native_iterator_delegate().is_some())
@@ -63,7 +69,7 @@ fn validate_inner(receiver: &Value, source: &Value, eg: &mut ExecutorGlobals, ow
     }
     if !source
         .as_object()
-        .is_some_and(|o| eg.class_is_a(&o.class_name, "Iterator"))
+        .is_some_and(|o| eg.class_is_a(&o.class_name, expected))
     {
         typed_internal_argument_error(
             eg,
@@ -71,7 +77,7 @@ fn validate_inner(receiver: &Value, source: &Value, eg: &mut ExecutorGlobals, ow
             source,
             1,
             "iterator",
-            "Iterator",
+            expected,
         );
         return false;
     }
@@ -79,7 +85,7 @@ fn validate_inner(receiver: &Value, source: &Value, eg: &mut ExecutorGlobals, ow
 }
 
 #[cold]
-fn install(
+pub(super) fn install(
     receiver: &Value,
     inner: Value,
     regex: Option<Box<RegexIteratorState>>,
@@ -103,7 +109,7 @@ fn construct(
     let method = "RegexIterator::__construct";
     let receiver = owned_argument(ed, 0);
     let inner = owned_argument(ed, 1);
-    if !validate_inner(&receiver, &inner, eg, "RegexIterator") {
+    if !validate_inner(&receiver, &inner, eg, "RegexIterator", "Iterator") {
         return Ok(());
     }
     let pattern = owned_argument(ed, 2);
@@ -228,7 +234,11 @@ fn filter(receiver: &Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
             return Ok(());
         }
         let accepted = call_object_protocol_method(eg, receiver, "FilterIterator", "accept", &[])?;
-        if eg.exception.is_some() || accepted.is_some_and(|v| v.is_truthy()) {
+        let keep = accepted.as_ref().is_some_and(Value::is_truthy);
+        if let Some(accepted) = accepted {
+            iterator_delegate::discard(accepted, eg)?;
+        }
+        if eg.exception.is_some() || keep {
             return Ok(());
         }
         iterator_delegate::clear(receiver, eg)?;
@@ -679,7 +689,8 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     filter.parent = Some("IteratorIterator".into());
     filter.is_abstract = true;
     filter.abstract_methods.push("accept".into());
-    eg.register_class(filter).unwrap();
+    eg.register_class_with_complete_native_parent(filter)
+        .unwrap();
     let mut regex = empty_internal_type("RegexIterator", vec![], false, false);
     regex.parent = Some("FilterIterator".into());
     let mut replacement = PropertyDefinition::new(
@@ -705,7 +716,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     }
     let mut functions = Vec::with_capacity(13);
     macro_rules! method {
-        ($owner:expr, $name:expr, $handler:expr, $names:expr, $hints:expr, $defaults:expr, $result:expr $(,)?) => {
+        ($owner:expr, $name:expr, $handler:expr, $names:expr, $hints:expr, $defaults:expr, $result:expr $(,)?) => {{
             recursive_iterator::register_method(
                 eg,
                 &mut functions,
@@ -716,8 +727,12 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 $hints,
                 $defaults,
                 $result,
-            )
-        };
+            );
+            if $owner == "FilterIterator" {
+                let body = &functions.last().unwrap().common as *const FunctionCommon;
+                eg.bind_latest_internal_method_body($owner, $name, body);
+            }
+        }};
     }
     method!(
         "FilterIterator",
@@ -740,7 +755,8 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     method!("FilterIterator", "rewind", rewind, &[], vec![], &[], Void);
     method!("FilterIterator", "next", next, &[], vec![], &[], Void);
     eg.set_internal_method_access("FilterIterator", "accept", Visibility::Public, true);
-    eg.register_class(regex).unwrap();
+    eg.register_class_with_complete_native_parent(regex)
+        .unwrap();
     method!(
         "RegexIterator",
         "__construct",

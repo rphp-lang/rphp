@@ -25307,7 +25307,15 @@ fn call_resolved_with_source_unpack(
         }
     }
 
-    for index in 0..required {
+    // Internal positional omissions belong to the canonical callee's arity
+    // check. Only an actual named hole precedes that check; preserving the
+    // highest supplied slot distinguishes it from a missing trailing argument.
+    let checked_required = if resolved.common().fn_type == FunctionType::Internal {
+        required.min(highest_fixed)
+    } else {
+        required
+    };
+    for index in 0..checked_required {
         if fixed.get(index).is_none_or(Value::is_undef) {
             let parameter = param_names
                 .get(index)
@@ -25316,7 +25324,7 @@ fn call_resolved_with_source_unpack(
             eg.exception = Some(crate::value::make_error_value(
                 "ArgumentCountError",
                 &format!(
-                    "{}(): Argument #{} (${}): not passed",
+                    "{}(): Argument #{} (${}) not passed",
                     function_name,
                     index + 1,
                     parameter,
@@ -25327,7 +25335,7 @@ fn call_resolved_with_source_unpack(
     }
 
     let mut normalized = fixed;
-    normalized.truncate(highest_fixed.max(required));
+    normalized.truncate(highest_fixed);
     normalized.extend(positional_extras);
     let num_args = resolved.prepend_args.len() + normalized.len() + resolved.use_vars.len();
     if resolved.common().fn_type == FunctionType::Internal {

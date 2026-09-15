@@ -13,6 +13,18 @@ pub(crate) struct NativeIteratorDelegate {
     pub limit: i64,
     pub recursive: Option<Box<RecursiveTraversal>>,
     pub regex: Option<Box<RegexIteratorState>>,
+    pub callback: Option<Box<NativeFilterCallback>>,
+}
+
+/// Only callback filters allocate this state. Preserve the original callable
+/// (including Closure identity/captures), not a synthetic PHP Closure or an
+/// untraced resolved descriptor. Scope strings contain no PHP ownership edges.
+pub(crate) struct NativeFilterCallback {
+    pub callable: Value,
+    pub lexical_class: Option<String>,
+    pub called_class: Option<String>,
+    pub legacy_receiver: Option<Value>,
+    pub legacy: bool,
 }
 
 /// Only native regex filters allocate this configuration. All PHP-owned
@@ -64,6 +76,7 @@ impl NativeIteratorDelegate {
             limit,
             recursive: None,
             regex: None,
+            callback: None,
         }
     }
 
@@ -77,9 +90,21 @@ impl NativeIteratorDelegate {
         visit(&self.key);
         visit(&self.iterator);
         visit(&self.inner);
+        if let Some(callback) = &self.callback {
+            visit(&callback.callable);
+            if let Some(receiver) = &callback.legacy_receiver {
+                visit(receiver);
+            }
+        }
     }
 
     pub(crate) fn append_values_reversed(self, pending: &mut Vec<Value>) {
+        // Callback ownership retires after the cached projections and inner
+        // iterator, following PHP's filter destruction order.
+        if let Some(callback) = self.callback {
+            pending.extend(callback.legacy_receiver);
+            pending.push(callback.callable);
+        }
         pending.extend([self.inner, self.iterator, self.key, self.current]);
         if let Some(recursive) = self.recursive {
             pending.extend(recursive.frames.into_iter().map(|frame| frame.iterator));

@@ -13,7 +13,8 @@ pub(crate) use native_array_iteration::{
     NativeArrayBuckets, NativeArrayCursor, NativeArrayIteration,
 };
 pub(crate) use native_iterator_delegate::{
-    NativeIteratorDelegate, RecursiveFrame, RecursivePhase, RecursiveTraversal, RegexIteratorState,
+    NativeFilterCallback, NativeIteratorDelegate, RecursiveFrame, RecursivePhase,
+    RecursiveTraversal, RegexIteratorState,
 };
 
 #[cold]
@@ -1709,8 +1710,11 @@ fn materialize_declared_property_defaults(defaults: &[Value]) -> Vec<Value> {
             Vec::with_capacity(defaults.len())
         }
     };
-    for value in defaults {
-        let copied = if matches!(
+    // The exact-size iterator and the proven buffer capacity let Vec validate
+    // space once for the batch. Managed defaults still publish and clone in
+    // source order; no PHP callback or pool borrow crosses this projection.
+    values.extend(defaults.iter().map(|value| {
+        if matches!(
             value.value_type(),
             ValueType::Undef
                 | ValueType::Null
@@ -1719,12 +1723,19 @@ fn materialize_declared_property_defaults(defaults: &[Value]) -> Vec<Value> {
                 | ValueType::Long
                 | ValueType::Double
         ) {
-            value.clone()
+            // These six tags own no handle or reference. Copy the complete
+            // storage, including auxiliary bits, without reclassifying the
+            // already-proven primitive through the generic Clone dispatch.
+            stats::inc_value_clone(value.value_type() as usize);
+            Value {
+                data: value.data,
+                type_info: value.type_info,
+                _not_send: PhantomData,
+            }
         } else {
             clone_managed_property_default(value)
-        };
-        values.push(copied);
-    }
+        }
+    }));
     values
 }
 

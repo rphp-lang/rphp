@@ -11,7 +11,14 @@ pub(crate) fn native_protocol(receiver: &Value, eg: &ExecutorGlobals) -> bool {
     if object.property_slot(ARRAY_ITERATOR_STORAGE).is_none() {
         return false;
     }
-    if object.class_name.as_ref() == "ArrayIterator" {
+    // Both exact builtin classes use the same five ArrayIterator cursor
+    // methods. RecursiveArrayIterator only adds its child protocol; repeatedly
+    // resolving inherited cursor bodies adds no proof for that exact class.
+    // User subclasses retain all five method-identity checks below.
+    if matches!(
+        object.class_name.as_ref(),
+        "ArrayIterator" | "RecursiveArrayIterator"
+    ) {
         return true;
     }
     drop(object);

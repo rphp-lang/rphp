@@ -125,13 +125,20 @@ unsafe fn try_execute_property_init_constructor(
             return None;
         }
         let argument = &*arguments[assignment.argument as usize];
-        let called_class = object.object_class_name_unchecked();
-        if !instance_property_cache_accepts_exact_non_generic_write(
-            cache,
-            argument,
-            eg,
-            called_class,
-        ) {
+        // Arguments above are already proven non-reference. Reuse the exact
+        // integer cache proof before materializing a called-class name or
+        // repeating generic value/reference classification. Other property
+        // contracts retain the same scoped check and transactional fallback.
+        let exact_integer = argument.value_type() == ValueType::Long
+            && instance_property_cache_accepts_long_write(cache);
+        if !exact_integer
+            && !instance_property_cache_accepts_exact_non_generic_write(
+                cache,
+                argument,
+                eg,
+                object.object_class_name_unchecked(),
+            )
+        {
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             {
                 let declaration = if cache.property_flags() == 2 {

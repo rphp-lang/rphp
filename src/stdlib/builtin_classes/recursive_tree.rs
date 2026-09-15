@@ -484,7 +484,8 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             .constants
             .push(recursive_iterator::constant(OWNER, name, value));
     }
-    eg.register_class(class).unwrap();
+    eg.register_class_with_complete_native_parent(class)
+        .unwrap();
     eg.reserve_internal_method_contracts(OWNER, 8);
     let mut functions = Vec::with_capacity(8);
     recursive_iterator::register_method(
