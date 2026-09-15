@@ -1,0 +1,25 @@
+acosh:d:NAN;:d:NAN;
+asinh:d:0.48121182505960347;:d:0.48121182505960347;
+atanh:d:0.5493061443340548;:d:0.5493061443340548;
+expm1:d:0.6487212707001282;:d:0.6487212707001282;
+log1p:d:0.4054651081081644;:d:0.4054651081081644;
+a:5:{i:0;s:3:"0.5";i:1;s:3:"0.5";i:2;s:3:"0.5";i:3;a:1:{i:0;s:3:"0.5";}i:4;a:1:{i:0;s:3:"0.5";}}
+handler:8192:acosh(): Passing null to parameter #1 ($num) of type float is deprecated:nested:d:0;
+Exception:conversion interrupted
+acosh:after:untouched:d:NAN;
+handler:8192:asinh(): Passing null to parameter #1 ($num) of type float is deprecated:nested:d:0;
+Exception:conversion interrupted
+asinh:after:untouched:d:0.48121182505960347;
+handler:8192:atanh(): Passing null to parameter #1 ($num) of type float is deprecated:nested:d:0;
+Exception:conversion interrupted
+atanh:after:untouched:d:0.5493061443340548;
+handler:8192:expm1(): Passing null to parameter #1 ($num) of type float is deprecated:nested:d:0;
+Exception:conversion interrupted
+expm1:after:untouched:d:0.6487212707001282;
+handler:8192:log1p(): Passing null to parameter #1 ($num) of type float is deprecated:nested:d:0;
+Exception:conversion interrupted
+log1p:after:untouched:d:0.4054651081081644;
+argument:first
+argument:surplus
+ArgumentCountError:log1p() expects exactly 1 argument, 2 given
+final:a:3:{i:0;s:3:"0.5";i:1;a:1:{i:0;s:3:"0.5";}i:2;a:1:{i:0;s:3:"0.5";}}

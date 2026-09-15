@@ -1,0 +1,287 @@
+acosh:zero
+ArgumentCountError:acosh() expects exactly 1 argument, 0 given
+acosh:extra
+ArgumentCountError:acosh() expects exactly 1 argument, 2 given
+acosh:bad-name
+Error:Unknown named parameter $value
+acosh:named
+d:NAN;
+acosh:unpack
+d:NAN;
+acosh:callback
+d:NAN;
+acosh:first-class
+d:NAN;
+acosh:weak:0
+diagnostic:8192:acosh(): Passing null to parameter #1 ($num) of type float is deprecated
+d:NAN;
+acosh:weak:1
+d:0;
+acosh:weak:2
+d:NAN;
+acosh:weak:3
+d:0;
+acosh:weak:4
+d:NAN;
+acosh:weak:5
+d:0.9624236501192069;
+acosh:weak:6
+d:NAN;
+acosh:weak:7
+d:INF;
+acosh:weak:8
+TypeError:acosh(): Argument #1 ($num) must be of type float, string given
+acosh:weak:9
+TypeError:acosh(): Argument #1 ($num) must be of type float, string given
+acosh:weak:10
+TypeError:acosh(): Argument #1 ($num) must be of type float, array given
+acosh:weak:11
+TypeError:acosh(): Argument #1 ($num) must be of type float, stdClass given
+acosh:weak:12
+TypeError:acosh(): Argument #1 ($num) must be of type float, FloatText given
+acosh:weak:13
+TypeError:acosh(): Argument #1 ($num) must be of type float, resource given
+acosh:strict:0
+d:0;
+acosh:strict:1
+d:NAN;
+acosh:strict:2
+TypeError:acosh(): Argument #1 ($num) must be of type float, string given
+acosh:strict:3
+TypeError:acosh(): Argument #1 ($num) must be of type float, true given
+acosh:strict:4
+TypeError:acosh(): Argument #1 ($num) must be of type float, null given
+acosh:strict:5
+TypeError:acosh(): Argument #1 ($num) must be of type float, FloatText given
+acosh:signature
+a:8:{i:0;s:5:"acosh";i:1;i:1;i:2;i:1;i:3;s:3:"num";i:4;s:5:"float";i:5;b:0;i:6;b:0;i:7;s:5:"float";}
+asinh:zero
+ArgumentCountError:asinh() expects exactly 1 argument, 0 given
+asinh:extra
+ArgumentCountError:asinh() expects exactly 1 argument, 2 given
+asinh:bad-name
+Error:Unknown named parameter $value
+asinh:named
+d:0.48121182505960347;
+asinh:unpack
+d:0.48121182505960347;
+asinh:callback
+d:0.48121182505960347;
+asinh:first-class
+d:0.48121182505960347;
+asinh:weak:0
+diagnostic:8192:asinh(): Passing null to parameter #1 ($num) of type float is deprecated
+d:0;
+asinh:weak:1
+d:0.881373587019543;
+asinh:weak:2
+d:0;
+asinh:weak:3
+d:0.881373587019543;
+asinh:weak:4
+d:-0.881373587019543;
+asinh:weak:5
+d:1.1947632172871094;
+asinh:weak:6
+d:1.0E-16;
+asinh:weak:7
+d:INF;
+asinh:weak:8
+TypeError:asinh(): Argument #1 ($num) must be of type float, string given
+asinh:weak:9
+TypeError:asinh(): Argument #1 ($num) must be of type float, string given
+asinh:weak:10
+TypeError:asinh(): Argument #1 ($num) must be of type float, array given
+asinh:weak:11
+TypeError:asinh(): Argument #1 ($num) must be of type float, stdClass given
+asinh:weak:12
+TypeError:asinh(): Argument #1 ($num) must be of type float, FloatText given
+asinh:weak:13
+TypeError:asinh(): Argument #1 ($num) must be of type float, resource given
+asinh:strict:0
+d:0.881373587019543;
+asinh:strict:1
+d:0.48121182505960347;
+asinh:strict:2
+TypeError:asinh(): Argument #1 ($num) must be of type float, string given
+asinh:strict:3
+TypeError:asinh(): Argument #1 ($num) must be of type float, true given
+asinh:strict:4
+TypeError:asinh(): Argument #1 ($num) must be of type float, null given
+asinh:strict:5
+TypeError:asinh(): Argument #1 ($num) must be of type float, FloatText given
+asinh:signature
+a:8:{i:0;s:5:"asinh";i:1;i:1;i:2;i:1;i:3;s:3:"num";i:4;s:5:"float";i:5;b:0;i:6;b:0;i:7;s:5:"float";}
+atanh:zero
+ArgumentCountError:atanh() expects exactly 1 argument, 0 given
+atanh:extra
+ArgumentCountError:atanh() expects exactly 1 argument, 2 given
+atanh:bad-name
+Error:Unknown named parameter $value
+atanh:named
+d:0.5493061443340548;
+atanh:unpack
+d:0.5493061443340548;
+atanh:callback
+d:0.5493061443340548;
+atanh:first-class
+d:0.5493061443340548;
+atanh:weak:0
+diagnostic:8192:atanh(): Passing null to parameter #1 ($num) of type float is deprecated
+d:0;
+atanh:weak:1
+d:INF;
+atanh:weak:2
+d:0;
+atanh:weak:3
+d:INF;
+atanh:weak:4
+d:-INF;
+atanh:weak:5
+d:NAN;
+atanh:weak:6
+d:1.0E-16;
+atanh:weak:7
+d:NAN;
+atanh:weak:8
+TypeError:atanh(): Argument #1 ($num) must be of type float, string given
+atanh:weak:9
+TypeError:atanh(): Argument #1 ($num) must be of type float, string given
+atanh:weak:10
+TypeError:atanh(): Argument #1 ($num) must be of type float, array given
+atanh:weak:11
+TypeError:atanh(): Argument #1 ($num) must be of type float, stdClass given
+atanh:weak:12
+TypeError:atanh(): Argument #1 ($num) must be of type float, FloatText given
+atanh:weak:13
+TypeError:atanh(): Argument #1 ($num) must be of type float, resource given
+atanh:strict:0
+d:INF;
+atanh:strict:1
+d:0.5493061443340548;
+atanh:strict:2
+TypeError:atanh(): Argument #1 ($num) must be of type float, string given
+atanh:strict:3
+TypeError:atanh(): Argument #1 ($num) must be of type float, true given
+atanh:strict:4
+TypeError:atanh(): Argument #1 ($num) must be of type float, null given
+atanh:strict:5
+TypeError:atanh(): Argument #1 ($num) must be of type float, FloatText given
+atanh:signature
+a:8:{i:0;s:5:"atanh";i:1;i:1;i:2;i:1;i:3;s:3:"num";i:4;s:5:"float";i:5;b:0;i:6;b:0;i:7;s:5:"float";}
+expm1:zero
+ArgumentCountError:expm1() expects exactly 1 argument, 0 given
+expm1:extra
+ArgumentCountError:expm1() expects exactly 1 argument, 2 given
+expm1:bad-name
+Error:Unknown named parameter $value
+expm1:named
+d:0.6487212707001282;
+expm1:unpack
+d:0.6487212707001282;
+expm1:callback
+d:0.6487212707001282;
+expm1:first-class
+d:0.6487212707001282;
+expm1:weak:0
+diagnostic:8192:expm1(): Passing null to parameter #1 ($num) of type float is deprecated
+d:0;
+expm1:weak:1
+d:1.718281828459045;
+expm1:weak:2
+d:0;
+expm1:weak:3
+d:1.718281828459045;
+expm1:weak:4
+d:-0.6321205588285577;
+expm1:weak:5
+d:3.481689070338065;
+expm1:weak:6
+d:1.0E-16;
+expm1:weak:7
+d:INF;
+expm1:weak:8
+TypeError:expm1(): Argument #1 ($num) must be of type float, string given
+expm1:weak:9
+TypeError:expm1(): Argument #1 ($num) must be of type float, string given
+expm1:weak:10
+TypeError:expm1(): Argument #1 ($num) must be of type float, array given
+expm1:weak:11
+TypeError:expm1(): Argument #1 ($num) must be of type float, stdClass given
+expm1:weak:12
+TypeError:expm1(): Argument #1 ($num) must be of type float, FloatText given
+expm1:weak:13
+TypeError:expm1(): Argument #1 ($num) must be of type float, resource given
+expm1:strict:0
+d:1.718281828459045;
+expm1:strict:1
+d:0.6487212707001282;
+expm1:strict:2
+TypeError:expm1(): Argument #1 ($num) must be of type float, string given
+expm1:strict:3
+TypeError:expm1(): Argument #1 ($num) must be of type float, true given
+expm1:strict:4
+TypeError:expm1(): Argument #1 ($num) must be of type float, null given
+expm1:strict:5
+TypeError:expm1(): Argument #1 ($num) must be of type float, FloatText given
+expm1:signature
+a:8:{i:0;s:5:"expm1";i:1;i:1;i:2;i:1;i:3;s:3:"num";i:4;s:5:"float";i:5;b:0;i:6;b:0;i:7;s:5:"float";}
+log1p:zero
+ArgumentCountError:log1p() expects exactly 1 argument, 0 given
+log1p:extra
+ArgumentCountError:log1p() expects exactly 1 argument, 2 given
+log1p:bad-name
+Error:Unknown named parameter $value
+log1p:named
+d:0.4054651081081644;
+log1p:unpack
+d:0.4054651081081644;
+log1p:callback
+d:0.4054651081081644;
+log1p:first-class
+d:0.4054651081081644;
+log1p:weak:0
+diagnostic:8192:log1p(): Passing null to parameter #1 ($num) of type float is deprecated
+d:0;
+log1p:weak:1
+d:0.6931471805599453;
+log1p:weak:2
+d:0;
+log1p:weak:3
+d:0.6931471805599453;
+log1p:weak:4
+d:-INF;
+log1p:weak:5
+d:0.9162907318741551;
+log1p:weak:6
+d:1.0E-16;
+log1p:weak:7
+d:INF;
+log1p:weak:8
+TypeError:log1p(): Argument #1 ($num) must be of type float, string given
+log1p:weak:9
+TypeError:log1p(): Argument #1 ($num) must be of type float, string given
+log1p:weak:10
+TypeError:log1p(): Argument #1 ($num) must be of type float, array given
+log1p:weak:11
+TypeError:log1p(): Argument #1 ($num) must be of type float, stdClass given
+log1p:weak:12
+TypeError:log1p(): Argument #1 ($num) must be of type float, FloatText given
+log1p:weak:13
+TypeError:log1p(): Argument #1 ($num) must be of type float, resource given
+log1p:strict:0
+d:0.6931471805599453;
+log1p:strict:1
+d:0.4054651081081644;
+log1p:strict:2
+TypeError:log1p(): Argument #1 ($num) must be of type float, string given
+log1p:strict:3
+TypeError:log1p(): Argument #1 ($num) must be of type float, true given
+log1p:strict:4
+TypeError:log1p(): Argument #1 ($num) must be of type float, null given
+log1p:strict:5
+TypeError:log1p(): Argument #1 ($num) must be of type float, FloatText given
+log1p:signature
+a:8:{i:0;s:5:"log1p";i:1;i:1;i:2;i:1;i:3;s:3:"num";i:4;s:5:"float";i:5;b:0;i:6;b:0;i:7;s:5:"float";}
+closed-resource
+TypeError:asinh(): Argument #1 ($num) must be of type float, resource given

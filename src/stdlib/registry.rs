@@ -69,6 +69,34 @@ fn register_radix_conversions(
     }
 }
 
+#[cold]
+#[inline(never)]
+fn register_scalar_float_specials(
+    eg: &mut ExecutorGlobals,
+    functions: &mut Vec<Box<InternalFunction>>,
+) {
+    use crate::vm::function::InternalFunctionHandler;
+    let declarations: [(&'static str, InternalFunctionHandler); 5] = [
+        ("acosh", fn_acosh),
+        ("asinh", fn_asinh),
+        ("atanh", fn_atanh),
+        ("expm1", fn_expm1),
+        ("log1p", fn_log1p),
+    ];
+    for (name, handler) in declarations {
+        let mut function = Box::new(
+            make_internal_function(handler, 1, 1, vec![]).with_static_parameter_names(&["num"]),
+        );
+        function.common.sig.param_type_hints = vec![ParamTypeHint::Float];
+        function.common.sig.return_type_hint = ParamTypeHint::Float;
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function(name, pointer).unwrap();
+        eg.register_internal_function_extension(pointer, "standard");
+        functions.push(function);
+    }
+}
+
 // Keep the nullable timestamp descriptor construction with cold registration
 // work instead of growing the shared startup function's generated body.
 #[cold]
@@ -3228,6 +3256,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("sinh", fn_sinh, 1, 1, "num");
     reg!("cosh", fn_cosh, 1, 1, "num");
     reg!("tanh", fn_tanh, 1, 1, "num");
+    register_scalar_float_specials(eg, &mut funcs);
     reg!("deg2rad", fn_deg2rad, 1, 1, "num");
     reg!("rad2deg", fn_rad2deg, 1, 1, "num");
     reg!("hypot", fn_hypot, 2, 2, "x", "y");

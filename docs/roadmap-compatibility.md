@@ -36,34 +36,31 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `radix-numeric-call-contracts` checkpoint adds seventeen PHP 8.5
-passes over `f3bacfd7`, without loss, process hazards, changed expectations or
-moved failure stages. One gain is in the previous 7,959 cases (7,134 pass /
-392 fail); sixteen new math cases expand coverage to **7,975: 7,150 pass /
-392 fail**, plus 190 skips, 242 unsupported and one XFAIL. This is not all PHP.
+The accepted `scalar-float-special-function-contracts` checkpoint adds thirteen
+PHP 8.5 passes over `760ee022`, without losses, changed expectations, process
+hazards or moved failure stages. Previous 7,975-case counts stay 7,150/392;
+thirteen new math cases expand coverage to **7,988: 7,163 pass / 392 fail**,
+plus 190 skips, 242 unsupported and one XFAIL. This is not all PHP.
 
-Four radix functions reuse canonical typed arguments and checked numeric
-conversion. Original dual-JIT regressions preserve bytes, overflow, warnings,
-strict/named/callback calls, Reflection and reference/reentry state. Profiled
-registry headroom, sparse traversal guards, ASCII folding and cold batched
-registration preserve ordinary behavior without VM/Value layout changes.
+Five scalar functions share typed arguments and cold registration. Original
+dual-JIT oracles preserve exact bits, domain/NaN/INF, diagnostics, callable
+metadata, reentry and references/COW. A rejected Rust-only implementation led
+to three safe C99 libm declarations; the new unsafe external boundary and
+unvalidated platforms are explicit in `scalar-float-boundary.md`. No common
+VM/Value layout or Cargo dependency change; counted unsafe remains 1,626/289.
 
-One frozen checked five-configuration matrix/all-targets, exact no-loss and
-fresh gain oracles, prior original suites, inventory, S0-S3 and unsafe/hygiene
-pass. Four new builtin rows are exact; prior rows remain unchanged. All 136
-fixed 32-pair controls pass common <=1.65%, pay-use/first-present <=5%, maxima
-+1.361%/+3.668%. Six new API costs have exact eight-pair PHP comparisons.
-Nominal findings, five rejected candidates, hashes and shared-host limits are
-in `compatibility.md`. Unsafe remains 1,626 blocks/289 functions; inherited
-native crypt prerequisites remain in `crypt-boundary.md`. Cleanup is mandatory.
+One frozen checked five-configuration matrix/all-targets, exact no-loss/fresh
+oracles, prior original suites, inventory, S0-S3 and hygiene pass. All 142 fixed
+32-pair controls meet user limits common <=1.65%, pay-use/first-present <=5%,
+maxima +1.570%/+3.378%. Five new API costs have exact
+eight-pair PHP comparisons. Nominal findings, hashes and shared-host limits
+remain in `compatibility.md`; cleanup is mandatory.
 
-Next read-only admission checks thirteen shared scalar-float candidates for
-missing `acosh`, `asinh`, `atanh`, `expm1` and `log1p`. Require at least ten
-PHP-pass/current-fail cases before implementation. Reuse typed float arguments;
-retain exact signed zero, domain/NaN/INF, weak/strict/named/callback and state
-boundaries. Keep all 7,975 accepted-ledger cases, including the new radix math
-passes. Reselect below the admission threshold; no general arithmetic/VM,
-32-bit/OOM or blanket extension claim. One active implementation only.
+Next read-only admission examines twelve current SPL autoload/probe failures.
+Prove at least ten shared PHP-pass/current-fail cases before implementation;
+otherwise reselect. Keep registration identity/live mutation, diagnostics and
+exception ordering explicit; do not absorb general class-link/VM redesign.
+Retain the full expanded 7,988-case ledger and one active implementation.
 
 ### Preceding directory cursor checkpoint
 

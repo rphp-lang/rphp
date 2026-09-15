@@ -61,6 +61,7 @@ mod random;
 pub(crate) mod reflection;
 mod regex_callback;
 mod registry;
+mod scalar_float;
 mod serialization;
 mod tokenizer;
 
@@ -28128,6 +28129,45 @@ fn fn_cosh(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
 fn fn_tanh(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::double(arg_float!(ed, 0).tanh()));
 }
+
+/// Use the scalar operation itself: algebraic expansions lose precision near
+/// zero and can overflow intermediates for otherwise finite results.
+#[cold]
+#[inline(never)]
+fn scalar_float_special(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    name: &str,
+    operation: fn(f64) -> f64,
+) -> Result<(), VmError> {
+    let Some(number) = typed_internal_float_argument_expected(ed, eg, name, 0, "num", "float")?
+    else {
+        return Ok(());
+    };
+    ret!(rv, Value::double(operation(number)));
+}
+
+fn fn_acosh(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    scalar_float_special(ed, rv, eg, "acosh", scalar_float::acosh)
+}
+
+fn fn_asinh(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    scalar_float_special(ed, rv, eg, "asinh", scalar_float::asinh)
+}
+
+fn fn_atanh(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    scalar_float_special(ed, rv, eg, "atanh", scalar_float::atanh)
+}
+
+fn fn_expm1(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    scalar_float_special(ed, rv, eg, "expm1", f64::exp_m1)
+}
+
+fn fn_log1p(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    scalar_float_special(ed, rv, eg, "log1p", f64::ln_1p)
+}
+
 fn fn_deg2rad(
     ed: *mut ExecuteData,
     rv: *mut Value,
