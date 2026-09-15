@@ -630,7 +630,16 @@ pub(crate) fn cast_object_to_array(value: &Value, eg: &ExecutorGlobals) -> Value
         return Value::array(result);
     }
 
-    if let Some(class) = eg.class_by_id(object.class_id) {
+    if object.has_detached_property_table() {
+        object.for_each_dynamic_property(|key, property| {
+            if property.is_undef() {
+                return;
+            }
+            let key = crate::value::canonical_decimal_array_key(key)
+                .map_or_else(|| ArrayKey::String(key.to_owned()), ArrayKey::Int);
+            result.set(key, property.clone_for_php_storage());
+        });
+    } else if let Some(class) = eg.class_by_id(object.class_id) {
         for (slot, definition) in class.properties.iter().enumerate() {
             let Some(property) = object.get_property_slot(slot) else {
                 continue;

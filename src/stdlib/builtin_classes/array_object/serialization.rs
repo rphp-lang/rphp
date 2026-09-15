@@ -94,6 +94,10 @@ pub(in crate::stdlib) fn restore_storage(
         if eg.exception.is_some() {
             return Ok(());
         }
+        reject_incompatible_backing(receiver, storage, eg);
+        if eg.exception.is_some() {
+            return Ok(());
+        }
     }
     replace_storage(receiver, storage.clone_for_php_storage(), eg)
 }
@@ -106,7 +110,20 @@ pub(in crate::stdlib) fn restore_members(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    restore_members_with_policy(receiver, members, ed, eg, true, None)
+    restore_members_with_policy(receiver, members, ed, eg, true, false, None)
+}
+
+/// Serializable restores its member table even when backing admission leaves
+/// an exception pending. The modern hook stops before loading these members.
+#[cold]
+#[inline(never)]
+pub(in crate::stdlib) fn restore_legacy_members(
+    receiver: &Value,
+    members: &PhpArray,
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    restore_members_with_policy(receiver, members, ed, eg, true, true, None)
 }
 
 /// Heap/deque native hooks load the same raw member table, but report a
@@ -120,7 +137,7 @@ pub(in crate::stdlib) fn restore_container_members(
     eg: &mut ExecutorGlobals,
     invalid: Option<&str>,
 ) -> Result<(), VmError> {
-    restore_members_with_policy(receiver, members, ed, eg, false, invalid)
+    restore_members_with_policy(receiver, members, ed, eg, false, false, invalid)
 }
 
 #[cold]
@@ -131,6 +148,7 @@ fn restore_members_with_policy(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
     array_wrapper: bool,
+    continue_pending: bool,
     invalid: Option<&str>,
 ) -> Result<(), VmError> {
     let class_name = receiver
@@ -191,12 +209,12 @@ fn restore_members_with_policy(
                     "Creation of dynamic property {class_name}::${display_name} is deprecated"
                 ),
             )?;
-            if eg.exception.is_some() && array_wrapper {
+            if eg.exception.is_some() && array_wrapper && !continue_pending {
                 return Ok(());
             }
         }
         run_prepared_value_destructor(eg, release)?;
-        if eg.exception.is_some() && array_wrapper {
+        if eg.exception.is_some() && array_wrapper && !continue_pending {
             return Ok(());
         }
         // PHP's native array-wrapper restore copies members directly, unlike
@@ -213,7 +231,7 @@ fn restore_members_with_policy(
                 .expect("native receiver")
                 .set_property(&storage_key, value.clone_for_php_storage());
         }
-        if eg.exception.is_some() {
+        if eg.exception.is_some() && !continue_pending {
             // Native container loading commits this member even if its
             // diagnostic/destructor failed. Heap hooks replace that error
             // with their serialization exception; deque hooks propagate it.

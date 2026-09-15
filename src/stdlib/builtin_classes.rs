@@ -32,7 +32,7 @@ pub(crate) use array_object::cursor::{
 };
 pub(crate) use array_object::{
     array_cast as array_object_array_cast, bind_property as bind_array_object_property,
-    prepare_clone as prepare_array_object_clone,
+    prepare_backing as prepare_array_object_backing, prepare_clone as prepare_array_object_clone,
     property_uses_dimension as array_object_property_uses_dimension,
 };
 pub(crate) use deque::consumer as prepare_native_deque_consumer;
@@ -1400,16 +1400,21 @@ fn fn_array_iterator_count(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let count = arg!(ed, 0)
-        .as_object()
-        .and_then(|object| {
-            let storage = array_object_storage_key(&object);
-            object
-                .get_property(storage)
-                .and_then(Value::as_array)
-                .map(PhpArray::len)
-        })
-        .unwrap_or_else(|| array_object::count(arg!(ed, 0), eg));
+    let direct_count = arg!(ed, 0).as_object().and_then(|object| {
+        let storage = array_object_storage_key(&object);
+        object
+            .get_property(storage)
+            .and_then(Value::as_array)
+            .map(PhpArray::len)
+    });
+    let count = if let Some(count) = direct_count {
+        count
+    } else {
+        if !array_object::prepare_backing(arg!(ed, 0), eg)? {
+            return Ok(());
+        }
+        array_object::count(arg!(ed, 0), eg)
+    };
     ret!(rv, Value::long(count as i64));
 }
 
@@ -1743,6 +1748,9 @@ fn fn_array_object_offset_exists(
                 .is_some_and(|value| value.dereferenced().value_type() != ValueType::Null);
             ret!(rv, Value::bool(exists));
         }
+    }
+    if !array_object::prepare_backing(arg!(ed, 0), eg)? {
+        return Ok(());
     }
     let exists = array_object::offset_exists(arg!(ed, 0), &key, arg!(ed, 1), eg);
     ret!(rv, Value::bool(exists));

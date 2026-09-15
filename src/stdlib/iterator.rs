@@ -121,7 +121,7 @@ fn walk(
             } else {
                 NativeIteratorMove::Next
             };
-            let Some(entry) = native_iterator_projected_entry(&iterator, movement, projection, eg)
+            let Some(entry) = native_iterator_projected_entry(&iterator, movement, projection, eg)?
             else {
                 break;
             };

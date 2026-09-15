@@ -36,32 +36,32 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `recursive-callback-filter-projection-contracts` train adds twelve
-PHP 8.5 passes over `3bb992f1` (ten SPL, two Zend), without loss, process hazards,
-expectation changes or moved failure stages. SPL reaches 630/115/31 unsupported/
-8 skip/1 XFAIL; core reaches 6,448/333/182/211. Selected coverage is 7,959 cases:
-7,078 pass and 448 fail, not all PHP.
+The accepted `array-object-object-backing-projection-contracts` train adds ten
+PHP 8.5 SPL passes over `41dd855d`, without loss, process hazards, expectation
+changes or moved failure stages. SPL reaches 640/105/31 unsupported/8 skip/
+1 XFAIL; core remains 6,448/333/182/211. Selected coverage is 7,959 cases:
+7,088 pass and 438 fail, not all PHP.
 
-Four callback/recursive-filter classes reuse the existing filter loop and traced
-delegate state. Forty-one original cases prove callable identity/scope, lazy
-selection, reference/COW, child factories, reentry and retirement. One frozen
+Raw object backing shares admission, lazy activation, numeric-key projection,
+sort publication and native legacy trace/error handling. Existing sparse state
+retains declared/raw ownership and reference/COW semantics without common
+Value/PhpObject/VM layout changes. Twenty-five original cases, one frozen
 checked five-config matrix/all-targets, exact no-loss, S0-S3 and unsafe/hygiene
-gates pass. Native cursor/alias, primitive projection and engine-only metadata
-work removal preserve common Value/VM layouts and optimized-plan admission.
+gates pass. Native retirement ends mutable borrows before examining the graph.
 
-All 109 established controls meet fixed cumulative common <=1.65% against
-`9cddc39c`, pay-use <=5%; peaks +1.299%/+3.335%. Nominal/incremental findings,
-eight unchanged anchors, new API absolute costs and shared-host limitations
-remain explicit in `compatibility.md`. Cleanup is automatic; no unchanged
-failed timing reroll was used.
+All 113 established controls meet fixed cumulative common <=1.65% against
+`9cddc39c`, pay-use/first-present <=5%; maxima +1.024%/+3.791%/+2.454%.
+Nine anchors, nominal/incremental findings and shared-host limitations remain
+explicit in `compatibility.md`. Cleanup is automatic; no unchanged failed
+timing reroll was used.
 
-Next read-only admission identifies 21 PHP-pass/current-fail object-backed
-ArrayObject candidates. Prove the shared raw property projection/commit boundary
-with original oracles and >=10 reachable gains before production changes;
-separate unrelated serialization, overloaded-class and parser causes rather
-than expanding for quota. Retain all controls and now-present filter APIs.
-General shutdown, unrelated iterators, suspension, 32-bit/OOM and whole-PHP
-claims remain separate. One active implementation only.
+Next read-only triage targets nested constructor allocation/argument ordering:
+nine remaining differences contain only swapped object IDs, with constant-new
+defaults as adjacent candidates. Prove >=10 reachable common-cause gains and
+original error/order/lifetime oracles before production. Never remap visible
+IDs or expand for quota. Hooked duplicate-key arrays, general shutdown,
+unrelated iterators, suspension, 32-bit/OOM and whole-PHP claims remain separate.
+One active implementation only.
 
 ### Preceding directory cursor checkpoint
 

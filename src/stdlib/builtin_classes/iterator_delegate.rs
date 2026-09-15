@@ -131,15 +131,15 @@ pub(super) fn protocol(
                     },
                     Projection::None,
                     eg,
-                );
+                )?;
                 Value::null()
             }
             "valid" => Value::bool(
-                projected_entry(iterator, Move::Current, Projection::None, eg).is_some(),
+                projected_entry(iterator, Move::Current, Projection::None, eg)?.is_some(),
             ),
-            "key" => projected_entry(iterator, Move::Current, Projection::Key, eg)
+            "key" => projected_entry(iterator, Move::Current, Projection::Key, eg)?
                 .map_or_else(Value::null, |p| p.0),
-            "current" => array_object::cursor::cached_value(iterator, eg),
+            "current" => array_object::cursor::cached_value(iterator, eg)?,
             _ => unreachable!("iterator protocol name"),
         });
     }
@@ -487,7 +487,7 @@ fn lazy_current(
     }
     let iterator = inner(&receiver);
     if array_object::cursor::native_protocol(&iterator, eg) {
-        let value = array_object::cursor::cached_value(&iterator, eg);
+        let value = array_object::cursor::cached_value(&iterator, eg)?;
         ret!(rv, value.dereferenced().clone());
     }
     let empty = receiver

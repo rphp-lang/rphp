@@ -580,6 +580,9 @@ const OBJECT_CURSOR_INVALID: usize = usize::MAX - 1;
 struct DynamicPropertyAux {
     property_guards: HashMap<String, u8>,
     object_cursor: usize,
+    // Native raw-table sorting detaches the enumerated property table from
+    // declared slots. Values remain in the ordinary traced dynamic map.
+    detached_property_table: bool,
     native_array_options: NativeArrayOptions,
     native_array_iteration: Option<Box<NativeArrayIteration>>,
     native_iterator_delegate: Option<Box<NativeIteratorDelegate>>,
@@ -627,6 +630,7 @@ impl DynamicPropertyAux {
         Self {
             property_guards: HashMap::new(),
             object_cursor: OBJECT_CURSOR_UNTOUCHED,
+            detached_property_table: false,
             native_array_options: NativeArrayOptions::default(),
             native_array_iteration: None,
             native_iterator_delegate: None,
@@ -651,7 +655,7 @@ impl DynamicPropertyMap {
     #[inline]
     fn clone_native_array_auxiliary(&self) -> Option<Box<DynamicPropertyAux>> {
         let source = self.auxiliary.as_ref()?;
-        if source.native_object_state.is_some() {
+        if source.native_object_state.is_some() || source.detached_property_table {
             return Some(Self::clone_native_object_auxiliary(source));
         }
         let options = source.native_array_options;
@@ -669,6 +673,7 @@ impl DynamicPropertyMap {
             .native_object_state
             .as_ref()
             .map(|state| state.clone_state());
+        auxiliary.detached_property_table = source.detached_property_table;
         auxiliary
     }
 
@@ -1053,6 +1058,7 @@ impl DynamicPropertyMap {
             && auxiliary.native_array_iteration.is_none()
             && auxiliary.native_iterator_delegate.is_none()
             && auxiliary.native_object_state.is_none()
+            && !auxiliary.detached_property_table
         {
             self.auxiliary = None;
         }
@@ -1893,6 +1899,36 @@ impl PhpObject {
     #[inline]
     pub(crate) fn get_dynamic_property_mut(&mut self, key: &str) -> Option<&mut Value> {
         self.dynamic_properties.as_mut()?.get_mut(key)
+    }
+
+    #[inline]
+    pub(crate) fn has_detached_property_table(&self) -> bool {
+        self.dynamic_properties
+            .as_ref()
+            .and_then(|properties| properties.auxiliary.as_ref())
+            .is_some_and(|auxiliary| auxiliary.detached_property_table)
+    }
+
+    /// Publish an ordered raw table while keeping actual declared slots and
+    /// all native auxiliary state alive. Return displaced dynamic storage so
+    /// its caller can finish retirement after ending the object borrow.
+    #[cold]
+    pub(crate) fn replace_raw_property_table(
+        &mut self,
+        table: DynamicPropertyMap,
+    ) -> DynamicPropertyMap {
+        let properties = self
+            .dynamic_properties
+            .get_or_insert_with(|| Box::new(DynamicPropertyMap::with_capacity(0)));
+        let storage = std::mem::replace(&mut properties.storage, table.storage);
+        properties
+            .auxiliary
+            .get_or_insert_with(|| Box::new(DynamicPropertyAux::new()))
+            .detached_property_table = true;
+        DynamicPropertyMap {
+            storage,
+            auxiliary: None,
+        }
     }
 
     #[inline]
@@ -6915,7 +6951,27 @@ impl Value {
 
     /// Strict collector traversal. Cycle collection runs outside mutable VM
     /// storage borrows, so an unavailable snapshot remains a logic error there.
-    pub(crate) fn for_each_cycle_child_handle(&self, visitor: impl FnMut(Value)) {
+    pub(crate) fn for_each_cycle_child_handle(&self, mut visitor: impl FnMut(Value)) {
+        if let Some(object) = self
+            .as_object()
+            .filter(|object| object.has_detached_property_table())
+        {
+            // Zend's detached raw table no longer contains indirect edges to
+            // the declared slots. Those slots still own their values, whose
+            // strong counts conservatively root them outside this cycle view.
+            // Full ownership/deep-drop traversal above continues to visit both
+            // stores; only the collector's internal-edge accounting differs.
+            let mut push = |value: &Value| {
+                if let Some(value) = value.clone_cycle_handle() {
+                    visitor(value);
+                }
+            };
+            if let Some(dynamic) = &object.dynamic_properties {
+                PhpObject::for_each_native_owned_value(dynamic, &mut push);
+            }
+            object.for_each_dynamic_property(|_, value| push(value));
+            return;
+        }
         assert!(
             self.try_for_each_cycle_child_handle(visitor),
             "cycle child traversal requires unborrowed storage"

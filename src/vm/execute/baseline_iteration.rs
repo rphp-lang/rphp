@@ -710,6 +710,7 @@ fn set_foreach_object_entry(array: &mut PhpArray, name: &str, value: Value) {
 fn object_uses_direct_property_iteration(value: &Value, eg: &ExecutorGlobals) -> bool {
     value.as_object().is_some_and(|object| {
         object.is_dynamic_std_class()
+            || object.has_detached_property_table()
             || eg.class_by_id(object.class_id).is_some_and(|class| {
                 class
                     .properties
@@ -1312,7 +1313,10 @@ fn op_foreach_init<'a>(
     } else {
         if uses_user_iterator_protocol(arr_val, eg) {
             if crate::stdlib::uses_native_iterator_protocol(arr_val, eg) {
-                crate::stdlib::native_iterator_projected_entry(arr_val, crate::stdlib::NativeIteratorMove::Rewind, crate::stdlib::NativeIteratorProjection::None, eg);
+                crate::stdlib::native_iterator_projected_entry(arr_val, crate::stdlib::NativeIteratorMove::Rewind, crate::stdlib::NativeIteratorProjection::None, eg)?;
+                if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
+                    return Ok(control);
+                }
                 set_foreach_iteration_state(frame, opline, Some(arr_val.clone()), i64::MIN);
                 return Ok(ColdResult::Done);
             }
@@ -1495,7 +1499,7 @@ fn next_native_foreach<'a>(
         // a reference wrapper may exist yet: the destructor can remove it.
         let valid = crate::stdlib::native_iterator_projected_entry(
             source, movement, crate::stdlib::NativeIteratorProjection::None, eg,
-        ).is_some();
+        )?.is_some();
         if let Some(control) = release_temporary_foreach_aggregate(eg, frame, op_array, opline)? {
             return Ok(control);
         }
@@ -1508,8 +1512,11 @@ fn next_native_foreach<'a>(
         crate::stdlib::NativeIteratorProjection::Both
     };
     let entry = if valid {
-        crate::stdlib::native_iterator_entry(source, movement, by_reference, projection, eg)
+        crate::stdlib::native_iterator_entry(source, movement, by_reference, projection, eg)?
     } else { None };
+    if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
+        return Ok(control);
+    }
     let has_more = if let Some((key, value)) = entry {
         let value_cv = (opline.extended_value & 0xFFFF) as u32;
         if by_reference || !assign_through_reference {
@@ -1805,6 +1812,11 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                 .unwrap_or(0);
             let compact_slot_count = {
                 let object = arr_val.as_object().unwrap();
+                if object.has_detached_property_table()
+                    && !eg.class_by_id(class_id).is_some_and(|class| class.properties.iter().any(|p| p.has_get_hook || p.has_set_hook))
+                {
+                    Some(0)
+                } else {
                 eg.class_by_id(class_id)
                     .filter(|class| {
                         class.parent.is_none()
@@ -1819,6 +1831,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                             })
                     })
                     .map(|class| class.properties.len())
+                }
             };
             let slots = compact_slot_count.is_none().then(|| {
                 let object = arr_val.as_object().unwrap();
@@ -1844,7 +1857,9 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
             });
             let dynamic_names = has_dynamic_properties.then(|| {
                 let object = arr_val.as_object().unwrap();
-                let declared_names = if let Some(slots) = slots.as_ref() {
+                let declared_names = if object.has_detached_property_table() {
+                    std::collections::HashSet::new()
+                } else if let Some(slots) = slots.as_ref() {
                     slots
                         .iter()
                         .filter_map(|slot| eg.instance_property_definition(class_id, *slot))

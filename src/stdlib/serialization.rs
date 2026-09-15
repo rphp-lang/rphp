@@ -164,24 +164,27 @@ fn serialized_property_key(eg: &ExecutorGlobals, object: &PhpObject, storage_key
 fn ordinary_object_properties(value: &Value, eg: &ExecutorGlobals) -> PhpArray {
     let mut properties = PhpArray::new();
     if let Some(object) = value.as_object() {
-        for slot in eg.instance_property_slots_in_iteration_order(object.class_id) {
-            let Some(definition) = eg.instance_property_definition(object.class_id, slot) else {
-                continue;
-            };
-            if definition.is_virtual_hook_property() {
-                continue;
-            }
-            let Some(member) = object.get_property_slot(slot) else {
-                continue;
-            };
-            if member.value_type() != ValueType::Undef {
-                let storage_key = object
-                    .property_name_at_slot(slot)
-                    .unwrap_or(definition.name.as_str());
-                properties.set_str(
-                    &serialized_property_key(eg, &object, storage_key),
-                    member.clone(),
-                );
+        if !object.has_detached_property_table() {
+            for slot in eg.instance_property_slots_in_iteration_order(object.class_id) {
+                let Some(definition) = eg.instance_property_definition(object.class_id, slot)
+                else {
+                    continue;
+                };
+                if definition.is_virtual_hook_property() {
+                    continue;
+                }
+                let Some(member) = object.get_property_slot(slot) else {
+                    continue;
+                };
+                if member.value_type() != ValueType::Undef {
+                    let storage_key = object
+                        .property_name_at_slot(slot)
+                        .unwrap_or(definition.name.as_str());
+                    properties.set_str(
+                        &serialized_property_key(eg, &object, storage_key),
+                        member.clone(),
+                    );
+                }
             }
         }
         object.for_each_dynamic_property(|name, member| {
@@ -949,6 +952,92 @@ impl<'a> Parser<'a> {
         result
     }
 
+    /// Keep the graph parser's reference table while exposing the native
+    /// Serializable activation to callbacks and Throwable creation. Dispatching
+    /// the public handler again would instead start a second reference graph.
+    #[cold]
+    #[inline(never)]
+    // SAFETY: compiler-generated code retains its normal calling convention.
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+    fn array_wrapper_payload_call(
+        &mut self,
+        receiver: &Value,
+        resolved: &crate::stdlib::ResolvedCallback,
+        eg: &mut ExecutorGlobals,
+        allowed: &AllowedClasses,
+    ) -> Result<(), ()> {
+        #[repr(C)]
+        struct NativeActivation {
+            frame: ExecuteData,
+            arguments: [Value; 2],
+        }
+        const _: () = assert!(
+            std::mem::offset_of!(NativeActivation, arguments)
+                == crate::vm::frame::CALL_FRAME_SLOTS * std::mem::size_of::<Value>()
+        );
+        let caller = self.source_frame;
+        let mut activation = NativeActivation {
+            frame: ExecuteData {
+                opline: std::ptr::null(),
+                call: std::ptr::null_mut(),
+                return_value: std::ptr::null_mut(),
+                func: resolved.func_ptr,
+                prev_execute_data: caller,
+                num_args: 1,
+                num_cvs: 2,
+                num_temps: 0,
+                pending_return_after_finally: false,
+                has_heap_slots: true,
+                named_args_used: false,
+                call_kind_flags: 0,
+                heap_bitmap: 3,
+            },
+            arguments: [
+                receiver.clone(),
+                super::php_byte_result(self.input.to_vec(), false),
+            ],
+        };
+        let frame = &mut activation.frame as *mut ExecuteData;
+        // Like ordinary native handlers, keep current_execute_data on the
+        // suspended user activation used by global-scope synchronization.
+        // The explicit source frame carries this internal trace boundary.
+        self.source_frame = frame;
+        let result = self.array_wrapper_payload(receiver, eg, allowed, frame);
+        if let Some(exception) = eg.exception.as_ref() {
+            let missing_origin = exception.as_object().is_some_and(|object| {
+                object
+                    .get_property("file")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+            });
+            if missing_origin {
+                let options = if super::ini_default(eg, "zend.exception_ignore_args")
+                    .as_deref()
+                    .is_some_and(super::ini_boolean)
+                {
+                    2
+                } else {
+                    0
+                };
+                // SAFETY: NativeActivation has the asserted VM header/slot
+                // layout, a live registered internal method, and two owned
+                // arguments. The synchronous caller chain and this stack
+                // activation remain live until after this read-only snapshot.
+                let trace = unsafe { super::collect_debug_backtrace(frame, options, 0, eg, true) };
+                let (file, line) = super::internal_call_source(frame);
+                if let Some(mut object) = exception.as_object_mut() {
+                    let trace_key =
+                        crate::runtime::throwable_private_property_key(eg, &object, "trace");
+                    object.set_property("file", Value::string(file));
+                    object.set_property("line", Value::long(line as i64));
+                    object.set_property(&trace_key, Value::array(trace));
+                }
+            }
+        }
+        self.source_frame = caller;
+        result
+    }
+
     /// Parse the native Serializable payload using this graph's reference
     /// table. Embedded C: payloads and direct method calls share this parser;
     /// only the latter starts a fresh graph.
@@ -999,9 +1088,6 @@ impl<'a> Parser<'a> {
                     "unserialize",
                 )
                 .map_err(|_| ())?;
-                if eg.exception.is_some() {
-                    return Err(());
-                }
                 self.expect(b';')?;
             }
             self.expect(b'm')?;
@@ -1012,7 +1098,7 @@ impl<'a> Parser<'a> {
             if members_tag != Some(b'a') || members.value_type() != ValueType::Array {
                 return Err(());
             }
-            native::restore_members(receiver, members.as_array().ok_or(())?, ed, eg)
+            native::restore_legacy_members(receiver, members.as_array().ok_or(())?, ed, eg)
                 .map_err(|_| ())?;
             if eg.exception.is_some() {
                 return Err(());
@@ -1551,11 +1637,13 @@ impl<'a> Parser<'a> {
                         let result = if native_deque {
                             self.deque_payload(&object, eg, allowed_classes)
                         } else {
-                            self.array_wrapper_payload(
+                            self.array_wrapper_payload_call(
                                 &object,
+                                resolved
+                                    .as_ref()
+                                    .expect("resolved native Serializable method"),
                                 eg,
                                 allowed_classes,
-                                self.source_frame,
                             )
                         };
                         self.input = outer_input;

@@ -4647,7 +4647,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } else {
                             match source.value_type() {
                                 ValueType::Array => source.clone(),
-                                ValueType::Object => cast_object_to_array(source, eg),
+                                ValueType::Object => {
+                                    crate::stdlib::prepare_array_object_backing(source, eg)?;
+                                    resume_pending_exception!();
+                                    cast_object_to_array(source, eg)
+                                }
                                 ValueType::Null | ValueType::Undef => Value::array(PhpArray::new()),
                                 _ => {
                                     let mut array = PhpArray::new();

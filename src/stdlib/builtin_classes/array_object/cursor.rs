@@ -171,7 +171,7 @@ pub(crate) fn consume_array(
     eg: &ExecutorGlobals,
     project: Option<bool>,
 ) -> Option<(usize, Option<PhpArray>)> {
-    let Backing::Array(owner, key) = backing(receiver)? else {
+    let Backing::Array(owner, key) = backing(receiver, eg)? else {
         return None;
     };
     let object = owner.as_object()?;
@@ -190,7 +190,7 @@ pub(crate) fn consume_array(
     });
     drop(object);
     drop(owner);
-    entry(receiver, Move::Seek(count), false, Projection::None, eg);
+    entry_slow(receiver, Move::Seek(count), false, Projection::None, eg);
     Some((count, projection))
 }
 
@@ -203,6 +203,9 @@ struct ObjectEntry {
 fn object_entries(object: &PhpObject, eg: &ExecutorGlobals) -> Vec<ObjectEntry> {
     let mut entries = Vec::new();
     for slot in eg.instance_property_slots_in_iteration_order(object.class_id) {
+        if object.has_detached_property_table() {
+            break;
+        }
         let Some(definition) = eg.instance_property_definition(object.class_id, slot) else {
             continue;
         };
@@ -237,12 +240,15 @@ pub(crate) fn entry(
     movement: Move,
     by_reference: bool,
     projection: Projection,
-    eg: &ExecutorGlobals,
-) -> Option<(Value, Value)> {
+    eg: &mut ExecutorGlobals,
+) -> Result<Option<(Value, Value)>, VmError> {
     if !by_reference && let Some(entry) = existing_array_entry(receiver, movement, projection) {
-        return entry;
+        return Ok(entry);
     }
-    entry_slow(receiver, movement, by_reference, projection, eg)
+    if !prepare_backing(receiver, eg)? {
+        return Ok(None);
+    }
+    Ok(entry_slow(receiver, movement, by_reference, projection, eg))
 }
 
 /// Movement/probing must not create unused aliases before a consumer callback.
@@ -251,8 +257,8 @@ pub(crate) fn projected_entry(
     receiver: &Value,
     movement: Move,
     projection: Projection,
-    eg: &ExecutorGlobals,
-) -> Option<(Value, Value)> {
+    eg: &mut ExecutorGlobals,
+) -> Result<Option<(Value, Value)>, VmError> {
     entry(receiver, movement, false, projection, eg)
 }
 
@@ -260,9 +266,9 @@ pub(crate) fn projected_entry(
 /// creating a new reference. Public current() and by-reference foreach have
 /// different contracts and retain their existing projection paths.
 #[cold]
-pub(crate) fn cached_value(receiver: &Value, eg: &ExecutorGlobals) -> Value {
-    if projected_entry(receiver, Move::Current, Projection::None, eg).is_none() {
-        return Value::null();
+pub(crate) fn cached_value(receiver: &Value, eg: &mut ExecutorGlobals) -> Result<Value, VmError> {
+    if projected_entry(receiver, Move::Current, Projection::None, eg)?.is_none() {
+        return Ok(Value::null());
     }
     let state = receiver.as_object().and_then(|o| {
         o.native_array_iteration()?
@@ -271,26 +277,26 @@ pub(crate) fn cached_value(receiver: &Value, eg: &ExecutorGlobals) -> Value {
             .map(|cursor| *cursor.borrow())
     });
     let Some(state) = state else {
-        return Value::null();
+        return Ok(Value::null());
     };
-    let Some(storage) = backing(receiver) else {
-        return Value::null();
+    let Some(storage) = backing(receiver, eg) else {
+        return Ok(Value::null());
     };
     let (owner, key) = match storage {
         Backing::Array(owner, key) => (owner, Some(key)),
         Backing::Object(owner) => (owner, None),
     };
     let Some(object) = owner.as_object() else {
-        return Value::null();
+        return Ok(Value::null());
     };
     let Some(buckets) = object
         .native_array_iteration()
         .and_then(|i| i.buckets.as_ref())
     else {
-        return Value::null();
+        return Ok(Value::null());
     };
     let index = buckets.index(state.live);
-    if let Some(key) = key {
+    Ok(if let Some(key) = key {
         object
             .get_property(key)
             .and_then(Value::as_array)
@@ -300,7 +306,7 @@ pub(crate) fn cached_value(receiver: &Value, eg: &ExecutorGlobals) -> Value {
         object_entries(&object, eg)
             .get(index)
             .map_or_else(Value::null, |row| row.value.clone_for_php_storage())
-    }
+    })
 }
 
 #[cold]
@@ -323,7 +329,7 @@ fn entry_slow(
             .clone()
     };
     let mut state = *cursor.borrow();
-    let storage = backing(receiver)?;
+    let storage = backing(receiver, eg)?;
     let (owner, storage_key) = match storage {
         Backing::Array(owner, key) => (owner, Some(key)),
         Backing::Object(owner) => (owner, None),
@@ -544,27 +550,27 @@ pub(super) fn object_removed(
 }
 
 fn rewind(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    projected_entry(arg!(ed, 0), Move::Rewind, Projection::None, eg);
+    projected_entry(arg!(ed, 0), Move::Rewind, Projection::None, eg)?;
     ret!(rv, Value::null());
 }
 fn next(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    projected_entry(arg!(ed, 0), Move::Next, Projection::None, eg);
+    projected_entry(arg!(ed, 0), Move::Next, Projection::None, eg)?;
     ret!(rv, Value::null());
 }
 fn current(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let value = projected_entry(arg!(ed, 0), Move::Current, Projection::Value, eg)
+    let value = projected_entry(arg!(ed, 0), Move::Current, Projection::Value, eg)?
         .map_or_else(Value::null, |entry| entry.1);
     ret!(rv, value);
 }
 fn key(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let key = projected_entry(arg!(ed, 0), Move::Current, Projection::Key, eg)
+    let key = projected_entry(arg!(ed, 0), Move::Current, Projection::Key, eg)?
         .map_or_else(Value::null, |entry| entry.0);
     ret!(rv, key);
 }
 fn valid(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(
         rv,
-        Value::bool(projected_entry(arg!(ed, 0), Move::Current, Projection::None, eg).is_some())
+        Value::bool(projected_entry(arg!(ed, 0), Move::Current, Projection::None, eg)?.is_some())
     );
 }
 fn seek(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -587,7 +593,7 @@ fn seek(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Resul
             Move::Seek(offset as usize),
             Projection::None,
             eg,
-        )
+        )?
         .is_none()
     {
         eg.exception = Some(make_error_value(

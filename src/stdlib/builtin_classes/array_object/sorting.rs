@@ -73,6 +73,9 @@ fn sort(
     kind: Kind,
 ) -> Result<(), VmError> {
     let receiver = arg!(ed, 0).clone();
+    if !prepare_backing(&receiver, eg)? {
+        return Ok(());
+    }
     let owner_name = receiver.as_object().map_or("ArrayObject", |o| {
         if array_object_storage_key(&o) == ARRAY_ITERATOR_STORAGE {
             "ArrayIterator"
@@ -119,15 +122,22 @@ fn sort(
     } else {
         None
     };
-    let Some(Backing::Array(owner, key)) = backing(&receiver) else {
-        return Err(VmError::Fatal(
-            "Object-property-backed native sorting is not implemented".into(),
-        ));
+    let Some(storage) = backing(&receiver, eg) else {
+        return Ok(());
     };
-    let source = owner
-        .as_object()
-        .and_then(|o| o.get_property(key).cloned())
-        .expect("resolved native array storage");
+    let (owner, source, object_table) = match storage {
+        Backing::Array(owner, key) => {
+            let source = owner
+                .as_object()
+                .and_then(|o| o.get_property(key).cloned())
+                .expect("resolved native array storage");
+            (owner, source, false)
+        }
+        Backing::Object(owner) => {
+            let source = Value::array(snapshot(&receiver, eg, false));
+            (owner, source, true)
+        }
+    };
     let array = source.as_array().expect("resolved array backing");
     let external = array.has_external_byte_keys();
     let mut entries = Vec::with_capacity(array.len());
@@ -211,12 +221,52 @@ fn sort(
         );
     }
     copy_array_key_provenance(array, &sorted);
-    replace_storage_with_cursor_policy(&owner, Value::array(sorted), eg, false)?;
+    if object_table {
+        publish_object_table(&owner, &sorted, eg)?;
+    } else {
+        replace_storage_with_cursor_policy(&owner, Value::array(sorted), eg, false)?;
+    }
     if let Err(Some(error)) = outcome {
         return Err(error);
     }
     if eg.exception.is_none() {
         ret!(rv, Value::bool(true));
+    }
+    Ok(())
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn publish_object_table(
+    owner: &Value,
+    sorted: &PhpArray,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let mut table = crate::value::DynamicPropertyMap::with_capacity(sorted.len());
+    for (key, value) in sorted.iter() {
+        let name = match key {
+            ArrayKey::Int(key) => key.to_string(),
+            ArrayKey::String(key) => key,
+        };
+        table.insert_owned(name, value.clone_for_php_storage());
+    }
+    let object = owner.as_object().expect("retained raw-table owner");
+    let mut releases = Vec::new();
+    object.for_each_dynamic_property(|_, value| {
+        if let Some(release) = release_plan(eg, value) {
+            releases.push(release);
+        }
+    });
+    drop(object);
+    let mut object = owner.as_object_mut().expect("retained raw-table owner");
+    let retired = object.replace_raw_property_table(table);
+    cursor::storage_replaced(&mut object, sorted.len(), false);
+    drop(object);
+    drop(retired);
+    for release in releases {
+        run_prepared_value_destructor(eg, Some(release))?;
     }
     Ok(())
 }

@@ -8,64 +8,63 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
-`recursive-callback-filter-projection-contracts`, against `3bb992f1`:
-**+12/-0**, independently confirmed by PHP 8.5.10 (ten SPL, two Zend).
-SPL reaches **630 pass / 115 fail / 31 unsupported / 8 skip / 1 XFAIL**;
-core reaches **6,448 pass / 333 fail / 182 skip / 211 unsupported**.
-Selected coverage is **7,959 cases: 7,078 pass / 448 fail**, plus 190 skips,
-242 unsupported and one XFAIL. This is not complete PHP coverage.
+`array-object-object-backing-projection-contracts`, against `41dd855d`:
+**+10/-0**, independently confirmed by PHP 8.5.10. SPL reaches
+**640 pass / 105 fail / 31 unsupported / 8 skip / 1 XFAIL**; core remains
+**6,448 pass / 333 fail / 182 skip / 211 unsupported**. Selected coverage is
+**7,959 cases: 7,088 pass / 438 fail**, plus 190 skips, 242 unsupported and
+one XFAIL. This is not complete PHP coverage.
 
-CallbackFilterIterator, RecursiveFilterIterator, RecursiveCallbackFilterIterator
-and ParentIterator reuse the existing filter loop and traced delegate storage.
-Original oracles cover lazy selection, callable identity/scope, weak conversion,
-reference diagnostics, subclass child factories, reentry, COW, cycles and
-argument/result retirement, including destructor exceptions. No PHP call or
-retirement crosses a borrowed native state. Canonical unpack arity is preserved.
+Object-backed ArrayObject operations share raw property-table admission,
+lazy activation, key projection and sort publication. Declared slots retain
+their separate ownership after table detachment; ordinary property constraints,
+references/COW, callbacks and retirement remain distinct from the deprecated
+raw interface. Sparse existing auxiliary state carries the policy without
+changing common Value/PhpObject/VM layouts. Legacy restore preserves member/error
+ordering and a real native trace activation within the same reference graph.
+Retirement follows borrow release; collector edge accounting remains separate
+from full ownership traversal.
 
-Profile-backed work removal covers native-parent alias discovery, exact native
-recursive cursor checks, primitive constructor/default projection and hashing
-of engine-only declaration names. Public symbol tables retain keyed hashing.
-No common Value/VM layout, opcode, JIT admission, dependency or unsafe-ceiling
-change. Rejected candidates remain recorded; no unchanged failed timing reroll.
-
-All **1,160 focused tests** (729 library, 41 new original CLI cases plus
-adjacent suites) pass; originals agree with PHP with JIT enabled and disabled.
-One frozen checked matrix passes **5,551/5,219/5,622/5,644/5,695** tests
+All **896 focused tests** (729 library and 167 CLI, including 25 new original
+cases) pass; the originals agree with PHP with JIT enabled and disabled.
+One frozen checked matrix passes **5,576/5,244/5,647/5,669/5,720** tests
 (13/13/13/13/16 ignored, none filtered), plus all-features/all-targets.
-Exact no-loss, all twelve independent PHP gain checks, prior originals,
+Exact no-loss, ten independent PHP gain checks, prior originals,
 Composer/Symfony S0-S3, runner/unsafe self-tests and public hygiene pass.
-Unsafe stays **1,622/289**. No lost pass, process hazard, changed expectation or
-moved failure stage. The validation-only stop on two unexpected Zend gains
-was resolved by confirming their callback-filter GC/reference boundary against
-PHP, without changing production sources or repeating successful gates.
+No lost pass, process hazard, changed expectation or moved failure stage.
+No-default compiler warnings are unchanged. Unsafe is **1,623/289** within
+unchanged ceilings; the added trace snapshot has an asserted live frame layout.
 
-All **109 established 32-pair controls** have exact outputs and meet fixed
-cumulative common **+1.65%** / pay-use **+5%** limits. Against `9cddc39c`,
-common peaks at **+1.299%**, pay-use at **+3.335%**. Startup is the sole nominal
-+1% common finding; two immediate-parent common findings exceed +1%
-(maximum +1.244%). All eight fixed/first-present anchors remain unchanged.
-New API candidate/PHP ratios (eight pairs) are callback **5.143**, recursive
-callback **10.776**, recursive override **10.960**, parent **5.106**: absolute
-costs, not absent-parent regressions or PHP-speed parity. The user-authorized
-shared-host guard records two background events, not isolated-host evidence.
-No private host was configured. Cleanup runs between configurations and after
-full/release/perf gates; only regeneratable superseded builds are removed.
+All **113 established 32-pair controls** retain exact outputs and nine unchanged
+fixed/first-present anchors. Fixed cumulative common **+1.65%** / pay-use
+**+5%** gates pass: maxima **+1.024%/+3.791%**, first-present API maximum
+**+2.454%**. The array control exceeds nominal +1% but improves on the immediate
+parent; boolean coercion is +2.825% incremental and -6.439% cumulative.
+Both findings remain explicit. The user-authorized shared-host guard records
+two background events, not isolated-host evidence. No private host was
+configured and no unchanged failed timing reroll was used. Cleanup runs
+between configurations and after full/release/performance gates.
 
 SHA-256 evidence:
 
-- Release: `57fbcde7fbd83e502df99cf4513bdf2a5ba57dc7dd4ec8c67caffabd9692e66e`.
-- Complete technical record: `a4e4cc959901b95ae7db5c9db910c5f4987ce02116d60f7a1538b2cac1ab1cf1`.
-- Matrix: `9a719a082f9928855eba53f124dde67bc2539863309d0a8506607e7ae59ef9a5`.
-- SPL manifest / pass set: `dbbdb6ad7b8e66bace2bba71f5cf631a2e4e46f5495675a1f3b5826673fc8418` / `e43867911014d48a123a71c0f870c8cfa431286ed4c1c2a6961aa28d35674e2d`.
-- Zend/lang manifest / pass set: `4acbaa214d6021906519b87c5ecc8241e939e75bc52ba4ae3492e95098bf28d2` / `44e7000e60fa83566a9a4fe8d06e602486e2d063299a290f62c352a213f5f7f1`.
-- Strings/array manifest / pass set: `11ef353e249031e32b32b7dab1d2c8df7fd45005675fcec5d5a3e245786d7673` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
-- Reviewed performance / raw timing: `d2c13cbed99942e9421068da251d3982925ef18df23bc0c2240c96955ec7f35d` / `d9432cdbeda134e90b3ef51b9b7b2be88421718d50044e48fd96020c741308aa`.
+- Release: `f68f0672360e29b9e0c37f7587a2b118e71aa076972870ec4f3c57517b4effa9`.
+- Complete technical record: `d3f9c8db8734639adfc9c1d1d88922a4a424839cbc7caaaa7d24b1a29327f1cc`.
+- Matrix: `b6defbd3fe5c8781e196cc8e1b55632d7b193ab23051f7cd8b75755693217a56`.
+- SPL manifest / pass set: `30a837c5780be2c54ccdd1f3c410a3ac2dda4c7986d677c0db06a926072ce157` / `377403e577196d8f9d85296441eadfa1dcbf5a320a8a3ef99aa21aff54e09991`.
+- Zend/lang manifest / pass set: `b490ec69cb47c3e3fdcd349eae25f5c39a147852de1ba3ca99dc5ae19291d401` / `44e7000e60fa83566a9a4fe8d06e602486e2d063299a290f62c352a213f5f7f1`.
+- Strings/array manifest / pass set: `b798da1f890c3dbeb9418adb10019fff1ce5f93e04172700c74922776d5e6f5c` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+- Reviewed performance / raw timing: `e0df1bc31e2a0681d296a63d03f3ecc2446627de0db263c42211e7f7307ad6eb` / `4ba46003d6668441b3815bbf557c09f5d8c63ae64f59794e23482daf408a11c9`.
 
-Next read-only admission confirms 21 PHP-pass/current-fail object-backed
-ArrayObject candidates (`2554e5c697d81112385229ff6eb61835b815c9748163604184732ecd89c446d6`).
-Prove a shared projection/commit boundary with original oracles and at least ten
-reachable gains before implementation; unrelated serialization, internal-class
-behavior, parser, shutdown, suspension and 32-bit/OOM remain separate.
+Remaining non-claims include hooked duplicate raw-key array artifacts, orphan
+cycle request-shutdown, unrelated native classes, suspension and 32-bit/OOM.
+Read-only next triage identifies nine remaining output differences consisting
+solely of object IDs around nested constructors. Prove actual allocation and
+argument/error ordering, not ID remapping, and at least ten reachable shared
+gains before the next implementation; separately assess constant-new defaults.
+
+The preceding recursive callback-filter checkpoint added twelve passes;
+its complete technical record remains
+`a4e4cc959901b95ae7db5c9db910c5f4987ce02116d60f7a1538b2cac1ab1cf1`.
 
 The preceding recursive-directory/glob checkpoint added thirteen SPL passes;
 its complete technical record remains

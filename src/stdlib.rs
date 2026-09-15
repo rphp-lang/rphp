@@ -214,8 +214,8 @@ pub(crate) use builtin_classes::{
     NativeIteratorMove, NativeIteratorProjection, array_object_array_cast,
     array_object_property_uses_dimension, bind_array_object_property,
     consume_native_iterator_array, glob_method_state_ready, native_iterator_entry,
-    native_iterator_projected_entry, prepare_array_object_clone, prepare_file_info_clone,
-    prepare_native_deque_consumer, resolve_iterator_delegated_method,
+    native_iterator_projected_entry, prepare_array_object_backing, prepare_array_object_clone,
+    prepare_file_info_clone, prepare_native_deque_consumer, resolve_iterator_delegated_method,
     uses_native_iterator_protocol, validate_recursive_iterator_start,
 };
 
@@ -252,7 +252,18 @@ fn internal_user_caller_snapshot(
     // is one instruction past DoFcall. The immutable send sequence and caller
     // frame therefore remain valid until this handler returns.
     unsafe {
-        let caller = (*ed).prev_execute_data;
+        let mut caller = (*ed).prev_execute_data;
+        // Engine-invoked native methods have no source operands of their own.
+        // A diagnostic inherits the nearest user site; direct-argument
+        // classification must never cross such an internal activation.
+        if argument_index.is_none() {
+            while !caller.is_null()
+                && !(*caller).func.is_null()
+                && (*(*caller).func).fn_type == FunctionType::Internal
+            {
+                caller = (*caller).prev_execute_data;
+            }
+        }
         if caller.is_null() || (*caller).func.is_null() {
             return None;
         }
@@ -13157,6 +13168,22 @@ fn fn_get_object_vars(
 
     let caller_class = crate::vm::execute::lexical_class_name_for_internal_call(eg, ed);
     let class_id = object.class_id;
+    if object.has_detached_property_table()
+        && !eg.class_by_id(class_id).is_some_and(|class| {
+            class
+                .properties
+                .iter()
+                .any(|p| p.has_get_hook || p.has_set_hook)
+        })
+    {
+        let mut result = PhpArray::new();
+        object.for_each_dynamic_property(|name, value| {
+            if !value.is_undef() {
+                set_object_var(&mut result, name, clone_object_var(value));
+            }
+        });
+        ret!(rv, Value::array(result));
+    }
     let dynamic_len = object
         .dynamic_properties
         .as_ref()
@@ -15977,6 +16004,13 @@ pub(crate) fn dispatch_php_error(
     let Some(suspended) = eg.error_handler.take() else {
         return Ok(false);
     };
+    // Zend declines a user callback while an exception is pending. Native
+    // cleanup may still report a diagnostic; with no user handler it follows
+    // the ordinary output path instead.
+    if eg.exception.is_some() {
+        eg.error_handler = Some(suspended);
+        return Ok(true);
+    }
     let Some(resolved) = resolve_callback_at_callsite(&suspended, eg, ed) else {
         eg.error_handler = Some(suspended);
         return Ok(false);
@@ -19391,6 +19425,23 @@ fn var_dump_value_inner(
                     visited_arrays,
                     visited_objects,
                 )
+            } else if object.has_detached_property_table() {
+                let mut properties = PhpArray::new();
+                object.for_each_dynamic_property(|name, value| {
+                    if !value.is_undef() {
+                        properties.set_str(name, value.clone_for_php_storage());
+                    }
+                });
+                drop(object);
+                var_dump_projected_object(
+                    val,
+                    &Value::array(properties),
+                    indent,
+                    eg,
+                    context,
+                    visited_arrays,
+                    visited_objects,
+                )
             } else if object.class_name.as_ref() == "SensitiveParameterValue" {
                 let mut out = dump_object_header(
                     context,
@@ -19975,7 +20026,10 @@ fn print_r_value_inner(
                     out.push(b'\n');
                 }
             }
-            for slot in var_dump_property_slots(eg, object.class_id) {
+            for slot in var_dump_property_slots(eg, object.class_id)
+                .into_iter()
+                .filter(|_| !object.has_detached_property_table())
+            {
                 let definition = &class.properties[slot];
                 if definition.is_virtual_hook_property() {
                     continue;
@@ -20012,9 +20066,14 @@ fn print_r_value_inner(
                     return;
                 }
                 out.extend_from_slice(inner.as_bytes());
-                out.push(b'[');
-                out.extend_from_slice(name.as_bytes());
-                out.extend_from_slice(b"] => ");
+                if object.has_detached_property_table() && name.starts_with('\0') {
+                    out.extend_from_slice(print_r_raw_property_key(name).as_bytes());
+                    out.extend_from_slice(b" => ");
+                } else {
+                    out.push(b'[');
+                    out.extend_from_slice(name.as_bytes());
+                    out.extend_from_slice(b"] => ");
+                }
                 out.extend_from_slice(&print_r_value_inner(
                     value,
                     indent + 1,
@@ -20044,6 +20103,22 @@ fn print_r_value_inner(
         }
         ValueType::Resource => val.echo_to_string().into_bytes(),
         _ => Vec::new(),
+    }
+}
+
+#[cold]
+fn print_r_raw_property_key(name: &str) -> String {
+    if let Some((owner, member)) = name
+        .strip_prefix('\0')
+        .and_then(|name| name.split_once('\0'))
+    {
+        if owner == "*" {
+            format!("[{member}:protected]")
+        } else {
+            format!("[{member}:{owner}:private]")
+        }
+    } else {
+        format!("[{name}]")
     }
 }
 
@@ -20895,7 +20970,21 @@ fn project_ordinary_json_object(
         return Ok(PhpJsonValue::Null);
     }
 
-    let slots = eg.visible_instance_property_slots(class_id, None);
+    let detached = val
+        .as_object()
+        .is_some_and(|object| object.has_detached_property_table());
+    let has_hooks = detached
+        && eg.class_by_id(class_id).is_some_and(|class| {
+            class
+                .properties
+                .iter()
+                .any(|p| p.has_get_hook || p.has_set_hook)
+        });
+    let slots = if detached && !has_hooks {
+        Vec::new()
+    } else {
+        eg.visible_instance_property_slots(class_id, None)
+    };
     let mut entries = PhpJsonObjectBuilder::with_capacity(slots.len());
     let mut declared_names = std::collections::HashSet::new();
     for slot in slots {
@@ -20942,7 +21031,10 @@ fn project_ordinary_json_object(
     let mut dynamic = Vec::new();
     if let Some(object) = val.as_object() {
         object.for_each_dynamic_property(|name, property| {
-            if !property.is_undef() && !declared_names.contains(name) {
+            if !property.is_undef()
+                && !name.starts_with('\0')
+                && (detached || !declared_names.contains(name))
+            {
                 dynamic.push((name.to_string(), property.clone()));
             }
         });
@@ -29729,7 +29821,10 @@ fn object_cursor_entries(eg: &ExecutorGlobals, value: &Value) -> Vec<(String, Va
         .as_object()
         .expect("object cursor is entered only for an object");
     let mut entries = Vec::new();
-    if let Some(class) = eg.class_by_id(object.class_id) {
+    if let Some(class) = eg
+        .class_by_id(object.class_id)
+        .filter(|_| !object.has_detached_property_table())
+    {
         for slot in eg.instance_property_slots_in_iteration_order(object.class_id) {
             let Some(value) = object.get_property_slot(slot) else {
                 continue;
@@ -30849,6 +30944,16 @@ fn http_build_query_object_array(value: &Value, eg: &ExecutorGlobals) -> PhpArra
     let Some(object) = value.as_object() else {
         return PhpArray::new();
     };
+    if object.has_detached_property_table() {
+        let mut result = PhpArray::new();
+        object.for_each_dynamic_property(|name, property| {
+            if !property.is_undef() {
+                let name = name.rsplit_once('\0').map_or(name, |(_, name)| name);
+                result.set_str(name, property.clone_for_php_storage());
+            }
+        });
+        return result;
+    }
     let dynamic_len = object
         .dynamic_properties
         .as_ref()

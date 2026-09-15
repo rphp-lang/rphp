@@ -38,7 +38,12 @@ pub(crate) fn array_cast(receiver: &Value, eg: &ExecutorGlobals) -> Option<Value
     }
     if object.native_array_options().flags & 1 == 0 {
         drop(object);
-        return Some(Value::array(snapshot(receiver, eg, false)));
+        // A raw property table can contain integer-looking string keys.
+        // getArrayCopy() preserves them, but an explicit array cast performs
+        // the ordinary property-table -> array key canonicalization.
+        return Some(Value::array(snapshot_with_key_policy(
+            receiver, eg, false, true,
+        )));
     }
     drop(object);
     Some(Value::array(member_properties(receiver, eg)))
@@ -47,7 +52,11 @@ pub(crate) fn array_cast(receiver: &Value, eg: &ExecutorGlobals) -> Option<Value
 pub(super) fn member_properties(receiver: &Value, eg: &ExecutorGlobals) -> PhpArray {
     let object = receiver.as_object().expect("native array receiver");
     let mut result = PhpArray::new();
-    for slot in eg.instance_property_slots_in_iteration_order(object.class_id) {
+    for slot in eg
+        .instance_property_slots_in_iteration_order(object.class_id)
+        .into_iter()
+        .filter(|_| !object.has_detached_property_table())
+    {
         let Some(definition) = eg.instance_property_definition(object.class_id, slot) else {
             continue;
         };
@@ -204,7 +213,7 @@ enum Backing {
 #[inline(never)]
 // SAFETY: compiler-generated code retains its normal calling convention.
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
-fn backing(receiver: &Value) -> Option<Backing> {
+fn backing(receiver: &Value, eg: &ExecutorGlobals) -> Option<Backing> {
     let mut owner = receiver.clone();
     // Most native cursors have zero or one wrapper hop. Cycle detection must
     // not allocate a Vec for every element they read. Deep chains still spill
@@ -222,6 +231,9 @@ fn backing(receiver: &Value) -> Option<Backing> {
         let key = array_object_storage_key(&object);
         let Some(value) = object.get_property(key) else {
             drop(object);
+            if let Some(instance) = eg.lazy_proxy_instance(&owner) {
+                return Some(Backing::Object(instance));
+            }
             return Some(Backing::Object(owner));
         };
         if value.value_type() == ValueType::Array {
@@ -240,12 +252,47 @@ fn backing(receiver: &Value) -> Option<Backing> {
     }
 }
 
+/// Resolve a raw native backing table before an operation can observe it.
+/// Admission itself must not run a lazy initializer. No slot borrow or cursor
+/// state survives the initializer, which can throw, retry or replace storage.
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+pub(crate) fn prepare_backing(receiver: &Value, eg: &mut ExecutorGlobals) -> Result<bool, VmError> {
+    let native = receiver
+        .as_object()
+        .is_some_and(|object| native_storage_key(&object).is_some());
+    if !native {
+        return Ok(true);
+    }
+    if let Some(Backing::Object(object)) = backing(receiver, eg) {
+        if eg.is_uninitialized_lazy_object(&object) {
+            crate::stdlib::reflection::initialize_lazy_object(eg, &object)?;
+        }
+    }
+    Ok(eg.exception.is_none())
+}
+
 #[cold]
 #[inline(never)]
 // SAFETY: compiler-generated code retains its normal calling convention.
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
 pub(super) fn snapshot(receiver: &Value, eg: &ExecutorGlobals, public_only: bool) -> PhpArray {
-    let Some(storage) = backing(receiver) else {
+    snapshot_with_key_policy(receiver, eg, public_only, false)
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn snapshot_with_key_policy(
+    receiver: &Value,
+    eg: &ExecutorGlobals,
+    public_only: bool,
+    canonical: bool,
+) -> PhpArray {
+    let Some(storage) = backing(receiver, eg) else {
         return PhpArray::new();
     };
     let object_value = match storage {
@@ -259,7 +306,11 @@ pub(super) fn snapshot(receiver: &Value, eg: &ExecutorGlobals, public_only: bool
     };
     let object = object_value.as_object().expect("resolved object backing");
     let mut result = PhpArray::new();
-    for slot in eg.instance_property_slots_in_iteration_order(object.class_id) {
+    for slot in eg
+        .instance_property_slots_in_iteration_order(object.class_id)
+        .into_iter()
+        .filter(|_| !object.has_detached_property_table())
+    {
         let definition = eg
             .instance_property_definition(object.class_id, slot)
             .expect("declared slot");
@@ -288,11 +339,19 @@ pub(super) fn snapshot(receiver: &Value, eg: &ExecutorGlobals, public_only: bool
             Visibility::Protected => format!("\0*\0{}", definition.name),
             Visibility::Private => format!("\0{}\0{}", definition.declaring_class, definition.name),
         };
-        result.set_str(&key, value.clone_for_php_storage());
+        if canonical {
+            set_object_var(&mut result, &key, value.clone_for_php_storage());
+        } else {
+            result.set_str(&key, value.clone_for_php_storage());
+        }
     }
     object.for_each_dynamic_property(|key, value| {
         if value.value_type() != ValueType::Undef && (!public_only || !key.starts_with('\0')) {
-            result.set_str(key, value.clone_for_php_storage());
+            if canonical {
+                set_object_var(&mut result, key, value.clone_for_php_storage());
+            } else {
+                result.set_str(key, value.clone_for_php_storage());
+            }
         }
     });
     result
@@ -303,7 +362,7 @@ pub(super) fn snapshot(receiver: &Value, eg: &ExecutorGlobals, public_only: bool
 // SAFETY: compiler-generated code retains its normal calling convention.
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
 pub(super) fn count(receiver: &Value, eg: &ExecutorGlobals) -> usize {
-    let Some(storage) = backing(receiver) else {
+    let Some(storage) = backing(receiver, eg) else {
         return 0;
     };
     let owner = match storage {
@@ -323,6 +382,9 @@ pub(super) fn count(receiver: &Value, eg: &ExecutorGlobals) -> usize {
     let object = owner.as_object().expect("resolved object backing");
     let mut count = 0;
     for (slot, value) in object.property_values.iter().enumerate() {
+        if object.has_detached_property_table() {
+            break;
+        }
         if value.value_type() == ValueType::Undef {
             continue;
         }
@@ -350,7 +412,10 @@ pub(super) fn append(
     eg: &mut ExecutorGlobals,
     value: Value,
 ) -> Result<(), VmError> {
-    if matches!(backing(arg!(ed, 0)), Some(Backing::Object(_))) {
+    if !prepare_backing(arg!(ed, 0), eg)? {
+        return Ok(());
+    }
+    if matches!(backing(arg!(ed, 0), eg), Some(Backing::Object(_))) {
         let method = arg!(ed, 0).as_object().map_or("ArrayObject", |object| {
             if array_object_storage_key(&object) == ARRAY_ITERATOR_STORAGE {
                 "ArrayIterator"
@@ -398,6 +463,7 @@ fn validate(
     value: &Value,
     method: &str,
     owner: &str,
+    receiver: &Value,
 ) -> Result<bool, VmError> {
     if value.value_type() == ValueType::Array {
         return Ok(true);
@@ -421,18 +487,62 @@ fn validate(
             "{owner}::{method}(): Using an object as a backing array for {owner} is deprecated, as it allows violating class constraints and invariants"
         ),
     )?;
-    if eg.exception.is_none() && super::fixed_array::has_fixed_slots(value, eg) {
-        let name = value
-            .as_object()
-            .expect("object backing")
-            .class_name
-            .to_string();
-        eg.exception = Some(make_error_value(
-            "InvalidArgumentException",
-            &format!("Overloaded object of type {name} is not compatible with {owner}"),
-        ));
+    if eg.exception.is_none() {
+        reject_incompatible_backing(receiver, value, eg);
     }
     Ok(eg.exception.is_none())
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+pub(in crate::stdlib) fn reject_incompatible_backing(
+    receiver: &Value,
+    value: &Value,
+    eg: &mut ExecutorGlobals,
+) {
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    // Native array wrappers expose their own backing protocol, not the
+    // ordinary property-table contract. They remain valid wrapper links.
+    if native_storage_key(&object).is_some() {
+        return;
+    }
+    let name = object.class_name.to_string();
+    let is_enum = eg
+        .class_by_id(object.class_id)
+        .is_some_and(|class| class.is_enum);
+    drop(object);
+    // These native families replace ordinary property-table projection.
+    // User __get/__debugInfo methods do not change that capability. Test the
+    // ancestry so subclasses inherit the native restriction as well.
+    let overloaded = super::fixed_array::has_fixed_slots(value, eg)
+        || [
+            "DateInterval",
+            "DateTime",
+            "DateTimeImmutable",
+            "DateTimeZone",
+            "DatePeriod",
+            "WeakMap",
+        ]
+        .iter()
+        .any(|owner| eg.class_is_a(&name, owner));
+    if !overloaded && !is_enum {
+        return;
+    }
+    let owner = receiver
+        .as_object()
+        .expect("native array receiver")
+        .class_name
+        .to_string();
+    let message = if overloaded {
+        format!("Overloaded object of type {name} is not compatible with {owner}")
+    } else {
+        format!("Enums are not compatible with {owner}")
+    };
+    eg.exception = Some(make_error_value("InvalidArgumentException", &message));
 }
 
 #[cold]
@@ -494,13 +604,13 @@ pub(super) fn construct(
     // Validate the storage tag first, but defer object deprecation until all
     // options have passed: an invalid iterator class must not emit it.
     if !matches!(value.value_type(), ValueType::Array | ValueType::Object) {
-        validate(ed, eg, &value, "__construct", owner)?;
+        validate(ed, eg, &value, "__construct", owner, arg!(ed, 0))?;
         return Ok(());
     }
     let Some(options) = options::construct_options(ed, eg, &value, owner)? else {
         return Ok(());
     };
-    if !validate(ed, eg, &value, "__construct", owner)? {
+    if !validate(ed, eg, &value, "__construct", owner, arg!(ed, 0))? {
         return Ok(());
     }
     if reject_mutation(arg!(ed, 0), eg) {
@@ -525,10 +635,13 @@ pub(super) fn construct(
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
 fn exchange(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let value = arg!(ed, 1).dereferenced().clone();
-    if !validate(ed, eg, &value, "exchangeArray", "ArrayObject")? {
+    if !validate(ed, eg, &value, "exchangeArray", "ArrayObject", arg!(ed, 0))? {
         return Ok(());
     }
     if reject_mutation(arg!(ed, 0), eg) {
+        return Ok(());
+    }
+    if !prepare_backing(arg!(ed, 0), eg)? {
         return Ok(());
     }
     let previous = Value::array(snapshot(arg!(ed, 0), eg, false));
@@ -541,6 +654,9 @@ fn exchange(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
 // SAFETY: compiler-generated code retains its normal calling convention.
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
 fn copy(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    if !prepare_backing(arg!(ed, 0), eg)? {
+        return Ok(());
+    }
     ret!(rv, Value::array(snapshot(arg!(ed, 0), eg, false)));
 }
 
@@ -670,6 +786,9 @@ fn property_slot(object: &PhpObject, key: &ArrayKey, eg: &ExecutorGlobals) -> Pr
         ArrayKey::Int(key) => key.to_string(),
         ArrayKey::String(key) => key.clone(),
     };
+    if object.has_detached_property_table() {
+        return PropertySlot::Dynamic(name);
+    }
     for slot in 0..object.property_values.len() {
         let Some(definition) = eg.instance_property_definition(object.class_id, slot) else {
             continue;
@@ -712,7 +831,10 @@ pub(super) fn offset_get(
     key: ArrayKey,
     context: ArrayObjectOffsetGetContext,
 ) -> Result<(), VmError> {
-    let Some(storage) = backing(arg!(ed, 0)) else {
+    if !prepare_backing(arg!(ed, 0), eg)? {
+        return Ok(());
+    }
+    let Some(storage) = backing(arg!(ed, 0), eg) else {
         ret!(rv, Value::null());
     };
     let (owner, array_key) = match storage {
@@ -808,7 +930,10 @@ fn write_offset(
     key: Option<ArrayKey>,
     value: Value,
 ) -> Result<(), VmError> {
-    let Some(storage) = backing(receiver) else {
+    if !prepare_backing(receiver, eg)? {
+        return Ok(());
+    }
+    let Some(storage) = backing(receiver, eg) else {
         return Ok(());
     };
     let (owner, array_key) = match storage {
@@ -816,7 +941,7 @@ fn write_offset(
         Backing::Object(owner) => (owner, None),
     };
     let mut object = owner.as_object_mut().expect("resolved backing owner");
-    let mut release = None;
+    let mut retired = None;
     if let Some(storage_key) = array_key {
         let array = object
             .get_property_mut(storage_key)
@@ -825,8 +950,7 @@ fn write_offset(
         if let Some(key) = key {
             let key = array.prepare_string_key_for_write(key, key_source);
             if let Some(slot) = array.get_key_mut(&key) {
-                release = release_plan(eg, slot);
-                *slot = value;
+                retired = Some(std::mem::replace(slot, value));
             } else {
                 array.set(key, value);
             }
@@ -848,17 +972,20 @@ fn write_offset(
         });
         let target = property_slot(&object, &key, eg);
         if let Some(slot) = object_slot(&mut object, &target) {
-            release = release_plan(eg, slot);
             // SPL replaces the raw bucket, including its reference wrapper.
             // Ordinary property assignment would write through the cell (or
             // validate/remove typed-reference sources), which is not this
             // deprecated backing-storage API's observable behavior.
-            *slot = value;
+            retired = Some(std::mem::replace(slot, value));
         } else if let PropertySlot::Dynamic(name) = target {
             object.set_dynamic_property(&name, value);
         }
     }
     drop(object);
+    // A retired bucket may point back to its own backing owner. Inspect its
+    // release graph only after the mutable property-table borrow has ended.
+    let release = retired.as_ref().and_then(|value| release_plan(eg, value));
+    drop(retired);
     run_prepared_value_destructor(eg, release)
 }
 
@@ -872,7 +999,7 @@ pub(super) fn offset_exists(
     source: &Value,
     eg: &ExecutorGlobals,
 ) -> bool {
-    let Some(storage) = backing(receiver) else {
+    let Some(storage) = backing(receiver, eg) else {
         return false;
     };
     match storage {
@@ -909,7 +1036,10 @@ pub(super) fn offset_unset(
             .native_array_iteration()
             .and_then(|state| state.cursor.clone())
     });
-    let Some(storage) = backing(arg!(ed, 0)) else {
+    if !prepare_backing(arg!(ed, 0), eg)? {
+        return Ok(());
+    }
+    let Some(storage) = backing(arg!(ed, 0), eg) else {
         return Ok(());
     };
     let (owner, array_key) = match storage {
@@ -918,20 +1048,20 @@ pub(super) fn offset_unset(
     };
     let identity = owner.object_identity().expect("resolved backing identity");
     let mut object = owner.as_object_mut().expect("resolved backing owner");
-    let release;
+    let retired;
     if let Some(storage_key) = array_key {
         let array = object
             .get_property_mut(storage_key)
             .and_then(Value::as_array_mut)
             .expect("array backing");
         let key = array.normalize_string_key(key, arg!(ed, 1));
-        release = array_object_value(array, &key).and_then(|v| release_plan(eg, v));
+        retired = array_object_value(array, &key).cloned();
         if let Some(position) = array.remove_with_position(&key) {
             cursor::removed(&mut object, position);
         }
     } else {
         let target = property_slot(&object, &key, eg);
-        release = object_slot(&mut object, &target).and_then(|v| release_plan(eg, v));
+        retired = object_slot(&mut object, &target).cloned();
         match target {
             PropertySlot::Declared(slot) => {
                 let name = object
@@ -948,5 +1078,7 @@ pub(super) fn offset_unset(
         }
     }
     drop(object);
+    let release = retired.as_ref().and_then(|value| release_plan(eg, value));
+    drop(retired);
     run_prepared_value_destructor(eg, release)
 }

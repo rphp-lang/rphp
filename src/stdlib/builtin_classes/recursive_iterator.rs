@@ -676,7 +676,7 @@ fn array_has(
 ) -> Result<(), VmError> {
     use array_object::cursor::{Move, Projection, projected_entry};
     let receiver = owned_argument(ed, 0);
-    let value = projected_entry(&receiver, Move::Current, Projection::Value, eg).map(|p| p.1);
+    let value = projected_entry(&receiver, Move::Current, Projection::Value, eg)?.map(|p| p.1);
     let arrays_only = receiver
         .as_object()
         .expect("receiver")
@@ -698,7 +698,7 @@ fn array_get(
 ) -> Result<(), VmError> {
     use array_object::cursor::{Move, Projection, projected_entry};
     let receiver = owned_argument(ed, 0);
-    let Some((_, value)) = projected_entry(&receiver, Move::Current, Projection::Value, eg) else {
+    let Some((_, value)) = projected_entry(&receiver, Move::Current, Projection::Value, eg)? else {
         ret!(rv, Value::null());
     };
     let object = receiver.as_object().expect("receiver");
