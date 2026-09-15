@@ -2149,7 +2149,13 @@ fn complete_finally_marker<'a>(
                         return Ok(ColdResult::Continue);
                     }
                     (*frame).pending_return_after_finally = false;
-                    release_return_foreach_sources(eg, frame, op_array)?;
+                    // Every marked foreach source is an owned heap TMP.
+                    // A heap-free activation cannot have one to retire, so
+                    // do not scan its bytecode for release markers. Heap
+                    // activations retain the full callback/exception path.
+                    if (*frame).has_heap_slots {
+                        release_return_foreach_sources(eg, frame, op_array)?;
+                    }
                     if let Some(exception) = eg.exception.take() {
                         let return_target = (*frame).return_value;
                         if !return_target.is_null() {

@@ -1,0 +1,21 @@
+{
+  "nested": "[\"parcel\",2]\n[\"parcel\",1]\n[1,2,3,4]\n",
+  "argument_callbacks": "[\"left\",2]\n[\"right\",3]\n[\"parcel\",1]\n[1,2,3]\n",
+  "dynamic_owner": "owner\n[\"child\",2]\n[\"parcel\",1]\n[1,2]\n",
+  "anonymous_owner": "[\"child\",2]\n[\"parcel\",1]\n[1,2]\n",
+  "no_constructor": "[\"discarded\",2]\n1\nplain-drop\nafter\n",
+  "unpacked": "unpack\n[\"first\",2]\n[\"second\",3]\n[\"parcel\",1]\n[1,2,3]\n",
+  "named_references": "[\"child\",2]\n[1,2,7,7]\n",
+  "unpacked_references": "[\"child\",2]\n[1,2,8]\n",
+  "defaults": "[\"parcel\",2]\n[\"parcel\",1]\n[1,2,3]\n[\"parcel\",2]\n[\"parcel\",1]\n[1,2,3]\n",
+  "validation_priority": "[\"Error\",\"Call to private Locked::__construct() from global scope\"]\n[\"Error\",\"Cannot instantiate abstract class AbstractParcel\"]\n[\"Error\",\"Class \\\"MissingParcel\\\" not found\"]\nafter\n",
+  "autoload_order": "load:LoadedParcel\n[\"loader\",1]\n[\"child\",3]\n[\"parcel\",2]\n[2,3,1]\n",
+  "argument_throw": "argument-stop\n[\"LogicException\",\"argument\"]\n[\"after\",1]\n1\n",
+  "constructor_throw": "[\"child\",2]\n[\"reject\",1,2]\n[\"LogicException\",\"constructor\"]\nnull\n[\"after\",1]\n",
+  "no_constructor_throw": "argument-stop\n[\"LogicException\",\"argument\"]\nafter\n",
+  "reused_handles": "[\"parcel\",1]\n[1,2]\n[\"parcel\",1]\n[1,2]\n[\"parcel\",1]\n[1,2]\n",
+  "suspended_argument": "\"waiting\"\n[\"resume\",3]\n[\"parcel\",2]\n[2,3]\n",
+  "collect_during_argument": "null\n[\"after-collection\",2]\n[\"parcel\",1]\n[1,2]\n",
+  "diagnostic_allocation": "notice\n[\"parcel\",1]\n[1,2,null]\n",
+  "argument_snapshot": "[\"parcel\",1]\n[[\"original\"],[\"changed\"],[\"changed\"],[\"original\"]]\n"
+}

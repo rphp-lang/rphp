@@ -87,7 +87,8 @@ unsafe fn resolve_quick_virtual_object_array_pipeline(
     consumer_count: u8,
     trailing_key_literal: Option<u16>,
 ) -> Option<QuickResolvedVirtualPipeline> {
-    let new_object = caller_op_array.instructions.get(new_ip)?;
+    let shape = crate::vm::quick::virtual_constructor_shape(caller_op_array, new_ip)?;
+    let new_object = &shape.instruction;
     if new_object.opcode != OpCode::NewObj
         || new_object._pad & NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE == 0
         || new_object.op1_type != OpType::Const
@@ -136,7 +137,7 @@ unsafe fn resolve_quick_virtual_object_array_pipeline(
 
     let declaring_class = eg.declaring_class_of(new_cache.func);
     for index in 0..argument_count as usize {
-        let send = caller_op_array.instructions.get(new_ip + 1 + index)?;
+        let send = shape.argument(caller_op_array, index)?;
         if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
             || send.op2 as u32 != constructor_common.sig.param_cv_index(index as u32)
         {
@@ -188,9 +189,9 @@ unsafe fn resolve_quick_virtual_object_array_pipeline(
         }
     }
 
-    let constructor_do_ip = new_ip + 1 + argument_count as usize;
+    let constructor_do_ip = shape.invoke_ip + 1 + argument_count as usize;
     let constructor_do = caller_op_array.instructions.get(constructor_do_ip)?;
-    let object_assign = caller_op_array.instructions.get(constructor_do_ip + 1)?;
+    let object_assign = caller_op_array.instructions.get(shape.assign_ip)?;
     if constructor_do.opcode != OpCode::DoFcall
         || object_assign.opcode != OpCode::AssignCv
         || object_assign.op1_type != OpType::Cv
@@ -256,7 +257,7 @@ unsafe fn resolve_quick_virtual_object_array_pipeline(
         }
     }
 
-    let object_assign_ip = constructor_do_ip + 1;
+    let object_assign_ip = shape.assign_ip;
     let (method_ip, _) = crate::vm::quick::after_optional_assignment_release(
         caller_op_array,
         object_assign_ip,

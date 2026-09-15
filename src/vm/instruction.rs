@@ -418,6 +418,12 @@ pub const NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE: u16 = 1 << 5;
 /// is materialized separately. Do not publish an object or pending frame, so
 /// argument suspension and constructorless calls remain safe.
 pub const NEW_FLAG_VALIDATE_ONLY: u16 = 1 << 6;
+/// Publish a real receiver before evaluating constructor arguments, without
+/// opening a pending call. The TMP roots it across callbacks and suspension.
+pub const NEW_FLAG_PREPARE_ONLY: u16 = 1 << 7;
+/// Invoke construction on the already published op1/result receiver. No class
+/// resolution, allocation or instance-default evaluation is repeated.
+pub const NEW_FLAG_PREPARED: u16 = 1 << 8;
 
 /// CallUserFuncArray was emitted for PHP source-level `...` syntax. Its op2 is
 /// an internal argument list whose array aliases and Traversable value markers
@@ -448,6 +454,10 @@ pub const RELEASE_TEMPS_NESTED_OBJECTS: u16 = 1 << 1;
 /// inert during normal execution; the pending-return marker distinguishes the
 /// temporary remapping used by the cold cleanup path.
 pub const RELEASE_TEMPS_RETURN_COMPLETION_SITE: u16 = 1 << 2;
+/// Successful subexpression cleanup, not the enclosing exception boundary.
+/// Unwinding must continue to the statement range, which also owns receivers
+/// allocated before the interrupted argument evaluation.
+pub const RELEASE_TEMPS_SUBEXPRESSION: u16 = 1 << 3;
 
 /// AssignDim stores the source l-value's PHP reference cell in the selected
 /// element. Ordinary assignments intentionally dereference their source;

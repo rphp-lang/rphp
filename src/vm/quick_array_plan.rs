@@ -311,6 +311,90 @@ pub fn detect_object_array_consumer_span(op_array: &OpArray, init_ip: usize) -> 
     Some(cursor)
 }
 
+/// Structural view of a constructor without changing canonical bytecode.
+/// A prepared receiver may cross only snapshots and positive-constant modulo
+/// here. The typed region guards their CV representations before entry; these
+/// operations cannot call PHP, mutate a CV, or fail after entry. Fallback
+/// always resumes at preparation, never at an unallocated invocation.
+pub(crate) struct VirtualConstructorShape {
+    pub instruction: crate::vm::instruction::Instruction,
+    pub prepare_ip: usize,
+    pub invoke_ip: usize,
+    pub assign_ip: usize,
+}
+
+impl VirtualConstructorShape {
+    pub(crate) fn argument(
+        &self,
+        op_array: &OpArray,
+        index: usize,
+    ) -> Option<crate::vm::instruction::Instruction> {
+        let mut send = *op_array.instructions.get(self.invoke_ip + 1 + index)?;
+        if send.op1_type == OpType::Tmp && self.prepare_ip < self.invoke_ip {
+            for snapshot in &op_array.instructions[self.prepare_ip + 1..self.invoke_ip] {
+                if snapshot.opcode == OpCode::FetchCvR && snapshot.result == send.op1 {
+                    send.op1 = snapshot.op1;
+                    send.op1_type = OpType::Cv;
+                    break;
+                }
+            }
+        }
+        Some(send)
+    }
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zconstructor"))]
+pub(crate) fn virtual_constructor_shape(
+    op_array: &OpArray,
+    ip: usize,
+) -> Option<VirtualConstructorShape> {
+    use crate::vm::instruction::{NEW_FLAG_PREPARE_ONLY, NEW_FLAG_PREPARED, NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, RELEASE_TEMPS_SUBEXPRESSION};
+    let current = *op_array.instructions.get(ip)?;
+    if current.opcode != OpCode::NewObj { return None; }
+    let prepare_ip = if current._pad & NEW_FLAG_PREPARED != 0 {
+        (0..ip).rev().find(|&at| {
+            let entry = &op_array.instructions[at];
+            entry.opcode == OpCode::NewObj && entry.result == current.result
+                && entry._pad & NEW_FLAG_PREPARE_ONLY != 0
+        })?
+    } else { ip };
+    let mut instruction = op_array.instructions[prepare_ip];
+    let prepared = instruction._pad & NEW_FLAG_PREPARE_ONLY != 0;
+    let mut invoke_ip = prepare_ip;
+    if prepared {
+        if instruction._pad & !(NEW_FLAG_PREPARE_ONLY | NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE) != 0 { return None; }
+        invoke_ip += 1;
+        loop {
+            let entry = *op_array.instructions.get(invoke_ip)?;
+            if entry.opcode == OpCode::NewObj {
+                if entry._pad & !NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE != NEW_FLAG_PREPARED || entry.op1_type != instruction.result_type
+                    || entry.op1 != instruction.result || entry.result != instruction.result
+                    || entry.result_type != instruction.result_type { return None; }
+                instruction.extended_value = entry.extended_value;
+                break;
+            }
+            let snapshot = entry.opcode == OpCode::FetchCvR && entry.op1_type == OpType::Cv
+                && entry.result_type == OpType::Tmp && entry._pad == 0;
+            let modulo = matches!(entry.opcode, OpCode::Mod | OpCode::Mod_LongLong)
+                && entry.op1_type == OpType::Cv && entry.op2_type == OpType::Const
+                && entry.result_type == OpType::Tmp
+                && op_array.literals.get(entry.op2 as usize).and_then(Value::as_long).is_some_and(|n| n > 0);
+            if !snapshot && !modulo { return None; }
+            invoke_ip += 1;
+        }
+    }
+    if ip != prepare_ip && ip != invoke_ip { return None; }
+    let mut assign_ip = invoke_ip + 2 + instruction.extended_value as usize;
+    if prepared && op_array.instructions.get(assign_ip).is_some_and(|entry| {
+        entry.opcode == OpCode::ReleaseTemps && entry._pad == RELEASE_TEMPS_SUBEXPRESSION
+    }) {
+        assign_ip += 1;
+    }
+    Some(VirtualConstructorShape { instruction, prepare_ip, invoke_ip, assign_ip })
+}
+
 /// Prove the caller-side escape shape for a constructor-initialized object
 /// passed directly into an ObjectArray consumer call. Runtime supplies the
 /// class, constructor-plan and declared-property guards that are unavailable
@@ -319,7 +403,11 @@ pub fn detect_virtual_object_array_pipeline_span(
     op_array: &OpArray,
     new_ip: usize,
 ) -> Option<usize> {
-    let new_object = *op_array.instructions.get(new_ip)?;
+    if op_array.instructions.get(new_ip)?.opcode != OpCode::NewObj {
+        return None;
+    }
+    let shape = virtual_constructor_shape(op_array, new_ip)?;
+    let new_object = shape.instruction;
     if new_object.opcode != OpCode::NewObj
         || new_object.op1_type != OpType::Const
         || !matches!(new_object.result_type, OpType::Tmp | OpType::Var)
@@ -333,9 +421,9 @@ pub fn detect_virtual_object_array_pipeline_span(
     {
         return None;
     }
-    let constructor_do_ip = new_ip + 1 + new_object.extended_value as usize;
+    let constructor_do_ip = shape.invoke_ip + 1 + new_object.extended_value as usize;
     let constructor_do = *op_array.instructions.get(constructor_do_ip)?;
-    let object_assign_ip = constructor_do_ip + 1;
+    let object_assign_ip = shape.assign_ip;
     let object_assign = *op_array.instructions.get(object_assign_ip)?;
     if constructor_do.opcode != OpCode::DoFcall
         || object_assign.opcode != OpCode::AssignCv
@@ -348,7 +436,7 @@ pub fn detect_virtual_object_array_pipeline_span(
     }
 
     for index in 0..new_object.extended_value as usize {
-        let send = *op_array.instructions.get(new_ip + 1 + index)?;
+        let send = shape.argument(op_array, index)?;
         if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx) {
             return None;
         }
@@ -385,12 +473,31 @@ pub fn detect_virtual_object_array_pipeline_span(
     }
 
     for (ip, instruction) in op_array.instructions.iter().enumerate() {
-        if ip != new_ip
+        if ip != shape.prepare_ip
+            && ip != shape.invoke_ip
             && ip != object_assign_ip
             && object_release_ip != Some(ip)
             && instruction_mentions_operand(instruction, new_object.result_type, new_object.result)
         {
             return None;
+        }
+        if instruction.opcode != OpCode::ReleaseTemps
+            && !(shape.invoke_ip + 1..constructor_do_ip).contains(&ip)
+        {
+            for at in shape.prepare_ip + 1..shape.invoke_ip {
+                let temporary = &op_array.instructions[at];
+                if ip != at && instruction_mentions_operand(instruction, OpType::Tmp, temporary.result) {
+                    return None;
+                }
+            }
+        }
+        if shape.prepare_ip != shape.invoke_ip && matches!(instruction.opcode,
+            OpCode::Jmp | OpCode::JmpZ | OpCode::JmpNZ | OpCode::QuickLongLoopJmp)
+        {
+            let target = if matches!(instruction.opcode, OpCode::Jmp | OpCode::QuickLongLoopJmp) {
+                instruction.op1 as usize
+            } else { instruction.op2 as usize };
+            if target > shape.prepare_ip && target <= shape.assign_ip { return None; }
         }
         if ip != object_assign_ip
             && ip != virtual_send_ip

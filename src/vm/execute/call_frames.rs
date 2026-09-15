@@ -3342,7 +3342,7 @@ fn throw_through_catch_only_frames<'a>(
                     [current_ip as usize..active_handler.try_end as usize];
                 let first_release = release_window.iter().find(|instruction| {
                     instruction.opcode == OpCode::ReleaseTemps
-                        && instruction._pad & RELEASE_TEMPS_ON_RETURN == 0
+                        && instruction._pad & (RELEASE_TEMPS_ON_RETURN | RELEASE_TEMPS_SUBEXPRESSION) == 0
                 });
                 let release = first_release.and_then(|first_release| {
                     if first_release._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0 {
@@ -3591,7 +3591,7 @@ fn throw_in_frame<'a>(
                 .iter()
                 .find(|instruction| {
                     instruction.opcode == OpCode::ReleaseTemps
-                        && instruction._pad & RELEASE_TEMPS_ON_RETURN == 0
+                        && instruction._pad & (RELEASE_TEMPS_ON_RETURN | RELEASE_TEMPS_SUBEXPRESSION) == 0
                 });
             // An argument subexpression can publish its own smaller cleanup
             // before the consuming frameless statement boundary. Prefer the

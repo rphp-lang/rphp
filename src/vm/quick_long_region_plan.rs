@@ -183,8 +183,9 @@ fn detect_long_ops_region_inner(
             continue;
         }
         let new_ip = header_ip + relative_ip;
-        for index in 0..instruction.extended_value as usize {
-            let send = *op_array.instructions.get(new_ip + 1 + index)?;
+        let shape = virtual_constructor_shape(op_array, new_ip)?;
+        for index in 0..shape.instruction.extended_value as usize {
+            let send = shape.argument(op_array, index)?;
             if send.op1_type == OpType::Cv {
                 add_mask_slot(&mut virtual_string_candidate_mask, send.op1, total_slots)?;
             }
@@ -267,12 +268,32 @@ fn detect_long_ops_region_inner(
         .min(QUICK_STRING_FETCH_CACHE_LIMIT);
 
     let mut passthrough_ips = Vec::new();
+    let mut prepared_pipeline = None;
     #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
     let mut closure_alias = None;
     #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
     let mut pending_indirect_call: Option<PendingIndirectScalarCall> = None;
     while ip <= backedge_ip {
         let instruction = op_array.instructions[ip];
+        if instruction.opcode == OpCode::NewObj
+            && instruction._pad & crate::vm::instruction::NEW_FLAG_PREPARE_ONLY != 0
+        {
+            if instruction._pad & crate::vm::instruction::NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE == 0
+                || detect_virtual_object_array_pipeline_span(op_array, ip)? > backedge_ip
+            { return None; }
+            let shape = virtual_constructor_shape(op_array, ip)?;
+            prepared_pipeline = Some(shape.invoke_ip);
+            passthrough_ips.push(ip);
+            ip += 1;
+            continue;
+        }
+        if prepared_pipeline.is_some_and(|end| ip < end) && instruction.opcode == OpCode::FetchCvR {
+            // The constructor sources are projected back to these immutable
+            // CVs, whose Long/String entry guards also prove defined reads.
+            passthrough_ips.push(ip);
+            ip += 1;
+            continue;
+        }
         if instruction.opcode == OpCode::ReleaseTemps {
             if instruction.op1_type != OpType::Tmp
                 || instruction.op2_type != OpType::Tmp
@@ -1157,6 +1178,8 @@ fn detect_long_ops_region_inner(
                 }
             }
             OpCode::NewObj => {
+                let shape = virtual_constructor_shape(op_array, ip)?;
+                let instruction = shape.instruction;
                 if instruction._pad & crate::vm::instruction::NEW_FLAG_VIRTUAL_DECLARED_READS != 0 {
                     let next_ip = detect_virtual_declared_object_read_span(op_array, ip)?;
                     if next_ip <= ip || next_ip > backedge_ip {
@@ -1215,7 +1238,7 @@ fn detect_long_ops_region_inner(
                         .enumerate()
                         .take(instruction.extended_value as usize)
                     {
-                        let send = *op_array.instructions.get(ip + 1 + index)?;
+                        let send = shape.argument(op_array, index)?;
                         *argument = match send.op1_type {
                             OpType::Cv | OpType::Tmp => {
                                 let bit = 1u64.checked_shl(u32::from(send.op1))?;
@@ -1241,8 +1264,7 @@ fn detect_long_ops_region_inner(
                         };
                     }
 
-                    let constructor_do_ip = ip + 1 + instruction.extended_value as usize;
-                    let object_assign_ip = constructor_do_ip + 1;
+                    let object_assign_ip = shape.assign_ip;
                     let (method_ip, _) = after_optional_assignment_release(
                         op_array,
                         object_assign_ip,
@@ -1314,8 +1336,9 @@ fn detect_long_ops_region_inner(
                         return None;
                     }
                     has_object_call = true;
-                    let resume_ip = ip;
+                    let resume_ip = shape.prepare_ip;
                     ip = next_ip;
+                    prepared_pipeline = None;
                     QuickLongOp::VirtualObjectArrayPipeline {
                         constructor_arguments,
                         argument_count: instruction.extended_value as u8,
@@ -1732,11 +1755,15 @@ fn detect_long_ops_region_inner(
             | QuickLongOp::Shift { resume_ip, .. }
             | QuickLongOp::BinaryAssign { resume_ip, .. }
             | QuickLongOp::ComposedPropertyCall { resume_ip, .. }
-            | QuickLongOp::VirtualObjectArrayPipeline { resume_ip, .. }
             | QuickLongOp::VirtualDeclaredObjectReads { resume_ip, .. }
             | QuickLongOp::PostInc { resume_ip, .. }
             | QuickLongOp::PostIncJump { resume_ip, .. }
             | QuickLongOp::PostIncLoopLt { resume_ip, .. } => resume_ip,
+            QuickLongOp::VirtualObjectArrayPipeline { resume_ip, .. } => {
+                // Operation dispatch follows argument computation, while a
+                // side exit must replay the original receiver preparation.
+                virtual_constructor_shape(op_array, resume_ip)?.invoke_ip
+            }
             QuickLongOp::PropertyMethodCall { call }
             | QuickLongOp::PropertyGetterCall { call, .. }
             | QuickLongOp::ScalarMethodCall { call, .. } => call.resume_ip,

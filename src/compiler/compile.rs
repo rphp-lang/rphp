@@ -87,15 +87,16 @@ use crate::vm::instruction::{
     FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT,
     INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, JMP_NZ_RELEASE_TEMPS,
     KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
-    NEW_FLAG_UNPACKED_ARGUMENTS, NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE, NEW_FLAG_VALIDATE_ONLY,
-    OBJ_PROP_FUNC_ARG, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OBJ_PROP_TEMPORARY_RECEIVER,
-    OpType, PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
+    NEW_FLAG_PREPARE_ONLY, NEW_FLAG_PREPARED, NEW_FLAG_UNPACKED_ARGUMENTS,
+    NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE, NEW_FLAG_VALIDATE_ONLY, OBJ_PROP_FUNC_ARG,
+    OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OBJ_PROP_TEMPORARY_RECEIVER, OpType,
+    PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
     REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, RELEASE_TEMPS_NESTED_OBJECTS,
-    RELEASE_TEMPS_ON_RETURN, RELEASE_TEMPS_RETURN_COMPLETION_SITE, SEND_FLAG_GLOBALS,
-    SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_PREPARED_PROPERTY_ARGUMENT,
-    SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
-    STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH,
-    STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    RELEASE_TEMPS_ON_RETURN, RELEASE_TEMPS_RETURN_COMPLETION_SITE, RELEASE_TEMPS_SUBEXPRESSION,
+    SEND_FLAG_GLOBALS, SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE,
+    SEND_FLAG_PREPARED_PROPERTY_ARGUMENT, SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME,
+    STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND,
+    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -1297,7 +1298,8 @@ fn propagate_declared_scalar_types(
                     arguments_proven: true,
                 });
             }
-            OpCode::NewObj if instruction._pad & NEW_FLAG_VALIDATE_ONLY != 0 => {}
+            OpCode::NewObj
+                if instruction._pad & (NEW_FLAG_VALIDATE_ONLY | NEW_FLAG_PREPARE_ONLY) != 0 => {}
             OpCode::InitStaticCall
             | OpCode::InitLateStaticCall
             | OpCode::InitDynamicCall
@@ -1425,7 +1427,8 @@ fn propagate_declared_scalar_types(
         }
         let mut result = KnownScalarType::Unknown;
         let mut result_receiver_class = (instruction.opcode == OpCode::NewObj
-            && instruction._pad & NEW_FLAG_VALIDATE_ONLY == 0)
+            && instruction._pad & NEW_FLAG_VALIDATE_ONLY == 0
+            && instruction.op1_type == OpType::Const)
             .then(|| {
                 op_array
                     .literals
@@ -12369,6 +12372,17 @@ impl Compiler {
                 } else {
                     0
                 };
+                if generic_args.is_empty() && !args.is_empty() {
+                    return self.compile_prepared_new(
+                        owner,
+                        OpType::Const,
+                        owner_flags,
+                        args,
+                        Some(&resolved_class),
+                        *line,
+                        *call_line,
+                    );
+                }
                 let (owner, owner_type, owner_flags) = if !args.is_empty()
                     && (owner_flags != 0 || !self.known_constructor_is_public(&resolved_class))
                 {
@@ -12376,25 +12390,6 @@ impl Compiler {
                 } else {
                     (owner, OpType::Const, owner_flags)
                 };
-                if generic_args.is_empty()
-                    && args
-                        .iter()
-                        .any(|argument| matches!(argument, CallArg::Unpack(_)))
-                {
-                    let (arguments, arguments_type) =
-                        self.compile_mixed_unpacked_call_arguments(args, 0, None);
-                    let tmp = self.alloc_tmp();
-                    let mut new_obj = Instruction::new(OpCode::NewObj);
-                    new_obj.op1 = owner;
-                    new_obj.op1_type = owner_type;
-                    new_obj.op2 = arguments;
-                    new_obj.op2_type = arguments_type;
-                    new_obj.result = tmp;
-                    new_obj.result_type = OpType::Tmp;
-                    new_obj._pad = owner_flags | NEW_FLAG_UNPACKED_ARGUMENTS;
-                    self.push_instruction_at_line(new_obj, *line);
-                    return (tmp, OpType::Tmp);
-                }
                 // A linked source constructor with no by-reference parameters
                 // cannot change argument selection at runtime. Keep its plain
                 // CV operands compact so the existing object-pipeline region
@@ -12456,35 +12451,17 @@ impl Compiler {
                 // argument suspension/unpacking so neither side effect can be
                 // repeated or observed in the opposite order.
                 let (class_operand, class_type) = self.compile_expr(class);
-                let (class_operand, class_type, class_flags) = if args.is_empty() {
-                    (class_operand, class_type, NEW_FLAG_DYNAMIC_CLASS_NAME)
-                } else {
-                    self.emit_constructor_access_check(
+                if !args.is_empty() {
+                    return self.compile_prepared_new(
                         class_operand,
                         class_type,
                         NEW_FLAG_DYNAMIC_CLASS_NAME,
+                        args,
+                        None,
                         *line,
-                    )
-                };
-                if args
-                    .iter()
-                    .any(|argument| matches!(argument, CallArg::Unpack(_)))
-                {
-                    let (arguments, arguments_type) =
-                        self.compile_mixed_unpacked_call_arguments(args, 0, None);
-                    let tmp = self.alloc_tmp();
-                    let mut new_obj = Instruction::new(OpCode::NewObj);
-                    new_obj.op1 = class_operand;
-                    new_obj.op1_type = class_type;
-                    new_obj.op2 = arguments;
-                    new_obj.op2_type = arguments_type;
-                    new_obj.result = tmp;
-                    new_obj.result_type = OpType::Tmp;
-                    new_obj._pad = class_flags | NEW_FLAG_UNPACKED_ARGUMENTS;
-                    self.push_instruction_at_line(new_obj, *line);
-                    return (tmp, OpType::Tmp);
+                        *call_line,
+                    );
                 }
-                let compiled_args = self.compile_call_args(args, 0, None, true);
                 let tmp = self.alloc_tmp();
                 let mut new_obj = Instruction::new(OpCode::NewObj);
                 new_obj.op1 = class_operand;
@@ -12492,10 +12469,9 @@ impl Compiler {
                 new_obj.result = tmp;
                 new_obj.result_type = OpType::Tmp;
                 new_obj.extended_value = args.len() as u32;
-                new_obj._pad = class_flags;
+                new_obj._pad = NEW_FLAG_DYNAMIC_CLASS_NAME;
                 self.push_instruction_at_line(new_obj, *line);
 
-                self.emit_precompiled_call_args(&compiled_args, 1);
                 let discard = self.alloc_tmp();
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                 do_fcall.result = discard;
@@ -12519,15 +12495,6 @@ impl Compiler {
                 line,
                 call_line,
             } => {
-                let unpacked_arguments = args
-                    .iter()
-                    .any(|argument| matches!(argument, CallArg::Unpack(_)))
-                    .then(|| self.compile_mixed_unpacked_call_arguments(args, 0, None));
-                let compiled_args = if unpacked_arguments.is_none() {
-                    self.compile_call_args(args, 0, None, true)
-                } else {
-                    Vec::new()
-                };
                 let sequence = ANONYMOUS_CLASS_COUNTER.fetch_add(1, Ordering::Relaxed);
                 let class_name = format!("class@anonymous#{sequence}");
                 let declaration = Stmt::Class {
@@ -12553,23 +12520,25 @@ impl Compiler {
                 }
 
                 let name_idx = self.add_literal(Value::string(class_name));
+                if !args.is_empty() {
+                    return self.compile_prepared_new(
+                        name_idx,
+                        OpType::Const,
+                        0,
+                        args,
+                        None,
+                        *line,
+                        *call_line,
+                    );
+                }
                 let tmp = self.alloc_tmp();
                 let mut new_obj = Instruction::new(OpCode::NewObj);
                 new_obj.op1 = name_idx;
                 new_obj.op1_type = OpType::Const;
-                if let Some((arguments, arguments_type)) = unpacked_arguments {
-                    new_obj.op2 = arguments;
-                    new_obj.op2_type = arguments_type;
-                    new_obj._pad |= NEW_FLAG_UNPACKED_ARGUMENTS;
-                }
                 new_obj.result = tmp;
                 new_obj.result_type = OpType::Tmp;
                 new_obj.extended_value = args.len() as u32;
                 self.push_instruction_at_line(new_obj, *line);
-                if unpacked_arguments.is_some() {
-                    return (tmp, OpType::Tmp);
-                }
-                self.emit_precompiled_call_args(&compiled_args, 1);
                 let discard = self.alloc_tmp();
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                 do_fcall.result = discard;
@@ -14775,6 +14744,115 @@ impl Compiler {
             .collect()
     }
 
+    /// Split only argument lists which emit actual evaluation instructions.
+    /// Literal/plain-CV sends keep the single NewObj and its established
+    /// constructor/property pipeline admission. Reified generic syntax keeps
+    /// its separate existing binding protocol at its caller.
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zconstructor"))]
+    fn compile_prepared_new(
+        &mut self,
+        owner: u16,
+        owner_type: OpType,
+        flags: u16,
+        args: &[CallArg],
+        known_class: Option<&str>,
+        line: usize,
+        call_line: usize,
+    ) -> (u16, OpType) {
+        let result = self.alloc_tmp();
+        let mut prepare = Instruction::new(OpCode::NewObj);
+        prepare.op1 = owner;
+        prepare.op1_type = owner_type;
+        prepare.result = result;
+        prepare.result_type = OpType::Tmp;
+        prepare._pad = flags | NEW_FLAG_PREPARE_ONLY;
+        let prepare_ip = self.instructions.len();
+        self.push_instruction_at_line(prepare, line);
+        let unpacked = args.iter().any(|arg| matches!(arg, CallArg::Unpack(_)));
+        let mut invoke = Instruction::new(OpCode::NewObj);
+        invoke.op1 = result;
+        invoke.op1_type = OpType::Tmp;
+        invoke.result = result;
+        invoke.result_type = OpType::Tmp;
+        invoke.extended_value = args.len() as u32;
+        invoke._pad = NEW_FLAG_PREPARED;
+        if unpacked {
+            let (arguments, argument_type) =
+                self.compile_mixed_unpacked_call_arguments(args, 0, None);
+            invoke.op2 = arguments;
+            invoke.op2_type = argument_type;
+            invoke._pad |= NEW_FLAG_UNPACKED_ARGUMENTS;
+            self.push_instruction_at_line(invoke, line);
+            self.emit_constructor_argument_release(result + 1, self.next_tmp, call_line);
+            return (result, OpType::Tmp);
+        }
+        // A later expression may mutate an earlier CV. Keep compact CV sends
+        // only when every expression is itself a literal/plain variable.
+        let compact = args.iter().all(|arg| {
+            matches!(
+                arg.expr(),
+                Expr::Variable { .. }
+                    | Expr::Integer(_)
+                    | Expr::Float(_)
+                    | Expr::StringLiteral(_)
+                    | Expr::BinaryStringLiteral(_)
+                    | Expr::Bool(_)
+                    | Expr::Null
+            )
+        }) && known_class
+            .is_some_and(|name| self.known_constructor_is_by_value(name) == Some(true));
+        let mut compiled = if compact {
+            self.compile_known_value_call_args(args)
+        } else {
+            self.compile_call_args(args, 0, None, true)
+        };
+        if !compact {
+            for (argument, compiled) in args.iter().zip(&mut compiled) {
+                if compiled.3.is_none()
+                    && let Expr::Variable { name, .. } = argument.expr()
+                {
+                    // A variable read can already be a diagnostic snapshot
+                    // TMP. Keep its actual writable CV for the constructor's
+                    // late by-reference/named signature selection as well.
+                    compiled.3 = Some(self.resolve_cv(name));
+                }
+            }
+        }
+        if self.instructions.len() == prepare_ip + 1 {
+            let prepare = &mut self.instructions[prepare_ip];
+            prepare._pad = flags;
+            prepare.extended_value = args.len() as u32;
+        } else {
+            self.push_instruction_at_line(invoke, line);
+        }
+        self.emit_precompiled_call_args(&compiled, 1);
+        let argument_end = self.next_tmp;
+        let mut call = Instruction::new(OpCode::DoFcall);
+        call.result = self.alloc_tmp();
+        call.result_type = OpType::Tmp;
+        self.push_instruction_at_line(call, call_line);
+        self.emit_constructor_argument_release(result + 1, argument_end, call_line);
+        (result, OpType::Tmp)
+    }
+
+    fn emit_constructor_argument_release(&mut self, start: u16, end: u32, line: usize) {
+        if u32::from(start) == end {
+            return;
+        }
+        // Nested `new` results belong to the consumed arguments, not hidden
+        // aliases retained until a default-parameter activation returns.
+        // The outer receiver precedes this range and remains live.
+        let mut release = Instruction::new(OpCode::ReleaseTemps);
+        release.op1 = start;
+        release.op1_type = OpType::Tmp;
+        release.op2 = end as u16;
+        release.op2_type = OpType::Tmp;
+        release._pad |= RELEASE_TEMPS_SUBEXPRESSION;
+        self.push_instruction_at_line(release, line);
+    }
+
     fn emit_constructor_access_check(
         &mut self,
         owner: u16,
@@ -15019,6 +15097,7 @@ impl Compiler {
         release.op1_type = OpType::Tmp;
         release.op2 = receiver + 1;
         release.op2_type = OpType::Tmp;
+        release._pad |= RELEASE_TEMPS_SUBEXPRESSION;
         self.push_instruction_at_line(release, line);
     }
 

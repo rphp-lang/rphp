@@ -225,6 +225,11 @@ fn op_new_obj<'a>(
         )
     };
     let raw_name = class_operand.as_str().unwrap_or("");
+    if opline._pad & NEW_FLAG_PREPARED != 0 {
+        return op_invoke_prepared_constructor(
+            eg, frame, op_array, opline, ip, result_ptr, class_operand,
+        );
+    }
     let ic = &op_array.cache[ip];
     let dynamic_static_scope = opline._pad & NEW_FLAG_DYNAMIC_STATIC_SCOPE != 0;
     let dynamic_class_name = opline._pad & NEW_FLAG_DYNAMIC_CLASS_NAME != 0;
@@ -1022,9 +1027,13 @@ fn op_new_obj_unpacked<'a>(
                 ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
             });
         }
-        if constructor_has_destructor {
-            unsafe { &*result_ptr }.enable_constructed_object_destructor();
-        }
+    }
+    if constructor_has_destructor
+        || (func_ptr.is_null() && opline._pad & NEW_FLAG_PREPARED != 0)
+    {
+        // SAFETY: successful synchronous construction leaves the compiler's
+        // rooted result slot live; no outstanding object borrow crosses here.
+        unsafe { &*result_ptr }.enable_constructed_object_destructor();
     }
     Ok(ColdResult::Done)
 }
@@ -1205,12 +1214,61 @@ fn op_new_obj_resolved<'a>(
         }
     }
 
+    op_new_obj_construct(eg, frame, op_array, opline, ip, result_ptr, name, class_id, is_throwable)
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zconstructor"))]
+fn op_invoke_prepared_constructor<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    ip: usize,
+    result_ptr: *mut Value,
+    receiver: &Value,
+) -> Result<ColdResult<'a>, VmError> {
+    // Preparation already resolved/validated this rooted receiver. On a
+    // matching constructor cache, no class spelling or Throwable projection
+    // is needed again. End the borrow before entering the call protocol.
+    let class_id = receiver.as_object().expect("prepared NewObj receiver").class_id;
+    let ic = &op_array.cache[ip];
+    if class_id != 0 && ic.class_id == class_id {
+        return op_begin_constructor(
+            eg, frame, op_array, opline, ip, result_ptr, class_id,
+            ic.func, ic.constructor_has_destructor(),
+        );
+    }
+    let name = {
+        let object = receiver.as_object().expect("prepared NewObj receiver");
+        object.class_name.clone()
+    };
+    let is_throwable = eg.class_is_a(&name, "Throwable");
+    op_new_obj_construct(eg, frame, op_array, opline, ip, result_ptr, &name, class_id, is_throwable)
+}
+
+// Inline the established constructor protocol in the allocation path. The
+// prepared path shares that protocol without cloning/reallocating a receiver.
+#[inline(always)]
+fn op_new_obj_construct<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    ip: usize,
+    result_ptr: *mut Value,
+    name: &str,
+    class_id: u32,
+    is_throwable: bool,
+) -> Result<ColdResult<'a>, VmError> {
+    let ic = &op_array.cache[ip];
+    let constructor_cache_hit = class_id != 0 && ic.class_id == class_id;
     // Constructor lookup is invariant for this literal `new ClassName` site.
     // Cache both hits and misses under the stable class ID so repeated object
     // allocation does not format, lowercase, allocate and hash the same method
     // name every time. A changed/re-registered class gets a different ID and
     // therefore resolves again.
-    let num_args = opline.extended_value;
     let (func_ptr, constructor_has_destructor) = if constructor_cache_hit {
         (ic.func, ic.constructor_has_destructor())
     } else {
@@ -1226,11 +1284,40 @@ fn op_new_obj_resolved<'a>(
         }
         (resolved, has_destructor)
     };
-    if constructor_has_destructor {
+    op_begin_constructor(
+        eg, frame, op_array, opline, ip, result_ptr, class_id,
+        func_ptr, constructor_has_destructor,
+    )
+}
+
+#[inline(always)]
+fn op_begin_constructor<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    ip: usize,
+    result_ptr: *mut Value,
+    class_id: u32,
+    func_ptr: *const FunctionCommon,
+    constructor_has_destructor: bool,
+) -> Result<ColdResult<'a>, VmError> {
+    let num_args = opline.extended_value;
+    if opline._pad & NEW_FLAG_PREPARED == 0
+        && (constructor_has_destructor
+        || (opline._pad & NEW_FLAG_PREPARE_ONLY != 0
+            && func_ptr.is_null()
+            && eg.class_by_id(class_id).is_some_and(|class| {
+                eg.find_method_info(&class.name, "__destruct").is_some()
+            })))
+    {
         // A failed constructor permanently retires this allocation's own
         // destructor. Property values still follow their ordinary release
         // tree, because the marker suppresses only owner dispatch.
         unsafe { &*result_ptr }.suppress_unconstructed_object_destructor();
+    }
+    if opline._pad & NEW_FLAG_PREPARE_ONLY != 0 {
+        return Ok(ColdResult::Done);
     }
     #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
     let generic_constructor_contract = if func_ptr.is_null() {
@@ -1319,7 +1406,14 @@ fn op_new_obj_resolved<'a>(
             .position(|instruction| instruction.opcode == OpCode::DoFcall)
             .map(|offset| current_ip + 1 + offset)
             .ok_or_else(|| VmError::Fatal("new expression is missing DoFcall".into()))?;
-        unsafe { (*frame).opline = base_ptr.add(do_fcall_ip + 1) };
+        // SAFETY: result_ptr is the live published receiver and do_fcall_ip
+        // was found in this frame's instruction storage; the successor exists.
+        unsafe {
+            if opline._pad & NEW_FLAG_PREPARED != 0 {
+                (&*result_ptr).enable_constructed_object_destructor();
+            }
+            (*frame).opline = base_ptr.add(do_fcall_ip + 1);
+        };
         return Ok(ColdResult::Continue);
     }
     Ok(ColdResult::Done)
@@ -5827,7 +5921,8 @@ fn call_site_instruction_index(
         .skip(initializer_index.saturating_add(1))
     {
         match instruction.opcode {
-            OpCode::NewObj if instruction._pad & NEW_FLAG_VALIDATE_ONLY != 0 => {}
+            OpCode::NewObj
+                if instruction._pad & (NEW_FLAG_VALIDATE_ONLY | NEW_FLAG_PREPARE_ONLY) != 0 => {}
             OpCode::InitFcall
             | OpCode::InitUserCall
             | OpCode::InitMethodCall

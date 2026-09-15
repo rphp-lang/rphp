@@ -36,32 +36,35 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `array-object-object-backing-projection-contracts` train adds ten
-PHP 8.5 SPL passes over `41dd855d`, without loss, process hazards, expectation
-changes or moved failure stages. SPL reaches 640/105/31 unsupported/8 skip/
-1 XFAIL; core remains 6,448/333/182/211. Selected coverage is 7,959 cases:
-7,088 pass and 438 fail, not all PHP.
+The accepted `constructor-preargument-allocation-order` checkpoint adds
+7 exact PHP 8.5 passes over `36f09c7a`, without loss, process hazards,
+expectation changes or moved failure stages. Selected coverage is 7,959 cases:
+7,095 pass / 431 fail; core 6,451/330/182/211;
+SPL 644/101/31 unsupported/8 skip/1 XFAIL. This is not all PHP.
 
-Raw object backing shares admission, lazy activation, numeric-key projection,
-sort publication and native legacy trace/error handling. Existing sparse state
-retains declared/raw ownership and reference/COW semantics without common
-Value/PhpObject/VM layout changes. Twenty-five original cases, one frozen
-checked five-config matrix/all-targets, exact no-loss, S0-S3 and unsafe/hygiene
-gates pass. Native retirement ends mutable borrows before examining the graph.
+Actual allocation precedes constructor arguments. Writable reference sources,
+snapshots, validation, callbacks, failure cleanup and nested default ownership
+remain distinct. Argument-subexpression cleanup cannot replace whole-statement
+unwind. Property storage retires before identity reuse, without remapping IDs
+or changing common layouts. Nineteen original cases, adjacent cleanup regressions,
+one frozen checked five-config matrix/all-targets, exact no-loss, S0-S3 and
+unsafe/hygiene gates pass.
 
-All 113 established controls meet fixed cumulative common <=1.65% against
-`9cddc39c`, pay-use/first-present <=5%; maxima +1.024%/+3.791%/+2.454%.
-Nine anchors, nominal/incremental findings and shared-host limitations remain
-explicit in `compatibility.md`. Cleanup is automatic; no unchanged failed
-timing reroll was used.
+The initial >=10 forecast was rejected: five failures concern native iterator
+owners, not nested construction. The accepted seven-gain exception fixes a
+core allocation/reference/lifetime boundary; it is not a quota-driven expansion.
+All 118 controls retain the nine fixed/first-present anchors and meet cumulative
+common <=1.65%, pay-use/first-present <=5%; maxima
++1.264%/+2.792%/+2.741%.
+Nominal/incremental findings and rejected candidates remain explicit in
+`compatibility.md`. Automatic cleanup and the shared-host limitation remain.
 
-Next read-only triage targets nested constructor allocation/argument ordering:
-nine remaining differences contain only swapped object IDs, with constant-new
-defaults as adjacent candidates. Prove >=10 reachable common-cause gains and
-original error/order/lifetime oracles before production. Never remap visible
-IDs or expand for quota. Hooked duplicate-key arrays, general shutdown,
-unrelated iterators, suspension, 32-bit/OOM and whole-PHP claims remain separate.
-One active implementation only.
+Next read-only admission targets EmptyIterator/InfiniteIterator/MultipleIterator
+cursor policies in fourteen current failures. Prove >=10 reachable shared-cause
+gains and original callback/ownership/error oracles before production, otherwise
+reselect. Native iterator IDs, general trace retention, nested array-unpack
+aliases, deep-drop identity ordering, custom generic ordering and 32-bit/OOM
+remain separate. One active implementation only.
 
 ### Preceding directory cursor checkpoint
 

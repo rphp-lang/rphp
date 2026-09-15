@@ -1644,6 +1644,17 @@ fn release_object_handle(identity: usize, handle: u32) {
     with_object_handles(|state| state.release(identity, handle));
 }
 
+// Final object storage retirement must precede identity reuse. Keep that
+// ordering in one out-of-line boundary instead of duplicating Rc teardown
+// and its unwind path in every inlined Value::drop, including scalar users.
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zzobject_release"))]
+fn release_final_object(owner: Rc<RefCell<PhpObject>>, handle: u32) {
+    let identity = Rc::as_ptr(&owner) as usize;
+    drop(owner);
+    release_object_handle(identity, handle);
+}
+
 /// Start a fresh request numbering sequence once every owner from the prior
 /// request has gone away. A still-live object means the caller intentionally
 /// reuses one ExecutorGlobals and its request-local state.
@@ -8509,11 +8520,11 @@ impl Drop for Value {
                 } else {
                     if strong_count == 1 {
                         let handle = (*(*pointer).as_ptr()).lifecycle & OBJECT_HANDLE_MASK;
-                        release_object_handle(pointer as usize, handle);
+                        release_final_object(std::mem::ManuallyDrop::into_inner(owner), handle);
                     } else {
                         register_cycle_candidate(CycleCandidate::Object(Rc::downgrade(&owner)));
+                        Rc::decrement_strong_count(pointer);
                     }
-                    Rc::decrement_strong_count(pointer);
                 }
             },
             #[cfg(feature = "resource-lifetime")]

@@ -8,59 +8,72 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 checkpoint is
-`array-object-object-backing-projection-contracts`, against `41dd855d`:
-**+10/-0**, independently confirmed by PHP 8.5.10. SPL reaches
-**640 pass / 105 fail / 31 unsupported / 8 skip / 1 XFAIL**; core remains
-**6,448 pass / 333 fail / 182 skip / 211 unsupported**. Selected coverage is
-**7,959 cases: 7,088 pass / 438 fail**, plus 190 skips, 242 unsupported and
-one XFAIL. This is not complete PHP coverage.
+`constructor-preargument-allocation-order`, against `36f09c7a`:
+**+7/-0**, independently confirmed by PHP 8.5.10. SPL reaches
+**644 pass / 101 fail / 31 unsupported / 8 skip / 1 XFAIL**;
+core reaches **6,451 pass / 330 fail / 182 skip / 211 unsupported**.
+Selected coverage is **7,959 cases: 7,095 pass / 431 fail**,
+plus 190 skips, 242 unsupported and one XFAIL. This is not complete PHP coverage.
 
-Object-backed ArrayObject operations share raw property-table admission,
-lazy activation, key projection and sort publication. Declared slots retain
-their separate ownership after table detachment; ordinary property constraints,
-references/COW, callbacks and retirement remain distinct from the deprecated
-raw interface. Sparse existing auxiliary state carries the policy without
-changing common Value/PhpObject/VM layouts. Legacy restore preserves member/error
-ordering and a real native trace activation within the same reference graph.
-Retirement follows borrow release; collector edge accounting remains separate
-from full ownership traversal.
+Real constructor receivers are allocated and validated before effectful
+arguments, without a half-open call frame. Named/reference arguments retain
+their writable source alongside value snapshots; unpacking, nested defaults,
+callbacks and suspension preserve ownership and ordering. Failed construction
+retires before catch and cannot run its destructor. Consumed argument aliases
+are released separately from whole-statement exception cleanup. Final object
+storage retires before its identity can be reused; visible IDs are never remapped.
 
-All **896 focused tests** (729 library and 167 CLI, including 25 new original
-cases) pass; the originals agree with PHP with JIT enabled and disabled.
-One frozen checked matrix passes **5,576/5,244/5,647/5,669/5,720** tests
-(13/13/13/13/16 ignored, none filtered), plus all-features/all-targets.
-Exact no-loss, ten independent PHP gain checks, prior originals,
-Composer/Symfony S0-S3, runner/unsafe self-tests and public hygiene pass.
-No lost pass, process hazard, changed expectation or moved failure stage.
-No-default compiler warnings are unchanged. Unsafe is **1,623/289** within
-unchanged ceilings; the added trace snapshot has an asserted live frame layout.
+The initial ten-case forecast conflated allocation with native iterator owners.
+Five such holdouts remain debt. This seven-gain checkpoint is a core
+allocation/reference/lifetime correctness exception to the usual train size,
+proved by 19 original cases rather than widening scope to satisfy a quota.
+No common Value/PhpObject/VM/Instruction layout or opcode was added.
 
-All **113 established 32-pair controls** retain exact outputs and nine unchanged
-fixed/first-present anchors. Fixed cumulative common **+1.65%** / pay-use
-**+5%** gates pass: maxima **+1.024%/+3.791%**, first-present API maximum
-**+2.454%**. The array control exceeds nominal +1% but improves on the immediate
-parent; boolean coercion is +2.825% incremental and -6.439% cumulative.
-Both findings remain explicit. The user-authorized shared-host guard records
-two background events, not isolated-host evidence. No private host was
-configured and no unchanged failed timing reroll was used. Cleanup runs
-between configurations and after full/release/performance gates.
+All **872 focused tests**, including the 19 new originals and
+adjacent finally/foreach retirement tests, pass. The originals agree with PHP
+with JIT enabled and disabled. One frozen checked five-configuration matrix
+passes **5,598/5,266/5,669/5,691/5,742** tests (13/13/13/13/16 ignored, none filtered),
+plus all-features/all-targets. Exact no-loss, independent reference gain checks,
+prior originals, Composer/Symfony S0-S3, runner/unsafe self-tests and public
+hygiene pass. No lost pass, process hazard, changed expectation or moved failure
+stage. Existing no-default compiler warnings remain unchanged. Unsafe is
+**1,623/289** within unchanged ceilings.
+
+All **118 32-pair controls** pass: 113 established workloads, three new
+constructor costs and two guarded application pipelines, with exact outputs and nine unchanged fixed/first-present
+anchors. Fixed cumulative common **+1.65%** / pay-use **+5%** gates pass:
+maxima **+1.264%/+2.792%**, first-present maximum
+**+2.741%**. Nominal +1% findings: primary/startup +1.011%; primary/ordinary-dynamic-clone +1.264%; primary/array +1.118%.
+Immediate-parent findings above +1%: primary/object-lifecycle +1.628% incremental / -0.134% cumulative; primary/native-cycle +1.245% incremental / -0.586% cumulative; primary/memory-io +1.176% incremental / -0.852% cumulative; static-dispatch/static-reference +1.236% incremental / -9.560% cumulative; primary/ordinary-call +1.963% incremental / -3.974% cumulative.
+Rejected timing packets remain evidence. Final-object teardown is outlined,
+prepared construction reuses its validated cache, and heap-free finally returns
+skip an unnecessary cleanup-marker scan; live heap/callback paths are unchanged.
+Prepared scalar pipelines retain the prior native region only after snapshot,
+positive-modulo, escape and runtime type proofs; side exits replay allocation.
+The user-authorized shared-host guard records 2 background events,
+not exclusive-host evidence. No private host was configured. No unchanged failed
+timing reroll was used. Cleanup runs between configurations and after gates.
 
 SHA-256 evidence:
 
-- Release: `f68f0672360e29b9e0c37f7587a2b118e71aa076972870ec4f3c57517b4effa9`.
-- Complete technical record: `d3f9c8db8734639adfc9c1d1d88922a4a424839cbc7caaaa7d24b1a29327f1cc`.
-- Matrix: `b6defbd3fe5c8781e196cc8e1b55632d7b193ab23051f7cd8b75755693217a56`.
-- SPL manifest / pass set: `30a837c5780be2c54ccdd1f3c410a3ac2dda4c7986d677c0db06a926072ce157` / `377403e577196d8f9d85296441eadfa1dcbf5a320a8a3ef99aa21aff54e09991`.
-- Zend/lang manifest / pass set: `b490ec69cb47c3e3fdcd349eae25f5c39a147852de1ba3ca99dc5ae19291d401` / `44e7000e60fa83566a9a4fe8d06e602486e2d063299a290f62c352a213f5f7f1`.
-- Strings/array manifest / pass set: `b798da1f890c3dbeb9418adb10019fff1ce5f93e04172700c74922776d5e6f5c` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
-- Reviewed performance / raw timing: `e0df1bc31e2a0681d296a63d03f3ecc2446627de0db263c42211e7f7307ad6eb` / `4ba46003d6668441b3815bbf557c09f5d8c63ae64f59794e23482daf408a11c9`.
+- Release: `2601cdd08205a033fbc68a5d449dbae551361165b955c4cd3d338adaf75fa08b`.
+- Complete technical record: `1ddca7b5cba17e26a55f2d3db7ea3624063e8a66506311036f62a71a68f2f425`.
+- Matrix: `41c2c725f3a3b83c2808001d6d3fde2fc6a446a0c3828b1b3c232d1e6c6c94bc`.
+- SPL manifest / pass set: `48eaafc4e673b4363308bc66fa182c3361fd9b26c2e83dc83bca0201e227ae76` / `486c249fef690a14b6e98cb3f5d1437c99832d45b52fed37d21ee66e35535f2d`.
+- Zend/lang manifest / pass set: `a0250405b468feb7942575a810ffa90a3113cfc7ac17be7a4b165db901aceab1` / `92e29c209c44e52790fb8b1a6ec423279b1e473635695529d820c5a8dd473f13`.
+- Strings/array manifest / pass set: `6d2a472a4d164b8ffa9746b016c5c20a4b38f9d55bab2ae6c9a713febda3386f` / `0fe0c3057cf1aac44dd6b159eb67ec1439ff229988bd4b54055a2c37d62ffeb6`.
+- Reviewed performance / raw timing: `caf52c363d1e0c4595336b6e505a0e735a578caebc657f48d16cfc20b979a8ac` / `89fe30e581eacce20dc49a36922ae211e667999331833deba3d5af37acc2279f`.
 
-Remaining non-claims include hooked duplicate raw-key array artifacts, orphan
-cycle request-shutdown, unrelated native classes, suspension and 32-bit/OOM.
-Read-only next triage identifies nine remaining output differences consisting
-solely of object IDs around nested constructors. Prove actual allocation and
-argument/error ordering, not ID remapping, and at least ten reachable shared
-gains before the next implementation; separately assess constant-new defaults.
+Native iterator identities, general Throwable trace ownership, nested array
+unpack aliases, custom generic-construction ordering, deep iterative-drop
+identity order and 32-bit/OOM equivalence remain non-claims. Next read-only
+admission tests remaining EmptyIterator/InfiniteIterator/MultipleIterator cursor
+policies against fourteen current failures; prove at least ten reachable common
+gains with fresh reference/parent evidence before implementation, or reselect.
+
+The preceding ArrayObject raw-backing checkpoint added ten passes;
+its complete technical record remains
+`d3f9c8db8734639adfc9c1d1d88922a4a424839cbc7caaaa7d24b1a29327f1cc`.
 
 The preceding recursive callback-filter checkpoint added twelve passes;
 its complete technical record remains
