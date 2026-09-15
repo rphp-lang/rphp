@@ -1,0 +1,228 @@
+bindec:0|i:0;
+bindec:1|i:0;
+bindec:2|i:5;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:3|i:0;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:4|i:0;
+bindec:5|i:5;
+bindec:6|i:5;
+bindec:7|i:5;
+bindec:8|i:5;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:9|i:0;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:10|i:0;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:11|i:0;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:12|i:0;
+bindec:13|i:0;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:14|i:0;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:15|i:0;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:16|i:5;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:17|i:5;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:18|i:5;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:19|i:5;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:20|i:5;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:21|i:1;
+bindec:22|i:5;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:23|i:11;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:24|i:5;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:25|i:5;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:26|i:5;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:27|i:0;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:28|i:0;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:29|i:1;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:30|i:3;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:31|i:5;
+octdec:0|i:0;
+octdec:1|i:0;
+octdec:2|i:65;
+octdec:3|i:478;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:4|i:0;
+octdec:5|i:65;
+octdec:6|i:65;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:7|i:65;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:8|i:65;
+octdec:9|i:59;
+octdec:10|i:59;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:11|i:4;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:12|i:4;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:13|i:0;
+octdec:14|i:0;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:15|i:0;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:16|i:65;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:17|i:65;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:18|i:65;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:19|i:65;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:20|i:65;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:21|i:11;
+octdec:22|i:65;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:23|i:521;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:24|i:65;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:25|i:65;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:26|i:65;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:27|i:0;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:28|i:0;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:29|i:10;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:30|i:9;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:31|i:65;
+hexdec:0|i:0;
+hexdec:1|i:0;
+hexdec:2|i:257;
+hexdec:3|i:1846;
+hexdec:4|i:43981;
+hexdec:5|i:257;
+hexdec:6|i:257;
+hexdec:7|i:45313;
+hexdec:8|i:45313;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+hexdec:9|i:115;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+hexdec:10|i:115;
+hexdec:11|i:79;
+hexdec:12|i:79;
+hexdec:13|i:11;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+hexdec:14|i:0;
+hexdec:15|i:0;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+hexdec:16|i:257;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+hexdec:17|i:257;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+hexdec:18|i:257;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+hexdec:19|i:257;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+hexdec:20|i:257;
+hexdec:21|i:483;
+hexdec:22|i:257;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+hexdec:23|i:4113;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+hexdec:24|i:257;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+hexdec:25|i:257;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+hexdec:26|i:257;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+hexdec:27|i:13;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+hexdec:28|i:0;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+hexdec:29|i:18;
+hexdec:30|i:723729;
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+hexdec:31|i:257;
+bindec:wide:15|i:32767;
+bindec:wide:16|i:65535;
+bindec:wide:17|i:131071;
+bindec:wide:20|i:1048575;
+bindec:wide:21|i:2097151;
+bindec:wide:22|i:4194303;
+bindec:wide:52|i:4503599627370495;
+bindec:wide:53|i:9007199254740991;
+bindec:wide:54|i:18014398509481983;
+bindec:wide:62|i:4611686018427387903;
+bindec:wide:63|i:9223372036854775807;
+bindec:wide:64|d:1.8446744073709552E+19;|000000000000f043
+bindec:wide:65|d:3.6893488147419103E+19;|0000000000000044
+bindec:wide:128|d:3.402823669209385E+38;|000000000000f047
+bindec:wide:1024|d:INF;|000000000000f07f
+bindec:wide:1100|d:INF;|000000000000f07f
+octdec:wide:15|i:35184372088831;
+octdec:wide:16|i:281474976710655;
+octdec:wide:17|i:2251799813685247;
+octdec:wide:20|i:1152921504606846975;
+octdec:wide:21|i:9223372036854775807;
+octdec:wide:22|d:7.378697629483821E+19;|0000000000001044
+octdec:wide:52|d:9.134385233318143E+46;|000000000000b049
+octdec:wide:53|d:7.307508186654515E+47;|000000000000e049
+octdec:wide:54|d:5.846006549323612E+48;|000000000000104a
+octdec:wide:62|d:9.807971461541689E+55;|000000000000904b
+octdec:wide:63|d:7.846377169233351E+56;|000000000000c04b
+octdec:wide:64|d:6.277101735386681E+57;|000000000000f04b
+octdec:wide:65|d:5.021681388309345E+58;|000000000000204c
+octdec:wide:128|d:3.940200619639448E+115;|000000000000f057
+octdec:wide:1024|d:INF;|000000000000f07f
+octdec:wide:1100|d:INF;|000000000000f07f
+hexdec:wide:15|i:1152921504606846975;
+hexdec:wide:16|d:1.8446744073709552E+19;|000000000000f043
+hexdec:wide:17|d:2.9514790517935283E+20;|0000000000003044
+hexdec:wide:20|d:1.2089258196146292E+24;|000000000000f044
+hexdec:wide:21|d:1.9342813113834067E+25;|0000000000003045
+hexdec:wide:22|d:3.094850098213451E+26;|0000000000007045
+hexdec:wide:52|d:4.113761393303015E+62;|000000000000f04c
+hexdec:wide:53|d:6.582018229284824E+63;|000000000000304d
+hexdec:wide:54|d:1.0531229166855719E+65;|000000000000704d
+hexdec:wide:62|d:4.523128485832664E+74;|000000000000704f
+hexdec:wide:63|d:7.237005577332262E+75;|000000000000b04f
+hexdec:wide:64|d:1.157920892373162E+77;|000000000000f04f
+hexdec:wide:65|d:1.8526734277970591E+78;|0000000000003050
+hexdec:wide:128|d:1.3407807929942597E+154;|000000000000f05f
+hexdec:wide:1024|d:INF;|000000000000f07f
+hexdec:wide:1100|d:INF;|000000000000f07f
+decoct:0|s:1:"0";
+decoct:1|s:1:"1";
+decoct:7|s:1:"7";
+decoct:8|s:2:"10";
+decoct:9|s:2:"11";
+decoct:63|s:2:"77";
+decoct:64|s:3:"100";
+decoct:511|s:3:"777";
+decoct:512|s:4:"1000";
+decoct:9223372036854775807|s:21:"777777777777777777777";
+decoct:-9223372036854775808|s:22:"1000000000000000000000";
+decoct:-1|s:22:"1777777777777777777777";
+decoct:-8|s:22:"1777777777777777777770";
+decoct:-512|s:22:"1777777777777777777000";
+adjacent|s:1:"5";
+adjacent|s:1:"5";
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+adjacent|s:1:"5";
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+adjacent|s:1:"3";
+adjacent|s:22:"2000000000000000000000";
+decbin-negative|s:64:"1111111111111111111111111111111111111111111111111111111111110111";
+dechex-negative|s:16:"fffffffffffffff7";

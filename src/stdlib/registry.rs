@@ -34,6 +34,41 @@ static ASSERT_OPTIONS_DEPRECATION: InternalFunctionDeprecation = InternalFunctio
     message: "",
 };
 
+#[cold]
+#[inline(never)]
+fn register_radix_conversions(
+    eg: &mut ExecutorGlobals,
+    functions: &mut Vec<Box<InternalFunction>>,
+) {
+    use crate::vm::function::InternalFunctionHandler;
+    let declarations: [(&'static str, &'static str, InternalFunctionHandler, bool); 4] = [
+        ("decoct", "num", fn_decoct, false),
+        ("bindec", "binary_string", fn_bindec, true),
+        ("octdec", "octal_string", fn_octdec, true),
+        ("hexdec", "hex_string", fn_hexdec, true),
+    ];
+    for (name, parameter, handler, decoder) in declarations {
+        let mut function = Box::new(
+            make_internal_function(handler, 1, 1, vec![]).with_static_parameter_names(&[parameter]),
+        );
+        function.common.sig.param_type_hints = vec![if decoder {
+            ParamTypeHint::String
+        } else {
+            ParamTypeHint::Int
+        }];
+        function.common.sig.return_type_hint = if decoder {
+            ParamTypeHint::Union(vec![ParamTypeHint::Int, ParamTypeHint::Float])
+        } else {
+            ParamTypeHint::String
+        };
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function(name, pointer).unwrap();
+        eg.register_internal_function_extension(pointer, "standard");
+        functions.push(function);
+    }
+}
+
 // Keep the nullable timestamp descriptor construction with cold registration
 // work instead of growing the shared startup function's generated body.
 #[cold]
@@ -3223,6 +3258,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::Int],
         ParamTypeHint::String
     );
+    register_radix_conversions(eg, &mut funcs);
 
     // --- Environment / system ---
     reg_typed!(

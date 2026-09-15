@@ -1,0 +1,20 @@
+notice:8192:Invalid characters passed for attempted conversion, these have been ignored
+9|3130ff3031|3130ff3031
+1777777777777777777767:-9:-9
+outer:nested:255
+notice:8192:Invalid characters passed for attempted conversion, these have been ignored
+5
+object-failure:throwing conversion
+object-failure:Exception:conversion stopped
+bindec:invalid:bindec:invalid:Exception:8192:Invalid characters passed for attempted conversion, these have been ignored
+bindec:null:bindec:null:Exception:8192:bindec(): Passing null to parameter #1 ($binary_string) of type string is deprecated
+bindec:nan:bindec:nan:Exception:2:unexpected NAN value was coerced to string
+octdec:invalid:octdec:invalid:Exception:8192:Invalid characters passed for attempted conversion, these have been ignored
+octdec:null:octdec:null:Exception:8192:octdec(): Passing null to parameter #1 ($octal_string) of type string is deprecated
+octdec:nan:octdec:nan:Exception:2:unexpected NAN value was coerced to string
+hexdec:invalid:hexdec:invalid:Exception:8192:Invalid characters passed for attempted conversion, these have been ignored
+hexdec:null:hexdec:null:Exception:8192:hexdec(): Passing null to parameter #1 ($hex_string) of type string is deprecated
+hexdec:nan:hexdec:nan:Exception:2:unexpected NAN value was coerced to string
+fraction:fraction:Exception:8192:Implicit conversion from float 7.5 to int loses precision
+recovered:5:15:47:77
+state:3130ff3031:3130ff3031:-9

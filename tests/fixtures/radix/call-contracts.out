@@ -1,0 +1,251 @@
+bindec:zero
+ArgumentCountError:bindec() expects exactly 1 argument, 0 given
+bindec:extra
+ArgumentCountError:bindec() expects exactly 1 argument, 2 given
+bindec:bad-name
+Error:Unknown named parameter $wrong
+bindec:named-unpack
+i:5;
+bindec:callback
+i:5;
+bindec:first-class
+i:5;
+bindec:weak:0
+diag:8192:bindec(): Passing null to parameter #1 ($binary_string) of type string is deprecated
+i:0;
+bindec:weak:1
+i:0;
+bindec:weak:2
+i:1;
+bindec:weak:3
+i:5;
+bindec:weak:4
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+i:5;
+bindec:weak:5
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+i:2;
+bindec:weak:6
+diag:2:unexpected NAN value was coerced to string
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+i:0;
+bindec:weak:7
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+i:0;
+bindec:weak:8
+TypeError:bindec(): Argument #1 ($binary_string) must be of type string, array given
+bindec:weak:9
+TypeError:bindec(): Argument #1 ($binary_string) must be of type string, stdClass given
+bindec:weak:10
+string-conversion
+i:5;
+bindec:weak:11
+TypeError:bindec(): Argument #1 ($binary_string) must be of type string, resource given
+bindec:weak:12
+TypeError:bindec(): Argument #1 ($binary_string) must be of type string, resource given
+bindec:strict:0
+TypeError:bindec(): Argument #1 ($binary_string) must be of type string, int given
+bindec:strict:1
+TypeError:bindec(): Argument #1 ($binary_string) must be of type string, float given
+bindec:strict:2
+TypeError:bindec(): Argument #1 ($binary_string) must be of type string, true given
+bindec:strict:3
+TypeError:bindec(): Argument #1 ($binary_string) must be of type string, null given
+bindec:strict:4
+TypeError:bindec(): Argument #1 ($binary_string) must be of type string, RadixText given
+bindec:strict:5
+i:5;
+bindec:signature
+a:8:{i:0;s:6:"bindec";i:1;i:1;i:2;i:1;i:3;s:13:"binary_string";i:4;s:6:"string";i:5;b:0;i:6;b:0;i:7;s:9:"int|float";}
+octdec:zero
+ArgumentCountError:octdec() expects exactly 1 argument, 0 given
+octdec:extra
+ArgumentCountError:octdec() expects exactly 1 argument, 2 given
+octdec:bad-name
+Error:Unknown named parameter $wrong
+octdec:named-unpack
+i:65;
+octdec:callback
+i:65;
+octdec:first-class
+i:65;
+octdec:weak:0
+diag:8192:octdec(): Passing null to parameter #1 ($octal_string) of type string is deprecated
+i:0;
+octdec:weak:1
+i:0;
+octdec:weak:2
+i:1;
+octdec:weak:3
+i:65;
+octdec:weak:4
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+i:65;
+octdec:weak:5
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+i:69;
+octdec:weak:6
+diag:2:unexpected NAN value was coerced to string
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+i:0;
+octdec:weak:7
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+i:0;
+octdec:weak:8
+TypeError:octdec(): Argument #1 ($octal_string) must be of type string, array given
+octdec:weak:9
+TypeError:octdec(): Argument #1 ($octal_string) must be of type string, stdClass given
+octdec:weak:10
+string-conversion
+i:65;
+octdec:weak:11
+TypeError:octdec(): Argument #1 ($octal_string) must be of type string, resource given
+octdec:weak:12
+TypeError:octdec(): Argument #1 ($octal_string) must be of type string, resource given
+octdec:strict:0
+TypeError:octdec(): Argument #1 ($octal_string) must be of type string, int given
+octdec:strict:1
+TypeError:octdec(): Argument #1 ($octal_string) must be of type string, float given
+octdec:strict:2
+TypeError:octdec(): Argument #1 ($octal_string) must be of type string, true given
+octdec:strict:3
+TypeError:octdec(): Argument #1 ($octal_string) must be of type string, null given
+octdec:strict:4
+TypeError:octdec(): Argument #1 ($octal_string) must be of type string, RadixText given
+octdec:strict:5
+i:65;
+octdec:signature
+a:8:{i:0;s:6:"octdec";i:1;i:1;i:2;i:1;i:3;s:12:"octal_string";i:4;s:6:"string";i:5;b:0;i:6;b:0;i:7;s:9:"int|float";}
+hexdec:zero
+ArgumentCountError:hexdec() expects exactly 1 argument, 0 given
+hexdec:extra
+ArgumentCountError:hexdec() expects exactly 1 argument, 2 given
+hexdec:bad-name
+Error:Unknown named parameter $wrong
+hexdec:named-unpack
+i:257;
+hexdec:callback
+i:257;
+hexdec:first-class
+i:257;
+hexdec:weak:0
+diag:8192:hexdec(): Passing null to parameter #1 ($hex_string) of type string is deprecated
+i:0;
+hexdec:weak:1
+i:0;
+hexdec:weak:2
+i:1;
+hexdec:weak:3
+i:257;
+hexdec:weak:4
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+i:257;
+hexdec:weak:5
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+i:261;
+hexdec:weak:6
+diag:2:unexpected NAN value was coerced to string
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+i:10;
+hexdec:weak:7
+diag:8192:Invalid characters passed for attempted conversion, these have been ignored
+i:15;
+hexdec:weak:8
+TypeError:hexdec(): Argument #1 ($hex_string) must be of type string, array given
+hexdec:weak:9
+TypeError:hexdec(): Argument #1 ($hex_string) must be of type string, stdClass given
+hexdec:weak:10
+string-conversion
+i:257;
+hexdec:weak:11
+TypeError:hexdec(): Argument #1 ($hex_string) must be of type string, resource given
+hexdec:weak:12
+TypeError:hexdec(): Argument #1 ($hex_string) must be of type string, resource given
+hexdec:strict:0
+TypeError:hexdec(): Argument #1 ($hex_string) must be of type string, int given
+hexdec:strict:1
+TypeError:hexdec(): Argument #1 ($hex_string) must be of type string, float given
+hexdec:strict:2
+TypeError:hexdec(): Argument #1 ($hex_string) must be of type string, true given
+hexdec:strict:3
+TypeError:hexdec(): Argument #1 ($hex_string) must be of type string, null given
+hexdec:strict:4
+TypeError:hexdec(): Argument #1 ($hex_string) must be of type string, RadixText given
+hexdec:strict:5
+i:257;
+hexdec:signature
+a:8:{i:0;s:6:"hexdec";i:1;i:1;i:2;i:1;i:3;s:10:"hex_string";i:4;s:6:"string";i:5;b:0;i:6;b:0;i:7;s:9:"int|float";}
+decoct:zero
+ArgumentCountError:decoct() expects exactly 1 argument, 0 given
+decoct:extra
+ArgumentCountError:decoct() expects exactly 1 argument, 2 given
+decoct:bad-name
+Error:Unknown named parameter $wrong
+decoct:named-unpack
+s:3:"145";
+decoct:callback
+s:3:"145";
+decoct:first-class
+s:3:"145";
+decoct:weak:0
+diag:8192:decoct(): Passing null to parameter #1 ($num) of type int is deprecated
+s:1:"0";
+decoct:weak:1
+s:1:"0";
+decoct:weak:2
+s:1:"1";
+decoct:weak:3
+s:3:"145";
+decoct:weak:4
+s:22:"1777777777777777777633";
+decoct:weak:5
+diag:8192:Implicit conversion from float 10.5 to int loses precision
+s:2:"12";
+decoct:weak:6
+TypeError:decoct(): Argument #1 ($num) must be of type int, float given
+decoct:weak:7
+TypeError:decoct(): Argument #1 ($num) must be of type int, float given
+decoct:weak:8
+TypeError:decoct(): Argument #1 ($num) must be of type int, array given
+decoct:weak:9
+TypeError:decoct(): Argument #1 ($num) must be of type int, stdClass given
+decoct:weak:10
+TypeError:decoct(): Argument #1 ($num) must be of type int, RadixText given
+decoct:weak:11
+TypeError:decoct(): Argument #1 ($num) must be of type int, resource given
+decoct:weak:12
+TypeError:decoct(): Argument #1 ($num) must be of type int, resource given
+decoct:strict:0
+s:3:"145";
+decoct:strict:1
+TypeError:decoct(): Argument #1 ($num) must be of type int, float given
+decoct:strict:2
+TypeError:decoct(): Argument #1 ($num) must be of type int, true given
+decoct:strict:3
+TypeError:decoct(): Argument #1 ($num) must be of type int, null given
+decoct:strict:4
+TypeError:decoct(): Argument #1 ($num) must be of type int, RadixText given
+decoct:strict:5
+TypeError:decoct(): Argument #1 ($num) must be of type int, string given
+decoct:signature
+a:8:{i:0;s:6:"decoct";i:1;i:1;i:2;i:1;i:3;s:3:"num";i:4;s:3:"int";i:5;b:0;i:6;b:0;i:7;s:6:"string";}
+decoct-string:31302e30
+s:2:"12";
+decoct-string:31302e35
+diag:8192:Implicit conversion from float-string "10.5" to int loses precision
+s:2:"12";
+decoct-string:2d31302e35
+diag:8192:Implicit conversion from float-string "-10.5" to int loses precision
+s:22:"1777777777777777777766";
+decoct-string:316532
+s:3:"144";
+decoct-string:30783130
+TypeError:decoct(): Argument #1 ($num) must be of type int, string given
+decoct-string:
+TypeError:decoct(): Argument #1 ($num) must be of type int, string given
+decoct-string:2031370a
+s:2:"21";
+decoct-string:39323233333732303336383534373735383037
+s:21:"777777777777777777777";
+decoct-string:39323233333732303336383534373735383038
+TypeError:decoct(): Argument #1 ($num) must be of type int, string given

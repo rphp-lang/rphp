@@ -28172,13 +28172,16 @@ fn base_convert_digit(byte: u8) -> Option<u32> {
 /// trailing ASCII whitespace and a matching 0b/0o/0x prefix are admitted;
 /// every other invalid byte is ignored and reported once by the caller.
 fn parse_base_convert_number(bytes: &[u8], base: u32) -> (BaseConvertNumber, bool) {
+    // PHP's C whitespace set includes vertical tab, unlike Rust's ASCII
+    // whitespace predicate. Interior whitespace is still an invalid digit.
+    let whitespace = |byte: &u8| matches!(byte, b'\t'..=b'\r' | b' ');
     let start = bytes
         .iter()
-        .position(|byte| !byte.is_ascii_whitespace())
+        .position(|byte| !whitespace(byte))
         .unwrap_or(bytes.len());
     let end = bytes
         .iter()
-        .rposition(|byte| !byte.is_ascii_whitespace())
+        .rposition(|byte| !whitespace(byte))
         .map_or(start, |index| index + 1);
     let bytes = &bytes[start..end];
     let prefix = match base {
@@ -28525,6 +28528,79 @@ fn fn_base_convert(
     ret!(rv, Value::string(output));
 }
 
+/// The three radix decoders share the same byte parser as base_convert, but
+/// publish its integer-or-double result without formatting through a string.
+#[cold]
+#[inline(never)]
+fn radix_to_decimal(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    parameter: &str,
+    base: u32,
+) -> Result<(), VmError> {
+    let Some(input) =
+        typed_internal_string_value_argument_expected(ed, eg, function, 0, parameter, "string")?
+    else {
+        return Ok(());
+    };
+    let bytes = input.php_string_bytes().unwrap_or_default();
+    let (number, invalid) = parse_base_convert_number(&bytes, base);
+    if invalid {
+        report_internal_deprecation(
+            eg,
+            ed,
+            "Invalid characters passed for attempted conversion, these have been ignored",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    ret!(
+        rv,
+        match number {
+            BaseConvertNumber::Integer(value) => Value::long(value),
+            BaseConvertNumber::Float(value) => Value::double(value),
+        }
+    );
+}
+
+fn fn_bindec(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    radix_to_decimal(ed, rv, eg, "bindec", "binary_string", 2)
+}
+
+fn fn_octdec(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    radix_to_decimal(ed, rv, eg, "octdec", "octal_string", 8)
+}
+
+fn fn_hexdec(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    radix_to_decimal(ed, rv, eg, "hexdec", "hex_string", 16)
+}
+
+fn fn_decoct(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(number) = typed_internal_int_argument(ed, eg, "decoct", 0, "num")? else {
+        return Ok(());
+    };
+    ret!(rv, Value::string(format!("{:o}", number as u64)));
+}
+
 fn fn_decbin(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -28565,6 +28641,11 @@ mod base_convert_tests {
         assert_eq!(convert("\t0Xff\n", 16, 10), ("255".into(), false));
         assert_eq!(convert("0b101", 2, 10), ("5".into(), false));
         assert_eq!(convert("0o77", 8, 10), ("63".into(), false));
+        assert_eq!(
+            convert("\u{b}\u{c}101\u{b}\u{c}", 2, 8),
+            ("5".into(), false)
+        );
+        assert_eq!(convert("1\u{b}01", 2, 8), ("5".into(), true));
         assert_eq!(convert("&4#2", 10, 10), ("42".into(), true));
         assert_eq!(convert("12304560", 2, 10), ("4".into(), true));
         assert_eq!(convert("", 36, 2), ("0".into(), false));

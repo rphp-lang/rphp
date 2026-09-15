@@ -7,65 +7,65 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 PHP 8.5 checkpoint is `crypt-callable-salt-contracts`,
-against `0eb4d504`: **+14/-0**, confirmed by PHP 8.5.10.
-SPL reaches **660 pass / 85 fail / 31 unsupported / 8 skip / 1 XFAIL**;
-core reaches **6,473 pass / 308 fail / 182 skip / 211 unsupported**.
-Selected coverage is **7,959 cases: 7,133 pass / 393 fail**,
-plus 190 skips, 242 unsupported and one XFAIL. This is not complete PHP coverage.
+The latest measured AMD64 PHP 8.5 checkpoint is `radix-numeric-call-contracts`,
+against `f3bacfd7`: **+17/-0**, confirmed by PHP 8.5.10. One gain belongs to the
+previous 7,959-case corpus, now **7,134 pass / 392 fail**; sixteen newly tracked
+math cases expand coverage to **7,975 cases: 7,150 pass / 392 fail**, plus
+190 skips, 242 unsupported and one XFAIL. SPL reaches 661/84/31 unsupported/
+8 skip/1 XFAIL; core stays 6,473/308/182/211. This is not complete PHP coverage.
 
-`crypt()` preserves DES/extended-DES, MD5, SHA-256/SHA-512 and bcrypt variant
-contracts: raw bytes, NULs, salt limits, numeric rounds, failure sentinels,
-argument conversion order, named/callback/strict calls and SensitiveParameter
-traces/Reflection. Four original fixture programs match PHP in both JIT modes;
-native parallel/recovery, sparse descriptor isolation and fresh-process lazy
-loading regressions pass. All thirteen admitted upstream cases pass, with one
-additional gain in the full corpus. Prior expectations are unchanged.
+`decoct`, `bindec`, `octdec` and `hexdec` share existing numeric conversion and
+typed-argument boundaries. Original regressions cover signed AMD64 bits,
+integer-to-float overflow, prefixes/whitespace/raw bytes, invalid-digit notices,
+strict/weak/named/callback calls, Reflection, reentry and reference/COW state.
+Three original programs match PHP byte-exactly with both JIT modes; all seventeen
+admitted PHPT pass, with no changed expectations or hidden platform gains.
 
-One frozen checked five-configuration matrix passes **5,677/5,345/5,748/5,770/5,821** tests
-(13/13/13/13/16 ignored, none filtered), plus all-features/all-targets.
+One frozen checked five-configuration matrix passes **5,680/5,348/5,751/5,773/5,824**
+tests (13/13/13/13/16 ignored, none filtered), plus all-features/all-targets.
 Exact no-loss, fresh gain oracles, prior original suites, Composer/Symfony S0-S3
 and unsafe/hygiene pass. No lost pass, timeout, crash or changed failure stage.
-The builtin audit reaches **508 present / 693 missing / 0 call-shape mismatch /
-350 metadata mismatch / 158 exact**; crypt is exact and every prior inventory
-row is unchanged. These counts do not prove all builtin behavior.
+The builtin audit reaches **512 present / 689 missing / 0 call-shape mismatch /
+350 metadata mismatch / 162 exact**; all four additions are exact and every
+prior inventory row is unchanged. Inventory counts alone do not prove behavior.
 
-All **128 established/newly-present 32-pair controls** retain their fixed
-anchors and pass common **<=1.65%**, pay-use/first-present **<=5%** limits.
-Maxima are **+1.154%/+3.883%**; the two nominal +1% findings remain recorded.
-Six new hash workloads have exact eight-pair absolute PHP comparisons,
-candidate/PHP ratios **0.305x–0.866x**, not absent-parent regressions or a
-general PHP-speed claim. The user-authorized shared-host guard records two
-background events; this is not exclusive-host evidence.
+All **136 fixed-anchor 32-pair controls** pass common **<=1.65%** and
+pay-use/first-present **<=5%** limits, with maxima **+1.361%/+3.668%**.
+The startup nominal +1% finding remains recorded. Six new API workloads have
+exact eight-pair absolute PHP comparisons, candidate/PHP ratios **0.647x–1.031x**,
+not absent-parent regressions or a general PHP-speed claim. Two background
+events remain in the user-authorized shared-host record; this is not an
+exclusive-host causal measurement.
 
-Independent Rust hashing dependencies preserve raw salt contracts. Reentrant
-libxcrypt bcrypt loads only on first use from a trusted build-selected path;
-call-local output is copied before its native allocation is freed. Sparse
-native sensitivity descriptors avoid a new hash table or ordinary-call fields.
-Two rejected performance candidates led to these measured work reductions;
-no unchanged failed reroll or moving anchor. The intentional unsafe change is
-**1,623 -> 1,626 blocks**, with **289 functions unchanged**, justified and
-reviewed in [the crypt boundary record](crypt-boundary.md). It is not generic
-ratchet maintenance or an independent security audit. Legacy hashes are not
-recommended for new password storage. Native build/runtime and license
-requirements are explicit; macOS execution, FIPS, secure erasure, static
-redistribution and 32-bit/OOM equivalence remain unvalidated.
-Automatic cleanup retains exact binaries and removes reproducible intermediates.
+Five rejected timing candidates remain in the evidence. Profiles motivated
+native-registry headroom, empty-table/prefix traversal rejection, ASCII name
+folding with unchanged Unicode fallback, and batched cold registration.
+No VM/Value layout, dependency or unsafe addition: **1,626 blocks / 289 functions**
+remain unchanged. Six 32-bit-only cases, OOM equivalence and general arithmetic
+are explicit non-claims. Cleanup retains fixed anchors and removes reproducible
+intermediates; failed results are not silently rerolled or rounded into passes.
 
 SHA-256 evidence:
 
-- Release: `dbed9fb13cbd91d173e50e88ea2b71dd126d6f3f0dc21858987d9baa2ab0e87f`.
-- Complete technical record: `7788c28de32f2529f21dc766493a4b6f4829545901155c6471458a6f0594b207`.
-- Matrix: `70d1889a9599500b570e66deba0587a75e5cbc1edcdc632490f8328c48dde539`.
-- SPL manifest / pass set: `5fcb5fd3044754a603739ccd4724e69c4f160ca3536b50cddca2ff38df4cda2a` / `91abc59eb1022e2c3d182009339865702a7ebfe9f0a45f3299d0440e09dabf0c`.
-- Zend/lang manifest / pass set: `1d87eeb8115f81eb19e424c71cdf5d6bc58c86330f7335c7b5cd0562f179fd42` / `efd0f4684602a167bd888a7043303d3270b198c12d348af26eda1b14302b319b`.
-- Strings/array manifest / pass set: `ca758ac9ebb50324f7f93287b1412aaeace4304bbb57cd2473fac55cf2276463` / `482d95e26cbbd4c66abd2b34435b39c6042e65340215b02697de5fb9851aaa06`.
-- Performance decision / raw timing: `08b4be9f04fcd96e5ed31166630f194e1437cb02884cab5b96e241bb964b71ba` / `cab9e74d386d81bb1b4491af17d15f85ae88cd263d235d4b2fdec55d8c7e9d95`.
+- Release: `3f7452ee8c2388330f97e93c0a529cf6bb84f7fa65da13734dc9e04268b97aee`.
+- Complete technical record: `fff26a88b94f818a407e20919640c7e9c2c15cb5852884f4ae8fdc06617f031c`.
+- Matrix: `57510e2927641da102bd39b2c9df73f06477c7d923f4202230adbe11d3ec0bce`.
+- SPL manifest / pass set: `0f66b891b0f3b170bf7089ec56eeba2e80b0e47c3ac8a27c79e48f9630f6b574` / `fe051a234b3eeeaef9600c06deedcd09dbc57a5c88b55dc4072e8aec39388c6a`.
+- Zend/lang manifest / pass set: `f9e75d61655aca64bc131a632b02f40097c7ca55d081160217b7c65dbf33a673` / `efd0f4684602a167bd888a7043303d3270b198c12d348af26eda1b14302b319b`.
+- Strings/array manifest / pass set: `64a91d07a3d8bf3f94bead49b635a009d2d84463ebbba2acf33331a050c34455` / `482d95e26cbbd4c66abd2b34435b39c6042e65340215b02697de5fb9851aaa06`.
+- Performance decision / raw timing: `cd71981e169920a3a00343c63aac067e3c61e1ceadbf54e858c8e5da47c55f55` / `5c6f27bba0f7d07a6aa813f3376e7ee8536de442413836555a6e4aee39330498`.
 
-Next read-only admission checks seventeen candidates sharing missing `decoct`,
-`bindec`, `hexdec` and `octdec`. Require ten PHP-pass/current-fail cases with
-one radix conversion/callable root cause before implementation, otherwise
-reselect; keep platform skips and unrelated blockers explicit.
+Next read-only admission checks thirteen candidates sharing missing `acosh`,
+`asinh`, `atanh`, `expm1` and `log1p`. Require ten PHP-pass/current-fail cases
+before implementation; preserve signed zero, domain/NaN/INF and callable policy.
+Retain the expanded 7,975-case ledger, including the sixteen radix math passes.
+
+The preceding crypt checkpoint added fourteen passes; its technical record is
+`7788c28de32f2529f21dc766493a4b6f4829545901155c6471458a6f0594b207`.
+Its trusted lazy libxcrypt boundary, call-local allocation, licensing, native
+prerequisites and unvalidated security/platform claims remain documented in
+[the crypt boundary record](crypt-boundary.md). No new crypt security claim is
+made here; legacy hashes are not recommended for new password storage.
 
 The preceding lexical-source checkpoint added thirteen unique passes;
 its complete technical record remains

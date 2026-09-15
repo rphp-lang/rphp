@@ -1841,10 +1841,11 @@ impl ExecutorGlobals {
     /// normal executors avoid repeated hash-table growth while installing the
     /// fixed built-in class and function set.
     pub(crate) fn reserve_stdlib_capacity(&mut self) {
-        // Reserve the fixed native surface, not the later user declaration
-        // set. Larger requests can grow the index without moving its boxed
-        // function descriptors; empty requests do not pay for that headroom.
-        self.function_table.reserve(900);
+        // Native globals and method aliases nearly fill the 1,792-slot
+        // envelope. Reserve the next envelope before publication so the
+        // first ordinary declaration batch does not rehash the native set.
+        // Executors without stdlib stay lazy; boxed descriptors never move.
+        self.function_table.reserve(1800);
         // The heap family crosses the old 112-class hash-table envelope.
         self.class_table.reserve(113);
         // Native iterator methods leave only one slot in the old 896-entry
@@ -7354,6 +7355,11 @@ impl ExecutorGlobals {
                 let mut child_prefix = None;
                 let inherited = if let Some(aliases) = native_parent_aliases {
                     aliases
+                } else if self.function_table.is_empty() {
+                    // Early class registration can precede all native bodies.
+                    // No method aliases exist yet, regardless of reserved
+                    // capacity; property inheritance above still applies.
+                    Vec::new()
                 } else {
                     // Complete native aliases already contain the final
                     // inherited methods. Build search-only state solely for
@@ -7366,14 +7372,16 @@ impl ExecutorGlobals {
                         .map(|(n, _, _, _, _)| n.to_lowercase())
                         .collect();
                     let parent_prefix = Self::canonical_method_owner_prefix(parent_name);
+                    let parent_initial = parent_prefix.as_bytes().first();
                     let mut inherited = Vec::new();
                     self.function_table.iter().for_each(|(k, v)| {
                         // Most registry keys belong to another owner (or a
-                        // global function). Reject mismatched owner lengths
+                        // global function). Reject mismatched initials/lengths
                         // before comparing the whole potentially long prefix.
                         // This is only a necessary condition; the exact
                         // canonical prefix check still decides membership.
-                        if k.as_bytes().get(parent_prefix.len() - 1) != Some(&b':')
+                        if k.as_bytes().first() != parent_initial
+                            || k.as_bytes().get(parent_prefix.len() - 1) != Some(&b':')
                             || !k.starts_with(&parent_prefix)
                         {
                             return;
@@ -9809,7 +9817,15 @@ impl ExecutorGlobals {
             }
             return Ok(());
         }
-        let key = name.to_lowercase();
+        // Native names are usually ASCII. Copy once and fold in place;
+        // retain Unicode lowercase semantics for non-ASCII declarations.
+        let key = if name.is_ascii() {
+            let mut key = name.to_owned();
+            key.make_ascii_lowercase();
+            key
+        } else {
+            name.to_lowercase()
+        };
         if let Some(alias) = crate::builtin_metadata::internal_function_alias(&key)
             && let Some(&previous) = self.function_table.get(alias.target)
         {
@@ -11155,7 +11171,14 @@ mod stdlib_capacity_tests {
         let original = &first.common as *const _;
         let replacement = &second.common as *const _;
         let mut eg = ExecutorGlobals::new();
-        for (name, duplicate) in [("MiXeD", "mIXEd"), ("\u{130}TEM", "i\u{307}tem")] {
+        for (name, duplicate) in [
+            ("MiXeD", "mIXEd"),
+            (
+                "long_lowercase_function_name",
+                "LONG_LOWERCASE_FUNCTION_NAME",
+            ),
+            ("\u{130}TEM", "i\u{307}tem"),
+        ] {
             eg.register_function(name, original).unwrap();
             let error = eg.register_function(duplicate, replacement).unwrap_err();
             assert_eq!(error, format!("Cannot redeclare function {duplicate}()"));
@@ -11171,7 +11194,7 @@ mod stdlib_capacity_tests {
         assert_eq!(eg.function_table.get("rtrim"), Some(&original));
         eg.register_function("Other", replacement).unwrap();
         assert_eq!(eg.find_function("other"), Some(replacement));
-        assert_eq!(eg.function_table.len(), 4);
+        assert_eq!(eg.function_table.len(), 5);
     }
 
     #[test]
@@ -11544,13 +11567,15 @@ mod stdlib_capacity_tests {
     #[test]
     fn class_layout_publication_reuses_only_unique_storage_and_exact_empty_defaults() {
         use std::rc::Rc;
-        let source = "<?php class UniqueEmpty {} class SharedEmpty {} class WeakEmpty {} class ScalarSlots { public int $value = 7; } class InheritedSlots extends ScalarSlots {}";
+        let source = "<?php class UniqueEmpty {} class SharedEmpty {} class WeakEmpty {} class ChildEmpty extends UniqueEmpty {} class ScalarSlots { public int $value = 7; } class InheritedSlots extends ScalarSlots {}";
         let tokens = crate::lexer::Lexer::new(source).tokenize().unwrap();
         let statements = crate::parser::Parser::new(tokens).parse().unwrap();
         let compiled = crate::compiler::compile::Compiler::new()
             .compile(&statements)
             .unwrap();
         let mut eg = ExecutorGlobals::new();
+        eg.function_table.reserve(1800);
+        assert!(eg.function_table.is_empty());
         let mut count = 0;
         for mut definition in compiled
             .class_defs
@@ -11568,6 +11593,9 @@ mod stdlib_capacity_tests {
             let weak = (name == "WeakEmpty").then(|| Rc::downgrade(&definition.property_layout));
             let defaults = definition.property_defaults.clone();
             eg.register_class(definition).unwrap();
+            if name.ends_with("Empty") {
+                assert!(eg.function_table.is_empty());
+            }
             let registered = eg.find_class(&name).unwrap();
             assert_eq!(registered.property_layout.class_name().as_ref(), name);
             assert_eq!(registered.property_layout.slot("obsolete"), None);
@@ -11594,7 +11622,23 @@ mod stdlib_capacity_tests {
             }
             count += 1;
         }
-        assert_eq!(count, 5);
+        assert_eq!(count, 6);
+        // Publishing bodies later must re-enable canonical alias discovery.
+        let source = "<?php class BodyParent { public function value() { return 9; } } class BodyChild extends BodyParent {}";
+        let tokens = crate::lexer::Lexer::new(source).tokenize().unwrap();
+        let statements = crate::parser::Parser::new(tokens).parse().unwrap();
+        let compiled = crate::compiler::compile::Compiler::new()
+            .compile(&statements)
+            .unwrap();
+        for definition in compiled
+            .class_defs
+            .into_iter()
+            .chain(compiled.runtime_class_defs.into_iter().map(|(_, c)| c))
+        {
+            eg.register_class(definition).unwrap();
+        }
+        let parent_body = eg.find_function("BodyParent::value").unwrap();
+        assert_eq!(eg.find_function("BodyChild::value"), Some(parent_body));
     }
 
     #[test]
@@ -12113,6 +12157,12 @@ mod stdlib_capacity_tests {
             "fixed stdlib registration must not grow a reserved registry"
         );
         assert!(!functions.is_empty());
+        assert!(
+            eg.function_table.capacity() - eg.function_table.len() >= 32,
+            "native functions must leave room for ordinary declarations: {} entries in {} slots",
+            eg.function_table.len(),
+            eg.function_table.capacity(),
+        );
         assert!(
             eg.method_declaring_class.capacity() - eg.method_declaring_class.len() >= 32,
             "native owners must leave room for an ordinary user method batch"
