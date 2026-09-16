@@ -3351,7 +3351,36 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         eg.register_function("setlocale", pointer).unwrap();
         funcs.push(function);
     }
-    reg!("extension_loaded", fn_extension_loaded, 1, 1, "extension");
+    reg_typed!(
+        "extension_loaded",
+        fn_extension_loaded,
+        1,
+        1,
+        ["extension"],
+        [ParamTypeHint::String],
+        ParamTypeHint::Bool
+    );
+    let extension_loaded = eg
+        .find_function("extension_loaded")
+        .expect("extension_loaded was just registered");
+    eg.register_internal_function_extension(extension_loaded, "Core");
+    reg_typed!(
+        "get_loaded_extensions",
+        fn_get_loaded_extensions,
+        1,
+        0,
+        ["zend_extensions"],
+        [ParamTypeHint::Bool],
+        ParamTypeHint::Array
+    );
+    let get_loaded_extensions = eg
+        .find_function("get_loaded_extensions")
+        .expect("get_loaded_extensions was just registered");
+    eg.register_internal_function_reflection_metadata(
+        get_loaded_extensions,
+        vec![Some(Value::bool(false))],
+        "Core",
+    );
     {
         let mut function = Box::new(make_internal_function_ref(
             fn_headers_sent,
@@ -3559,6 +3588,10 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     // admitted hot-code layout stable as new cold stream handlers are added.
     #[cfg(target_vendor = "apple")]
     streams::register_extensions(eg, &mut funcs);
+
+    // Admitted extensions append their descriptors so the established Core
+    // registration order and its measured hot-code layout remain stable.
+    funcs.extend(calendar::register(eg));
 
     eg.seal_internal_class_ids();
     funcs

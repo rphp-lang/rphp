@@ -49,6 +49,7 @@ use crate::vm::function::{Function, FunctionCommon, FunctionType, ParamTypeHint,
 use crate::vm::instruction::{InlineCache, OpType};
 use crate::vm::opcode::OpCode;
 
+mod calendar;
 pub(crate) mod crypt;
 #[cfg(feature = "include-path")]
 pub(crate) mod include_path;
@@ -29370,15 +29371,65 @@ fn fn_setlocale(
     ret!(rv, Value::bool(false));
 }
 
-/// RPHP does not advertise an extension until its compatibility contract is
-/// separately admitted. Composer can therefore reject unsupported packages
-/// instead of selecting code for a partially implemented extension.
+const LOADED_EXTENSION_NAMES: &[&str] = &["calendar"];
+
+#[inline(always)]
+fn admitted_extension_name(bytes: &[u8]) -> bool {
+    LOADED_EXTENSION_NAMES
+        .iter()
+        .any(|name| bytes.eq_ignore_ascii_case(name.as_bytes()))
+}
+
 fn fn_extension_loaded(
-    _ed: *mut ExecuteData,
+    ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::bool(false));
+    let supplied = arg!(ed, 0).dereferenced();
+    if supplied.value_type() == ValueType::String {
+        ret!(
+            rv,
+            Value::bool(admitted_extension_name(
+                &supplied.php_string_bytes().unwrap_or_default()
+            ))
+        );
+    }
+    let Some(extension) =
+        typed_internal_string_argument(ed, eg, "extension_loaded", 0, "extension")?
+    else {
+        return Ok(());
+    };
+    ret!(
+        rv,
+        Value::bool(admitted_extension_name(extension.as_bytes()))
+    );
+}
+
+/// Publish only extensions whose user-visible compatibility checkpoint has
+/// been admitted. This keeps Composer and PHPT selection honest while making
+/// a completed extension discoverable through PHP's ordinary Core surface.
+fn fn_get_loaded_extensions(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let zend_extensions = if arg_opt!(ed, 0).is_some() {
+        let Some(value) =
+            typed_internal_bool_argument(ed, eg, "get_loaded_extensions", 0, "zend_extensions")?
+        else {
+            return Ok(());
+        };
+        value
+    } else {
+        false
+    };
+    let mut extensions = PhpArray::with_packed_capacity(LOADED_EXTENSION_NAMES.len());
+    if !zend_extensions {
+        for name in LOADED_EXTENSION_NAMES {
+            extensions.push(Value::string(*name));
+        }
+    }
+    ret!(rv, Value::array(extensions));
 }
 
 /// CLI execution has no response-header transport. These minimal contracts

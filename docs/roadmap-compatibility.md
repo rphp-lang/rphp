@@ -36,6 +36,49 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `calendar-extension` checkpoint adds all eighteen PHP 8.5
+Calendar globals, twenty-one `CAL_*` constants and honest Core extension
+discovery over `aace305b`, without a lost pass, timeout, crash or moved failure
+stage. The selected ledger grows from 7,988 to **8,041 cases** and reaches
+**7,217 pass / 379 fail / 194 skip / 250 unsupported / one XFAIL**. All 41
+runnable upstream Calendar cases pass; four cases are legitimate 32-bit skips
+and eight remain visible because the runner does not support their
+`date.timezone` INI request.
+
+One arithmetic boundary implements Gregorian, Julian, Jewish and French
+Republican conversion, weekday/month projections, Easter and Unix-day
+mapping. Exact Reflection metadata is published for all eighteen functions;
+`extension_loaded()` and `get_loaded_extensions()` expose only admitted
+extensions. Eleven original E2E tests and four unit tests cover signatures,
+constants, strict typing, invalid ranges, BCE/leap behavior, ISO-8859-8 Hebrew
+output and extension discovery. No VM/Value layout, opcode, dependency or unsafe
+boundary changes; unsafe remains 1,626/289.
+
+The final five-configuration matrix/all-targets is green at
+5,702/5,370/5,773/5,795/5,846 passes. Zend/lang, strings/array, SPL and retained
+math pass sets are byte-identical to the parent. Composer and Symfony S0-S3,
+runner/static/public-hygiene checks pass. The on-demand global audit reaches
+**536 present / 665 missing / 0 call-shape mismatch / 349 metadata mismatch /
+187 exact**; Calendar itself is 18/18 exact.
+
+The accepted fixed-parent 32-pair medians are startup -0.704%, ordinary calls
+-0.186% and missing-extension lookup +4.502%, within the unchanged common
+1.65% and pay-use 5% limits. A first registration/string-cloning layout was
+rejected at +7.464% ordinary and +45.997% extension lookup. The new Calendar
+workload is +15.952% versus PHP 8.5 and is recorded as an absolute optimization
+baseline, not an existing-path regression or parity claim.
+
+Next read-only extension admission ranks `gettext`: the selected PHP exposes
+exactly ten missing globals and nineteen upstream PHPT. Before implementation,
+prove at least ten reference-pass/current-fail cases with one shared native
+locale/catalog boundary and make environment-dependent skips explicit; reselect
+if the host locale/libintl contract cannot supply that evidence. Keep each
+extension in this repository but on a separate `codex/compat-*` worktree and
+append-only module/registry ownership. Date/timezone, iconv streams, 32-bit and
+OOM equivalence remain separate goals.
+
+### Preceding SPL autoload checkpoint
+
 The accepted `spl-autoload-public-boundaries` checkpoint adds thirteen PHP 8.5
 passes over `d5fdbc5a`, without losses, changed expectations, process hazards or
 moved failure stages. The same **7,988 cases reach 7,176 pass / 379 fail**,

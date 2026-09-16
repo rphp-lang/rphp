@@ -7,7 +7,73 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 Unix PHP 8.5 checkpoint is
+The latest measured AMD64 Unix PHP 8.5 checkpoint is `calendar-extension`,
+against `aace305b`: **+41/-0** runnable Calendar PHPT, confirmed by PHP 8.5.10.
+The selected ledger now has **8,041 cases: 7,217 pass / 379 fail / 194 skip /
+250 unsupported / one XFAIL**, with no timeout or crash. This adds the complete
+eighteen-function Calendar surface and twenty-one constants; it is
+tested-subset evidence, not complete PHP or extension coverage.
+
+The four admitted civil calendars share checked Julian-day arithmetic. Public
+behavior includes BCE/leap boundaries, weekday and month projections, Easter,
+Unix-day conversion, Jewish month shapes and PHP-compatible ISO-8859-8 Hebrew
+rendering. All eighteen functions have exact names, arity, parameter names,
+types, defaults, return types and extension ownership. Core discovery is now
+real: `extension_loaded()` is ASCII-case-insensitive and
+`get_loaded_extensions()` lists admitted extensions without claiming incomplete
+ones. Eleven original E2E cases and four unit cases cover the general contract.
+
+The unmodified 53-case upstream Calendar suite reaches **41 pass / 0 fail / 4
+skip / 8 unsupported**. The four skips are 32-bit-only; the eight unsupported
+cases request `date.timezone`, which remains a visible runner/runtime non-claim.
+A task-scoped selector-only comparison makes the immutable parent runnable and
+measures 0/41 against 41/41 without changing PHP code or expectations. Removing
+only that unsupported INI request in a separate diagnostic copy reaches 47 pass
+and six legitimate skips. Timezone/local-time equivalence, 32-bit behavior and
+OOM behavior are not claimed.
+
+The checked matrix passes **5,702/5,370/5,773/5,795/5,846** tests
+(13/13/13/13/16 ignored), plus all-features/all-targets. Zend/lang remains
+5,001/303/115/180, strings/array 1,472/5/67/31 and SPL
+674/71/8/31/one XFAIL, with exact parent pass sets. Retained math remains
+29/0/6. Composer 2.8.12, four Symfony S1 components and byte-exact S2/S3,
+runner self-tests, formatting, unsafe and generated-data checks pass. No
+dependency, opcode or common VM/Value layout changed; unsafe remains
+**1,626 blocks / 289 functions**.
+
+The global-function audit now reaches **536 present / 665 missing / 0
+call-shape mismatch / 349 Reflection-metadata mismatch / 187 exact**. Calendar
+is 18/18 exact. The 665 missing names include functions from reference PHP's
+loaded extensions; they do not include Composer/vendor package functions
+because no vendor tree was supplied to this audit.
+
+The accepted CPU-2 fixed-parent 32-pair medians are startup **-0.704%**,
+ordinary calls **-0.186%** and missing-extension lookup **+4.502%**, within the
+common 1.65% and pay-use 5% ceilings. A first candidate was rejected at
++7.464% ordinary calls and +45.997% extension lookup; append-only registration
+and a borrowed exact-string path remove those regressions. Calendar's own
+150,000-iteration workload is **+15.952%** against PHP 8.5, retained as an
+absolute optimization baseline rather than a parity claim.
+
+SHA-256 evidence:
+
+- Release: `40f17e83fcd613baffc31d56195e117f6aa7516ba4f44f33da62b434fe292801`.
+- Final matrix: `416e2edba7a6cb7d10f9884822388e74d8a5721bf88e05a060df8b1c1c92a601`.
+- Calendar manifest / summary: `063510cff42963f2e13adaca8af77a452120cd5cbbec824235858449ee04b5d1` / `00c09fb99d2533b35dc7b631617ff8bcaf3aa40b60c7ad81e6cc9de49f0d73c6`.
+- Zend/lang manifest / pass set: `c08746ca78be5b5e843e4e195145a291767faebe55f434e0c02d1487a6b76e51` / `efd0f4684602a167bd888a7043303d3270b198c12d348af26eda1b14302b319b`.
+- Strings/array manifest / pass set: `db28073d2d6d78f8b34fc367d57efd035974b77692bc6b21f58e6ea9807ba32b` / `482d95e26cbbd4c66abd2b34435b39c6042e65340215b02697de5fb9851aaa06`.
+- SPL manifest / pass set: `d736151dddb2e7ab7b1e6b9e6634d62ba25b7f3c9a02d162e2680fa38c46f08c` / `712be8e30baa20a29ca8b1ef595b921c8f645e7ebcbe654d074efe654978ec36`.
+- Inventory report / summary: `578ac0275ab390f6099adff8a4cfe7d70a4e842514d579396faf891c99abfeca` / `fdac241af3bfa1f20db99961ed77b80a11e1a3afc2bb8a00a40b6fc23a38956d`.
+- Performance summary / raw timing: `0fb011723ae41d13a7c38650532314427a42a66e2871eb3010d69ec178d301f2` / `e50cfdc2f71332ae2ce53e1be3fc297e3b5446aef5719abab944e2fd1f3ebbc2`.
+
+Next read-only extension admission is `gettext`: ten missing globals and
+nineteen upstream PHPT, contingent on at least ten reachable cases sharing one
+locale/catalog boundary. It belongs in this repository as an isolated module
+and worktree; no implementation or availability claim is made yet.
+
+### Preceding SPL autoload checkpoint
+
+The preceding measured AMD64 Unix PHP 8.5 checkpoint is
 `spl-autoload-public-boundaries`, against `d5fdbc5a`: **+13/-0**, confirmed
 by PHP 8.5.10. The same **7,988 cases reach 7,176 pass / 379 fail**, plus
 190 skips, 242 unsupported and one XFAIL. SPL reaches 674 pass / 71 fail;

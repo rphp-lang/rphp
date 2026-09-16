@@ -1,6 +1,6 @@
 # RPHP engineering roadmap
 
-Status: active coordination map, 2026-08-26
+Status: active coordination map, 2026-09-16
 
 This document coordinates two independent engineering workstreams. It stays
 short and current; detailed plans live in the workstream roadmaps, while the
@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5 AMD64 `hebrev()` checkpoint reaches 631/733 strings, exactly +1/-0, while array remains 828/842 and Zend/lang remains 4,214/5,599. A typed clean-room byte transform covers audited directional, punctuation, binary, line and wrapping boundaries; representative and exhaustive oracles are byte-identical to PHP 8.5.9. All feature, unsafe, Composer/Symfony S0-S3 and exact-final-binary performance gates pass. Monitored supported debt is 1,107. Manifest triage selects the PHP 8.5 `E_ALL=30719` error-reporting boundary, directly implicated in 11 Zend/lang failures, as the next higher-yield goal. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5 AMD64 `calendar-extension` checkpoint adds all 18 Calendar globals and 21 constants, with +41/-0 runnable upstream cases. The selected 8,041-case ledger reaches 7,217 pass; the global inventory is 536 present / 665 missing / 0 call-shape mismatch / 187 exact. Five Cargo configurations, all-targets, no-loss, Composer/Symfony S0-S3 and fixed-parent performance gates pass. Next read-only admission evaluates the ten-function, nineteen-PHPT `gettext` extension and proceeds only with at least ten reachable shared-cause cases. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,

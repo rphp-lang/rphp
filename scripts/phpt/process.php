@@ -156,9 +156,6 @@ function target_command(
 /** @return array<string, true> */
 function loaded_extensions(string $target, string $kind, float $timeout): array
 {
-    if ($kind === 'rphp') {
-        return [];
-    }
     $result = run_process(
         [$target, '-r', 'echo implode("\\n", get_loaded_extensions());'],
         getcwd() ?: '.',
@@ -166,6 +163,16 @@ function loaded_extensions(string $target, string $kind, float $timeout): array
         '',
         $timeout,
     );
+    if ($kind === 'rphp'
+        && !$result['timeout']
+        && $result['exit_code'] !== 0
+        && str_contains($result['output'], 'Call to undefined function get_loaded_extensions()')
+    ) {
+        // Immutable pre-discovery baselines do not expose
+        // get_loaded_extensions(). Keep their historical empty extension set
+        // so parent/candidate comparisons remain runnable.
+        return [];
+    }
     if ($result['exit_code'] !== 0 || $result['timeout']) {
         throw new RuntimeException('cannot query target extensions');
     }
