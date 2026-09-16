@@ -7,7 +7,74 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 Unix PHP 8.5 checkpoint is `calendar-extension`,
+The latest measured AMD64 Linux PHP 8.5 checkpoint is `gettext-extension`,
+against `d155bf36`: **+18/-0** upstream gettext passes, confirmed by PHP
+8.5.10. The selected ledger now has **8,060 cases: 7,235 pass / 380 fail / 194
+skip / 250 unsupported / one XFAIL**, with no timeout or crash. This is tested
+subset evidence, not a complete PHP, GNU libc or extension-platform claim.
+
+All ten PHP 8.5 gettext globals are present with exact Reflection-visible names,
+arity, parameter names, types, defaults, return types and extension ownership.
+A Linux-only cold native boundary shares libc locale state with `setlocale()`
+and supports real domains, catalog directories, codesets, plural selection and
+untranslated binary fallback. Domain and message limits are independently
+enforced at 1,024 and 4,096 bytes. `PHP_ZTS`, `extension_loaded()` and
+`get_loaded_extensions()` now expose only the platform contract actually
+admitted. Eleven original E2E cases and two unit cases cover metadata, strict
+and weak conversion, native state, embedded NUL fallback, category validation,
+boundary lengths and current-directory binding.
+
+The unmodified 19-case upstream gettext suite reaches **18 pass / 1 fail**.
+The sole visible holdout is `gettext_phpinfo.phpt`, because general `phpinfo()`
+module-table rendering remains a separate Core boundary. A selector-only copy
+of the immutable parent reaches 0 pass / 10 fail / 9 skip; the reference PHP
+passes all 19. Locale data is generated task-locally and PHP code and
+expectations are never changed.
+
+The checked matrix passes **5,715/5,383/5,786/5,808/5,859** tests
+(13/13/13/13/16 ignored), plus all-features/all-targets. Zend/lang remains
+5,001/303/115/180, strings/array 1,472/5/67/31, SPL
+674/71/8/31/one XFAIL and retained math 29/0/6; every manifest and pass set is
+byte-identical to the Calendar parent. Composer 2.8.12, four Symfony S1
+components and byte-exact S2/S3, formatting, unsafe and generated-data checks
+pass. No dependency, opcode or common VM/Value layout changed; unsafe remains
+**1,626 blocks / 289 functions**.
+
+The global-function audit now reaches **546 present / 655 missing / 0
+call-shape mismatch / 349 Reflection-metadata mismatch / 197 exact**. Gettext
+is 10/10 exact. The 655 missing names include globals from all extensions
+loaded by the reference PHP; they do not include Composer/vendor package
+functions because no vendor tree was supplied.
+
+The accepted CPU-31 fixed-parent 32-pair medians are startup **+0.138%**,
+ordinary calls **+0.860%** and missing-extension lookup **+0.303%**, within the
+common 1.65% ceiling. The modified `putenv()` path is **+1.760%**, within the 5%
+pay-use ceiling. Native `setlocale()` is **-18.717%** versus PHP 8.5 while the
+new gettext workload is **+102.761%**; the latter is an explicit absolute
+optimization baseline, not a parity claim. The semantic `setlocale()` change
+is +126.188% against the parent's C-only stub and is not classified as an
+existing-behavior regression.
+
+SHA-256 evidence:
+
+- Release: `638d2b6709e9aaa331036ec7bca4c9e2ad0c33d731dc96ebe890afd813bb92db`.
+- Final matrix: `2814d9d07d32cbcc3d32c9ebc90ecdf34b9af5a379f5174aeb3d43a2daef1255`.
+- Gettext manifest / summary: `68b1129402972a554715a13507b6ad8d73fa3a221e0f430c3236e16c6a4fd7c0` / `68758e30f46fe414c765b3422f6edb7170d107abf82ceffff8f1f466d431a8f0`.
+- Reference gettext manifest: `7e6d0ab7d84cd6e5b19964271542409eb9b33ba54deb04cd6e4ff5980e1208ec`.
+- Zend/lang manifest / pass set: `c08746ca78be5b5e843e4e195145a291767faebe55f434e0c02d1487a6b76e51` / `efd0f4684602a167bd888a7043303d3270b198c12d348af26eda1b14302b319b`.
+- Strings/array manifest / pass set: `db28073d2d6d78f8b34fc367d57efd035974b77692bc6b21f58e6ea9807ba32b` / `482d95e26cbbd4c66abd2b34435b39c6042e65340215b02697de5fb9851aaa06`.
+- SPL manifest / pass set: `d736151dddb2e7ab7b1e6b9e6634d62ba25b7f3c9a02d162e2680fa38c46f08c` / `712be8e30baa20a29ca8b1ef595b921c8f645e7ebcbe654d074efe654978ec36`.
+- Inventory report / summary: `dd79bdde3384028bb9634853148569bd5267ba250970b0e8c9b3868ecbe31667` / `3ad0ac3f738428098eea491d1b185c10fb50323d81edfbed8d95ba12a8f3b2b7`.
+- Performance summary / raw timing: `7a1f0b4dc1a33daf0cf0a987f9d52bc69bebddbec927416d3cfd06d54b20223f` / `a6a648a08100bf35e892b3e8e991d692be760d7e8a551c9b19f13020dd9cdb28`.
+
+Next read-only extension admission is `iconv`: ten missing globals and 76
+upstream PHPT. Require at least ten reference-pass/current-fail cases sharing
+one native conversion/MIME boundary before editing. Stream-filter and output
+handler cases stay separate if they require independent Core infrastructure.
+
+### Preceding Calendar checkpoint
+
+The preceding measured AMD64 Unix PHP 8.5 checkpoint is `calendar-extension`,
 against `aace305b`: **+41/-0** runnable Calendar PHPT, confirmed by PHP 8.5.10.
 The selected ledger now has **8,041 cases: 7,217 pass / 379 fail / 194 skip /
 250 unsupported / one XFAIL**, with no timeout or crash. This adds the complete
@@ -66,10 +133,8 @@ SHA-256 evidence:
 - Inventory report / summary: `578ac0275ab390f6099adff8a4cfe7d70a4e842514d579396faf891c99abfeca` / `fdac241af3bfa1f20db99961ed77b80a11e1a3afc2bb8a00a40b6fc23a38956d`.
 - Performance summary / raw timing: `0fb011723ae41d13a7c38650532314427a42a66e2871eb3010d69ec178d301f2` / `e50cfdc2f71332ae2ce53e1be3fc297e3b5446aef5719abab944e2fd1f3ebbc2`.
 
-Next read-only extension admission is `gettext`: ten missing globals and
-nineteen upstream PHPT, contingent on at least ten reachable cases sharing one
-locale/catalog boundary. It belongs in this repository as an isolated module
-and worktree; no implementation or availability claim is made yet.
+That checkpoint selected `gettext` as its next read-only admission; the current
+checkpoint above records the completed result.
 
 ### Preceding SPL autoload checkpoint
 

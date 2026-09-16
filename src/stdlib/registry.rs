@@ -3592,6 +3592,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     // Admitted extensions append their descriptors so the established Core
     // registration order and its measured hot-code layout remain stable.
     funcs.extend(calendar::register(eg));
+    #[cfg(target_os = "linux")]
+    funcs.extend(gettext::register(eg));
 
     eg.seal_internal_class_ids();
     funcs

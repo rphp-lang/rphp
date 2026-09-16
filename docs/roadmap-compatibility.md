@@ -36,6 +36,38 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `gettext-extension` checkpoint adds all ten PHP 8.5 gettext
+globals with exact callable metadata and honest Linux extension discovery over
+`d155bf36`. A cold native boundary unifies libc locale and catalog state for
+real domains, directories, codesets, plural rules and binary untranslated
+fallback. The selected ledger grows from 8,041 to **8,060 cases** and reaches
+**7,235 pass / 380 fail / 194 skip / 250 unsupported / one XFAIL**, without a
+lost pass, timeout, crash or moved failure stage.
+
+The unmodified gettext suite is 18/19; general `phpinfo()` module-table output
+is the only explicit holdout. Eleven original E2E cases and two unit cases
+cover signatures, conversions, state, diagnostics, length limits and cwd
+binding. The global audit reaches **546 present / 655 missing / 0 call-shape
+mismatch / 349 metadata mismatch / 197 exact**; gettext is 10/10 exact. No
+dependency, opcode or common VM/Value layout changed and unsafe remains
+1,626/289.
+
+The final five-configuration matrix/all-targets is green at
+5,715/5,383/5,786/5,808/5,859 passes. Zend/lang, strings/array, SPL and retained
+math manifests are byte-identical to the parent; Composer/Symfony S0-S3 and
+static/public-hygiene gates pass. Fixed-parent common medians are startup
++0.138%, ordinary +0.860% and extension miss +0.303%; `putenv()` is +1.760%
+pay-use. Native `setlocale()` is -18.717% versus PHP 8.5 and gettext itself is
++102.761%, retained as the next absolute optimization baseline.
+
+Next read-only admission ranks `iconv`: exactly ten missing globals and 76
+upstream PHPT. Prove at least ten reference-pass/current-fail cases with one
+shared native conversion/MIME boundary before implementation. Keep stream
+filters and output handlers out if they require independent Core work; reselect
+if the host iconv contract cannot provide a portable, cleanly bounded result.
+
+### Preceding Calendar checkpoint
+
 The accepted `calendar-extension` checkpoint adds all eighteen PHP 8.5
 Calendar globals, twenty-one `CAL_*` constants and honest Core extension
 discovery over `aace305b`, without a lost pass, timeout, crash or moved failure
@@ -68,14 +100,10 @@ rejected at +7.464% ordinary and +45.997% extension lookup. The new Calendar
 workload is +15.952% versus PHP 8.5 and is recorded as an absolute optimization
 baseline, not an existing-path regression or parity claim.
 
-Next read-only extension admission ranks `gettext`: the selected PHP exposes
-exactly ten missing globals and nineteen upstream PHPT. Before implementation,
-prove at least ten reference-pass/current-fail cases with one shared native
-locale/catalog boundary and make environment-dependent skips explicit; reselect
-if the host locale/libintl contract cannot supply that evidence. Keep each
-extension in this repository but on a separate `codex/compat-*` worktree and
-append-only module/registry ownership. Date/timezone, iconv streams, 32-bit and
-OOM equivalence remain separate goals.
+That checkpoint selected `gettext`; the current checkpoint above records the
+completed extension. Each following extension stays in this repository but in
+a separate `codex/compat-*` worktree with append-only module/registry ownership.
+Date/timezone, iconv streams, 32-bit and OOM equivalence remain separate goals.
 
 ### Preceding SPL autoload checkpoint
 

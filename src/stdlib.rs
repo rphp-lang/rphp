@@ -51,11 +51,14 @@ use crate::vm::opcode::OpCode;
 
 mod calendar;
 pub(crate) mod crypt;
+#[cfg(target_os = "linux")]
+mod gettext;
 #[cfg(feature = "include-path")]
 pub(crate) mod include_path;
 mod json_decode;
 mod legacy_encoding;
 mod meta_tags;
+mod native_process;
 mod pack;
 mod parse_ini;
 mod random;
@@ -28961,9 +28964,7 @@ fn fn_putenv(
     let s = arg_str!(ed, 0);
     if let Some(pos) = s.find('=') {
         let (key, val) = s.split_at(pos);
-        unsafe {
-            std::env::set_var(key, &val[1..]);
-        }
+        native_process::set_environment_variable(key.as_ref(), val[1..].as_ref());
         ret!(rv, Value::bool(true));
     }
     ret!(rv, Value::bool(false));
@@ -29143,8 +29144,8 @@ fn fn_version_compare(
     ret!(rv, Value::bool(result));
 }
 
-/// Portable locale subset. Unsupported host locales return false, allowing
-/// callers and PHPT setup sections to detect the unavailable capability.
+/// Locale arguments retain PHP's conversion and diagnostic contract while the
+/// admitted Linux gettext boundary delegates actual locale selection to libc.
 enum SetLocaleCandidate {
     Query,
     Name(Value),
@@ -29229,6 +29230,7 @@ fn setlocale_scalar_candidate(
 fn setlocale_try_name(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
+    category: i64,
     locale: &Value,
 ) -> Result<Option<Value>, VmError> {
     let bytes = locale.php_string_bytes().unwrap_or_default();
@@ -29245,10 +29247,32 @@ fn setlocale_try_name(
         }
         return Ok(None);
     }
+    #[cfg(target_os = "linux")]
+    {
+        return Ok(
+            native_process::set_process_locale(category, Some(bytes.as_ref()))
+                .map(|bytes| php_byte_result(bytes, false)),
+        );
+    }
+    #[cfg(not(target_os = "linux"))]
     if bytes.as_ref() == b"C" || bytes.eq_ignore_ascii_case(b"POSIX") {
         return Ok(Some(Value::string("C")));
     }
+    #[cfg(not(target_os = "linux"))]
     Ok(None)
+}
+
+fn setlocale_query(category: i64) -> Option<Value> {
+    #[cfg(target_os = "linux")]
+    {
+        native_process::set_process_locale(category, None)
+            .map(|bytes| php_byte_result(bytes, false))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = category;
+        Some(Value::string("C"))
+    }
 }
 
 fn setlocale_normalize_argument(
@@ -29274,14 +29298,15 @@ fn setlocale_normalize_argument(
 fn setlocale_try_argument(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
+    category: i64,
     argument: &SetLocaleArgument,
     position: usize,
     parameter: &str,
 ) -> Result<Option<Value>, VmError> {
     match argument {
-        SetLocaleArgument::Scalar(SetLocaleCandidate::Query) => Ok(Some(Value::string("C"))),
+        SetLocaleArgument::Scalar(SetLocaleCandidate::Query) => Ok(setlocale_query(category)),
         SetLocaleArgument::Scalar(SetLocaleCandidate::Name(locale)) => {
-            setlocale_try_name(ed, eg, locale)
+            setlocale_try_name(ed, eg, category, locale)
         }
         SetLocaleArgument::Array(locales) => {
             for locale in locales {
@@ -29291,9 +29316,9 @@ fn setlocale_try_argument(
                     return Ok(None);
                 };
                 match candidate {
-                    SetLocaleCandidate::Query => return Ok(Some(Value::string("C"))),
+                    SetLocaleCandidate::Query => return Ok(setlocale_query(category)),
                     SetLocaleCandidate::Name(locale) => {
-                        if let Some(result) = setlocale_try_name(ed, eg, &locale)? {
+                        if let Some(result) = setlocale_try_name(ed, eg, category, &locale)? {
                             return Ok(Some(result));
                         }
                         if eg.exception.is_some() {
@@ -29312,25 +29337,15 @@ fn fn_setlocale(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    if arg!(ed, 0).value_type() == ValueType::Long {
-        let first = arg!(ed, 1);
-        if arg!(ed, 2).as_array().is_some_and(PhpArray::is_empty) {
-            if first.value_type() == ValueType::Null {
-                ret!(rv, Value::string("C"));
-            }
-            if first.value_type() == ValueType::String {
-                let bytes = first.php_string_bytes().unwrap_or_default();
-                if bytes.as_ref() == b"0"
-                    || bytes.as_ref() == b"C"
-                    || bytes.eq_ignore_ascii_case(b"POSIX")
-                {
-                    ret!(rv, Value::string("C"));
-                }
-            }
-        }
-    } else if typed_internal_int_argument(ed, eg, "setlocale", 0, "category")?.is_none() {
-        return Ok(());
-    }
+    let category = if arg!(ed, 0).value_type() == ValueType::Long {
+        arg!(ed, 0).as_long().unwrap_or_default()
+    } else {
+        let Some(category) = typed_internal_int_argument(ed, eg, "setlocale", 0, "category")?
+        else {
+            return Ok(());
+        };
+        category
+    };
 
     let strict = internal_call_is_strict(ed);
     let first = owned_argument(ed, 1);
@@ -29354,14 +29369,14 @@ fn fn_setlocale(
         }
     }
 
-    if let Some(result) = setlocale_try_argument(ed, eg, &first, 2, "locales")? {
+    if let Some(result) = setlocale_try_argument(ed, eg, category, &first, 2, "locales")? {
         ret!(rv, result);
     }
     if eg.exception.is_some() {
         return Ok(());
     }
     for (index, locale) in normalized.iter().enumerate() {
-        if let Some(result) = setlocale_try_argument(ed, eg, locale, index + 3, "")? {
+        if let Some(result) = setlocale_try_argument(ed, eg, category, locale, index + 3, "")? {
             ret!(rv, result);
         }
         if eg.exception.is_some() {
@@ -29371,7 +29386,11 @@ fn fn_setlocale(
     ret!(rv, Value::bool(false));
 }
 
-const LOADED_EXTENSION_NAMES: &[&str] = &["calendar"];
+const LOADED_EXTENSION_NAMES: &[&str] = &[
+    "calendar",
+    #[cfg(target_os = "linux")]
+    "gettext",
+];
 
 #[inline(always)]
 fn admitted_extension_name(bytes: &[u8]) -> bool {
