@@ -197,6 +197,35 @@ impl Parser {
         )
     }
 
+    #[cold]
+    #[inline(never)]
+    fn parse_tick_interval(&mut self, line: usize) -> Result<i64, String> {
+        let mut offset = 0;
+        while matches!(self.peek_at(offset), Token::LParen(_)) { offset += 1; }
+        let literal = matches!(self.peek_at(offset), Token::Integer(_) | Token::Float(_)
+            | Token::StringLiteral(_) | Token::BinaryStringLiteral(_));
+        let expression = self.parse_expr()?;
+        let value = if literal { match expression {
+            Expr::Integer(value) => Some(crate::value::Value::long(value)),
+            Expr::Float(value) => Some(crate::value::Value::double(value)),
+            Expr::StringLiteral(value) | Expr::BinaryStringLiteral(value) => Some(crate::value::Value::string(value)),
+            _ => None,
+        } } else { None };
+        let Some(value) = value else {
+            self.compile_error("declare(ticks) value must be a literal", line);
+            return Ok(0);
+        };
+        if let Some(message) = crate::vm::execute::explicit_numeric_cast_warning(
+            &value, crate::vm::execute::ExplicitNumericCastTarget::Int,
+        ) {
+            // Use the same trailing source-unit warning tokens as the lexer.
+            // They survive dead branches without adding ordinary parser state.
+            let end = self.tokens.len() - usize::from(matches!(self.tokens.last(), Some(Token::Eof)));
+            self.tokens.insert(end, Token::CompileWarning(message, line));
+        }
+        Ok(crate::vm::execute::explicit_long_conversion(&value))
+    }
+
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
         let strict_types_allowed = self.strict_types_allowed;
         if self.outermost_scope
@@ -321,6 +350,8 @@ impl Parser {
                                 0
                             }
                         }
+                    } else if directive.eq_ignore_ascii_case("ticks") {
+                        self.parse_tick_interval(directive_line)?
                     } else {
                         match self.advance() {
                             Token::Integer(n) => n,
@@ -342,7 +373,7 @@ impl Parser {
                 }
                 self.expect(&Token::RParen)?;
                 let invalid_strict_block = strict_line.is_some()
-                    && matches!(self.peek(), Token::LBrace(_));
+                    && !matches!(self.peek(), Token::Semicolon(_));
                 if invalid_strict_block {
                     let _ = self.compile_error(
                         "strict_types declaration must not use block mode",
@@ -357,9 +388,27 @@ impl Parser {
                     }
                     self.expect(&Token::RBrace)?;
                     Some(body)
-                } else {
+                } else if self.peek() == Token::Colon {
+                    self.advance();
+                    let body = self.parse_statements_until(|token| {
+                        matches!(token, Token::Identifier(name, _) if name.eq_ignore_ascii_case("enddeclare"))
+                    })?;
+                    self.advance();
+                    self.expect(&Token::Semicolon(0))?;
+                    Some(body)
+                } else if matches!(self.peek(), Token::Semicolon(_)) {
                     self.expect(&Token::Semicolon(0))?;
                     None
+                } else {
+                    let start = self.pos;
+                    let statement = self.parse_stmt_in_scope(false);
+                    if statement.is_err() && self.pos == start && self.source_name.is_none() {
+                        // Preserve the source-less terminator diagnostic when
+                        // no body began, reusing the existing cold error path.
+                        // An entered body retains its own diagnostic instead.
+                        self.expect(&Token::Semicolon(0))?;
+                    }
+                    Some(vec![statement?])
                 };
                 if invalid_strict_placement || invalid_strict_block {
                     Ok(Stmt::Noop)

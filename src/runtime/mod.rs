@@ -8691,7 +8691,7 @@ impl ExecutorGlobals {
     }
 
     #[inline(always)]
-    fn note_request_static_value(&mut self, value: &Value) {
+    pub(crate) fn note_request_static_value(&mut self, value: &Value) {
         self.request_static_values_may_retain_objects |= matches!(
             value.value_type(),
             crate::value::ValueType::Array

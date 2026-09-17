@@ -208,6 +208,7 @@ mod process;
 mod recursive_arrays;
 mod source_filters;
 mod strings;
+pub(crate) mod ticks;
 mod weak;
 
 use filesystem::{bytes_to_php_string, php_string_to_bytes};
@@ -23067,6 +23068,7 @@ impl ResolvedCallback {
                         | OpCode::Include
                         | OpCode::Eval
                         | OpCode::AssertCheck
+                        | OpCode::Tick
                         | OpCode::Yield
                         | OpCode::YieldFrom
                 )

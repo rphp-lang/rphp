@@ -141,6 +141,7 @@ pub(super) fn loop_miss_reason(
             | OpCode::DirectInternalCall2 => has_direct_call_shape = true,
 
             OpCode::Throw
+            | OpCode::Tick
             | OpCode::Yield
             | OpCode::YieldFrom
             | OpCode::GeneratorReturn

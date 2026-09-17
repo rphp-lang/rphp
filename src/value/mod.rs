@@ -7568,11 +7568,20 @@ impl Value {
                 // Plain decimal operands need no boundary scan. A failed
                 // exact parse retains the existing whitespace/overflow path.
                 text.parse::<i64>()
-                    .or_else(|_| text.trim().parse::<i64>())
                     .ok()
+                    .or_else(|| Self::arithmetic_trimmed_long(text))
             }
             _ => None,
         }
+    }
+
+    // A failed exact decimal parse is the only path needing whitespace
+    // normalization and another parse. Keep that fallback out of the ordinary
+    // numeric-string projection, which can then stay a small leaf function.
+    #[cold]
+    #[inline(never)]
+    fn arithmetic_trimmed_long(text: &str) -> Option<i64> {
+        text.trim().parse::<i64>().ok()
     }
 
     /// Convert a complete PHP numeric operand to double without admitting a
@@ -8788,6 +8797,9 @@ mod arithmetic_projection_tests {
             (" -9223372036854775808\n", Some(i64::MIN)),
             ("+9223372036854775807", Some(i64::MAX)),
             ("00042", Some(42)),
+            ("\t+00042\u{b}\u{c}", Some(42)),
+            ("\n-0\r", Some(0)),
+            (" 4tail ", None),
             ("9223372036854775808", None),
             ("-9223372036854775809", None),
             ("4.0", None),

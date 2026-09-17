@@ -245,7 +245,7 @@ impl OpArray {
                 OpCode::ForeachNextRef => mark(instruction.extended_value as u16),
                 // Included code shares the current symbol table and may bind
                 // any visible local by reference.
-                OpCode::Include => may_reference.fill(true),
+                OpCode::Include | OpCode::Tick => may_reference.fill(true),
                 _ => {}
             }
         }

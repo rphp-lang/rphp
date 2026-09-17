@@ -1204,6 +1204,7 @@ fn propagate_declared_scalar_types(
             // Included code and direct `$GLOBALS[...]` mutation execute
             // against the current symbol table and may replace any local.
             OpCode::Include
+            | OpCode::Tick
             | OpCode::AssignGlobal
             | OpCode::UnsetGlobal
             | OpCode::BindGlobalRef
@@ -3187,6 +3188,8 @@ pub struct Compiler {
     known_param_names: HashMap<String, Vec<String>>,
     /// Per-file strict_types flag from `declare(strict_types=1);`
     strict_types: bool,
+    /// Lexical declaration state, propagated only to child source op arrays.
+    tick_interval: u32,
     /// Request startup mode for PHP's assertion construct. A negative value
     /// removes the expression; zero and one retain a runtime guard so
     /// `ini_set("zend.assertions", ...)` can toggle already-compiled code.
@@ -3561,6 +3564,7 @@ impl Compiler {
             known_public_constructors: None,
             known_param_names: HashMap::new(),
             strict_types: false,
+            tick_interval: 0,
             zend_assertions: 1,
             precision: 14,
             current_namespace: None,
@@ -3789,6 +3793,7 @@ impl Compiler {
         // namespace aliases or strict-types semantics when their bytecode is
         // emitted by a fresh compiler instance.
         child.strict_types = self.strict_types;
+        child.tick_interval = self.tick_interval;
         child.zend_assertions = self.zend_assertions;
         child.precision = self.precision;
         child.current_namespace = self.current_namespace.clone();

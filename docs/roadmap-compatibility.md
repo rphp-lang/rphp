@@ -36,31 +36,31 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `reference-mode-iteration-contracts` train over `30b3d80c` adds
-**12 PHP 8.5 passes without losses**, all confirmed by PHP 8.5.10. The unchanged
-8,060-case ledger reaches **7,257 pass / 358 fail / 194 skip / 250 unsupported /
-one XFAIL**. Reference generators publish owned writable cells with correct
-ordering, constraints, notices and consumer aliases. General generator/GC
-lifetime, Fiber and fatal CLI-channel/trace equivalence remain explicit
-non-claims.
+The accepted `declare-tick-callback-lifecycle` train over `473149c2` adds
+**12 PHP 8.5 passes without losses**, confirmed by fresh PHP 8.5.10 runs.
+The selected ledger grows from 8,060 to **8,067 cases: 7,269 pass / 353 fail /
+194 skip / 250 unsupported / one XFAIL**. Five existing Zend failures and
+seven newly admitted standard-library failures become exact passes; no previous
+pass, failure stage or expectation is lost, and no timeout or crash is hidden.
 
-Nine original E2E, 882 focused checks, five complete Cargo configurations/
-all-targets and all 52 correctness/framework gates pass. The 169 fixed-anchor
-32-pair controls meet common 1.65% and pay-use 5% ceilings, with maxima
-**+0.969%/+4.448%**; no final nominal finding. The first rejected cumulative
-timing remains recorded, followed by a genuine cold-path correction, not an
-unchanged reroll. Shared-host timings are diagnostic. Frozen-source validation
-retains all safety checks, the disk reserve and automatic cleanup. No new
-opcode, common VM/Value layout, dependency or unsafe-count increase.
+The declaration-to-callback boundary is pay-for-use: no ordinary VM polling,
+common runtime/value field, dependency or unsafe-count increase. A justified
+cold Tick opcode preserves existing discriminants/instruction size; callback
+identity, mutation, exceptions and request shutdown reuse canonical mechanisms.
+Twenty original E2E, all five Cargo configurations/all-targets and all 54
+correctness/framework gates pass. The 173 retained 32-pair controls meet common
+1.65% and pay-use 5% ceilings at **+0.508%/+4.887%** maxima;
+rejected candidates and absolute new-API costs remain visible in
+`compatibility.md`. Shared-host timings remain diagnostic. Bounded cache
+reuse preserves all checks, disk reserve and mandatory cleanup.
 
-Next: `declare-tick-callback-lifecycle`. Fresh read-only admission proves
-**12 current-fail/reference-pass** cases with one declaration-to-callback
-boundary. Validate lexical statement counting, callback arguments/identity,
-mutation, reentry and shutdown with original oracles before implementation.
-Pay for enabled tick regions only: no ordinary VM-loop polling or new common
-state. Justify any new opcode before editing and retain every existing
-performance/no-loss control. Reselect if independent suspension or GC work is
-needed; Fiber ticks are not counted toward admission.
+Next read-only candidate: `native-object-backing-projection-contracts`.
+Thirteen known failures concern typed/readonly cursor references, construction
+flags, backing ownership, existence and unset projections. Confirm fresh PHP
+oracles and a shared root cause for at least ten cases before implementation;
+do not combine independent causes merely to meet the yield threshold. Ordinary
+arrays/objects must stay pay-free. Fiber, unrelated GC and broad representation
+work remain outside this candidate.
 
 ### Preceding gettext checkpoint
 

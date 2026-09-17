@@ -902,6 +902,14 @@ impl<'a> Lexer<'a> {
                         && self.src[self.pos + 1].is_ascii_digit()
                         && !Self::is_value_token(tokens.last())
                         && !Self::is_loop_control_operand_sign(&tokens)
+                        && !{
+                            let mut previous = tokens
+                                .iter()
+                                .rev()
+                                .skip_while(|token| matches!(token, Token::LParen(_)));
+                            matches!((previous.next(), previous.next()), (Some(Token::Assign), Some(Token::Identifier(name, _)))
+                                if name.eq_ignore_ascii_case("ticks"))
+                        }
                     {
                         self.pos += 1;
                         let number = self.read_number()?;

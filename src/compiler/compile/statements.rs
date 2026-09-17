@@ -2844,7 +2844,50 @@ impl Compiler {
         }
         let result = self.compile_stmt_inner(stmt);
         self.class_declarations_are_runtime = previous_runtime_declarations;
+        if result.is_ok() && self.tick_interval != 0 {
+            self.emit_statement_tick(stmt);
+        }
         result
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn emit_statement_tick(&mut self, stmt: &Stmt) {
+        if matches!(stmt, Stmt::Noop | Stmt::Block(_) | Stmt::Label(_) | Stmt::Namespace { .. }
+            | Stmt::Return { .. } | Stmt::Throw { .. } | Stmt::Break { .. }
+            | Stmt::Continue { .. } | Stmt::Goto { .. } | Stmt::HaltCompiler { .. }) {
+            return;
+        }
+        fn has_statement(stmt: &Stmt) -> bool {
+            match stmt {
+                Stmt::Noop => false,
+                Stmt::Block(body) => body.iter().any(has_statement),
+                _ => true,
+            }
+        }
+        let source_transfer = match stmt {
+            Stmt::If { .. } => true,
+            Stmt::Switch { cases, .. } => cases.iter().any(|case| case.body.iter().any(has_statement)),
+            _ => false,
+        };
+        if source_transfer
+            && self.instructions.last().is_some_and(|last| matches!(last.opcode,
+                OpCode::Jmp | OpCode::Return | OpCode::Throw)) {
+            return;
+        }
+        self.emit_tick();
+    }
+
+    fn emit_tick(&mut self) {
+        if self.tick_interval == 0 || self.instructions.last().is_some_and(|last| last.opcode == OpCode::Tick) {
+            return;
+        }
+        let mut tick = Instruction::new(OpCode::Tick);
+        tick.extended_value = self.tick_interval;
+        self.instructions.push(tick);
+        // A callback can write globals and reference-bound locals. Do not
+        // carry scalar/defined-variable proofs across that user-code boundary.
+        self.definitely_defined_cvs.clear();
     }
 
     fn compile_stmt_inner(&mut self, stmt: &Stmt) -> Result<(), String> {
@@ -2893,6 +2936,7 @@ impl Compiler {
                         release.op2_type = OpType::Tmp;
                         self.instructions.push(release);
                     }
+                    if self.tick_interval != 0 { self.emit_tick(); }
                 }
             }
             Stmt::Assign { var, expr } => {
@@ -3080,7 +3124,7 @@ impl Compiler {
                 // effects. Compile only its live branch so mutually exclusive
                 // conditional declarations retain PHP's runtime identity
                 // instead of being registered eagerly as duplicates.
-                if let Ok(value) =
+                if self.tick_interval == 0 && let Ok(value) =
                     self.eval_const_expr_in_source(condition, &self.known_constants)
                 {
                     // Yield is a syntactic generator marker in PHP, including
@@ -3447,6 +3491,10 @@ impl Compiler {
                 self.push_instruction_at_line(ret, *line);
             }
             Stmt::ExprStmt(expr) => {
+                if self.tick_interval != 0
+                    && self.eval_const_expr_in_source(expr, &self.known_constants).is_ok() {
+                    return Ok(());
+                }
                 // PHP does not perform an rvalue fetch for a bare CV whose
                 // value is discarded by the statement. In particular, an
                 // undefined variable here emits no notice and cannot invoke a
@@ -3584,7 +3632,7 @@ impl Compiler {
             } => {
                 // Compile init statements
                 for s in init {
-                    self.compile_stmt(s)?;
+                    self.compile_stmt_inner(s)?;
                 }
 
                 // Loop start: compile condition (or always true)
@@ -4819,15 +4867,20 @@ impl Compiler {
                 self.definitely_defined_cvs.clear();
             }
             Stmt::Declare { directives, body } => {
+                let previous_ticks = self.tick_interval;
                 for (directive, value) in directives {
                     if directive == "strict_types" {
                         self.strict_types = *value != 0;
+                    }
+                    if directive.eq_ignore_ascii_case("ticks") {
+                        self.tick_interval = *value as u32;
                     }
                 }
                 if let Some(body) = body {
                     for statement in body {
                         self.compile_stmt(statement)?;
                     }
+                    self.tick_interval = previous_ticks;
                 }
             }
             Stmt::Namespace { name, body } => {

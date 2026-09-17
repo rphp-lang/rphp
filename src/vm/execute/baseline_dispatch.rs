@@ -11139,6 +11139,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 resume_pending_exception!();
             }
 
+            OpCode::Tick => {
+                op_tick(eg, frame, op_array, opline)?;
+                resume_pending_exception!();
+            }
+
             OpCode::DeclareClass => {
                 match op_declare_class(eg, frame, op_array, opline)? {
                     ColdResult::NewFrame(new_frame, new_op_array) => {

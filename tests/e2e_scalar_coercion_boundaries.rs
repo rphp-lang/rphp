@@ -3,6 +3,38 @@ mod common;
 use common::{run_php, run_php_with_source_context};
 
 #[test]
+fn numeric_materialization_preserves_integer_and_float_boundaries() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach (['-0', '-000', '9007199254740993', '9007199254740995',
+    '9223372036854775807', '-9223372036854775808',
+    '9223372036854775808', '-9223372036854775809', '1.25', '2e3', '-0.0'] as $value) {
+    echo bin2hex(pack('E', (float) $value)), '|';
+    var_dump($value + 0);
+}
+set_error_handler(function ($level, $message) { echo $level, ':', $message, '|'; return true; });
+foreach (['31tail', '-0tail', '2e3tail'] as $value) { var_dump($value + 0); }
+"#
+        ),
+        concat!(
+            "8000000000000000|int(0)\n8000000000000000|int(0)\n",
+            "4340000000000000|int(9007199254740993)\n",
+            "4340000000000002|int(9007199254740995)\n",
+            "43e0000000000000|int(9223372036854775807)\n",
+            "c3e0000000000000|int(-9223372036854775808)\n",
+            "43e0000000000000|float(9.223372036854776E+18)\n",
+            "c3e0000000000000|float(-9.223372036854776E+18)\n",
+            "3ff4000000000000|float(1.25)\n409f400000000000|float(2000)\n",
+            "8000000000000000|float(0)\n",
+            "2:A non-numeric value encountered|int(31)\n",
+            "2:A non-numeric value encountered|int(0)\n",
+            "2:A non-numeric value encountered|float(2000)\n",
+        )
+    );
+}
+
+#[test]
 fn weak_scalar_coercions_report_before_calls_returns_and_typed_writes_commit() {
     assert_eq!(
         run_php(

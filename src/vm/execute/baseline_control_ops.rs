@@ -11,6 +11,20 @@ pub(crate) enum IncludeFileOutcome {
     Thrown(Value),
 }
 
+#[cold]
+#[inline(never)]
+fn op_tick(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    let index = (opline as *const Instruction as usize - op_array.instructions.as_ptr() as usize)
+        / std::mem::size_of::<Instruction>();
+    crate::stdlib::ticks::dispatch(eg, frame, opline.extended_value,
+        &op_array.source_file, op_array.source_line(index).unwrap_or(1))
+}
+
 fn collect_unconditional_function_names(
     statements: &[crate::parser::Stmt],
     namespace: Option<&str>,

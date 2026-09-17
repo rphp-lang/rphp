@@ -137,7 +137,7 @@ pub(super) fn class_probe_name(
     Ok(None)
 }
 
-fn callback_equal(left: &Value, right: &Value) -> bool {
+pub(super) fn callback_equal(left: &Value, right: &Value) -> bool {
     if left.value_type() != right.value_type() {
         return false;
     }
@@ -193,7 +193,11 @@ fn invalid_callback(function: &str, callback: &Value, nullable: bool, eg: &mut E
 }
 
 #[inline]
-fn canonical_callback(callback: Value, resolved: &ResolvedCallback, eg: &ExecutorGlobals) -> Value {
+pub(super) fn canonical_callback(
+    callback: Value,
+    resolved: &ResolvedCallback,
+    eg: &ExecutorGlobals,
+) -> Value {
     // An ordinary function's immutable name is already the public callable
     // representation. Keep that no-op out of the allocating method/legacy
     // projection path, including when unregister validates the same string.

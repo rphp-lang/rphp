@@ -1983,6 +1983,39 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         eg.register_internal_function_extension(pointer, "standard");
         funcs.push(function);
     }
+    for (name, handler, variadic) in [
+        (
+            "register_tick_function",
+            ticks::register as crate::vm::function::InternalFunctionHandler,
+            true,
+        ),
+        (
+            "unregister_tick_function",
+            ticks::unregister as crate::vm::function::InternalFunctionHandler,
+            false,
+        ),
+    ] {
+        let mut function = Box::new(if variadic {
+            make_internal_function_variadic(handler, 1, pn!["callback", "args"])
+        } else {
+            make_internal_function(handler, 1, 1, pn!["callback"])
+        });
+        function.common.sig.param_type_hints = if variadic {
+            vec![ParamTypeHint::Callable, ParamTypeHint::Mixed]
+        } else {
+            vec![ParamTypeHint::Callable]
+        };
+        function.common.sig.return_type_hint = if variadic {
+            ParamTypeHint::Bool
+        } else {
+            ParamTypeHint::Void
+        };
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function(name, pointer).unwrap();
+        eg.register_internal_function_extension(pointer, "standard");
+        funcs.push(function);
+    }
     reg_typed!(
         "error_reporting",
         fn_error_reporting,

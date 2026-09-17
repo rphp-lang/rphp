@@ -263,6 +263,9 @@ pub enum OpCode {
     /// AssignDim can then suppress stale writeback when that callback replaced
     /// or mutated the PHP-visible root.
     SnapshotDiagnosticWrite = 176,
+    /// A lexical PHP statement tick. extended_value is the positive interval;
+    /// absent from ordinary source units and never polled by the dispatch loop.
+    Tick = 177,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

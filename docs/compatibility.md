@@ -7,66 +7,59 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 Linux PHP 8.5 checkpoint is
-`reference-mode-iteration-contracts`, against `30b3d80c`: **+12/-0**,
-confirmed by fresh PHP 8.5.10 runs. The unchanged **8,060-case ledger reaches
-7,257 pass / 358 fail / 194 skip / 250 unsupported / one XFAIL**, without lost
-passes, timeout, crash, changed expectations or moved failure stages. Ten
-admitted generator/typed-reference cases and two adjacent nullsafe/string-offset
-reference errors account for all gains; this is not a complete-PHP claim.
+The accepted `declare-tick-callback-lifecycle` train over `473149c2` adds
+**12 PHP 8.5 passes without losses**, confirmed by fresh PHP 8.5.10 runs.
+The selected ledger grows from 8,060 to **8,067 cases: 7,269 pass / 353 fail /
+194 skip / 250 unsupported / one XFAIL**. Five existing Zend failures and
+seven newly admitted standard-library failures become exact passes; no previous
+pass, failure stage or expectation is lost, and no timeout or crash is hidden.
 
-Reference generators publish writable cells with correct key/value ordering,
-typed constraints, reference/COW identity, temporary retirement and notice
-exceptions. Iterator consumers retain published aliases while explicit
-`Generator::current()` stays by value. Dead-code validation rejects forbidden
-reference delegation and nullsafe property sources. Nine original E2E cases,
-seven runnable byte-exact PHP/default/no-JIT process fixtures and **882 focused
-checks** pass. The 304-case generator/typed-property packet has no lost pass;
-the global-function and method inventory is unchanged.
+Lexical tick intervals instrument statement boundaries only where enabled.
+One cold Tick opcode (177, preserving every existing discriminant and the
+16-byte instruction layout) dispatches sparse request-owned callback roots.
+Registration/removal preserve callback identity, private scope, value arguments,
+live mutation, exception order, reentry suppression and shutdown. Ordinary code
+has no tick polling or new common VM/Value field. Both globals have exact
+callable metadata; the inventory is **548 present / 653 missing / 0 call-shape
+mismatch / 349 metadata mismatch / 199 exact**.
 
-The checked five-configuration matrix passes **5,738/5,406/5,809/5,831/5,882**
-tests (13/13/13/13/16 ignored, none filtered), plus all-features/all-targets.
-All 52 correctness/framework gates pass, including fresh gain oracles, exact
-family pass sets, Composer/Symfony S0-S3, runner, unsafe and public-data checks.
-The matrix uses hash-identical frozen sources on the separate validation
-filesystem, unchanged safety checks and disk reserve, with automatic cleanup.
-No-default warning headers match the accepted parent. No dependency, opcode,
-common VM/Value layout or warmed dispatch change; unsafe remains **1,626 blocks
-/ 289 functions**.
-Final staged hygiene removes one redundant trailing LF from four new fixtures:
-tokens and before/after PHP/default/no-JIT outputs are identical, all nine E2E
-pass again, and every other frozen input plus the release ELF is unchanged.
+Nineteen original tick E2E cases, an additional numeric-projection regression,
+**816 focused checks**, twelve supplying PHPT and 124 adjacent differential
+checks pass. The final five Cargo configurations pass **5758/5426/5829/5851/5902** tests
+(13/13/13/13/16 ignored, none filtered), plus all-features/all-targets. All
+54 correctness/framework gates, Composer/Symfony S0-S3, runner and public-data
+checks pass. Unsafe remains **1,626 blocks / 289 functions**; no dependency
+changed. Frozen-source verification retains safety checks and a 20-GiB reserve;
+bounded feature-cache reuse avoids redundant dependency builds, followed by
+automatic cleanup.
 
-All **169 fixed-anchor 32-pair controls** pass: common maximum **+0.969%**
-(below both nominal 1% and accepted 1.65%), pay-use maximum **+4.448%** (5%
-ceiling). The rejected first candidate's +1.767% cumulative catch-only result
-is retained; a cold publication helper removed its hot dispatch change before
-fresh measurement. No unchanged failed timing was rerolled. Shared-host timing
-is diagnostic, not exclusive-host evidence. The three newly functional
-reference lanes cost **1.029x/1.522x/3.280x PHP** for local/array/collection
-respectively; these are absolute optimization anchors, not absent-parent
-regression or parity claims.
+All **173 retained fixed-anchor 32-pair controls** pass: common maximum
+**+0.508%** (accepted ceiling 1.65%) and pay-use maximum
+**+4.887%** (5%). No final nominal finding. A cold split of the
+unchanged integer-string whitespace fallback removed the measured regression;
+the rejected parser-diagnostic and timing candidates remain in the technical
+record, without unchanged failed rerolls. Shared-host timing is diagnostic.
+Three new empty/callback/argument tick lanes cost **1.226/3.195/3.441x PHP**; these
+are absolute optimization anchors, not parity or absent-parent regression claims.
 
-General abandoned-generator finally/destructor/GC behavior, ordinary detached
-property iteration, Fiber suspension, 32-bit and OOM equivalence are not claimed.
-The original invalid-delegation probe preserves an explicit fatal CLI-channel/
-trace mismatch despite correct compile rejection. Next read-only admission
-confirms twelve tick-declaration/callback cases fail here and pass on PHP;
-implementation requires lexical, pay-for-use instrumentation without ordinary
-VM-loop polling or new common state.
+Fiber suspension, general GC/lifetime changes, 32-bit and allocation-limit
+equivalence remain explicit non-claims. Next read-only admission targets native
+ArrayObject/ArrayIterator object-backed projections; require at least ten
+reference-pass/current-fail cases sharing one demonstrated boundary before
+implementation, otherwise reselect.
 
 SHA-256 evidence:
 
-- Release: `cc1921d2081db7a6af48b910a20fff9ee02877d06a9e87e4f2ddebfd0ef4c8e8`.
-- Complete technical record: `3f545ed58aa079aeee0f96dd66f1fae34537192f79fb75614d874988145b6320`.
-- Fixture-hygiene equivalence: `b03ddb8b134829c2f47f7af869c410187af92b44961bb6041013db2800b856b1`.
-- Matrix: `b2ddde2a5a7f78c7c8ba456ad3892f21df7a41fa37cb21cab5057658b43573d5`.
-- Fresh reference gains: `a598dfc1dc3e9535ac5c1618bbf18903287d6506c6786a37a72d9ebf4547b1a4`.
-- Zend/lang manifest / pass set: `9addad2ea5477ccc99fe8c4f0bc7f8f8b02d5d3a625c785e0965cfd1a8c1f1e9` / `99c675cd2905ed65b22055826e23e13c343cda436bf5ebea064189f7ea193f71`.
-- SPL pass set: `d25cfe5049f316866c9e795dcdeff7ccf7091e1f1f30f8f8b50da9abf72a9319`.
+- Release: `357a9df49a21cf6ba6ca61c80bd398b841ee859002012fb0f15aee2bdd22fa9c`.
+- Complete technical record: `a385990ffeec7c9a9dc7caef464b5163f5a5c92dffe01b9dd54f45c4e9527f92`.
+- Matrix: `7872fa6d1bed9e148facc2395cfbdd45a79348299e5c72fc3383e6e287cc61cd`.
+- Exact no-loss decision: `06cd1738d0447a6d741baced8d0444e18b5fb5364068ffb89166acba23dae569`.
+- Fresh PHP gain oracles: `5705ec28f0b35cff95f3baa4db0f66ff30bea02cd66c1cb4f96985f313306bd5`.
+- Zend/lang manifest / pass set: `84fc57c2d3336078e632565866dcfdd6b67913786bc48cddea700ddfb14d3aaf` / `fa9424406699048f75ca1c6425a533f089bc2f53f533ed43b28f7aa380a8d4f3`.
 - Strings/array pass set: `482d95e26cbbd4c66abd2b34435b39c6042e65340215b02697de5fb9851aaa06`.
-- Performance decision / raw timing: `d3e58aba11dea0015defa9f3f870218296c547524105bb33f319add7bfe05006` / `d1503e88a4c2ff1f20a5341012756e179ed32e3f7b39b5654d0f248416bbed35`.
-- Next admission: `7d7669be40c649ba5e286fa6b5a72567f438dc92626485d71cc5060b1be4f28c`.
+- SPL pass set: `d25cfe5049f316866c9e795dcdeff7ccf7091e1f1f30f8f8b50da9abf72a9319`.
+- Global inventory: `59edff8b52c53ec6263b2a628e64961913337cca9d122b1fa71bda1f622f3a61`.
+- Performance decision / raw timing: `e14c9937161398bec60ef9f300fd7c3a633f1bfd20c3ff7e1a4841ab8cb8780b` / `1e99882ee1372c8bdb190f4398c5637682e3eff13e77e88bf1d539ff1ff7d6b4`.
 
 ### Preceding gettext checkpoint
 
