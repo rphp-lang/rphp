@@ -46,6 +46,7 @@ impl Parser {
             source_name: None,
             in_class_body: false,
             class_scope_active: false,
+            reference_return_context: false,
             generic_scopes: Vec::new(),
             deferred_compile_error: None,
             deferred_compile_deprecations: Vec::new(),
@@ -1268,6 +1269,7 @@ impl Parser {
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
                 let return_type = self.parse_return_type(line, false)?;
+                let previous_reference_context = std::mem::replace(&mut self.reference_return_context, returns_by_ref);
                 self.expect(&Token::LBrace(0))?;
                 let mut body = Vec::new();
                 while self.peek() != Token::RBrace && !self.at_eof() {
@@ -1276,6 +1278,7 @@ impl Parser {
                 self.expect(&Token::RBrace)?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
+                self.reference_return_context = previous_reference_context;
                 Ok(Stmt::Function {
                     line,
                     attributes: Vec::new(),

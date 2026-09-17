@@ -206,6 +206,11 @@ impl OpArray {
                 {
                     mark(instruction.op1)
                 }
+                OpCode::Yield
+                    if instruction.extended_value == 1 && instruction.op1_type == OpType::Cv =>
+                {
+                    mark(instruction.op1)
+                }
                 OpCode::BindArrayAppendRef
                 | OpCode::BindObjPropRef
                 | OpCode::BindArrayDimRef

@@ -233,6 +233,7 @@ impl Parser {
                     promotion_hooks: Vec::new(),
                 }]
             };
+            let previous_reference_context = std::mem::replace(&mut self.reference_return_context, hook_returns_by_ref);
             let (body, hook_is_abstract) = if matches!(self.peek(), Token::Semicolon(_)) {
                 self.advance();
                 (Vec::new(), true)
@@ -266,6 +267,7 @@ impl Parser {
                 self.expect(&Token::RBrace)?;
                 (body, false)
             };
+            self.reference_return_context = previous_reference_context;
             property.has_get_hook |= is_get;
             property.has_set_hook |= is_set;
             property.has_abstract_get_hook |= is_get && hook_is_abstract;
@@ -452,6 +454,7 @@ impl Parser {
                         promotion_hooks: Vec::new(),
                     }]
                 };
+                let previous_reference_context = std::mem::replace(&mut self.reference_return_context, hook_returns_by_ref);
                 let (body, hook_is_abstract) = if matches!(self.peek(), Token::Semicolon(_)) {
                     self.advance();
                     (Vec::new(), true)
@@ -485,6 +488,7 @@ impl Parser {
                     self.expect(&Token::RBrace)?;
                     (body, false)
                 };
+                self.reference_return_context = previous_reference_context;
                 property.has_get_hook |= is_get;
                 property.has_set_hook |= is_set;
                 property.has_abstract_get_hook |= is_get && hook_is_abstract;
@@ -621,7 +625,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type(line, false)?;
-                let (body, has_body) = self.parse_method_body(&modifiers, line)?;
+                let (body, has_body) = self.parse_reference_method_body(&modifiers, line, returns_by_ref)?;
                 if modifiers.is_abstract {
                     self.compile_error(
                         format!("Anonymous class method {method_name}() must not be abstract"),
@@ -1001,7 +1005,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type(line, false)?;
-                let (body, has_body) = self.parse_method_body(&modifiers, line)?;
+                let (body, has_body) = self.parse_reference_method_body(&modifiers, line, returns_by_ref)?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
@@ -1180,7 +1184,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type(line, false)?;
-                let (body, has_body) = self.parse_method_body(&modifiers, line)?;
+                let (body, has_body) = self.parse_reference_method_body(&modifiers, line, returns_by_ref)?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
@@ -1558,7 +1562,7 @@ impl Parser {
                     let params = self.parse_param_list()?;
                     self.expect(&Token::RParen)?;
                     let return_type = self.parse_return_type(line, false)?;
-                    let (body, has_body) = self.parse_method_body(&modifiers, line)?;
+                    let (body, has_body) = self.parse_reference_method_body(&modifiers, line, returns_by_ref)?;
                     self.pop_generic_scope();
                     self.class_scope_active = previous_class_scope;
                     methods.push(ClassMethod {
@@ -1837,6 +1841,13 @@ impl Parser {
         Ok(Some(hint))
     }
 
+    fn parse_reference_method_body(&mut self, modifiers: &MemberModifiers, line: usize, returns_reference: bool) -> Result<(Vec<Stmt>, bool), String> {
+        let previous = std::mem::replace(&mut self.reference_return_context, returns_reference);
+        let body = self.parse_method_body(modifiers, line);
+        self.reference_return_context = previous;
+        body
+    }
+
     fn parse_method_body(
         &mut self,
         modifiers: &MemberModifiers,
@@ -1975,7 +1986,9 @@ impl Parser {
         self.expect(&Token::RParen)?;
         let return_type = self.parse_return_type(line, true)?;
         self.expect(&Token::DoubleArrow)?;
+        let previous_reference_context = std::mem::replace(&mut self.reference_return_context, returns_by_ref);
         let expr = self.parse_expr()?;
+        self.reference_return_context = previous_reference_context;
         self.pop_generic_scope();
 
         // Auto-capture: collect free variables from expr that aren't params
@@ -2253,7 +2266,7 @@ impl Parser {
             | Expr::CompilerHaltOffsetConstant { .. }
             | Expr::MagicConstant { .. } => {}
             // Yield — collect vars from value/key expressions
-            Expr::Yield { value, key } => {
+            Expr::Yield { value, key, .. } => {
                 if let Some(v) = value {
                     Self::collect_free_vars(v, bound, out);
                 }
@@ -2403,6 +2416,7 @@ impl Parser {
 
         let return_type = self.parse_return_type(line, true)?;
 
+        let previous_reference_context = std::mem::replace(&mut self.reference_return_context, returns_by_ref);
         self.expect(&Token::LBrace(0))?;
         let mut body = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
@@ -2411,6 +2425,7 @@ impl Parser {
         self.expect(&Token::RBrace)?;
         self.pop_generic_scope();
 
+        self.reference_return_context = previous_reference_context;
         Ok(Expr::Closure {
             line,
             attributes: Vec::new(),

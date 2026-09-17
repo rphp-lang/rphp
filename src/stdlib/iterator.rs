@@ -104,6 +104,17 @@ fn walk(
         return Ok(());
     };
     let native = uses_native_iterator_protocol(&iterator, eg);
+    // Iterator consumers copy a reference generator's published cell, while
+    // an explicit Generator::current() call is a by-value return. Resolve the
+    // exceptional protocol once, outside the ordinary advancement loop.
+    let reference_generator = if values {
+        iterator
+            .as_object()
+            .and_then(|object| object.generator.clone())
+            .filter(|generator| generator.borrow().yields_by_reference())
+    } else {
+        None
+    };
     if !native {
         protocol(eg, &iterator, "rewind")?;
     }
@@ -140,7 +151,11 @@ fn walk(
                 break;
             }
             let value = if values {
-                protocol(eg, &iterator, "current")?
+                if let Some(generator) = &reference_generator {
+                    generator.borrow().value.clone_closure_capture()
+                } else {
+                    protocol(eg, &iterator, "current")?
+                }
             } else {
                 Value::null()
             };

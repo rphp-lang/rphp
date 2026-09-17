@@ -533,6 +533,7 @@ pub enum Expr {
     },
     Yield {
         // yield $value or yield $key => $value
+        line: usize,
         value: Option<Box<Expr>>,
         key: Option<Box<Expr>>,
     },

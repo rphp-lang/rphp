@@ -2406,7 +2406,7 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
             Expr::PreIncTarget(target) => (format!("++{}", render(target, 80, false)?), 80),
             Expr::PreDecTarget(target) => (format!("--{}", render(target, 80, false)?), 80),
             Expr::Print(value) => (format!("print {}", render(value, 5, false)?), 5),
-            Expr::Yield { value, key } => {
+            Expr::Yield { value, key, .. } => {
                 let value = match value.as_deref() {
                     Some(value) => render(value, 0, false)?,
                     None => String::new(),

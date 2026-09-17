@@ -8,61 +8,65 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 Linux PHP 8.5 checkpoint is
-`native-container-purpose-property-views`, against `49cfe018`: **+10/-0**,
-confirmed by PHP 8.5.10. The same **8,060 cases reach 7,245 pass / 370 fail /
-194 skip / 250 unsupported / one XFAIL**, without lost passes, timeout, crash,
-changed expectations or moved failure stages. Nine gains are in SPL and one
-is the adjacent ordinary-object `print_r()` case `Zend/tests/bug71067.phpt`.
+`reference-mode-iteration-contracts`, against `30b3d80c`: **+12/-0**,
+confirmed by fresh PHP 8.5.10 runs. The unchanged **8,060-case ledger reaches
+7,257 pass / 358 fail / 194 skip / 250 unsupported / one XFAIL**, without lost
+passes, timeout, crash, changed expectations or moved failure stages. Ten
+admitted generator/typed-reference cases and two adjacent nullsafe/string-offset
+reference errors account for all gains; this is not a complete-PHP claim.
 
-ArrayObject/ArrayIterator debug views and SplFixedArray array/debug/wire views
-now preserve their distinct property tables, raw versus canonical keys,
-reference/COW ownership, recursion, overrides and diagnostic publication order.
-SplFixedArray gains exact `__serialize()`/`__unserialize()` contracts. Ordinary
-printing retains live declared slots and snapshots dynamic values across hooks.
-The existing global-function inventory is unchanged. Fourteen original
-regressions cover these boundaries and the profile-backed registration,
-lookup and constructor-cache work removal; the focused packet is **890/890**.
+Reference generators publish writable cells with correct key/value ordering,
+typed constraints, reference/COW identity, temporary retirement and notice
+exceptions. Iterator consumers retain published aliases while explicit
+`Generator::current()` stays by value. Dead-code validation rejects forbidden
+reference delegation and nullsafe property sources. Nine original E2E cases,
+seven runnable byte-exact PHP/default/no-JIT process fixtures and **882 focused
+checks** pass. The 304-case generator/typed-property packet has no lost pass;
+the global-function and method inventory is unchanged.
 
-The checked five-configuration matrix passes **5,729/5,397/5,800/5,822/5,873**
+The checked five-configuration matrix passes **5,738/5,406/5,809/5,831/5,882**
 tests (13/13/13/13/16 ignored, none filtered), plus all-features/all-targets.
-All 50 correctness/framework gates pass, including fresh gain oracles, exact
+All 52 correctness/framework gates pass, including fresh gain oracles, exact
 family pass sets, Composer/Symfony S0-S3, runner, unsafe and public-data checks.
-A disk-reserve rejection before any matrix build was resolved with an isolated,
-hash-identical validation checkout on another filesystem, not a lower reserve,
-different profile or reduced coverage. Compiler warnings match the preceding
-accepted no-default configuration. Final fixture whitespace normalization is
-separately proven token-equivalent and byte-exact before/after, with all eight
-affected E2E rerun; production sources and the measured ELF are unchanged.
-No dependency, opcode or common VM/Value
-layout change; unsafe remains **1,626 blocks / 289 functions**.
+The matrix uses hash-identical frozen sources on the separate validation
+filesystem, unchanged safety checks and disk reserve, with automatic cleanup.
+No-default warning headers match the accepted parent. No dependency, opcode,
+common VM/Value layout or warmed dispatch change; unsafe remains **1,626 blocks
+/ 289 functions**.
+Final staged hygiene removes one redundant trailing LF from four new fixtures:
+tokens and before/after PHP/default/no-JIT outputs are identical, all nine E2E
+pass again, and every other frozen input plus the release ELF is unchanged.
 
-All **164 fixed-anchor 32-pair controls** pass the common **1.65%** and pay-use
-**5%** ceilings: maxima **+1.440%/+4.165%**. Dynamic clone's nominal +1% finding
-remains explicit (+1.440% cumulative, +1.270% versus immediate parent).
-Rejected candidates and instruction profiles remain in the evidence; no
-unchanged failed timing was rerolled. The shared-host guard is diagnostic,
-not proof of exclusive timing. New-API costs versus PHP are fixed-array wire
-**+55.307%**, native debug **-12.229%** and deque print **-2.810%**; these are
-absolute optimization baselines, not absent-parent regression or parity claims.
+All **169 fixed-anchor 32-pair controls** pass: common maximum **+0.969%**
+(below both nominal 1% and accepted 1.65%), pay-use maximum **+4.448%** (5%
+ceiling). The rejected first candidate's +1.767% cumulative catch-only result
+is retained; a cold publication helper removed its hot dispatch change before
+fresh measurement. No unchanged failed timing was rerolled. Shared-host timing
+is diagnostic, not exclusive-host evidence. The three newly functional
+reference lanes cost **1.029x/1.522x/3.280x PHP** for local/array/collection
+respectively; these are absolute optimization anchors, not absent-parent
+regression or parity claims.
 
-`ArrayObject/bug74669.phpt` remains an explicit object-handle lifetime holdout.
-Three fatal-print oracle observations prove ordering but do not claim exact
-CLI channel/trace equivalence. Broader SPL, 32-bit and OOM equivalence remain
-outside this checkpoint. Next read-only admission ranks reference-mode
-iteration failures; require ten genuinely shared reference-pass/current-fail
-cases and a pay-for-use design before touching generator or object iteration.
+General abandoned-generator finally/destructor/GC behavior, ordinary detached
+property iteration, Fiber suspension, 32-bit and OOM equivalence are not claimed.
+The original invalid-delegation probe preserves an explicit fatal CLI-channel/
+trace mismatch despite correct compile rejection. Next read-only admission
+confirms twelve tick-declaration/callback cases fail here and pass on PHP;
+implementation requires lexical, pay-for-use instrumentation without ordinary
+VM-loop polling or new common state.
 
 SHA-256 evidence:
 
-- Release: `844c09f62448ee93488f89e9b8f93f97d83d30b670026624bb5f8bc4736fa6a2`.
-- Complete technical record: `1a2837e481f92825334805bfd0b6199f9af5ad46954144317ceee595becc2c88`.
-- Final fixture-hygiene amendment: `2bd53b8a497e13ee132edc721921980537ade8cb204a18abb1c9f965b6b1e090`.
-- Matrix: `1109044b2c583abebeb7aa54b7a96a290f7a94bd3331ad504d550ea9c33b8d04`.
-- Fresh reference gains: `3d30a738a6ed9a31330fde1205c392aa7c7b99f4fbf1b80bc125406d281d664d`.
-- Zend/lang manifest / pass set: `f301fe024ec127cc7ec793b314f8f514e602c36873734f82272711ebf9e012f4` / `26c0e5ffd27f26c45b1e6faca6f0c9100cdc93b5f332342d8c28129027336473`.
-- SPL manifest / pass set: `623cb5699374b46623da5d8b27445b491117a219de1bf68652019c2e7f7e6911` / `d25cfe5049f316866c9e795dcdeff7ccf7091e1f1f30f8f8b50da9abf72a9319`.
+- Release: `cc1921d2081db7a6af48b910a20fff9ee02877d06a9e87e4f2ddebfd0ef4c8e8`.
+- Complete technical record: `3f545ed58aa079aeee0f96dd66f1fae34537192f79fb75614d874988145b6320`.
+- Fixture-hygiene equivalence: `b03ddb8b134829c2f47f7af869c410187af92b44961bb6041013db2800b856b1`.
+- Matrix: `b2ddde2a5a7f78c7c8ba456ad3892f21df7a41fa37cb21cab5057658b43573d5`.
+- Fresh reference gains: `a598dfc1dc3e9535ac5c1618bbf18903287d6506c6786a37a72d9ebf4547b1a4`.
+- Zend/lang manifest / pass set: `9addad2ea5477ccc99fe8c4f0bc7f8f8b02d5d3a625c785e0965cfd1a8c1f1e9` / `99c675cd2905ed65b22055826e23e13c343cda436bf5ebea064189f7ea193f71`.
+- SPL pass set: `d25cfe5049f316866c9e795dcdeff7ccf7091e1f1f30f8f8b50da9abf72a9319`.
 - Strings/array pass set: `482d95e26cbbd4c66abd2b34435b39c6042e65340215b02697de5fb9851aaa06`.
-- Performance decision / raw timing: `9cc3a43fa095c9fcb86487560a68aa3748c0502ad3e6d09c0554cdd9cae02a36` / `4cbb3092f62f899160ccb4fcfd6093382311873d3f77a0f71b1d407e21dfd931`.
+- Performance decision / raw timing: `d3e58aba11dea0015defa9f3f870218296c547524105bb33f319add7bfe05006` / `d1503e88a4c2ff1f20a5341012756e179ed32e3f7b39b5654d0f248416bbed35`.
+- Next admission: `7d7669be40c649ba5e286fa6b5a72567f438dc92626485d71cc5060b1be4f28c`.
 
 ### Preceding gettext checkpoint
 

@@ -36,27 +36,31 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The accepted `native-container-purpose-property-views` train over `49cfe018`
-adds **10 PHP 8.5 passes without losses**: nine native property/debug/wire cases
-and adjacent ordinary-object printing. The unchanged 8,060-case ledger reaches
-**7,245 pass / 370 fail / 194 skip / 250 unsupported / one XFAIL**. Purpose-specific
-views retain raw/canonical keys, references, callback order and COW ownership;
-ArrayObject's object-handle lifetime case stays an explicit holdout.
+The accepted `reference-mode-iteration-contracts` train over `30b3d80c` adds
+**12 PHP 8.5 passes without losses**, all confirmed by PHP 8.5.10. The unchanged
+8,060-case ledger reaches **7,257 pass / 358 fail / 194 skip / 250 unsupported /
+one XFAIL**. Reference generators publish owned writable cells with correct
+ordering, constraints, notices and consumer aliases. General generator/GC
+lifetime, Fiber and fatal CLI-channel/trace equivalence remain explicit
+non-claims.
 
-Fourteen original regressions, 890 focused checks, five complete Cargo
-configurations/all-targets, exact no-loss/fresh oracles, inventory, S0-S3 and
-unsafe/hygiene pass. All 164 fixed-anchor 32-pair controls meet common 1.65% and
-pay-use 5% ceilings, maxima +1.440%/+4.165%; nominal findings and rejected
-alternatives remain recorded. Shared-host results are diagnostic. The matrix
-uses identical frozen sources on a separate validation filesystem, retaining
-the original disk reserve and automatic cleanup. No new common layout,
-opcode, dependency or unsafe-count increase.
+Nine original E2E, 882 focused checks, five complete Cargo configurations/
+all-targets and all 52 correctness/framework gates pass. The 169 fixed-anchor
+32-pair controls meet common 1.65% and pay-use 5% ceilings, with maxima
+**+0.969%/+4.448%**; no final nominal finding. The first rejected cumulative
+timing remains recorded, followed by a genuine cold-path correction, not an
+unchanged reroll. Shared-host timings are diagnostic. Frozen-source validation
+retains all safety checks, the disk reserve and automatic cleanup. No new
+opcode, common VM/Value layout, dependency or unsafe-count increase.
 
-Next read-only admission ranks reference-mode generator/object iteration.
-Require ten shared reference-pass/current-fail cases before implementation;
-reselect if writable-cell, validation and lifetime failures prove independent.
-Additional work must be paid only by actual by-reference iteration: no Fiber
-changes or common suspension state without a separate performance design.
+Next: `declare-tick-callback-lifecycle`. Fresh read-only admission proves
+**12 current-fail/reference-pass** cases with one declaration-to-callback
+boundary. Validate lexical statement counting, callback arguments/identity,
+mutation, reentry and shutdown with original oracles before implementation.
+Pay for enabled tick regions only: no ordinary VM-loop polling or new common
+state. Justify any new opcode before editing and retain every existing
+performance/no-loss control. Reselect if independent suspension or GC work is
+needed; Fiber ticks are not counted toward admission.
 
 ### Preceding gettext checkpoint
 

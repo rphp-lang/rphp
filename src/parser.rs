@@ -26,6 +26,8 @@ pub struct Parser {
     /// Bindable closures may accept relative return types without one, while
     /// named functions deliberately clear this state.
     class_scope_active: bool,
+    /// Declaration-local yield validation, including dead source branches.
+    reference_return_context: bool,
     generic_scopes: Vec<Vec<GenericParameter>>,
     /// PHP compile-time semantic errors discovered while parsing must survive
     /// dead-branch elimination. The first one is replayed as a top-level AST

@@ -161,6 +161,7 @@ fn expression_source_line(expression: &Expr) -> usize {
         | Expr::DynamicStaticCall { line, .. }
         | Expr::Constant { line, .. }
         | Expr::MagicConstant { line, .. }
+        | Expr::Yield { line, .. }
         | Expr::YieldFrom { line, .. }
         | Expr::Clone { line, .. } => *line,
         Expr::BinaryOp { line, .. } if *line != 0 => *line,
@@ -1111,7 +1112,10 @@ fn propagate_declared_scalar_types(
                     }
                 }
             }
-            OpCode::SendRef if instruction.op1_type == OpType::Cv => {
+            OpCode::SendRef | OpCode::Yield
+                if instruction.op1_type == OpType::Cv
+                    && (instruction.opcode != OpCode::Yield || instruction.extended_value == 1) =>
+            {
                 mark_param(&mut maybe_aliased_params, instruction.op1);
                 if let Some(aliased) = aliased_cvs.get_mut(instruction.op1 as usize) {
                     *aliased = true;
@@ -1164,7 +1168,10 @@ fn propagate_declared_scalar_types(
         // A CV exposed by reference can be changed by code outside this body.
         // Forget any straight-line fact before later instructions consume it.
         match instruction.opcode {
-            OpCode::SendRef if instruction.op1_type == OpType::Cv => {
+            OpCode::SendRef | OpCode::Yield
+                if instruction.op1_type == OpType::Cv
+                    && (instruction.opcode != OpCode::Yield || instruction.extended_value == 1) =>
+            {
                 if let Some(slot) = slots.get_mut(instruction.op1 as usize) {
                     *slot = KnownScalarType::Unknown;
                 }
@@ -13780,8 +13787,11 @@ impl Compiler {
                 let literal = self.add_literal(value);
                 (literal, OpType::Const)
             }
-            Expr::Yield { value, key } => {
+            Expr::Yield { value, key, line } => {
                 self.contains_yield = true;
+                if self.returns_reference_context {
+                    return self.compile_reference_yield(value.as_deref(), key.as_deref(), *line);
+                }
                 let mut instr = Instruction::new(OpCode::Yield);
                 // op1 = yielded value
                 if let Some(val_expr) = value {
@@ -13811,6 +13821,12 @@ impl Compiler {
                 line,
             } => {
                 self.contains_yield = true;
+                if self.returns_reference_context {
+                    self.deferred_error = Some(self.goto_error(
+                        "Cannot use \"yield from\" inside a by-reference generator",
+                        *line,
+                    ));
+                }
                 let (sub_op, sub_type) = self.compile_expr(sub_expr);
                 let tmp = self.alloc_tmp();
                 let mut instr = Instruction::new(OpCode::YieldFrom);
@@ -14659,6 +14675,99 @@ impl Compiler {
             current = result;
         }
         Some(current)
+    }
+
+    /// Reference generators publish addressable cells, not ordinary rvalues.
+    /// Keep this path separate so non-reference functions pay no extra fetches.
+    #[cold]
+    #[inline(never)]
+    fn compile_reference_yield(
+        &mut self,
+        value: Option<&Expr>,
+        key: Option<&Expr>,
+        line: usize,
+    ) -> (u16, OpType) {
+        let mut instruction = Instruction::new(OpCode::Yield);
+        if let Some(key) = key {
+            let (operand, kind) = self.compile_expr(key);
+            let (operand, kind) = self.snapshot_yield_rvalue_operand(
+                operand,
+                kind,
+                "yield_key",
+                expression_source_line(key),
+            );
+            instruction.op2 = operand;
+            instruction.op2_type = kind;
+        }
+        // 1 permits a CV/call-result alias; 2 requires a detached cell and a
+        // notice even when expression lowering happens to return a CV. Bare
+        // yield uses 3: an owned null cell without a nonvariable notice.
+        instruction.extended_value = 1;
+        let operand = match value {
+            Some(
+                source @ (Expr::Variable { .. }
+                | Expr::DynamicVariable { .. }
+                | Expr::PropertyAccess {
+                    nullsafe: false, ..
+                }
+                | Expr::DynamicPropertyAccess {
+                    nullsafe: false, ..
+                }
+                | Expr::StaticProperty { .. }
+                | Expr::DynamicNamedStaticProperty { .. }
+                | Expr::DynamicStaticProperty { .. }
+                | Expr::ArrayAccess { .. }),
+            ) => self
+                .compile_array_element_reference_source(source)
+                .map(|cv| (cv, OpType::Cv)),
+            Some(Expr::ArrayAppendArgument { target, .. }) => {
+                self.compile_array_append_argument_reference(target, &[])
+            }
+            Some(source) => {
+                if !Self::is_call_result_reference_source(source)
+                    && !matches!(
+                        source,
+                        Expr::AssignReference { .. }
+                            | Expr::AssignTargetReference { .. }
+                            | Expr::ArrayAppendAssign { by_ref: true, .. }
+                    )
+                {
+                    instruction.extended_value = 2;
+                }
+                Ok(self.compile_expr(source))
+            }
+            None => {
+                instruction.extended_value = 3;
+                Ok((self.add_literal(Value::null()), OpType::Const))
+            }
+        };
+        let (operand, kind) = match operand {
+            Ok(operand) => operand,
+            Err(error) => {
+                self.deferred_error = Some(error);
+                (self.add_literal(Value::null()), OpType::Const)
+            }
+        };
+        instruction.op1 = operand;
+        instruction.op1_type = kind;
+        let result = self.alloc_tmp();
+        instruction.result = result;
+        instruction.result_type = OpType::Tmp;
+        self.push_instruction_at_line(instruction, line);
+        if kind == OpType::Cv
+            && instruction.extended_value == 1
+            && self
+                .cv_table
+                .iter()
+                .any(|(name, index)| *index == u32::from(operand) && name.starts_with('\0'))
+        {
+            self.emit_foreach_reference_source_writeback(
+                ForeachArrayWriteback::ReleaseInternalCv(operand),
+                operand,
+                kind,
+            );
+        }
+        (result, OpType::Tmp)
     }
 
     /// Evaluate arguments that precede a later `yield` into stable operands.

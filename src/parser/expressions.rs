@@ -419,6 +419,9 @@ impl Parser {
         if self.peek() == Token::From {
             self.advance(); // consume 'from'
             let expr = self.parse_expr()?;
+            if self.reference_return_context {
+                self.compile_error("Cannot use \"yield from\" inside a by-reference generator", line);
+            }
             return Ok(Expr::YieldFrom {
                 expr: Box::new(expr),
                 line,
@@ -437,6 +440,7 @@ impl Parser {
                 | Token::Eof
         ) {
             return Ok(Expr::Yield {
+                line,
                 value: None,
                 key: None,
             });
@@ -447,15 +451,28 @@ impl Parser {
         if self.peek() == Token::DoubleArrow {
             self.advance(); // consume '=>'
             let value = self.parse_assignment_or_yield()?;
+            self.validate_reference_yield_source(&value);
             Ok(Expr::Yield {
+                line,
                 key: Some(Box::new(first)),
                 value: Some(Box::new(value)),
             })
         } else {
+            self.validate_reference_yield_source(&first);
             Ok(Expr::Yield {
+                line,
                 value: Some(Box::new(first)),
                 key: None,
             })
+        }
+    }
+
+    fn validate_reference_yield_source(&mut self, value: &Expr) {
+        if self.reference_return_context
+            && matches!(value, Expr::PropertyAccess { .. } | Expr::DynamicPropertyAccess { .. } | Expr::ArrayAccess { .. })
+            && let Some(line) = Self::nullsafe_chain_line(value)
+        {
+            self.compile_error("Cannot take reference of a nullsafe chain", line);
         }
     }
 

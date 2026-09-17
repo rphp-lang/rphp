@@ -1107,7 +1107,6 @@ fn flush_foreach_reference_value(
             return Ok(());
         }
 
-        let value = (&*(*frame).get_op_ptr(value_cv, OpType::Cv, op_array)).clone();
         let array_ptr = (*frame).get_op_mut(array_operand as u32, array_type);
         let array = &mut *array_ptr;
         if array.is_reference() {
@@ -1116,11 +1115,15 @@ fn flush_foreach_reference_value(
             // assignment, so there is no detached snapshot to flush.
             return Ok(());
         }
-        if let Some(object) = array.as_object()
-            && object.class_name.as_ref() != "Generator"
-        {
+        if array.as_object().is_some() {
+            // Object slots and yielded generator cells are live aliases.
+            // Only detached array snapshots require element writeback.
             return Ok(());
         }
+        // Reading through get_op_ptr would erase the CV's reference identity
+        // before copying it into the detached source array. Live sources above
+        // need neither this snapshot nor its extra reference owner.
+        let value = (*frame).cv(value_cv).clone_closure_capture();
         let Some(array) = array.as_array_mut() else {
             return Err(VmError::Fatal(
                 "Foreach by-reference source is no longer an array".into(),
@@ -2143,6 +2146,32 @@ fn mark_generator_not_rewindable(gen_ref: &crate::vm::generator::GeneratorRef) {
     gen_ref.borrow_mut().rewindable = false;
 }
 
+#[cold]
+#[inline(never)]
+fn prepare_reference_yield(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<Option<Value>, VmError> {
+    let (value, notice) = if opline.extended_value == 1 {
+        prepare_user_return_value(frame, op_array, opline, true)
+    } else {
+        let (value, _) = prepare_user_return_value(frame, op_array, opline, false);
+        (Value::owned_reference(value), opline.extended_value == 2)
+    };
+    if notice {
+        report_php_notice(eg, frame, op_array, opline, "Only variable references should be yielded by reference")?;
+        // The resume boundary consumes this escaping exception. Leave it in
+        // executor state and end the detached activation without entering a
+        // generator-local catch/finally or extending the hot dispatch arm.
+        if eg.exception.is_some() {
+            return Ok(None);
+        }
+    }
+    Ok(Some(value))
+}
+
 #[inline(never)]
 fn op_yield<'a>(
     eg: &mut ExecutorGlobals,
@@ -2152,7 +2181,12 @@ fn op_yield<'a>(
 ) -> Result<ColdResult<'a>, VmError> {
     use crate::vm::generator::GeneratorState;
 
-    let yielded_value = if opline.op1_type != OpType::Unused {
+    let yielded_value = if opline.extended_value != 0 {
+        let Some(value) = prepare_reference_yield(eg, frame, op_array, opline)? else {
+            return Ok(ColdResult::Return);
+        };
+        value
+    } else if opline.op1_type != OpType::Unused {
         unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) }.clone()
     } else {
         Value::null()
