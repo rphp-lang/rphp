@@ -36,6 +36,30 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `native-container-purpose-property-views` train over `49cfe018`
+adds **10 PHP 8.5 passes without losses**: nine native property/debug/wire cases
+and adjacent ordinary-object printing. The unchanged 8,060-case ledger reaches
+**7,245 pass / 370 fail / 194 skip / 250 unsupported / one XFAIL**. Purpose-specific
+views retain raw/canonical keys, references, callback order and COW ownership;
+ArrayObject's object-handle lifetime case stays an explicit holdout.
+
+Fourteen original regressions, 890 focused checks, five complete Cargo
+configurations/all-targets, exact no-loss/fresh oracles, inventory, S0-S3 and
+unsafe/hygiene pass. All 164 fixed-anchor 32-pair controls meet common 1.65% and
+pay-use 5% ceilings, maxima +1.440%/+4.165%; nominal findings and rejected
+alternatives remain recorded. Shared-host results are diagnostic. The matrix
+uses identical frozen sources on a separate validation filesystem, retaining
+the original disk reserve and automatic cleanup. No new common layout,
+opcode, dependency or unsafe-count increase.
+
+Next read-only admission ranks reference-mode generator/object iteration.
+Require ten shared reference-pass/current-fail cases before implementation;
+reselect if writable-cell, validation and lifetime failures prove independent.
+Additional work must be paid only by actual by-reference iteration: no Fiber
+changes or common suspension state without a separate performance design.
+
+### Preceding gettext checkpoint
+
 The accepted `gettext-extension` checkpoint adds all ten PHP 8.5 gettext
 globals with exact callable metadata and honest Linux extension discovery over
 `d155bf36`. A cold native boundary unifies libc locale and catalog state for

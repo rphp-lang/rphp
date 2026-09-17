@@ -386,34 +386,34 @@ fn legacy_unserialize(
 #[cold]
 #[inline(never)]
 pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
-    let mut functions = Vec::new();
+    let mut functions = Vec::with_capacity(8);
     for owner in ["ArrayObject", "ArrayIterator"] {
         for (method, handler, names, hints, result) in [
             (
                 "serialize",
                 legacy_serialize as InternalFunctionHandler,
-                vec![],
+                &[] as &'static [&'static str],
                 vec![],
                 ParamTypeHint::String,
             ),
             (
                 "unserialize",
                 legacy_unserialize,
-                vec!["data"],
+                &["data"],
                 vec![ParamTypeHint::String],
                 ParamTypeHint::Void,
             ),
             (
                 "__serialize",
                 modern_serialize as InternalFunctionHandler,
-                vec![],
+                &[],
                 vec![],
                 ParamTypeHint::Array,
             ),
             (
                 "__unserialize",
                 modern_unserialize,
-                vec!["data"],
+                &["data"],
                 vec![ParamTypeHint::Array],
                 ParamTypeHint::Void,
             ),
@@ -423,31 +423,19 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 method,
                 false,
                 names.len() as u32,
-                &names,
+                names,
                 hints.clone(),
                 result,
-                &vec![None; names.len()],
+                &[None][..names.len()],
                 true,
             );
-            let mut function = Box::new(make_internal_method(
-                handler,
-                names.len() as u32 + 1,
-                names.len() as u32,
-                names.iter().map(|name| name.to_string()).collect(),
-            ));
+            let mut function = boxed_method(handler, names.len() as u32, names);
             function.common.sig.param_type_hints = hints;
             function.handler_validates_types = true;
             let ptr = &function.common as *const FunctionCommon;
-            eg.function_table.insert(
-                internal_method_display_name(owner, method).to_ascii_lowercase(),
-                ptr,
-            );
-            eg.method_declaring_class.insert(ptr, owner.into());
-            eg.register_internal_function_display_name(
-                ptr,
-                internal_method_display_name(owner, method),
-            );
-            eg.register_internal_function_reflection_metadata(ptr, vec![None; names.len()], "SPL");
+            register_method_identity(eg, ptr, owner, method);
+            // Required parameters have no default slots to materialize.
+            eg.register_internal_function_extension(ptr, "SPL");
             functions.push(function);
         }
     }

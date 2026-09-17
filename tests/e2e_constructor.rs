@@ -1,5 +1,44 @@
 /// Tests for __construct() constructor
 mod common;
+
+#[test]
+fn warmed_constructor_cache_keeps_failure_and_destructor_boundaries() {
+    let source = r#"<?php
+class CacheOwner {
+    public int $value;
+    function __construct(int $value) {
+        $this->value = $value;
+        echo "construct:$value\n";
+        if ($value < 0) throw new Exception('stopped');
+    }
+    function __destruct() { echo "drop:$this->value\n"; }
+}
+class CacheChild extends CacheOwner {}
+class CacheEmpty {}
+function cached_create($class, $value) { return new $class($value); }
+foreach ([CacheOwner::class, CacheOwner::class, CacheChild::class, CacheOwner::class] as $class) {
+    foreach ([1, -2, 3] as $value) {
+        try { $object = cached_create($class, $value); unset($object); }
+        catch (Exception $error) { echo "caught:", $error->getMessage(), "\n"; }
+    }
+}
+foreach ([4, 5] as $value) {
+    $object = cached_create(CacheEmpty::class, $value);
+    echo get_class($object), "\n";
+}
+foreach (['one', 'two'] as $message) {
+    $error = cached_create(Exception::class, $message);
+    echo $error->getMessage(), "\n";
+}
+"#;
+    assert_eq!(
+        common::run_php(source),
+        format!(
+            "{}CacheEmpty\nCacheEmpty\none\ntwo\n",
+            "construct:1\ndrop:1\nconstruct:-2\ncaught:stopped\nconstruct:3\ndrop:3\n".repeat(4)
+        )
+    );
+}
 use common::run_php;
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;

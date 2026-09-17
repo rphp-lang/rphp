@@ -1,0 +1,27 @@
+diagnostic:8192:ArrayObject::exchangeArray(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants
+self-debug
+array(1) {
+  ["label"]=>
+  string(4) "self"
+}
+object(SelfView)#2 (1) {
+  ["label"]=>
+  string(4) "self"
+}
+override-debug
+object(DebugView)#3 (2) {
+  ["slots"]=>
+  int(1)
+  ["visible"]=>
+  int(7)
+}
+object(IteratorView)#4 (2) {
+  ["members"]=>
+  int(2)
+  ["native"]=>
+  int(2)
+}
+array(1) {
+  ["kept"]=>
+  int(2)
+}

@@ -1512,6 +1512,11 @@ impl<'a> Parser<'a> {
                 // Publish the object before parsing properties so `r:N;` can
                 // close self-references and longer object cycles.
                 self.publish_partial_reference(reference, &object)?;
+                let unserialize_hook = allowed
+                    .then(|| {
+                        crate::stdlib::resolve_object_public_method(eg, &object, "__unserialize")
+                    })
+                    .flatten();
                 let mut properties = PhpArray::with_hash_capacity(property_count);
                 let mut property_value_offsets = Vec::with_capacity(property_count);
                 for _ in 0..property_count {
@@ -1546,7 +1551,14 @@ impl<'a> Parser<'a> {
                         ArrayKey::Int(key) => properties.set_int(key, member),
                         ArrayKey::String(key) => {
                             property_value_offsets.push((key.clone(), value_offset));
-                            properties.set_str(&key, member);
+                            // Hook arguments are arrays, not raw object tables.
+                            // Canonicalize on insertion so interleaved string
+                            // and integer duplicates obey wire order as well.
+                            if unserialize_hook.is_some() {
+                                super::set_object_var(&mut properties, &key, member);
+                            } else {
+                                properties.set_str(&key, member);
+                            }
                         }
                     }
                 }
@@ -1554,16 +1566,16 @@ impl<'a> Parser<'a> {
                 if !allowed {
                     Ok(incomplete_object(class_name, &properties))
                 } else {
-                    let serialized = Value::array(properties.clone());
-                    match crate::stdlib::call_object_public_method(
-                        eg,
-                        &object,
-                        "__unserialize",
-                        std::slice::from_ref(&serialized),
-                    )
-                    .map_err(|_| ())?
-                    {
-                        Some(_) => {}
+                    match unserialize_hook {
+                        Some(resolved) => {
+                            let serialized = Value::array(properties);
+                            crate::stdlib::call_resolved_object_method(
+                                eg,
+                                &resolved,
+                                std::slice::from_ref(&serialized),
+                            )
+                            .map_err(|_| ())?;
+                        }
                         None => {
                             let virtual_property = object.as_object().and_then(|object| {
                                 property_value_offsets.iter().find_map(|(key, offset)| {

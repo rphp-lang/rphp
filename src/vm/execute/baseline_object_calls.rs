@@ -1189,6 +1189,18 @@ fn op_new_obj_resolved<'a>(
     } else {
         eg.class_is_a(name, "Throwable")
     };
+    #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
+    if constructor_cache_hit && !is_throwable {
+        // The cache was checked after default materialization and TMP
+        // retirement. No PHP callback or generic binding occurs on this
+        // ordinary path before construction, so reuse that same resolution.
+        // Preparation, arity, init-plan guards and destructor eligibility
+        // still enter the canonical constructor protocol below.
+        return op_begin_constructor(
+            eg, frame, op_array, opline, ip, result_ptr, class_id,
+            ic.func, ic.constructor_has_destructor(),
+        );
+    }
     if is_throwable {
         attach_new_throwable_origin(object, eg, frame, op_array, ip);
     }

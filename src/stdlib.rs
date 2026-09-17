@@ -245,6 +245,45 @@ struct InternalUserCallerSnapshot {
     has_direct_argument: bool,
 }
 
+#[inline]
+fn internal_caller_source_line(source_lines: &[(u32, u32)], instruction: u32) -> usize {
+    // OpArray source mappings are sorted by instruction, including the final
+    // declaration sentinel. Unlike an exact source_line() lookup, an internal
+    // caller needs the last predecessor when its next instruction has no map.
+    let end = source_lines.partition_point(|(index, _)| *index <= instruction);
+    end.checked_sub(1)
+        .map_or(0, |position| source_lines[position].1 as usize)
+}
+
+#[cfg(test)]
+mod internal_caller_source_line_tests {
+    use super::internal_caller_source_line;
+
+    #[test]
+    fn internal_caller_source_line_matches_predecessor_scan() {
+        let dense: Vec<_> = (0..512).map(|index| (index * 2, 7 + index % 19)).collect();
+        for entries in [
+            &[][..],
+            &[(4, 12)],
+            &[(0, 8), (4, 12), (4, 19), (400, 5), (u32::MAX, 31)],
+            dense.as_slice(),
+        ] {
+            for instruction in (0..1027).chain([u32::MAX - 1, u32::MAX]) {
+                let previous = entries
+                    .iter()
+                    .rev()
+                    .find(|(index, _)| *index <= instruction)
+                    .map_or(0, |(_, line)| *line as usize);
+                assert_eq!(
+                    internal_caller_source_line(entries, instruction),
+                    previous,
+                    "instruction {instruction}"
+                );
+            }
+        }
+    }
+}
+
 /// Recover source metadata and identify a direct-CV static send. Never read
 /// the caller's operand here: a diagnostic may already have replaced it.
 fn internal_user_caller_snapshot(
@@ -280,13 +319,7 @@ fn internal_user_caller_snapshot(
         let op_array = &function.as_user().op_array;
         let next = (*caller).opline.offset_from(op_array.instructions.as_ptr());
         let next = usize::try_from(next).ok()?.min(op_array.instructions.len());
-        let line = op_array
-            .source_lines
-            .iter()
-            .rev()
-            .find(|(instruction, _)| *instruction <= next as u32)
-            .map(|(_, line)| *line as usize)
-            .unwrap_or(0);
+        let line = internal_caller_source_line(&op_array.source_lines, next as u32);
         let argument = argument_index.and_then(|index| {
             for instruction in op_array.instructions[..next].iter().rev() {
                 match instruction.opcode {
@@ -14991,16 +15024,16 @@ fn fn_var_dump(
         .map(|arguments| arguments.values().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
     let first = var_dump_output_value(&first_value, eg, ed)?;
+    eg.write_output(first.as_bytes());
     if eg.exception.is_some() {
         return Ok(());
     }
-    eg.write_output(first.as_bytes());
     for value in remaining {
         let output = var_dump_output_value(&value, eg, ed)?;
+        eg.write_output(output.as_bytes());
         if eg.exception.is_some() {
             return Ok(());
         }
-        eg.write_output(output.as_bytes());
     }
     Ok(())
 }
@@ -15040,8 +15073,12 @@ fn fn_print_r(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let v = arg!(ed, 0);
-    let output = print_r_value(v, 0, eg);
+    // Keep the input alive when a debug hook rebinds the caller's variable.
+    let v = arg!(ed, 0).clone();
+    let output = print_r_value(&v, 0, eg, ed)?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     if arg_opt!(ed, 1).is_some_and(Value::is_truthy) {
         ret!(rv, php_byte_result(output, false));
     }
@@ -18967,15 +19004,55 @@ fn dump_output_value(
     // Retain the receiver across the synchronous user call. __debugInfo() may
     // rebind the variable that supplied var_dump() or initialize a lazy proxy.
     let receiver = value.clone();
-    let Some(debug_info) = crate::vm::execute::call_object_debug_info(eg, &receiver)? else {
+    let Some(debug_info) = object_debug_projection(&receiver, eg, ed)? else {
         return Ok(dump_value(&receiver, 0, eg, context));
     };
-    if eg.exception.is_some() {
-        return Ok(PhpOutputBytes::new());
+    // var_dump publishes the empty legacy-null projection before propagating
+    // an exception raised by its deprecation handler. print_r has a different
+    // engine-fatal boundary and handles it in its own recursive writer.
+    Ok(var_dump_debug_info_object(
+        &receiver,
+        &debug_info,
+        0,
+        eg,
+        context,
+    ))
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn object_debug_projection(
+    receiver: &Value,
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+) -> Result<Option<Value>, VmError> {
+    // A root user declaration has no inherited/native method table. Its
+    // immutable declaration can prove a missing hook without constructing a
+    // qualified function name. Traits and internal classes retain the full
+    // resolver, including aliases and native method registrations.
+    if receiver.as_object().is_some_and(|object| {
+        !eg.class_id_is_internal(object.class_id)
+            && eg.class_by_id(object.class_id).is_some_and(|class| {
+                class.parent.is_none()
+                    && class.uses.is_empty()
+                    && class.trait_aliases.is_empty()
+                    && !class
+                        .methods
+                        .iter()
+                        .any(|(name, ..)| name.eq_ignore_ascii_case("__debuginfo"))
+            })
+    }) {
+        return Ok(None);
     }
+    let debug_info = crate::vm::execute::call_object_debug_info(eg, receiver)?;
+    check_debug_projection_exception(eg, ed)?;
+    let Some(debug_info) = debug_info else {
+        return Ok(None);
+    };
     let debug_info = debug_info.dereferenced();
-    let empty_projection;
-    let debug_info = if debug_info.value_type() == ValueType::Null {
+    if debug_info.value_type() == ValueType::Null {
         let class_name = receiver
             .as_object()
             .map(|object| object.class_name.to_string())
@@ -18987,26 +19064,39 @@ fn dump_output_value(
                 "Returning null from {class_name}::__debugInfo() is deprecated, return an empty array instead"
             ),
         )?;
-        if eg.exception.is_some() {
-            return Ok(PhpOutputBytes::new());
-        }
         // The legacy null form projects an empty object rather than falling
         // back to the receiver's ordinary properties.
-        empty_projection = Value::array(PhpArray::new());
-        &empty_projection
+        Ok(Some(Value::array(PhpArray::new())))
     } else if debug_info.value_type() == ValueType::Array {
-        debug_info
+        Ok(Some(debug_info.clone()))
     } else {
         // Invalid __debugInfo() returns are an engine fatal, not a catchable
         // TypeError. This boundary intentionally escapes the internal call.
         let (file, line) = internal_call_source(ed);
+        Err(VmError::Fatal(format!(
+            "__debuginfo() must return an array in {file} on line {line}"
+        )))
+    }
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn check_debug_projection_exception(
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+) -> Result<(), VmError> {
+    if let Some(exception) = eg.exception.take() {
+        // Report the thrown exception before the non-catchable engine fatal.
+        let rendered = crate::vm::execute::format_uncaught_throwable(eg, &exception);
+        eg.write_output(format!("\nWarning: {rendered}\n").as_bytes());
+        let (file, line) = internal_call_source(ed);
         return Err(VmError::Fatal(format!(
             "__debuginfo() must return an array in {file} on line {line}"
         )));
-    };
-    Ok(var_dump_debug_info_object(
-        &receiver, debug_info, 0, eg, context,
-    ))
+    }
+    Ok(())
 }
 
 fn var_dump_debug_info_object(
@@ -19383,8 +19473,9 @@ fn var_dump_value_inner(
                 .lazy_object_state(val)
                 .filter(|state| !state.initializing);
             let initialized_proxy = lazy_state.and_then(|state| state.proxy_instance.clone());
-            let output = if let Some(projection) = builtin_classes::fixed_array::array_cast(val, eg)
-            {
+            let projection = builtin_classes::fixed_array::debug_projection(val, eg)
+                .or_else(|| builtin_classes::array_object::debug_projection(val, eg));
+            let output = if let Some(projection) = projection {
                 drop(object);
                 var_dump_projected_object(
                     val,
@@ -19811,40 +19902,64 @@ fn var_dump_property_slots(eg: &ExecutorGlobals, class_id: u32) -> Vec<usize> {
     eg.instance_property_slots_in_iteration_order(class_id)
 }
 
-fn print_r_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> Vec<u8> {
+fn print_r_value(
+    val: &Value,
+    indent: usize,
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+) -> Result<Vec<u8>, VmError> {
     let mut visited_arrays = std::collections::HashSet::new();
     let mut visited_objects = std::collections::HashSet::new();
-    print_r_value_inner(val, indent, eg, &mut visited_arrays, &mut visited_objects)
+    let mut output = Vec::new();
+    print_r_value_inner(
+        val,
+        indent,
+        eg,
+        ed,
+        &mut visited_arrays,
+        &mut visited_objects,
+        &mut output,
+    )?;
+    Ok(output)
 }
 
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
 fn print_r_value_inner(
     val: &Value,
     indent: usize,
-    eg: &ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
     visited_arrays: &mut std::collections::HashSet<usize>,
     visited_objects: &mut std::collections::HashSet<usize>,
-) -> Vec<u8> {
+    out: &mut Vec<u8>,
+) -> Result<(), VmError> {
     let val = val.dereferenced();
-    match val.value_type() {
-        ValueType::Null => Vec::new(),
-        ValueType::True => b"1".to_vec(),
-        ValueType::False => Vec::new(),
-        ValueType::Long => val.as_long().unwrap().to_string().into_bytes(),
-        ValueType::Double => val.echo_to_string_with_precision(eg.precision).into_bytes(),
-        ValueType::String => val.php_string_bytes().unwrap_or_default().into_owned(),
+    Ok(match val.value_type() {
+        ValueType::Null => (),
+        ValueType::True => out.push(b'1'),
+        ValueType::False => (),
+        ValueType::Long => out.extend_from_slice(val.as_long().unwrap().to_string().as_bytes()),
+        ValueType::Double => {
+            out.extend_from_slice(val.echo_to_string_with_precision(eg.precision).as_bytes())
+        }
+        ValueType::String => out.extend_from_slice(&val.php_string_bytes().unwrap_or_default()),
         ValueType::Array => {
             let arr = val.as_array().unwrap();
             let identity = val
                 .array_identity()
                 .expect("live print_r array must retain an identity");
             if !visited_arrays.insert(identity) {
-                return b"Array\n *RECURSION*".to_vec();
+                out.extend_from_slice(b"Array\n *RECURSION*");
+                return Ok(());
             }
             // print_r() indents a nested array's body relative to both the
             // containing key and its `=>` value column.
             let prefix = "    ".repeat(indent * 2);
             let inner = "    ".repeat(indent * 2 + 1);
-            let mut out = b"Array\n".to_vec();
+            out.extend_from_slice(b"Array\n");
             out.extend_from_slice(prefix.as_bytes());
             out.extend_from_slice(b"(\n");
             for (key, v) in arr.iter() {
@@ -19857,26 +19972,20 @@ fn print_r_value_inner(
                 out.push(b'[');
                 out.extend_from_slice(&key_bytes);
                 out.extend_from_slice(b"] => ");
-                out.extend_from_slice(&print_r_value_inner(
-                    v,
-                    indent + 1,
-                    eg,
-                    visited_arrays,
-                    visited_objects,
-                ));
+                print_r_value_inner(v, indent + 1, eg, ed, visited_arrays, visited_objects, out)?;
                 out.push(b'\n');
             }
             out.extend_from_slice(prefix.as_bytes());
             out.extend_from_slice(b")\n");
             visited_arrays.remove(&identity);
-            out
         }
         ValueType::Closure => {
             let identity = val
                 .weak_object_identity()
                 .expect("live print_r Closure must retain an identity");
             if !visited_objects.insert(identity) {
-                return b"Closure Object\n *RECURSION*".to_vec();
+                out.extend_from_slice(b"Closure Object\n *RECURSION*");
+                return Ok(());
             }
             let closure = val
                 .as_closure()
@@ -19884,7 +19993,7 @@ fn print_r_value_inner(
             let properties = closure_debug_properties(closure, eg);
             let prefix = "    ".repeat(indent * 2);
             let inner = "    ".repeat(indent * 2 + 1);
-            let mut out = b"Closure Object\n".to_vec();
+            out.extend_from_slice(b"Closure Object\n");
             out.extend_from_slice(prefix.as_bytes());
             out.extend_from_slice(b"(\n");
             for (key, value) in properties.iter() {
@@ -19895,33 +20004,35 @@ fn print_r_value_inner(
                 out.push(b'[');
                 out.extend_from_slice(key.as_bytes());
                 out.extend_from_slice(b"] => ");
-                out.extend_from_slice(&print_r_value_inner(
+                print_r_value_inner(
                     value,
                     indent + 1,
                     eg,
+                    ed,
                     visited_arrays,
                     visited_objects,
-                ));
+                    out,
+                )?;
                 out.push(b'\n');
             }
             out.extend_from_slice(prefix.as_bytes());
             out.extend_from_slice(b")\n");
             visited_objects.remove(&identity);
-            out
         }
         ValueType::Object => {
             let Some(object) = val.as_object() else {
-                return Vec::new();
+                return Ok(());
             };
             if object.class_name.as_ref() == "SensitiveParameterValue" {
-                return b"SensitiveParameterValue Object\n(\n)\n".to_vec();
+                out.extend_from_slice(b"SensitiveParameterValue Object\n(\n)\n");
+                return Ok(());
             }
-            let Some(class) = eg.class_by_id(object.class_id) else {
-                return Vec::new();
-            };
-            if class.is_enum {
+            if eg
+                .class_by_id(object.class_id)
+                .is_some_and(|class| class.is_enum)
+            {
                 let Some(name) = object.get_property("name").and_then(Value::as_str) else {
-                    return Vec::new();
+                    return Ok(());
                 };
                 let prefix = "    ".repeat(indent * 2);
                 let inner = "    ".repeat(indent * 2 + 1);
@@ -19931,7 +20042,6 @@ fn print_r_value_inner(
                     ValueType::String => ":string",
                     _ => "",
                 });
-                let mut out = Vec::new();
                 out.extend_from_slice(object.class_name.as_bytes());
                 out.extend_from_slice(b" Enum");
                 out.extend_from_slice(backing.as_bytes());
@@ -19956,7 +20066,7 @@ fn print_r_value_inner(
                 }
                 out.extend_from_slice(prefix.as_bytes());
                 out.extend_from_slice(b")\n");
-                return out;
+                return Ok(());
             }
 
             let display_class = object
@@ -19967,113 +20077,117 @@ fn print_r_value_inner(
                 .object_identity()
                 .expect("live print_r object must retain an identity");
             if !visited_objects.insert(identity) {
-                let mut out = display_class.as_bytes().to_vec();
+                out.extend_from_slice(display_class.as_bytes());
                 out.extend_from_slice(b" Object\n *RECURSION*");
-                return out;
+                return Ok(());
             }
-
             let prefix = "    ".repeat(indent * 2);
             let inner = "    ".repeat(indent * 2 + 1);
-            let mut out = display_class.as_bytes().to_vec();
+            out.extend_from_slice(display_class.as_bytes());
             out.extend_from_slice(b" Object\n");
             out.extend_from_slice(prefix.as_bytes());
             out.extend_from_slice(b"(\n");
-            let mut native_array_storage = None;
-            if let Some(slots) = builtin_classes::fixed_array::slot_projection(val, eg) {
-                for (key, value) in slots.iter() {
-                    let ArrayKey::Int(key) = key else {
-                        unreachable!("fixed slot index")
-                    };
+            drop(object);
+            let properties = object_debug_projection(val, eg, ed)?
+                .or_else(|| builtin_classes::fixed_array::debug_projection(val, eg));
+            // Unlike var_dump, print_r treats a failed debug projection,
+            // including its null-result deprecation callback, as fatal.
+            check_debug_projection_exception(eg, ed)?;
+            if let Some(properties) = properties {
+                let properties = properties.as_array().expect("debug property array");
+                for (key, value) in properties.iter() {
                     out.extend_from_slice(inner.as_bytes());
-                    out.extend_from_slice(format!("[{key}] => ").as_bytes());
-                    out.extend_from_slice(&print_r_value_inner(
+                    let key = match key {
+                        ArrayKey::Int(index) => format!("[{index}]"),
+                        ArrayKey::String(name) => print_r_raw_property_key(&name),
+                    };
+                    if properties.has_external_byte_keys() {
+                        out.extend_from_slice(&php_string_to_bytes(&key));
+                    } else {
+                        out.extend_from_slice(key.as_bytes());
+                    }
+                    out.extend_from_slice(b" => ");
+                    print_r_value_inner(
                         value,
                         indent + 1,
                         eg,
+                        ed,
                         visited_arrays,
                         visited_objects,
-                    ));
+                        out,
+                    )?;
                     out.push(b'\n');
                 }
-            }
-            for slot in var_dump_property_slots(eg, object.class_id)
-                .into_iter()
-                .filter(|_| !object.has_detached_property_table())
-            {
-                let definition = &class.properties[slot];
-                if definition.is_virtual_hook_property() {
-                    continue;
-                }
-                let Some(value) = object.get_property_slot(slot) else {
-                    continue;
-                };
-                if value.value_type() == ValueType::Undef {
-                    continue;
-                }
-                if definition.name == "storage"
-                    && matches!(
-                        definition.declaring_class.as_str(),
-                        "ArrayObject" | "ArrayIterator"
-                    )
-                {
-                    native_array_storage = Some((definition, value));
-                    continue;
-                }
-                out.extend_from_slice(inner.as_bytes());
-                out.extend_from_slice(print_r_property_key(definition).as_bytes());
-                out.extend_from_slice(b" => ");
-                out.extend_from_slice(&print_r_value_inner(
-                    value,
-                    indent + 1,
-                    eg,
-                    visited_arrays,
-                    visited_objects,
-                ));
-                out.push(b'\n');
-            }
-            object.for_each_dynamic_property(|name, value| {
-                if value.value_type() == ValueType::Undef {
-                    return;
-                }
-                out.extend_from_slice(inner.as_bytes());
-                if object.has_detached_property_table() && name.starts_with('\0') {
-                    out.extend_from_slice(print_r_raw_property_key(name).as_bytes());
-                    out.extend_from_slice(b" => ");
+            } else {
+                let object = val.as_object().expect("retained print receiver");
+                let class_id = object.class_id;
+                let slots = if object.has_detached_property_table() {
+                    Vec::new()
                 } else {
-                    out.push(b'[');
-                    out.extend_from_slice(name.as_bytes());
-                    out.extend_from_slice(b"] => ");
+                    eg.instance_property_slots_in_iteration_order(class_id)
+                };
+                // PHP's ordinary debug table contains indirect declared slots
+                // but copies dynamic values. Preserve that distinction across
+                // nested callbacks without constructing a temporary PHP array.
+                let mut dynamic = Vec::new();
+                object.for_each_dynamic_property(|name, value| {
+                    if !value.is_undef() {
+                        dynamic.push((
+                            print_r_raw_property_key(name),
+                            value.clone_for_php_storage(),
+                        ));
+                    }
+                });
+                drop(object);
+                for slot in slots {
+                    let Some(value) = val.as_object().and_then(|object| {
+                        object
+                            .get_property_slot(slot)
+                            .filter(|value| !value.is_undef())
+                            .map(Value::clone)
+                    }) else {
+                        continue;
+                    };
+                    let Some(definition) = eg.instance_property_definition(class_id, slot) else {
+                        continue;
+                    };
+                    out.extend_from_slice(inner.as_bytes());
+                    out.extend_from_slice(print_r_property_key(definition).as_bytes());
+                    out.extend_from_slice(b" => ");
+                    print_r_value_inner(
+                        &value,
+                        indent + 1,
+                        eg,
+                        ed,
+                        visited_arrays,
+                        visited_objects,
+                        out,
+                    )?;
+                    out.push(b'\n');
                 }
-                out.extend_from_slice(&print_r_value_inner(
-                    value,
-                    indent + 1,
-                    eg,
-                    visited_arrays,
-                    visited_objects,
-                ));
-                out.push(b'\n');
-            });
-            if let Some((definition, value)) = native_array_storage {
-                out.extend_from_slice(inner.as_bytes());
-                out.extend_from_slice(print_r_property_key(definition).as_bytes());
-                out.extend_from_slice(b" => ");
-                out.extend_from_slice(&print_r_value_inner(
-                    value,
-                    indent + 1,
-                    eg,
-                    visited_arrays,
-                    visited_objects,
-                ));
-                out.push(b'\n');
+                for (key, value) in dynamic {
+                    out.extend_from_slice(inner.as_bytes());
+                    out.extend_from_slice(key.as_bytes());
+                    out.extend_from_slice(b" => ");
+                    print_r_value_inner(
+                        &value,
+                        indent + 1,
+                        eg,
+                        ed,
+                        visited_arrays,
+                        visited_objects,
+                        out,
+                    )?;
+                    out.push(b'\n');
+                }
             }
             out.extend_from_slice(prefix.as_bytes());
             out.extend_from_slice(b")\n");
             visited_objects.remove(&identity);
-            out
         }
-        ValueType::Resource => val.echo_to_string().into_bytes(),
-        _ => Vec::new(),
-    }
+        ValueType::Resource => out.extend_from_slice(val.echo_to_string().as_bytes()),
+        _ => (),
+    })
 }
 
 #[cold]
@@ -20085,6 +20199,11 @@ fn print_r_raw_property_key(name: &str) -> String {
         if owner == "*" {
             format!("[{member}:protected]")
         } else {
+            let owner = if owner.starts_with("class@anonymous#") {
+                "class@anonymous"
+            } else {
+                owner
+            };
             format!("[{member}:{owner}:private]")
         }
     } else {
@@ -22781,6 +22900,16 @@ pub(crate) fn call_object_public_method(
     let Some(resolved) = resolve_object_public_method(eg, receiver, method) else {
         return Ok(None);
     };
+    call_resolved_object_method(eg, &resolved, args).map(Some)
+}
+
+/// Use a previously resolved native/user method while retaining the same
+/// internal activation and diagnostic origin as ordinary protocol dispatch.
+fn call_resolved_object_method(
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    args: &[Value],
+) -> Result<Value, VmError> {
     if resolved.common().fn_type == FunctionType::Internal {
         let num_args = resolved.prepend_args.len() + args.len();
         return call_internal_function_iter_from_current_site(
@@ -22788,10 +22917,9 @@ pub(crate) fn call_object_public_method(
             resolved.func_ptr,
             num_args,
             resolved.prepend_args.iter().chain(args.iter()),
-        )
-        .map(Some);
+        );
     }
-    call_resolved_with_values(eg, &resolved, args).map(Some)
+    call_resolved_with_values(eg, resolved, args)
 }
 
 /// Result of resolving a callback: func pointer + args to prepend (e.g. $this, use_vars).

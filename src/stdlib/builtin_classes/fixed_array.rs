@@ -128,15 +128,47 @@ pub(in crate::stdlib) fn member_projection(
     if !has_fixed_slots(receiver, eg) {
         return None;
     }
-    Some(array_object::member_properties(receiver, eg))
+    let mut members = PhpArray::new();
+    for (key, value) in array_object::member_properties(receiver, eg).iter() {
+        match key {
+            ArrayKey::Int(key) => members.set_int(key, value.clone_for_php_storage()),
+            ArrayKey::String(key) => {
+                set_object_var(&mut members, &key, value.clone_for_php_storage())
+            }
+        }
+    }
+    Some(members)
 }
 
 #[cold]
 pub(in crate::stdlib) fn array_cast(receiver: &Value, eg: &ExecutorGlobals) -> Option<Value> {
+    property_projection(receiver, eg, true)
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+pub(in crate::stdlib) fn debug_projection(receiver: &Value, eg: &ExecutorGlobals) -> Option<Value> {
+    property_projection(receiver, eg, false)
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn property_projection(
+    receiver: &Value,
+    eg: &ExecutorGlobals,
+    canonical_keys: bool,
+) -> Option<Value> {
     let mut array = slot_projection(receiver, eg)?;
     for (key, value) in array_object::member_properties(receiver, eg).iter() {
         match key {
             ArrayKey::Int(key) => array.set_int(key, value.clone_for_php_storage()),
+            ArrayKey::String(key) if canonical_keys => {
+                set_object_var(&mut array, &key, value.clone_for_php_storage())
+            }
             ArrayKey::String(key) => array.set_str(&key, value.clone_for_php_storage()),
         }
     }
@@ -318,6 +350,69 @@ fn to_array(
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     ret!(rv, Value::array(snapshot(arg!(ed, 0))));
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn serialize_slots(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    // Serialization preserves raw property names, including a string "0"
+    // beside slot 0. An explicit array cast canonicalizes that name instead.
+    ret!(
+        rv,
+        property_projection(arg!(ed, 0), eg, false).expect("fixed-array receiver")
+    );
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn unserialize_slots(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = arg!(ed, 0).clone();
+    let input = arg!(ed, 1).dereferenced().clone();
+    let Some(data) = input.as_array() else {
+        typed_internal_argument_error(
+            eg,
+            "SplFixedArray::__unserialize",
+            &input,
+            1,
+            "data",
+            "array",
+        );
+        return Ok(());
+    };
+    if size(&receiver) != 0 {
+        return Ok(());
+    }
+    let mut slots = Vec::new();
+    reserve_slots(&mut slots, data.len(), ed)?;
+    let mut members = PhpArray::new();
+    for (key, value) in data.iter() {
+        match key {
+            ArrayKey::Int(_) => slots.push(value.dereferenced().clone()),
+            ArrayKey::String(key) => members.set_str(&key, value.clone_for_php_storage()),
+        }
+    }
+    {
+        let mut object = receiver.as_object_mut().expect("fixed-array receiver");
+        let state = object.native_object_state_mut::<FixedArray>();
+        state.slots = slots;
+        state.initialized = true;
+    }
+    // Native slots are published before member loading can invoke a diagnostic
+    // handler. The ordinary native member loader preserves raw types and the
+    // committed member when that handler throws.
+    array_object::serialization::restore_container_members(&receiver, &members, ed, eg, None)
 }
 
 fn index(
@@ -629,6 +724,13 @@ fn method(
     is_static: bool,
 ) {
     let required = defaults.iter().filter(|d| d.is_none()).count() as u32;
+    // Tentative return contracts live only in reflection/link metadata; do
+    // not clone a class-name payload that the executable signature discards.
+    let executable_result = if tentative {
+        ParamTypeHint::None
+    } else {
+        result.clone()
+    };
     eg.register_internal_method_contract(
         "SplFixedArray",
         name,
@@ -636,53 +738,45 @@ fn method(
         required,
         names,
         hints.clone(),
-        result.clone(),
+        result,
         defaults,
         tentative,
     );
-    let mut function = Box::new(
-        make_internal_method(handler, names.len() as u32 + 1, required, vec![])
-            .with_static_parameter_names(names),
-    );
+    let mut function = array_object::boxed_method(handler, required, names);
     function.handler_validates_types = true;
     function.common.sig.param_type_hints = hints;
-    if !tentative {
-        function.common.sig.return_type_hint = result;
-    }
+    function.common.sig.return_type_hint = executable_result;
     let pointer = &function.common as *const FunctionCommon;
     if is_static {
         eg.register_internal_static_method(pointer);
     }
-    eg.function_table
-        .insert(internal_method_lookup_name("SplFixedArray", name), pointer);
-    eg.method_declaring_class
-        .insert(pointer, "SplFixedArray".into());
-    eg.register_internal_function_display_name(
-        pointer,
-        internal_method_display_name("SplFixedArray", name),
-    );
-    eg.register_internal_function_reflection_metadata(
-        pointer,
-        defaults
-            .iter()
-            .map(|d| {
-                d.map(|d| match d {
-                    "true" => Value::bool(true),
-                    "0" => Value::long(0),
-                    _ => unreachable!(),
+    array_object::register_method_identity(eg, pointer, "SplFixedArray", name);
+    if defaults.iter().all(Option::is_none) {
+        eg.register_internal_function_extension(pointer, "SPL");
+    } else {
+        eg.register_internal_function_reflection_metadata(
+            pointer,
+            defaults
+                .iter()
+                .map(|d| {
+                    d.map(|d| match d {
+                        "true" => Value::bool(true),
+                        "0" => Value::long(0),
+                        _ => unreachable!(),
+                    })
                 })
-            })
-            .collect(),
-        "SPL",
-    );
+                .collect(),
+            "SPL",
+        );
+    }
     functions.push(function);
 }
 
 #[cold]
 pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     use ParamTypeHint::{Array, Bool, ClassName, Int, Mixed, None as NoType, Void};
-    let mut functions = Vec::with_capacity(12);
-    eg.reserve_internal_method_contracts("SplFixedArray", 12);
+    let mut functions = Vec::with_capacity(14);
+    eg.reserve_internal_method_contracts("SplFixedArray", 14);
     method(
         eg,
         &mut functions,
@@ -700,6 +794,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ("getSize", get_size, Int, true),
         ("toArray", to_array, Array, true),
         ("jsonSerialize", to_array, Array, false),
+        ("__serialize", serialize_slots, Array, false),
         (
             "getIterator",
             get_iterator,
@@ -720,6 +815,18 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             false,
         );
     }
+    method(
+        eg,
+        &mut functions,
+        "__unserialize",
+        unserialize_slots,
+        &["data"],
+        vec![Array],
+        &[None],
+        Void,
+        false,
+        false,
+    );
     method(
         eg,
         &mut functions,

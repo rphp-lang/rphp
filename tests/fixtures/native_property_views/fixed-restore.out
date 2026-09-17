@@ -1,0 +1,104 @@
+case:populate
+diagnostic:8192:Creation of dynamic property SplFixedArray::$note is deprecated
+NULL
+array(1) {
+  [0]=>
+  int(11)
+}
+array(2) {
+  [0]=>
+  int(11)
+  ["note"]=>
+  string(5) "saved"
+}
+case:repeat
+NULL
+array(1) {
+  [0]=>
+  int(11)
+}
+array(2) {
+  [0]=>
+  int(11)
+  ["note"]=>
+  string(5) "saved"
+}
+array(1) {
+  [0]=>
+  NULL
+}
+int(22)
+case:keys
+NULL
+array(1) {
+  [0]=>
+  string(8) "negative"
+}
+array(1) {
+  [0]=>
+  string(8) "negative"
+}
+case:keys
+NULL
+array(1) {
+  [0]=>
+  string(6) "sparse"
+}
+array(1) {
+  [0]=>
+  string(6) "sparse"
+}
+case:keys
+diagnostic:8192:Creation of dynamic property SplFixedArray::$x is deprecated
+NULL
+array(0) {
+}
+array(1) {
+  ["x"]=>
+  string(11) "only-member"
+}
+case:keys
+diagnostic:8192:Creation of dynamic property SplFixedArray::$00 is deprecated
+NULL
+array(0) {
+}
+array(1) {
+  ["00"]=>
+  string(12) "leading-zero"
+}
+case:wrong-input
+TypeError:SplFixedArray::__unserialize(): Argument #1 ($data) must be of type array, null given
+case:too-many
+ArgumentCountError:SplFixedArray::__serialize() expects exactly 0 arguments, 1 given
+case:initialized
+NULL
+array(2) {
+  [0]=>
+  string(4) "kept"
+  [1]=>
+  NULL
+}
+case:typed-member
+NULL
+array(1) {
+  [0]=>
+  int(8)
+}
+string(5) "wrong"
+case:member-error
+throwing:8192
+Exception:stopped
+array(2) {
+  [0]=>
+  int(9)
+  [1]=>
+  int(10)
+}
+array(3) {
+  [0]=>
+  int(9)
+  [1]=>
+  int(10)
+  ["member"]=>
+  int(4)
+}

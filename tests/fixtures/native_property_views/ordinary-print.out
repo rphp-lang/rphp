@@ -1,0 +1,42 @@
+DeclaredPrintOwner Object
+(
+    [first] => MutatingPrintChild Object
+        (
+            [child] => 1
+        )
+
+    [last] => after
+)
+state:after,added
+DynamicPrintOwner Object
+(
+    [first] => MutatingPrintChild Object
+        (
+            [child] => 1
+        )
+
+    [last] => before
+)
+state:after,added
+stdClass Object
+(
+    [left] => 2
+    [right] => Array
+        (
+            [0] => 3
+            [1] => 4
+        )
+
+)
+TraitPrintOwner Object
+(
+    [trait] => 5
+)
+InheritedPrintOwner Object
+(
+    [trait] => 5
+)
+CasePrintOwner Object
+(
+    [case] => 6
+)

@@ -1,0 +1,118 @@
+diagnostic:8192:Creation of dynamic property SlotView::$0 is deprecated
+views
+array(3) {
+  [0]=>
+  string(5) "north"
+  [1]=>
+  NULL
+  [2]=>
+  array(1) {
+    ["east"]=>
+    int(4)
+  }
+}
+array(4) {
+  [0]=>
+  string(6) "member"
+  [1]=>
+  NULL
+  [2]=>
+  array(1) {
+    ["east"]=>
+    int(4)
+  }
+  ["caption"]=>
+  string(5) "label"
+}
+array(5) {
+  [0]=>
+  string(5) "north"
+  [1]=>
+  NULL
+  [2]=>
+  array(1) {
+    ["east"]=>
+    int(4)
+  }
+  ["caption"]=>
+  string(5) "label"
+  ["0"]=>
+  string(6) "member"
+}
+members-only
+array(2) {
+  ["caption"]=>
+  string(5) "label"
+  [0]=>
+  string(6) "member"
+}
+raw-debug
+object(SlotView)#2 (5) {
+  [0]=>
+  string(5) "north"
+  [1]=>
+  NULL
+  [2]=>
+  array(1) {
+    ["east"]=>
+    int(4)
+  }
+  ["caption"]=>
+  string(5) "label"
+  ["0"]=>
+  string(6) "member"
+}
+O:8:"SlotView":5:{i:0;s:5:"north";i:1;N;i:2;a:1:{s:4:"east";i:4;}s:7:"caption";s:5:"label";s:1:"0";s:6:"member";}
+array(3) {
+  [0]=>
+  string(6) "member"
+  [1]=>
+  NULL
+  [2]=>
+  array(1) {
+    ["east"]=>
+    int(4)
+  }
+}
+array(4) {
+  [0]=>
+  string(6) "member"
+  [1]=>
+  NULL
+  [2]=>
+  array(1) {
+    ["east"]=>
+    int(4)
+  }
+  ["caption"]=>
+  string(5) "label"
+}
+string(5) "label"
+array(4) {
+  [0]=>
+  string(6) "member"
+  [1]=>
+  NULL
+  [2]=>
+  array(1) {
+    ["east"]=>
+    int(4)
+  }
+  [3]=>
+  string(4) "last"
+}
+array(3) {
+  [0]=>
+  string(5) "north"
+  [1]=>
+  NULL
+  [2]=>
+  array(1) {
+    ["east"]=>
+    int(4)
+  }
+}
+cycle
+O:13:"SplFixedArray":1:{i:0;r:1;}
+bool(true)
+int(1)

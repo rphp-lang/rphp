@@ -49,7 +49,7 @@ pub(crate) fn array_cast(receiver: &Value, eg: &ExecutorGlobals) -> Option<Value
     Some(Value::array(member_properties(receiver, eg)))
 }
 
-pub(super) fn member_properties(receiver: &Value, eg: &ExecutorGlobals) -> PhpArray {
+pub(in crate::stdlib) fn member_properties(receiver: &Value, eg: &ExecutorGlobals) -> PhpArray {
     let object = receiver.as_object().expect("native array receiver");
     let mut result = PhpArray::new();
     for slot in eg
@@ -87,6 +87,184 @@ pub(super) fn member_properties(receiver: &Value, eg: &ExecutorGlobals) -> PhpAr
         }
     });
     result
+}
+
+/// These native declaration spellings live for the process lifetime. Keep only
+/// the mutable lookup key request-owned, rather than allocating a second copy
+/// of the same label for diagnostics on every registration.
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+pub(super) fn register_method_identity(
+    eg: &mut ExecutorGlobals,
+    pointer: *const FunctionCommon,
+    owner: &'static str,
+    name: &'static str,
+) {
+    macro_rules! spellings {
+        ($owner:literal; $($method:literal),+ $(,)?) => {
+            match name {
+                $($method => Some(concat!($owner, "::", $method)),)+
+                _ => None,
+            }
+        };
+    }
+    let display = match owner {
+        "ArrayObject" => spellings!("ArrayObject";
+            "__debugInfo", "exchangeArray", "getArrayCopy", "getIterator",
+            "asort", "ksort", "natsort", "natcasesort", "uasort", "uksort",
+            "__construct", "getFlags", "setFlags", "getIteratorClass", "setIteratorClass",
+            "serialize", "unserialize", "__serialize", "__unserialize"),
+        "ArrayIterator" => spellings!("ArrayIterator";
+            "__debugInfo", "getArrayCopy", "asort", "ksort", "natsort", "natcasesort",
+            "uasort", "uksort", "__construct", "getFlags", "setFlags",
+            "rewind", "current", "key", "next", "valid", "seek",
+            "serialize", "unserialize", "__serialize", "__unserialize"),
+        "SplFixedArray" => spellings!("SplFixedArray";
+            "__construct", "getSize", "setSize", "count", "toArray", "fromArray",
+            "jsonSerialize", "getIterator", "offsetGet", "offsetSet", "offsetExists",
+            "offsetUnset", "__serialize", "__unserialize"),
+        _ => None,
+    };
+    if let Some(display) = display {
+        eg.function_table
+            .insert(display.to_ascii_lowercase(), pointer);
+        eg.register_internal_function_static_display_name(pointer, display);
+    } else {
+        eg.function_table
+            .insert(internal_method_lookup_name(owner, name), pointer);
+        eg.register_internal_function_display_name(
+            pointer,
+            internal_method_display_name(owner, name),
+        );
+    }
+    eg.method_declaring_class.insert(pointer, owner.into());
+}
+
+/// Initialize names in the final descriptor rather than moving the complete
+/// InternalFunction through the consuming parameter-name builder. These native
+/// declarations start without names, so no previous label storage is replaced.
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+pub(super) fn boxed_method(
+    handler: InternalFunctionHandler,
+    required: u32,
+    names: &[&'static str],
+) -> Box<InternalFunction> {
+    let mut function = Box::new(make_internal_method(
+        handler,
+        names.len() as u32 + 1,
+        required,
+        vec![],
+    ));
+    function.common.sig.param_names = names
+        .iter()
+        .map(|name| std::borrow::Cow::Borrowed(*name))
+        .collect();
+    function
+}
+
+#[cfg(test)]
+mod registration_identity_tests {
+    use super::*;
+
+    #[test]
+    fn borrowed_and_fallback_native_method_spellings_preserve_identity() {
+        for names in [&[][..], &["CaseName", "\u{3b2}eta"][..]] {
+            let function = boxed_method(debug_info, names.len() as u32, names);
+            let original = make_internal_method(
+                debug_info,
+                names.len() as u32 + 1,
+                names.len() as u32,
+                names.iter().map(|name| (*name).to_string()).collect(),
+            );
+            assert_eq!(function.common.sig.num_args, original.common.sig.num_args);
+            assert_eq!(
+                function.common.sig.required_num_args,
+                original.common.sig.required_num_args
+            );
+            assert_eq!(
+                function.common.sig.this_offset,
+                original.common.sig.this_offset
+            );
+            assert_eq!(
+                function.common.sig.param_names,
+                original.common.sig.param_names
+            );
+            assert!(
+                function
+                    .common
+                    .sig
+                    .param_names
+                    .iter()
+                    .all(|name| { matches!(name, std::borrow::Cow::Borrowed(_)) })
+            );
+        }
+        for (owner, name) in [
+            ("ArrayObject", "__debugInfo"),
+            ("ArrayIterator", "getArrayCopy"),
+            ("SplFixedArray", "__unserialize"),
+            ("FutureNative", "MixedCase"),
+            ("UnicodeNative", "\u{00c9}cho"),
+        ] {
+            let mut eg = ExecutorGlobals::new();
+            let function = Box::new(make_internal_method(debug_info, 1, 0, vec![]));
+            let pointer = &function.common as *const FunctionCommon;
+            register_method_identity(&mut eg, pointer, owner, name);
+            let display = format!("{owner}::{name}");
+            assert_eq!(eg.function_table[&display.to_lowercase()], pointer);
+            assert_eq!(
+                eg.internal_function_display_name(pointer),
+                Some(display.as_str())
+            );
+            assert_eq!(eg.method_declaring_class[&pointer], owner);
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+pub(in crate::stdlib) fn debug_projection(receiver: &Value, eg: &ExecutorGlobals) -> Option<Value> {
+    let object = receiver.as_object()?;
+    let key = native_storage_key(&object)?;
+    let storage = object.get_property(key);
+    let self_backed = storage.and_then(Value::object_identity) == receiver.object_identity();
+    let storage = (!self_backed).then(|| {
+        storage
+            .map(Value::clone_for_php_storage)
+            .unwrap_or_else(|| Value::array(PhpArray::new()))
+    });
+    let owner = if key == ARRAY_ITERATOR_STORAGE {
+        "ArrayIterator"
+    } else {
+        "ArrayObject"
+    };
+    drop(object);
+    let mut properties = member_properties(receiver, eg);
+    if let Some(storage) = storage {
+        properties.set_str(&format!("\0{owner}\0storage"), storage);
+    }
+    Some(Value::array(properties))
+}
+
+#[cold]
+#[inline(never)]
+// SAFETY: compiler-generated code retains its normal calling convention.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+fn debug_info(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        debug_projection(arg!(ed, 0), eg).expect("native array receiver")
+    );
 }
 
 #[inline]
@@ -691,14 +869,37 @@ fn iterator(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
 // SAFETY: compiler-generated code retains its normal calling convention.
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
 pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
-    let mut functions = Vec::new();
+    // Six projection methods plus the sorting, options, cursor and wire batches.
+    let mut functions = Vec::with_capacity(6 + 12 + 8 + 6 + 8);
+    // Include the offsetSet descriptor installed with each native class.
+    // Installing the known batches must not repeatedly move prior signatures.
+    eg.reserve_internal_method_contracts("ArrayObject", 20);
+    eg.reserve_internal_method_contracts("ArrayIterator", 22);
     for (owner, method, handler, required, names, hints, result) in [
+        (
+            "ArrayObject",
+            "__debugInfo",
+            debug_info as InternalFunctionHandler,
+            0,
+            &[] as &'static [&'static str],
+            vec![],
+            ParamTypeHint::Array,
+        ),
+        (
+            "ArrayIterator",
+            "__debugInfo",
+            debug_info,
+            0,
+            &[],
+            vec![],
+            ParamTypeHint::Array,
+        ),
         (
             "ArrayObject",
             "exchangeArray",
             exchange as InternalFunctionHandler,
             1,
-            vec!["array"],
+            &["array"],
             vec![ParamTypeHint::Union(vec![
                 ParamTypeHint::ClassName("object".into()),
                 ParamTypeHint::Array,
@@ -710,7 +911,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             "getArrayCopy",
             copy,
             0,
-            vec![],
+            &[],
             vec![],
             ParamTypeHint::Array,
         ),
@@ -719,7 +920,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             "getArrayCopy",
             copy,
             0,
-            vec![],
+            &[],
             vec![],
             ParamTypeHint::Array,
         ),
@@ -728,7 +929,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             "getIterator",
             iterator,
             0,
-            vec![],
+            &[],
             vec![],
             ParamTypeHint::ClassName("Iterator".into()),
         ),
@@ -738,31 +939,18 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             method,
             false,
             required,
-            &names,
+            names,
             hints.clone(),
-            result.clone(),
-            &vec![None; names.len()],
+            result,
+            &[None][..names.len()],
             true,
         );
-        let mut function = Box::new(make_internal_method(
-            handler,
-            names.len() as u32 + 1,
-            required as u32,
-            names.iter().map(|n| n.to_string()).collect(),
-        ));
+        let mut function = boxed_method(handler, required as u32, names);
         function.common.sig.param_type_hints = hints;
         function.handler_validates_types = true;
         let ptr = &function.common as *const FunctionCommon;
-        eg.function_table.insert(
-            internal_method_display_name(owner, method).to_ascii_lowercase(),
-            ptr,
-        );
-        eg.method_declaring_class.insert(ptr, owner.into());
-        eg.register_internal_function_display_name(
-            ptr,
-            internal_method_display_name(owner, method),
-        );
-        eg.register_internal_function_reflection_metadata(ptr, vec![None; names.len()], "SPL");
+        register_method_identity(eg, ptr, owner, method);
+        eg.register_internal_function_extension(ptr, "SPL");
         functions.push(function);
     }
     functions.extend(sorting::register(eg));

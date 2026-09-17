@@ -308,12 +308,12 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             (Kind::UserValues, user_values),
             (Kind::UserKeys, user_keys),
         ] {
-            let names = if kind.callback() {
-                vec!["callback"]
+            let names: &'static [&'static str] = if kind.callback() {
+                &["callback"]
             } else if kind.flags() {
-                vec!["flags"]
+                &["flags"]
             } else {
-                vec![]
+                &[]
             };
             let hints = if kind.callback() {
                 vec![ParamTypeHint::Callable]
@@ -322,52 +322,39 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             } else {
                 vec![]
             };
-            let defaults = if kind.callback() {
-                vec![None]
-            } else if kind.flags() {
+            let defaults = if kind.flags() {
                 vec![Some(Value::long(0))]
             } else {
                 vec![]
             };
             let required = usize::from(kind.callback());
+            let diagnostics: &[Option<&str>] = if kind.flags() {
+                &[Some("SORT_REGULAR")]
+            } else if kind.callback() {
+                &[None]
+            } else {
+                &[]
+            };
             eg.register_internal_method_contract(
                 owner,
                 kind.name(),
                 false,
                 required as u32,
-                &names,
+                names,
                 hints.clone(),
                 ParamTypeHint::ClassName("true".into()),
-                &if kind.flags() {
-                    vec![Some("SORT_REGULAR")]
-                } else {
-                    vec![None; names.len()]
-                },
+                diagnostics,
                 true,
             );
-            let mut function = Box::new(make_internal_method(
-                handler,
-                names.len() as u32 + 1,
-                required as u32,
-                names.iter().map(|n| n.to_string()).collect(),
-            ));
+            let mut function = boxed_method(handler, required as u32, names);
             function.common.sig.param_type_hints = hints;
             function.handler_validates_types = true;
             let ptr = &function.common as *const FunctionCommon;
-            let display = internal_method_display_name(owner, kind.name());
-            eg.function_table.insert(display.to_ascii_lowercase(), ptr);
-            eg.method_declaring_class.insert(ptr, owner.into());
-            eg.register_internal_function_display_name(ptr, display);
+            register_method_identity(eg, ptr, owner, kind.name());
             eg.register_internal_function_reflection_metadata_with_diagnostics(
                 ptr,
                 defaults,
-                if kind.flags() {
-                    &[Some("SORT_REGULAR")]
-                } else if kind.callback() {
-                    &[None]
-                } else {
-                    &[]
-                },
+                diagnostics,
                 "SPL",
             );
             functions.push(function);

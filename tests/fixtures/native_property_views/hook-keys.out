@@ -1,0 +1,21 @@
+array(3) {
+  [0]=>
+  string(6) "second"
+  ["00"]=>
+  int(3)
+  ["x"]=>
+  int(4)
+}
+array(1) {
+  [0]=>
+  int(3)
+}
+array(1) {
+  [0]=>
+  int(3)
+}
+SplFixedArray::__serialize:0:0:array:declared
+SplFixedArray::__unserialize:1:1:void:declared
+data:array
+ArrayObject::__debugInfo:0:0:array:tentative
+ArrayIterator::__debugInfo:0:0:array:tentative

@@ -204,23 +204,27 @@ fn set_iterator_class(
 // SAFETY: compiler-generated code retains its normal calling convention.
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
 pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(8);
     for owner in ["ArrayObject", "ArrayIterator"] {
         let storage_hint = ParamTypeHint::Union(vec![
             ParamTypeHint::ClassName("object".into()),
             ParamTypeHint::Array,
         ]);
         let mut constructors = (
-            vec!["array", "flags"],
+            if owner == "ArrayObject" {
+                &["array", "flags", "iteratorClass"] as &'static [&'static str]
+            } else {
+                &["array", "flags"]
+            },
             vec![storage_hint, ParamTypeHint::Int],
             vec![Some(Value::array(PhpArray::new())), Some(Value::long(0))],
         );
         if owner == "ArrayObject" {
-            constructors.0.push("iteratorClass");
             constructors.1.push(ParamTypeHint::String);
             constructors.2.push(Some(Value::string("ArrayIterator")));
         }
-        let mut methods = vec![
+        let mut methods = Vec::with_capacity(if owner == "ArrayObject" { 5 } else { 3 });
+        methods.extend([
             (
                 "__construct",
                 fn_array_iterator_construct as InternalFunctionHandler,
@@ -234,7 +238,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 "getFlags",
                 get_flags,
                 0,
-                vec![],
+                &[],
                 vec![],
                 vec![],
                 ParamTypeHint::Int,
@@ -243,19 +247,19 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 "setFlags",
                 set_flags,
                 1,
-                vec!["flags"],
+                &["flags"],
                 vec![ParamTypeHint::Int],
-                vec![None],
+                vec![],
                 ParamTypeHint::Void,
             ),
-        ];
+        ]);
         if owner == "ArrayObject" {
             methods.extend([
                 (
                     "getIteratorClass",
                     get_iterator_class as InternalFunctionHandler,
                     0,
-                    vec![],
+                    &[] as &'static [&'static str],
                     vec![],
                     vec![],
                     ParamTypeHint::String,
@@ -264,9 +268,9 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                     "setIteratorClass",
                     set_iterator_class,
                     1,
-                    vec!["iteratorClass"],
+                    &["iteratorClass"],
                     vec![ParamTypeHint::String],
-                    vec![None],
+                    vec![],
                     ParamTypeHint::Void,
                 ),
             ]);
@@ -277,25 +281,17 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 name,
                 false,
                 required,
-                &names,
+                names,
                 hints.clone(),
                 return_type,
-                &vec![None; names.len()],
+                &[None; 3][..names.len()],
                 name != "__construct",
             );
-            let mut function = Box::new(make_internal_method(
-                handler,
-                names.len() as u32 + 1,
-                required,
-                names.iter().map(|name| name.to_string()).collect(),
-            ));
+            let mut function = boxed_method(handler, required, names);
             function.common.sig.param_type_hints = hints;
             function.handler_validates_types = true;
             let ptr = &function.common as *const FunctionCommon;
-            let display = internal_method_display_name(owner, name);
-            eg.function_table.insert(display.to_ascii_lowercase(), ptr);
-            eg.method_declaring_class.insert(ptr, owner.into());
-            eg.register_internal_function_display_name(ptr, display);
+            register_method_identity(eg, ptr, owner, name);
             eg.register_internal_function_reflection_metadata(ptr, defaults, "SPL");
             result.push(function);
         }

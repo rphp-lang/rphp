@@ -7,7 +7,66 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The latest measured AMD64 Linux PHP 8.5 checkpoint is `gettext-extension`,
+The latest measured AMD64 Linux PHP 8.5 checkpoint is
+`native-container-purpose-property-views`, against `49cfe018`: **+10/-0**,
+confirmed by PHP 8.5.10. The same **8,060 cases reach 7,245 pass / 370 fail /
+194 skip / 250 unsupported / one XFAIL**, without lost passes, timeout, crash,
+changed expectations or moved failure stages. Nine gains are in SPL and one
+is the adjacent ordinary-object `print_r()` case `Zend/tests/bug71067.phpt`.
+
+ArrayObject/ArrayIterator debug views and SplFixedArray array/debug/wire views
+now preserve their distinct property tables, raw versus canonical keys,
+reference/COW ownership, recursion, overrides and diagnostic publication order.
+SplFixedArray gains exact `__serialize()`/`__unserialize()` contracts. Ordinary
+printing retains live declared slots and snapshots dynamic values across hooks.
+The existing global-function inventory is unchanged. Fourteen original
+regressions cover these boundaries and the profile-backed registration,
+lookup and constructor-cache work removal; the focused packet is **890/890**.
+
+The checked five-configuration matrix passes **5,729/5,397/5,800/5,822/5,873**
+tests (13/13/13/13/16 ignored, none filtered), plus all-features/all-targets.
+All 50 correctness/framework gates pass, including fresh gain oracles, exact
+family pass sets, Composer/Symfony S0-S3, runner, unsafe and public-data checks.
+A disk-reserve rejection before any matrix build was resolved with an isolated,
+hash-identical validation checkout on another filesystem, not a lower reserve,
+different profile or reduced coverage. Compiler warnings match the preceding
+accepted no-default configuration. Final fixture whitespace normalization is
+separately proven token-equivalent and byte-exact before/after, with all eight
+affected E2E rerun; production sources and the measured ELF are unchanged.
+No dependency, opcode or common VM/Value
+layout change; unsafe remains **1,626 blocks / 289 functions**.
+
+All **164 fixed-anchor 32-pair controls** pass the common **1.65%** and pay-use
+**5%** ceilings: maxima **+1.440%/+4.165%**. Dynamic clone's nominal +1% finding
+remains explicit (+1.440% cumulative, +1.270% versus immediate parent).
+Rejected candidates and instruction profiles remain in the evidence; no
+unchanged failed timing was rerolled. The shared-host guard is diagnostic,
+not proof of exclusive timing. New-API costs versus PHP are fixed-array wire
+**+55.307%**, native debug **-12.229%** and deque print **-2.810%**; these are
+absolute optimization baselines, not absent-parent regression or parity claims.
+
+`ArrayObject/bug74669.phpt` remains an explicit object-handle lifetime holdout.
+Three fatal-print oracle observations prove ordering but do not claim exact
+CLI channel/trace equivalence. Broader SPL, 32-bit and OOM equivalence remain
+outside this checkpoint. Next read-only admission ranks reference-mode
+iteration failures; require ten genuinely shared reference-pass/current-fail
+cases and a pay-for-use design before touching generator or object iteration.
+
+SHA-256 evidence:
+
+- Release: `844c09f62448ee93488f89e9b8f93f97d83d30b670026624bb5f8bc4736fa6a2`.
+- Complete technical record: `1a2837e481f92825334805bfd0b6199f9af5ad46954144317ceee595becc2c88`.
+- Final fixture-hygiene amendment: `2bd53b8a497e13ee132edc721921980537ade8cb204a18abb1c9f965b6b1e090`.
+- Matrix: `1109044b2c583abebeb7aa54b7a96a290f7a94bd3331ad504d550ea9c33b8d04`.
+- Fresh reference gains: `3d30a738a6ed9a31330fde1205c392aa7c7b99f4fbf1b80bc125406d281d664d`.
+- Zend/lang manifest / pass set: `f301fe024ec127cc7ec793b314f8f514e602c36873734f82272711ebf9e012f4` / `26c0e5ffd27f26c45b1e6faca6f0c9100cdc93b5f332342d8c28129027336473`.
+- SPL manifest / pass set: `623cb5699374b46623da5d8b27445b491117a219de1bf68652019c2e7f7e6911` / `d25cfe5049f316866c9e795dcdeff7ccf7091e1f1f30f8f8b50da9abf72a9319`.
+- Strings/array pass set: `482d95e26cbbd4c66abd2b34435b39c6042e65340215b02697de5fb9851aaa06`.
+- Performance decision / raw timing: `9cc3a43fa095c9fcb86487560a68aa3748c0502ad3e6d09c0554cdd9cae02a36` / `4cbb3092f62f899160ccb4fcfd6093382311873d3f77a0f71b1d407e21dfd931`.
+
+### Preceding gettext checkpoint
+
+The preceding measured AMD64 Linux PHP 8.5 checkpoint is `gettext-extension`,
 against `d155bf36`: **+18/-0** upstream gettext passes, confirmed by PHP
 8.5.10. The selected ledger now has **8,060 cases: 7,235 pass / 380 fail / 194
 skip / 250 unsupported / one XFAIL**, with no timeout or crash. This is tested

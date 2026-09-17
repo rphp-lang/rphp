@@ -1199,12 +1199,10 @@ impl ExecutorGlobals {
         &mut self,
         frame: usize,
     ) -> Option<FunctionArgumentSnapshot> {
-        if self
-            .function_argument_state
-            .snapshots
-            .last()
-            .is_some_and(|(candidate, _)| *candidate == frame)
-        {
+        // Most internal calls never publish an argument snapshot. Stop before
+        // setting up the fallback reverse scan for that absent side state.
+        let (last_frame, _) = self.function_argument_state.snapshots.last()?;
+        if *last_frame == frame {
             return self
                 .function_argument_state
                 .snapshots
@@ -1837,6 +1835,11 @@ impl ExecutorGlobals {
     }
 
     pub(crate) fn end_error_suppression(&mut self, frame: usize) {
+        // Ordinary calls cannot own a suppression entry when none exists.
+        // Keep the reverse lookup and restoration semantics for live scopes.
+        if self.error_suppression_frames.is_empty() {
+            return;
+        }
         if let Some(index) = self
             .error_suppression_frames
             .iter()
@@ -7399,12 +7402,14 @@ impl ExecutorGlobals {
                     let parent_initial = parent_prefix.as_bytes().first();
                     let mut inherited = Vec::new();
                     self.function_table.iter().for_each(|(k, v)| {
-                        // Most registry keys belong to another owner (or a
-                        // global function). Reject mismatched initials/lengths
+                        // The length is stored in the table entry. Reject a
+                        // short global name before touching its separate heap
+                        // storage, then reject mismatched initials/delimiters
                         // before comparing the whole potentially long prefix.
                         // This is only a necessary condition; the exact
                         // canonical prefix check still decides membership.
-                        if k.as_bytes().first() != parent_initial
+                        if k.len() < parent_prefix.len()
+                            || k.as_bytes().first() != parent_initial
                             || k.as_bytes().get(parent_prefix.len() - 1) != Some(&b':')
                             || !k.starts_with(&parent_prefix)
                         {
@@ -9987,12 +9992,11 @@ impl ExecutorGlobals {
             stats::inc_find_function_exact_hit();
             return Some(ptr);
         }
-        // Slow path: allocate lowercase string
-        let lower = name.to_lowercase();
+        let lower = Self::normalize_missing_function_name(name);
         if lower != name {
             let found = self
                 .function_table
-                .get(&lower)
+                .get(lower.as_ref())
                 .copied()
                 .or_else(|| self.find_inherited_function(&lower, name));
             if found.is_some() {
@@ -10007,6 +10011,25 @@ impl ExecutorGlobals {
                 stats::inc_find_function_miss();
             }
             found
+        }
+    }
+
+    // Keep case conversion out of inlined exact-hit lookups. Optional-method
+    // misses still borrow an already normalized name; Unicode names retain
+    // the same lowercase expansion as registration.
+    #[cold]
+    #[inline(never)]
+    // SAFETY: only the placement of ordinary Rust code changes, not its ABI.
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zdiagnostic"))]
+    fn normalize_missing_function_name(name: &str) -> std::borrow::Cow<'_, str> {
+        if name.is_ascii() {
+            if !name.bytes().any(|byte| byte.is_ascii_uppercase()) {
+                std::borrow::Cow::Borrowed(name)
+            } else {
+                std::borrow::Cow::Owned(name.to_ascii_lowercase())
+            }
+        } else {
+            std::borrow::Cow::Owned(name.to_lowercase())
         }
     }
 
@@ -11222,6 +11245,62 @@ mod stdlib_capacity_tests {
     }
 
     #[test]
+    fn function_miss_normalization_preserves_boundaries_aliases_and_late_registration() {
+        fn handler(
+            _: *mut crate::vm::frame::ExecuteData,
+            _: *mut crate::value::Value,
+            _: &mut ExecutorGlobals,
+        ) -> Result<(), crate::vm::execute::VmError> {
+            Ok(())
+        }
+        let function = crate::compiler::make_internal_function(handler, 0, 0, vec![]);
+        let pointer = &function.common as *const _;
+        let mut eg = ExecutorGlobals::new();
+        let mut names = vec![String::new(), "MiXeD".into(), "\u{130}TEM".into()];
+        for length in [1, 31, 127, 128, 129, 1024] {
+            names.push(format!("{}Z", "a".repeat(length - 1)));
+        }
+        for name in names {
+            assert_eq!(eg.find_function(&name), None);
+            assert_eq!(eg.find_function(&name.to_lowercase()), None);
+            eg.register_function(&name, pointer).unwrap();
+            assert_eq!(eg.find_function(&name), Some(pointer));
+            assert_eq!(eg.find_function(&name.to_lowercase()), Some(pointer));
+            assert_eq!(eg.find_function(&format!("{name}_absent")), None);
+        }
+        assert_eq!(eg.find_function("ChOp"), None);
+        eg.register_function("rtrim", pointer).unwrap();
+        for spelling in ["chop", "ChOp", "CHOP"] {
+            assert_eq!(eg.find_function(spelling), Some(pointer));
+        }
+
+        // Only the parent owns a method table entry: the miss path must keep
+        // the original class spelling when resolving inherited declarations.
+        let tokens = crate::lexer::Lexer::new(
+            "<?php class MixedParent {} class MixedChild extends MixedParent {}",
+        )
+        .tokenize()
+        .unwrap();
+        let statements = crate::parser::Parser::new(tokens).parse().unwrap();
+        let compiled = crate::compiler::compile::Compiler::new()
+            .compile(&statements)
+            .unwrap();
+        for definition in compiled.class_defs.into_iter().chain(
+            compiled
+                .runtime_class_defs
+                .into_iter()
+                .map(|(_, class)| class),
+        ) {
+            eg.register_class(definition).unwrap();
+        }
+        assert_eq!(eg.find_function("MixedChild::LaTe"), None);
+        eg.register_function("MixedParent::Late", pointer).unwrap();
+        for spelling in ["MixedChild::LaTe", "mixedchild::late", "MIXEDCHILD::LATE"] {
+            assert_eq!(eg.find_function(spelling), Some(pointer));
+        }
+    }
+
+    #[test]
     fn method_lookup_separator_matches_first_substring_without_normalizing() {
         let alphabet = ["a", "Z", ":", "\0", "\u{130}", "\u{1f642}"];
         let mut level = vec![String::new()];
@@ -11812,6 +11891,7 @@ mod stdlib_capacity_tests {
         let _functions = crate::stdlib::register_stdlib(&mut eg);
         let pointer = eg.find_function("IteratorIterator::current").unwrap();
         for key in [
+            "",
             "x",
             "iteratoriterator",
             "iteratoriteratorx::not_inherited",
@@ -11819,6 +11899,14 @@ mod stdlib_capacity_tests {
             "unrelated_______::not_inherited",
         ] {
             eg.function_table.insert(key.into(), pointer);
+        }
+        // Names shorter than the owner prefix can be discarded without
+        // dereferencing their storage. At and beyond the boundary, the exact
+        // prefix still decides membership, including multibyte spellings.
+        for length in 0..=32 {
+            eg.function_table.insert("i".repeat(length), pointer);
+            eg.function_table
+                .insert(format!("{}:", "\u{e9}".repeat(length)), pointer);
         }
         let mut expected: Vec<_> = eg
             .function_table
@@ -12358,6 +12446,56 @@ mod stdlib_capacity_tests {
                 .as_long(),
             Some(1)
         );
+    }
+
+    #[test]
+    fn sparse_argument_take_preserves_missing_and_non_lifo_owners() {
+        for order in [[3, 2, 1], [1, 3, 2], [2, 1, 3]] {
+            let mut eg = ExecutorGlobals::new();
+            assert!(eg.take_function_arguments(1).is_none());
+            for frame in 1..=3 {
+                eg.publish_function_arguments(
+                    frame,
+                    super::FunctionArgumentSnapshot {
+                        first: frame as u32,
+                        values: vec![crate::value::Value::long(frame as i64)],
+                    },
+                );
+            }
+            assert!(eg.take_function_arguments(99).is_none());
+            for (removed, frame) in order.into_iter().enumerate() {
+                let snapshot = eg.take_function_arguments(frame).unwrap();
+                assert_eq!(snapshot.first, frame as u32);
+                assert_eq!(snapshot.values[0].as_long(), Some(frame as i64));
+                assert!(eg.take_function_arguments(frame).is_none());
+                assert_eq!(eg.function_argument_state.snapshots.len(), 2 - removed);
+            }
+            assert!(eg.function_argument_state.is_empty());
+            assert!(eg.take_function_arguments(99).is_none());
+            assert!(eg.function_argument_state.snapshots.capacity() >= 3);
+        }
+    }
+
+    #[test]
+    fn sparse_suppression_end_preserves_other_and_nested_owners() {
+        let mut eg = ExecutorGlobals::new();
+        eg.set_error_reporting(8);
+        eg.end_error_suppression(99);
+        assert_eq!(eg.error_reporting, 8);
+        eg.set_error_reporting(crate::PHP_E_ALL);
+        eg.begin_error_suppression(1);
+        eg.begin_error_suppression(2);
+        eg.end_error_suppression(99);
+        assert_eq!(eg.error_suppression_frames.len(), 2);
+        assert_eq!(eg.error_reporting, 4_437);
+        eg.end_error_suppression(2);
+        assert_eq!(eg.error_suppression_frames.len(), 1);
+        assert_eq!(eg.error_reporting, 4_437);
+        eg.end_error_suppression(1);
+        assert_eq!(eg.error_reporting, crate::PHP_E_ALL);
+        assert!(eg.error_suppression_frames.is_empty());
+        eg.end_error_suppression(99);
+        assert_eq!(eg.error_reporting, crate::PHP_E_ALL);
     }
 
     #[test]

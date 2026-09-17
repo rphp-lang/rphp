@@ -605,7 +605,7 @@ fn seek(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Resul
 }
 
 pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
-    let mut functions = Vec::new();
+    let mut functions = Vec::with_capacity(6);
     for (name, handler, return_type) in [
         (
             "rewind",
@@ -626,11 +626,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ("valid", valid, ParamTypeHint::Bool),
         ("seek", seek, ParamTypeHint::Void),
     ] {
-        let names = if name == "seek" {
-            vec!["offset"]
-        } else {
-            vec![]
-        };
+        let names: &'static [&'static str] = if name == "seek" { &["offset"] } else { &[] };
         let hints = if name == "seek" {
             vec![ParamTypeHint::Int]
         } else {
@@ -641,30 +637,19 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             name,
             false,
             names.len() as u32,
-            &names,
+            names,
             hints.clone(),
             return_type,
-            &vec![None; names.len()],
+            &[None][..names.len()],
             true,
         );
-        let mut function = Box::new(make_internal_method(
-            handler,
-            names.len() as u32 + 1,
-            names.len() as u32,
-            names.iter().map(|name| name.to_string()).collect(),
-        ));
+        let mut function = boxed_method(handler, names.len() as u32, names);
         function.common.sig.param_type_hints = hints;
         function.handler_validates_types = true;
         let ptr = &function.common as *const FunctionCommon;
-        eg.function_table
-            .insert(internal_method_display_name("arrayiterator", name), ptr);
-        eg.method_declaring_class
-            .insert(ptr, "ArrayIterator".into());
-        eg.register_internal_function_display_name(
-            ptr,
-            internal_method_display_name("ArrayIterator", name),
-        );
-        eg.register_internal_function_reflection_metadata(ptr, vec![None; names.len()], "SPL");
+        register_method_identity(eg, ptr, "ArrayIterator", name);
+        // All parameters are required: an absent default entry is canonical.
+        eg.register_internal_function_extension(ptr, "SPL");
         functions.push(function);
     }
     functions

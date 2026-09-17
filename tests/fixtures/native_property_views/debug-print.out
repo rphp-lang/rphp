@@ -1,0 +1,39 @@
+root
+hook
+PrintedView Object
+(
+    [shown] => 23
+    [loop] => PrintedView Object
+ *RECURSION*
+)
+nested
+hook
+Array
+(
+    [box] => PrintedView Object
+        (
+            [shown] => 23
+            [loop] => PrintedView Object
+ *RECURSION*
+        )
+
+)
+returned
+hook
+PrintedView Object
+(
+    [shown] => 23
+    [loop] => PrintedView Object
+ *RECURSION*
+)
+deque
+SplDoublyLinkedList Object
+(
+    [flags:SplDoublyLinkedList:private] => 0
+    [dllist:SplDoublyLinkedList:private] => Array
+        (
+            [0] => one
+            [1] => two
+        )
+
+)
