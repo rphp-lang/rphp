@@ -8352,6 +8352,12 @@ impl ExecutorGlobals {
         {
             return flag == 2;
         }
+        // Private VM envelopes deliberately have no PHP class identity and
+        // therefore cannot declare or inherit __destruct. Keep them out of
+        // the dynamic-name resolver used by class-id-zero user objects.
+        if class_name.is_empty() {
+            return false;
+        }
         self.resolve_class_destructor_flag(class_id, class_name)
     }
 
@@ -8587,6 +8593,11 @@ impl ExecutorGlobals {
     /// same object handles. `cases()` and constant expressions intentionally
     /// publish only the individual values they materialize.
     pub(crate) fn publish_backed_enum_case_handles(&self, class_id: u32) {
+        // Internal enums already have their backing lookup defined by native
+        // registration. A lookup does not materialize their other cases.
+        if self.class_id_is_internal(class_id) {
+            return;
+        }
         let Some(class) = self.class_by_id(class_id) else {
             return;
         };

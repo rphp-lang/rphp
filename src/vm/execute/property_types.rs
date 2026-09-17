@@ -736,6 +736,17 @@ fn prepare_property_assignment_with_stringable(
     called_class: &str,
     receiver: *const Value,
 ) -> Result<Result<(Value, Option<ScalarCoercionDiagnostic>), String>, VmError> {
+    // Only a weak object-to-string retry needs to retain a second owner.
+    // Ordinary class-typed/scalar writes can transfer the prepared value;
+    // failed writes still leave their canonical operand for frame cleanup.
+    if strict
+        || value.dereferenced().value_type() != ValueType::Object
+        || !property_type_accepts_string(&definition.type_hint)
+    {
+        return Ok(prepare_property_assignment_with_diagnostic(
+            value, definition, eg, strict, called_class,
+        ));
+    }
     let prepared = prepare_property_assignment_with_diagnostic(
         value.clone(),
         definition,
@@ -743,11 +754,7 @@ fn prepare_property_assignment_with_stringable(
         strict,
         called_class,
     );
-    if prepared.is_ok()
-        || strict
-        || value.dereferenced().value_type() != ValueType::Object
-        || !property_type_accepts_string(&definition.type_hint)
-    {
+    if prepared.is_ok() {
         return Ok(prepared);
     }
     let Some(rendered) = call_object_string_conversion(eg, &value)? else {

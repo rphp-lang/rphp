@@ -622,6 +622,8 @@ pub(crate) trait NativeObjectState: std::any::Any {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct NativeArrayOptions {
     pub flags: u16,
+    /// A view of this object's own member table is not a strong self edge.
+    pub self_backed: bool,
     pub iterator_class_id: u32,
 }
 
@@ -1651,6 +1653,17 @@ fn release_object_handle(identity: usize, handle: u32) {
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zzobject_release"))]
 fn release_final_object(owner: Rc<RefCell<PhpObject>>, handle: u32) {
     let identity = Rc::as_ptr(&owner) as usize;
+    drop(owner);
+    release_object_handle(identity, handle);
+}
+
+// Closures participate in the same object store: their bound receiver and
+// captures retire before the closure's own handle is returned for reuse.
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zzobject_release"))]
+fn release_final_closure(owner: Rc<PhpClosure>) {
+    let identity = Rc::as_ptr(&owner) as usize;
+    let handle = owner.object_handle;
     drop(owner);
     release_object_handle(identity, handle);
 }
@@ -5636,6 +5649,60 @@ mod closure_ownership_tests {
         }));
         assert!(rejected.is_err());
     }
+
+    #[test]
+    fn final_capture_proof_distinguishes_shared_and_sole_children() {
+        let captured = Value::object(PhpObject::dynamic(
+            "Captured".to_string(),
+            0,
+            HashMap::new(),
+        ));
+        let closure = closure_with_capture(captured.clone());
+        assert!(
+            !closure
+                .as_closure()
+                .unwrap()
+                .final_drop_may_release_cycle_child()
+        );
+        drop(captured);
+        assert!(
+            closure
+                .as_closure()
+                .unwrap()
+                .final_drop_may_release_cycle_child()
+        );
+        let scalar = closure_with_capture(Value::long(1));
+        assert!(
+            !scalar
+                .as_closure()
+                .unwrap()
+                .final_drop_may_release_cycle_child()
+        );
+    }
+
+    #[test]
+    fn duplicate_captures_count_all_owned_edges_before_final_release() {
+        let captured = Value::object(PhpObject::dynamic(
+            "Captured".to_string(),
+            0,
+            HashMap::new(),
+        ));
+        let mut closure = closure_with_capture(captured.clone());
+        closure.push_closure_capture(captured.clone());
+        assert!(
+            !closure
+                .as_closure()
+                .unwrap()
+                .final_drop_may_release_cycle_child()
+        );
+        drop(captured);
+        assert!(
+            closure
+                .as_closure()
+                .unwrap()
+                .final_drop_may_release_cycle_child()
+        );
+    }
 }
 
 /// PHP closure — function pointer + captured values.
@@ -5853,13 +5920,21 @@ impl PhpClosure {
     /// direct cycle-capable children. Duplicate edges count independently,
     /// because they can collectively be the child's only remaining owners.
     fn final_drop_may_release_cycle_child(&self) -> bool {
-        if self.captures.is_empty() && self.static_vars.is_none() {
-            return self.bound_this.as_ref().is_some_and(|value| {
-                value.cycle_node().is_some()
+        if self.static_vars.is_none() {
+            let sole_child = match (self.bound_this.as_ref(), self.captures.as_slice()) {
+                (None, []) => return false,
+                (Some(value), []) | (None, [value]) => Some(value),
+                _ => None,
+            };
+            if let Some(value) = sole_child {
+                // One edge cannot alias another capture. Avoid allocating the
+                // duplicate-edge table while retaining the same final-owner
+                // proof and deep-tree checkpoint for its eventual release.
+                return value.cycle_node().is_some()
                     && value
                         .cycle_strong_count()
-                        .is_some_and(|strong_count| strong_count == 1)
-            });
+                        .is_some_and(|strong_count| strong_count == 1);
+            }
         }
         let mut children = Vec::<((usize, CycleNodeKind), usize, usize)>::new();
         let mut record = |value: &Value| {
@@ -8547,11 +8622,11 @@ impl Drop for Value {
                     let pointer = self.data.ptr as *const PhpClosure;
                     let owner = std::mem::ManuallyDrop::new(Rc::from_raw(pointer));
                     if Rc::strong_count(&owner) == 1 {
-                        release_object_handle(pointer as usize, (*pointer).object_handle);
+                        release_final_closure(std::mem::ManuallyDrop::into_inner(owner));
                     } else {
                         register_cycle_candidate(CycleCandidate::Closure(Rc::downgrade(&owner)));
+                        Rc::decrement_strong_count(pointer);
                     }
-                    Rc::decrement_strong_count(pointer);
                 };
             }
             ValueType::Reference if self.is_owned_reference() => {
@@ -8971,6 +9046,7 @@ mod native_array_options_tests {
         assert!(object.dynamic_properties.is_none());
         let options = NativeArrayOptions {
             flags: 3,
+            self_backed: true,
             iterator_class_id: 42,
         };
         object.set_native_array_options(options);
@@ -8992,6 +9068,7 @@ mod native_array_options_tests {
         properties.set_object_cursor(Some(9));
         let options = NativeArrayOptions {
             flags: 2,
+            self_backed: false,
             iterator_class_id: 17,
         };
         properties.auxiliary.as_mut().unwrap().native_array_options = options;

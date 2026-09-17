@@ -36,6 +36,34 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `object-store-owner-lifecycle` train over `2220926e` adds
+**11 PHP 8.5 passes without losses**. The selected 8,067 cases now reach
+**7,280 pass / 342 fail / 194 skip / 250 unsupported / one XFAIL**. Three Zend
+and eight SPL ArrayObject failures become exact passes; every preceding pass
+set and failure stage is preserved.
+
+Native backing now has one bounded owner-lifecycle contract across typed
+assignment, foreach consumers, frame retirement, closure captures and
+ArrayObject serialization. Explicit self-backing avoids `Rc` cycles, while a
+private iterator envelope retains the owner without publishing an extra object
+ID after native cursor materialization. Ordinary object/property/call paths
+remain outside the cold owner proof and retirement helpers.
+
+Eighteen original E2E cases, ten target PHPT and all 54 correctness/framework
+gates pass. The five Cargo configurations/all-targets are green at
+5,778/5,446/5,849/5,871/5,922 passes. Exact Zend, strings/array, SPL and retained
+family no-loss manifests, S0-S3, unsafe and public hygiene pass. All 180
+fixed-parent controls have exact output; common/pay-use maxima are
+**+0.729%/+4.854%** under the existing 1.65%/5% limits.
+
+Next read-only admission is `filter-value-dispatch-contracts`. Rank the current
+failure manifest by a shared filter dispatch/coercion root cause and require a
+realistic 10--30 reachable-pass yield before implementation. Keep general GC,
+Fiber suspension, public private-iterator materialization, 32-bit and OOM
+equivalence out of that train.
+
+### Preceding tick-callback checkpoint
+
 The accepted `declare-tick-callback-lifecycle` train over `473149c2` adds
 **12 PHP 8.5 passes without losses**, confirmed by fresh PHP 8.5.10 runs.
 The selected ledger grows from 8,060 to **8,067 cases: 7,269 pass / 353 fail /

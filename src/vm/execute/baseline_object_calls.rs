@@ -4659,6 +4659,10 @@ fn op_assign_obj_prop_inner<'a>(
     };
     let mut assigned = if opline._pad & ASSIGN_PROP_MOVE_SOURCE != 0
         && matches!(opline.result_type, OpType::Tmp | OpType::Var)
+        // Keep owner-bearing operands in their canonical TMP until validation
+        // finishes. Exception cleanup must retire them before rebinding a
+        // catch variable, including nested/destructor-capable values.
+        && (val.value_type() as u8) < ValueType::Array as u8
     {
         // The statement compiler proved this source has no later consumer.
         // `val` is no longer used after this transfer.
@@ -5265,7 +5269,12 @@ fn op_assign_obj_prop_inner<'a>(
             }
             if definition_ref.is_typed() && definition_ref.generic_declaration.is_none() {
                 let definition = (*definition_ref).clone();
-                let diagnostic_source = assigned.dereferenced().clone();
+                // Scalar coercion diagnostics only inspect floats/strings.
+                // An object/array clone here would survive catch dispatch
+                // after the original TMP has already been retired.
+                let diagnostic_source = if (assigned.dereferenced().value_type() as u8) < ValueType::Array as u8 {
+                    assigned.dereferenced().clone()
+                } else { Value::undef() };
                 let prepared = prepare_property_assignment_with_stringable(
                     assigned,
                     &definition,

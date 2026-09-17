@@ -5108,6 +5108,7 @@ fn property_hook_type_case(eg: &ExecutorGlobals, backing_value: &str) -> Option<
         })
     })?;
     let storage = eg.static_property_storage_slot(class.class_id, index)?;
+    eg.publish_static_property_object_handles(storage);
     eg.static_property_value(storage).cloned()
 }
 

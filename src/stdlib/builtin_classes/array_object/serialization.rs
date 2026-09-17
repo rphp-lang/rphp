@@ -38,7 +38,7 @@ pub(in crate::stdlib) fn storage_state(receiver: &Value) -> (i64, Value, u32) {
     let object = receiver.as_object().expect("native serialization receiver");
     let options = object.native_array_options();
     let storage = object.get_property(array_object_storage_key(&object));
-    let self_backed = storage.and_then(Value::object_identity) == receiver.object_identity();
+    let self_backed = options.self_backed;
     let flags = i64::from(options.flags) | if self_backed { SELF_BACKING } else { 0 };
     let storage = if self_backed {
         Value::null()

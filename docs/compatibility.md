@@ -7,6 +7,59 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The accepted `object-store-owner-lifecycle` train over `2220926e` adds
+**11 PHP 8.5 passes without losses**, confirmed by fresh PHP 8.5.10 runs. The
+selected 8,067-case ledger reaches **7,280 pass / 342 fail / 194 skip / 250
+unsupported / one XFAIL**. Three Zend cases and eight SPL ArrayObject cases
+become exact passes; no prior pass or failure stage is lost, and no timeout or
+crash is hidden.
+
+One general owner-lifecycle boundary now keeps native object backing alive
+through typed writes, foreach cursors, frame retirement, closure captures and
+ArrayObject serialization without introducing a public self-cycle. Private
+iterator envelopes use a detached object-reference view; a deferred handle is
+used only when a native consumer already owns the cursor, so helper objects do
+not consume observable object IDs. ArrayObject self-backing is represented
+explicitly rather than by an `Rc` cycle, and internal enum cases are released
+after their consumers. Callback-free owner proofs and retirement work remain
+cold and bounded.
+
+Eighteen original E2E cases, the ten-case target PHPT set, 105 deque
+differential cases and all 54 correctness/framework gates pass. The five Cargo
+configurations pass **5,778/5,446/5,849/5,871/5,922** tests with no failures or
+filtering (13/13/13/13/16 ignored), plus all-features/all-targets. Exact no-loss
+manifests cover Zend, strings/array, SPL and retained extension/math families;
+Composer/Symfony S0-S3, unsafe, formatting and public-data hygiene pass.
+
+All **180 fixed-parent 32-pair controls** have exact output and pass. The
+largest common-lane cumulative regression is **+0.729%** (1.65% ceiling); the
+largest pay-use result is **+4.854%** (5% ceiling). Rejected candidates exposed
+and then removed owner leaks, object-ID publication errors and hot-layout
+regressions. The accepted implementation moves the private iterator path to a
+cold section and preserves ordinary object/property/call behavior.
+
+General cyclic GC, Fiber suspension, same-frame local-catch retirement,
+public WeakMap materialization of private iterators, user-destructor graphs
+returned through destructuring arrays, 32-bit and allocation-limit/OOM
+equivalence remain explicit non-claims. Next admission ranks a
+`filter-value-dispatch-contracts` cluster from the current failure manifest;
+implementation requires 10--30 reachable PHP-pass/current-fail cases with one
+shared dispatch/coercion cause.
+
+SHA-256 evidence:
+
+- Release: `0ae0bdeb03ec76323b6fdcc8eb23160d63acaa2ea00dc85c93dd4a3431dc74c5`.
+- Complete technical record: `63034ef0e811688772fd179de9a1599358df8ad4be6a0dbef6ec9c160e8b4317`.
+- Matrix: `d0fde7914c3ef233c5949e46f70af328ff6fb71416940ea1dc5298f79f0536e5`.
+- Exact no-loss decision: `8dd9beef49bd710fdca2438547219b6a681fb6ffa8ba2c9bd239b7973a4779df`.
+- Fresh PHP gain oracles: `62bd2ee58a34c387caa7faf431b9855fba9b51ab936deb3bc0017987d4c47cb5`.
+- Zend manifest / pass set: `5825246100c152b6658ffd359ba0696e6310adf501e9af7c8888f8a20a466d3a` / `7f8b5f2814f912e3102d564350b43e174b91614fa655040366fd1716a649ec50`.
+- Strings/array manifest / pass set: `deb8d324b8d5be7bc5ba65004cc520eef8ddc502d849075947e50221fd73a9bb` / `482d95e26cbbd4c66abd2b34435b39c6042e65340215b02697de5fb9851aaa06`.
+- SPL manifest / pass set: `e85f049eb647cb0f9a8d36e0cee68b02bf9fe2314b5968c1dc433c251c18199f` / `27dfa9d65f074eafde0aeb6993c21b7f9e6defe5183b4fc7339a3f78c64d6620`.
+- Performance decision / raw timing: `9a19c7f149c2064127f40dc859d80ca713d1685036820fe59cf841e5c5e32f37` / `45583c30111b1552fba2728bea2965aa8c368895c732e2154dfee125ed8896a2`.
+
+### Preceding tick-callback checkpoint
+
 The accepted `declare-tick-callback-lifecycle` train over `473149c2` adds
 **12 PHP 8.5 passes without losses**, confirmed by fresh PHP 8.5.10 runs.
 The selected ledger grows from 8,060 to **8,067 cases: 7,269 pass / 353 fail /

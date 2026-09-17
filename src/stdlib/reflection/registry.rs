@@ -324,7 +324,7 @@ fn property_hook_type_case(name: &str, value: &str) -> PropertyDefinition {
     .collect();
     PropertyDefinition::new(
         name.to_string(),
-        Some(Value::object(PhpObject::dynamic(
+        Some(Value::deferred_object(PhpObject::dynamic(
             "PropertyHookType".to_string(),
             0,
             properties,

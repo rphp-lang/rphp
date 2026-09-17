@@ -263,12 +263,15 @@ fn value_is_shallow_plain_drop(eg: &ExecutorGlobals, value: &Value) -> bool {
                 }
             })
         }),
-        ValueType::Object => !value_requires_vm_release(eg, value) && value.as_object().is_some_and(|object| {
-            let mut plain = true;
-            object.for_each_owned_value(|property| {
-                plain &= !property_prevents_shallow_drop(property);
-            });
-            plain
+        ValueType::Object => value.as_object().is_some_and(|object| {
+            let ordinary_plain = !value_requires_vm_release(eg, value) && {
+                let mut plain = true;
+                object.for_each_owned_value(|property| {
+                    plain &= !property_prevents_shallow_drop(property);
+                });
+                plain
+            };
+            ordinary_plain || foreach_owner_has_plain_source(&object, eg)
         }),
         ValueType::Closure => false,
         ValueType::Resource => !value.needs_vm_resource_release(),
@@ -428,7 +431,7 @@ fn value_may_require_vm_release_tree(eg: &ExecutorGlobals, value: &Value) -> boo
             {
                 return true;
             }
-            object.any_property_value(|property| {
+            let nested_release_candidate = object.any_property_value(|property| {
                 let property = property.dereferenced();
                 match property.value_type() {
                     ValueType::Array => property
@@ -438,7 +441,8 @@ fn value_may_require_vm_release_tree(eg: &ExecutorGlobals, value: &Value) -> boo
                     ValueType::Resource => property.needs_vm_resource_release(),
                     _ => false,
                 }
-            })
+            });
+            nested_release_candidate && !foreach_owner_has_plain_source(&object, eg)
         }),
         ValueType::Closure => true,
         ValueType::Resource => value.needs_vm_resource_release(),
@@ -1258,17 +1262,20 @@ fn run_frame_destructors(
             let mut progressed = false;
             for identity in pending {
                 let frame_references = counts[&identity];
-                let representative = candidate_indices
+                let representative_index = candidate_indices
                     .iter()
-                    .map(|index| &*base.add(*index))
-                    .find(|value| destructor_identity(eg, value) == Some(identity));
-                let Some(representative) = representative else {
+                    .copied()
+                    .find(|index| destructor_identity(eg, &*base.add(*index)) == Some(identity));
+                let Some(index) = representative_index else {
                     continue;
                 };
+                let representative = &*base.add(index);
                 if representative.vm_release_strong_count() != Some(frame_references) {
                     deferred.push(identity);
                     continue;
                 }
+                let retire_consumer = frame_references == 1
+                    && representative.as_object().is_some_and(|object| object.class_name.is_empty());
                 let receiver = representative.clone();
                 progressed |= run_final_object_destructor_tree(
                     eg,
@@ -1280,6 +1287,18 @@ fn run_frame_destructors(
                     false,
                     false,
                 )?;
+                // Private consumers cannot escape or resurrect. Commit each
+                // retired edge now, so a later consumer sees the actual last
+                // Iterator owner rather than an already-abandoned sibling.
+                if retire_consumer {
+                    let slot = base.cast_mut().add(index);
+                    std::ptr::drop_in_place(slot);
+                    std::ptr::write_bytes(slot as *mut u8, 0, std::mem::size_of::<Value>());
+                    if total <= 64 {
+                        (*frame).heap_bitmap &= !(1u64 << index);
+                    }
+                    progressed = true;
+                }
                 if eg.exception.is_some() {
                     return Ok(());
                 }

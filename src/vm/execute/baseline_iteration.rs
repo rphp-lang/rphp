@@ -1,5 +1,90 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
+/// A protocol consumer is an object-store owner distinct from its public
+/// Iterator. Its existing foreach TMP supplies all normal/abrupt cleanup
+/// edges. One private, pooled slot keeps its edge visible to release/GC without
+/// allocating dynamic properties, a native sidecar or a name per traversal.
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+fn foreach_iterator_owner(
+    iterator: &Value,
+    eg: &ExecutorGlobals,
+    already_has_native_consumer: bool,
+) -> Value {
+    thread_local! {
+        static LAYOUT: std::rc::Rc<crate::value::ObjectLayout> = std::rc::Rc::new(
+            crate::value::ObjectLayout::new("", vec!["\0iterator".into()])
+        );
+    }
+    LAYOUT.with(|layout| {
+        let owner = PhpObject::with_layout_from_defaults(
+            0, std::rc::Rc::clone(layout), std::slice::from_ref(iterator),
+        );
+        // A native cursor materialized specifically for this traversal, or a
+        // registered weak iterator cursor, already is the PHP-visible
+        // consumer. The private ownership envelope must not publish a second
+        // object-store handle of its own.
+        if already_has_native_consumer || eg.weak_iterator_allows_references(iterator) {
+            Value::deferred_object(owner)
+        } else {
+            Value::object(owner)
+        }
+    })
+}
+
+#[inline(always)]
+fn foreach_owned_iterator(value: &Value) -> *const Value {
+    let object = value.as_object().expect("protocol consumer owns an object");
+    object.get_property_slot(0).expect("protocol consumer retains its Iterator") as *const Value
+}
+
+/// The private envelope has exactly one edge and cannot have PHP hooks.
+/// Prove a bounded callback-free child shape, independently of Rc counts:
+/// multiple consumers can retire together and hold every remaining alias.
+#[inline]
+fn foreach_owner_has_plain_source(object: &PhpObject, eg: &ExecutorGlobals) -> bool {
+    object.class_name.is_empty()
+        && object.get_property_slot(0)
+            .is_some_and(|source| foreach_source_is_plain(source, eg, 4, &mut 32))
+}
+
+/// Composite cursors may retain a shallow list of other scalar-backed cursors.
+/// Bound both depth and visited values; flat scalar arrays need no traversal.
+/// This read-only proof allocates no graph bookkeeping. References, closures,
+/// deep/cyclic graphs and every callback-capable value retain the complete
+/// alias-aware planner, even when they currently have other owners.
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+fn foreach_source_is_plain(source: &Value, eg: &ExecutorGlobals, depth: u8, remaining: &mut u8) -> bool {
+    if *remaining == 0 {
+        return false;
+    }
+    *remaining -= 1;
+    match source.value_type() {
+        ValueType::Object => {
+            if depth == 0 || value_requires_vm_release(eg, source) {
+                return false;
+            }
+            source.as_object().is_some_and(|object| {
+                let mut plain = true;
+                object.for_each_owned_value(|value| {
+                    plain = plain && foreach_source_is_plain(value, eg, depth - 1, remaining);
+                });
+                plain
+            })
+        }
+        ValueType::Array => source.as_array().is_some_and(|array| {
+            !array.may_require_nested_release()
+                || depth != 0 && array.values().all(|value| foreach_source_is_plain(value, eg, depth - 1, remaining))
+        }),
+        ValueType::Reference | ValueType::Closure => false,
+        ValueType::Resource => !source.needs_vm_resource_release(),
+        _ => true,
+    }
+}
+
 #[inline]
 fn assign_foreach_cv(
     eg: &mut ExecutorGlobals,
@@ -1027,10 +1112,44 @@ fn release_temporary_foreach_source<'a>(
     take_foreach_protocol_exception(eg, frame)
 }
 
-/// Release a temporary IteratorAggregate receiver after its returned Iterator
-/// has successfully completed the first validity check. Zend no longer needs
-/// the aggregate at that boundary, but still retains direct Iterator operands
-/// and named/aliased aggregate variables for their ordinary PHP lifetime.
+/// A failed rewind retires the consumer before its temporary source. In
+/// particular, the source destructor can already reuse the consumer's handle.
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
+fn release_failed_foreach_rewind<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    init: &Instruction,
+) -> Result<Option<ColdResult<'a>>, VmError> {
+    // The pending rewind exception must not look like a fresh destructor
+    // failure to the release planner and prevent it from clearing the TMP.
+    let pending = eg.exception.take();
+    let mut cleanup = release_statement_temps(
+        eg, frame, init.result as usize, init.result as usize + 1,
+        STATEMENT_TEMPS_ORDINARY, false,
+    );
+    if cleanup.is_ok() && eg.exception.is_none()
+        && matches!(init.op1_type, OpType::Tmp | OpType::Var) {
+        cleanup = release_statement_temps(
+            eg, frame, init.op1 as usize, init.op1 as usize + 1,
+            STATEMENT_TEMPS_ORDINARY, false,
+        );
+    }
+    if let Some(replacement) = eg.exception.as_ref() {
+        if let Some(previous) = pending.as_ref() {
+            append_replaced_exception(replacement, previous, eg);
+        }
+    } else {
+        eg.exception = pending;
+    }
+    cleanup?;
+    take_foreach_protocol_exception(eg, frame)
+}
+
+/// Release a temporary protocol source after the first validity check. The
+/// consumer retains a direct Iterator; an aggregate receiver is no longer
+/// needed. Named/aliased variables retain their ordinary PHP lifetime.
 #[inline]
 fn release_temporary_foreach_aggregate<'a>(
     eg: &mut ExecutorGlobals,
@@ -1054,18 +1173,21 @@ fn release_temporary_foreach_aggregate<'a>(
         return Ok(None);
     }
 
-    // SAFETY: ForeachInit's compiler-owned source TMP remains live until this
-    // first ForeachNext. release_statement_temps clears exactly that one slot
-    // and keeps the frame ownership bitmap synchronized.
-    let is_aggregate = unsafe {
+    // SAFETY: ForeachInit's compiler-owned source TMP remains live until the
+    // first validity check for both aggregate and direct Iterator sources.
+    // release_statement_temps clears only that slot and updates the bitmap.
+    let is_protocol_source = unsafe {
         let source = &*(*frame).get_op_ptr(init.op1 as u32, init.op1_type, op_array);
         source
             .dereferenced()
             .as_object()
             .map(|object| object.class_name.to_string())
-            .is_some_and(|class_name| eg.class_is_a(&class_name, "IteratorAggregate"))
+            .is_some_and(|class_name| {
+                eg.class_is_a(&class_name, "IteratorAggregate")
+                    || eg.class_is_a(&class_name, "Iterator")
+            })
     };
-    if !is_aggregate {
+    if !is_protocol_source {
         return Ok(None);
     }
 
@@ -1316,11 +1438,20 @@ fn op_foreach_init<'a>(
     } else {
         if uses_user_iterator_protocol(arr_val, eg) {
             if crate::stdlib::uses_native_iterator_protocol(arr_val, eg) {
+                set_foreach_iteration_state(
+                    frame,
+                    opline,
+                    Some(foreach_iterator_owner(arr_val, eg, native_consumer.is_some())),
+                    i64::MIN,
+                );
                 crate::stdlib::native_iterator_projected_entry(arr_val, crate::stdlib::NativeIteratorMove::Rewind, crate::stdlib::NativeIteratorProjection::None, eg)?;
+                if eg.exception.is_some()
+                    && let Some(control) = release_failed_foreach_rewind(eg, frame, opline)? {
+                    return Ok(control);
+                }
                 if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
                     return Ok(control);
                 }
-                set_foreach_iteration_state(frame, opline, Some(arr_val.clone()), i64::MIN);
                 return Ok(ColdResult::Done);
             }
             if by_reference && !eg.weak_iterator_allows_references(arr_val) {
@@ -1343,6 +1474,12 @@ fn op_foreach_init<'a>(
                     return Ok(control);
                 }
             }
+            set_foreach_iteration_state(
+                frame,
+                opline,
+                Some(foreach_iterator_owner(arr_val, eg, native_consumer.is_some())),
+                -1,
+            );
             let _ = crate::stdlib::call_object_protocol_method(
                 eg,
                 arr_val,
@@ -1350,13 +1487,16 @@ fn op_foreach_init<'a>(
                 "rewind",
                 &[],
             )?;
+            if eg.exception.is_some()
+                && let Some(control) = release_failed_foreach_rewind(eg, frame, opline)? {
+                return Ok(control);
+            }
             if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
                 return Ok(control);
             }
             // Negative cursor values identify the user Iterator protocol. Each
             // successful fetch decrements it, retaining first-vs-next state
             // without a class lookup in the hot ForeachNext path.
-            set_foreach_iteration_state(frame, opline, Some(arr_val.clone()), -1);
             return Ok(ColdResult::Done);
         }
         let object_values = if arr_val.as_object().is_some() {
@@ -1562,9 +1702,10 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
         )?;
     }
 
-    // SAFETY: both operands are compiler-allocated slots in this live frame;
-    // neither shared borrow escapes this synchronous iteration opcode.
-    let (iteration_state, cursor) = unsafe {
+    // SAFETY: both operands are compiler-owned slots in this live frame. A
+    // negative cursor proves an internal consumer with an immutable slot 0;
+    // neither shared borrow is used after an exception transfers control.
+    let (iteration_state, cursor, source) = unsafe {
         let iteration_state =
             &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
         let cursor = (&*(*frame).get_op_ptr(
@@ -1574,9 +1715,16 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
         ))
             .as_long()
             .unwrap_or(0);
-        (iteration_state, cursor)
+        // The private owner slot never escapes or changes while this TMP
+        // is live. End its RefCell guard before invoking callbacks: a thrown
+        // exception can retire the TMP. No source read follows that transfer.
+        let source = if cursor < 0 {
+            &*foreach_owned_iterator(iteration_state)
+        } else {
+            iteration_state.dereferenced()
+        };
+        (iteration_state, cursor, source)
     };
-    let source = iteration_state.dereferenced();
     let lazy_source_owner = eg.lazy_object_state(source).map(|_| source.clone());
     let source = lazy_source_owner.as_ref().unwrap_or(source);
     let initialized_source = if eg.lazy_object_state(source).is_some() {

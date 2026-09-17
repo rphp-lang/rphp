@@ -233,7 +233,7 @@ pub(in crate::stdlib) fn debug_projection(receiver: &Value, eg: &ExecutorGlobals
     let object = receiver.as_object()?;
     let key = native_storage_key(&object)?;
     let storage = object.get_property(key);
-    let self_backed = storage.and_then(Value::object_identity) == receiver.object_identity();
+    let self_backed = object.native_array_options().self_backed;
     let storage = (!self_backed).then(|| {
         storage
             .map(Value::clone_for_php_storage)
@@ -336,6 +336,10 @@ fn prepare_native_clone(source: &Value, clone: &mut PhpObject, eg: &ExecutorGlob
     let Some(key) = native_storage_key(clone) else {
         return;
     };
+    // A self view follows the cloned member table, never its source owner.
+    if clone.native_array_options().self_backed {
+        return;
+    }
     if key == ARRAY_ITERATOR_STORAGE {
         clone.set_property(key, source.clone());
         return;
@@ -402,7 +406,10 @@ fn backing(receiver: &Value, eg: &ExecutorGlobals) -> Option<Backing> {
     loop {
         let object = owner.as_object()?;
         let identity = owner.object_identity()?;
-        if inline[..used].contains(&identity) || overflow.contains(&identity) {
+        if object.native_array_options().self_backed
+            || inline[..used].contains(&identity)
+            || overflow.contains(&identity)
+        {
             drop(object);
             return Some(Backing::Object(owner));
         }
@@ -753,7 +760,13 @@ fn replace_storage_with_cursor_policy(
         .and_then(|old| release_plan(eg, old));
     drop(object);
     let len = value.as_array().map_or(0, PhpArray::len);
+    let self_backed =
+        value.object_identity().is_some() && value.object_identity() == receiver.object_identity();
+    let value = if self_backed { Value::undef() } else { value };
     let mut object = receiver.as_object_mut().expect("retained native receiver");
+    let mut options = object.native_array_options();
+    options.self_backed = self_backed;
+    object.set_native_array_options(options);
     object.set_property(key, value);
     cursor::storage_replaced(&mut object, len, new_table);
     drop(object);
@@ -859,6 +872,7 @@ fn iterator(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
     object.set_property(ARRAY_ITERATOR_STORAGE, arg!(ed, 0).clone());
     object.set_native_array_options(crate::value::NativeArrayOptions {
         flags: options.flags,
+        self_backed: false,
         iterator_class_id: 0,
     });
     ret!(rv, Value::object(object));
