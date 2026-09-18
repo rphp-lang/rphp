@@ -7,7 +7,7 @@
 use std::borrow::Cow;
 
 use crate::runtime::ExecutorGlobals;
-use crate::value::{PhpArray, Value, ValueType};
+use crate::value::{ArrayKey, PhpArray, Value, ValueType};
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 
@@ -1369,23 +1369,333 @@ pub(super) fn fn_get_html_translation_table(
     ret!(rv, Value::array(result));
 }
 
+const FILTER_VALIDATE_INT: i64 = 257;
+const FILTER_VALIDATE_BOOL: i64 = 258;
+const FILTER_VALIDATE_FLOAT: i64 = 259;
+const FILTER_VALIDATE_IP: i64 = 275;
+const FILTER_DEFAULT: i64 = 516;
+const FILTER_CALLBACK: i64 = 1024;
+const FILTER_FLAG_ALLOW_OCTAL: i64 = 1;
+const FILTER_FLAG_ALLOW_HEX: i64 = 2;
+const FILTER_FLAG_IPV4: i64 = 1_048_576;
+const FILTER_FLAG_IPV6: i64 = 2_097_152;
+const FILTER_REQUIRE_ARRAY: i64 = 16_777_216;
+const FILTER_REQUIRE_SCALAR: i64 = 33_554_432;
+const FILTER_FORCE_ARRAY: i64 = 67_108_864;
+const FILTER_NULL_ON_FAILURE: i64 = 134_217_728;
+
+struct FilterVarConfig<'a> {
+    filter: i64,
+    flags: i64,
+    option: Option<&'a Value>,
+    default: Option<Value>,
+}
+
+#[inline]
+fn filter_var_invalid(config: &FilterVarConfig<'_>) -> Value {
+    config.default.clone().unwrap_or_else(|| {
+        if config.flags & FILTER_NULL_ON_FAILURE != 0 {
+            Value::null()
+        } else {
+            Value::bool(false)
+        }
+    })
+}
+
+#[inline]
+fn parse_filter_integer(source: &str, flags: i64) -> Option<i64> {
+    let source = source.trim();
+    if flags & FILTER_FLAG_ALLOW_HEX != 0
+        && let Some(digits) = source
+            .strip_prefix("0x")
+            .or_else(|| source.strip_prefix("0X"))
+    {
+        return (!digits.is_empty())
+            .then(|| {
+                u64::from_str_radix(digits, 16)
+                    .ok()
+                    .map(|value| value as i64)
+            })
+            .flatten();
+    }
+    if flags & FILTER_FLAG_ALLOW_OCTAL != 0 {
+        if let Some(digits) = source
+            .strip_prefix("0o")
+            .or_else(|| source.strip_prefix("0O"))
+        {
+            return (!digits.is_empty())
+                .then(|| {
+                    u64::from_str_radix(digits, 8)
+                        .ok()
+                        .map(|value| value as i64)
+                })
+                .flatten();
+        }
+        if source.len() > 1 && source.starts_with('0') {
+            return u64::from_str_radix(&source[1..], 8)
+                .ok()
+                .map(|value| value as i64);
+        }
+    }
+    let digits = source.strip_prefix(['+', '-']).unwrap_or(source);
+    (!digits.is_empty()
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+        && (digits.len() == 1 || !digits.starts_with('0')))
+    .then(|| source.parse::<i64>().ok())
+    .flatten()
+}
+
+fn filter_float_decimal(config: &FilterVarConfig<'_>) -> Result<char, Value> {
+    let decimal = config
+        .option
+        .and_then(Value::as_array)
+        .and_then(|options| options.get_str("decimal"));
+    let Some(decimal) = decimal else {
+        return Ok('.');
+    };
+    let rendered = decimal.echo_to_string();
+    let mut characters = rendered.chars();
+    let Some(decimal) = characters.next() else {
+        return Err(crate::value::make_error_value(
+            "ValueError",
+            "filter_var(): \"decimal\" option must be one character long",
+        ));
+    };
+    if characters.next().is_some() {
+        return Err(crate::value::make_error_value(
+            "ValueError",
+            "filter_var(): \"decimal\" option must be one character long",
+        ));
+    }
+    Ok(decimal)
+}
+
+fn parse_filter_float(source: &str, decimal: char) -> Option<f64> {
+    let source = source.trim();
+    if source.is_empty() {
+        return None;
+    }
+    let normalized;
+    let source = if decimal == '.' {
+        source
+    } else {
+        if source.contains('.') {
+            return None;
+        }
+        normalized = source.replace(decimal, ".");
+        &normalized
+    };
+    let value = source.parse::<f64>().ok()?;
+    if !value.is_finite() {
+        return None;
+    }
+    if value == 0.0 {
+        let mantissa = source.split(['e', 'E']).next().unwrap_or(source);
+        if mantissa.bytes().any(|byte| matches!(byte, b'1'..=b'9')) {
+            return None;
+        }
+    }
+    Some(value)
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn filter_var_scalar(
+    value: &Value,
+    config: &FilterVarConfig<'_>,
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+) -> Result<Value, VmError> {
+    let validator_options = config.option.and_then(Value::as_array);
+    let result = match config.filter {
+        FILTER_DEFAULT => match value.value_type() {
+            ValueType::String => value.clone(),
+            ValueType::Long | ValueType::Double | ValueType::True | ValueType::False => {
+                Value::string(value.echo_to_string_with_precision(eg.precision))
+            }
+            ValueType::Null => Value::string(String::new()),
+            _ => filter_var_invalid(config),
+        },
+        FILTER_VALIDATE_INT => {
+            let parsed = match value.value_type() {
+                ValueType::Long => value.as_long(),
+                ValueType::True => Some(1),
+                ValueType::Double => parse_filter_integer(
+                    &value.echo_to_string_with_precision(eg.precision),
+                    config.flags,
+                ),
+                ValueType::String => value
+                    .as_str()
+                    .and_then(|source| parse_filter_integer(source, config.flags)),
+                _ => None,
+            };
+            let in_range = parsed.is_some_and(|parsed| {
+                let minimum = validator_options
+                    .and_then(|options| options.get_str("min_range"))
+                    .map(Value::to_long_val);
+                let maximum = validator_options
+                    .and_then(|options| options.get_str("max_range"))
+                    .map(Value::to_long_val);
+                minimum.is_none_or(|minimum| parsed >= minimum)
+                    && maximum.is_none_or(|maximum| parsed <= maximum)
+            });
+            if in_range {
+                Value::long(parsed.expect("validated integer filter result"))
+            } else {
+                filter_var_invalid(config)
+            }
+        }
+        FILTER_VALIDATE_BOOL => {
+            let normalized = value.echo_to_string().to_ascii_lowercase();
+            match normalized.as_str() {
+                "1" | "true" | "on" | "yes" => Value::bool(true),
+                "" | "0" | "false" | "off" | "no" => Value::bool(false),
+                _ => filter_var_invalid(config),
+            }
+        }
+        FILTER_VALIDATE_FLOAT => {
+            let decimal = match filter_float_decimal(config) {
+                Ok(decimal) => decimal,
+                Err(exception) => {
+                    eg.exception = Some(exception);
+                    return Ok(Value::null());
+                }
+            };
+            let parsed = match value.value_type() {
+                ValueType::Double => value.as_double().filter(|value| value.is_finite()),
+                ValueType::Long => value.as_long().map(|value| value as f64),
+                ValueType::String => value
+                    .as_str()
+                    .and_then(|source| parse_filter_float(source, decimal)),
+                _ => None,
+            };
+            parsed.map_or_else(|| filter_var_invalid(config), Value::double)
+        }
+        FILTER_VALIDATE_IP => {
+            let parsed = value
+                .as_str()
+                .and_then(|source| source.parse::<std::net::IpAddr>().ok());
+            let valid = parsed.is_some_and(|address| {
+                (config.flags & FILTER_FLAG_IPV4 == 0 || address.is_ipv4())
+                    && (config.flags & FILTER_FLAG_IPV6 == 0 || address.is_ipv6())
+            });
+            if valid {
+                value.clone()
+            } else {
+                filter_var_invalid(config)
+            }
+        }
+        FILTER_CALLBACK => {
+            let Some(callback) = config.option else {
+                eg.exception = Some(crate::value::make_error_value(
+                    "TypeError",
+                    "filter_var(): Option must be a valid callback",
+                ));
+                return Ok(Value::null());
+            };
+            let Some(resolved) = super::resolve_callback_at_callsite_checked(callback, eg, ed)?
+            else {
+                if eg.exception.is_none() {
+                    eg.exception = Some(crate::value::make_error_value(
+                        "TypeError",
+                        "filter_var(): Option must be a valid callback",
+                    ));
+                }
+                return Ok(Value::null());
+            };
+            let argument = value.dereferenced().clone();
+            if super::callback_has_hard_reference_parameters(&resolved) {
+                let mut arguments = PhpArray::with_packed_capacity(1);
+                arguments.push(argument.clone());
+                let callback_name = super::callable_display_name(callback, eg);
+                if !super::report_callback_reference_warnings(
+                    eg,
+                    ed,
+                    &resolved,
+                    &arguments,
+                    true,
+                    &callback_name,
+                )? {
+                    return Ok(Value::null());
+                }
+            }
+            super::call_resolved_with_values_from_internal(
+                ed,
+                eg,
+                &resolved,
+                std::slice::from_ref(&argument),
+                true,
+            )?
+        }
+        _ => {
+            report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("filter_var(): Unknown filter with ID {}", config.filter),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(Value::null());
+            }
+            Value::bool(false)
+        }
+    };
+    Ok(result)
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn filter_var_dispatch(
+    value: &Value,
+    config: &FilterVarConfig<'_>,
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    nested: bool,
+) -> Result<Value, VmError> {
+    if let Some(array) = value.as_array() {
+        if !nested
+            && (config.flags & FILTER_REQUIRE_SCALAR != 0
+                || config.flags & (FILTER_REQUIRE_ARRAY | FILTER_FORCE_ARRAY) == 0)
+        {
+            return Ok(filter_var_invalid(config));
+        }
+        let mut result = array.clone();
+        let mut entries = Vec::with_capacity(array.len());
+        for (key, value) in array.iter() {
+            entries.push((key, value.dereferenced().clone()));
+        }
+        for (key, value) in entries {
+            let filtered = filter_var_dispatch(&value, config, ed, eg, true)?;
+            if eg.exception.is_some() {
+                return Ok(Value::null());
+            }
+            match key {
+                ArrayKey::Int(key) => result.set_int(key, filtered),
+                ArrayKey::String(key) => result.set_str(&key, filtered),
+            }
+        }
+        return Ok(Value::array(result));
+    }
+    if !nested && config.flags & FILTER_REQUIRE_ARRAY != 0 {
+        return Ok(filter_var_invalid(config));
+    }
+    let result = filter_var_scalar(value, config, ed, eg)?;
+    if !nested && config.flags & FILTER_FORCE_ARRAY != 0 && eg.exception.is_none() {
+        let mut array = PhpArray::with_packed_capacity(1);
+        array.push(result);
+        return Ok(Value::array(array));
+    }
+    Ok(result)
+}
+
 pub(super) fn fn_filter_var(
     ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    const FILTER_VALIDATE_INT: i64 = 257;
-    const FILTER_VALIDATE_BOOL: i64 = 258;
-    const FILTER_VALIDATE_FLOAT: i64 = 259;
-    const FILTER_VALIDATE_IP: i64 = 275;
-    const FILTER_FLAG_ALLOW_OCTAL: i64 = 1;
-    const FILTER_FLAG_ALLOW_HEX: i64 = 2;
-    const FILTER_NULL_ON_FAILURE: i64 = 134_217_728;
-    const FILTER_FLAG_IPV4: i64 = 1_048_576;
-    const FILTER_FLAG_IPV6: i64 = 2_097_152;
-
-    const FILTER_DEFAULT: i64 = 516;
-
     let value = arg!(ed, 0);
     let filter = if arg_opt!(ed, 1).is_some() {
         let Some(filter) = typed_internal_int_argument(ed, eg, "filter_var", 1, "filter")? else {
@@ -1396,7 +1706,7 @@ pub(super) fn fn_filter_var(
         FILTER_DEFAULT
     };
     let options = arg!(ed, 2);
-    let (flags, validator_options) = if options.value_type() == ValueType::Undef {
+    let (flags, option) = if options.value_type() == ValueType::Undef {
         (0, None)
     } else if let Some(options) = options.as_array() {
         (
@@ -1404,7 +1714,7 @@ pub(super) fn fn_filter_var(
                 .get_str("flags")
                 .map(Value::to_long_val)
                 .unwrap_or(0),
-            options.get_str("options").and_then(Value::as_array),
+            options.get_str("options").cloned(),
         )
     } else {
         let Some(flags) = typed_internal_int_value_argument_expected(
@@ -1424,117 +1734,25 @@ pub(super) fn fn_filter_var(
     if filter == FILTER_VALIDATE_INT
         && value.value_type() == ValueType::Long
         && flags == 0
-        && validator_options.is_none()
+        && option.is_none()
     {
         ret!(rv, value.clone());
     }
-    let default = validator_options
+    let default = option
+        .as_ref()
+        .and_then(Value::as_array)
         .and_then(|options| options.get_str("default"))
         .cloned();
-    let invalid = || {
-        default.clone().unwrap_or_else(|| {
-            if flags & FILTER_NULL_ON_FAILURE != 0 {
-                Value::null()
-            } else {
-                Value::bool(false)
-            }
-        })
+    let config = FilterVarConfig {
+        filter,
+        flags,
+        option: option.as_ref(),
+        default,
     };
-    let parse_integer = |source: &str| {
-        let source = source.trim();
-        if flags & FILTER_FLAG_ALLOW_HEX != 0
-            && source.len() > 2
-            && (source.starts_with("0x") || source.starts_with("0X"))
-        {
-            return i64::from_str_radix(&source[2..], 16).ok();
-        }
-        if flags & FILTER_FLAG_ALLOW_OCTAL != 0 && source.len() > 1 && source.starts_with('0') {
-            return i64::from_str_radix(&source[1..], 8).ok();
-        }
-        let digits = source.strip_prefix(['+', '-']).unwrap_or(source);
-        (!digits.is_empty()
-            && digits.bytes().all(|byte| byte.is_ascii_digit())
-            && (digits.len() == 1 || !digits.starts_with('0')))
-        .then(|| source.parse::<i64>().ok())
-        .flatten()
-    };
-
-    let result = match filter {
-        FILTER_DEFAULT => match value.value_type() {
-            ValueType::String => value.clone(),
-            ValueType::Long | ValueType::Double | ValueType::True | ValueType::False => {
-                Value::string(value.echo_to_string_with_precision(eg.precision))
-            }
-            ValueType::Null => Value::string(String::new()),
-            _ => invalid(),
-        },
-        FILTER_VALIDATE_INT => {
-            let parsed = match value.value_type() {
-                ValueType::Long => value.as_long(),
-                ValueType::True => Some(1),
-                ValueType::Double => {
-                    parse_integer(&value.echo_to_string_with_precision(eg.precision))
-                }
-                ValueType::String => value.as_str().and_then(parse_integer),
-                _ => None,
-            };
-            let in_range = parsed.is_some_and(|parsed| {
-                let minimum = validator_options
-                    .and_then(|options| options.get_str("min_range"))
-                    .map(Value::to_long_val);
-                let maximum = validator_options
-                    .and_then(|options| options.get_str("max_range"))
-                    .map(Value::to_long_val);
-                minimum.is_none_or(|minimum| parsed >= minimum)
-                    && maximum.is_none_or(|maximum| parsed <= maximum)
-            });
-            if in_range {
-                Value::long(parsed.expect("validated integer filter result"))
-            } else {
-                invalid()
-            }
-        }
-        FILTER_VALIDATE_BOOL => {
-            let normalized = value.echo_to_string().to_ascii_lowercase();
-            match normalized.as_str() {
-                "1" | "true" | "on" | "yes" => Value::bool(true),
-                "" | "0" | "false" | "off" | "no" => Value::bool(false),
-                _ => invalid(),
-            }
-        }
-        FILTER_VALIDATE_FLOAT => match value.value_type() {
-            ValueType::Double => value.clone(),
-            ValueType::Long => Value::double(value.as_long().unwrap_or_default() as f64),
-            ValueType::String => value
-                .as_str()
-                .and_then(|source| source.parse::<f64>().ok())
-                .map_or_else(invalid, Value::double),
-            _ => invalid(),
-        },
-        FILTER_VALIDATE_IP => {
-            let parsed = value
-                .as_str()
-                .and_then(|source| source.parse::<std::net::IpAddr>().ok());
-            let valid = parsed.is_some_and(|address| {
-                (flags & FILTER_FLAG_IPV4 == 0 || address.is_ipv4())
-                    && (flags & FILTER_FLAG_IPV6 == 0 || address.is_ipv6())
-            });
-            if valid { value.clone() } else { invalid() }
-        }
-        _ => {
-            report_internal_diagnostic(
-                eg,
-                ed,
-                2,
-                "Warning",
-                &format!("filter_var(): Unknown filter with ID {filter}"),
-            )?;
-            if eg.exception.is_some() {
-                return Ok(());
-            }
-            Value::bool(false)
-        }
-    };
+    let result = filter_var_dispatch(value, &config, ed, eg, false)?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     ret!(rv, result);
 }
 

@@ -36,6 +36,28 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `filter-value-dispatch-contracts` checkpoint over `e93cd45a`
+adds **15 PHP 8.5 passes without losses**. The selected ledger reaches
+**7,295 pass / 327 fail / 194 skip / 250 unsupported / one XFAIL**. The full
+selector-free 120-case filter suite moves from 18 to 33 exact passes while
+retaining every previous pass.
+
+The implementation centralizes PHP-compatible scalar/array dispatch,
+recursive key-preserving filtering, callback warnings and evaluation order,
+integer radix/boundary parsing, and finite float validation. Five original and
+five adjacent E2E cases plus all 15 target PHPT are green. To maximize
+compatibility throughput, the repeated full matrix and performance cycle is
+deferred to the aggregate sweep boundary; every internal cluster still needs
+focused exact-output and no-loss evidence before integration.
+
+The active direction is now one continuous supported-failure sweep from
+**327 to zero**, using reversible root-cause commits rather than isolated
+performance checkpoints. Rank the remaining failure manifest by shared cause,
+prefer 20--80-case clusters, and retain immediate safety gates for crashes,
+unsafe representation changes and hot VM/value paths.
+
+### Preceding object-store owner checkpoint
+
 The accepted `object-store-owner-lifecycle` train over `2220926e` adds
 **11 PHP 8.5 passes without losses**. The selected 8,067 cases now reach
 **7,280 pass / 342 fail / 194 skip / 250 unsupported / one XFAIL**. Three Zend
