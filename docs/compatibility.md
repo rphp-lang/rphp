@@ -7,6 +7,41 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The accepted `generator-finalization-sweep` checkpoint over `cdd2096f`
+closes the shared generator finalization, delegation and detached-trace
+boundary. Suspended generators now execute enclosing `finally` blocks when
+their final public owner disappears, reject a new `yield` while force-closing,
+retire nested `yield from` activations iteratively, preserve closure and extra
+argument lifetimes, and report the canonical internal-generator trace. Live
+delegation observes later source/reference changes, while top-level `yield` is
+rejected before lowering without overflowing the host stack on deep valid
+expressions.
+
+The complete 184-case PHP 8.5 generator directory moves from **144 pass / 38
+fail / 2 unsupported** to **166 pass / 16 fail / 2 unsupported**, exact
+**+22/-0**. Two adjacent `Zend/tests/try` cases also become exact, so the
+8,258-case supported ledger advances to **7,485 pass / 300 fail / 194 skip /
+276 unsupported / 3 XFAIL**. The remaining generator failures are visible: nine
+require Fiber suspension semantics and seven concern distinct key, shutdown,
+exception-chain or diagnostic details.
+
+Sixty-five generator E2E cases, eleven Fiber E2E cases, the complete default
+Cargo suite, four feature/all-target checks, exact Zend/lang and strings/array
+no-loss, Composer S0, Symfony S1--S3, formatting and unsafe policy pass. The
+Zend/lang family is **5,047 pass / 257 fail / 115 skip / 180 unsupported**;
+strings/array remains **1,470 / 8 / 67 / 30** with an identical parent pass
+set. Per the continuous compatibility sweep, cumulative performance tuning is
+deferred until the remaining correctness clusters are implemented.
+
+SHA-256 evidence:
+
+- Release candidate: `2c79e24af42db052c77ccb5691fa06ec0f60512a5d3a3c01ead825091e28cb47`.
+- Generator manifest: `c40a93355dded6bfb2297f4846ff01e9c2ed74f8b3022838fa6f2a9cb5e6ea29`.
+- Zend/lang manifest / pass set: `4eca4902c91978c1dfaf03b371480169f3faafc7046dc23b28de668f50078ec8` / `b15bd174a9062768614daf8b179d192a1f0b3ff0752d0b23d4496b9f7547522b`.
+- Strings/array manifest / pass set: `d708dd38a1c7e2c9dd20d1d97e10a4c4f89c27b38982baec074e319748fb2f16` / `e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
+
+### Preceding PCRE capture checkpoint
+
 The accepted `pcre-capture-backtracking-semantics` checkpoint over `f30e7304`
 advances RPHP's own Rust PCRE-compatible engine without linking or delegating
 to PCRE2. Backtracking candidates now carry the capture registers and MARK

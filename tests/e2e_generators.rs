@@ -1703,3 +1703,86 @@ echo ":", Factory::from();
         "12:method"
     );
 }
+
+#[test]
+fn suspended_finally_preserves_deferred_return_and_exception_state() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function deferredReturn() {
+    try { return 7; }
+    finally { yield 'return-finally'; echo "return-done\n"; }
+}
+$returning = deferredReturn();
+echo $returning->current(), "\n";
+$returning->next();
+var_dump($returning->getReturn());
+
+function deferredThrow() {
+    try { throw new RuntimeException('saved'); }
+    finally { yield 'throw-finally'; }
+}
+$throwing = deferredThrow();
+echo $throwing->current(), "\n";
+try { $throwing->next(); }
+catch (Throwable $error) { echo $error::class, ':', $error->getMessage(), "\n"; }
+"#,
+        ),
+        "return-finally\nreturn-done\nint(7)\nthrow-finally\nRuntimeException:saved\n"
+    );
+}
+
+#[test]
+fn generator_creation_retains_extra_arguments_and_closure_owner() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$factory = function ($first) {
+    echo implode(',', func_get_args()), "\n";
+    yield $first;
+};
+$weak = WeakReference::create($factory);
+$generator = $factory('a', 'b', 'c');
+unset($factory);
+$probe = $weak->get();
+echo $probe instanceof Closure ? "alive\n" : "lost\n";
+unset($probe);
+var_dump($generator->current());
+$probe = $weak->get();
+echo $probe instanceof Closure ? "alive\n" : "lost\n";
+unset($probe);
+unset($generator);
+var_dump($weak->get());
+"#,
+        ),
+        "alive\na,b,c\nstring(1) \"a\"\nalive\nNULL\n"
+    );
+}
+
+#[test]
+fn force_close_runs_private_finally_without_aborting_a_shared_delegate() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function sourceForClose() {
+    try { yield 1; yield 2; }
+    finally { echo "source-finally\n"; }
+}
+function relayForClose($source, $name) {
+    try { yield from $source; }
+    finally { echo $name, "-finally\n"; }
+}
+$source = sourceForClose();
+$temporary = relayForClose($source, 'temporary');
+var_dump($temporary->current());
+unset($temporary);
+$survivor = relayForClose($source, 'survivor');
+var_dump($survivor->current());
+$survivor->next();
+var_dump($survivor->current());
+unset($survivor, $source);
+"#,
+        ),
+        "int(1)\ntemporary-finally\nint(1)\nint(2)\nsurvivor-finally\nsource-finally\n"
+    );
+}

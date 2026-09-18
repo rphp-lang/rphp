@@ -774,6 +774,7 @@ impl ExecutionTimer {
 pub(crate) struct PendingClosureBindings {
     pub(crate) captures: Vec<Value>,
     pub(crate) bound_this: Option<Value>,
+    pub(crate) owner: Option<Value>,
 }
 
 pub struct ExecutorGlobals {
@@ -967,6 +968,11 @@ pub struct ExecutorGlobals {
     /// physical predecessor stays null so `Return` exits the detached
     /// executor, while live backtraces can still cross the callback boundary.
     detached_trace_callers: Option<Box<Vec<(usize, usize, bool)>>>,
+    /// Yield-from parent snapshots are needed by debug_backtrace(), but a
+    /// Throwable crossing the same parent is extended at the propagation
+    /// boundary instead. Mark those transient frames so exception creation
+    /// does not record both representations of one generator activation.
+    debug_only_trace_frames: Option<Box<Vec<usize>>>,
     /// Optional synthetic call sites for engine-created callbacks and source
     /// units. Attribute constructors retain their declaration origin; eval
     /// additionally publishes its logical frame name without widening the hot
@@ -2031,6 +2037,7 @@ impl ExecutorGlobals {
             dynamic_variables: HashMap::new(),
             dynamic_scope_owners: HashMap::new(),
             detached_trace_callers: None,
+            debug_only_trace_frames: None,
             detached_trace_origins: None,
             detached_return_discarded: false,
             dirty_globals: std::collections::HashSet::new(),
@@ -2160,6 +2167,7 @@ impl ExecutorGlobals {
             dynamic_variables: HashMap::new(),
             dynamic_scope_owners: HashMap::new(),
             detached_trace_callers: None,
+            debug_only_trace_frames: None,
             detached_trace_origins: None,
             detached_return_discarded: false,
             dirty_globals: std::collections::HashSet::new(),
@@ -2803,6 +2811,22 @@ impl ExecutorGlobals {
     }
 
     #[cold]
+    pub(crate) fn publish_debug_only_trace_frame(&mut self, frame: usize) {
+        let frames = self
+            .debug_only_trace_frames
+            .get_or_insert_with(|| Box::new(Vec::with_capacity(1)));
+        if !frames.contains(&frame) {
+            frames.push(frame);
+        }
+    }
+
+    pub(crate) fn is_debug_only_trace_frame(&self, frame: usize) -> bool {
+        self.debug_only_trace_frames
+            .as_deref()
+            .is_some_and(|frames| frames.contains(&frame))
+    }
+
+    #[cold]
     pub(crate) fn publish_detached_trace_origin(
         &mut self,
         frame: usize,
@@ -2856,6 +2880,18 @@ impl ExecutorGlobals {
             });
         if origins_empty {
             self.detached_trace_origins = None;
+        }
+        let debug_frames_empty =
+            self.debug_only_trace_frames
+                .as_deref_mut()
+                .is_some_and(|frames| {
+                    if let Some(index) = frames.iter().position(|candidate| *candidate == frame) {
+                        frames.swap_remove(index);
+                    }
+                    frames.is_empty()
+                });
+        if debug_frames_empty {
+            self.debug_only_trace_frames = None;
         }
     }
 

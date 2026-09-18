@@ -7373,6 +7373,7 @@ fn init_resolved_user_call_mode(
             .insert(call as usize, crate::runtime::PendingClosureBindings {
                 captures: resolved.use_vars,
                 bound_this: bound_this.take(),
+                owner: None,
             });
     } else {
         for (index, value) in resolved.use_vars.into_iter().enumerate() {
@@ -7677,8 +7678,11 @@ fn init_closure_dynamic_call(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     explicit_args: u32,
-    closure: &PhpClosure,
+    callable: &Value,
 ) {
+    let closure = callable
+        .as_closure()
+        .expect("Closure-tagged callable must retain its payload");
     let func_ptr = closure.func;
     let mut resolved = crate::stdlib::ResolvedCallback {
         func_ptr,
@@ -7697,6 +7701,24 @@ fn init_closure_dynamic_call(
     init_resolved_user_call_mode(eg, frame, explicit_args, resolved, is_method);
     // SAFETY: the live frame owns the call initialized immediately above.
     let call = unsafe { (*frame).call };
+    // A generator closure's short creation frame is retired before its body
+    // first runs. PHP nevertheless keeps the originating Closure observable
+    // through WeakReference until the Generator object itself is released.
+    // Reuse the pending-binding sidecar so ordinary closure calls pay nothing.
+    let is_generator = unsafe {
+        (*func_ptr).fn_type == FunctionType::User
+            && (&*(func_ptr as *const UserFunction)).op_array.is_generator
+    };
+    if is_generator {
+        eg.pending_closure_captures
+            .entry(call as usize)
+            .or_insert_with(|| crate::runtime::PendingClosureBindings {
+                captures: Vec::new(),
+                bound_this: None,
+                owner: None,
+            })
+            .owner = Some(callable.clone());
+    }
     initialize_trait_class_scope(eg, call, func_ptr, closure.trait_scope_class_id);
 }
 
@@ -7744,10 +7766,7 @@ fn op_init_dynamic_call<'a>(
                 .as_str()
                 .is_some_and(|method| method.eq_ignore_ascii_case("__invoke"))
         {
-            let closure = callback_owner
-                .as_closure()
-                .expect("Closure-tagged array receiver must retain its payload");
-            init_closure_dynamic_call(eg, frame, opline.extended_value, closure);
+            init_closure_dynamic_call(eg, frame, opline.extended_value, callback_owner);
             return Ok(ColdResult::Done);
         }
         if !closure_receiver
@@ -7882,11 +7901,11 @@ fn op_init_dynamic_call<'a>(
         return Ok(ColdResult::Done);
     }
 
-    if let Some(closure) = callable.as_closure() {
+    if callable.as_closure().is_some() {
         // Dynamic sends start at CV 0. A first-class method closure retains
         // the hidden receiver slot, so the shared initializer defers it until
         // DoFcall shifts the explicit argument prefix.
-        init_closure_dynamic_call(eg, frame, opline.extended_value, closure);
+        init_closure_dynamic_call(eg, frame, opline.extended_value, callable);
         return Ok(ColdResult::Done);
     } else if let Some(func_name) = callable.as_str() {
         // Simple string function call: $func = "my_func"; $func()

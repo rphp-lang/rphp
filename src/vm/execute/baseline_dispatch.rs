@@ -2173,12 +2173,18 @@ fn complete_finally_marker<'a>(
                     }
                 }
                 // Deferred return — pop frame now (return value already written)
+                if op_array.is_generator {
+                    complete_active_generator(eg, None);
+                }
                 // SAFETY: the active frame keeps both its caller link and
                 // immutable function metadata live until it is popped below.
                 let (prev, func_common) = unsafe {
                     ((*frame).prev_execute_data, &*(*frame).func)
                 };
                 if prev.is_null() {
+                    if op_array.is_generator {
+                        run_frame_destructors(eg, frame)?;
+                    }
                     return Ok(ColdResult::Return);
                 }
                 run_frame_destructors(eg, frame)?;
@@ -10876,6 +10882,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if let Some(finally_ip) = need_finally {
                     // Write return value now (so it's available after finally)
                     if opline.op1_type != OpType::Unused {
+                        if op_array.is_generator {
+                            let retval = unsafe {
+                                &*(*frame).get_op_ptr(
+                                    opline.op1 as u32,
+                                    opline.op1_type,
+                                    op_array,
+                                )
+                            }
+                            .clone();
+                            complete_active_generator_return_value(eg, retval);
+                        }
                         // SAFETY: Return executes with a live frame and its caller-provided slot.
                         let return_target = unsafe { (*frame).return_value };
                         if return_target.is_null() && func_common_ret.sig.returns_reference {
@@ -10965,32 +10982,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 // Generator return — save return value and mark completed
                 if op_array.is_generator {
-                    if let Some(gen_ref) = eg.active_generator.take() {
-                        let mut gen_data = gen_ref.borrow_mut();
-                        if opline.op1_type != OpType::Unused {
-                            let retval = unsafe {
-                                &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-                            };
-                            gen_data.return_value = retval.clone();
-                        }
-                        gen_data.has_returned = true;
-                        gen_data.state = crate::vm::generator::GeneratorState::Completed;
-                        gen_data.value = Value::null();
-                        gen_data.key = Value::null();
-                        // The live frame owns the final CV/TMP values until
-                        // normal frame cleanup below. Retaining the suspended
-                        // snapshots after completion delays PHP lifetimes and
-                        // can recursively drop an arbitrarily deep yield-from
-                        // chain when the outer Generator object is released.
-                        gen_data.cv_values.clear();
-                        gen_data.tmp_values.clear();
-                        gen_data.delegate = None;
-                        drop(gen_data);
-                        eg.active_generator = Some(gen_ref);
-                    }
+                    let return_value = (opline.op1_type != OpType::Unused).then(|| unsafe {
+                        (&*(*frame).get_op_ptr(
+                            opline.op1 as u32,
+                            opline.op1_type,
+                            op_array,
+                        ))
+                            .clone()
+                    });
+                    complete_active_generator(eg, return_value);
 
                     let prev = unsafe { (*frame).prev_execute_data };
                     if prev.is_null() {
+                        run_frame_destructors(eg, frame)?;
                         return Ok(());
                     }
                     run_frame_destructors(eg, frame)?;
@@ -11106,6 +11110,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 match op_yield(eg, frame, op_array, opline)? {
                     ColdResult::Return => { return Ok(()); }
                     ColdResult::NewFrame(nf, no) => { resume_activation!(nf, no); }
+                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
                     _ => {}
                 }
             }
@@ -11318,6 +11323,34 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
         unsafe { (*frame).opline = opline_ptr.add(1); }
     }
     }
+}
+
+#[inline]
+fn complete_active_generator_return_value(eg: &ExecutorGlobals, return_value: Value) {
+    if let Some(generator) = eg.active_generator.as_ref() {
+        generator.borrow_mut().return_value = return_value;
+    }
+}
+
+#[inline]
+fn complete_active_generator(eg: &ExecutorGlobals, return_value: Option<Value>) {
+    let Some(generator) = eg.active_generator.as_ref() else {
+        return;
+    };
+    let mut generator = generator.borrow_mut();
+    if let Some(return_value) = return_value {
+        generator.return_value = return_value;
+    }
+    generator.has_returned = !generator.force_closing;
+    generator.state = crate::vm::generator::GeneratorState::Completed;
+    generator.value = Value::null();
+    generator.key = Value::null();
+    // The live frame owns the final CV/TMP values until normal frame cleanup.
+    // Retaining the suspended snapshots after completion delays PHP lifetimes
+    // and recursively drops arbitrarily deep yield-from chains.
+    generator.cv_values.clear();
+    generator.tmp_values.clear();
+    generator.delegate = None;
 }
 
 #[cold]

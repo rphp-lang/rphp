@@ -5808,6 +5808,23 @@ impl Compiler {
         }) {
             return Err(self.goto_error(message, line));
         }
+        if let Some(statement) = stmts.iter().find(|statement| {
+            // The top-level legality pass deliberately observes yields hidden
+            // by constant control flow before lowering can erase them. Deep,
+            // left-associated expressions are valid PHP and must not consume
+            // the comparatively small host test/thread stack while this cold
+            // AST predicate walks them.
+            stacker::grow(8 * 1024 * 1024, || statement.contains_yield())
+        }) {
+            let line = match statement {
+                Stmt::ExprStmt(expression) => expression_source_line(expression),
+                _ => 0,
+            };
+            return Err(self.goto_error(
+                "The \"yield\" expression can only be used inside a function",
+                line.max(1),
+            ));
+        }
 
         self.compiler_halt_offset = self.compiler_halt_offset.or_else(|| {
             Self::find_compiler_halt_offset(stmts).and_then(|offset| i64::try_from(offset).ok())

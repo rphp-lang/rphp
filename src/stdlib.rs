@@ -17630,6 +17630,10 @@ pub(crate) unsafe fn collect_debug_backtrace(
         // include() onto that same frame; retain the synthetic entry before
         // stopping at the physical main-script boundary.
         let caller = eg.trace_caller(frame as usize, (*frame).prev_execute_data);
+        if include_creation_frame && eg.is_debug_only_trace_frame(frame as usize) {
+            frame = caller;
+            continue;
+        }
         if caller.is_null() && synthetic_frame.is_none() {
             break;
         }
@@ -22327,10 +22331,18 @@ fn fn_generator_next(
         if state == crate::vm::generator::GeneratorState::Running {
             reject_running_generator(eg);
         } else if state == crate::vm::generator::GeneratorState::Suspended {
-            if gen_ref.borrow().rewindable {
-                gen_ref.borrow_mut().rewindable = false;
+            let indirectly_primed = {
+                let mut generator = gen_ref.borrow_mut();
+                let indirectly_primed = generator.indirectly_primed;
+                generator.indirectly_primed = false;
+                if generator.rewindable {
+                    generator.rewindable = false;
+                }
+                indirectly_primed
+            };
+            if !indirectly_primed {
+                resume_generator_method(ed, eg, &gen_ref, Value::null())?;
             }
-            resume_generator_method(ed, eg, &gen_ref, Value::null())?;
         }
     }
     ret!(rv, Value::null());
@@ -22358,6 +22370,7 @@ fn synchronize_aborted_generator_delegate(
     use crate::vm::generator::{GeneratorState, YieldFromDelegate};
 
     let mut current = gen_ref.clone();
+    let mut parents = Vec::new();
     loop {
         let delegate = {
             let generator = current.borrow();
@@ -22375,9 +22388,24 @@ fn synchronize_aborted_generator_delegate(
         if delegate_state == GeneratorState::Completed {
             if !delegate.borrow().has_returned {
                 resume_generator_method(ed, eg, gen_ref, Value::null())?;
+            } else {
+                let (value, key) = {
+                    let delegate = delegate.borrow();
+                    (
+                        delegate.last_yielded_value.clone_closure_capture(),
+                        delegate.last_yielded_key.clone_closure_capture(),
+                    )
+                };
+                parents.push(current);
+                for parent in parents {
+                    let mut parent = parent.borrow_mut();
+                    parent.value = value.clone_closure_capture();
+                    parent.key = key.clone_closure_capture();
+                }
             }
             return Ok(());
         }
+        parents.push(current);
         current = delegate;
     }
 }

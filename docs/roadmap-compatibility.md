@@ -36,6 +36,28 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `generator-finalization-sweep` checkpoint over `cdd2096f` adds
+**24 PHP 8.5 passes without losses**. The 8,258-case supported ledger is now
+**7,485 pass / 300 fail / 194 skip / 276 unsupported / three XFAIL**. The full
+generator directory reaches **166 pass / 16 fail / 2 unsupported**, compared
+with 144/38/2 at the parent.
+
+One shared boundary now covers last-owner force-close, nested `yield from`
+retirement, `finally` ordering, detached exception traces, closure/argument
+lifetime, live delegation and top-level-yield legality. Default Cargo, all
+feature/all-target checks, exact no-loss families, Composer/Symfony S0--S3,
+formatting and unsafe policy are green. Performance work is intentionally
+deferred to the aggregate correctness-sweep boundary.
+
+Continue the supported-failure sweep from **300 to zero**. Select the next
+10--30-case cluster from the fresh failure manifest by shared root cause and
+fan-out, keep exact parent pass sets, and integrate each coherent green commit
+without waiting for a separate micro-checkpoint performance cycle. Fiber
+suspension remains a distinct architectural train rather than being hidden in
+the seven non-Fiber generator holdouts.
+
+### Preceding PCRE capture checkpoint
+
 The accepted `pcre-capture-backtracking-semantics` checkpoint over `f30e7304`
 adds **10 PHP 8.5 PCRE passes without losses**. RPHP's own Rust engine now binds
 capture registers and MARK to each backtracking candidate, while the PHP

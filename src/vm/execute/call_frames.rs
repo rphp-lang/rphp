@@ -506,6 +506,11 @@ fn plain_generator_children(
     let identity = value.object_identity()?;
     let object = value.as_object()?;
     let generator = object.generator.clone()?;
+    if generator.borrow().state != crate::vm::generator::GeneratorState::Completed {
+        // A live Generator is itself a VM finalization boundary: its finally
+        // blocks must run before the retained snapshot can be flattened.
+        return None;
+    }
     if eg.has_weak_object_release_work(identity)
         || eg.lazy_object_state(value).is_some()
         || eg.has_fiber_context(identity)
@@ -735,6 +740,9 @@ fn run_final_object_destructor_tree_inner(
         .map(|state| (true, state.proxy_instance.clone()))
         .unwrap_or((false, None));
     let mut ran_destructor = false;
+    let generator = owner
+        .as_object()
+        .and_then(|object| object.generator.clone());
     let fiber_identity = owner
         .object_identity()
         .filter(|identity| eg.has_fiber_context(*identity));
@@ -748,6 +756,25 @@ fn run_final_object_destructor_tree_inner(
             if owner.object_strong_count() == Some(expected_references) {
                 eg.release_fiber_object(identity);
             }
+            return Ok(true);
+        }
+    }
+
+    if let Some(generator) = generator
+        && generator.borrow().state != crate::vm::generator::GeneratorState::Completed
+    {
+        // The request frame is no longer the active executor frame during
+        // shutdown, but it remains the logical caller of a force-closed
+        // generator. Publish it only for the detached generator execution so
+        // exceptions retain PHP's internal-generator + {main} trace without
+        // changing replacement chaining for ordinary object destructors.
+        let saved_execute_data = eg.current_execute_data.get();
+        eg.current_execute_data.set(logical_caller);
+        let close_result = force_close_generator(eg, &generator);
+        eg.current_execute_data.set(saved_execute_data);
+        close_result?;
+        ran_destructor = true;
+        if eg.exception.is_some() {
             return Ok(true);
         }
     }

@@ -2329,6 +2329,32 @@ fn op_yield<'a>(
 ) -> Result<ColdResult<'a>, VmError> {
     use crate::vm::generator::GeneratorState;
 
+    if eg
+        .active_generator
+        .as_ref()
+        .is_some_and(|generator| generator.borrow().force_closing)
+    {
+        let error = make_error_value(
+            "Error",
+            "Cannot yield from finally in a force-closed generator",
+        );
+        let instruction_index = unsafe {
+            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+        };
+        let origin_index = (0..=instruction_index)
+            .rev()
+            .find(|index| op_array.source_line(*index).is_some())
+            .unwrap_or(instruction_index);
+        attach_new_throwable_origin(
+            &error,
+            eg,
+            frame,
+            op_array,
+            origin_index,
+        );
+        return throw_yield_from_exception(eg, frame, error);
+    }
+
     let yielded_value = if opline.extended_value != 0 {
         let Some(value) = prepare_reference_yield(eg, frame, op_array, opline)? else {
             return Ok(ColdResult::Return);
@@ -2347,6 +2373,10 @@ fn op_yield<'a>(
     };
 
     if let Some(gen_ref) = eg.active_generator.take() {
+        let pending_finally_exceptions = eg
+            .finally_exceptions
+            .remove(&(frame as usize))
+            .unwrap_or_default();
         let mut gen_data = gen_ref.borrow_mut();
 
         // Set yielded value/key
@@ -2362,6 +2392,8 @@ fn op_yield<'a>(
             gen_data.key = Value::long(gen_data.implicit_key);
             gen_data.implicit_key += 1;
         }
+        gen_data.last_yielded_value = gen_data.value.clone_closure_capture();
+        gen_data.last_yielded_key = gen_data.key.clone_closure_capture();
 
         // Save frame state back to generator
         let num_cvs = unsafe { (*frame).num_cvs } as usize;
@@ -2384,6 +2416,8 @@ fn op_yield<'a>(
         // Save instruction pointer (advance past yield for resume)
         let base = op_array.instructions.as_ptr();
         gen_data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize + 1 };
+        gen_data.pending_return_after_finally = unsafe { (*frame).pending_return_after_finally };
+        gen_data.pending_finally_exceptions = pending_finally_exceptions;
         gen_data.state = GeneratorState::Suspended;
 
         drop(gen_data);
@@ -2591,12 +2625,18 @@ fn suspend_yield_from<'a>(
 ) -> ColdResult<'a> {
     use crate::vm::generator::GeneratorState;
 
+    let pending_finally_exceptions = eg
+        .finally_exceptions
+        .remove(&(frame as usize))
+        .unwrap_or_default();
     {
         let mut data = generator.borrow_mut();
         data.delegate = Some(delegate);
         data.yield_from_result_slot = opline.result as u32;
         data.value = value;
         data.key = key;
+        data.last_yielded_value = data.value.clone_closure_capture();
+        data.last_yielded_key = data.key.clone_closure_capture();
         // SAFETY: `frame` is the active activation for `op_array`; the
         // compiler-sized CV/TMP envelopes and current opline all remain live
         // until this helper snapshots them and pops that same frame below.
@@ -2614,6 +2654,8 @@ fn suspend_yield_from<'a>(
         }
         let base = op_array.instructions.as_ptr();
         data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize };
+        data.pending_return_after_finally = unsafe { (*frame).pending_return_after_finally };
+        data.pending_finally_exceptions = pending_finally_exceptions;
         data.state = GeneratorState::Suspended;
     }
 
@@ -2639,6 +2681,32 @@ fn op_yield_from<'a>(
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
     use crate::vm::generator::{GeneratorState, YieldFromDelegate};
+
+    if eg
+        .active_generator
+        .as_ref()
+        .is_some_and(|generator| generator.borrow().force_closing)
+    {
+        let error = make_error_value(
+            "Error",
+            "Cannot use \"yield from\" in a force-closed generator",
+        );
+        let instruction_index = unsafe {
+            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+        };
+        let origin_index = (0..=instruction_index)
+            .rev()
+            .find(|index| op_array.source_line(*index).is_some())
+            .unwrap_or(instruction_index);
+        attach_new_throwable_origin(
+            &error,
+            eg,
+            frame,
+            op_array,
+            origin_index,
+        );
+        return throw_yield_from_exception(eg, frame, error);
+    }
 
     let source_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) }.clone();
 

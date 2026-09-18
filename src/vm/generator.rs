@@ -2,9 +2,9 @@
 /// Created when a generator function is called. Holds all state needed to
 /// suspend at yield and resume later.
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
-use crate::value::{ArrayKey, Value};
+use crate::value::{ArrayKey, PhpObject, Value};
 use crate::vm::function::{FunctionCommon, UserFunction};
 
 /// Delegate for `yield from` — a sub-generator, array or user Iterator.
@@ -58,17 +58,39 @@ pub struct Generator {
     pub value: Value,
     /// Last yielded key (available via key())
     pub key: Value,
+    /// Last published pair retained after completion so a separate generator
+    /// delegating to this one can synchronize its still-visible current item.
+    pub last_yielded_value: Value,
+    pub last_yielded_key: Value,
     /// Number of public arguments supplied at creation, retained in the
     /// existing Value-sized cold metadata slot for exception traces.
     pub trace_num_args: Value,
+    /// Positional arguments beyond the declared non-variadic parameter list.
+    /// Their creation frame is retired before the generator body starts, so
+    /// func_get_arg(s) and trace collection need an activation-owned copy.
+    pub extra_args: Vec<Value>,
     /// Return value (set when generator returns)
     pub return_value: Value,
     /// True only after the generator reaches a normal explicit or implicit
     /// return. Exceptional closure also uses Completed but has no return value.
     pub has_returned: bool,
+    /// The last userland owner is force-closing this suspended activation.
+    /// Finally blocks still execute, but another yield/yield-from is rejected.
+    pub force_closing: bool,
+    /// A `return` crossed into a finally block before the last suspension.
+    /// The frame-local bit must survive yield just like CV/TMP state.
+    pub pending_return_after_finally: bool,
+    /// Exceptions displaced while a suspended activation executes a finally
+    /// block. The request sidecar is keyed by the transient frame address, so
+    /// its stack must travel with the generator snapshot across every yield.
+    pub pending_finally_exceptions: Vec<Value>,
     /// Rewind remains legal until execution advances beyond the first
     /// suspension point. An empty generator also completes while rewindable.
     pub rewindable: bool,
+    /// The first suspension was reached only while an outer yield-from chain
+    /// primed this generator. PHP lets the first direct next() claim that
+    /// already-published item without advancing the shared delegate again.
+    pub indirectly_primed: bool,
     /// Auto-incrementing key for yield without explicit key
     pub implicit_key: i64,
     /// Class scope captured when a generator closure/method is invoked.
@@ -77,6 +99,13 @@ pub struct Generator {
     /// Anonymous Closure-owned function statics retained across the short
     /// creation frame and every suspended generator activation.
     pub closure_static_vars: Option<crate::value::ClosureStaticVars>,
+    /// Anonymous generator functions keep their Closure object observable
+    /// until the Generator itself is released, even after execution completes.
+    pub closure_owner: Option<Value>,
+    /// Weak back-reference to the PHP Generator object. Force-close uses its
+    /// visible owner count to avoid aborting a delegate that is also retained
+    /// independently by userland.
+    pub owner_object: Option<Weak<RefCell<PhpObject>>>,
     /// Active `yield from` delegate (sub-generator or array)
     pub delegate: Option<YieldFromDelegate>,
     /// TMP slot index for writing `yield from` result when delegate completes
@@ -127,13 +156,22 @@ impl Generator {
             state: GeneratorState::Created,
             value: Value::null(),
             key: Value::long(-1), // will become 0 on first yield
+            last_yielded_value: Value::null(),
+            last_yielded_key: Value::long(-1),
             trace_num_args: Value::long(i64::try_from(trace_num_args).unwrap_or(i64::MAX)),
+            extra_args: Vec::new(),
             return_value: Value::null(),
             has_returned: false,
+            force_closing: false,
+            pending_return_after_finally: false,
+            pending_finally_exceptions: Vec::new(),
             rewindable: true,
+            indirectly_primed: false,
             implicit_key: 0,
             called_scope_class_id: 0,
             closure_static_vars: None,
+            closure_owner: None,
+            owner_object: None,
             delegate: None,
             yield_from_result_slot: 0,
             #[cfg(feature = "php-generics-reified")]
@@ -176,7 +214,15 @@ impl Generator {
         }
         visitor(&self.value);
         visitor(&self.key);
+        visitor(&self.last_yielded_value);
+        visitor(&self.last_yielded_key);
         visitor(&self.trace_num_args);
+        for value in &self.extra_args {
+            visitor(value);
+        }
+        for value in &self.pending_finally_exceptions {
+            visitor(value);
+        }
         visitor(&self.return_value);
         if let Some(static_vars) = &self.closure_static_vars {
             let Ok(static_vars) = static_vars.as_ref().try_borrow() else {
@@ -185,6 +231,23 @@ impl Generator {
             for value in static_vars.values() {
                 visitor(value);
             }
+        }
+        // An acyclic Closure is an ordinary strong child, not a possible
+        // cycle edge. Publishing it to the request collector would let the
+        // discarded invocation handle nominate the still-observable Closure
+        // independently of its live Generator owner. Keep only closures that
+        // can actually lead back into a cycle in the collector graph; every
+        // Closure remains strongly retained by `closure_owner` either way.
+        if self
+            .closure_owner
+            .as_ref()
+            .is_some_and(|owner| owner.try_has_cycle_children().unwrap_or(true))
+        {
+            visitor(
+                self.closure_owner
+                    .as_ref()
+                    .expect("checked generator closure owner"),
+            );
         }
         if let Some(YieldFromDelegate::Array(entries, _, _)) = &self.delegate {
             for (_, value) in entries {
@@ -223,6 +286,8 @@ impl Drop for Generator {
         // generator and overflow the native stack for valid, deep PHP programs.
         self.cv_values.clear();
         self.tmp_values.clear();
+        self.extra_args.clear();
+        self.pending_finally_exceptions.clear();
 
         while let Some(generator) = next {
             if Rc::strong_count(&generator) != 1 {
@@ -238,6 +303,8 @@ impl Drop for Generator {
             };
             generator_data.cv_values.clear();
             generator_data.tmp_values.clear();
+            generator_data.extra_args.clear();
+            generator_data.pending_finally_exceptions.clear();
         }
     }
 }

@@ -20,6 +20,20 @@ fn finish_request_shutdown(
         crate::value::end_object_handle_request();
         return Err(error);
     }
+    // Active handlers must remain callable while class/function statics are
+    // released: their destructors may still throw. Retire handler-owned
+    // generators and objects only after that final dispatch boundary.
+    let mut handler_roots = Vec::new();
+    handler_roots.extend(eg.error_handler.take());
+    for (handler, _) in eg.error_handler_stack.drain(..) {
+        handler_roots.extend(handler);
+    }
+    handler_roots.extend(eg.exception_handler.take());
+    for handler in eg.exception_handler_stack.drain(..) {
+        handler_roots.extend(handler);
+    }
+    run_value_destructors(eg, &handler_roots, frame)?;
+    drop(handler_roots);
     pop_vm_call_frame(eg, frame);
     shutdown_error.map_or(Ok(()), Err)
 }
@@ -2020,6 +2034,227 @@ pub(crate) fn throw_into_generator(
     resume_generator_with_input(eg, gen_ref, Value::null(), Some(exception))
 }
 
+/// Retire a suspended generator whose last userland owner is being released.
+/// PHP skips the abandoned body, executes every enclosing finally block and
+/// rejects any attempt to suspend again from that force-close path.
+#[cold]
+pub(crate) fn force_close_generator(
+    eg: &mut ExecutorGlobals,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+) -> Result<(), VmError> {
+    use crate::vm::generator::YieldFromDelegate;
+
+    // A suspended `yield from` owns a nested activation whose finally blocks
+    // and locals must retire before the delegating frame. Walk this sparse
+    // chain iteratively so valid deep delegation cannot overflow Rust's stack.
+    let mut chain = Vec::new();
+    let mut current = Some(gen_ref.clone());
+    let mut seen = std::collections::HashSet::new();
+    while let Some(generator) = current {
+        let identity = std::rc::Rc::as_ptr(&generator) as usize;
+        if !seen.insert(identity) {
+            break;
+        }
+        current = match generator.borrow().delegate.as_ref() {
+            Some(YieldFromDelegate::Generator(delegate, _))
+                if delegate
+                    .borrow()
+                    .owner_object
+                    .as_ref()
+                    .is_none_or(|owner| owner.strong_count() <= 1) =>
+            {
+                Some(delegate.clone())
+            }
+            Some(YieldFromDelegate::Generator(_, _)) => None,
+            Some(YieldFromDelegate::Array(_, _, _))
+            | Some(YieldFromDelegate::Iterator(_))
+            | None => None,
+        };
+        chain.push(generator);
+    }
+    while let Some(generator) = chain.pop() {
+        let close_result = force_close_generator_activation(eg, &generator);
+        // Force-close runs only after the last public Generator owner has
+        // disappeared. The internal GeneratorRef can outlive that object
+        // briefly while release bookkeeping unwinds; do not let that private
+        // handle extend the observable lifetime of the creating Closure.
+        // Normal and exceptional completion retain the Closure until the
+        // still-visible Generator object itself is released.
+        {
+            let mut generator = generator.borrow_mut();
+            generator.closure_owner = None;
+            generator.extra_args.clear();
+        }
+        close_result?;
+    }
+    Ok(())
+}
+
+#[cold]
+fn force_close_generator_activation(
+    eg: &mut ExecutorGlobals,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+) -> Result<(), VmError> {
+    use crate::vm::generator::GeneratorState;
+
+    let state = gen_ref.borrow().state;
+    if matches!(state, GeneratorState::Completed | GeneratorState::Running) {
+        return Ok(());
+    }
+
+    let (func, ip_offset) = {
+        let generator = gen_ref.borrow();
+        (generator.func, generator.ip_offset)
+    };
+    // SAFETY: generator construction retains a stable request-owned user
+    // function pointer until the Generator payload is dropped.
+    let user = unsafe { &*(func as *const UserFunction) };
+    let finally_start = (state == GeneratorState::Suspended)
+        .then(|| {
+            user.op_array
+                .try_entries
+                .iter()
+                .filter(|entry| {
+                    entry.finally_start != u32::MAX
+                        && ip_offset >= entry.try_start as usize
+                        && ip_offset < entry.finally_start as usize
+                })
+                .min_by_key(|entry| entry.finally_end - entry.try_start)
+                .map(|entry| entry.finally_start as usize)
+        })
+        .flatten();
+
+    let (frame, saved_execute_data) = materialize_generator_frame(eg, gen_ref);
+    eg.current_execute_data.set(frame);
+    let release_result = release_force_closed_generator_temps(
+        eg,
+        frame,
+        &user.op_array,
+        ip_offset,
+        finally_start,
+    );
+    eg.current_execute_data.set(saved_execute_data);
+    release_result?;
+    {
+        let mut generator = gen_ref.borrow_mut();
+        generator.force_closing = true;
+        generator.delegate = None;
+    }
+    let Some(finally_start) = finally_start else {
+        close_failed_generator(gen_ref);
+        eg.current_execute_data.set(frame);
+        run_frame_destructors(eg, frame)?;
+        eg.current_execute_data.set(saved_execute_data);
+        unsafe { cleanup_frame_slots(frame) };
+        pop_vm_call_frame(eg, frame);
+        return Ok(());
+    };
+
+    // A force-close is represented as a value-less non-local return. The
+    // ordinary finally completion machinery already walks nested outer
+    // finally ranges and retires the detached frame at the last marker.
+    unsafe {
+        (*frame).pending_return_after_finally = true;
+        (*frame).opline = user.op_array.instructions.as_ptr().add(finally_start);
+    }
+    gen_ref.borrow_mut().pending_return_after_finally = true;
+    match execute_resumed_generator_frame(
+        eg,
+        gen_ref,
+        frame,
+        saved_execute_data,
+        None,
+        false,
+        false,
+        false,
+    )? {
+        GeneratorResumeOutcome::Advanced => Ok(()),
+        GeneratorResumeOutcome::Threw(exception) => {
+            eg.exception = Some(exception);
+            Ok(())
+        }
+    }
+}
+
+#[cold]
+fn release_force_closed_generator_temps(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    ip_offset: usize,
+    finally_start: Option<usize>,
+) -> Result<(), VmError> {
+    // A force-close is an abrupt exit from every active foreach. Generator
+    // returns intentionally do not carry ordinary return-cleanup markers, so
+    // recover the compiler-owned iteration source from the enclosing loop
+    // shape and retire it before entering finally. Nested loops are ordered
+    // innermost first, matching PHP's unwind order.
+    for index in (0..ip_offset.min(op_array.instructions.len())).rev() {
+        let next = &op_array.instructions[index];
+        if !matches!(
+            next.opcode,
+            OpCode::ForeachNext | OpCode::ForeachNextRef | OpCode::ForeachNextPlain
+        ) {
+            continue;
+        }
+        let Some(exit) = op_array.instructions.get(index + 1) else {
+            continue;
+        };
+        if exit.opcode != OpCode::JmpZ || usize::from(exit.op2) <= ip_offset {
+            continue;
+        }
+        release_statement_temps(
+            eg,
+            frame,
+            next.op1 as usize,
+            next.op1 as usize + 1,
+            STATEMENT_TEMPS_NESTED_OBJECTS,
+            false,
+        )?;
+    }
+
+    let Some(finally_start) = finally_start else {
+        return Ok(());
+    };
+    let end = finally_start.min(op_array.instructions.len());
+    if ip_offset >= end {
+        return Ok(());
+    }
+    let window = &op_array.instructions[ip_offset..end];
+    let Some(first_release) = window.iter().find(|instruction| {
+        instruction.opcode == OpCode::ReleaseTemps
+            && instruction._pad & (RELEASE_TEMPS_ON_RETURN | RELEASE_TEMPS_SUBEXPRESSION) == 0
+    }) else {
+        return Ok(());
+    };
+    let release = if first_release._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0 {
+        first_release
+    } else {
+        window
+            .iter()
+            .find(|candidate| {
+                candidate.opcode == OpCode::ReleaseTemps
+                    && candidate._pad & RELEASE_TEMPS_ON_RETURN == 0
+                    && candidate._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0
+                    && candidate.op1 <= first_release.op1
+                    && candidate.op2 >= first_release.op2
+            })
+            .unwrap_or(first_release)
+    };
+    release_statement_temps(
+        eg,
+        frame,
+        release.op1 as usize,
+        release.op2 as usize,
+        if release._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0 {
+            STATEMENT_TEMPS_NESTED_OBJECTS
+        } else {
+            STATEMENT_TEMPS_ORDINARY
+        },
+        false,
+    )
+}
+
 fn resume_generator_with_input(
     eg: &mut ExecutorGlobals,
     gen_ref: &crate::vm::generator::GeneratorRef,
@@ -2093,6 +2328,10 @@ fn resume_generator_delegation(
                             let mut parent_data = parent.borrow_mut();
                             parent_data.value = value;
                             parent_data.key = key;
+                            parent_data.last_yielded_value =
+                                parent_data.value.clone_closure_capture();
+                            parent_data.last_yielded_key =
+                                parent_data.key.clone_closure_capture();
                             parent_data.state = GeneratorState::Suspended;
                         }
                         child = parent;
@@ -2194,6 +2433,7 @@ fn resume_generator_delegation(
                             eg,
                             &current,
                             GeneratorFrameInput::SyntheticThrow(error),
+                            &parents,
                         )? {
                             GeneratorFrameOutcome::Advanced => {
                                 fresh_execution = true;
@@ -2298,7 +2538,7 @@ fn resume_generator_delegation(
                         &mut input,
                         GeneratorFrameInput::Send(Value::null()),
                     );
-                    match execute_generator_frame_input(eg, &current, frame_input)? {
+                    match execute_generator_frame_input(eg, &current, frame_input, &parents)? {
                         GeneratorFrameOutcome::Advanced => fresh_execution = true,
                         GeneratorFrameOutcome::Threw(exception, extend_trace) => {
                             propagation = Some(GeneratorPropagation::Threw(
@@ -2345,7 +2585,7 @@ fn resume_generator_delegation(
                 | GeneratorFrameInput::SyntheticThrow(_)
                 | GeneratorFrameInput::Propagate(_)) => {
                     drop(entries);
-                    match execute_generator_frame_input(eg, &current, frame_input)? {
+                    match execute_generator_frame_input(eg, &current, frame_input, &parents)? {
                         GeneratorFrameOutcome::Advanced => fresh_execution = true,
                         GeneratorFrameOutcome::Threw(exception, extend_trace) => {
                             propagation = Some(GeneratorPropagation::Threw(
@@ -2362,6 +2602,7 @@ fn resume_generator_delegation(
                             eg,
                             &current,
                             GeneratorFrameInput::YieldFromReturn(Value::null()),
+                            &parents,
                         )? {
                             GeneratorFrameOutcome::Advanced => fresh_execution = true,
                             GeneratorFrameOutcome::Threw(exception, extend_trace) => {
@@ -2387,6 +2628,10 @@ fn resume_generator_delegation(
                             let mut current_data = current.borrow_mut();
                             current_data.value = value;
                             current_data.key = key;
+                            current_data.last_yielded_value =
+                                current_data.value.clone_closure_capture();
+                            current_data.last_yielded_key =
+                                current_data.key.clone_closure_capture();
                             current_data.delegate = Some(YieldFromDelegate::Array(
                                 entries,
                                 position + 1,
@@ -2421,7 +2666,7 @@ fn resume_generator_delegation(
                 frame_input @ (GeneratorFrameInput::Throw(_)
                 | GeneratorFrameInput::SyntheticThrow(_)
                 | GeneratorFrameInput::Propagate(_)) => {
-                    match execute_generator_frame_input(eg, &current, frame_input)? {
+                    match execute_generator_frame_input(eg, &current, frame_input, &parents)? {
                         GeneratorFrameOutcome::Advanced => fresh_execution = true,
                         GeneratorFrameOutcome::Threw(exception, extend_trace) => {
                             propagation = Some(GeneratorPropagation::Threw(
@@ -2438,6 +2683,7 @@ fn resume_generator_delegation(
                             eg,
                             &current,
                             GeneratorFrameInput::Propagate(exception),
+                            &parents,
                         )? {
                             GeneratorFrameOutcome::Advanced => fresh_execution = true,
                             GeneratorFrameOutcome::Threw(exception, extend_trace) => {
@@ -2452,6 +2698,10 @@ fn resume_generator_delegation(
                             let mut current_data = current.borrow_mut();
                             current_data.value = value;
                             current_data.key = key;
+                            current_data.last_yielded_value =
+                                current_data.value.clone_closure_capture();
+                            current_data.last_yielded_key =
+                                current_data.key.clone_closure_capture();
                             current_data.delegate = Some(YieldFromDelegate::Iterator(iterator));
                             current_data.state = GeneratorState::Suspended;
                         }
@@ -2462,6 +2712,7 @@ fn resume_generator_delegation(
                             eg,
                             &current,
                             GeneratorFrameInput::YieldFromReturn(Value::null()),
+                            &parents,
                         )? {
                             GeneratorFrameOutcome::Advanced => fresh_execution = true,
                             GeneratorFrameOutcome::Threw(exception, extend_trace) => {
@@ -2481,7 +2732,7 @@ fn resume_generator_delegation(
             &mut input,
             GeneratorFrameInput::Send(Value::null()),
         );
-        match execute_generator_frame_input(eg, &current, frame_input)? {
+        match execute_generator_frame_input(eg, &current, frame_input, &parents)? {
             GeneratorFrameOutcome::Advanced => fresh_execution = true,
             GeneratorFrameOutcome::Threw(exception, extend_trace) => {
                 propagation = Some(GeneratorPropagation::Threw(exception, extend_trace));
@@ -2498,6 +2749,7 @@ fn execute_generator_frame_input(
     eg: &mut ExecutorGlobals,
     gen_ref: &crate::vm::generator::GeneratorRef,
     input: GeneratorFrameInput,
+    trace_parents: &[crate::vm::generator::GeneratorRef],
 ) -> Result<GeneratorFrameOutcome, VmError> {
     let escaped_same_input_extends = match &input {
         GeneratorFrameInput::Throw(exception) => {
@@ -2509,7 +2761,12 @@ fn execute_generator_frame_input(
         }
         GeneratorFrameInput::Send(_) | GeneratorFrameInput::YieldFromReturn(_) => None,
     };
+    let saved_execute_data = eg.current_execute_data.get();
+    let trace_frames = materialize_generator_trace_frames(eg, trace_parents, saved_execute_data);
     let (frame, saved_execute_data) = materialize_generator_frame(eg, gen_ref);
+    if let Some(parent) = trace_frames.last() {
+        eg.publish_detached_trace_caller_at_current_site(frame as usize, *parent as usize);
+    }
     let (injected_exception, seed_injected_trace, extend_injected_trace) = match input {
         GeneratorFrameInput::Send(value) => {
             restore_yield_send_value(frame, gen_ref, value);
@@ -2532,7 +2789,19 @@ fn execute_generator_frame_input(
         seed_injected_trace,
         extend_injected_trace,
         false,
-    )?;
+    );
+    release_generator_trace_frames(eg, trace_frames);
+    let outcome = outcome?;
+    if matches!(outcome, GeneratorResumeOutcome::Advanced)
+        && !trace_parents.is_empty()
+        && gen_ref.borrow().state == crate::vm::generator::GeneratorState::Suspended
+        && matches!(
+            gen_ref.borrow().delegate.as_ref(),
+            Some(crate::vm::generator::YieldFromDelegate::Generator(_, _))
+        )
+    {
+        gen_ref.borrow_mut().indirectly_primed = true;
+    }
     Ok(match outcome {
         GeneratorResumeOutcome::Advanced => GeneratorFrameOutcome::Advanced,
         GeneratorResumeOutcome::Threw(exception) => {
@@ -2544,6 +2813,95 @@ fn execute_generator_frame_input(
     })
 }
 
+#[cold]
+fn materialize_generator_trace_frames(
+    eg: &mut ExecutorGlobals,
+    parents: &[crate::vm::generator::GeneratorRef],
+    saved_execute_data: *mut ExecuteData,
+) -> Vec<*mut ExecuteData> {
+    // Debug traces need the logical yield-from chain, but valid user programs
+    // can delegate hundreds of thousands of generators without requesting a
+    // trace. Bound the temporary diagnostic reconstruction so ordinary deep
+    // traversal remains iterative and cannot exhaust the VM stack.
+    if parents.len() > 64 {
+        return Vec::new();
+    }
+    let mut frames = Vec::with_capacity(parents.len());
+    let mut caller = saved_execute_data;
+    for (index, parent) in parents.iter().enumerate() {
+        let parent = parent.borrow();
+        let public_num_args = parent
+            .trace_num_args
+            .as_long()
+            .and_then(|count| u32::try_from(count).ok())
+            .unwrap_or(0);
+        let frame = eg.vm_stack.push_call_frame(
+            parent.func,
+            0,
+            public_num_args,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        if index == 0 {
+            eg.publish_detached_trace_caller(frame as usize, caller as usize);
+        } else {
+            eg.publish_detached_trace_caller_at_current_site(frame as usize, caller as usize);
+        }
+        eg.publish_debug_only_trace_frame(frame as usize);
+        if !parent.extra_args.is_empty() {
+            let first = unsafe { (*parent.func).sig.public_arity() };
+            eg.publish_function_arguments(
+                frame as usize,
+                crate::runtime::FunctionArgumentSnapshot {
+                    first,
+                    values: parent.extra_args.clone(),
+                },
+            );
+        }
+        // SAFETY: these trace-only frames use the same immutable function and
+        // compiler-sized CV/TMP layout as their suspended generator snapshots.
+        unsafe {
+            let user = &*(parent.func as *const UserFunction);
+            (*frame).opline = user
+                .op_array
+                .instructions
+                .as_ptr()
+                .add(parent.ip_offset);
+            for (slot, value) in parent.cv_values.iter().enumerate() {
+                frame_restore_slot(frame, (*frame).cv_mut(slot as u32), value.clone_closure_capture());
+            }
+            for (slot, value) in parent.tmp_values.iter().enumerate() {
+                frame_restore_slot(frame, (*frame).tmp_mut(slot as u32), value.clone_closure_capture());
+            }
+            if user.op_array.is_anonymous()
+                && parent
+                    .tmp_values
+                    .last()
+                    .is_some_and(|value| value.as_long().is_some())
+            {
+                (*frame).set_closure_scope();
+            }
+        }
+        caller = frame;
+        frames.push(frame);
+    }
+    frames
+}
+
+#[cold]
+fn release_generator_trace_frames(
+    eg: &mut ExecutorGlobals,
+    frames: Vec<*mut ExecuteData>,
+) {
+    for frame in frames.into_iter().rev() {
+        eg.discard_detached_trace_caller(frame as usize);
+        // SAFETY: trace frames were allocated in this order on the VM stack,
+        // never executed, and are retired in strict reverse order.
+        unsafe { cleanup_frame_slots(frame) };
+        pop_vm_call_frame(eg, frame);
+    }
+}
+
 /// Materialize one detached frame from the generator snapshot. All resume
 /// paths use this function so slot restoration and frame ownership cannot
 /// drift between normal yield, delegated return and delegated exception.
@@ -2551,20 +2909,69 @@ fn materialize_generator_frame(
     eg: &mut ExecutorGlobals,
     gen_ref: &crate::vm::generator::GeneratorRef,
 ) -> (*mut ExecuteData, *mut ExecuteData) {
-    gen_ref.borrow_mut().state = crate::vm::generator::GeneratorState::Running;
-    let func_ptr = gen_ref.borrow().func;
+    let (
+        func_ptr,
+        public_num_args,
+        called_scope_class_id,
+        closure_static_vars,
+        pending_return_after_finally,
+        ip_offset,
+        closure_scope,
+        cv_values,
+        tmp_values,
+        extra_args,
+        pending_finally_exceptions,
+    ) = {
+        let mut generator = gen_ref.borrow_mut();
+        generator.state = crate::vm::generator::GeneratorState::Running;
+        let closure_scope = generator
+            .tmp_values
+            .last()
+            .is_some_and(|value| value.as_long().is_some());
+        (
+            generator.func,
+            generator
+                .trace_num_args
+                .as_long()
+                .and_then(|count| u32::try_from(count).ok())
+                .unwrap_or(0),
+            generator.called_scope_class_id,
+            generator.closure_static_vars.clone(),
+            generator.pending_return_after_finally,
+            generator.ip_offset,
+            closure_scope,
+            std::mem::take(&mut generator.cv_values),
+            std::mem::take(&mut generator.tmp_values),
+            generator.extra_args.clone(),
+            std::mem::take(&mut generator.pending_finally_exceptions),
+        )
+    };
     let saved_execute_data = eg.current_execute_data.get();
     let frame = eg.vm_stack.push_call_frame(
         func_ptr,
         0,
-        0,
+        public_num_args,
         std::ptr::null_mut(),
         std::ptr::null_mut(),
     );
-    let gen_data = gen_ref.borrow();
-    publish_late_static_call_class_id(eg, frame, gen_data.called_scope_class_id);
-    if let Some(storage) = gen_data.closure_static_vars.clone() {
+    eg.publish_detached_trace_caller(frame as usize, saved_execute_data as usize);
+    publish_late_static_call_class_id(eg, frame, called_scope_class_id);
+    if let Some(storage) = closure_static_vars {
         eg.publish_closure_static_vars(frame as usize, storage);
+    }
+    if !extra_args.is_empty() {
+        let first = unsafe { (*func_ptr).sig.public_arity() };
+        eg.publish_function_arguments(
+            frame as usize,
+            crate::runtime::FunctionArgumentSnapshot {
+                first,
+                values: extra_args,
+            },
+        );
+    }
+    if !pending_finally_exceptions.is_empty() {
+        eg.finally_exceptions
+            .insert(frame as usize, pending_finally_exceptions);
     }
     // SAFETY: push_call_frame returned this live compiler-sized generator
     // frame; every restored CV/TMP index comes from its retained snapshot and
@@ -2572,26 +2979,24 @@ fn materialize_generator_frame(
     unsafe {
         let user = &*(func_ptr as *const UserFunction);
         (*frame).return_value = std::ptr::null_mut();
-        for (i, value) in gen_data.cv_values.iter().enumerate() {
+        (*frame).pending_return_after_finally = pending_return_after_finally;
+        for (i, value) in cv_values.into_iter().enumerate() {
             let slot = (*frame).cv_mut(i as u32);
-            frame_restore_slot(frame, slot as *mut Value, value.clone_closure_capture());
+            frame_restore_slot(frame, slot as *mut Value, value);
         }
-        for (i, value) in gen_data.tmp_values.iter().enumerate() {
+        for (i, value) in tmp_values.into_iter().enumerate() {
             let slot = (*frame).tmp_mut(i as u32);
-            frame_restore_slot(frame, slot as *mut Value, value.clone_closure_capture());
+            frame_restore_slot(frame, slot as *mut Value, value);
         }
-        if user.op_array.is_anonymous()
-            && gen_data.tmp_values.last().is_some_and(|value| value.as_long().is_some())
-        {
+        if user.op_array.is_anonymous() && closure_scope {
             (*frame).set_closure_scope();
         }
         (*frame).opline = user
             .op_array
             .instructions
             .as_ptr()
-            .add(gen_data.ip_offset)
+            .add(ip_offset)
     };
-    drop(gen_data);
     (frame, saved_execute_data)
 }
 
@@ -2741,47 +3146,64 @@ fn extend_generator_delegation_trace(
 
 #[cold]
 #[inline(never)]
-fn complete_escaped_generator_trace(
+fn complete_escaped_generator_origin_trace(
     exception: &Value,
-    injected_exception_identity: Option<usize>,
     eg: &ExecutorGlobals,
     gen_ref: &crate::vm::generator::GeneratorRef,
     frame: *mut ExecuteData,
     saved_execute_data: *mut ExecuteData,
 ) {
-    if saved_execute_data.is_null()
-        || exception.object_identity() == injected_exception_identity
-    {
+    if saved_execute_data.is_null() {
         return;
     }
-    let existing_trace = exception
-        .as_object()
-        .and_then(|object| {
-            let trace_key =
-                crate::runtime::throwable_private_property_key(eg, &object, "trace");
-            object
-                .get_property(&trace_key)
-                .and_then(Value::as_array)
-                .map(|trace| trace.values().cloned().collect::<Vec<_>>())
-        })
-        .unwrap_or_default();
     let continuation =
         generator_resume_continuation_trace(eg, gen_ref, frame, saved_execute_data);
-    let trace = if existing_trace.is_empty() {
-        continuation
-    } else {
-        let mut complete = PhpArray::new();
-        for value in existing_trace {
-            complete.push(value);
-        }
-        for value in continuation.values() {
-            complete.push(value.clone());
-        }
-        complete
+    let Some(origin_frame) = continuation.values().next().cloned() else {
+        return;
     };
+    let Some(object) = exception.as_object() else {
+        return;
+    };
+    let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
+    let existing = object
+        .get_property(&trace_key)
+        .and_then(Value::as_array)
+        .map(|trace| trace.values().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    let same_frame = |candidate: &Value| {
+        let Some(candidate) = candidate.as_array() else {
+            return false;
+        };
+        let Some(origin) = origin_frame.as_array() else {
+            return false;
+        };
+        ["function", "class", "type"].into_iter().all(|key| {
+            let left = candidate.get_str(key).and_then(Value::as_str);
+            let right = origin.get_str(key).and_then(Value::as_str);
+            left == right
+        })
+    };
+    if existing.iter().any(same_frame) {
+        return;
+    }
+
+    if existing.is_empty() {
+        drop(object);
+        if let Some(mut object) = exception.as_object_mut() {
+            object.set_property(&trace_key, Value::array(continuation));
+        }
+        return;
+    }
+
+    let mut complete = PhpArray::new();
+    complete.push(origin_frame);
+    for entry in existing {
+        complete.push(entry);
+    }
+    drop(object);
     if let Some(mut object) = exception.as_object_mut() {
-        let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
-        object.set_property(&trace_key, Value::array(trace));
+        object.set_property(&trace_key, Value::array(complete));
     }
 }
 
@@ -2818,7 +3240,8 @@ fn prepare_injected_generator_exception(
                 .map(|trace| trace.values().cloned().collect::<Vec<_>>())
         })
         .unwrap_or_default();
-    if saved_execute_data.is_null() || !((seed_trace && existing_trace.is_empty()) || extend_trace)
+    if saved_execute_data.is_null()
+        || !((seed_trace && existing_trace.is_empty()) || extend_trace)
     {
         return;
     }
@@ -2880,11 +3303,16 @@ fn execute_resumed_generator_frame(
         execute_ex(eg, frame)
     };
     let escaped_exception = eg.exception.take();
-
-    if let Some(exception) = escaped_exception.as_ref() {
-        complete_escaped_generator_trace(
+    if let Some(exception) = escaped_exception.as_ref()
+        && exception.object_identity() != injected_exception_identity
+    {
+        // The detached activation is intentionally omitted from ordinary
+        // live backtrace traversal to avoid duplicating yield-from parents.
+        // If an exception is created inside that activation, restore exactly
+        // its missing origin frame before the materialized frame is retired;
+        // each delegating boundary is still appended separately on unwind.
+        complete_escaped_generator_origin_trace(
             exception,
-            injected_exception_identity,
             eg,
             gen_ref,
             frame,
@@ -2942,6 +3370,7 @@ fn close_failed_generator(gen_ref: &crate::vm::generator::GeneratorRef) {
     generator.delegate = None;
     generator.cv_values.clear();
     generator.tmp_values.clear();
+    generator.pending_finally_exceptions.clear();
 }
 
 /// A detached generator owns every frame above and including `root`. Normal
@@ -2982,6 +3411,7 @@ pub(crate) fn cleanup_detached_frame_chain(
         }
         eg.current_execute_data.set(previous);
         discard_generator_generic_context(eg, frame);
+        eg.discard_detached_trace_caller(frame as usize);
         unsafe {
             cleanup_pending_calls(eg, frame);
             cleanup_frame_slots(frame);

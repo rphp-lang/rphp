@@ -7066,7 +7066,7 @@ impl Value {
 
     /// Whether this node directly owns any cycle-capable child. This cheap
     /// preflight keeps shallow final objects out of the deep-marker worklist.
-    fn try_has_cycle_children(&self) -> Option<bool> {
+    pub(crate) fn try_has_cycle_children(&self) -> Option<bool> {
         match self.cycle_node().map(|node| node.1) {
             Some(CycleNodeKind::Array) => Some(
                 self.as_array()

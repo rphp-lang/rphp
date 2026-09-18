@@ -4440,15 +4440,22 @@ fn execute_full_call<'a>(
         }
     }
 
+    let mut generator_closure_owner = None;
     if let Some(bindings) = pending_closure_captures {
+        let crate::runtime::PendingClosureBindings {
+            captures,
+            bound_this,
+            owner,
+        } = bindings;
+        generator_closure_owner = owner;
         let capture_offset = func_common.sig.parameter_cv_count();
-        for (index, value) in bindings.captures.into_iter().enumerate() {
+        for (index, value) in captures.into_iter().enumerate() {
             // SAFETY: closure frame sizing includes every capture after the
             // declared parameter CVs; each destination is initialized once.
             let destination = unsafe { (*call).cv_mut(capture_offset + index as u32) };
             unsafe { frame_slot_set(call, destination as *mut Value, value) };
         }
-        initialize_bound_this_frame(call, func_common, bindings.bound_this, None);
+        initialize_bound_this_frame(call, func_common, bound_this, None);
     }
 
     if let Some(arguments) = original_user_arguments {
@@ -4488,6 +4495,10 @@ fn execute_full_call<'a>(
                     user.op_array.num_temps,
                 );
                 generator.trace_num_args = Value::long(i64::from(num_args));
+                generator.extra_args = eg
+                    .take_function_arguments(call_key)
+                    .map(|snapshot| snapshot.values)
+                    .unwrap_or_default();
                 generator.called_scope_class_id = late_static_call_class_id(eg, call);
                 if let Some(scope) = closure_scope {
                     *generator
@@ -4496,6 +4507,7 @@ fn execute_full_call<'a>(
                         .expect("anonymous scope TMP") = scope;
                 }
                 generator.closure_static_vars = eg.closure_static_vars(call as usize);
+                generator.closure_owner = generator_closure_owner;
                 #[cfg(feature = "php-generics-reified")]
                 {
                     generator.reified_context = eg.generator_reified_context(call as usize);
@@ -4511,8 +4523,11 @@ fn execute_full_call<'a>(
                 let _ = generic_member_contract;
                 let gen_ref = new_generator_ref(generator);
                 let mut gen_obj = PhpObject::dynamic("Generator".to_string(), 0, HashMap::new());
-                gen_obj.generator = Some(gen_ref);
+                gen_obj.generator = Some(gen_ref.clone());
                 let generator_value = Value::object(gen_obj);
+                if let Some(owner) = generator_value.as_object_rc() {
+                    gen_ref.borrow_mut().owner_object = Some(std::rc::Rc::downgrade(&owner));
+                }
                 let return_hint = &func_common.sig.return_type_hint;
                 if !check_type_hint(
                     &generator_value,
