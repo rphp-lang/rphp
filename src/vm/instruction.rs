@@ -122,9 +122,9 @@ pub const FIRST_CLASS_CALLABLE_CLASS_PRELOADED: u16 = 1 << 2;
 /// guard in this opcode's existing cache; dynamic names must resolve anew.
 pub const FIRST_CLASS_CALLABLE_LITERAL_METHOD: u16 = 1 << 3;
 
-/// FetchConst flag: this exact read resolves PHP's deprecated built-in
-/// `E_STRICT` constant and must emit its PHP 8.5 use-site diagnostic.
-pub const FETCH_CONST_DEPRECATED_E_STRICT: u16 = 1;
+/// FetchConst flag: this exact read resolves a deprecated built-in constant
+/// and must emit its PHP use-site diagnostic.
+pub const FETCH_CONST_DEPRECATED_BUILTIN: u16 = 1;
 /// FetchConst flag: the read is inside `@`; a deprecation handler still runs
 /// but observes PHP's fatal-only reporting mask.
 pub const FETCH_CONST_ERROR_SUPPRESS: u16 = 1 << 1;

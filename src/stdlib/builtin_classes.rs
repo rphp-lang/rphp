@@ -2730,6 +2730,13 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         .return_type_hint = ParamTypeHint::Array;
 
     funcs.extend(register_value_error(eg));
+    let mut filter_exception = empty_internal_type("Filter\\FilterException", vec![], false, false);
+    filter_exception.parent = Some("Exception".to_string());
+    eg.register_class(filter_exception).unwrap();
+    let mut filter_failed_exception =
+        empty_internal_type("Filter\\FilterFailedException", vec![], false, false);
+    filter_failed_exception.parent = Some("Filter\\FilterException".to_string());
+    eg.register_class(filter_failed_exception).unwrap();
     funcs.extend(super::directory::object::register_class(eg));
     #[cfg(feature = "stream-registry")]
     funcs.extend(super::streams::filters::register_classes(eg));

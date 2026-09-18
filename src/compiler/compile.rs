@@ -13716,8 +13716,14 @@ impl Compiler {
                 }
                 // Fetch a named constant at runtime
                 let (runtime_name, fallback) = self.resolve_constant_name(name);
-                let deprecated_e_strict =
-                    runtime_name == "E_STRICT" || fallback.as_deref() == Some("E_STRICT");
+                let deprecated_builtin = [runtime_name.as_str(), fallback.as_deref().unwrap_or("")]
+                    .into_iter()
+                    .any(|name| {
+                        matches!(
+                            name,
+                            "E_STRICT" | "FILTER_SANITIZE_STRING" | "FILTER_SANITIZE_STRIPPED"
+                        )
+                    });
                 let name_idx = self.add_literal(Value::string(runtime_name));
                 let tmp = self.alloc_tmp();
                 let mut instr = Instruction::new(OpCode::FetchConst);
@@ -13730,8 +13736,8 @@ impl Compiler {
                     instr.op2_type = OpType::Const;
                     instr.extended_value = 2;
                 }
-                if deprecated_e_strict {
-                    instr._pad |= crate::vm::instruction::FETCH_CONST_DEPRECATED_E_STRICT;
+                if deprecated_builtin {
+                    instr._pad |= crate::vm::instruction::FETCH_CONST_DEPRECATED_BUILTIN;
                 }
                 instr.result = tmp;
                 instr.result_type = OpType::Tmp;

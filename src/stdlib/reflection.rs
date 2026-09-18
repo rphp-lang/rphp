@@ -1624,10 +1624,21 @@ pub(crate) fn report_deprecated_global_constant_use(
     use_site: &DeprecatedUseSite,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    if name == "E_STRICT" {
-        let identity = "constant:E_STRICT".to_string();
+    let builtin_message = match name {
+        "E_STRICT" => {
+            Some("Constant E_STRICT is deprecated since 8.4, the error level was removed")
+        }
+        "FILTER_SANITIZE_STRING" => Some(
+            "Constant FILTER_SANITIZE_STRING is deprecated since 8.1, use htmlspecialchars() instead",
+        ),
+        "FILTER_SANITIZE_STRIPPED" => Some(
+            "Constant FILTER_SANITIZE_STRIPPED is deprecated since 8.1, use htmlspecialchars() instead",
+        ),
+        _ => None,
+    };
+    if let Some(message) = builtin_message {
+        let identity = format!("constant:{name}");
         return guarded_deprecated_symbol(identity, eg, |eg| {
-            let message = "Constant E_STRICT is deprecated since 8.4, the error level was removed";
             let handled = crate::stdlib::dispatch_php_error(
                 eg,
                 use_site.frame,

@@ -3014,6 +3014,108 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ])
     );
     reg_typed!(
+        "filter_list",
+        fn_filter_list,
+        0,
+        0,
+        [],
+        [],
+        ParamTypeHint::Array
+    );
+    let filter_list = eg
+        .find_function("filter_list")
+        .expect("filter_list was just registered");
+    eg.register_internal_function_reflection_metadata(filter_list, vec![], "filter");
+    reg_typed!(
+        "filter_id",
+        fn_filter_id,
+        1,
+        1,
+        ["name"],
+        [ParamTypeHint::String],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Int,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    let filter_id = eg
+        .find_function("filter_id")
+        .expect("filter_id was just registered");
+    eg.register_internal_function_reflection_metadata(filter_id, vec![None], "filter");
+    const FILTER_INPUT_DEFAULT_DIAGNOSTICS: &[Option<&str>] =
+        &[None, None, Some("FILTER_DEFAULT"), None];
+    const FILTER_ARRAY_DEFAULT_DIAGNOSTICS: &[Option<&str>] = &[None, Some("FILTER_DEFAULT"), None];
+    reg_typed!(
+        "filter_input",
+        fn_filter_input,
+        4,
+        2,
+        ["type", "var_name", "filter", "options"],
+        [
+            ParamTypeHint::Int,
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::Int]),
+        ],
+        ParamTypeHint::Mixed
+    );
+    let filter_input = eg
+        .find_function("filter_input")
+        .expect("filter_input was just registered");
+    eg.register_internal_function_reflection_metadata_with_diagnostics(
+        filter_input,
+        vec![None, None, Some(Value::long(516)), Some(Value::long(0))],
+        FILTER_INPUT_DEFAULT_DIAGNOSTICS,
+        "filter",
+    );
+    reg_typed!(
+        "filter_input_array",
+        fn_filter_input_array,
+        3,
+        1,
+        ["type", "options", "add_empty"],
+        [
+            ParamTypeHint::Int,
+            ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::Int]),
+            ParamTypeHint::Bool,
+        ],
+        ParamTypeHint::Mixed
+    );
+    let filter_input_array = eg
+        .find_function("filter_input_array")
+        .expect("filter_input_array was just registered");
+    eg.register_internal_function_reflection_metadata_with_diagnostics(
+        filter_input_array,
+        vec![None, Some(Value::long(516)), Some(Value::bool(true))],
+        FILTER_ARRAY_DEFAULT_DIAGNOSTICS,
+        "filter",
+    );
+    reg_typed!(
+        "filter_var_array",
+        fn_filter_var_array,
+        3,
+        1,
+        ["array", "options", "add_empty"],
+        [
+            ParamTypeHint::Array,
+            ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::Int]),
+            ParamTypeHint::Bool,
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    let filter_var_array = eg
+        .find_function("filter_var_array")
+        .expect("filter_var_array was just registered");
+    eg.register_internal_function_reflection_metadata_with_diagnostics(
+        filter_var_array,
+        vec![None, Some(Value::long(516)), Some(Value::bool(true))],
+        FILTER_ARRAY_DEFAULT_DIAGNOSTICS,
+        "filter",
+    );
+    reg_typed!(
         "filter_var",
         fn_filter_var,
         3,

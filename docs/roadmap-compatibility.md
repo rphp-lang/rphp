@@ -36,6 +36,27 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `filter-extension-completion` checkpoint over `56c7720e` adds
+**63 PHP 8.5 passes without losses**. The expanded 8,258-case ledger reaches
+**7,437 pass / 348 fail / 194 skip / 276 unsupported / three XFAIL**. The full
+selector-free filter family is now **96 pass / zero fail / 22 unsupported / two
+upstream XFAIL**, retaining every parent pass.
+
+One extension-wide contract now covers callable and constant inventory,
+byte sanitizers, validators, recursive arrays and references, input
+projections, deprecated aliases and throw-on-failure exceptions. Nine original
+and five adjacent E2E cases plus every runnable extension PHPT are green. The
+repeated full matrix and performance cycle remains deferred to the aggregate
+sweep boundary.
+
+The active direction is now one continuous supported-failure sweep from
+**348 to zero**, using reversible root-cause commits rather than isolated
+performance checkpoints. Rank the remaining failure manifest by shared cause,
+prefer 20--80-case clusters, and retain immediate safety gates for crashes,
+unsafe representation changes and hot VM/value paths.
+
+### Preceding iconv-extension checkpoint
+
 The accepted `iconv-extension` checkpoint over `5b8c4cd0` adds all ten PHP 8.5
 iconv globals, four constants and Linux/glibc discovery. A cold native boundary
 implements binary conversion, `//IGNORE`, `//TRANSLIT`, character-based offsets
@@ -62,28 +83,6 @@ Exact evidence and rejected experiments are recorded in `compatibility.md`.
 Next extension work stays isolated from the active Core sweep. Rank one
 independently bounded extension from the remaining 645 missing globals; keep
 iconv filters, output handling and OOM behavior as separate Core prerequisites.
-
-### Preceding filter-value dispatch checkpoint
-
-The accepted `filter-value-dispatch-contracts` checkpoint over `e93cd45a`
-adds **15 PHP 8.5 passes without losses** and admits the complete 120-case
-selector-free filter suite. The expanded 8,187-case ledger reaches **7,313
-pass / 404 fail / 194 skip / 273 unsupported / three XFAIL**. The filter family
-moves from 18 to 33 exact passes while retaining every previous pass.
-
-The implementation centralizes PHP-compatible scalar/array dispatch,
-recursive key-preserving filtering, callback warnings and evaluation order,
-integer radix/boundary parsing, and finite float validation. Five original and
-five adjacent E2E cases plus all 15 target PHPT are green. To maximize
-compatibility throughput, the repeated full matrix and performance cycle is
-deferred to the aggregate sweep boundary; every internal cluster still needs
-focused exact-output and no-loss evidence before integration.
-
-The active direction is now one continuous supported-failure sweep from
-**404 to zero**, using reversible root-cause commits rather than isolated
-performance checkpoints. Rank the remaining failure manifest by shared cause,
-prefer 20--80-case clusters, and retain immediate safety gates for crashes,
-unsafe representation changes and hot VM/value paths.
 
 ### Preceding object-store owner checkpoint
 

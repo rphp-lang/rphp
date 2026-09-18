@@ -924,7 +924,7 @@ fn normalized_tag_name(tag: &[u8]) -> Option<Vec<u8>> {
     normalized_allowed_name(&tag[start..index])
 }
 
-fn strip_tags_bytes(bytes: &[u8], allowed: &HashSet<Vec<u8>>) -> Vec<u8> {
+pub(super) fn strip_tags_bytes(bytes: &[u8], allowed: &HashSet<Vec<u8>>) -> Vec<u8> {
     let mut output = Vec::with_capacity(bytes.len());
     let mut index = 0usize;
     while index < bytes.len() {

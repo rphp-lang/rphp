@@ -1372,17 +1372,100 @@ pub(super) fn fn_get_html_translation_table(
 const FILTER_VALIDATE_INT: i64 = 257;
 const FILTER_VALIDATE_BOOL: i64 = 258;
 const FILTER_VALIDATE_FLOAT: i64 = 259;
+const FILTER_VALIDATE_REGEXP: i64 = 272;
+const FILTER_VALIDATE_URL: i64 = 273;
+const FILTER_VALIDATE_EMAIL: i64 = 274;
 const FILTER_VALIDATE_IP: i64 = 275;
+const FILTER_VALIDATE_MAC: i64 = 276;
+const FILTER_VALIDATE_DOMAIN: i64 = 277;
+const FILTER_SANITIZE_STRING: i64 = 513;
+const FILTER_SANITIZE_ENCODED: i64 = 514;
+const FILTER_SANITIZE_SPECIAL_CHARS: i64 = 515;
 const FILTER_DEFAULT: i64 = 516;
+const FILTER_SANITIZE_EMAIL: i64 = 517;
+const FILTER_SANITIZE_URL: i64 = 518;
+const FILTER_SANITIZE_NUMBER_INT: i64 = 519;
+const FILTER_SANITIZE_NUMBER_FLOAT: i64 = 520;
+const FILTER_SANITIZE_FULL_SPECIAL_CHARS: i64 = 522;
+const FILTER_SANITIZE_ADD_SLASHES: i64 = 523;
 const FILTER_CALLBACK: i64 = 1024;
 const FILTER_FLAG_ALLOW_OCTAL: i64 = 1;
 const FILTER_FLAG_ALLOW_HEX: i64 = 2;
+const FILTER_FLAG_STRIP_LOW: i64 = 4;
+const FILTER_FLAG_STRIP_HIGH: i64 = 8;
+const FILTER_FLAG_ENCODE_LOW: i64 = 16;
+const FILTER_FLAG_ENCODE_HIGH: i64 = 32;
+const FILTER_FLAG_ENCODE_AMP: i64 = 64;
+const FILTER_FLAG_NO_ENCODE_QUOTES: i64 = 128;
+const FILTER_FLAG_EMPTY_STRING_NULL: i64 = 256;
+const FILTER_FLAG_STRIP_BACKTICK: i64 = 512;
+const FILTER_FLAG_ALLOW_FRACTION: i64 = 4_096;
+const FILTER_FLAG_ALLOW_THOUSAND: i64 = 8_192;
+const FILTER_FLAG_ALLOW_SCIENTIFIC: i64 = 16_384;
+const FILTER_FLAG_PATH_REQUIRED: i64 = 262_144;
+const FILTER_FLAG_QUERY_REQUIRED: i64 = 524_288;
+const FILTER_FLAG_HOSTNAME: i64 = 1_048_576;
 const FILTER_FLAG_IPV4: i64 = 1_048_576;
 const FILTER_FLAG_IPV6: i64 = 2_097_152;
+const FILTER_FLAG_NO_RES_RANGE: i64 = 4_194_304;
+const FILTER_FLAG_NO_PRIV_RANGE: i64 = 8_388_608;
 const FILTER_REQUIRE_ARRAY: i64 = 16_777_216;
 const FILTER_REQUIRE_SCALAR: i64 = 33_554_432;
 const FILTER_FORCE_ARRAY: i64 = 67_108_864;
 const FILTER_NULL_ON_FAILURE: i64 = 134_217_728;
+const FILTER_THROW_ON_FAILURE: i64 = 268_435_456;
+const FILTER_FLAG_GLOBAL_RANGE: i64 = 536_870_912;
+
+const FILTER_NAMES: &[(&str, i64)] = &[
+    ("int", FILTER_VALIDATE_INT),
+    ("boolean", FILTER_VALIDATE_BOOL),
+    ("float", FILTER_VALIDATE_FLOAT),
+    ("validate_regexp", 272),
+    ("validate_domain", 277),
+    ("validate_url", 273),
+    ("validate_email", 274),
+    ("validate_ip", FILTER_VALIDATE_IP),
+    ("validate_mac", 276),
+    ("string", 513),
+    ("stripped", 513),
+    ("encoded", 514),
+    ("special_chars", 515),
+    ("full_special_chars", 522),
+    ("unsafe_raw", FILTER_DEFAULT),
+    ("email", 517),
+    ("url", 518),
+    ("number_int", 519),
+    ("number_float", 520),
+    ("add_slashes", 523),
+    ("callback", FILTER_CALLBACK),
+];
+
+pub(super) fn fn_filter_list(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let mut result = PhpArray::with_packed_capacity(FILTER_NAMES.len());
+    for (name, _) in FILTER_NAMES {
+        result.push(Value::string(*name));
+    }
+    ret!(rv, Value::array(result));
+}
+
+pub(super) fn fn_filter_id(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(name) = typed_internal_string_argument(ed, eg, "filter_id", 0, "name")? else {
+        return Ok(());
+    };
+    let result = FILTER_NAMES
+        .iter()
+        .find_map(|(candidate, id)| (*candidate == name).then_some(*id))
+        .map_or_else(|| Value::bool(false), Value::long);
+    ret!(rv, result);
+}
 
 struct FilterVarConfig<'a> {
     filter: i64,
@@ -1400,6 +1483,66 @@ fn filter_var_invalid(config: &FilterVarConfig<'_>) -> Value {
             Value::bool(false)
         }
     })
+}
+
+#[cold]
+fn filter_var_failure(
+    value: &Value,
+    config: &FilterVarConfig<'_>,
+    eg: &mut ExecutorGlobals,
+) -> Value {
+    if config.flags & FILTER_THROW_ON_FAILURE == 0 {
+        return filter_var_invalid(config);
+    }
+    let message = if value.dereferenced().value_type() == ValueType::Object {
+        let class_name = value
+            .dereferenced()
+            .as_object()
+            .map(|object| object.class_name.to_string())
+            .unwrap_or_else(|| "object".to_string());
+        format!("filter validation failed: object of type {class_name} has no __toString() method")
+    } else {
+        let filter_name = FILTER_NAMES
+            .iter()
+            .find_map(|(name, filter)| (*filter == config.filter).then_some(*name))
+            .unwrap_or("unknown");
+        format!(
+            "filter validation failed: filter {filter_name} not satisfied by '{}'",
+            value
+                .dereferenced()
+                .echo_to_string_with_precision(eg.precision)
+        )
+    };
+    eg.exception = Some(crate::value::make_error_value(
+        "Filter\\FilterFailedException",
+        &message,
+    ));
+    Value::null()
+}
+
+#[cold]
+fn filter_array_shape_failure(
+    value: &Value,
+    config: &FilterVarConfig<'_>,
+    eg: &mut ExecutorGlobals,
+    expected_array: bool,
+) -> Value {
+    if config.flags & FILTER_THROW_ON_FAILURE == 0 {
+        return filter_var_invalid(config);
+    }
+    let message = if expected_array {
+        format!(
+            "filter validation failed: not an array (got {})",
+            value.dereferenced().diagnostic_type_name()
+        )
+    } else {
+        "filter validation failed: not a scalar value (got an array)".to_string()
+    };
+    eg.exception = Some(crate::value::make_error_value(
+        "Filter\\FilterFailedException",
+        &message,
+    ));
+    Value::null()
 }
 
 #[inline]
@@ -1470,32 +1613,592 @@ fn filter_float_decimal(config: &FilterVarConfig<'_>) -> Result<char, Value> {
     Ok(decimal)
 }
 
-fn parse_filter_float(source: &str, decimal: char) -> Option<f64> {
+fn filter_float_thousand(config: &FilterVarConfig<'_>) -> Result<char, Value> {
+    let thousand = config
+        .option
+        .and_then(Value::as_array)
+        .and_then(|options| options.get_str("thousand"));
+    let Some(thousand) = thousand else {
+        return Ok(',');
+    };
+    let rendered = thousand.echo_to_string();
+    let mut characters = rendered.chars();
+    let Some(thousand) = characters.next() else {
+        return Err(crate::value::make_error_value(
+            "ValueError",
+            "filter_var(): \"thousand\" option must not be empty",
+        ));
+    };
+    if characters.next().is_some() {
+        return Err(crate::value::make_error_value(
+            "ValueError",
+            "filter_var(): \"thousand\" option must be one character long",
+        ));
+    }
+    Ok(thousand)
+}
+
+fn parse_filter_float(
+    source: &str,
+    decimal: char,
+    thousand: char,
+    allow_thousand: bool,
+) -> Option<f64> {
     let source = source.trim();
     if source.is_empty() {
         return None;
     }
-    let normalized;
-    let source = if decimal == '.' {
-        source
-    } else {
-        if source.contains('.') {
+    let mut normalized = source.to_string();
+    if allow_thousand && normalized.contains(thousand) {
+        let unsigned = normalized.strip_prefix(['+', '-']).unwrap_or(&normalized);
+        let mantissa = unsigned.split(['e', 'E']).next().unwrap_or(unsigned);
+        let integer = mantissa.split(decimal).next().unwrap_or(mantissa);
+        let mut groups = integer.split(thousand);
+        let first = groups.next()?;
+        if first.is_empty()
+            || first.len() > 3
+            || !first.bytes().all(|byte| byte.is_ascii_digit())
+            || groups
+                .any(|group| group.len() != 3 || !group.bytes().all(|byte| byte.is_ascii_digit()))
+        {
             return None;
         }
-        normalized = source.replace(decimal, ".");
-        &normalized
-    };
-    let value = source.parse::<f64>().ok()?;
+        normalized.retain(|character| character != thousand);
+    } else if !allow_thousand && thousand != decimal && normalized.contains(thousand) {
+        return None;
+    }
+    if decimal != '.' {
+        if normalized.contains('.') {
+            return None;
+        }
+        normalized = normalized.replace(decimal, ".");
+    }
+    let value = normalized.parse::<f64>().ok()?;
     if !value.is_finite() {
         return None;
     }
     if value == 0.0 {
-        let mantissa = source.split(['e', 'E']).next().unwrap_or(source);
+        let mantissa = normalized.split(['e', 'E']).next().unwrap_or(&normalized);
         if mantissa.bytes().any(|byte| matches!(byte, b'1'..=b'9')) {
             return None;
         }
     }
     Some(value)
+}
+
+fn filter_scalar_bytes(value: &Value, eg: &ExecutorGlobals) -> Option<(Vec<u8>, bool)> {
+    match value.value_type() {
+        ValueType::String => value
+            .php_string_bytes()
+            .map(|bytes| (bytes.into_owned(), value.is_binary_string())),
+        ValueType::Long | ValueType::Double | ValueType::True | ValueType::False => Some((
+            value
+                .echo_to_string_with_precision(eg.precision)
+                .into_bytes(),
+            false,
+        )),
+        ValueType::Null => Some((Vec::new(), false)),
+        _ => None,
+    }
+}
+
+#[inline]
+fn push_numeric_entity(output: &mut Vec<u8>, byte: u8) {
+    output.extend_from_slice(b"&#");
+    output.extend_from_slice(byte.to_string().as_bytes());
+    output.push(b';');
+}
+
+fn filter_encode_byte_flags(source: &[u8], flags: i64) -> Vec<u8> {
+    let mut output = Vec::with_capacity(source.len());
+    for byte in source.iter().copied() {
+        let low = byte < 0x20;
+        let high = byte >= 0x7f;
+        if (low && flags & FILTER_FLAG_STRIP_LOW != 0)
+            || (high && flags & FILTER_FLAG_STRIP_HIGH != 0)
+            || (byte == b'`' && flags & FILTER_FLAG_STRIP_BACKTICK != 0)
+        {
+            continue;
+        }
+        if (low && flags & FILTER_FLAG_ENCODE_LOW != 0)
+            || (high && flags & FILTER_FLAG_ENCODE_HIGH != 0)
+            || (byte == b'&' && flags & FILTER_FLAG_ENCODE_AMP != 0)
+        {
+            push_numeric_entity(&mut output, byte);
+        } else {
+            output.push(byte);
+        }
+    }
+    output
+}
+
+fn filter_sanitize_special_chars(source: &[u8], flags: i64) -> Vec<u8> {
+    let mut output = Vec::with_capacity(source.len());
+    for byte in source.iter().copied() {
+        let low = byte < 0x20;
+        let high = byte >= 0x7f;
+        if (low && flags & FILTER_FLAG_STRIP_LOW != 0)
+            || (high && flags & FILTER_FLAG_STRIP_HIGH != 0)
+            || (byte == b'`' && flags & FILTER_FLAG_STRIP_BACKTICK != 0)
+        {
+            continue;
+        }
+        if (low && flags & FILTER_FLAG_ENCODE_LOW != 0)
+            || (high && flags & FILTER_FLAG_ENCODE_HIGH != 0)
+            || matches!(byte, b'"' | b'\'' | b'&' | b'<' | b'>')
+        {
+            push_numeric_entity(&mut output, byte);
+        } else {
+            output.push(byte);
+        }
+    }
+    output
+}
+
+fn filter_sanitize_full_special_chars(source: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(source.len());
+    for byte in source.iter().copied() {
+        match byte {
+            b'&' => output.extend_from_slice(b"&amp;"),
+            b'"' => output.extend_from_slice(b"&quot;"),
+            b'\'' => output.extend_from_slice(b"&#039;"),
+            b'<' => output.extend_from_slice(b"&lt;"),
+            b'>' => output.extend_from_slice(b"&gt;"),
+            _ => output.push(byte),
+        }
+    }
+    output
+}
+
+fn filter_sanitize_string(source: &[u8], flags: i64) -> Vec<u8> {
+    let mut normalized = Vec::with_capacity(source.len());
+    let mut index = 0;
+    while index < source.len() {
+        let byte = source[index];
+        normalized.push(byte);
+        index += 1;
+        if byte != b'<' {
+            continue;
+        }
+        while source.get(index).is_some_and(u8::is_ascii_whitespace) {
+            index += 1;
+        }
+        if source.get(index) == Some(&b'/') {
+            normalized.push(b'/');
+            index += 1;
+            while source.get(index).is_some_and(u8::is_ascii_whitespace) {
+                index += 1;
+            }
+        }
+    }
+    let stripped =
+        super::source_filters::strip_tags_bytes(&normalized, &std::collections::HashSet::new());
+    let source = filter_encode_byte_flags(&stripped, flags);
+    if flags & FILTER_FLAG_NO_ENCODE_QUOTES != 0 {
+        return source;
+    }
+    let mut output = Vec::with_capacity(source.len());
+    for byte in source {
+        if matches!(byte, b'"' | b'\'') {
+            push_numeric_entity(&mut output, byte);
+        } else {
+            output.push(byte);
+        }
+    }
+    output
+}
+
+fn filter_percent_encode(source: &[u8], flags: i64) -> Vec<u8> {
+    let source = filter_encode_byte_flags(source, flags);
+    let mut output = String::with_capacity(source.len());
+    for byte in source {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_') {
+            output.push(char::from(byte));
+        } else {
+            push_percent_escape(&mut output, byte);
+        }
+    }
+    output.into_bytes()
+}
+
+fn filter_sanitize_email(source: &[u8], flags: i64) -> Vec<u8> {
+    let source = filter_encode_byte_flags(source, flags);
+    source
+        .into_iter()
+        .filter(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'='
+                        | b'?'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'{'
+                        | b'|'
+                        | b'}'
+                        | b'~'
+                        | b'@'
+                        | b'.'
+                        | b'['
+                        | b']'
+                )
+        })
+        .collect()
+}
+
+fn filter_sanitize_url(source: &[u8], flags: i64) -> Vec<u8> {
+    let source = filter_encode_byte_flags(source, flags);
+    source
+        .into_iter()
+        .filter(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'$' | b'-'
+                        | b'_'
+                        | b'.'
+                        | b'+'
+                        | b'!'
+                        | b'*'
+                        | b'\''
+                        | b'('
+                        | b')'
+                        | b','
+                        | b'{'
+                        | b'}'
+                        | b'|'
+                        | b'\\'
+                        | b'^'
+                        | b'~'
+                        | b'['
+                        | b']'
+                        | b'`'
+                        | b'<'
+                        | b'>'
+                        | b'#'
+                        | b'%'
+                        | b'"'
+                        | b';'
+                        | b'/'
+                        | b':'
+                        | b'@'
+                        | b'&'
+                        | b'='
+                        | b'?'
+                )
+        })
+        .collect()
+}
+
+fn filter_sanitize_number(source: &[u8], flags: i64, float: bool) -> Vec<u8> {
+    source
+        .iter()
+        .copied()
+        .filter(|byte| {
+            byte.is_ascii_digit()
+                || matches!(byte, b'+' | b'-')
+                || (float && flags & FILTER_FLAG_ALLOW_FRACTION != 0 && *byte == b'.')
+                || (float && flags & FILTER_FLAG_ALLOW_THOUSAND != 0 && *byte == b',')
+                || (float
+                    && flags & FILTER_FLAG_ALLOW_SCIENTIFIC != 0
+                    && matches!(byte, b'e' | b'E'))
+        })
+        .collect()
+}
+
+fn filter_add_slashes(source: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(source.len());
+    for byte in source.iter().copied() {
+        match byte {
+            b'\0' => output.extend_from_slice(b"\\0"),
+            b'\'' | b'"' | b'\\' => {
+                output.push(b'\\');
+                output.push(byte);
+            }
+            _ => output.push(byte),
+        }
+    }
+    output
+}
+
+fn filter_domain_is_valid(source: &str, hostname_only: bool) -> bool {
+    let source = source.strip_suffix('.').unwrap_or(source);
+    if source.is_empty() || source.len() > 253 || source.starts_with('.') {
+        return false;
+    }
+    source.split('.').all(|label| {
+        if label.is_empty() || label.len() > 63 {
+            return false;
+        }
+        if hostname_only {
+            label
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .as_bytes()
+                    .last()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        } else {
+            true
+        }
+    })
+}
+
+fn filter_email_is_valid(source: &str, unicode_local: bool) -> bool {
+    if source.len() > 254 || source.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
+        return false;
+    }
+    let Some((local, domain)) = source.rsplit_once('@') else {
+        return false;
+    };
+    if local.is_empty() || local.len() > 64 || domain.is_empty() {
+        return false;
+    }
+    let local_valid = if local.starts_with('"') && local.ends_with('"') && local.len() >= 2 {
+        true
+    } else {
+        !local.starts_with('.')
+            && !local.ends_with('.')
+            && !local.contains("..")
+            && local.chars().all(|character| {
+                character.is_ascii_alphanumeric()
+                    || (!character.is_ascii() && unicode_local)
+                    || matches!(
+                        character,
+                        '!' | '#'
+                            | '$'
+                            | '%'
+                            | '&'
+                            | '\''
+                            | '*'
+                            | '+'
+                            | '-'
+                            | '/'
+                            | '='
+                            | '?'
+                            | '^'
+                            | '_'
+                            | '`'
+                            | '{'
+                            | '|'
+                            | '}'
+                            | '~'
+                            | '.'
+                    )
+            })
+    };
+    if !local_valid {
+        return false;
+    }
+    if let Some(literal) = domain
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+    {
+        if let Some(ipv6) = literal.strip_prefix("IPv6:") {
+            return ipv6.parse::<std::net::Ipv6Addr>().is_ok();
+        }
+        return literal.parse::<std::net::Ipv4Addr>().is_ok();
+    }
+    filter_domain_is_valid(domain, true)
+        && domain
+            .rsplit_once('.')
+            .is_some_and(|(_, suffix)| suffix.bytes().any(|byte| byte.is_ascii_alphabetic()))
+}
+
+fn filter_mac_is_valid(source: &str, separator: Option<char>) -> bool {
+    let separator = separator.or_else(|| {
+        if source.contains(':') {
+            Some(':')
+        } else if source.contains('-') {
+            Some('-')
+        } else if source.contains('.') {
+            Some('.')
+        } else {
+            None
+        }
+    });
+    let Some(separator) = separator else {
+        return false;
+    };
+    let (count, width) = if separator == '.' { (3, 4) } else { (6, 2) };
+    let mut parts = source.split(separator);
+    (0..count).all(|_| {
+        parts.next().is_some_and(|part| {
+            part.len() == width && part.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+    }) && parts.next().is_none()
+}
+
+#[inline]
+fn ipv4_in_prefix(address: std::net::Ipv4Addr, base: u32, prefix: u32) -> bool {
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix)
+    };
+    u32::from(address) & mask == base & mask
+}
+
+#[inline]
+fn ipv6_in_prefix(address: std::net::Ipv6Addr, base: u128, prefix: u32) -> bool {
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u128::MAX << (128 - prefix)
+    };
+    u128::from(address) & mask == base & mask
+}
+
+fn filter_ip_is_private(address: std::net::IpAddr) -> bool {
+    match address {
+        std::net::IpAddr::V4(address) => {
+            ipv4_in_prefix(address, 0x0a00_0000, 8)
+                || ipv4_in_prefix(address, 0xac10_0000, 12)
+                || ipv4_in_prefix(address, 0xc0a8_0000, 16)
+        }
+        std::net::IpAddr::V6(address) => ipv6_in_prefix(address, 0xfc00u128 << 112, 7),
+    }
+}
+
+fn filter_ip_is_reserved(address: std::net::IpAddr) -> bool {
+    match address {
+        std::net::IpAddr::V4(address) => [
+            (0x0000_0000, 8),
+            (0x7f00_0000, 8),
+            (0xa9fe_0000, 16),
+            (0xf000_0000, 4),
+        ]
+        .into_iter()
+        .any(|(base, prefix)| ipv4_in_prefix(address, base, prefix)),
+        std::net::IpAddr::V6(address) => [
+            (0u128, 128),
+            (1u128, 128),
+            (0xffffu128 << 32, 96),
+            (0xfe80u128 << 112, 10),
+        ]
+        .into_iter()
+        .any(|(base, prefix)| ipv6_in_prefix(address, base, prefix)),
+    }
+}
+
+fn filter_ip_is_non_global(address: std::net::IpAddr) -> bool {
+    if filter_ip_is_private(address) || filter_ip_is_reserved(address) {
+        return true;
+    }
+    match address {
+        std::net::IpAddr::V4(address) => [
+            (0x6440_0000, 10),
+            (0xc000_0000, 24),
+            (0xc000_0200, 24),
+            (0xc612_0000, 15),
+            (0xc633_6400, 24),
+            (0xcb00_7100, 24),
+        ]
+        .into_iter()
+        .any(|(base, prefix)| ipv4_in_prefix(address, base, prefix)),
+        std::net::IpAddr::V6(address) => [
+            (0x0100u128 << 112, 64),
+            (0x2001u128 << 112, 23),
+            ((0x2001u128 << 112) | (0x0002u128 << 96), 48),
+            ((0x2001u128 << 112) | (0x0db8u128 << 96), 32),
+            ((0x2001u128 << 112) | (0x0010u128 << 96), 28),
+        ]
+        .into_iter()
+        .any(|(base, prefix)| ipv6_in_prefix(address, base, prefix)),
+    }
+}
+
+fn filter_url_is_valid(source: &str, flags: i64) -> bool {
+    if source.is_empty()
+        || source
+            .chars()
+            .any(|character| character.is_control() || !character.is_ascii())
+        || source.contains('\\')
+    {
+        return false;
+    }
+    let Some((scheme, remainder)) = source.split_once(':') else {
+        return false;
+    };
+    if scheme.is_empty()
+        || !scheme.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_alphabetic() || (index > 0 && matches!(byte, b'+' | b'-' | b'.'))
+        })
+    {
+        return false;
+    }
+    if scheme.eq_ignore_ascii_case("file")
+        || scheme.eq_ignore_ascii_case("mailto")
+        || scheme.eq_ignore_ascii_case("news")
+    {
+        return true;
+    }
+    let Some(rest) = remainder.strip_prefix("//") else {
+        return false;
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    let tail = &rest[authority_end..];
+    if authority.is_empty()
+        || authority.contains('[') && !authority.contains("@[") && !authority.starts_with('[')
+    {
+        return false;
+    }
+    let host_port = if let Some((userinfo, host)) = authority.rsplit_once('@') {
+        if userinfo.contains(['[', ']']) {
+            return false;
+        }
+        host
+    } else {
+        authority
+    };
+    let host_valid = if let Some(bracketed) = host_port.strip_prefix('[') {
+        let Some(close) = bracketed.find(']') else {
+            return false;
+        };
+        let host = &bracketed[..close];
+        let suffix = &bracketed[close + 1..];
+        if !suffix.is_empty()
+            && (!suffix.starts_with(':')
+                || suffix[1..].parse::<u16>().ok().is_none_or(|port| port == 0))
+        {
+            return false;
+        }
+        host.parse::<std::net::Ipv6Addr>().is_ok()
+    } else {
+        let (host, port) = host_port
+            .rsplit_once(':')
+            .filter(|(_, port)| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
+            .map_or((host_port, None), |(host, port)| (host, Some(port)));
+        if host_port.contains(':') && port.is_none() {
+            return false;
+        }
+        if let Some(port) = port {
+            let Some(port) = port.parse::<u16>().ok() else {
+                return false;
+            };
+            if port == 0 {
+                return false;
+            }
+        }
+        filter_domain_is_valid(host, true)
+    };
+    host_valid
+        && (flags & FILTER_FLAG_PATH_REQUIRED == 0 || tail.starts_with('/'))
+        && (flags & FILTER_FLAG_QUERY_REQUIRED == 0 || tail.contains('?'))
 }
 
 #[cold]
@@ -1507,16 +2210,58 @@ fn filter_var_scalar(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
 ) -> Result<Value, VmError> {
+    macro_rules! scalar_bytes {
+        () => {
+            match filter_scalar_bytes(value, eg) {
+                Some(result) => result,
+                None => return Ok(filter_var_failure(value, config, eg)),
+            }
+        };
+    }
     let validator_options = config.option.and_then(Value::as_array);
     let result = match config.filter {
-        FILTER_DEFAULT => match value.value_type() {
-            ValueType::String => value.clone(),
-            ValueType::Long | ValueType::Double | ValueType::True | ValueType::False => {
-                Value::string(value.echo_to_string_with_precision(eg.precision))
-            }
-            ValueType::Null => Value::string(String::new()),
-            _ => filter_var_invalid(config),
-        },
+        FILTER_SANITIZE_STRING => {
+            let (source, binary) = scalar_bytes!();
+            php_byte_result(filter_sanitize_string(&source, config.flags), binary)
+        }
+        FILTER_SANITIZE_ENCODED => {
+            let (source, _) = scalar_bytes!();
+            Value::string(
+                String::from_utf8_lossy(&filter_percent_encode(&source, config.flags)).into_owned(),
+            )
+        }
+        FILTER_SANITIZE_SPECIAL_CHARS => {
+            let (source, _) = scalar_bytes!();
+            php_byte_result(filter_sanitize_special_chars(&source, config.flags), false)
+        }
+        FILTER_SANITIZE_FULL_SPECIAL_CHARS => {
+            let (source, _) = scalar_bytes!();
+            php_byte_result(filter_sanitize_full_special_chars(&source), false)
+        }
+        FILTER_DEFAULT => {
+            let (source, binary) = scalar_bytes!();
+            php_byte_result(filter_encode_byte_flags(&source, config.flags), binary)
+        }
+        FILTER_SANITIZE_EMAIL => {
+            let (source, binary) = scalar_bytes!();
+            php_byte_result(filter_sanitize_email(&source, config.flags), binary)
+        }
+        FILTER_SANITIZE_URL => {
+            let (source, binary) = scalar_bytes!();
+            php_byte_result(filter_sanitize_url(&source, config.flags), binary)
+        }
+        FILTER_SANITIZE_NUMBER_INT => {
+            let (source, _) = scalar_bytes!();
+            php_byte_result(filter_sanitize_number(&source, config.flags, false), false)
+        }
+        FILTER_SANITIZE_NUMBER_FLOAT => {
+            let (source, _) = scalar_bytes!();
+            php_byte_result(filter_sanitize_number(&source, config.flags, true), false)
+        }
+        FILTER_SANITIZE_ADD_SLASHES => {
+            let (source, binary) = scalar_bytes!();
+            php_byte_result(filter_add_slashes(&source), binary)
+        }
         FILTER_VALIDATE_INT => {
             let parsed = match value.value_type() {
                 ValueType::Long => value.as_long(),
@@ -1562,15 +2307,86 @@ fn filter_var_scalar(
                     return Ok(Value::null());
                 }
             };
+            let thousand = match filter_float_thousand(config) {
+                Ok(thousand) => thousand,
+                Err(exception) => {
+                    eg.exception = Some(exception);
+                    return Ok(Value::null());
+                }
+            };
             let parsed = match value.value_type() {
                 ValueType::Double => value.as_double().filter(|value| value.is_finite()),
                 ValueType::Long => value.as_long().map(|value| value as f64),
-                ValueType::String => value
-                    .as_str()
-                    .and_then(|source| parse_filter_float(source, decimal)),
+                ValueType::String => value.as_str().and_then(|source| {
+                    parse_filter_float(
+                        source,
+                        decimal,
+                        thousand,
+                        config.flags & FILTER_FLAG_ALLOW_THOUSAND != 0,
+                    )
+                }),
                 _ => None,
             };
+            let parsed = parsed.filter(|parsed| {
+                let minimum = validator_options
+                    .and_then(|options| options.get_str("min_range"))
+                    .map(Value::to_float_val);
+                let maximum = validator_options
+                    .and_then(|options| options.get_str("max_range"))
+                    .map(Value::to_float_val);
+                minimum.is_none_or(|minimum| *parsed >= minimum)
+                    && maximum.is_none_or(|maximum| *parsed <= maximum)
+            });
             parsed.map_or_else(|| filter_var_invalid(config), Value::double)
+        }
+        FILTER_VALIDATE_REGEXP => {
+            let Some(pattern) = validator_options
+                .and_then(|options| options.get_str("regexp"))
+                .and_then(Value::as_str)
+            else {
+                eg.exception = Some(crate::value::make_error_value(
+                    "ValueError",
+                    "filter_var(): \"regexp\" option is missing",
+                ));
+                return Ok(Value::null());
+            };
+            let Some(source) = value.as_str() else {
+                return Ok(filter_var_invalid(config));
+            };
+            match eg.regex_cache.get_or_compile(pattern) {
+                Ok(regex) if regex.is_match(source) => value.clone(),
+                _ => filter_var_invalid(config),
+            }
+        }
+        FILTER_VALIDATE_DOMAIN => {
+            let Some(source) = value.as_str() else {
+                return Ok(filter_var_invalid(config));
+            };
+            if filter_domain_is_valid(source, config.flags & FILTER_FLAG_HOSTNAME != 0) {
+                value.clone()
+            } else {
+                filter_var_invalid(config)
+            }
+        }
+        FILTER_VALIDATE_URL => {
+            let Some(source) = value.as_str() else {
+                return Ok(filter_var_invalid(config));
+            };
+            if filter_url_is_valid(source, config.flags) {
+                value.clone()
+            } else {
+                filter_var_invalid(config)
+            }
+        }
+        FILTER_VALIDATE_EMAIL => {
+            let Some(source) = value.as_str() else {
+                return Ok(filter_var_failure(value, config, eg));
+            };
+            if filter_email_is_valid(source, config.flags & FILTER_FLAG_HOSTNAME != 0) {
+                value.clone()
+            } else {
+                filter_var_failure(value, config, eg)
+            }
         }
         FILTER_VALIDATE_IP => {
             let parsed = value
@@ -1579,8 +2395,48 @@ fn filter_var_scalar(
             let valid = parsed.is_some_and(|address| {
                 (config.flags & FILTER_FLAG_IPV4 == 0 || address.is_ipv4())
                     && (config.flags & FILTER_FLAG_IPV6 == 0 || address.is_ipv6())
+                    && (config.flags & FILTER_FLAG_NO_PRIV_RANGE == 0
+                        || !filter_ip_is_private(address))
+                    && (config.flags & FILTER_FLAG_NO_RES_RANGE == 0
+                        || !filter_ip_is_reserved(address))
+                    && (config.flags & FILTER_FLAG_GLOBAL_RANGE == 0
+                        || !filter_ip_is_non_global(address))
             });
             if valid {
+                value.clone()
+            } else {
+                filter_var_invalid(config)
+            }
+        }
+        FILTER_VALIDATE_MAC => {
+            let Some(source) = value.as_str() else {
+                return Ok(filter_var_invalid(config));
+            };
+            let separator = validator_options
+                .and_then(|options| options.get_str("separator"))
+                .map(Value::echo_to_string);
+            let separator = match separator {
+                Some(separator) => {
+                    let mut characters = separator.chars();
+                    let Some(separator) = characters.next() else {
+                        eg.exception = Some(crate::value::make_error_value(
+                            "ValueError",
+                            "filter_var(): \"separator\" option must be one character long",
+                        ));
+                        return Ok(Value::null());
+                    };
+                    if characters.next().is_some() {
+                        eg.exception = Some(crate::value::make_error_value(
+                            "ValueError",
+                            "filter_var(): \"separator\" option must be one character long",
+                        ));
+                        return Ok(Value::null());
+                    }
+                    Some(separator)
+                }
+                None => None,
+            };
+            if filter_mac_is_valid(source, separator) {
                 value.clone()
             } else {
                 filter_var_invalid(config)
@@ -1642,6 +2498,11 @@ fn filter_var_scalar(
             Value::bool(false)
         }
     };
+    if config.flags & FILTER_FLAG_EMPTY_STRING_NULL != 0
+        && result.php_string_len().is_some_and(|length| length == 0)
+    {
+        return Ok(Value::null());
+    }
     Ok(result)
 }
 
@@ -1658,9 +2519,10 @@ fn filter_var_dispatch(
     if let Some(array) = value.as_array() {
         if !nested
             && (config.flags & FILTER_REQUIRE_SCALAR != 0
-                || config.flags & (FILTER_REQUIRE_ARRAY | FILTER_FORCE_ARRAY) == 0)
+                || (config.flags & (FILTER_REQUIRE_ARRAY | FILTER_FORCE_ARRAY) == 0
+                    && !(config.filter == FILTER_CALLBACK && config.option.is_some())))
         {
-            return Ok(filter_var_invalid(config));
+            return Ok(filter_array_shape_failure(value, config, eg, false));
         }
         let mut result = array.clone();
         let mut entries = Vec::with_capacity(array.len());
@@ -1680,7 +2542,7 @@ fn filter_var_dispatch(
         return Ok(Value::array(result));
     }
     if !nested && config.flags & FILTER_REQUIRE_ARRAY != 0 {
-        return Ok(filter_var_invalid(config));
+        return Ok(filter_array_shape_failure(value, config, eg, true));
     }
     let result = filter_var_scalar(value, config, ed, eg)?;
     if !nested && config.flags & FILTER_FORCE_ARRAY != 0 && eg.exception.is_none() {
@@ -1754,6 +2616,306 @@ pub(super) fn fn_filter_var(
         return Ok(());
     }
     ret!(rv, result);
+}
+
+#[inline]
+fn filter_id_is_known(filter: i64) -> bool {
+    FILTER_NAMES.iter().any(|(_, id)| *id == filter)
+}
+
+fn filter_array_definition(definition: &Value) -> (i64, i64, Option<Value>) {
+    if let Some(definition) = definition.as_array() {
+        let filter = definition
+            .get_str("filter")
+            .map(Value::to_long_val)
+            .unwrap_or(FILTER_DEFAULT);
+        let flags = definition
+            .get_str("flags")
+            .map(Value::to_long_val)
+            .unwrap_or(0);
+        let option = definition.get_str("options").cloned();
+        (filter, flags, option)
+    } else {
+        let specification = definition.to_long_val();
+        (specification, 0, None)
+    }
+}
+
+fn filter_array_value(
+    value: &Value,
+    filter: i64,
+    flags: i64,
+    option: Option<&Value>,
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+) -> Result<Value, VmError> {
+    let default = option
+        .and_then(Value::as_array)
+        .and_then(|options| options.get_str("default"))
+        .cloned();
+    let flags = if value.is_reference()
+        && value.dereferenced().value_type() == ValueType::Array
+        && flags & (FILTER_REQUIRE_ARRAY | FILTER_FORCE_ARRAY) == 0
+    {
+        flags | FILTER_REQUIRE_ARRAY
+    } else {
+        flags
+    };
+    let config = FilterVarConfig {
+        filter,
+        flags,
+        option,
+        default,
+    };
+    filter_var_dispatch(value.dereferenced(), &config, ed, eg, false)
+}
+
+pub(super) fn fn_filter_var_array(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(input) = arg!(ed, 0).as_array() else {
+        super::typed_internal_argument_error(
+            eg,
+            "filter_var_array",
+            arg!(ed, 0),
+            1,
+            "array",
+            "array",
+        );
+        return Ok(());
+    };
+    let definitions = arg!(ed, 1);
+    let add_empty = if arg_opt!(ed, 2).is_some() {
+        let Some(add_empty) =
+            super::typed_internal_bool_argument(ed, eg, "filter_var_array", 2, "add_empty")?
+        else {
+            return Ok(());
+        };
+        add_empty
+    } else {
+        true
+    };
+
+    if definitions.value_type() == ValueType::Undef {
+        let mut result = PhpArray::new();
+        for (key, value) in input.iter() {
+            let filtered = filter_array_value(value, FILTER_DEFAULT, 0, None, ed, eg)?;
+            result.set(key, filtered);
+        }
+        ret!(rv, Value::array(result));
+    }
+
+    if let Some(definitions) = definitions.as_array() {
+        let mut result = PhpArray::new();
+        for (key, definition) in definitions.iter() {
+            if matches!(&key, ArrayKey::String(name) if name.is_empty()) {
+                eg.exception = Some(crate::value::make_error_value(
+                    "ValueError",
+                    "filter_var_array(): Argument #2 ($options) cannot contain empty keys",
+                ));
+                return Ok(());
+            }
+            let (filter, flags, option) = filter_array_definition(definition.dereferenced());
+            let value = match &key {
+                ArrayKey::Int(key) => input.get_int(*key),
+                ArrayKey::String(key) => input.get_str(key),
+            };
+            if value.is_none() && !add_empty {
+                continue;
+            }
+            if value.is_none() {
+                result.set(key, Value::null());
+                continue;
+            }
+            if !filter_id_is_known(filter) {
+                report_internal_diagnostic(
+                    eg,
+                    ed,
+                    2,
+                    "Warning",
+                    &format!("filter_var_array(): Unknown filter with ID {filter}"),
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+                result.set(key, value.cloned().unwrap_or_else(Value::null));
+                continue;
+            }
+            let value = value.expect("missing values returned above");
+            let filtered = filter_array_value(value, filter, flags, option.as_ref(), ed, eg)?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            if value.is_owned_reference() && value.dereferenced().value_type() == ValueType::Array {
+                let mut alias = value.clone_owned_reference_alias();
+                alias.assign_dereferenced(filtered);
+                result.set(key, alias);
+            } else {
+                result.set(key, filtered);
+            }
+        }
+        ret!(rv, Value::array(result));
+    }
+
+    let Some(specification) = typed_internal_int_value_argument_expected(
+        ed,
+        eg,
+        definitions,
+        "filter_var_array",
+        1,
+        "options",
+        "array|int",
+    )?
+    else {
+        return Ok(());
+    };
+    let filter = specification;
+    let flags = 0;
+    if !filter_id_is_known(filter) {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!("filter_var_array(): Unknown filter with ID {specification}"),
+        )?;
+        if eg.exception.is_none() {
+            ret!(rv, Value::bool(false));
+        }
+        return Ok(());
+    }
+    let mut result = PhpArray::new();
+    for (key, value) in input.iter() {
+        let filtered = filter_array_value(value, filter, flags, None, ed, eg)?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        if value.is_owned_reference() && value.dereferenced().value_type() == ValueType::Array {
+            let mut alias = value.clone_owned_reference_alias();
+            alias.assign_dereferenced(filtered);
+            result.set(key, alias);
+        } else {
+            result.set(key, filtered);
+        }
+    }
+    ret!(rv, Value::array(result));
+}
+
+fn filter_input_source<'a>(eg: &'a ExecutorGlobals, input_type: i64) -> Option<&'a PhpArray> {
+    let name = match input_type {
+        0 => "_POST",
+        1 => "_GET",
+        2 => "_COOKIE",
+        4 => "_ENV",
+        5 => "_SERVER",
+        _ => return None,
+    };
+    eg.globals.get(name).and_then(Value::as_array)
+}
+
+pub(super) fn fn_filter_input(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(input_type) = typed_internal_int_argument(ed, eg, "filter_input", 0, "type")? else {
+        return Ok(());
+    };
+    let Some(variable_name) =
+        typed_internal_string_argument(ed, eg, "filter_input", 1, "var_name")?
+    else {
+        return Ok(());
+    };
+    let filter = if arg_opt!(ed, 2).is_some() {
+        let Some(filter) = typed_internal_int_argument(ed, eg, "filter_input", 2, "filter")? else {
+            return Ok(());
+        };
+        filter
+    } else {
+        FILTER_DEFAULT
+    };
+    let options = arg!(ed, 3);
+    let (flags, option) = if options.value_type() == ValueType::Undef {
+        (0, None)
+    } else if let Some(options) = options.as_array() {
+        (
+            options
+                .get_str("flags")
+                .map(Value::to_long_val)
+                .unwrap_or(0),
+            options.get_str("options").cloned(),
+        )
+    } else {
+        let Some(flags) = typed_internal_int_value_argument_expected(
+            ed,
+            eg,
+            options,
+            "filter_input",
+            3,
+            "options",
+            "array|int",
+        )?
+        else {
+            return Ok(());
+        };
+        (flags, None)
+    };
+    let input = filter_input_source(eg, input_type)
+        .and_then(|input| input.get_str(&variable_name))
+        .cloned();
+    let input = input.or_else(|| {
+        (input_type == 5 && variable_name == "PHP_SELF")
+            .then(|| Value::string(super::internal_call_source(ed).0))
+    });
+    let Some(input) = input else {
+        let default = option
+            .as_ref()
+            .and_then(Value::as_array)
+            .and_then(|options| options.get_str("default"))
+            .cloned();
+        ret!(
+            rv,
+            default.unwrap_or_else(|| {
+                if flags & FILTER_NULL_ON_FAILURE != 0 {
+                    Value::bool(false)
+                } else {
+                    Value::null()
+                }
+            })
+        );
+    };
+    let filtered = filter_array_value(&input, filter, flags, option.as_ref(), ed, eg)?;
+    if eg.exception.is_none() {
+        ret!(rv, filtered);
+    }
+    Ok(())
+}
+
+pub(super) fn fn_filter_input_array(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(input_type) = typed_internal_int_argument(ed, eg, "filter_input_array", 0, "type")?
+    else {
+        return Ok(());
+    };
+    let Some(input) = filter_input_source(eg, input_type).cloned() else {
+        ret!(rv, Value::null());
+    };
+    let definitions = arg!(ed, 1).clone();
+    let add_empty = arg_opt!(ed, 2).map_or_else(|| Value::bool(true), Clone::clone);
+    let arguments = [Value::array(input), definitions, add_empty];
+    let function = eg
+        .find_function("filter_var_array")
+        .expect("filter_var_array is registered");
+    let result = super::call_function(eg, function, &arguments)?;
+    if eg.exception.is_none() {
+        ret!(rv, result);
+    }
+    Ok(())
 }
 
 pub(super) fn fn_preg_quote(

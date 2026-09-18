@@ -164,3 +164,86 @@ catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(), "\
         )
     );
 }
+
+#[test]
+fn filter_inventory_and_deprecated_aliases_match_php_85() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+var_dump(count(filter_list()), filter_id('validate_email'), filter_id('missing'));
+set_error_handler(function ($level, $message) { echo $level, ':', $message, "\n"; });
+var_dump(filter_var('<b>x</b>', FILTER_SANITIZE_STRING));
+restore_error_handler();
+"#,
+        ),
+        concat!(
+            "int(21)\n",
+            "int(274)\n",
+            "bool(false)\n",
+            "8192:Constant FILTER_SANITIZE_STRING is deprecated since 8.1, use htmlspecialchars() instead\n",
+            "string(1) \"x\"\n",
+        )
+    );
+}
+
+#[test]
+fn sanitizer_ip_and_mac_edges_use_php_byte_contracts() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+var_dump(filter_var("ки", FILTER_SANITIZE_SPECIAL_CHARS, FILTER_FLAG_ENCODE_HIGH));
+var_dump(filter_var('0123.4567.89ab', FILTER_VALIDATE_MAC));
+var_dump(filter_var('224.0.0.0', FILTER_VALIDATE_IP, FILTER_FLAG_NO_RES_RANGE));
+var_dump(filter_var('240.0.0.0', FILTER_VALIDATE_IP, FILTER_FLAG_NO_RES_RANGE));
+"#,
+        ),
+        concat!(
+            "string(24) \"&#208;&#186;&#208;&#184;\"\n",
+            "string(14) \"0123.4567.89ab\"\n",
+            "string(9) \"224.0.0.0\"\n",
+            "bool(false)\n",
+        )
+    );
+}
+
+#[test]
+fn filter_var_array_preserves_only_nested_array_reference_cells() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$scalar = '1';
+$scalarInput = [&$scalar];
+var_dump(filter_var_array($scalarInput, FILTER_VALIDATE_INT), $scalar);
+$nested = ['123foo'];
+$nestedInput = [&$nested];
+var_dump(filter_var_array($nestedInput, FILTER_VALIDATE_INT), $nested);
+"#,
+        ),
+        concat!(
+            "array(1) {\n  [0]=>\n  int(1)\n}\n",
+            "string(1) \"1\"\n",
+            "array(1) {\n  [0]=>\n  &array(1) {\n    [0]=>\n    bool(false)\n  }\n}\n",
+            "array(1) {\n  [0]=>\n  bool(false)\n}\n",
+        )
+    );
+}
+
+#[test]
+fn filter_throw_on_failure_uses_the_namespaced_exception_hierarchy() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach ([new stdClass(), 'bad'] as $value) {
+    try { filter_var($value, FILTER_VALIDATE_EMAIL, FILTER_THROW_ON_FAILURE); }
+    catch (Filter\FilterException $error) {
+        echo get_class($error), ':', $error->getMessage(), "\n";
+    }
+}
+"#,
+        ),
+        concat!(
+            "Filter\\FilterFailedException:filter validation failed: object of type stdClass has no __toString() method\n",
+            "Filter\\FilterFailedException:filter validation failed: filter validate_email not satisfied by 'bad'\n",
+        )
+    );
+}

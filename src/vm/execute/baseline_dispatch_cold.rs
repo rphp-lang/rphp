@@ -5172,7 +5172,7 @@ fn op_fetch_const(
             ));
             return Ok(());
         };
-        if opline._pad & crate::vm::instruction::FETCH_CONST_DEPRECATED_E_STRICT != 0 {
+        if opline._pad & crate::vm::instruction::FETCH_CONST_DEPRECATED_BUILTIN != 0 {
             let resolved_name = if eg.find_constant(name).is_some() {
                 name
             } else {

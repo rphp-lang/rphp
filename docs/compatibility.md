@@ -7,6 +7,35 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The accepted `filter-extension-completion` checkpoint over `56c7720e` adds
+**63 PHP 8.5 passes without losses**. The expanded 8,258-case ledger reaches
+**7,437 pass / 348 fail / 194 skip / 276 unsupported / three XFAIL**. Every
+runnable case in the monitored 120-case selector-free `ext/filter` suite now
+passes: **96 pass / zero fail / 22 unsupported / two upstream XFAIL**, compared
+with 33/62/23/2 at the parent. Unsupported cases require request-data PHPT
+sections and remain visible rather than being counted as passes.
+
+The filter surface now includes its constant and callable inventory, scalar
+sanitizers and validators, recursive `filter_var_array()` definitions,
+reference-preserving nested arrays, input projections, deprecated constant
+diagnostics, and the `Filter\\FilterException` hierarchy with
+`FILTER_THROW_ON_FAILURE`. URL, email, IP, domain and MAC validation share the
+same byte-oriented dispatch contract as numeric and callback filtering.
+
+Nine original E2E cases, five adjacent pre-existing E2E cases and all 96
+runnable extension PHPT pass. Exact pass-set comparison records **+63/-0**,
+with no timeout or crash. Per the continuous compatibility-sweep policy, the
+repeated full matrix and cumulative performance work remains deferred to the
+aggregate boundary.
+
+SHA-256 evidence:
+
+- Complete candidate filter manifest / pass set: `cbdee5fa49163cd834952cf7fe2649e3e84b9658b7b421c1888838ffda01f65a` / `f40639b51ccf73c84caf725d8420513807120cf2e4cd589286e66d9ce6e8aabb`.
+- Parent filter pass set: `b2fc53f33a9c6c6fd914945b54522df941df0733d08078175286aef18f1b5778`.
+- Clean-room oracle: `ebac439f45c1b979e55e5a5d5c20317c471ce9f724ff8857fd052917721a48d9`.
+
+### Preceding iconv-extension checkpoint
+
 The accepted `iconv-extension` checkpoint over `5b8c4cd0` adds all ten PHP 8.5
 iconv globals, four constants and honest Linux/glibc extension discovery. The
 selected ledger grows from 8,187 to **8,258 cases: 7,374 pass / 410 fail / 194
@@ -59,37 +88,6 @@ SHA-256 evidence:
 - Strings/array manifest / pass set: `80d4a2e791fdeab78ff3c9b2a64aaa5a081908b20546498f3e73f189678a0d3d` / `482d95e26cbbd4c66abd2b34435b39c6042e65340215b02697de5fb9851aaa06`.
 - Inventory report / summary: `2820c7239cf75442ad746cf53cc67bc446bc1d6f84151e7af1cabbe708a1def8` / `3796caff3829cb5c101629d558dc32a94075e47f36a6fa6a7cf3d8ae3d76e09c`.
 - Performance raw timing / summary: `417979ce889264952456adfcf51d2bfff96e42a07ab9ea8285ebff93efb88621` / `efd300aa2f652ae412ee2579d82a24d31fee26c9c13a1317d02c16209a907409`.
-
-### Preceding filter-value dispatch checkpoint
-
-The accepted `filter-value-dispatch-contracts` checkpoint over `e93cd45a`
-adds **15 PHP 8.5 passes without losses** and admits the complete 120-case
-selector-free `ext/filter` suite to the monitored ledger. The expanded 8,187
-cases reach **7,313 pass / 404 fail / 194 skip / 273 unsupported / three
-XFAIL**. The filter family itself moves from 18/77/23/2 to **33 pass / 62 fail /
-23 unsupported / two XFAIL**, with an identical prior pass set and no timeout
-or crash.
-
-One recursive value-shape dispatcher now applies scalar filters, callback
-frames and array flags in PHP order. Integer validation covers whitespace,
-hexadecimal and octal forms plus AMD64 boundary casts; float validation covers
-custom decimal separators and rejects non-finite or underflowed results.
-Nested arrays retain keys and copy-on-write state, callback invocation retains
-canonical warning and exception behavior, and shape rejection precedes invalid
-callback diagnostics where PHP does the same.
-
-Five original E2E cases, five adjacent pre-existing E2E cases, all 15 target
-PHPT and the complete 120-case selector-free filter suite pass their focused
-gates. This throughput checkpoint deliberately defers the repeated full matrix
-and performance cycle to the aggregate compatibility sweep boundary; its
-acceptance evidence is the exact focused no-loss comparison above.
-
-SHA-256 evidence:
-
-- Focused target manifest: `ac939e99bc7b05a42572170277b366b816c7d6b3c2b594f73b1ffe1edc650e44`.
-- Complete candidate filter manifest / pass set: `4c81793e92c367e278ac8800ee3b4661a16987c7eca7fb888bb1c50ffcd2c328` / `b2fc53f33a9c6c6fd914945b54522df941df0733d08078175286aef18f1b5778`.
-- Complete parent filter manifest / pass set: `802f72c981e7616748c6ffedae17737f108b171e637f1d52ad40c562d994563f` / `447eba255f244206d279f6ccf0acce65b9e23323aaa5cbeb1c29b919f627a69d`.
-- Clean-room oracle: `ebac439f45c1b979e55e5a5d5c20317c471ce9f724ff8857fd052917721a48d9`.
 
 ### Preceding object-store owner checkpoint
 
