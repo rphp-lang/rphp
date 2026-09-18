@@ -3,6 +3,23 @@ mod common;
 use common::{run_php, run_php_expect_error, run_php_with_source_context};
 
 #[test]
+fn enum_objects_used_as_constant_array_keys_raise_a_located_type_error() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+enum ObjectKey { case Value; }
+class InvalidConstantKey { public const ITEMS = [ObjectKey::Value => 1]; }
+try { var_dump(InvalidConstantKey::ITEMS); }
+catch (TypeError $error) { echo $error->getMessage(), ':', $error->getLine(); }
+"#,
+            "/virtual/enum-key.php",
+            "/virtual",
+        ),
+        "Cannot access offset of type ObjectKey on array:3"
+    );
+}
+
+#[test]
 fn object_defaults_materialize_at_each_php_ownership_boundary() {
     assert_eq!(
         run_php(

@@ -364,6 +364,7 @@ impl Parser {
                 | Expr::DynamicVariable { .. }
                 | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
+                | Expr::ArrayAppendArgument { .. }
                 | Expr::PropertyAccess {
                     nullsafe: false,
                     ..
@@ -399,6 +400,9 @@ impl Parser {
         }
         if let Some((message, line)) = write_root_error {
             return Ok(self.compile_error(message, line));
+        }
+        if let Expr::ArrayAppendArgument { line, .. } = target {
+            return Ok(self.compile_error("Cannot use [] for reading", line));
         }
         if let Expr::Globals { line } = target {
             return Ok(self.globals_modification_error(line));
@@ -490,6 +494,7 @@ impl Parser {
             if self.peek() == Token::Colon {
                 self.advance(); // consume :
                 let right = self.parse_null_coalesce()?;
+                let right = self.finish_assignment_tail(right)?;
                 let mut result = Expr::Elvis {
                     left: Box::new(expr),
                     right: Box::new(right),
@@ -498,6 +503,7 @@ impl Parser {
                     self.advance();
                     self.advance();
                     let right = self.parse_null_coalesce()?;
+                    let right = self.finish_assignment_tail(right)?;
                     result = Expr::Elvis {
                         left: Box::new(result),
                         right: Box::new(right),
@@ -697,6 +703,49 @@ impl Parser {
     }
 
     /// Comparison: ==, !=, <, <=, >, >=, <=>, instanceof
+    fn finish_instanceof_expression(&mut self, expr: Expr) -> Result<Expr, String> {
+        if self.peek() == Token::Backslash
+            || matches!(self.peek(), Token::Identifier(_, _) | Token::Enum { .. })
+        {
+            return Ok(Expr::Instanceof {
+                expr: Box::new(expr),
+                class_name: self.parse_qualified_name()?,
+            });
+        }
+        if matches!(self.peek(), Token::Static(_)) {
+            self.advance();
+            return Ok(Expr::Instanceof {
+                expr: Box::new(expr),
+                class_name: "static".to_string(),
+            });
+        }
+        let class = if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
+            let class = match self.advance() {
+                Token::Variable(name, line) => Self::variable_expression(name, line),
+                Token::This(line) => Expr::Variable {
+                    name: "this".to_string(),
+                    line,
+                },
+                _ => unreachable!(),
+            };
+            self.parse_dynamic_new_class_expression(class)?
+        } else if matches!(self.peek(), Token::LParen(_)) {
+            self.advance();
+            let class = self.parse_expr()?;
+            self.expect(&Token::RParen)?;
+            class
+        } else {
+            return Err(format!(
+                "Expected class name after instanceof, got {:?}",
+                self.peek()
+            ));
+        };
+        Ok(Expr::DynamicInstanceof {
+            expr: Box::new(expr),
+            class: Box::new(class),
+        })
+    }
+
     fn parse_comparison(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_pipe()?;
 
@@ -704,39 +753,7 @@ impl Parser {
             // instanceof has same precedence as comparison operators
             if self.peek_is_instanceof_keyword() {
                 self.advance();
-                left = if self.peek() == Token::Backslash
-                    || matches!(self.peek(), Token::Identifier(_, _) | Token::Enum { .. })
-                {
-                    Expr::Instanceof {
-                        expr: Box::new(left),
-                        class_name: self.parse_qualified_name()?,
-                    }
-                } else if matches!(self.peek(), Token::Static(_)) {
-                    self.advance();
-                    Expr::Instanceof {
-                        expr: Box::new(left),
-                        class_name: "static".to_string(),
-                    }
-                } else if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
-                    let class = match self.advance() {
-                        Token::Variable(name, line) => Self::variable_expression(name, line),
-                        Token::This(line) => Expr::Variable {
-                            name: "this".to_string(),
-                            line,
-                        },
-                        _ => unreachable!(),
-                    };
-                    let class = self.parse_dynamic_new_class_expression(class)?;
-                    Expr::DynamicInstanceof {
-                        expr: Box::new(left),
-                        class: Box::new(class),
-                    }
-                } else {
-                    return Err(format!(
-                        "Expected class name after instanceof, got {:?}",
-                        self.peek()
-                    ));
-                };
+                left = self.finish_instanceof_expression(left)?;
                 continue;
             }
             let op = match self.peek() {
@@ -913,39 +930,7 @@ impl Parser {
                 // `!$value instanceof Type` means `!($value instanceof Type)`.
                 if self.peek_is_instanceof_keyword() {
                     self.advance();
-                    expr = if self.peek() == Token::Backslash
-                        || matches!(self.peek(), Token::Identifier(_, _) | Token::Enum { .. })
-                    {
-                        Expr::Instanceof {
-                            expr: Box::new(expr),
-                            class_name: self.parse_qualified_name()?,
-                        }
-                    } else if matches!(self.peek(), Token::Static(_)) {
-                        self.advance();
-                        Expr::Instanceof {
-                            expr: Box::new(expr),
-                            class_name: "static".to_string(),
-                        }
-                    } else if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
-                        let class = match self.advance() {
-                            Token::Variable(name, line) => Self::variable_expression(name, line),
-                            Token::This(line) => Expr::Variable {
-                                name: "this".to_string(),
-                                line,
-                            },
-                            _ => unreachable!(),
-                        };
-                        let class = self.parse_dynamic_new_class_expression(class)?;
-                        Expr::DynamicInstanceof {
-                            expr: Box::new(expr),
-                            class: Box::new(class),
-                        }
-                    } else {
-                        return Err(format!(
-                            "Expected class name after instanceof, got {:?}",
-                            self.peek()
-                        ));
-                    };
+                    expr = self.finish_instanceof_expression(expr)?;
                 }
                 // PHP permits `!$value ??= $fallback` and applies `!` to the
                 // value produced by the coalescing assignment.

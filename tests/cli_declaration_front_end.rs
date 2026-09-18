@@ -23,6 +23,18 @@ fn run_stdin(source: &str) -> (i32, String, String) {
 }
 
 #[test]
+fn final_private_constant_reports_its_declaring_symbol() {
+    let (status, stdout, stderr) =
+        run_stdin("<?php\nclass HiddenFinal { private final const VALUE = 1; }\n");
+    assert_eq!(status, 255);
+    assert_eq!(stdout, "");
+    assert_eq!(
+        stderr,
+        "Fatal error: Private constant HiddenFinal::VALUE cannot be final as it is not visible to other classes in Standard input code on line 2\n"
+    );
+}
+
+#[test]
 fn declaration_and_expression_keywords_are_ascii_case_insensitive() {
     let (status, stdout, stderr) = run_stdin(
         "<?php\nAbStRaCt ClAsS BaseNode {}\nFiNaL ClAsS LeafNode extends BaseNode {}\nvar_dump(new LeafNode InStAnCeOf BaseNode);\n",

@@ -341,9 +341,10 @@ impl Parser {
                 line: dollar_line,
             });
         }
-        if let Token::Variable(_, _) = self.peek() {
+        if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
             let (property, property_line) = match self.advance() {
                 Token::Variable(name, line) => (name, line),
+                Token::This(line) => ("this".to_string(), line),
                 _ => unreachable!(),
             };
             if matches!(self.peek(), Token::LParen(_)) {
@@ -572,8 +573,12 @@ impl Parser {
                         }
                         continue;
                     }
-                    if let Token::Variable(member_name, member_line) = self.peek() {
-                        self.advance();
+                    if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
+                        let (member_name, member_line) = match self.advance() {
+                            Token::Variable(name, line) => (name, line),
+                            Token::This(line) => ("this".to_string(), line),
+                            _ => unreachable!(),
+                        };
                         if matches!(self.peek(), Token::LParen(_)) {
                             let line = self.expect_lparen()?;
                             let method = Expr::Variable {

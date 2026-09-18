@@ -2,6 +2,21 @@
 mod common;
 use common::{run_php, run_php_expect_error};
 
+#[test]
+fn instanceof_accepts_a_parenthesized_arbitrary_class_expression() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$suffix = 'Class';
+$object = new stdClass;
+var_dump($object instanceof ('std' . $suffix));
+var_dump(!$object instanceof ('missing' . $suffix));
+"#,
+        ),
+        "bool(true)\nbool(true)\n"
+    );
+}
+
 // ── instanceof operator ──
 
 #[test]

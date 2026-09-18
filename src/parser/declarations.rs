@@ -1759,9 +1759,6 @@ impl Parser {
                 line,
             );
         }
-        if modifiers.is_final && modifiers.visibility == Visibility::Private {
-            return Err("Private class constants cannot be final".into());
-        }
         if in_interface && modifiers.visibility != Visibility::Public {
             return Err("Access type for interface constants must be public".into());
         }

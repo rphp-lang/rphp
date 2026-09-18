@@ -6,6 +6,18 @@ use common::{
 };
 
 #[test]
+fn this_token_after_static_scope_resolution_is_a_static_property_name() {
+    let error = run_php_expect_error(
+        "<?php class StaticThisOwner {} class Caller { function read() { return StaticThisOwner::$this; } } (new Caller)->read();",
+    );
+    assert!(
+        format!("{error:?}")
+            .contains("Access to undeclared static property StaticThisOwner::$this"),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn global_relative_class_operations_raise_catchable_scope_errors() {
     assert_eq!(
         run_php(

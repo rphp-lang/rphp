@@ -193,6 +193,20 @@ echo $value;
 }
 
 #[test]
+fn unicode_escapes_preserve_individual_surrogate_half_bytes() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+echo bin2hex("\u{D801}"), '|';
+echo bin2hex("\u{DC00}"), '|';
+echo bin2hex("\u{D801}\u{DC00}");
+"#,
+        ),
+        "eda081|edb080|eda081edb080"
+    );
+}
+
+#[test]
 fn scalar_literals_flow_through_array_selection_and_transform_functions() {
     assert_eq!(
         run_php(

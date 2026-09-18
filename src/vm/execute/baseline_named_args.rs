@@ -10,21 +10,28 @@ fn named_argument_reference_error(
     func_common: &FunctionCommon,
     parameter_index: u32,
 ) -> Value {
-    let parameter = func_common
-        .sig
-        .diagnostic_parameter_name(parameter_index)
-        .map(|name| format!(" (${name})"))
-        .unwrap_or_default();
-    let function_name = displayed_frame_function_name(eg, call);
-    let error = make_error_value(
-        "Error",
-        &format!(
-            "{}(): Argument #{}{} could not be passed by reference",
-            function_name,
-            parameter_index + 1,
-            parameter
-        ),
-    );
+    let error = if opline._pad & SEND_FLAG_TEMPORARY_WRITE_ERROR != 0 {
+        make_error_value(
+            "Error",
+            "Cannot use temporary expression in write context",
+        )
+    } else {
+        let parameter = func_common
+            .sig
+            .diagnostic_parameter_name(parameter_index)
+            .map(|name| format!(" (${name})"))
+            .unwrap_or_default();
+        let function_name = displayed_frame_function_name(eg, call);
+        make_error_value(
+            "Error",
+            &format!(
+                "{}(): Argument #{}{} could not be passed by reference",
+                function_name,
+                parameter_index + 1,
+                parameter
+            ),
+        )
+    };
     let instruction_index = call_argument_diagnostic_origin_index(op_array, opline);
     attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
     error

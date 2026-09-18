@@ -238,6 +238,7 @@ impl Parser {
                         | Token::Finally
                         | Token::Return { .. }
                         | Token::Echo { .. }
+                        | Token::ShortEcho { .. }
                         | Token::Const
                         | Token::Global
                         | Token::Use(_)

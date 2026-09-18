@@ -55,6 +55,14 @@ fn included_source_accepts_initial_inline_html_and_long_plain_text() {
 }
 
 #[test]
+fn short_echo_open_tags_resume_php_segments() {
+    assert_eq!(
+        run_php("<?php echo 'left'; ?><?= ':right' ?>"),
+        "left:right"
+    );
+}
+
+#[test]
 fn relative_includes_follow_the_owning_source_unit_through_functions_and_eval() {
     let dir = TempDir::new();
     dir.write("function-target.inc", "<?php echo \"function-target\\n\";");

@@ -595,6 +595,11 @@ enum DeferredAttributeError {
         source_file: String,
         line: usize,
     },
+    LocatedTypeError {
+        message: String,
+        source_file: String,
+        line: usize,
+    },
     TypedClassConstant(String),
     /// A nested synthetic constant-expression factory already published the
     /// exact throwable, origin and trace into ExecutorGlobals.
@@ -1439,16 +1444,35 @@ fn evaluate_deferred_attribute_expression(
                     }
                     continue;
                 }
-                if let Some(key) = &element.key {
-                    let key = evaluate_deferred_attribute_expression(key, scope, source_file, eg)?;
-                    if let Some(key) = key.as_long() {
-                        result.set_int(key, value);
-                    } else if let Some(key) = key.as_str() {
-                        result.set_str(key, value);
-                    } else {
-                        return Err(DeferredAttributeError::Message(
-                            "unsupported array key type in constant expression".to_string(),
-                        ));
+                if let Some(key_expression) = &element.key {
+                    let key = evaluate_deferred_attribute_expression(
+                        key_expression,
+                        scope,
+                        source_file,
+                        eg,
+                    )?;
+                    match key.value_type() {
+                        ValueType::Long => result.set_int(key.as_long().unwrap(), value),
+                        ValueType::String => result.set_str(key.as_str().unwrap(), value),
+                        ValueType::True => result.set_int(1, value),
+                        ValueType::False => result.set_int(0, value),
+                        ValueType::Object | ValueType::Closure => {
+                            return Err(DeferredAttributeError::LocatedTypeError {
+                                message: format!(
+                                    "Cannot access offset of type {} on array",
+                                    key.diagnostic_type_name()
+                                ),
+                                source_file: source_file.to_string(),
+                                line: crate::compiler::compile::expression_source_line(
+                                    key_expression,
+                                ),
+                            });
+                        }
+                        _ => {
+                            return Err(DeferredAttributeError::Message(
+                                "unsupported array key type in constant expression".to_string(),
+                            ));
+                        }
                     }
                 } else {
                     result.push(value);
@@ -1783,6 +1807,19 @@ pub(crate) fn evaluate_deferred_class_constant_value(
             eg.exception = Some(error);
             Ok(None)
         }
+        Err(DeferredAttributeError::LocatedTypeError {
+            message,
+            source_file,
+            line,
+        }) => {
+            let error = make_error_value("TypeError", &message);
+            if let Some(mut object) = error.as_object_mut() {
+                object.set_property("file", Value::string(source_file));
+                object.set_property("line", Value::long(line as i64));
+            }
+            eg.exception = Some(error);
+            Ok(None)
+        }
         Err(DeferredAttributeError::TypedClassConstant(error)) => {
             eg.exception = Some(make_error_value("TypeError", &error));
             Ok(None)
@@ -1944,6 +1981,21 @@ pub(crate) fn evaluate_deferred_property_default_value(
         }) => {
             if eg.exception.is_none() {
                 let error = make_error_value("Error", &message);
+                if let Some(mut object) = error.as_object_mut() {
+                    object.set_property("file", Value::string(source_file));
+                    object.set_property("line", Value::long(line as i64));
+                }
+                eg.exception = Some(error);
+            }
+            Ok(None)
+        }
+        Err(DeferredAttributeError::LocatedTypeError {
+            message,
+            source_file,
+            line,
+        }) => {
+            if eg.exception.is_none() {
+                let error = make_error_value("TypeError", &message);
                 if let Some(mut object) = error.as_object_mut() {
                     object.set_property("file", Value::string(source_file));
                     object.set_property("line", Value::long(line as i64));
@@ -2233,6 +2285,10 @@ fn evaluate_attribute_arguments(
                         eg.exception = Some(make_error_value("Error", &message));
                         return Ok(None);
                     }
+                    Err(DeferredAttributeError::LocatedTypeError { message, .. }) => {
+                        eg.exception = Some(make_error_value("TypeError", &message));
+                        return Ok(None);
+                    }
                     Err(DeferredAttributeError::TypedClassConstant(error)) => {
                         eg.exception = Some(make_error_value("TypeError", &error));
                         return Ok(None);
@@ -2267,6 +2323,10 @@ fn evaluate_attribute_arguments(
                     }
                     Err(DeferredAttributeError::LocatedMessage { message, .. }) => {
                         eg.exception = Some(make_error_value("Error", &message));
+                        return Ok(None);
+                    }
+                    Err(DeferredAttributeError::LocatedTypeError { message, .. }) => {
+                        eg.exception = Some(make_error_value("TypeError", &message));
                         return Ok(None);
                     }
                     Err(DeferredAttributeError::TypedClassConstant(error)) => {

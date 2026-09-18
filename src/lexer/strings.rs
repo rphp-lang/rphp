@@ -691,20 +691,23 @@ impl<'a> Lexer<'a> {
                                 "Invalid UTF-8 codepoint escape sequence: Codepoint too large",
                             ));
                         }
-                        let Some(character) = char::from_u32(value) else {
-                            // PHP strings can carry CESU-8 surrogate-half bytes. RPHP's
-                            // current UTF-8 String representation cannot yet preserve
-                            // those bytes, so keep the unsupported case visible instead
-                            // of manufacturing a different byte sequence.
-                            return Err(Self::string_lex_error_at(
-                                content,
-                                escape_start,
-                                source_line,
-                                "Invalid UTF-8 codepoint escape sequence",
-                            ));
-                        };
-                        let mut encoded = [0; 4];
-                        current.extend_from_slice(character.encode_utf8(&mut encoded).as_bytes());
+                        if (0xd800..=0xdfff).contains(&value) {
+                            // PHP deliberately admits UTF-16 surrogate halves in
+                            // \u{} escapes and stores their CESU-8 byte sequence.
+                            // They are not Unicode scalar values, so encode the
+                            // three bytes directly into the lossless string buffer.
+                            current.extend_from_slice(&[
+                                0xe0 | ((value >> 12) as u8),
+                                0x80 | (((value >> 6) & 0x3f) as u8),
+                                0x80 | ((value & 0x3f) as u8),
+                            ]);
+                            current_is_binary = true;
+                        } else {
+                            let character = char::from_u32(value).expect("validated scalar value");
+                            let mut encoded = [0; 4];
+                            current
+                                .extend_from_slice(character.encode_utf8(&mut encoded).as_bytes());
+                        }
                     }
                     b'n' => {
                         current.push(b'\n');

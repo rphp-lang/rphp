@@ -7,6 +7,35 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The accepted `frontend-expression-boundaries` checkpoint over `35ddb85a`
+adds **9 exact PHP 8.5 passes without losses**. One general front-end/runtime
+slice now covers CESU-8 surrogate escapes, boolean constant-array keys,
+located enum-key type errors, dynamic `instanceof` class expressions, final
+private-constant diagnostics, static `$this` property syntax, assignment in an
+Elvis fallback, immutable temporary dimensions at by-reference call
+boundaries, and short-echo source segments. The 8,258-case supported ledger is
+now **7,494 pass / 291 fail / 194 skip / 276 unsupported / 3 XFAIL**.
+
+Zend/lang advances from 5,047/257 to **5,056 pass / 248 fail**, exact
+**+9/-0**. Strings/array remains **1,470 pass / 8 fail / 67 skip / 30
+unsupported** with an identical pass set. The default, no-default, erased,
+reified and all-features Cargo suites, all-target compilation, Composer S0,
+all four Symfony S1 gates and warmed/cold S2--S3 pass. Formatting, PHPT-runner
+self-tests and HTML entity data verification also pass. This change adds no
+unsafe operation; the parent and candidate both contain 1,639 unsafe blocks
+and 289 unsafe functions, while the committed 1,626-block ceiling remains a
+visible pre-existing ratchet defect rather than being silently widened here.
+Per the continuous correctness sweep, cumulative performance tuning remains
+deferred to a larger boundary.
+
+SHA-256 evidence:
+
+- Release candidate: `00e4c05f855cffc693df50837bf377585771e2e9061ff356e2cea47e12fa67ff`.
+- Zend/lang manifest / pass set: `66e3a8948093e310287eee8ce07ff4a0e2a97bbf44920c23a122aebc94af3601` / `b2c1ef8e360ddecbfa11e773231ac681cbbd4809aa961b21aa1d83dc582ca4e9`.
+- Strings/array manifest / pass set: `4455f1ae577ddabcb2250adb965b264e6bff9b458e841c9e8110c9b4bfa0f2d0` / `e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
+
+### Preceding generator finalization checkpoint
+
 The accepted `generator-finalization-sweep` checkpoint over `cdd2096f`
 closes the shared generator finalization, delegation and detached-trace
 boundary. Suspended generators now execute enclosing `finally` blocks when

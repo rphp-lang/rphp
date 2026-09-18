@@ -2,6 +2,23 @@ mod common;
 use common::run_php;
 
 #[test]
+fn constant_array_dimensions_are_values_until_a_reference_parameter_rejects_them() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+const IMMUTABLE_ITEMS = ['value'];
+function readValue($value) { echo $value, "\n"; }
+function bindValue(&$value) {}
+readValue(IMMUTABLE_ITEMS[0]);
+try { bindValue(IMMUTABLE_ITEMS[0]); }
+catch (Error $error) { echo $error->getMessage(); }
+"#,
+        ),
+        "value\nCannot use temporary expression in write context"
+    );
+}
+
+#[test]
 fn named_array_elements_alias_reference_parameters_before_and_after_declaration() {
     assert_eq!(
         run_php(

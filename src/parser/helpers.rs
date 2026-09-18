@@ -54,6 +54,7 @@ impl Parser {
             | Token::MagicConstant { line, .. }
             | Token::Goto { line, .. }
             | Token::Echo { line }
+            | Token::ShortEcho { line }
             | Token::Return { line }
             | Token::Foreach { line }
             | Token::As(line) => line,
@@ -101,6 +102,7 @@ impl Parser {
                 | Token::MagicConstant { line, .. }
                 | Token::Goto { line, .. }
                 | Token::Echo { line }
+                | Token::ShortEcho { line }
                 | Token::Return { line }
                 | Token::Foreach { line } => Some(*line),
                 Token::As(line) => Some(*line),
@@ -1033,6 +1035,10 @@ impl Parser {
         &mut self,
         adaptation_line: usize,
     ) -> Result<(Option<String>, String), String> {
+        if let Token::ShortEcho { line } = self.peek() {
+            self.advance();
+            return Err(self.source_error("Cannot use \"<?=\" as an identifier", line));
+        }
         let first = match self.peek() {
             Token::Namespace if self.peek_at(1) == Token::Backslash => {
                 self.parse_qualified_or_namespace_relative_name()?

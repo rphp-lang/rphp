@@ -94,9 +94,10 @@ use crate::vm::instruction::{
     REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, RELEASE_TEMPS_NESTED_OBJECTS,
     RELEASE_TEMPS_ON_RETURN, RELEASE_TEMPS_RETURN_COMPLETION_SITE, RELEASE_TEMPS_SUBEXPRESSION,
     SEND_FLAG_GLOBALS, SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE,
-    SEND_FLAG_PREPARED_PROPERTY_ARGUMENT, SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME,
-    STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND,
-    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    SEND_FLAG_PREPARED_PROPERTY_ARGUMENT, SEND_FLAG_TEMPORARY_WRITE_ERROR,
+    SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
+    STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH,
+    STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -119,7 +120,7 @@ fn incdec_target_source_line(target: &Expr) -> usize {
     }
 }
 
-fn expression_source_line(expression: &Expr) -> usize {
+pub(crate) fn expression_source_line(expression: &Expr) -> usize {
     match expression {
         Expr::Variable { line, .. }
         | Expr::DynamicVariable { line, .. }
@@ -3389,6 +3390,9 @@ impl Compiler {
         if self.is_zend_special_builtin_write_result(expr) {
             return Some(expression_source_line(expr));
         }
+        if Self::array_access_has_nonreferenceable_root(expr) {
+            return Some(expression_source_line(expr));
+        }
         Self::nullsafe_chain_line(expr).or_else(|| match expr {
             Expr::ErrorSuppress(inner) => self.nonreferenceable_call_argument_line(inner),
             Expr::Integer(_)
@@ -3445,6 +3449,44 @@ impl Compiler {
         })
     }
 
+    fn array_access_has_nonreferenceable_root(expression: &Expr) -> bool {
+        let Expr::ArrayAccess { .. } = expression else {
+            return false;
+        };
+        let mut root = expression;
+        while let Expr::ArrayAccess { array, .. } = root {
+            root = array;
+        }
+        !matches!(
+            root,
+            Expr::Variable { .. }
+                | Expr::DynamicVariable { .. }
+                | Expr::Globals { .. }
+                | Expr::ArrayAppendArgument { .. }
+                | Expr::PropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
+                | Expr::DynamicPropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
+                | Expr::StaticProperty { .. }
+                | Expr::DynamicNamedStaticProperty { .. }
+                | Expr::DynamicStaticProperty { .. }
+        ) && !Self::is_array_write_call_result(root)
+    }
+
+    fn temporary_write_error_call_argument_line(&self, expression: &Expr) -> Option<usize> {
+        if Self::array_access_has_nonreferenceable_root(expression) {
+            return Some(expression_source_line(expression));
+        }
+        match expression {
+            Expr::ErrorSuppress(inner) => self.temporary_write_error_call_argument_line(inner),
+            _ => None,
+        }
+    }
+
     fn indirect_temporary_call_argument_line(&self, expr: &Expr) -> Option<usize> {
         if Self::nullsafe_chain_line(expr).is_some()
             || self.is_zend_special_builtin_write_result(expr)
@@ -3466,6 +3508,9 @@ impl Compiler {
     }
 
     fn is_mutable_call_reference_source(expr: &Expr) -> bool {
+        if Self::array_access_has_nonreferenceable_root(expr) {
+            return false;
+        }
         matches!(
             expr,
             Expr::DynamicVariable { .. }
@@ -7684,15 +7729,23 @@ impl Compiler {
                             precision,
                             known_enum_classes,
                         )?;
-                        if !matches!(key.value_type(), ValueType::Long | ValueType::String) {
-                            return Err(
-                                "unsupported array key type in constant expression".to_string()
-                            );
+                        if matches!(key.value_type(), ValueType::Object | ValueType::Closure) {
+                            return Err(OBJECT_OFFSET_CONSTANT_EXPRESSION_ERROR.to_string());
                         }
-                        let mut array_key =
-                            crate::vm::execute::value_to_array_key(&key).map_err(|_| {
-                                "unsupported array key type in constant expression".to_string()
-                            })?;
+                        let mut array_key = match key.value_type() {
+                            ValueType::True => crate::value::ArrayKey::Int(1),
+                            ValueType::False => crate::value::ArrayKey::Int(0),
+                            ValueType::Long | ValueType::String => {
+                                crate::vm::execute::value_to_array_key(&key).map_err(|_| {
+                                    "unsupported array key type in constant expression".to_string()
+                                })?
+                            }
+                            _ => {
+                                return Err(
+                                    "unsupported array key type in constant expression".to_string()
+                                );
+                            }
+                        };
                         if matches!(array_key, crate::value::ArrayKey::String(_)) {
                             array_key = arr.prepare_string_key_for_write(array_key, &key);
                         }
@@ -11182,7 +11235,10 @@ impl Compiler {
                                     | Expr::DynamicNamedStaticProperty { .. }
                                     | Expr::DynamicStaticProperty { .. }
                             )
-                        ))
+                        )
+                        && self
+                            .nonreferenceable_call_argument_line(arg.expr())
+                            .is_none())
                         || (named_reference_args[index]
                             && matches!(arg, CallArg::Named { value, .. } if Self::is_mutable_call_reference_source(value)))
                 });
@@ -14443,6 +14499,7 @@ impl Compiler {
                 CallArg::Positional(expr)
                     if (!use_var_ex
                         && Self::positional_argument_is_ref(ref_args, variadic_ref_start, i)
+                        && self.nonreferenceable_call_argument_line(expr).is_none()
                         && matches!(
                             expr,
                             Expr::DynamicVariable { .. }
@@ -14580,6 +14637,12 @@ impl Compiler {
                         send._pad |= SEND_FLAG_NONREFERENCEABLE;
                         send.extended_value = i as u32;
                     }
+                    if self
+                        .temporary_write_error_call_argument_line(expr)
+                        .is_some()
+                    {
+                        send._pad |= SEND_FLAG_TEMPORARY_WRITE_ERROR;
+                    }
                     if indirect_temporary_line.is_some() {
                         send._pad |= SEND_FLAG_INDIRECT_TEMPORARY;
                         send.extended_value = i as u32;
@@ -14636,6 +14699,12 @@ impl Compiler {
                     let nonreferenceable_line = self.nonreferenceable_call_argument_line(value);
                     if nonreferenceable_line.is_some() {
                         send._pad |= SEND_FLAG_NONREFERENCEABLE;
+                    }
+                    if self
+                        .temporary_write_error_call_argument_line(value)
+                        .is_some()
+                    {
+                        send._pad |= SEND_FLAG_TEMPORARY_WRITE_ERROR;
                     }
                     let indirect_temporary_line = self.indirect_temporary_call_argument_line(value);
                     debug_assert!(
@@ -15446,6 +15515,12 @@ impl Compiler {
                         send._pad |= SEND_FLAG_NONREFERENCEABLE;
                         send.extended_value = index as u32;
                     }
+                    if self
+                        .temporary_write_error_call_argument_line(expr)
+                        .is_some()
+                    {
+                        send._pad |= SEND_FLAG_TEMPORARY_WRITE_ERROR;
+                    }
                     if indirect_temporary_line.is_some() {
                         send._pad |= SEND_FLAG_INDIRECT_TEMPORARY;
                         send.extended_value = index as u32;
@@ -15472,6 +15547,12 @@ impl Compiler {
                         self.nonreferenceable_call_argument_line(arg.expr());
                     if nonreferenceable_line.is_some() {
                         send._pad |= SEND_FLAG_NONREFERENCEABLE;
+                    }
+                    if self
+                        .temporary_write_error_call_argument_line(arg.expr())
+                        .is_some()
+                    {
+                        send._pad |= SEND_FLAG_TEMPORARY_WRITE_ERROR;
                     }
                     let indirect_temporary_line =
                         self.indirect_temporary_call_argument_line(arg.expr());

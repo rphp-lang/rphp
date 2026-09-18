@@ -36,6 +36,29 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `frontend-expression-boundaries` checkpoint over `35ddb85a`
+adds **9 PHP 8.5 passes without losses**. The 8,258-case supported ledger is
+now **7,494 pass / 291 fail / 194 skip / 276 unsupported / three XFAIL**.
+Zend/lang reaches 5,056/248, while strings/array remains exactly 1,470/8.
+
+The shared front-end/runtime boundary covers surrogate escape bytes, constant
+array keys, dynamic `instanceof`, final-constant and static-property syntax,
+Elvis/coalesce parsing, immutable temporary dimensions at reference calls and
+short-echo source segments. Five Cargo configurations/all-targets, exact
+no-loss families and Composer/Symfony S0--S3 pass. The diff adds no unsafe
+operation; the already-stale parent unsafe ceiling remains a separate visible
+ratchet repair. Performance work remains deferred to the aggregate sweep
+boundary.
+
+Continue the supported-failure sweep from **291 to zero**. Re-cluster the
+fresh 248 Zend/lang failures and 43 failures in other admitted supported
+families by common root cause, then take the largest coherent safe slice.
+Prefer a 10--30-case train, but do not withhold a smaller independently green
+semantic fix when it is already part of the same continuous sweep. Preserve
+the exact 5,056 and 1,470 parent pass sets.
+
+### Preceding generator finalization checkpoint
+
 The accepted `generator-finalization-sweep` checkpoint over `cdd2096f` adds
 **24 PHP 8.5 passes without losses**. The 8,258-case supported ledger is now
 **7,485 pass / 300 fail / 194 skip / 276 unsupported / three XFAIL**. The full

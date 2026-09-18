@@ -95,6 +95,11 @@ pub enum Token {
     Echo {
         line: usize,
     }, // echo
+    /// PHP's `<?=` opening tag. It behaves like `echo` at statement level,
+    /// while remaining distinct for contextual-identifier diagnostics.
+    ShortEcho {
+        line: usize,
+    },
     Function(usize), // function with source line
     Return {
         line: usize,
@@ -549,10 +554,10 @@ impl<'a> Lexer<'a> {
                 .map_or(self.src.len(), |end| end + 1);
         }
         let initial_text = self.pos;
-        if self.is_long_open_tag(self.pos) {
+        if self.is_long_open_tag(self.pos) || self.is_short_echo_open_tag(self.pos) {
             return self.tokenize();
         }
-        let Some(open) = self.next_long_open_tag(self.pos) else {
+        let Some((open, _)) = self.next_php_open_tag(self.pos) else {
             let mut tokens = vec![Token::OpenTag];
             self.emit_inline_html(&mut tokens, initial_text, self.src.len());
             tokens.push(Token::Eof);
@@ -574,10 +579,15 @@ impl<'a> Lexer<'a> {
 
         let _ = self.skip_whitespace().map_err(|error| error.message)?;
 
-        // Expect <?php opening tag
+        // Expect a long or short-echo opening tag.
         if self.is_long_open_tag(self.pos) {
             self.pos += 5;
             tokens.push(Token::OpenTag);
+        } else if self.is_short_echo_open_tag(self.pos) {
+            let line = self.source_line_at(self.pos);
+            self.pos += 3;
+            tokens.push(Token::OpenTag);
+            tokens.push(Token::ShortEcho { line });
         } else {
             return Err("Expected <?php opening tag".into());
         }
@@ -1679,11 +1689,17 @@ impl<'a> Lexer<'a> {
             inline_start += 1;
         }
 
-        let next_open = self.next_long_open_tag(inline_start);
-        let inline_end = next_open.unwrap_or(self.src.len());
+        let next_open = self.next_php_open_tag(inline_start);
+        let inline_end = next_open.map_or(self.src.len(), |(open, _)| open);
         self.emit_inline_html(tokens, inline_start, inline_end);
         self.pos = match next_open {
-            Some(open) => open + 5,
+            Some((open, false)) => open + 5,
+            Some((open, true)) => {
+                tokens.push(Token::ShortEcho {
+                    line: self.source_line_at(open),
+                });
+                open + 3
+            }
             None => self.src.len(),
         };
         Ok(())
@@ -1700,13 +1716,28 @@ impl<'a> Lexer<'a> {
                 .is_none_or(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
     }
 
+    #[inline]
+    fn is_short_echo_open_tag(&self, position: usize) -> bool {
+        self.src.get(position..position + 3) == Some(b"<?=")
+    }
+
     #[cold]
-    fn next_long_open_tag(&self, start: usize) -> Option<usize> {
+    fn next_php_open_tag(&self, start: usize) -> Option<(usize, bool)> {
         self.src[start..]
-            .windows(5)
+            .iter()
             .enumerate()
-            .find_map(|(offset, tag)| {
-                (tag[0] == b'<' && self.is_long_open_tag(start + offset)).then_some(start + offset)
+            .find_map(|(offset, byte)| {
+                if *byte != b'<' {
+                    return None;
+                }
+                let position = start + offset;
+                if self.is_short_echo_open_tag(position) {
+                    Some((position, true))
+                } else if self.is_long_open_tag(position) {
+                    Some((position, false))
+                } else {
+                    None
+                }
             })
     }
 

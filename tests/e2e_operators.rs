@@ -1458,6 +1458,32 @@ fn test_equal_with_concat_rhs() {
 // ========== Elvis operator (?:) ==========
 
 #[test]
+fn elvis_right_arm_accepts_a_lower_precedence_assignment() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$left = null;
+$result = $left ?: $assigned = 'fallback';
+echo $result, ':', $assigned;
+"#,
+        ),
+        "fallback:fallback"
+    );
+}
+
+#[test]
+fn coalesce_assignment_rejects_an_append_read() {
+    let source = "<?php\n$values[] ??= true;";
+    let tokens = Lexer::new(source).tokenize().expect("source must lex");
+    let statements = Parser::new(tokens).parse().expect("source must parse");
+    let error = match Compiler::new().compile(&statements) {
+        Ok(_) => panic!("append read must fail during compilation"),
+        Err(error) => error,
+    };
+    assert_eq!(error.message, "Cannot use [] for reading on line 2");
+}
+
+#[test]
 fn test_elvis_truthy_string() {
     assert_eq!(
         run_php(

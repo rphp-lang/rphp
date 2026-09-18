@@ -3,6 +3,25 @@ mod common;
 use common::run_php;
 
 #[test]
+fn declaration_array_keys_coerce_boolean_constants() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+define('ZERO_KEY', false);
+define('ONE_KEY', true);
+class BooleanKeyDefaults {
+    public static array $literal = [false => 'f', true => 't'];
+    public static array $constants = [ZERO_KEY => 'zero', ONE_KEY => 'one'];
+}
+echo implode(',', BooleanKeyDefaults::$literal), '|';
+echo implode(',', BooleanKeyDefaults::$constants);
+"#,
+        ),
+        "f,t|zero,one"
+    );
+}
+
+#[test]
 fn range_matches_integer_float_numeric_string_and_byte_modes() {
     assert_eq!(
         run_php(

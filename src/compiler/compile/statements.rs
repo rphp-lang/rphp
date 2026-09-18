@@ -8075,6 +8075,15 @@ impl Compiler {
     ) -> Result<Vec<ClassConstantDefinition>, String> {
         let mut names = std::collections::HashSet::new();
         for constant in constants {
+            if constant.is_final && constant.visibility == Visibility::Private {
+                return Err(self.goto_error(
+                    &format!(
+                        "Private constant {owner}::{} cannot be final as it is not visible to other classes",
+                        constant.name
+                    ),
+                    constant.line,
+                ));
+            }
             self.validate_attribute_target(
                 &constant.attributes,
                 "class constant",

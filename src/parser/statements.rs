@@ -141,7 +141,8 @@ impl Parser {
                 }
                 | Token::Case(token_line)
                 | Token::Default(token_line)
-                | Token::Echo { line: token_line } => *token_line,
+                | Token::Echo { line: token_line }
+                | Token::ShortEcho { line: token_line } => *token_line,
                 _ => line,
             };
 
@@ -709,7 +710,7 @@ impl Parser {
                     declarations,
                 })
             }
-            Token::Echo { line } => {
+            Token::Echo { line } | Token::ShortEcho { line } => {
                 self.advance();
                 let mut expressions = vec![self.with_new_postfix_error_suffix(
                     Some(", expecting \",\" or \";\""),

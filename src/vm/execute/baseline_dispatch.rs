@@ -5573,21 +5573,28 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 .sig
                                 .is_param_prefer_ref(parameter_index as u32)
                         {
-                            let parameter = common
-                                .sig
-                                .diagnostic_parameter_name(parameter_index as u32)
-                                .map(|name| format!(" (${name})"))
-                                .unwrap_or_default();
-                            let function_name = displayed_frame_function_name(eg, call);
-                            let error = make_error_value(
-                                "Error",
-                                &format!(
-                                    "{}(): Argument #{}{} could not be passed by reference",
-                                    function_name,
-                                    parameter_index + 1,
-                                    parameter
-                                ),
-                            );
+                            let error = if opline._pad & SEND_FLAG_TEMPORARY_WRITE_ERROR != 0 {
+                                make_error_value(
+                                    "Error",
+                                    "Cannot use temporary expression in write context",
+                                )
+                            } else {
+                                let parameter = common
+                                    .sig
+                                    .diagnostic_parameter_name(parameter_index as u32)
+                                    .map(|name| format!(" (${name})"))
+                                    .unwrap_or_default();
+                                let function_name = displayed_frame_function_name(eg, call);
+                                make_error_value(
+                                    "Error",
+                                    &format!(
+                                        "{}(): Argument #{}{} could not be passed by reference",
+                                        function_name,
+                                        parameter_index + 1,
+                                        parameter
+                                    ),
+                                )
+                            };
                             attach_call_argument_throwable_origin(
                                 &error, eg, frame, op_array, opline,
                             );

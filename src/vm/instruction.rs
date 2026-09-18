@@ -95,6 +95,12 @@ pub const SEND_FLAG_INDIRECT_TEMPORARY: u16 = 1 << 5;
 /// prepared internal CV instead of resolving the same signature twice.
 pub const SEND_FLAG_PREPARED_PROPERTY_ARGUMENT: u16 = 1 << 6;
 
+/// SendVal/SendNamed flag: the non-referenceable value came from reading an
+/// array dimension whose root is itself a temporary (for example `C[0]`).
+/// PHP diagnoses a by-reference consumer of this value as a write to a
+/// temporary expression rather than with the ordinary argument-number Error.
+pub const SEND_FLAG_TEMPORARY_WRITE_ERROR: u16 = 1 << 7;
+
 /// FetchCvR flag: evaluate this read under PHP's `@` reporting mask. Custom
 /// handlers still run and observe the suppressed mask.
 pub const FETCH_CV_ERROR_SUPPRESS: u16 = 1;
