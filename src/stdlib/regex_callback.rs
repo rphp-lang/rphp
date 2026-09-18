@@ -17,6 +17,7 @@ pub(super) fn replace(
     resolved: &ResolvedCallback,
     limit: usize,
     unmatched_as_null: bool,
+    offset_capture: bool,
     eg: &mut ExecutorGlobals,
 ) -> Result<Option<(String, usize)>, VmError> {
     if limit == 0 {
@@ -35,7 +36,7 @@ pub(super) fn replace(
             result.reserve(subject.len());
         }
         let full_match = caps.get(0).unwrap();
-        let capture_free = caps.len() == 1 && caps.named_groups().is_empty();
+        let capture_free = !offset_capture && caps.len() == 1 && caps.named_groups().is_empty();
 
         let matches_value = if capture_free {
             debug_assert_eq!(caps.len(), 1);
@@ -58,17 +59,53 @@ pub(super) fn replace(
         } else {
             let mut matches = PhpArray::new();
             for index in 0..caps.len() {
-                match caps.get(index) {
-                    Some(capture) => matches.push(Value::string(capture.as_str(&subject))),
-                    None if unmatched_as_null => matches.push(Value::null()),
-                    None => matches.push(Value::string("")),
-                }
+                let value = match caps.get(index) {
+                    Some(capture) if offset_capture => {
+                        let mut pair = PhpArray::with_packed_capacity(2);
+                        pair.push(Value::string(capture.as_str(&subject)));
+                        pair.push(Value::long(capture.start as i64));
+                        Value::array(pair)
+                    }
+                    Some(capture) => Value::string(capture.as_str(&subject)),
+                    None if offset_capture => {
+                        let mut pair = PhpArray::with_packed_capacity(2);
+                        pair.push(if unmatched_as_null {
+                            Value::null()
+                        } else {
+                            Value::string("")
+                        });
+                        pair.push(Value::long(-1));
+                        Value::array(pair)
+                    }
+                    None if unmatched_as_null => Value::null(),
+                    None => Value::string(""),
+                };
+                matches.push(value);
             }
             for (name, &index) in caps.named_groups() {
-                if let Some(capture) = caps.get(index) {
-                    matches.set_str(name, Value::string(capture.as_str(&subject)));
-                } else if unmatched_as_null {
-                    matches.set_str(name, Value::null());
+                let value = match caps.get(index) {
+                    Some(capture) if offset_capture => {
+                        let mut pair = PhpArray::with_packed_capacity(2);
+                        pair.push(Value::string(capture.as_str(&subject)));
+                        pair.push(Value::long(capture.start as i64));
+                        Some(Value::array(pair))
+                    }
+                    Some(capture) => Some(Value::string(capture.as_str(&subject))),
+                    None if offset_capture => {
+                        let mut pair = PhpArray::with_packed_capacity(2);
+                        pair.push(if unmatched_as_null {
+                            Value::null()
+                        } else {
+                            Value::string("")
+                        });
+                        pair.push(Value::long(-1));
+                        Some(Value::array(pair))
+                    }
+                    None if unmatched_as_null => Some(Value::null()),
+                    None => None,
+                };
+                if let Some(value) = value {
+                    matches.set_str(name, value);
                 }
             }
             Value::array(matches)

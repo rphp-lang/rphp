@@ -1355,30 +1355,68 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("shell_exec", fn_shell_exec, 1, 1, "command");
 
     // --- Regex functions ---
-    reg_ref!(
+    reg_typed_ref!(
         "preg_match",
         fn_preg_match,
         5,
         2,
         0b100,
-        "pattern",
-        "subject",
-        "matches",
-        "flags",
-        "offset"
+        ["pattern", "subject", "matches", "flags", "offset"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::None,
+            ParamTypeHint::Int,
+            ParamTypeHint::Int,
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Int,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
     );
-    reg_ref!(
+    let preg_match = eg
+        .find_function("preg_match")
+        .expect("preg_match was just registered");
+    eg.register_internal_function_reflection_metadata(
+        preg_match,
+        vec![
+            None,
+            None,
+            Some(Value::null()),
+            Some(Value::long(0)),
+            Some(Value::long(0)),
+        ],
+        "pcre",
+    );
+    reg_typed_ref!(
         "preg_replace",
         fn_preg_replace,
         5,
         3,
         0b1_0000,
-        "pattern",
-        "replacement",
-        "subject",
-        "limit",
-        "count"
+        ["pattern", "replacement", "subject", "limit", "count"],
+        [
+            ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String]),
+            ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String]),
+            ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String]),
+            ParamTypeHint::Int,
+            ParamTypeHint::None,
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("null".to_string()),
+        ])
     );
+    let preg_replace = eg
+        .find_function("preg_replace")
+        .expect("preg_replace was just registered");
+    eg.register_internal_function_reflection_metadata(
+        preg_replace,
+        vec![None, None, None, Some(Value::long(-1)), Some(Value::null())],
+        "pcre",
+    );
+    funcs.extend(pcre::register(eg));
 
     // --- Type functions ---
     reg_typed!(
@@ -2733,40 +2771,99 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
 
     // --- Regex (extended) ---
-    reg_ref!(
+    reg_typed_ref!(
         "preg_match_all",
         fn_preg_match_all,
         5,
         2,
         0b100,
-        "pattern",
-        "subject",
-        "matches",
-        "flags",
-        "offset"
+        ["pattern", "subject", "matches", "flags", "offset"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::None,
+            ParamTypeHint::Int,
+            ParamTypeHint::Int,
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Int,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
     );
-    reg!(
+    let preg_match_all = eg
+        .find_function("preg_match_all")
+        .expect("preg_match_all was just registered");
+    eg.register_internal_function_reflection_metadata(
+        preg_match_all,
+        vec![
+            None,
+            None,
+            Some(Value::null()),
+            Some(Value::long(0)),
+            Some(Value::long(0)),
+        ],
+        "pcre",
+    );
+    reg_typed!(
         "preg_split",
         fn_preg_split,
         4,
         2,
-        "pattern",
-        "subject",
-        "limit",
-        "flags"
+        ["pattern", "subject", "limit", "flags"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::Int,
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
     );
-    reg_ref!(
+    let preg_split = eg
+        .find_function("preg_split")
+        .expect("preg_split was just registered");
+    eg.register_internal_function_reflection_metadata(
+        preg_split,
+        vec![None, None, Some(Value::long(-1)), Some(Value::long(0))],
+        "pcre",
+    );
+    reg_typed_ref!(
         "preg_replace_callback",
         fn_preg_replace_callback,
         6,
         3,
         0b1_0000,
-        "pattern",
-        "callback",
-        "subject",
-        "limit",
-        "count",
-        "flags"
+        ["pattern", "callback", "subject", "limit", "count", "flags"],
+        [
+            ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String]),
+            ParamTypeHint::Callable,
+            ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String]),
+            ParamTypeHint::Int,
+            ParamTypeHint::None,
+            ParamTypeHint::Int,
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("null".to_string()),
+        ])
+    );
+    let preg_replace_callback = eg
+        .find_function("preg_replace_callback")
+        .expect("preg_replace_callback was just registered");
+    eg.register_internal_function_reflection_metadata(
+        preg_replace_callback,
+        vec![
+            None,
+            None,
+            None,
+            Some(Value::long(-1)),
+            Some(Value::null()),
+            Some(Value::long(0)),
+        ],
+        "pcre",
     );
     reg_typed!(
         "preg_quote",

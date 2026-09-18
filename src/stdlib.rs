@@ -221,6 +221,7 @@ mod formatted_io;
 mod hebrew;
 mod html_entities;
 mod iterator;
+mod pcre;
 mod process;
 mod recursive_arrays;
 mod source_filters;
@@ -22603,12 +22604,8 @@ fn fn_preg_match(
         !raw.is_undef()
     };
 
-    let re = match eg.regex_cache.get_or_compile(&pattern_str) {
-        Ok(regex) => regex,
-        Err(_e) => {
-            // PHP emits a warning and returns false for invalid patterns
-            ret!(rv, Value::bool(false));
-        }
+    let Some(re) = pcre::compile_pattern(eg, ed, "preg_match", &pattern_str)? else {
+        ret!(rv, Value::bool(false));
     };
 
     if !has_matches {
@@ -22678,12 +22675,14 @@ fn fn_preg_match(
 
 fn preg_replace_strings(
     eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    function: &str,
     patterns: &[String],
     replacements: &[String],
     replacement_is_array: bool,
     subject: &str,
     limit: usize,
-) -> Option<(String, usize)> {
+) -> Result<(Option<String>, usize), VmError> {
     let mut result = subject.to_string();
     let mut count = 0;
     for (index, pattern) in patterns.iter().enumerate() {
@@ -22692,12 +22691,14 @@ fn preg_replace_strings(
         } else {
             replacements.first().map_or("", String::as_str)
         };
-        let regex = eg.regex_cache.get_or_compile(pattern).ok()?;
+        let Some(regex) = pcre::compile_pattern(eg, ed, function, pattern)? else {
+            return Ok((None, count));
+        };
         let (replaced, replacements) = regex.replace_limit(&result, replacement, limit);
         result = replaced;
         count += replacements;
     }
-    Some((result, count))
+    Ok((Some(result), count))
 }
 
 fn preg_replace_argument_strings(value: &Value) -> (Vec<String>, bool) {
@@ -22740,9 +22741,8 @@ fn fn_preg_replace(
         let pattern = arg_str!(ed, 0);
         let replacement = arg_str!(ed, 1);
         let subject = arg_str!(ed, 2);
-        let regex = match eg.regex_cache.get_or_compile(&pattern) {
-            Ok(regex) => regex,
-            Err(_) => ret!(rv, Value::null()),
+        let Some(regex) = pcre::compile_pattern(eg, ed, "preg_replace", &pattern)? else {
+            ret!(rv, Value::null());
         };
         let result = regex.replace_all(&subject, &replacement);
         ret!(rv, Value::string(result));
@@ -22759,17 +22759,23 @@ fn fn_preg_replace(
             .collect();
         let mut result = PhpArray::new();
         for (key, subject) in subjects {
-            let Some((replaced, count)) = preg_replace_strings(
+            let (replaced, count) = preg_replace_strings(
                 eg,
+                ed,
+                "preg_replace",
                 &patterns,
                 &replacements,
                 replacement_is_array,
                 &subject,
                 limit,
-            ) else {
+            )?;
+            total_count += count;
+            let Some(replaced) = replaced else {
+                if has_count {
+                    arg_mut!(ed, 4, Value::long(total_count as i64));
+                }
                 ret!(rv, Value::null());
             };
-            total_count += count;
             match key {
                 ArrayKey::Int(key) => result.set_int(key, Value::string(replaced)),
                 ArrayKey::String(key) => result.set_str(&key, Value::string(replaced)),
@@ -22788,14 +22794,20 @@ fn fn_preg_replace(
     }
 
     let subject = arg!(ed, 2).dereferenced().echo_to_string();
-    let Some((result, count)) = preg_replace_strings(
+    let (result, count) = preg_replace_strings(
         eg,
+        ed,
+        "preg_replace",
         &patterns,
         &replacements,
         replacement_is_array,
         &subject,
         limit,
-    ) else {
+    )?;
+    let Some(result) = result else {
+        if has_count {
+            arg_mut!(ed, 4, Value::long(count as i64));
+        }
         ret!(rv, Value::null());
     };
     if has_count {
@@ -31778,11 +31790,8 @@ fn fn_preg_match_all(
         !raw.is_undef()
     };
 
-    let re = match eg.regex_cache.get_or_compile(&pattern_str) {
-        Ok(regex) => regex,
-        Err(_) => {
-            ret!(rv, Value::long(0));
-        }
+    let Some(re) = pcre::compile_pattern(eg, ed, "preg_match_all", &pattern_str)? else {
+        ret!(rv, Value::bool(false));
     };
 
     if !has_matches {
@@ -31965,11 +31974,8 @@ fn fn_preg_split(
     let limit = arg_opt!(ed, 2).map(|v| v.to_long_val()).unwrap_or(-1);
     let flags = arg_opt!(ed, 3).map(Value::to_long_val).unwrap_or(0);
 
-    let re = match eg.regex_cache.get_or_compile(&pattern_str) {
-        Ok(regex) => regex,
-        Err(_) => {
-            ret!(rv, Value::bool(false));
-        }
+    let Some(re) = pcre::compile_pattern(eg, ed, "preg_split", &pattern_str)? else {
+        ret!(rv, Value::bool(false));
     };
 
     let mut arr = PhpArray::new();
@@ -32069,15 +32075,19 @@ fn fn_preg_replace_callback(
     let has_count = arg_opt!(ed, 4).is_some();
     let flags = arg_opt!(ed, 5).map_or(0, Value::to_long_val);
 
-    let re = match eg.regex_cache.get_or_compile(&pattern_str) {
-        Ok(regex) => regex,
-        Err(_) => {
-            ret!(rv, Value::null());
-        }
+    let Some(re) = pcre::compile_pattern(eg, ed, "preg_replace_callback", &pattern_str)? else {
+        ret!(rv, Value::null());
     };
 
-    let Some((result, replacements)) =
-        regex_callback::replace(&re, subject, &resolved, limit, flags & 512 != 0, eg)?
+    let Some((result, replacements)) = regex_callback::replace(
+        &re,
+        subject,
+        &resolved,
+        limit,
+        flags & 512 != 0,
+        flags & 256 != 0,
+        eg,
+    )?
     else {
         return Ok(());
     };

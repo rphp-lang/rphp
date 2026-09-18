@@ -46,7 +46,7 @@ fn preg_match_accepts_utf8_mode_for_empty_and_unicode_patterns() {
         run_php(
             "<?php echo preg_match('//u', '/health'), '|', preg_match('/^.$/u', 'ž'), '|'; var_dump(preg_match('/a/uz', 'a'));"
         ),
-        "1|1|bool(false)\n"
+        "1|1|\nWarning: preg_match(): Unknown modifier 'z' in <main> on line 1\nbool(false)\n"
     );
 }
 
@@ -279,7 +279,7 @@ fn test_preg_match_invalid_pattern_returns_false() {
     // PHP returns false for invalid patterns, not a fatal error
     assert_eq!(
         run_php("<?php var_dump(preg_match('/(/', 'a'));"),
-        "bool(false)\n"
+        "\nWarning: preg_match(): Compilation failed: Unterminated capturing group in <main> on line 1\nbool(false)\n"
     );
 }
 
@@ -287,7 +287,7 @@ fn test_preg_match_invalid_pattern_returns_false() {
 fn test_preg_match_unknown_modifier_returns_false() {
     assert_eq!(
         run_php("<?php var_dump(preg_match('/a/z', 'a'));"),
-        "bool(false)\n"
+        "\nWarning: preg_match(): Unknown modifier 'z' in <main> on line 1\nbool(false)\n"
     );
 }
 
@@ -296,7 +296,7 @@ fn test_preg_match_paired_delimiter_malformed() {
     // {a}b} — 'b' is unknown modifier, returns false like PHP
     assert_eq!(
         run_php(r#"<?php var_dump(preg_match('{a}b}', 'a'));"#),
-        "bool(false)\n"
+        "\nWarning: preg_match(): Unknown modifier 'b' in <main> on line 1\nbool(false)\n"
     );
 }
 

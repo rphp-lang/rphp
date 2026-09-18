@@ -7,6 +7,62 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The accepted `pcre-callable-contracts` checkpoint over `62ed7920` adds
+`preg_filter()`, `preg_grep()`, `preg_last_error()`,
+`preg_last_error_msg()` and `preg_replace_callback_array()`. All eleven
+reference PCRE globals now have exact Reflection-visible names, argument
+names, arity, types, defaults, return types and extension ownership. The
+public constant surface, partial replacement counts, callback capture flags,
+key preservation and request-local last-error state follow PHP 8.5. The error
+code shares the existing regex-cache word, so `ExecutorGlobals` does not grow.
+
+This is a callable-surface checkpoint, not complete PCRE2 admission. RPHP does
+not publish `extension_loaded('pcre')`: JIT, several PCRE2 constructs and
+modifiers, complete Unicode/UTF validation, backtracking/resource limits and
+all engine error codes remain explicit non-claims. Valid but unimplemented
+engine constructs fail without PHP's malformed-pattern warning; truly invalid
+delimiters and modifiers retain the PHP diagnostic boundary.
+
+Reference PHP passes 159 of the monitored 165 upstream PCRE cases. A
+task-scoped copy removes only the `--EXTENSIONS-- pcre` selector from one
+reentrancy case; PHP code and expectations remain byte-identical. The frozen
+parent reaches 44 pass / 98 fail / 8 skip / 14 unsupported / one timeout; the
+candidate reaches **66 pass / 75 fail / 9 skip / 14 unsupported / one timeout**,
+an exact **+22/-0** with no crash. Six original extension E2E cases and 52
+adjacent regex E2E cases pass. A pre-existing native-class reservation defect
+also exposed by the clean matrix is corrected by reserving the indexed class
+vectors once before fixed stdlib publication; the parent reproduces the
+133-to-266 growth and the repaired invariant test passes.
+
+The five Cargo configurations pass **5,814 / 5,482 / 5,885 / 5,907 / 5,958**
+tests with no failure, plus all-features/all-targets. Zend/lang moves from
+5,022 to 5,023 passes with one gain and no loss; the 1,575-case strings/array
+family is identical at 1,470 pass / 8 fail / 67 skip / 30 unsupported.
+Composer S0, all four Symfony S1 components, warmed S2, cold-build S3,
+formatting, PHPT-runner and unsafe-policy gates pass. Unsafe inventory remains
+1,626 blocks / 289 functions. The on-demand global audit is **570 present /
+631 missing / 0 call-shape mismatch / 341 metadata mismatch / 229 exact**;
+PCRE itself is 11/11 exact.
+
+The fixed-parent CPU-31 32-pair packet records paired medians of startup
+-0.222%, ordinary calls +0.250%, existing `preg_match()` -8.517% and existing
+`preg_replace()` +1.189%, all with exact output. The new `preg_filter()` and
+`preg_grep()` lanes are respectively +442.405% and +441.121% versus PHP 8.5;
+these are explicit pay-use optimization anchors rather than common-lane
+regressions or parity claims.
+
+SHA-256 evidence:
+
+- Final release candidate: `7b702838338b13f4a70f9d44e50a0a04c2e7b85fdc2ada2ee022457499ff4030`.
+- Five-configuration matrix: `cfcc54b80dbc645df3b850a1015c9440fcd166731da76f7453f094daa52fa5c6`.
+- PCRE manifest / summary / pass set: `6646d540996304e25ca144088b19b58e7264ef863afb5305fb273eb7e9863ffa` / `33fd98bcc03c5f088c142238e82adf51369ced75d8b2b2b040ce490fae4fe2e5` / `daa50d67a1df55c4cee90121d21761fc4670894079ee8716c5d2536ea92f7fcd`.
+- Zend/lang manifest / pass set: `7f82f12dced5993416a8d54e3b364ccfc33cbdbe36828d65b43a8e26a5143161` / `e8f2406e6510e5666299bb6deababea5ea770398ce925e411587f1dbef9383eb`.
+- Strings/array manifest / pass set: `c782b93935c1aaba8789c0bc84b3fe98f347c01d15cdc3e187cdb09412357115` / `e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
+- Inventory report / summary: `fbd226f0d0c9fdaa1f8abde6c5aa69cc3c9d4da528a956d5a79b2153f610f0b6` / `430a97071afa90cba0e78a6458a767718496f131cd3d893361ee77076a9c8b96`.
+- Performance raw timing / summary: `e1810c82eb029428179d08c2df13897f3fc8f2f14cf7acc85d1ecb1af0546fb9` / `cdabe1045d0cfdbb1aee4e923356a95ceda3910081698ba7b3e6d9a5f22adbcc`.
+
+### Preceding scalar-math checkpoint
+
 The accepted `math-scalar-completion` checkpoint over `15250e71` converts all
 **23 remaining supported failures** in the monitored 171-case PHP 8.5
 `ext/standard/tests/math` directory without losses. The directory is now

@@ -510,6 +510,18 @@ fn test_regex_cache_does_not_store_invalid_patterns() {
 }
 
 #[test]
+fn test_regex_cache_error_slot_preserves_capacity_and_entries() {
+    let mut cache = RegexCache::new(2);
+    cache.set_last_error(6);
+    assert_eq!(cache.last_error(), 6);
+    cache.get_or_compile("/first/").unwrap();
+    cache.get_or_compile("/second/").unwrap();
+    cache.get_or_compile("/third/").unwrap();
+    assert_eq!(cache.last_error(), 6);
+    assert_eq!(cache.entries.len(), 2);
+}
+
+#[test]
 fn test_zero_capacity_disables_regex_caching() {
     let mut cache = RegexCache::new(0);
     let first = cache.get_or_compile("/hello/").unwrap();
@@ -622,6 +634,42 @@ fn test_named_group_angle_syntax() {
 #[test]
 fn test_unknown_modifier_rejected() {
     assert!(parse_php_regex("/a/z").is_err());
+}
+
+#[test]
+fn valid_unimplemented_modifier_is_distinct_from_unknown_modifier() {
+    assert_eq!(
+        parse_php_regex("/a/A").unwrap_err(),
+        "Unsupported PCRE modifier 'A'"
+    );
+    assert_eq!(
+        parse_php_regex("/a/Az").unwrap_err(),
+        "Unknown modifier 'z'"
+    );
+}
+
+#[test]
+fn test_php_rejects_alphanumeric_backslash_and_nul_delimiters() {
+    for pattern in ["aba", "1b1", "\\b\\", "\0b\0"] {
+        assert_eq!(
+            parse_php_regex(pattern).unwrap_err(),
+            "Delimiter must not be alphanumeric, backslash, or NUL byte"
+        );
+    }
+}
+
+#[test]
+fn valid_scoped_option_group_is_classified_as_an_engine_limit() {
+    let (pattern, flags) = parse_php_regex("/(?i:a|(?-i:B))/").unwrap();
+    assert_eq!(
+        Regex::new(&pattern, flags).unwrap_err(),
+        "Unsupported PCRE scoped option group"
+    );
+    let (pattern, flags) = parse_php_regex("/(?i:a/").unwrap();
+    assert_eq!(
+        Regex::new(&pattern, flags).unwrap_err(),
+        "Unterminated scoped PCRE option group"
+    );
 }
 
 // ── P2: Named backreferences ───────────────────────────────────────────

@@ -1922,7 +1922,11 @@ impl ExecutorGlobals {
         // RecursiveDirectoryIterator and GlobIterator reuse the native cursor.
         // Callback and recursive filter policies add four native children.
         // Empty, infinite and parallel cursor policies add three declarations.
-        let class_capacity = 130 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        // Internal inheritance contracts and the DateTime/SPL families now
+        // cross the former 130-class envelope. Reserve modest declaration
+        // headroom once instead of doubling both indexed class vectors while
+        // the fixed native set is being published.
+        let class_capacity = 160 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;

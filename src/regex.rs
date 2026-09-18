@@ -152,18 +152,46 @@ pub struct Regex {
 /// path without adding per-hit list maintenance; a repeated static pattern
 /// remains cached until enough distinct patterns displace it.
 pub struct RegexCache {
-    capacity: usize,
+    /// Cache capacity in the low bits and the request-local `preg_last_error()`
+    /// code in the high byte. Keeping both values in the existing word avoids
+    /// growing `ExecutorGlobals` for scripts that never use PCRE diagnostics.
+    capacity_and_last_error: usize,
     entries: HashMap<String, Rc<Regex>>,
     insertion_order: VecDeque<String>,
 }
 
 impl RegexCache {
+    const ERROR_SHIFT: u32 = usize::BITS - 8;
+    const CAPACITY_MASK: usize = (1usize << Self::ERROR_SHIFT) - 1;
+
     pub fn new(capacity: usize) -> Self {
+        assert!(
+            capacity <= Self::CAPACITY_MASK,
+            "regex cache capacity exceeds request-local packed representation"
+        );
         Self {
-            capacity,
+            capacity_and_last_error: capacity,
             entries: HashMap::with_capacity(capacity),
             insertion_order: VecDeque::with_capacity(capacity),
         }
+    }
+
+    #[inline]
+    fn capacity(&self) -> usize {
+        self.capacity_and_last_error & Self::CAPACITY_MASK
+    }
+
+    /// PHP exposes the last PCRE operation status per request. The custom
+    /// engine currently publishes the portable no-error/internal-error subset;
+    /// limits and malformed UTF-8 remain separate engine capabilities.
+    #[inline]
+    pub fn last_error(&self) -> u8 {
+        (self.capacity_and_last_error >> Self::ERROR_SHIFT) as u8
+    }
+
+    #[inline]
+    pub fn set_last_error(&mut self, error: u8) {
+        self.capacity_and_last_error = self.capacity() | (usize::from(error) << Self::ERROR_SHIFT);
     }
 
     /// Return a shared compiled regex, compiling and caching it on a miss.
@@ -177,11 +205,12 @@ impl RegexCache {
         let (pattern, flags) = parse_php_regex(php_pattern)?;
         let regex = Rc::new(Regex::new(&pattern, flags)?);
 
-        if self.capacity == 0 {
+        let capacity = self.capacity();
+        if capacity == 0 {
             return Ok(regex);
         }
 
-        if self.entries.len() == self.capacity {
+        if self.entries.len() == capacity {
             if let Some(oldest) = self.insertion_order.pop_front() {
                 self.entries.remove(&oldest);
             }
@@ -1731,6 +1760,38 @@ impl Parser {
                 self.advance();
                 return Ok(Node::Sequence(Vec::new()));
             }
+
+            // PCRE scoped option groups such as `(?-i:...)` are valid syntax,
+            // but changing matcher flags for only one subtree is not yet an
+            // engine capability. Parse the body far enough to distinguish a
+            // valid unsupported construct from a malformed group. Public
+            // preg_* callers can then preserve the historical silent engine
+            // limitation without publishing PHP's compilation warning for a
+            // pattern that PCRE itself accepts.
+            let option_start = self.pos;
+            let mut saw_option = false;
+            while let Some(option) = self.peek() {
+                if matches!(option, 'i' | 'm' | 'n' | 'r' | 's' | 'x' | 'J' | 'U' | 'X') {
+                    saw_option = true;
+                    self.advance();
+                    continue;
+                }
+                if option == '-' {
+                    self.advance();
+                    continue;
+                }
+                break;
+            }
+            if saw_option && self.peek() == Some(':') {
+                self.advance();
+                self.parse_alternation()?;
+                if self.advance() != Some(')') {
+                    return Err("Unterminated scoped PCRE option group".into());
+                }
+                return Err("Unsupported PCRE scoped option group".into());
+            }
+            self.pos = option_start;
+
             match self.peek() {
                 Some('&') => {
                     // Named subroutine call (?&name). DEFINE blocks above
@@ -2070,6 +2131,9 @@ pub fn parse_php_regex(input: &str) -> Result<(String, RegexFlags), String> {
         return Err("Empty regular expression".into());
     }
     let open = bytes[0];
+    if open.is_ascii_alphanumeric() || open == b'\\' || open == 0 {
+        return Err("Delimiter must not be alphanumeric, backslash, or NUL byte".into());
+    }
     let close = match open {
         b'{' => b'}',
         b'(' => b')',
@@ -2096,6 +2160,7 @@ pub fn parse_php_regex(input: &str) -> Result<(String, RegexFlags), String> {
     let flags_str = &input[close_pos + 1..];
 
     let mut flags = RegexFlags::default();
+    let mut unsupported_modifier = None;
     for ch in flags_str.chars() {
         match ch {
             'i' => flags.case_insensitive = true,
@@ -2111,8 +2176,18 @@ pub fn parse_php_regex(input: &str) -> Result<(String, RegexFlags), String> {
             // observable match or replacement results.
             'S' => {}
             'D' => flags.dollar_end_only = true,
+            // These are valid PHP/PCRE modifiers, but their engine semantics
+            // are not implemented yet. Finish scanning first so a genuinely
+            // unknown modifier later in the same suffix still wins and emits
+            // PHP's compile warning.
+            'A' | 'J' | 'X' | 'n' | 'r' => {
+                unsupported_modifier.get_or_insert(ch);
+            }
             _ => return Err(format!("Unknown modifier '{}'", ch)),
         }
+    }
+    if let Some(modifier) = unsupported_modifier {
+        return Err(format!("Unsupported PCRE modifier '{modifier}'"));
     }
     Ok((pattern.to_string(), flags))
 }
