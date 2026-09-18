@@ -1653,11 +1653,44 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
 
     // --- Math functions ---
-    reg_direct!("abs", fn_abs, direct_abs, 1, 1, "num");
+    reg_typed!(
+        "abs",
+        fn_abs,
+        1,
+        1,
+        ["num"],
+        [ParamTypeHint::Union(vec![
+            ParamTypeHint::Int,
+            ParamTypeHint::Float
+        ])],
+        ParamTypeHint::Union(vec![ParamTypeHint::Int, ParamTypeHint::Float])
+    );
     reg_var_ref!("max", fn_max, fn_max_raw_variadic, 1, 0, "value", "values");
     reg_var_ref!("min", fn_min, fn_min_raw_variadic, 1, 0, "value", "values");
-    reg_direct!("floor", fn_floor, direct_floor, 1, 1, "num");
-    reg!("ceil", fn_ceil, 1, 1, "num");
+    reg_typed!(
+        "floor",
+        fn_floor,
+        1,
+        1,
+        ["num"],
+        [ParamTypeHint::Union(vec![
+            ParamTypeHint::Int,
+            ParamTypeHint::Float
+        ])],
+        ParamTypeHint::Float
+    );
+    reg_typed!(
+        "ceil",
+        fn_ceil,
+        1,
+        1,
+        ["num"],
+        [ParamTypeHint::Union(vec![
+            ParamTypeHint::Int,
+            ParamTypeHint::Float
+        ])],
+        ParamTypeHint::Float
+    );
     reg_typed!(
         "round",
         fn_round,
@@ -1702,6 +1735,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
     let pow = eg.find_function("pow").expect("pow was just registered");
     eg.register_internal_function_reflection_metadata(pow, vec![None, None], "standard");
+    reg_typed!(
+        "fpow",
+        fn_fpow,
+        2,
+        2,
+        ["num", "exponent"],
+        [ParamTypeHint::Float, ParamTypeHint::Float],
+        ParamTypeHint::Float
+    );
     reg_direct!("sqrt", fn_sqrt, direct_sqrt, 1, 1, "num");
     reg_typed!(
         "intdiv",
@@ -1753,6 +1795,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("is_infinite", fn_is_infinite, 1, 1, "num");
     reg!("rand", fn_rand, 2, 0, "min", "max");
     reg!("mt_rand", fn_rand, 2, 0, "min", "max");
+    reg_typed!(
+        "getrandmax",
+        fn_getrandmax,
+        0,
+        0,
+        [],
+        [],
+        ParamTypeHint::Int
+    );
     reg!("random_int", fn_random_int, 2, 2, "min", "max");
 
     // --- Output ---
@@ -3392,8 +3443,24 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("cosh", fn_cosh, 1, 1, "num");
     reg!("tanh", fn_tanh, 1, 1, "num");
     register_scalar_float_specials(eg, &mut funcs);
-    reg!("deg2rad", fn_deg2rad, 1, 1, "num");
-    reg!("rad2deg", fn_rad2deg, 1, 1, "num");
+    reg_typed!(
+        "deg2rad",
+        fn_deg2rad,
+        1,
+        1,
+        ["num"],
+        [ParamTypeHint::Float],
+        ParamTypeHint::Float
+    );
+    reg_typed!(
+        "rad2deg",
+        fn_rad2deg,
+        1,
+        1,
+        ["num"],
+        [ParamTypeHint::Float],
+        ParamTypeHint::Float
+    );
     reg!("hypot", fn_hypot, 2, 2, "x", "y");
     reg!(
         "base_convert",

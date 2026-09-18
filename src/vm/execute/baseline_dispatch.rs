@@ -4234,9 +4234,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
+                let deprecated_zero_negative_power;
 
                 let result = if let Some((l1, l2)) = arithmetic_long_pair(op1, op2)
                 {
+                    deprecated_zero_negative_power = l1 == 0 && l2 < 0;
                     if let Ok(exponent) = u32::try_from(l2)
                         && let Some(value) = l1.checked_pow(exponent)
                     {
@@ -4246,6 +4248,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                 } else if let Some((d1, d2)) = arithmetic_double_pair(op1, op2)
                 {
+                    deprecated_zero_negative_power = d1 == 0.0 && d2 < 0.0;
                     Err(Value::double(d1.powf(d2)))
                 } else {
                     let pair = prepare_arithmetic_operator_pair(
@@ -4262,8 +4265,20 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             )
                         );
                     };
+                    deprecated_zero_negative_power = left.to_double() == Some(0.0)
+                        && right.to_double().is_some_and(|number| number < 0.0);
                     split_arithmetic_result(prepared_pow_result(&left, &right))
                 };
+                if deprecated_zero_negative_power {
+                    report_php_deprecation(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        "Power of base 0 and negative exponent is deprecated",
+                    )?;
+                    resume_pending_exception!();
+                }
                 // SAFETY: `result_ptr` is this instruction's resolved result slot,
                 // and the operand borrows are no longer used after building `result`.
                 unsafe {
@@ -4959,6 +4974,31 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         resume_pending_exception!();
                         result
                     }
+                } else if matches!(
+                    kind,
+                    crate::builtin_metadata::DirectInternalKind::Abs
+                        | crate::builtin_metadata::DirectInternalKind::Floor
+                ) && !matches!(
+                    argument.dereferenced().value_type(),
+                    ValueType::Long | ValueType::Double
+                ) {
+                    let argument = argument.clone();
+                    let name = if kind == crate::builtin_metadata::DirectInternalKind::Abs {
+                        "abs"
+                    } else {
+                        "floor"
+                    };
+                    let function = eg
+                        .find_function(name)
+                        .ok_or_else(|| VmError::Fatal(format!("Unknown function {name}")))?;
+                    let result = call_internal_function_iter_from_current_site(
+                        eg,
+                        function,
+                        1,
+                        std::iter::once(&argument),
+                    )?;
+                    resume_pending_exception!();
+                    result
                 } else if kind == crate::builtin_metadata::DirectInternalKind::ChunkSplit {
                     if let Some(result) = crate::stdlib::try_direct_chunk_split1(argument) {
                         result
@@ -5164,6 +5204,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                         spec.kind,
                                         crate::builtin_metadata::DirectInternalKind::ChunkSplit
                                             | crate::builtin_metadata::DirectInternalKind::Ord
+                                            | crate::builtin_metadata::DirectInternalKind::Abs
+                                            | crate::builtin_metadata::DirectInternalKind::Floor
                                     )
                                     && spec.kind.lowering()
                                         != crate::builtin_metadata::DirectInternalLowering::Generic2

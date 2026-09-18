@@ -293,7 +293,7 @@ fn render_output_value(
             } else {
                 format!("{number:.precision$}")
             };
-            add_sign(rendered, flags, number >= 0.0)
+            add_sign(rendered, flags, !number.is_sign_negative())
         }
         b'e' | b'E' => {
             let number = output_float_value(value);
@@ -307,7 +307,7 @@ fn render_output_value(
             } else {
                 normalize_exponent(format!("{number:.precision$e}"), specifier == b'E')
             };
-            add_sign(rendered, flags, number >= 0.0)
+            add_sign(rendered, flags, !number.is_sign_negative())
         }
         b'g' | b'G' => {
             let number = output_float_value(value);
@@ -319,7 +319,7 @@ fn render_output_value(
                     rendered
                 },
                 flags,
-                number >= 0.0,
+                !number.is_sign_negative(),
             )
         }
         _ => unreachable!("validated output conversion"),

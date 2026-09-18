@@ -10925,6 +10925,24 @@ fn php_newline_length(source: &[u8], position: usize) -> usize {
     ) + 1
 }
 
+fn number_format_integer_at_precision(value: i128, digits: u64) -> String {
+    if digits >= 39 {
+        return "0".to_string();
+    }
+    let factor = 10i128.pow(digits as u32);
+    let magnitude = value.abs();
+    let mut rounded = magnitude / factor;
+    if (magnitude % factor) * 2 >= factor {
+        rounded += 1;
+    }
+    let rounded = rounded * factor;
+    if value < 0 && rounded != 0 {
+        format!("-{rounded}")
+    } else {
+        rounded.to_string()
+    }
+}
+
 fn fn_strrev(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -10942,38 +10960,108 @@ fn fn_strrev(
 fn fn_number_format(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let num = arg_float!(ed, 0);
+    let original = arg!(ed, 0).dereferenced();
+    let integer = original.as_long();
+    let num = if let Some(integer) = integer {
+        integer as f64
+    } else {
+        let Some(number) =
+            typed_internal_float_argument_expected(ed, eg, "number_format", 0, "num", "float")?
+        else {
+            return Ok(());
+        };
+        number
+    };
     let decimals = match arg_opt!(ed, 1) {
-        Some(v) => v.to_long_val().max(0) as usize,
+        Some(v) => v.to_long_val(),
         None => 0,
     };
-    let dec_point = arg_opt!(ed, 2).and_then(Value::as_str).unwrap_or(".");
-    let thousands_sep = arg_opt!(ed, 3).and_then(Value::as_str).unwrap_or(",");
+    let decimal_separator = if arg_opt!(ed, 2)
+        .is_some_and(|value| value.dereferenced().value_type() != ValueType::Null)
+    {
+        let Some(separator) = typed_internal_string_argument_expected(
+            ed,
+            eg,
+            "number_format",
+            2,
+            "decimal_separator",
+            "?string",
+        )?
+        else {
+            return Ok(());
+        };
+        Some(separator)
+    } else {
+        None
+    };
+    let thousands_separator = if arg_opt!(ed, 3)
+        .is_some_and(|value| value.dereferenced().value_type() != ValueType::Null)
+    {
+        let Some(separator) = typed_internal_string_argument_expected(
+            ed,
+            eg,
+            "number_format",
+            3,
+            "thousands_separator",
+            "?string",
+        )?
+        else {
+            return Ok(());
+        };
+        Some(separator)
+    } else {
+        None
+    };
+    let dec_point = decimal_separator.as_deref().unwrap_or(".");
+    let thousands_sep = thousands_separator.as_deref().unwrap_or(",");
 
-    // Format and group in one owned buffer. Inserting separators from right
-    // to left keeps all yet-to-be-used byte positions stable and avoids the
-    // quadratic front insertion plus intermediate Strings of the old path.
-    let mut result = String::with_capacity(decimals.saturating_add(32));
-    let _ = write!(&mut result, "{:.prec$}", num, prec = decimals);
-    let decimal_position = result.find('.');
+    let mut result = if decimals >= 0 {
+        let precision = usize::try_from(decimals).unwrap_or(usize::MAX).min(100_000);
+        if let Some(integer) = integer {
+            let mut rendered = integer.to_string();
+            if precision != 0 {
+                rendered.push_str(dec_point);
+                rendered.extend(std::iter::repeat_n('0', precision));
+            }
+            rendered
+        } else {
+            let rounded = php_round_value(num, decimals, PhpRoundingMode::HalfAwayFromZero);
+            let rounded = if rounded == 0.0 { 0.0 } else { rounded };
+            let mut rendered = format!("{rounded:.precision$}");
+            if dec_point != "." && precision != 0 {
+                let position = rendered.len() - precision - 1;
+                rendered.replace_range(position..position + 1, dec_point);
+            }
+            rendered
+        }
+    } else if let Some(integer) = integer {
+        number_format_integer_at_precision(i128::from(integer), decimals.unsigned_abs())
+    } else if num.is_finite()
+        && num.fract() == 0.0
+        && (num.is_sign_negative() || num < 9_223_372_036_854_775_808.0)
+    {
+        number_format_integer_at_precision(num as i128, decimals.unsigned_abs())
+    } else {
+        let rounded = php_round_value(num, decimals, PhpRoundingMode::HalfAwayFromZero);
+        if rounded == 0.0 {
+            "0".to_string()
+        } else {
+            format!("{rounded:.0}")
+        }
+    };
+
+    let decimal_position = if decimals > 0 && !dec_point.is_empty() {
+        result.find(dec_point)
+    } else {
+        None
+    };
     let integer_end = decimal_position.unwrap_or(result.len());
     let digits_start = usize::from(result.as_bytes().first() == Some(&b'-'));
     let digit_count = integer_end.saturating_sub(digits_start);
     let separator_count = digit_count.saturating_sub(1) / 3;
-    let decimal_growth = decimal_position
-        .map(|_| dec_point.len().saturating_sub(1))
-        .unwrap_or(0);
-    result.reserve(
-        separator_count
-            .saturating_mul(thousands_sep.len())
-            .saturating_add(decimal_growth),
-    );
-
-    if let Some(position) = decimal_position {
-        result.replace_range(position..position + 1, dec_point);
-    }
+    result.reserve(separator_count.saturating_mul(thousands_sep.len()));
     let mut separator_position = integer_end;
     while separator_position > digits_start + 3 {
         separator_position -= 3;
@@ -11755,7 +11843,7 @@ fn render_sprintf_value(
             } else {
                 format!("{number:.precision$}")
             };
-            add_sprintf_sign(rendered, flags, number >= 0.0).into_bytes()
+            add_sprintf_sign(rendered, flags, !number.is_sign_negative()).into_bytes()
         }
         b'e' | b'E' => {
             let Some(number) = sprintf_numeric_float(ed, eg, value)? else {
@@ -11771,7 +11859,7 @@ fn render_sprintf_value(
             } else {
                 normalize_sprintf_exponent(format!("{number:.precision$e}"), specifier == b'E')
             };
-            add_sprintf_sign(rendered, flags, number >= 0.0).into_bytes()
+            add_sprintf_sign(rendered, flags, !number.is_sign_negative()).into_bytes()
         }
         b'g' | b'G' | b'h' | b'H' => {
             let Some(number) = sprintf_numeric_float(ed, eg, value)? else {
@@ -11784,7 +11872,7 @@ fn render_sprintf_value(
                     matches!(specifier, b'G' | b'H'),
                 ),
                 flags,
-                number >= 0.0,
+                !number.is_sign_negative(),
             )
             .into_bytes()
         }
@@ -13846,14 +13934,30 @@ fn fn_class_uses(
 fn direct_abs(args: &[Value]) -> Result<Value, VmError> {
     let value = direct_arg(args, 0);
     Ok(match value.value_type() {
-        ValueType::Long => Value::long(value.as_long().unwrap().abs()),
+        ValueType::Long => {
+            let value = value.as_long().unwrap();
+            value
+                .checked_abs()
+                .map_or_else(|| Value::double(-(value as f64)), Value::long)
+        }
         ValueType::Double => Value::double(value.as_double().unwrap().abs()),
         _ => Value::long(0),
     })
 }
 
-fn fn_abs(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let result = direct_abs(std::slice::from_ref(arg!(ed, 0)))?;
+fn fn_abs(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let Some(number) =
+        typed_internal_number_argument_expected(ed, eg, "abs", 0, "num", "int|float")?
+    else {
+        return Ok(());
+    };
+    let result = if let Some(number) = number.as_long() {
+        number
+            .checked_abs()
+            .map_or_else(|| Value::double(-(number as f64)), Value::long)
+    } else {
+        Value::double(number.as_double().unwrap().abs())
+    };
     ret!(rv, result);
 }
 
@@ -14061,17 +14165,77 @@ fn direct_floor(args: &[Value]) -> Result<Value, VmError> {
     Ok(Value::double(direct_arg(args, 0).to_float_val().floor()))
 }
 
-fn fn_floor(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let result = direct_floor(std::slice::from_ref(arg!(ed, 0)))?;
-    ret!(rv, result);
+fn fn_floor(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let Some(number) =
+        typed_internal_number_argument_expected(ed, eg, "floor", 0, "num", "int|float")?
+    else {
+        return Ok(());
+    };
+    ret!(rv, Value::double(number.to_float_val().floor()));
 }
 
-fn fn_ceil(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::double(arg_float!(ed, 0).ceil()));
+fn fn_ceil(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let Some(number) =
+        typed_internal_number_argument_expected(ed, eg, "ceil", 0, "num", "int|float")?
+    else {
+        return Ok(());
+    };
+    ret!(rv, Value::double(number.to_float_val().ceil()));
+}
+
+/// Canonical weak-ZPP projection for PHP's `int|float` internal parameters.
+/// Keep integer numeric strings as Long so callers such as abs() preserve the
+/// return arm selected by Zend instead of round-tripping through f64.
+#[inline]
+fn typed_internal_number_argument_expected(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    index: u32,
+    parameter: &str,
+    expected: &str,
+) -> Result<Option<Value>, VmError> {
+    let argument = arg!(ed, index).dereferenced();
+    if matches!(argument.value_type(), ValueType::Long | ValueType::Double) {
+        return Ok(Some(argument.clone()));
+    }
+    let argument = owned_argument(ed, index);
+    let argument = argument.dereferenced();
+    let strict = internal_call_is_strict(ed);
+    let converted = match argument.value_type() {
+        ValueType::String if !strict => arithmetic_operator_operand(argument)
+            .ok()
+            .filter(|number| !number.leading_numeric)
+            .map(|number| number.value),
+        ValueType::True if !strict => Some(Value::long(1)),
+        ValueType::False if !strict => Some(Value::long(0)),
+        ValueType::Null if !strict => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                &format!(
+                    "{function}(): Passing null to parameter #{} (${parameter}) of type {expected} is deprecated",
+                    index + 1
+                ),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            Some(Value::long(0))
+        }
+        _ => None,
+    };
+    if converted.is_none() && eg.exception.is_none() {
+        typed_internal_argument_error(
+            eg,
+            function,
+            argument,
+            index as usize + 1,
+            parameter,
+            expected,
+        );
+    }
+    Ok(converted)
 }
 
 /// PHP's internal float parameters admit Long values in both strict and weak
@@ -14735,6 +14899,14 @@ fn fn_pow(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Res
     fn_pow_coerced(ed, rv, eg)
 }
 
+fn fn_fpow(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let Some((base, exponent)) = typed_internal_float_pair(ed, eg, "fpow", "num", "exponent")?
+    else {
+        return Ok(());
+    };
+    ret!(rv, Value::double(base.powf(exponent)));
+}
+
 #[inline(always)]
 fn direct_sqrt(args: &[Value]) -> Result<Value, VmError> {
     Ok(Value::double(direct_arg(args, 0).to_float_val().sqrt()))
@@ -14972,6 +15144,14 @@ fn fn_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
     let range = (hi - lo + 1).max(1);
     let val = lo + (seed as i64 % range);
     ret!(rv, Value::long(val));
+}
+
+fn fn_getrandmax(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, Value::long(i64::from(i32::MAX)));
 }
 
 fn fn_random_int(
@@ -28283,16 +28463,26 @@ fn fn_log1p(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
 fn fn_deg2rad(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::double(arg_float!(ed, 0).to_radians()));
+    let Some(number) =
+        typed_internal_float_argument_expected(ed, eg, "deg2rad", 0, "num", "float")?
+    else {
+        return Ok(());
+    };
+    ret!(rv, Value::double(number / 180.0 * std::f64::consts::PI));
 }
 fn fn_rad2deg(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::double(arg_float!(ed, 0).to_degrees()));
+    let Some(number) =
+        typed_internal_float_argument_expected(ed, eg, "rad2deg", 0, "num", "float")?
+    else {
+        return Ok(());
+    };
+    ret!(rv, Value::double(number / std::f64::consts::PI * 180.0));
 }
 fn fn_hypot(
     ed: *mut ExecuteData,

@@ -7,6 +7,28 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The accepted `math-scalar-completion` checkpoint over `15250e71` converts all
+**23 remaining supported failures** in the monitored 171-case PHP 8.5
+`ext/standard/tests/math` directory without losses. The directory is now
+**159 pass / zero fail / 11 platform skips / one unsupported CLI-INI case**;
+the expanded 8,258-case ledger is **7,460 pass / 325 fail / 194 skip / 276
+unsupported / three XFAIL**.
+
+One canonical numeric boundary now preserves integer and float arms through
+weak internal calls, including `PHP_INT_MIN`; exact decimal formatting retains
+AMD64 integers and PHP negative-precision rounding; power diagnostics cover
+both the function and operator paths. `fpow()`, `getrandmax()` and the complete
+math constant surface are present, angle conversion uses PHP's operation
+order, and signed zero survives formatted output. Four original E2E cases and
+105 adjacent numeric/stdlib E2E cases pass. Exact pass-set comparison is
+**+23/-0**, with no failure, timeout or crash. Manifest / parent pass set /
+candidate pass set SHA-256 are respectively
+`d9ec545a133c81f08b4ba882cad7155ae0fa3bec347eab08003c3d88bc3a35ea`,
+`9673a15f90df5835a85eefdc3db71230042b9a24988094a457f3085e451b27a4`, and
+`49acf1a552c28c89c010535c1def8426f176f006e259c31f4862d7289fdaacc6`.
+
+### Preceding filter-extension checkpoint
+
 The accepted `filter-extension-completion` checkpoint over `56c7720e` adds
 **63 PHP 8.5 passes without losses**. The expanded 8,258-case ledger reaches
 **7,437 pass / 348 fail / 194 skip / 276 unsupported / three XFAIL**. Every
