@@ -58,55 +58,31 @@ pub(super) fn replace(
             }
         } else {
             let mut matches = PhpArray::new();
-            for index in 0..caps.len() {
-                let value = match caps.get(index) {
-                    Some(capture) if offset_capture => {
-                        let mut pair = PhpArray::with_packed_capacity(2);
-                        pair.push(Value::string(capture.as_str(&subject)));
-                        pair.push(Value::long(capture.start as i64));
-                        Value::array(pair)
+            let last_capture = if unmatched_as_null {
+                caps.len() - 1
+            } else {
+                (0..caps.len())
+                    .rev()
+                    .find(|&index| caps.get(index).is_some())
+                    .unwrap_or(0)
+            };
+            for index in 0..=last_capture {
+                let value = super::pcre_capture_value(
+                    caps.get(index),
+                    &subject,
+                    0,
+                    offset_capture,
+                    unmatched_as_null,
+                );
+                for (name, slot) in caps.named_groups() {
+                    if *slot == index {
+                        matches.set_str(name, value.clone());
                     }
-                    Some(capture) => Value::string(capture.as_str(&subject)),
-                    None if offset_capture => {
-                        let mut pair = PhpArray::with_packed_capacity(2);
-                        pair.push(if unmatched_as_null {
-                            Value::null()
-                        } else {
-                            Value::string("")
-                        });
-                        pair.push(Value::long(-1));
-                        Value::array(pair)
-                    }
-                    None if unmatched_as_null => Value::null(),
-                    None => Value::string(""),
-                };
+                }
                 matches.push(value);
             }
-            for (name, &index) in caps.named_groups() {
-                let value = match caps.get(index) {
-                    Some(capture) if offset_capture => {
-                        let mut pair = PhpArray::with_packed_capacity(2);
-                        pair.push(Value::string(capture.as_str(&subject)));
-                        pair.push(Value::long(capture.start as i64));
-                        Some(Value::array(pair))
-                    }
-                    Some(capture) => Some(Value::string(capture.as_str(&subject))),
-                    None if offset_capture => {
-                        let mut pair = PhpArray::with_packed_capacity(2);
-                        pair.push(if unmatched_as_null {
-                            Value::null()
-                        } else {
-                            Value::string("")
-                        });
-                        pair.push(Value::long(-1));
-                        Some(Value::array(pair))
-                    }
-                    None if unmatched_as_null => Some(Value::null()),
-                    None => None,
-                };
-                if let Some(value) = value {
-                    matches.set_str(name, value);
-                }
+            if let Some(mark) = caps.mark() {
+                matches.set_str("MARK", Value::string(mark));
             }
             Value::array(matches)
         };

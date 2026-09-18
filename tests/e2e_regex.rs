@@ -166,12 +166,12 @@ fn preg_match_supports_offset_capture_and_start_offset() {
 preg_match('/(?<word>[a-z]+)(\d+)?/', '00 alpha 42 beta', $matches, PREG_OFFSET_CAPTURE, 3);
 echo $matches[0][0], ':', $matches[0][1], '|';
 echo $matches['word'][0], ':', $matches['word'][1], '|';
-echo $matches[2][0], ':', $matches[2][1], '|';
+echo array_key_exists(2, $matches) ? 'present' : 'missing', '|';
 preg_match('/beta/', '00 alpha 42 beta', $tail, PREG_OFFSET_CAPTURE, -4);
 echo $tail[0][0], ':', $tail[0][1];
 "#,
     );
-    assert_eq!(out, "alpha:3|alpha:3|:-1|beta:12");
+    assert_eq!(out, "alpha:3|alpha:3|missing|beta:12");
 }
 
 #[test]

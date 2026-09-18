@@ -993,16 +993,7 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
         } => {
             let tracked_index = index.filter(|idx| *idx < ctx.groups.len());
             let start_offset = tracked_index.map_or(0, |_| ctx.metadata.byte_offsets.get(pos));
-            let saved_group = tracked_index.map(|idx| ctx.groups[idx].clone());
-            let result =
-                match_seq_from_with_group(inner, rest, pos, ctx, tracked_index, start_offset);
-            if result.is_none() {
-                // Restore group on failure
-                if let Some(idx) = tracked_index {
-                    ctx.groups[idx] = saved_group.unwrap();
-                }
-            }
-            result
+            match_seq_from_with_group(inner, rest, pos, ctx, tracked_index, start_offset)
         }
         Node::Quantifier {
             inner,
@@ -1087,84 +1078,110 @@ fn match_seq_from_with_group(
     group_idx: Option<usize>,
     start_offset: usize,
 ) -> Option<usize> {
-    // We need to match inner, then set group, then match rest.
-    // Create a temporary "after group" rest that we handle specially.
-    // Actually, the simplest approach: match inner with empty rest, get end pos,
-    // set group, then match rest. But this doesn't allow backtracking into the group.
-    //
-    // For proper backtracking: we match inner with the rest passed through.
-    // The group capture is set as soon as inner finishes.
-    //
-    // Use a wrapper approach: match inner+rest, where inner's continuation sets the group.
-
-    // Simple approach that works for most cases:
-    // Match inner against empty rest to find all possible end positions,
-    // then for each, try the rest.
-    // Actually, for proper backtracking we need to integrate rest into inner's matching.
-
-    // The simplest correct approach: wrap into a sequence [inner, rest_nodes...]
-    // and match, recording the group after inner.
-
-    // Let's use a different strategy: match inner with rest, and we set the group
-    // after inner matches but before rest starts. We do this by trying inner with
-    // empty rest first to get a position, set group, then try rest.
-    // If rest fails, we need to tell inner to try a different match.
-
-    // For correctness with backtracking, we need to try all possible inner matches.
-    // We implement this by using match_seq_from with the rest, but wrapping inner
-    // such that when it succeeds, we record the group.
-
-    // Practical approach: collect all possible end positions for inner, then try rest.
-    let ends = collect_match_positions(inner, pos, ctx);
-    for end_pos in ends {
+    // A terminal group has no continuation that could reject its preferred
+    // inner match. Let the ordinary matcher consume that path directly; this
+    // keeps the common `(prefix)(digits+)` capture shape allocation-free.
+    if rest.is_empty() {
+        let end = match_seq_from(inner, &[], pos, ctx)?;
         if let Some(idx) = group_idx {
-            let end_offset = ctx.metadata.byte_offsets.get(end_pos);
+            ctx.groups[idx] = Some(Match {
+                start: start_offset,
+                end: ctx.metadata.byte_offsets.get(end),
+            });
+        }
+        return Some(end);
+    }
+
+    let (initial, states) = collect_match_states(inner, pos, ctx);
+    for state in states {
+        let end = state.end;
+        state.install(ctx);
+        if let Some(idx) = group_idx {
+            let end_offset = ctx.metadata.byte_offsets.get(end);
             ctx.groups[idx] = Some(Match {
                 start: start_offset,
                 end: end_offset,
             });
         }
-        if let Some(final_pos) = match_rest(rest, end_pos, ctx) {
+        if let Some(final_pos) = match_rest(rest, end, ctx) {
             return Some(final_pos);
         }
     }
+    initial.install(ctx);
     None
 }
 
-/// Collect all possible end positions for a node match (for backtracking in groups).
-fn collect_match_positions(node: &Node, pos: usize, ctx: &mut MatchCtx) -> Vec<usize> {
-    let mut positions = Vec::new();
-    collect_match_positions_inner(node, pos, ctx, &mut positions);
-    positions
+/// One possible matcher continuation. Capture registers and the last MARK are
+/// part of the state: two paths ending at the same subject position are not
+/// interchangeable when PHP later publishes their captures.
+#[derive(Clone)]
+struct BacktrackState {
+    end: usize,
+    groups: Vec<Option<Match>>,
+    mark: Option<String>,
 }
 
-fn collect_match_positions_inner(
+impl BacktrackState {
+    fn take(end: usize, ctx: &mut MatchCtx<'_>) -> Self {
+        Self {
+            end,
+            groups: std::mem::take(ctx.groups),
+            mark: ctx.mark.take(),
+        }
+    }
+
+    fn install(self, ctx: &mut MatchCtx<'_>) {
+        *ctx.groups = self.groups;
+        *ctx.mark = self.mark;
+    }
+}
+
+/// Collect every possible continuation for a node and return the caller's
+/// initial state separately. Group and quantified alternatives consume these
+/// immutable snapshots in PCRE backtracking order.
+fn collect_match_states(
     node: &Node,
     pos: usize,
     ctx: &mut MatchCtx,
-    out: &mut Vec<usize>,
-) {
+) -> (BacktrackState, Vec<BacktrackState>) {
+    let initial = BacktrackState::take(pos, ctx);
+    let states = collect_match_states_from(node, initial.clone(), ctx);
+    (initial, states)
+}
+
+fn collect_match_states_from(
+    node: &Node,
+    state: BacktrackState,
+    ctx: &mut MatchCtx,
+) -> Vec<BacktrackState> {
     match node {
         Node::Sequence(nodes) => {
-            if nodes.is_empty() {
-                out.push(pos);
-                return;
-            }
-            // For each way the first node can match, try the rest of the sequence
-            let first_positions = collect_match_positions(&nodes[0], pos, ctx);
-            for fp in first_positions {
-                if nodes.len() == 1 {
-                    out.push(fp);
-                } else {
-                    let rest_seq = Node::Sequence(nodes[1..].to_vec());
-                    collect_match_positions_inner(&rest_seq, fp, ctx, out);
+            let mut states = vec![state];
+            for node in nodes {
+                let mut next = Vec::new();
+                for state in states {
+                    next.extend(collect_match_states_from(node, state, ctx));
+                }
+                states = next;
+                if states.is_empty() {
+                    break;
                 }
             }
+            states
         }
         Node::Alternation(branches) => {
-            for branch in branches {
-                collect_match_positions_inner(branch, pos, ctx, out);
+            let mut states = Vec::new();
+            let last = branches.len().saturating_sub(1);
+            let mut initial = Some(state);
+            for (index, branch) in branches.iter().enumerate() {
+                let branch_state = if index == last {
+                    initial.take().unwrap()
+                } else {
+                    initial.as_ref().unwrap().clone()
+                };
+                states.extend(collect_match_states_from(branch, branch_state, ctx));
             }
+            states
         }
         Node::Quantifier {
             inner,
@@ -1173,74 +1190,77 @@ fn collect_match_positions_inner(
             greedy,
             possessive,
         } => {
-            let mut reps_positions: Vec<(usize, usize)> = Vec::new(); // (reps, pos)
-            // Collect all possible repetition counts
+            let mut repetitions = Vec::new();
             fn collect_reps(
                 inner: &Node,
                 min: usize,
-                max: Option<usize>,
-                pos: usize,
+                limit: usize,
                 current_reps: usize,
+                state: BacktrackState,
                 ctx: &mut MatchCtx,
-                reps_positions: &mut Vec<(usize, usize)>,
+                repetitions: &mut Vec<(usize, BacktrackState)>,
             ) {
                 if current_reps >= min {
-                    reps_positions.push((current_reps, pos));
+                    repetitions.push((current_reps, state.clone()));
                 }
-                let limit = max.unwrap_or(usize::MAX);
                 if current_reps >= limit {
                     return;
                 }
-                let next_positions = collect_match_positions(inner, pos, ctx);
-                for np in next_positions {
-                    if np == pos {
+                let current_end = state.end;
+                for next in collect_match_states_from(inner, state, ctx) {
+                    if next.end == current_end {
                         continue;
-                    } // avoid infinite loop on zero-width
-                    collect_reps(inner, min, max, np, current_reps + 1, ctx, reps_positions);
+                    }
+                    collect_reps(inner, min, limit, current_reps + 1, next, ctx, repetitions);
                 }
             }
-            collect_reps(inner, *min, *max, pos, 0, ctx, &mut reps_positions);
-            // Sort by greedy preference
+            collect_reps(
+                inner,
+                *min,
+                max.unwrap_or(usize::MAX),
+                0,
+                state,
+                ctx,
+                &mut repetitions,
+            );
             if *greedy {
-                reps_positions.sort_by(|a, b| b.0.cmp(&a.0)); // most reps first
+                repetitions.sort_by(|a, b| b.0.cmp(&a.0));
             } else {
-                reps_positions.sort_by(|a, b| a.0.cmp(&b.0)); // fewest reps first
+                repetitions.sort_by(|a, b| a.0.cmp(&b.0));
             }
             if *possessive {
-                reps_positions.truncate(1);
+                repetitions.truncate(1);
             }
-            for (_, p) in reps_positions {
-                if !out.contains(&p) {
-                    out.push(p);
-                }
-            }
+            repetitions.into_iter().map(|(_, state)| state).collect()
         }
         Node::Group {
             index,
             name: _,
             inner,
         } => {
-            let tracked_index = index.filter(|idx| *idx < ctx.groups.len());
+            let pos = state.end;
+            let tracked_index = index.filter(|idx| *idx < state.groups.len());
             let start_offset = tracked_index.map_or(0, |_| ctx.metadata.byte_offsets.get(pos));
-            let inner_positions = collect_match_positions(inner, pos, ctx);
-            for end_pos in inner_positions {
+            let mut states = collect_match_states_from(inner, state, ctx);
+            for state in &mut states {
                 if let Some(idx) = tracked_index {
-                    let end_offset = ctx.metadata.byte_offsets.get(end_pos);
-                    ctx.groups[idx] = Some(Match {
+                    let end_offset = ctx.metadata.byte_offsets.get(state.end);
+                    state.groups[idx] = Some(Match {
                         start: start_offset,
                         end: end_offset,
                     });
                 }
-                out.push(end_pos);
             }
+            states
         }
         // For simple nodes, delegate to match_seq_from with empty rest
         _ => {
-            let saved = ctx.groups.clone();
+            let pos = state.end;
+            state.install(ctx);
             if let Some(end) = match_seq_from(node, &[], pos, ctx) {
-                out.push(end);
+                vec![BacktrackState::take(end, ctx)]
             } else {
-                *ctx.groups = saved;
+                Vec::new()
             }
         }
     }

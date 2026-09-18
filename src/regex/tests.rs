@@ -267,6 +267,41 @@ fn test_capture_visitor_streams_named_utf8_matches() {
 }
 
 #[test]
+fn capture_backtracking_keeps_the_registers_for_each_candidate_path() {
+    let repeated = Regex::new("^(/([a-z]*))*$", RegexFlags::default()).unwrap();
+    let captures = repeated.captures("//abcde").unwrap();
+    assert_eq!(captures.get(1).unwrap().as_str("//abcde"), "/abcde");
+    assert_eq!(captures.get(2).unwrap().as_str("//abcde"), "abcde");
+
+    let nested = Regex::new(
+        "(?P<date>(?P<year>(\\d{2})?\\d{2})-(?P<month>\\d{2}|[a-z]{3})-(?P<day>\\d{2}))",
+        RegexFlags {
+            case_insensitive: true,
+            ..RegexFlags::default()
+        },
+    )
+    .unwrap();
+    let captures = nested.captures("2006-05-13").unwrap();
+    assert_eq!(
+        captures.get_named("year").unwrap().as_str("2006-05-13"),
+        "2006"
+    );
+    assert_eq!(
+        captures.get_named("month").unwrap().as_str("2006-05-13"),
+        "05"
+    );
+    assert_eq!(
+        captures.get_named("day").unwrap().as_str("2006-05-13"),
+        "13"
+    );
+
+    let alternative = Regex::new("(a)|(b)", RegexFlags::default()).unwrap();
+    let captures = alternative.captures("b").unwrap();
+    assert!(captures.get(1).is_none());
+    assert_eq!(captures.get(2).unwrap().as_str("b"), "b");
+}
+
+#[test]
 fn test_count_matches_uses_ascii_and_capture_fallbacks() {
     let ascii = Regex::new("user[0-9]+", RegexFlags::default()).unwrap();
     let utf8 = Regex::new("uživatel[0-9]+", RegexFlags::default()).unwrap();

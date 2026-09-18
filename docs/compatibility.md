@@ -7,6 +7,49 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The accepted `pcre-capture-backtracking-semantics` checkpoint over `f30e7304`
+advances RPHP's own Rust PCRE-compatible engine without linking or delegating
+to PCRE2. Backtracking candidates now carry the capture registers and MARK
+selected by that exact path. `preg_match()`, `preg_match_all()` and callback
+projection preserve PHP's numeric/named insertion order, distinguish an empty
+participating group from an unmatched group, omit trailing unmatched groups
+unless requested, implement `PREG_UNMATCHED_AS_NULL`, retain sparse MARK
+indices and publish MARK in callback match arrays.
+
+The frozen 165-case PHP 8.5 `ext/pcre` packet moves from **66 pass / 75 fail /
+9 skip / 14 unsupported / one timeout** to **76 pass / 65 fail / 9 skip / 14
+unsupported / one timeout**, exact **+10/-0** with no crash. The gains are
+`001`, `003`, `bug40195`, the three `bug61780*` cases, `bug81424a`, `gh17122`,
+`marks` and `match_flags2`. `bug41050` remains a named holdout for repeated
+empty-capture semantics; Unicode validation, advanced constructs, resource
+limits and JIT remain non-claims, so RPHP still does not advertise the PCRE
+extension as complete.
+
+Sixty-five regex unit tests, 52 adjacent regex E2E cases, seven PCRE extension
+E2E cases and 21 RegexIterator cases pass. The five Cargo configurations are
+green at **5,816 / 5,484 / 5,887 / 5,909 / 5,960** passes with zero failures,
+plus all-features/all-targets. Zend/lang is byte-identical at 5,023 passes and
+strings/array at 1,470 passes. Composer S0, all four Symfony S1 components,
+warmed S2, cold-build S3, formatting and unsafe policy pass; unsafe inventory
+remains 1,626 blocks / 289 functions.
+
+The fixed-parent CPU-31 32-pair packet has exact output in every pair. Paired
+medians are startup -3.598%, ordinary -6.335%, capture-free callback -2.346%,
+grouped callback -5.728%, match-all output -13.901%, fixed-prefix count
+-3.070%, no-group match -6.823% and group-miss -7.809%. These improvements
+are reported as observed code-layout results, not as a portable speed claim.
+
+SHA-256 evidence:
+
+- Release candidate: `17998d25decefec43ee834150287fb011aaf17ce6259627d9279e23111062b47`.
+- Five-configuration matrix: `5a4ad9111cdea7dfba95bd1e032cd636560356d15f82886bdb829a2ce863c46d`.
+- PCRE manifest / summary / pass set: `ba2b6f909c7c747da4ba11600da7587a4f47d80cbeb5cbbd4d6ab3c8e6970f3b` / `d58d29661db15de9f45b4d28bef22bcacdb7f8b0dee4d39efc817f4b0a2addb` / `4035aea30972ab27032d8e4cfb7ee3aaab733d99815ca1c550e6905d8064b767`.
+- Zend/lang manifest / pass set: `7f82f12dced5993416a8d54e3b364ccfc33cbdbe36828d65b43a8e26a5143161` / `e8f2406e6510e5666299bb6deababea5ea770398ce925e411587f1dbef9383eb`.
+- Strings/array manifest / pass set: `c782b93935c1aaba8789c0bc84b3fe98f347c01d15cdc3e187cdb09412357115` / `e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
+- Performance raw timing / summary: `0281b5a3686c16d0a8f8f5f0065489ad1a66d33d5e3769d0fb401b9ce8fde9ae` / `fdc21e51fe95e7bf2c412773014ea527a601b7869e997934bebb21f702888e2d`.
+
+### Preceding PCRE callable checkpoint
+
 The accepted `pcre-callable-contracts` checkpoint over `62ed7920` adds
 `preg_filter()`, `preg_grep()`, `preg_last_error()`,
 `preg_last_error_msg()` and `preg_replace_callback_array()`. All eleven

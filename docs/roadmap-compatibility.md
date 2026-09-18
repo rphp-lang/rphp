@@ -36,6 +36,27 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `pcre-capture-backtracking-semantics` checkpoint over `f30e7304`
+adds **10 PHP 8.5 PCRE passes without losses**. RPHP's own Rust engine now binds
+capture registers and MARK to each backtracking candidate, while the PHP
+projection preserves named/numeric order, unmatched/null distinctions,
+trailing omission and sparse MARK publication across match, match-all and
+callback consumers. No external regex engine or FFI is introduced.
+
+The monitored 165-case `ext/pcre` packet reaches **76 pass / 65 fail / 9 skip /
+14 unsupported / one timeout**, exact +10/-0 and no crash. The five Cargo
+configurations/all-targets, exact Zend and strings/array no-loss, Composer and
+Symfony S0--S3, unsafe and fixed-parent 32-pair performance gates pass.
+
+The next PCRE engine admission should be selected from the remaining 65
+failures by a fresh shared-cause oracle. Prefer the UTF/Unicode validation and
+byte-offset family if at least ten whole PHPT cases share one implementable
+boundary; otherwise take the next independently bounded parser construct.
+Keep JIT, resource limits, duplicate-name syntax and unrelated diagnostic
+surface out of that checkpoint unless their own admission threshold is met.
+
+### Preceding filter-extension checkpoint
+
 The accepted `filter-extension-completion` checkpoint over `56c7720e` adds
 **63 PHP 8.5 passes without losses**. The expanded 8,258-case ledger reaches
 **7,437 pass / 348 fail / 194 skip / 276 unsupported / three XFAIL**. The full
@@ -48,12 +69,6 @@ projections, deprecated aliases and throw-on-failure exceptions. Nine original
 and five adjacent E2E cases plus every runnable extension PHPT are green. The
 repeated full matrix and performance cycle remains deferred to the aggregate
 sweep boundary.
-
-The active direction is now one continuous supported-failure sweep from
-**348 to zero**, using reversible root-cause commits rather than isolated
-performance checkpoints. Rank the remaining failure manifest by shared cause,
-prefer 20--80-case clusters, and retain immediate safety gates for crashes,
-unsafe representation changes and hot VM/value paths.
 
 ### Preceding iconv-extension checkpoint
 

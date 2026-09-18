@@ -202,3 +202,55 @@ echo implode(',', $log), "\n";
         )
     );
 }
+
+#[test]
+fn capture_registers_and_php_projection_follow_the_selected_backtracking_path() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function emit($label, $value) { echo $label, ':', json_encode($value), "\n"; }
+preg_match('~(?P<date>(?P<year>(\d{2})?\d{2})-(?P<month>\d{2}|[a-z]{3})-(?P<day>\d{2}))~i', '2006-05-13', $matches);
+emit('date', $matches);
+preg_match('@^(/([a-z]*))*$@', '//abcde', $matches);
+emit('repeat', $matches);
+preg_match('/(a)?([a-z]*)(\d*)/', '123', $matches, PREG_UNMATCHED_AS_NULL);
+emit('null', $matches);
+preg_match('/(?P<size>\d+)m|M/', '4M', $matches);
+emit('trailing', $matches);
+preg_match('|(?P<name>)(\d+)|', '123', $matches);
+emit('named', $matches);
+preg_match_all('/(4)?(2)?\d/', '123456', $matches, PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL);
+emit('set', $matches);
+preg_match_all('/(?<a>4)?(?<b>2)?\d/', '123456', $matches, PREG_UNMATCHED_AS_NULL);
+emit('pattern', $matches);
+preg_match('/(a)|(b)/', 'b', $matches);
+emit('branch', $matches);
+preg_match('/(a(b)?)+/', 'aba', $matches);
+emit('stale', $matches);
+preg_replace_callback('/(?<left>a)|(b)/', function ($matches) {
+    emit('callback', $matches);
+    return $matches[0];
+}, 'ab');
+preg_replace_callback('/_(a)(*MARK:A)_|_(b)_/', function ($matches) {
+    emit('mark', $matches);
+    return $matches[0];
+}, '_a__b_');
+"#,
+        ),
+        concat!(
+            "date:{\"0\":\"2006-05-13\",\"date\":\"2006-05-13\",\"1\":\"2006-05-13\",\"year\":\"2006\",\"2\":\"2006\",\"3\":\"20\",\"month\":\"05\",\"4\":\"05\",\"day\":\"13\",\"5\":\"13\"}\n",
+            "repeat:[\"\\/\\/abcde\",\"\\/abcde\",\"abcde\"]\n",
+            "null:[\"123\",null,\"\",\"123\"]\n",
+            "trailing:[\"M\"]\n",
+            "named:{\"0\":\"123\",\"name\":\"\",\"1\":\"\",\"2\":\"123\"}\n",
+            "set:[[\"1\",null,null],[\"23\",null,\"2\"],[\"45\",\"4\",null],[\"6\",null,null]]\n",
+            "pattern:{\"0\":[\"1\",\"23\",\"45\",\"6\"],\"a\":[null,null,\"4\",null],\"1\":[null,null,\"4\",null],\"b\":[null,\"2\",null,null],\"2\":[null,\"2\",null,null]}\n",
+            "branch:[\"b\",\"\",\"b\"]\n",
+            "stale:[\"aba\",\"a\",\"b\"]\n",
+            "callback:{\"0\":\"a\",\"left\":\"a\",\"1\":\"a\"}\n",
+            "callback:{\"0\":\"b\",\"left\":\"\",\"1\":\"\",\"2\":\"b\"}\n",
+            "mark:{\"0\":\"_a_\",\"1\":\"a\",\"MARK\":\"A\"}\n",
+            "mark:[\"_b_\",\"\",\"b\"]\n",
+        )
+    );
+}

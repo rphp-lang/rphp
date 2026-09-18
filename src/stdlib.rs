@@ -24,6 +24,7 @@ use crate::compiler::{
     make_internal_method_variadic,
 };
 use crate::parser::Visibility;
+use crate::regex::Match as RegexMatch;
 use crate::runtime::ExecutorGlobals;
 use crate::value::{
     ArrayKey, ClosureStaticVars, CycleNodeKind, PhpArray, PhpClosure, PhpObject, Value, ValueType,
@@ -22580,6 +22581,33 @@ fn fn_generator_throw(
 // Regex (PCRE) functions
 // ============================================================================
 
+const PREG_OFFSET_CAPTURE_RESULT: i64 = 256;
+const PREG_UNMATCHED_AS_NULL_RESULT: i64 = 512;
+
+#[cold]
+fn pcre_capture_value(
+    capture: Option<&RegexMatch>,
+    subject: &str,
+    offset_base: usize,
+    offset_capture: bool,
+    unmatched_as_null: bool,
+) -> Value {
+    let value = match capture {
+        Some(capture) => Value::string(capture.as_str(subject)),
+        None if unmatched_as_null => Value::null(),
+        None => Value::string(""),
+    };
+    if !offset_capture {
+        return value;
+    }
+    let mut pair = PhpArray::with_packed_capacity(2);
+    pair.push(value);
+    pair.push(Value::long(
+        capture.map_or(-1, |capture| (offset_base + capture.start) as i64),
+    ));
+    Value::array(pair)
+}
+
 /// preg_match($pattern, $subject, &$matches = null, $flags = 0, $offset = 0): int|false
 fn fn_preg_match(
     ed: *mut ExecuteData,
@@ -22589,7 +22617,8 @@ fn fn_preg_match(
     let pattern_str = arg_str!(ed, 0);
     let subject = arg_str!(ed, 1);
     let flags = arg_opt!(ed, 3).map_or(0, Value::to_long_val);
-    let offset_capture = flags & 256 != 0;
+    let offset_capture = flags & PREG_OFFSET_CAPTURE_RESULT != 0;
+    let unmatched_as_null = flags & PREG_UNMATCHED_AS_NULL_RESULT != 0;
     let raw_offset = arg_opt!(ed, 4).map_or(0, Value::to_long_val);
     let subject_len = subject.len() as i64;
     let offset = if raw_offset < 0 {
@@ -22617,38 +22646,28 @@ fn fn_preg_match(
             if has_matches {
                 let matches_ptr = arg_mut!(ed, 2);
                 let mut arr = PhpArray::new();
-                for i in 0..caps.len() {
-                    let value = match caps.get(i) {
-                        Some(m) if offset_capture => {
-                            let mut pair = PhpArray::with_packed_capacity(2);
-                            pair.push(Value::string(m.as_str(searched_subject)));
-                            pair.push(Value::long((offset + m.start) as i64));
-                            Value::array(pair)
+                let last_capture = if unmatched_as_null {
+                    caps.len() - 1
+                } else {
+                    (0..caps.len())
+                        .rev()
+                        .find(|&index| caps.get(index).is_some())
+                        .unwrap_or(0)
+                };
+                for i in 0..=last_capture {
+                    let value = pcre_capture_value(
+                        caps.get(i),
+                        searched_subject,
+                        offset,
+                        offset_capture,
+                        unmatched_as_null,
+                    );
+                    for (name, slot) in caps.named_groups() {
+                        if *slot == i {
+                            arr.set_str(name, value.clone());
                         }
-                        Some(m) => Value::string(m.as_str(searched_subject)),
-                        None if offset_capture => {
-                            let mut pair = PhpArray::with_packed_capacity(2);
-                            pair.push(Value::string(""));
-                            pair.push(Value::long(-1));
-                            Value::array(pair)
-                        }
-                        None => Value::string(""),
-                    };
-                    arr.push(value);
-                }
-                // Add named capture groups as string-keyed entries
-                for (name, &idx) in caps.named_groups() {
-                    if let Some(m) = caps.get(idx) {
-                        let value = if offset_capture {
-                            let mut pair = PhpArray::with_packed_capacity(2);
-                            pair.push(Value::string(m.as_str(searched_subject)));
-                            pair.push(Value::long((offset + m.start) as i64));
-                            Value::array(pair)
-                        } else {
-                            Value::string(m.as_str(searched_subject))
-                        };
-                        arr.set_str(name, value);
                     }
+                    arr.push(value);
                 }
                 if let Some(mark) = caps.mark() {
                     arr.set_str("MARK", Value::string(mark));
@@ -31783,7 +31802,8 @@ fn fn_preg_match_all(
     let pattern_str = arg_str!(ed, 0);
     let subject = arg_str!(ed, 1);
     let flags = arg_opt!(ed, 3).map(|v| v.to_long_val()).unwrap_or(0);
-    let offset_capture = flags & 256 != 0;
+    let offset_capture = flags & PREG_OFFSET_CAPTURE_RESULT != 0;
+    let unmatched_as_null = flags & PREG_UNMATCHED_AS_NULL_RESULT != 0;
 
     let has_matches = {
         let raw = unsafe { (*ed).cv(2) };
@@ -31807,50 +31827,28 @@ fn fn_preg_match_all(
                 let mut row = PhpArray::new();
                 // PHP omits trailing unmatched groups in PREG_SET_ORDER rows,
                 // while retaining empty placeholders before a later match.
-                let last_capture = (1..caps.len())
-                    .rev()
-                    .find(|&index| caps.get(index).is_some())
-                    .unwrap_or(0);
+                let last_capture = if unmatched_as_null {
+                    caps.len() - 1
+                } else {
+                    (1..caps.len())
+                        .rev()
+                        .find(|&index| caps.get(index).is_some())
+                        .unwrap_or(0)
+                };
                 for index in 0..=last_capture {
-                    let capture = match caps.get(index) {
-                        Some(capture) if offset_capture => {
-                            let mut pair = PhpArray::with_packed_capacity(2);
-                            pair.push(Value::string(capture.as_str(&subject)));
-                            pair.push(Value::long(capture.start as i64));
-                            Value::array(pair)
+                    let capture = pcre_capture_value(
+                        caps.get(index),
+                        &subject,
+                        0,
+                        offset_capture,
+                        unmatched_as_null,
+                    );
+                    for (name, slot) in caps.named_groups() {
+                        if *slot == index {
+                            row.set_str(name, capture.clone());
                         }
-                        Some(capture) => Value::string(capture.as_str(&subject)),
-                        None if offset_capture => {
-                            let mut pair = PhpArray::with_packed_capacity(2);
-                            pair.push(Value::string(""));
-                            pair.push(Value::long(-1));
-                            Value::array(pair)
-                        }
-                        None => Value::string(""),
-                    };
-                    row.push(capture);
-                }
-                for (name, &index) in caps.named_groups() {
-                    if index > last_capture {
-                        continue;
                     }
-                    let capture = match caps.get(index) {
-                        Some(capture) if offset_capture => {
-                            let mut pair = PhpArray::with_packed_capacity(2);
-                            pair.push(Value::string(capture.as_str(&subject)));
-                            pair.push(Value::long(capture.start as i64));
-                            Value::array(pair)
-                        }
-                        Some(capture) => Value::string(capture.as_str(&subject)),
-                        None if offset_capture => {
-                            let mut pair = PhpArray::with_packed_capacity(2);
-                            pair.push(Value::string(""));
-                            pair.push(Value::long(-1));
-                            Value::array(pair)
-                        }
-                        None => Value::string(""),
-                    };
-                    row.set_str(name, capture);
+                    row.push(capture);
                 }
                 if let Some(mark) = caps.mark() {
                     row.set_str("MARK", Value::string(mark));
@@ -31872,60 +31870,28 @@ fn fn_preg_match_all(
     // match, matches[1] every group 1 match, and so on. Fill those arrays
     // directly while the regex visitor lends each reusable capture buffer.
     let mut result_arrays: Option<Vec<PhpArray>> = None;
-    let mut named_arrays: Vec<(String, usize, PhpArray)> = Vec::new();
     let mut marks = PhpArray::new();
+    let mut match_index = 0i64;
     let count: Result<usize, std::convert::Infallible> = re.try_visit_captures(&subject, |caps| {
         if result_arrays.is_none() {
             result_arrays = Some((0..caps.len()).map(|_| PhpArray::new()).collect());
-            named_arrays.extend(
-                caps.named_groups()
-                    .iter()
-                    .map(|(name, &index)| (name.clone(), index, PhpArray::new())),
-            );
         }
 
         let arrays = result_arrays.as_mut().unwrap();
         for (index, array) in arrays.iter_mut().enumerate() {
-            let capture = match caps.get(index) {
-                Some(capture) if offset_capture => {
-                    let mut pair = PhpArray::with_packed_capacity(2);
-                    pair.push(Value::string(capture.as_str(&subject)));
-                    pair.push(Value::long(capture.start as i64));
-                    Value::array(pair)
-                }
-                Some(capture) => Value::string(capture.as_str(&subject)),
-                None if offset_capture => {
-                    let mut pair = PhpArray::with_packed_capacity(2);
-                    pair.push(Value::string(""));
-                    pair.push(Value::long(-1));
-                    Value::array(pair)
-                }
-                None => Value::string(""),
-            };
-            array.push(capture);
-        }
-        for (_, index, array) in &mut named_arrays {
-            let capture = match caps.get(*index) {
-                Some(capture) if offset_capture => {
-                    let mut pair = PhpArray::with_packed_capacity(2);
-                    pair.push(Value::string(capture.as_str(&subject)));
-                    pair.push(Value::long(capture.start as i64));
-                    Value::array(pair)
-                }
-                Some(capture) => Value::string(capture.as_str(&subject)),
-                None if offset_capture => {
-                    let mut pair = PhpArray::with_packed_capacity(2);
-                    pair.push(Value::string(""));
-                    pair.push(Value::long(-1));
-                    Value::array(pair)
-                }
-                None => Value::string(""),
-            };
+            let capture = pcre_capture_value(
+                caps.get(index),
+                &subject,
+                0,
+                offset_capture,
+                unmatched_as_null,
+            );
             array.push(capture);
         }
         if let Some(mark) = caps.mark() {
-            marks.push(Value::string(mark));
+            marks.set_int(match_index, Value::string(mark));
         }
+        match_index += 1;
         Ok(true)
     });
     let count = count.unwrap();
@@ -31937,19 +31903,12 @@ fn fn_preg_match_all(
         .enumerate()
     {
         let value = Value::array(array);
-        // No match visits the capture buffer, but the declared groups still
-        // define every empty column (including each named alias).
-        if count == 0 {
-            for (name, slot) in re.capture_names() {
-                if *slot == index {
-                    out.set_str(name, value.clone());
-                }
+        for (name, slot) in re.capture_names() {
+            if *slot == index {
+                out.set_str(name, value.clone());
             }
         }
         out.push(value);
-    }
-    for (name, _, array) in named_arrays {
-        out.set_str(&name, Value::array(array));
     }
     if !marks.is_empty() {
         out.set_str("MARK", Value::array(marks));
