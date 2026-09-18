@@ -7,6 +7,61 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The accepted `iconv-extension` checkpoint over `5b8c4cd0` adds all ten PHP 8.5
+iconv globals, four constants and honest Linux/glibc extension discovery. The
+selected ledger grows from 8,187 to **8,258 cases: 7,374 pass / 410 fail / 194
+skip / 277 unsupported / three XFAIL**, a focused **+61/-0** with no hidden
+timeout or crash. This is tested Linux/glibc subset evidence, not complete
+iconv, stream-filter, output-buffering or cross-platform coverage.
+
+A cold native boundary implements direct binary conversion, `//IGNORE`,
+`//TRANSLIT`, character-based indexing and RFC 2047 Q/B MIME projection. Sparse
+request-local state owns the admitted encoding settings while PHP 8.5's
+historical charset/HTTP directives remain unpublished. Every global has exact
+Reflection-visible names, arity, parameter types/defaults, return type and
+extension ownership. Ten original E2E cases plus unit coverage protect weak and
+strict conversion, request isolation, NUL/invalid sequences, character bounds,
+MIME folding and optional-array diagnostics.
+
+Reference PHP passes 71 of 76 upstream iconv cases. A task-scoped copy removes
+only the `--EXTENSIONS-- iconv` selector; its PHP and expectations remain
+byte-identical. The candidate reaches **61 pass / 6 fail / 4 unsupported**:
+four failures require `convert.iconv.*` stream filters, one requires
+`ob_iconv_handler`, and one requires intentional `memory_limit` exhaustion.
+Those prerequisites and non-glibc backends remain explicit non-claims.
+
+The frozen-parent five-configuration matrix and all-targets are green at
+5,751/5,419/5,822/5,844/5,895 passes. Exact Zend/lang, strings/array, SPL and
+math pass sets lose nothing; Composer/Symfony S0-S3, formatting, runner,
+unsafe and public-data checks pass. The global audit is **556 present / 645
+missing / 0 call-shape mismatch / 349 metadata mismatch / 207 exact**; iconv
+is 10/10 exact. No dependency, opcode or common VM/Value layout changed, and
+unsafe remains 1,626 blocks / 289 functions.
+
+The retained CPU-31 32-pair packet records startup +0.311%/+0.151%, ordinary
+calls **+4.515%/+4.449%**, missing-extension lookup -0.034%/-0.105% and existing
+INI lookup -11.853%/-11.782% by independent/paired medians. The ordinary lane
+exceeds the 1.65% common ceiling and is accepted here as explicit linker-layout
+debt: its hot function sizes are unchanged and a 100,000-call Callgrind control
+adds only 0.033% instructions, while the larger unwind/read-only prefix moves
+the entire `.text` mapping by `0x3540`. Two bounded registration/cold-attribute
+experiments did not correct placement and were rejected rather than retained.
+Against PHP 8.5, direct conversion is +60.895%/+61.200%, character operations
+-27.294%/-27.523% and MIME +21.297%/+21.620%; these are absolute optimization
+anchors, not parity claims.
+
+SHA-256 evidence:
+
+- Frozen release candidate: `195f19b2728e7823bcfa1c4a9109ddaeddba622d631e29e28af94701af9b8d73`.
+- Five-configuration matrix: `69fa5e4db90e894f2a693b418cece76dbc372d6a86e1b55293774f00c0416ac0`.
+- Rebased iconv manifest / summary: `08bcfe61d0eef82a0263c01020b4df9bd9aafec7174c4382e33b60706555ead3` / `5de80c6ff819dfdb5d43ff0f18cc688e62d4864fb6702864d40f9f8e0b412f2c`.
+- Zend/lang manifest / pass set: `ecff766d41c87be9734a027f7e7623de54fa9e93cc7a23e8302d1098f38ae74d` / `99c675cd2905ed65b22055826e23e13c343cda436bf5ebea064189f7ea193f71`.
+- Strings/array manifest / pass set: `80d4a2e791fdeab78ff3c9b2a64aaa5a081908b20546498f3e73f189678a0d3d` / `482d95e26cbbd4c66abd2b34435b39c6042e65340215b02697de5fb9851aaa06`.
+- Inventory report / summary: `2820c7239cf75442ad746cf53cc67bc446bc1d6f84151e7af1cabbe708a1def8` / `3796caff3829cb5c101629d558dc32a94075e47f36a6fa6a7cf3d8ae3d76e09c`.
+- Performance raw timing / summary: `417979ce889264952456adfcf51d2bfff96e42a07ab9ea8285ebff93efb88621` / `efd300aa2f652ae412ee2579d82a24d31fee26c9c13a1317d02c16209a907409`.
+
+### Preceding filter-value dispatch checkpoint
+
 The accepted `filter-value-dispatch-contracts` checkpoint over `e93cd45a`
 adds **15 PHP 8.5 passes without losses** and admits the complete 120-case
 selector-free `ext/filter` suite to the monitored ledger. The expanded 8,187

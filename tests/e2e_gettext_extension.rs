@@ -41,7 +41,7 @@ echo "\n", (int) extension_loaded('gettext'),
             "bindtextdomain:gettext:1/2:string|false|ngettext:gettext:3/3:string|",
             "dngettext:gettext:4/4:string|dcngettext:gettext:5/5:string|",
             "bind_textdomain_codeset:gettext:1/2:string|false|\n",
-            "11|calendar,gettext\n",
+            "11|calendar,gettext,iconv\n",
         )
     );
 }

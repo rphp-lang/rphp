@@ -36,6 +36,35 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `iconv-extension` checkpoint over `5b8c4cd0` adds all ten PHP 8.5
+iconv globals, four constants and Linux/glibc discovery. A cold native boundary
+implements binary conversion, `//IGNORE`, `//TRANSLIT`, character-based offsets
+and RFC 2047 Q/B MIME projection; sparse request-local state holds the admitted
+encoding settings. All ten callable contracts are Reflection-exact.
+
+The selected ledger grows from 8,187 to **8,258 cases: 7,374 pass / 410 fail /
+194 skip / 277 unsupported / three XFAIL**. The selector-free iconv packet is
+**61 pass / 6 fail / 4 unsupported**, +61/-0 without timeout or crash. Four
+holdouts require iconv stream filters, one needs `ob_iconv_handler`, and one
+requires intentional `memory_limit` exhaustion; cross-platform backends remain
+outside this checkpoint.
+
+Ten original E2E cases, the complete frozen-parent five-configuration matrix,
+all-targets, exact no-loss families, Composer/Symfony S0-S3, inventory, unsafe
+and public hygiene pass. No dependency, opcode or common VM/Value layout
+changed. The ordinary fixed-parent lane nevertheless measures
+**+4.515%/+4.449%** and exceeds the 1.65% ceiling. Instruction count changes by
+only +0.033%; the measured cause is a `0x3540` whole-`.text` placement shift
+from larger unwind/read-only sections. This is accepted explicitly as linker
+layout debt rather than misrepresented as extension work or hidden by rerolls.
+Exact evidence and rejected experiments are recorded in `compatibility.md`.
+
+Next extension work stays isolated from the active Core sweep. Rank one
+independently bounded extension from the remaining 645 missing globals; keep
+iconv filters, output handling and OOM behavior as separate Core prerequisites.
+
+### Preceding filter-value dispatch checkpoint
+
 The accepted `filter-value-dispatch-contracts` checkpoint over `e93cd45a`
 adds **15 PHP 8.5 passes without losses** and admits the complete 120-case
 selector-free filter suite. The expanded 8,187-case ledger reaches **7,313

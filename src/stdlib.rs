@@ -53,6 +53,8 @@ mod calendar;
 pub(crate) mod crypt;
 #[cfg(target_os = "linux")]
 mod gettext;
+#[cfg(target_os = "linux")]
+mod iconv;
 #[cfg(feature = "include-path")]
 pub(crate) mod include_path;
 mod json_decode;
@@ -70,6 +72,21 @@ mod serialization;
 mod tokenizer;
 
 pub use registry::register_stdlib;
+
+#[cfg(target_os = "linux")]
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+pub(crate) fn iconv_version() -> &'static str {
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    VERSION
+        .get_or_init(|| {
+            native_process::iconv_version()
+                .and_then(|version| String::from_utf8(version).ok())
+                .unwrap_or_else(|| "unknown".to_string())
+        })
+        .as_str()
+}
 
 const BUILTIN_EXCEPTION_SUBCLASSES: &[(&str, &str)] = &[
     ("ClosedGeneratorException", "Exception"),
@@ -29520,10 +29537,30 @@ const LOADED_EXTENSION_NAMES: &[&str] = &[
     "calendar",
     #[cfg(target_os = "linux")]
     "gettext",
+    #[cfg(target_os = "linux")]
+    "iconv",
 ];
 
 #[inline(always)]
 fn admitted_extension_name(bytes: &[u8]) -> bool {
+    // Keep the overwhelmingly common miss path independent of the number of
+    // admitted extensions. Actual name comparisons are explicit pay-use work
+    // and stay out of the hot caller's instruction footprint.
+    let admitted_length = match bytes.len() {
+        8 => true,
+        #[cfg(target_os = "linux")]
+        7 => true,
+        #[cfg(target_os = "linux")]
+        5 => true,
+        _ => false,
+    };
+    admitted_length && admitted_extension_name_same_length(bytes)
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn admitted_extension_name_same_length(bytes: &[u8]) -> bool {
     LOADED_EXTENSION_NAMES
         .iter()
         .any(|name| bytes.eq_ignore_ascii_case(name.as_bytes()))
@@ -29727,7 +29764,14 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
             | "highlight.keyword"
             | "highlight.default"
             | "highlight.html"
-            | "arg_separator.output" => {
+            | "arg_separator.output"
+            | "default_charset"
+            | "internal_encoding"
+            | "input_encoding"
+            | "output_encoding"
+            | "iconv.internal_encoding"
+            | "iconv.input_encoding"
+            | "iconv.output_encoding" => {
                 eg.ini_overrides
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
                     .insert(normalized, value.clone());
@@ -29795,6 +29839,18 @@ fn fn_ini_get(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let option = arg_str!(ed, 0);
+    // Both settings have dedicated request fields that every admitted writer
+    // keeps synchronized. Avoid allocating a lowercase lookup key on the
+    // ordinary sidecar-free path. When a sidecar exists, the canonical lookup
+    // below must retain the original spelling of values such as `17junk`.
+    if eg.ini_overrides.is_none() {
+        if option.eq_ignore_ascii_case("precision") {
+            ret!(rv, Value::string(eg.precision.to_string()));
+        }
+        if option.eq_ignore_ascii_case("serialize_precision") {
+            ret!(rv, Value::string(eg.serialize_precision.to_string()));
+        }
+    }
     let normalized = option.to_ascii_lowercase();
     if let Some(value) = eg
         .ini_overrides
@@ -29821,7 +29877,26 @@ fn fn_ini_get(
     if option.eq_ignore_ascii_case("arg_separator.output") {
         ret!(rv, Value::string("&"));
     }
+    if let Some(value) = admitted_iconv_ini_default(&normalized) {
+        ret!(rv, Value::string(value));
+    }
     ret!(rv, Value::bool(false));
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn admitted_iconv_ini_default(option: &str) -> Option<&'static str> {
+    match option {
+        "default_charset" => Some("UTF-8"),
+        "internal_encoding"
+        | "input_encoding"
+        | "output_encoding"
+        | "iconv.internal_encoding"
+        | "iconv.input_encoding"
+        | "iconv.output_encoding" => Some(""),
+        _ => None,
+    }
 }
 
 pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> {
@@ -29849,6 +29924,13 @@ pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> 
         "zend.exception_string_param_max_len" => "15".to_string(),
         "fiber.stack_size" => "2097152".to_string(),
         "arg_separator.output" => "&".to_string(),
+        "default_charset" => "UTF-8".to_string(),
+        "internal_encoding"
+        | "input_encoding"
+        | "output_encoding"
+        | "iconv.internal_encoding"
+        | "iconv.input_encoding"
+        | "iconv.output_encoding" => String::new(),
         "highlight.string" => "#DD0000".to_string(),
         "highlight.comment" => "#FF8000".to_string(),
         "highlight.keyword" => "#007700".to_string(),

@@ -126,6 +126,14 @@ pub(crate) const BUILTIN_CONSTANT_NAMES: &[&str] = &[
     "CAL_JEWISH_ADD_ALAFIM_GERESH",
     "CAL_JEWISH_ADD_ALAFIM",
     "CAL_JEWISH_ADD_GERESHAYIM",
+    #[cfg(target_os = "linux")]
+    "ICONV_IMPL",
+    #[cfg(target_os = "linux")]
+    "ICONV_VERSION",
+    #[cfg(target_os = "linux")]
+    "ICONV_MIME_DECODE_STRICT",
+    #[cfg(target_os = "linux")]
+    "ICONV_MIME_DECODE_CONTINUE_ON_ERROR",
     "PHP_EOL",
     "PHP_MAXPATHLEN",
     "DIRECTORY_SEPARATOR",
@@ -435,6 +443,18 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "CAL_JEWISH_ADD_ALAFIM_GERESH" => Some(value::Value::long(2)),
         "CAL_JEWISH_ADD_ALAFIM" => Some(value::Value::long(4)),
         "CAL_JEWISH_ADD_GERESHAYIM" => Some(value::Value::long(8)),
+        #[cfg(target_os = "linux")]
+        "ICONV_IMPL" => Some(value::Value::string(if cfg!(target_env = "gnu") {
+            "glibc"
+        } else {
+            "unknown"
+        })),
+        #[cfg(target_os = "linux")]
+        "ICONV_VERSION" => Some(value::Value::string(stdlib::iconv_version())),
+        #[cfg(target_os = "linux")]
+        "ICONV_MIME_DECODE_STRICT" => Some(value::Value::long(1)),
+        #[cfg(target_os = "linux")]
+        "ICONV_MIME_DECODE_CONTINUE_ON_ERROR" => Some(value::Value::long(2)),
 
         // System
         "PHP_EOL" => Some(value::Value::string("\n".to_string())),

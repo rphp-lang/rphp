@@ -14,6 +14,20 @@ function unsupported_rphp_ini_directives(string $section): array
         'highlight.html' => true,
         'highlight.keyword' => true,
         'highlight.string' => true,
+        'default_charset' => true,
+        'internal_encoding' => true,
+        'input_encoding' => true,
+        'output_encoding' => true,
+        'iconv.internal_encoding' => true,
+        'iconv.input_encoding' => true,
+        'iconv.output_encoding' => true,
+        // PHP accepts these historical iconv keys on the command line even
+        // though they are no longer published through ini_get()/ini_set().
+        // Admit them so the test executes; the runtime intentionally ignores
+        // their values just like PHP 8.5.
+        'iconv.internal_charset' => true,
+        'iconv.http_input' => true,
+        'iconv.http_output' => true,
         'precision' => true,
         'serialize_precision' => true,
         'zend.assertions' => true,
