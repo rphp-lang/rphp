@@ -8,11 +8,12 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The accepted `filter-value-dispatch-contracts` checkpoint over `e93cd45a`
-adds **15 PHP 8.5 passes without losses**. The selected 8,067-case ledger now
-reaches **7,295 pass / 327 fail / 194 skip / 250 unsupported / one XFAIL**.
-The complete selector-free `ext/filter` comparison moves from 18/77/23/2 to
-**33 pass / 62 fail / 23 unsupported / two XFAIL**, with an identical prior
-pass set and no timeout or crash.
+adds **15 PHP 8.5 passes without losses** and admits the complete 120-case
+selector-free `ext/filter` suite to the monitored ledger. The expanded 8,187
+cases reach **7,313 pass / 404 fail / 194 skip / 273 unsupported / three
+XFAIL**. The filter family itself moves from 18/77/23/2 to **33 pass / 62 fail /
+23 unsupported / two XFAIL**, with an identical prior pass set and no timeout
+or crash.
 
 One recursive value-shape dispatcher now applies scalar filters, callback
 frames and array flags in PHP order. Integer validation covers whitespace,

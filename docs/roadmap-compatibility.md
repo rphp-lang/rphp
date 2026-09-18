@@ -37,10 +37,10 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 ## Current measured checkpoint
 
 The accepted `filter-value-dispatch-contracts` checkpoint over `e93cd45a`
-adds **15 PHP 8.5 passes without losses**. The selected ledger reaches
-**7,295 pass / 327 fail / 194 skip / 250 unsupported / one XFAIL**. The full
-selector-free 120-case filter suite moves from 18 to 33 exact passes while
-retaining every previous pass.
+adds **15 PHP 8.5 passes without losses** and admits the complete 120-case
+selector-free filter suite. The expanded 8,187-case ledger reaches **7,313
+pass / 404 fail / 194 skip / 273 unsupported / three XFAIL**. The filter family
+moves from 18 to 33 exact passes while retaining every previous pass.
 
 The implementation centralizes PHP-compatible scalar/array dispatch,
 recursive key-preserving filtering, callback warnings and evaluation order,
@@ -51,7 +51,7 @@ deferred to the aggregate sweep boundary; every internal cluster still needs
 focused exact-output and no-loss evidence before integration.
 
 The active direction is now one continuous supported-failure sweep from
-**327 to zero**, using reversible root-cause commits rather than isolated
+**404 to zero**, using reversible root-cause commits rather than isolated
 performance checkpoints. Rank the remaining failure manifest by shared cause,
 prefer 20--80-case clusters, and retain immediate safety gates for crashes,
 unsafe representation changes and hot VM/value paths.
