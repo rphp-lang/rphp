@@ -2320,6 +2320,57 @@ fn prepare_reference_yield(
     Ok(Some(value))
 }
 
+struct SuspendedGeneratorFrameSnapshot {
+    cv_values: Vec<Value>,
+    tmp_values: Vec<Value>,
+    ip_offset: usize,
+    pending_return_after_finally: bool,
+}
+
+#[inline]
+fn snapshot_suspended_generator_frame(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    advance_ip: bool,
+    mut cv_values: Vec<Value>,
+    mut tmp_values: Vec<Value>,
+) -> SuspendedGeneratorFrameSnapshot {
+    // SAFETY: both callers pass the currently active generator frame and its
+    // owning immutable op-array. CV/TMP bounds are read from that frame, and
+    // its opline remains inside the op-array until the snapshot is complete.
+    unsafe {
+        let frame = &*frame;
+        cv_values.clear();
+        cv_values.extend(
+            (0..frame.num_cvs).map(|index| frame.cv(index).clone_closure_capture()),
+        );
+        tmp_values.clear();
+        tmp_values.extend(
+            (0..frame.num_temps).map(|index| frame.tmp(index).clone_closure_capture()),
+        );
+        SuspendedGeneratorFrameSnapshot {
+            cv_values,
+            tmp_values,
+            ip_offset: frame.opline.offset_from(op_array.instructions.as_ptr()) as usize
+                + usize::from(advance_ip),
+            pending_return_after_finally: frame.pending_return_after_finally,
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn generator_instruction_index(
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> usize {
+    op_array
+        .instructions
+        .iter()
+        .position(|candidate| std::ptr::eq(candidate, opline))
+        .expect("generator instruction must belong to its op-array")
+}
+
 #[inline(never)]
 fn op_yield<'a>(
     eg: &mut ExecutorGlobals,
@@ -2338,9 +2389,7 @@ fn op_yield<'a>(
             "Error",
             "Cannot yield from finally in a force-closed generator",
         );
-        let instruction_index = unsafe {
-            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
-        };
+        let instruction_index = generator_instruction_index(op_array, opline);
         let origin_index = (0..=instruction_index)
             .rev()
             .find(|index| op_array.source_line(*index).is_some())
@@ -2395,28 +2444,17 @@ fn op_yield<'a>(
         gen_data.last_yielded_value = gen_data.value.clone_closure_capture();
         gen_data.last_yielded_key = gen_data.key.clone_closure_capture();
 
-        // Save frame state back to generator
-        let num_cvs = unsafe { (*frame).num_cvs } as usize;
-        let num_temps = unsafe { (*frame).num_temps } as usize;
-        gen_data.cv_values.clear();
-        // SAFETY: `frame` is the active generator activation and both loops
-        // use the CV/TMP bounds read from that same live frame.
-        for i in 0..num_cvs {
-            gen_data
-                .cv_values
-                .push(unsafe { (*frame).cv(i as u32) }.clone_closure_capture());
-        }
-        gen_data.tmp_values.clear();
-        for i in 0..num_temps {
-            gen_data
-                .tmp_values
-                .push(unsafe { (*frame).tmp(i as u32) }.clone_closure_capture());
-        }
-
-        // Save instruction pointer (advance past yield for resume)
-        let base = op_array.instructions.as_ptr();
-        gen_data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize + 1 };
-        gen_data.pending_return_after_finally = unsafe { (*frame).pending_return_after_finally };
+        let snapshot = snapshot_suspended_generator_frame(
+            frame,
+            op_array,
+            true,
+            std::mem::take(&mut gen_data.cv_values),
+            std::mem::take(&mut gen_data.tmp_values),
+        );
+        gen_data.cv_values = snapshot.cv_values;
+        gen_data.tmp_values = snapshot.tmp_values;
+        gen_data.ip_offset = snapshot.ip_offset;
+        gen_data.pending_return_after_finally = snapshot.pending_return_after_finally;
         gen_data.pending_finally_exceptions = pending_finally_exceptions;
         gen_data.state = GeneratorState::Suspended;
 
@@ -2637,24 +2675,17 @@ fn suspend_yield_from<'a>(
         data.key = key;
         data.last_yielded_value = data.value.clone_closure_capture();
         data.last_yielded_key = data.key.clone_closure_capture();
-        // SAFETY: `frame` is the active activation for `op_array`; the
-        // compiler-sized CV/TMP envelopes and current opline all remain live
-        // until this helper snapshots them and pops that same frame below.
-        let num_cvs = unsafe { (*frame).num_cvs } as usize;
-        let num_temps = unsafe { (*frame).num_temps } as usize;
-        data.cv_values.clear();
-        for index in 0..num_cvs {
-            data.cv_values
-                .push(unsafe { (*frame).cv(index as u32) }.clone_closure_capture());
-        }
-        data.tmp_values.clear();
-        for index in 0..num_temps {
-            data.tmp_values
-                .push(unsafe { (*frame).tmp(index as u32) }.clone_closure_capture());
-        }
-        let base = op_array.instructions.as_ptr();
-        data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize };
-        data.pending_return_after_finally = unsafe { (*frame).pending_return_after_finally };
+        let snapshot = snapshot_suspended_generator_frame(
+            frame,
+            op_array,
+            false,
+            std::mem::take(&mut data.cv_values),
+            std::mem::take(&mut data.tmp_values),
+        );
+        data.cv_values = snapshot.cv_values;
+        data.tmp_values = snapshot.tmp_values;
+        data.ip_offset = snapshot.ip_offset;
+        data.pending_return_after_finally = snapshot.pending_return_after_finally;
         data.pending_finally_exceptions = pending_finally_exceptions;
         data.state = GeneratorState::Suspended;
     }
@@ -2691,9 +2722,7 @@ fn op_yield_from<'a>(
             "Error",
             "Cannot use \"yield from\" in a force-closed generator",
         );
-        let instruction_index = unsafe {
-            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
-        };
+        let instruction_index = generator_instruction_index(op_array, opline);
         let origin_index = (0..=instruction_index)
             .rev()
             .find(|index| op_array.source_line(*index).is_some())

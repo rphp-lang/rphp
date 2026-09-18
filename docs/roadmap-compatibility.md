@@ -46,9 +46,9 @@ array keys, dynamic `instanceof`, final-constant and static-property syntax,
 Elvis/coalesce parsing, immutable temporary dimensions at reference calls and
 short-echo source segments. Five Cargo configurations/all-targets, exact
 no-loss families and Composer/Symfony S0--S3 pass. The diff adds no unsafe
-operation; the already-stale parent unsafe ceiling remains a separate visible
-ratchet repair. Performance work remains deferred to the aggregate sweep
-boundary.
+operation; a separate audit consolidates the generator-frame snapshot boundary
+and restores the existing 1,626/289 ratchet without increasing it. Performance
+work remains deferred to the aggregate sweep boundary.
 
 Continue the supported-failure sweep from **291 to zero**. Re-cluster the
 fresh 248 Zend/lang failures and 43 failures in other admitted supported

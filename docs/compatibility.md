@@ -22,17 +22,18 @@ unsupported** with an identical pass set. The default, no-default, erased,
 reified and all-features Cargo suites, all-target compilation, Composer S0,
 all four Symfony S1 gates and warmed/cold S2--S3 pass. Formatting, PHPT-runner
 self-tests and HTML entity data verification also pass. This change adds no
-unsafe operation; the parent and candidate both contain 1,639 unsafe blocks
-and 289 unsafe functions, while the committed 1,626-block ceiling remains a
-visible pre-existing ratchet defect rather than being silently widened here.
+unsafe operation. A separate audit consolidates the repeated generator-frame
+snapshot blocks introduced by `35ddb85a`, returning the inventory to the
+canonical **1,626 blocks / 289 functions** without raising the ratchet; the
+ownership invariants are recorded in `generator-unsafe-boundary.md`.
 Per the continuous correctness sweep, cumulative performance tuning remains
 deferred to a larger boundary.
 
 SHA-256 evidence:
 
-- Release candidate: `00e4c05f855cffc693df50837bf377585771e2e9061ff356e2cea47e12fa67ff`.
-- Zend/lang manifest / pass set: `66e3a8948093e310287eee8ce07ff4a0e2a97bbf44920c23a122aebc94af3601` / `b2c1ef8e360ddecbfa11e773231ac681cbbd4809aa961b21aa1d83dc582ca4e9`.
-- Strings/array manifest / pass set: `4455f1ae577ddabcb2250adb965b264e6bff9b458e841c9e8110c9b4bfa0f2d0` / `e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
+- Release candidate: `635023f17976be800d8d1bbde4039e535686899ac58fd78b719a3102203d17fb`.
+- Zend/lang manifest / pass set: `e4819d944c782dba176f5bef8fa97de4c9c738afa75aec0432ce9d5f8c50d3db` / `b2c1ef8e360ddecbfa11e773231ac681cbbd4809aa961b21aa1d83dc582ca4e9`.
+- Strings/array manifest / pass set: `c782b93935c1aaba8789c0bc84b3fe98f347c01d15cdc3e187cdb09412357115` / `e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
 
 ### Preceding generator finalization checkpoint
 
