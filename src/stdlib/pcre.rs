@@ -2,8 +2,9 @@
 //!
 //! The engine intentionally remains a separately bounded compatibility layer:
 //! these handlers expose the missing collection/callback/error contracts
-//! without claiming PCRE2 backtracking, JIT or malformed UTF-8 equivalence.
+//! without claiming complete PCRE2 syntax, backtracking limits or JIT.
 
+use std::borrow::Cow;
 use std::rc::Rc;
 
 use super::{ResolvedCallback, regex_callback};
@@ -17,6 +18,8 @@ use crate::vm::function::{FunctionCommon, InternalFunction, ParamTypeHint};
 
 const PREG_NO_ERROR: u8 = 0;
 const PREG_INTERNAL_ERROR: u8 = 1;
+pub(super) const PREG_BAD_UTF8_ERROR: u8 = 4;
+pub(super) const PREG_BAD_UTF8_OFFSET_ERROR: u8 = 5;
 const PREG_OFFSET_CAPTURE: i64 = 256;
 const PREG_UNMATCHED_AS_NULL: i64 = 512;
 const PREG_GREP_INVERT: i64 = 1;
@@ -89,6 +92,49 @@ pub(super) fn compile_pattern(
             Ok(None)
         }
     }
+}
+
+/// Project a PHP byte string into the engine's Unicode scalar input without
+/// losing PHP's byte-offset contract. PCRE validates only the suffix beginning
+/// at the supplied offset, but an offset on a UTF-8 continuation byte is a
+/// distinct error from malformed subject data.
+pub(super) fn prepare_utf_subject<'a>(
+    value: &'a Value,
+    rendered: Cow<'a, str>,
+    offset: usize,
+) -> Result<Cow<'a, str>, u8> {
+    let value = value.dereferenced();
+    let Some(bytes) = value.php_string_bytes() else {
+        if !rendered.is_char_boundary(offset) {
+            return Err(PREG_BAD_UTF8_OFFSET_ERROR);
+        }
+        return Ok(match rendered {
+            Cow::Borrowed(subject) => Cow::Borrowed(&subject[offset..]),
+            Cow::Owned(subject) => Cow::Owned(subject[offset..].to_string()),
+        });
+    };
+    if offset < bytes.len() && bytes[offset] & 0b1100_0000 == 0b1000_0000 {
+        return Err(PREG_BAD_UTF8_OFFSET_ERROR);
+    }
+
+    match bytes {
+        Cow::Borrowed(bytes) => std::str::from_utf8(&bytes[offset..])
+            .map(Cow::Borrowed)
+            .map_err(|_| PREG_BAD_UTF8_ERROR),
+        Cow::Owned(mut bytes) => {
+            if offset != 0 {
+                bytes = bytes.split_off(offset);
+            }
+            String::from_utf8(bytes)
+                .map(Cow::Owned)
+                .map_err(|_| PREG_BAD_UTF8_ERROR)
+        }
+    }
+}
+
+#[inline]
+pub(super) fn set_last_error(eg: &mut ExecutorGlobals, error: u8) {
+    eg.regex_cache.set_last_error(error);
 }
 
 fn required_string(
@@ -326,8 +372,24 @@ pub(super) fn fn_preg_grep(
     let invert = flags & PREG_GREP_INVERT != 0;
     let mut result = PhpArray::new();
     for (key, value) in values.iter() {
-        let Some(subject) = super::internal_value_to_string(ed, eg, value)? else {
+        let Some(subject_value) = super::internal_value_to_string_value(ed, eg, value)? else {
             return Ok(());
+        };
+        let rendered = Cow::Borrowed(
+            subject_value
+                .as_str()
+                .expect("preg_grep string conversion must produce a string"),
+        );
+        let subject = if regex.is_unicode() {
+            match prepare_utf_subject(&subject_value, rendered, 0) {
+                Ok(subject) => subject,
+                Err(error) => {
+                    set_last_error(eg, error);
+                    break;
+                }
+            }
+        } else {
+            rendered
         };
         if regex.is_match(&subject) != invert {
             array_keyed_value(&mut result, key, value.clone_for_php_storage());

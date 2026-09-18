@@ -36,9 +36,39 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `pcre-utf-byte-semantics` checkpoint over `6983b212` adds **14 PHP
+8.5 PCRE passes without losses**. The 8,258-case supported ledger is now
+**7,508 pass / 277 fail / 194 skip / 276 unsupported / three XFAIL**. The
+monitored 165-case `ext/pcre` packet reaches **90 pass / 51 fail / 9 skip / 14
+unsupported / one timeout**, compared with 76/65/9/14/1 at the parent.
+
+RPHP's own Rust engine now validates UTF-8 on the selected byte-offset suffix,
+distinguishes malformed input from a continuation-byte start, retains byte
+capture offsets and admits Unicode `\w`, `\s` and `\b` semantics under `/u`.
+The error contract is shared by match, match-all, scalar replace, split and
+grep consumers. No external engine, FFI or fixture-specific path is added.
+
+Five Cargo configurations/all-targets, exact PCRE and broad no-loss families,
+Composer/Symfony S0--S3, formatting and runner self-tests are green. The diff
+adds no textual `unsafe`; the parent snapshot audit restores the enforced
+inventory to 1,626 blocks / 289 functions without raising the ratchet.
+
+The clean fixed-parent 32-pair packet keeps existing `preg_match()` and
+callback controls at -4.643% and -0.343% paired median. The new UTF word and
+byte-offset lanes are +31.368% and +9.256%, respectively, and remain named
+pay-use optimization anchors.
+
+Select the next PCRE engine admission from the remaining **51** failures using
+a fresh shared-cause oracle. Complete Unicode property syntax, Unicode decimal
+`\d`, duplicate names, advanced constructs, execution limits and JIT remain
+separate work. Until those surfaces meet their own admission gates,
+`extension_loaded('pcre')` must remain false.
+
+### Preceding frontend expression checkpoint
+
 The accepted `frontend-expression-boundaries` checkpoint over `35ddb85a`
-adds **9 PHP 8.5 passes without losses**. The 8,258-case supported ledger is
-now **7,494 pass / 291 fail / 194 skip / 276 unsupported / three XFAIL**.
+adds **9 PHP 8.5 passes without losses**. The 8,258-case supported ledger
+reaches **7,494 pass / 291 fail / 194 skip / 276 unsupported / three XFAIL**.
 Zend/lang reaches 5,056/248, while strings/array remains exactly 1,470/8.
 
 The shared front-end/runtime boundary covers surrogate escape bytes, constant
@@ -47,37 +77,21 @@ Elvis/coalesce parsing, immutable temporary dimensions at reference calls and
 short-echo source segments. Five Cargo configurations/all-targets, exact
 no-loss families and Composer/Symfony S0--S3 pass. The diff adds no unsafe
 operation; a separate audit consolidates the generator-frame snapshot boundary
-and restores the existing 1,626/289 ratchet without increasing it. Performance
-work remains deferred to the aggregate sweep boundary.
-
-Continue the supported-failure sweep from **291 to zero**. Re-cluster the
-fresh 248 Zend/lang failures and 43 failures in other admitted supported
-families by common root cause, then take the largest coherent safe slice.
-Prefer a 10--30-case train, but do not withhold a smaller independently green
-semantic fix when it is already part of the same continuous sweep. Preserve
-the exact 5,056 and 1,470 parent pass sets.
+and restores the existing 1,626/289 ratchet without increasing it.
 
 ### Preceding generator finalization checkpoint
 
 The accepted `generator-finalization-sweep` checkpoint over `cdd2096f` adds
-**24 PHP 8.5 passes without losses**. The 8,258-case supported ledger is now
+**24 PHP 8.5 passes without losses**. The 8,258-case supported ledger reaches
 **7,485 pass / 300 fail / 194 skip / 276 unsupported / three XFAIL**. The full
 generator directory reaches **166 pass / 16 fail / 2 unsupported**, compared
 with 144/38/2 at the parent.
 
-One shared boundary now covers last-owner force-close, nested `yield from`
+One shared boundary covers last-owner force-close, nested `yield from`
 retirement, `finally` ordering, detached exception traces, closure/argument
 lifetime, live delegation and top-level-yield legality. Default Cargo, all
 feature/all-target checks, exact no-loss families, Composer/Symfony S0--S3,
-formatting and unsafe policy are green. Performance work is intentionally
-deferred to the aggregate correctness-sweep boundary.
-
-Continue the supported-failure sweep from **300 to zero**. Select the next
-10--30-case cluster from the fresh failure manifest by shared root cause and
-fan-out, keep exact parent pass sets, and integrate each coherent green commit
-without waiting for a separate micro-checkpoint performance cycle. Fiber
-suspension remains a distinct architectural train rather than being hidden in
-the seven non-Fiber generator holdouts.
+formatting and unsafe policy are green.
 
 ### Preceding PCRE capture checkpoint
 
@@ -93,12 +107,9 @@ The monitored 165-case `ext/pcre` packet reaches **76 pass / 65 fail / 9 skip /
 configurations/all-targets, exact Zend and strings/array no-loss, Composer and
 Symfony S0--S3, unsafe and fixed-parent 32-pair performance gates pass.
 
-The next PCRE engine admission should be selected from the remaining 65
-failures by a fresh shared-cause oracle. Prefer the UTF/Unicode validation and
-byte-offset family if at least ten whole PHPT cases share one implementable
-boundary; otherwise take the next independently bounded parser construct.
-Keep JIT, resource limits, duplicate-name syntax and unrelated diagnostic
-surface out of that checkpoint unless their own admission threshold is met.
+This capture checkpoint's next-action boundary was completed by the current
+UTF/byte checkpoint above. Its remaining parser, resource-limit and JIT
+non-claims stay separately bounded.
 
 ### Preceding filter-extension checkpoint
 

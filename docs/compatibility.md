@@ -7,14 +7,64 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The accepted `pcre-utf-byte-semantics` checkpoint over `6983b212` advances
+RPHP's own Rust PCRE-compatible engine without linking, FFI or delegation to
+PCRE2. The `/u` path now validates the selected subject suffix as UTF-8,
+distinguishes malformed data (`PREG_BAD_UTF8_ERROR`) from an offset on a UTF-8
+continuation byte (`PREG_BAD_UTF8_OFFSET_ERROR`), and preserves PHP byte
+offsets through matching and capture projection. The admitted Unicode subset
+also applies Unicode word, whitespace and boundary semantics to `\w`, `\s`
+and `\b`; byte mode remains ASCII-oriented.
+
+The frozen 165-case PHP 8.5 `ext/pcre` packet moves from **76 pass / 65 fail /
+9 skip / 14 unsupported / one timeout** to **90 pass / 51 fail / 9 skip / 14
+unsupported / one timeout**, exact **+14/-0** with no crash. Error propagation
+is covered across `preg_match()`, `preg_match_all()`, scalar `preg_replace()`,
+`preg_split()` and `preg_grep()`, including the match-all empty capture shape
+and partial grep result before malformed input. The 8,258-case supported
+ledger therefore advances to **7,508 pass / 277 fail / 194 skip / 276
+unsupported / 3 XFAIL**.
+
+Five original UTF/byte E2E cases, seven PCRE extension E2E cases and 52
+adjacent regex E2E cases pass. The five Cargo configurations and
+all-features/all-targets gate are green; after both disjoint parent rebases,
+all three focused suites pass again. Zend/lang remains byte-identical at
+**5,056 / 248 / 115 / 180**, and strings/array remains byte-identical at
+**1,470 / 8 / 67 / 30**. Composer S0, Symfony S1--S3, formatting and the PHPT
+runner self-test pass; Routing S1 and warmed-kernel S2 also pass again after
+the rebase. This diff adds no textual `unsafe`, and the parent snapshot audit
+restores the enforced inventory to 1,626 blocks / 289 functions.
+
+The clean fixed-parent CPU-31 packet uses 32 alternating pairs with exact
+output in every sample. Paired medians are startup -0.263%, ordinary -0.695%,
+existing `preg_match()` -4.643%, existing callback -0.343%, UTF literal
+match-all +0.112%, UTF word matching +31.368% and UTF byte-offset matching
++9.256%. The Unicode word and byte-validation lanes are explicit pay-use
+optimization anchors; existing common lanes remain neutral or faster.
+
+This remains an explicit subset, not a complete PCRE2 claim:
+`extension_loaded('pcre')` remains false. Complete Unicode property syntax,
+Unicode decimal `\d`, duplicate-name and other advanced constructs, execution
+limits and JIT remain visible non-claims.
+
+SHA-256 evidence:
+
+- Release candidate: `73837b423f99369e0bd63372f2ea33b81b98e59112f3160070344048dafda046`.
+- PCRE manifest / summary / pass set: `950607cc76a524d4593df38ec85c8fa93ff9a23144f20d50ccc92a4de2aae0ab` / `bfa231749aa446c68d5dc7c049d65b68cf6ecae00280e51a077c5a7f1d4f2ff3` / `086fe2f2c468820f70f73e51994b68c17ed478843c8e63cb440cd6cf57632f40`.
+- Zend/lang manifest / pass set: `e4819d944c782dba176f5bef8fa97de4c9c738afa75aec0432ce9d5f8c50d3db` / `b2c1ef8e360ddecbfa11e773231ac681cbbd4809aa961b21aa1d83dc582ca4e9`.
+- Strings/array manifest / pass set: `c782b93935c1aaba8789c0bc84b3fe98f347c01d15cdc3e187cdb09412357115` / `e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
+- Performance raw timing / summary: `342f8640a27fe7d560e6182543083e55ed5f5f0ab734428400d7311a6a7aca66` / `6a02948302776b395550bb2ed85db71212724405877aad0cdd5e9c19ae04ccd6`.
+
+### Preceding frontend expression checkpoint
+
 The accepted `frontend-expression-boundaries` checkpoint over `35ddb85a`
 adds **9 exact PHP 8.5 passes without losses**. One general front-end/runtime
-slice now covers CESU-8 surrogate escapes, boolean constant-array keys,
-located enum-key type errors, dynamic `instanceof` class expressions, final
+slice covers CESU-8 surrogate escapes, boolean constant-array keys, located
+enum-key type errors, dynamic `instanceof` class expressions, final
 private-constant diagnostics, static `$this` property syntax, assignment in an
 Elvis fallback, immutable temporary dimensions at by-reference call
-boundaries, and short-echo source segments. The 8,258-case supported ledger is
-now **7,494 pass / 291 fail / 194 skip / 276 unsupported / 3 XFAIL**.
+boundaries, and short-echo source segments. The 8,258-case supported ledger
+reaches **7,494 pass / 291 fail / 194 skip / 276 unsupported / 3 XFAIL**.
 
 Zend/lang advances from 5,047/257 to **5,056 pass / 248 fail**, exact
 **+9/-0**. Strings/array remains **1,470 pass / 8 fail / 67 skip / 30

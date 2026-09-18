@@ -99,6 +99,10 @@ pub struct RegexFlags {
     pub extended: bool,
     pub ungreedy: bool,
     pub dollar_end_only: bool,
+    /// PCRE UTF mode. Besides requiring valid UTF-8 at the public preg_*
+    /// boundary, PHP 8.5 enables Unicode character properties for the word
+    /// and whitespace shorthand classes admitted by this checkpoint.
+    pub unicode: bool,
 }
 
 impl Default for RegexFlags {
@@ -110,6 +114,7 @@ impl Default for RegexFlags {
             extended: false,
             ungreedy: false,
             dollar_end_only: false,
+            unicode: false,
         }
     }
 }
@@ -182,8 +187,8 @@ impl RegexCache {
     }
 
     /// PHP exposes the last PCRE operation status per request. The custom
-    /// engine currently publishes the portable no-error/internal-error subset;
-    /// limits and malformed UTF-8 remain separate engine capabilities.
+    /// engine currently publishes the portable no-error/internal-error and
+    /// malformed-UTF subsets; execution limits remain separate capabilities.
     #[inline]
     pub fn last_error(&self) -> u8 {
         (self.capacity_and_last_error >> Self::ERROR_SHIFT) as u8
@@ -301,6 +306,11 @@ impl CaptureView<'_> {
 }
 
 impl Regex {
+    #[inline]
+    pub(crate) fn is_unicode(&self) -> bool {
+        self.flags.unicode
+    }
+
     /// Projection consumers need the declared slots even when there is no
     /// match. This exposes metadata only, not another matching path.
     pub(crate) fn capture_count(&self) -> usize {
@@ -943,7 +953,7 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             if ok { match_rest(rest, pos, ctx) } else { None }
         }
         Node::WordBoundary(positive) => {
-            let at_boundary = is_word_boundary(ctx.chars, pos);
+            let at_boundary = is_word_boundary(ctx.chars, pos, ctx.flags.unicode);
             if at_boundary == *positive {
                 match_rest(rest, pos, ctx)
             } else {
@@ -957,7 +967,7 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             let c = ctx.chars[pos];
             let in_class = items
                 .iter()
-                .any(|item| match_class_item(item, c, ctx.flags.case_insensitive));
+                .any(|item| match_class_item(item, c, ctx.flags));
             if in_class != *negated {
                 match_rest(rest, pos + 1, ctx)
             } else {
@@ -968,7 +978,7 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             if pos >= ctx.chars.len() {
                 return None;
             }
-            if match_shorthand(*sh, ctx.chars[pos]) {
+            if match_shorthand(*sh, ctx.chars[pos], ctx.flags.unicode) {
                 match_rest(rest, pos + 1, ctx)
             } else {
                 None
@@ -1445,46 +1455,62 @@ fn match_quantifier(
     None
 }
 
-fn is_word_boundary(chars: &[char], pos: usize) -> bool {
+fn is_word_boundary(chars: &[char], pos: usize, unicode: bool) -> bool {
     let before = if pos > 0 {
-        is_word_char(chars[pos - 1])
+        is_word_char(chars[pos - 1], unicode)
     } else {
         false
     };
     let after = if pos < chars.len() {
-        is_word_char(chars[pos])
+        is_word_char(chars[pos], unicode)
     } else {
         false
     };
     before != after
 }
 
-fn is_word_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_'
+fn is_word_char(c: char, unicode: bool) -> bool {
+    (if unicode {
+        c.is_alphanumeric()
+    } else {
+        c.is_ascii_alphanumeric()
+    }) || c == '_'
 }
 
-fn match_shorthand(sh: Shorthand, c: char) -> bool {
+fn match_shorthand(sh: Shorthand, c: char, unicode: bool) -> bool {
     match sh {
         Shorthand::Digit => c.is_ascii_digit(),
         Shorthand::NonDigit => !c.is_ascii_digit(),
-        Shorthand::Word => is_word_char(c),
-        Shorthand::NonWord => !is_word_char(c),
-        Shorthand::Space => c.is_ascii_whitespace(),
-        Shorthand::NonSpace => !c.is_ascii_whitespace(),
+        Shorthand::Word => is_word_char(c, unicode),
+        Shorthand::NonWord => !is_word_char(c, unicode),
+        Shorthand::Space => {
+            if unicode {
+                c.is_whitespace()
+            } else {
+                c.is_ascii_whitespace()
+            }
+        }
+        Shorthand::NonSpace => {
+            if unicode {
+                !c.is_whitespace()
+            } else {
+                !c.is_ascii_whitespace()
+            }
+        }
     }
 }
 
-fn match_class_item(item: &ClassItem, c: char, case_insensitive: bool) -> bool {
+fn match_class_item(item: &ClassItem, c: char, flags: RegexFlags) -> bool {
     match item {
         ClassItem::Literal(l) => {
-            if case_insensitive {
+            if flags.case_insensitive {
                 c.to_lowercase().eq(l.to_lowercase())
             } else {
                 c == *l
             }
         }
         ClassItem::Range(lo, hi) => {
-            if case_insensitive {
+            if flags.case_insensitive {
                 let cl = c.to_ascii_lowercase();
                 let ll = lo.to_ascii_lowercase();
                 let hl = hi.to_ascii_lowercase();
@@ -1493,7 +1519,7 @@ fn match_class_item(item: &ClassItem, c: char, case_insensitive: bool) -> bool {
                 c >= *lo && c <= *hi
             }
         }
-        ClassItem::Shorthand(sh) => match_shorthand(*sh, c),
+        ClassItem::Shorthand(sh) => match_shorthand(*sh, c, flags.unicode),
     }
 }
 
@@ -2188,10 +2214,7 @@ pub fn parse_php_regex(input: &str) -> Result<(String, RegexFlags), String> {
             's' => flags.dotall = true,
             'x' => flags.extended = true,
             'U' => flags.ungreedy = true,
-            // RPHP strings and this engine's matching units are already
-            // Unicode scalar values. Accept PHP's UTF-8 mode for valid RPHP
-            // strings; unknown modifiers must still fail independently.
-            'u' => {}
+            'u' => flags.unicode = true,
             // PCRE's study modifier is an optimization hint and cannot alter
             // observable match or replacement results.
             'S' => {}

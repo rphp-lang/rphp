@@ -198,19 +198,21 @@ fn match_atom(node: &Node, pos: usize, chars: &[char], flags: RegexFlags) -> Opt
             matches.then_some(pos)
         }
         Node::Anchor(Anchor::End) => end_anchor_matches(pos, chars, flags).then_some(pos),
-        Node::WordBoundary(positive) => (is_word_boundary(chars, pos) == *positive).then_some(pos),
+        Node::WordBoundary(positive) => {
+            (is_word_boundary(chars, pos, flags.unicode) == *positive).then_some(pos)
+        }
         Node::CharClass { negated, items } => {
             if pos >= chars.len() {
                 return None;
             }
             let in_class = items
                 .iter()
-                .any(|item| match_class_item(item, chars[pos], flags.case_insensitive));
+                .any(|item| match_class_item(item, chars[pos], flags));
             (in_class != *negated).then_some(pos + 1)
         }
-        Node::Shorthand(shorthand) => {
-            (pos < chars.len() && match_shorthand(*shorthand, chars[pos])).then_some(pos + 1)
-        }
+        Node::Shorthand(shorthand) => (pos < chars.len()
+            && match_shorthand(*shorthand, chars[pos], flags.unicode))
+        .then_some(pos + 1),
         _ => None,
     }
 }

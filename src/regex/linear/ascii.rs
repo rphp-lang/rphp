@@ -253,7 +253,7 @@ fn match_terminal_class(plan: ClassTailPlan<'_>, pos: usize, bytes: &[u8]) -> Op
         let in_class = plan
             .items
             .iter()
-            .any(|item| match_class_item(item, candidate, false));
+            .any(|item| match_class_item(item, candidate, RegexFlags::default()));
         if in_class == plan.negated {
             break;
         }
@@ -324,7 +324,9 @@ fn match_atom(node: &Node, pos: usize, bytes: &[u8], flags: RegexFlags) -> Optio
             };
             matches.then_some(pos)
         }
-        Node::WordBoundary(positive) => (is_word_boundary(bytes, pos) == *positive).then_some(pos),
+        Node::WordBoundary(positive) => {
+            (is_word_boundary(bytes, pos, flags.unicode) == *positive).then_some(pos)
+        }
         Node::CharClass { negated, items } => {
             if pos >= bytes.len() {
                 return None;
@@ -332,20 +334,20 @@ fn match_atom(node: &Node, pos: usize, bytes: &[u8], flags: RegexFlags) -> Optio
             let candidate = char::from(bytes[pos]);
             let in_class = items
                 .iter()
-                .any(|item| match_class_item(item, candidate, flags.case_insensitive));
+                .any(|item| match_class_item(item, candidate, flags));
             (in_class != *negated).then_some(pos + 1)
         }
         Node::Shorthand(shorthand) => (pos < bytes.len()
-            && match_shorthand(*shorthand, char::from(bytes[pos])))
+            && match_shorthand(*shorthand, char::from(bytes[pos]), flags.unicode))
         .then_some(pos + 1),
         _ => None,
     }
 }
 
 #[inline]
-fn is_word_boundary(bytes: &[u8], pos: usize) -> bool {
-    let before = pos > 0 && is_word_char(char::from(bytes[pos - 1]));
-    let after = pos < bytes.len() && is_word_char(char::from(bytes[pos]));
+fn is_word_boundary(bytes: &[u8], pos: usize, unicode: bool) -> bool {
+    let before = pos > 0 && is_word_char(char::from(bytes[pos - 1]), unicode);
+    let after = pos < bytes.len() && is_word_char(char::from(bytes[pos]), unicode);
     before != after
 }
 

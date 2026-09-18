@@ -22636,6 +22636,110 @@ fn pcre_capture_value(
     Value::array(pair)
 }
 
+#[cold]
+fn pcre_clear_matches_argument(ed: *mut ExecuteData, argument: u32) {
+    arg_mut!(ed, argument, Value::array(PhpArray::new()));
+}
+
+#[cold]
+fn pcre_empty_match_all_projection(regex: &crate::regex::Regex, set_order: bool) -> PhpArray {
+    if set_order {
+        return PhpArray::new();
+    }
+    let mut result = PhpArray::new();
+    for index in 0..regex.capture_count() {
+        let value = Value::array(PhpArray::new());
+        for (name, slot) in regex.capture_names() {
+            if *slot == index {
+                result.set_str(name, value.clone());
+            }
+        }
+        result.push(value);
+    }
+    result
+}
+
+#[cold]
+fn pcre_match_unicode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    re: &crate::regex::Regex,
+    subject: Cow<'_, str>,
+    raw_offset: i64,
+    has_matches: bool,
+    offset_capture: bool,
+    unmatched_as_null: bool,
+) -> Result<(), VmError> {
+    let subject_len = arg!(ed, 1)
+        .dereferenced()
+        .php_string_len()
+        .unwrap_or(subject.len()) as i64;
+    let offset = if raw_offset < 0 {
+        (subject_len + raw_offset).max(0)
+    } else {
+        raw_offset
+    } as usize;
+    if raw_offset > subject_len {
+        if has_matches {
+            pcre_clear_matches_argument(ed, 2);
+        }
+        pcre::set_last_error(eg, 1);
+        ret!(rv, Value::bool(false));
+    }
+    let searched_subject = match pcre::prepare_utf_subject(arg!(ed, 1), subject, offset) {
+        Ok(subject) => subject,
+        Err(error) => {
+            if has_matches {
+                pcre_clear_matches_argument(ed, 2);
+            }
+            pcre::set_last_error(eg, error);
+            ret!(rv, Value::bool(false));
+        }
+    };
+
+    if !has_matches {
+        ret!(rv, Value::long(re.is_match(&searched_subject) as i64));
+    }
+    match re.captures(&searched_subject) {
+        Some(caps) => {
+            let mut arr = PhpArray::new();
+            let last_capture = if unmatched_as_null {
+                caps.len() - 1
+            } else {
+                (0..caps.len())
+                    .rev()
+                    .find(|&index| caps.get(index).is_some())
+                    .unwrap_or(0)
+            };
+            for i in 0..=last_capture {
+                let value = pcre_capture_value(
+                    caps.get(i),
+                    &searched_subject,
+                    offset,
+                    offset_capture,
+                    unmatched_as_null,
+                );
+                for (name, slot) in caps.named_groups() {
+                    if *slot == i {
+                        arr.set_str(name, value.clone());
+                    }
+                }
+                arr.push(value);
+            }
+            if let Some(mark) = caps.mark() {
+                arr.set_str("MARK", Value::string(mark));
+            }
+            arg_mut!(ed, 2, Value::array(arr));
+            ret!(rv, Value::long(1));
+        }
+        None => {
+            pcre_clear_matches_argument(ed, 2);
+            ret!(rv, Value::long(0));
+        }
+    }
+}
+
 /// preg_match($pattern, $subject, &$matches = null, $flags = 0, $offset = 0): int|false
 fn fn_preg_match(
     ed: *mut ExecuteData,
@@ -22648,13 +22752,6 @@ fn fn_preg_match(
     let offset_capture = flags & PREG_OFFSET_CAPTURE_RESULT != 0;
     let unmatched_as_null = flags & PREG_UNMATCHED_AS_NULL_RESULT != 0;
     let raw_offset = arg_opt!(ed, 4).map_or(0, Value::to_long_val);
-    let subject_len = subject.len() as i64;
-    let offset = if raw_offset < 0 {
-        (subject_len + raw_offset).max(0)
-    } else {
-        raw_offset.min(subject_len)
-    } as usize;
-    let searched_subject = &subject[offset..];
 
     let has_matches = {
         let raw = unsafe { (*ed).cv(2) };
@@ -22664,6 +22761,34 @@ fn fn_preg_match(
     let Some(re) = pcre::compile_pattern(eg, ed, "preg_match", &pattern_str)? else {
         ret!(rv, Value::bool(false));
     };
+    if re.is_unicode() {
+        return pcre_match_unicode(
+            ed,
+            rv,
+            eg,
+            &re,
+            subject,
+            raw_offset,
+            has_matches,
+            offset_capture,
+            unmatched_as_null,
+        );
+    }
+
+    let subject_len = subject.len() as i64;
+    if raw_offset > subject_len {
+        if has_matches {
+            pcre_clear_matches_argument(ed, 2);
+        }
+        pcre::set_last_error(eg, 1);
+        ret!(rv, Value::bool(false));
+    }
+    let offset = if raw_offset < 0 {
+        (subject_len + raw_offset).max(0)
+    } else {
+        raw_offset
+    } as usize;
+    let searched_subject = &subject[offset..];
 
     if !has_matches {
         ret!(rv, Value::long(re.is_match(searched_subject) as i64));
@@ -22790,6 +22915,17 @@ fn fn_preg_replace(
         let subject = arg_str!(ed, 2);
         let Some(regex) = pcre::compile_pattern(eg, ed, "preg_replace", &pattern)? else {
             ret!(rv, Value::null());
+        };
+        let subject = if regex.is_unicode() {
+            match pcre::prepare_utf_subject(arg!(ed, 2), subject, 0) {
+                Ok(subject) => subject,
+                Err(error) => {
+                    pcre::set_last_error(eg, error);
+                    ret!(rv, Value::null());
+                }
+            }
+        } else {
+            subject
         };
         let result = regex.replace_all(&subject, &replacement);
         ret!(rv, Value::string(result));
@@ -31842,6 +31978,22 @@ fn fn_preg_match_all(
         ret!(rv, Value::bool(false));
     };
 
+    let subject = if re.is_unicode() {
+        match pcre::prepare_utf_subject(arg!(ed, 1), subject, 0) {
+            Ok(subject) => subject,
+            Err(error) => {
+                if has_matches {
+                    let empty = pcre_empty_match_all_projection(&re, flags & 2 != 0);
+                    arg_mut!(ed, 2, Value::array(empty));
+                }
+                pcre::set_last_error(eg, error);
+                ret!(rv, Value::bool(false));
+            }
+        }
+    } else {
+        subject
+    };
+
     if !has_matches {
         ret!(rv, Value::long(re.count_matches(&subject) as i64));
     }
@@ -31963,6 +32115,18 @@ fn fn_preg_split(
 
     let Some(re) = pcre::compile_pattern(eg, ed, "preg_split", &pattern_str)? else {
         ret!(rv, Value::bool(false));
+    };
+
+    let subject = if re.is_unicode() {
+        match pcre::prepare_utf_subject(arg!(ed, 1), subject, 0) {
+            Ok(subject) => subject,
+            Err(error) => {
+                pcre::set_last_error(eg, error);
+                ret!(rv, Value::bool(false));
+            }
+        }
+    } else {
+        subject
     };
 
     let mut arr = PhpArray::new();
