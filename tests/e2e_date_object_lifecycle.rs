@@ -146,3 +146,35 @@ var_dump(DATE_RFC7231 === DateTimeInterface::RFC7231);
         )
     );
 }
+
+#[test]
+fn native_serialization_preserves_visibility_legacy_fields_and_expanded_years() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ZoneState extends DateTimeZone {
+    private int $hidden = 7;
+    protected int $guard = 8;
+    public function state(): string { return "$this->hidden/$this->guard/{$this->getName()}"; }
+}
+$zone = new ZoneState('Europe/Kyiv');
+$serialized = serialize($zone);
+echo str_replace(chr(0), '!', $serialized), "\n", unserialize($serialized)->state(), "\n";
+
+$date = (new DateTime('UTC'))->setDate(20201, 1, 1)->setTime(0, 0);
+$serialized = serialize($date);
+echo $serialized, "\n", unserialize($serialized)->format('X-m-d H:i:s.u'), "\n";
+
+$interval = unserialize('O:12:"DateInterval":8:{s:1:"y";s:1:"2";s:1:"m";s:1:"0";s:1:"d";s:3:"bla";s:1:"h";s:1:"6";s:1:"i";s:1:"8";s:1:"s";s:1:"0";s:6:"invert";i:0;s:4:"days";s:4:"aoeu";}');
+echo $interval->format('%y/%m/%d %h:%i:%s %a'), "\n";
+"#,
+        ),
+        concat!(
+            "O:9:\"ZoneState\":4:{s:13:\"timezone_type\";i:3;s:8:\"timezone\";s:11:\"Europe/Kyiv\";s:17:\"!ZoneState!hidden\";i:7;s:8:\"!*!guard\";i:8;}\n",
+            "7/8/Europe/Kyiv\n",
+            "O:8:\"DateTime\":3:{s:4:\"date\";s:28:\"+20201-01-01 00:00:00.000000\";s:13:\"timezone_type\";i:3;s:8:\"timezone\";s:3:\"UTC\";}\n",
+            "+20201-01-01 00:00:00.000000\n",
+            "2/0/0 6:8:0 0\n",
+        )
+    );
+}

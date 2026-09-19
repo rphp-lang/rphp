@@ -376,48 +376,8 @@ pub(super) fn checked_object_description(
 }
 
 pub(crate) fn debug_projection(value: &Value, eg: &ExecutorGlobals) -> Option<Value> {
-    let object = value.as_object()?;
     let description = object_description(value)?;
-    let mut result = PhpArray::new();
-    let mut hierarchy = Vec::new();
-    let mut class = eg.class_by_id(object.class_id);
-    while let Some(definition) = class {
-        hierarchy.push(definition.name.clone());
-        class = definition
-            .parent
-            .as_deref()
-            .and_then(|parent| eg.find_class(parent));
-    }
-    hierarchy.reverse();
-    let mut declared = std::collections::HashSet::new();
-    for class_name in hierarchy {
-        let Some(definition) = eg.find_class(&class_name) else {
-            continue;
-        };
-        for property in &definition.properties {
-            if !property.declaring_class.eq_ignore_ascii_case(&class_name)
-                || matches!(property.name.as_str(), "timezone_type" | "timezone")
-                || !declared.insert(property.name.clone())
-            {
-                continue;
-            }
-            if let Some(value) = object
-                .get_property(&property.name)
-                .filter(|value| !value.is_undef())
-            {
-                result.set_str(&property.name, value.clone_for_php_storage());
-            }
-        }
-    }
-    object.for_each_dynamic_property(|name, property| {
-        if name != "timezone_type"
-            && name != "timezone"
-            && !declared.contains(name)
-            && !property.is_undef()
-        {
-            result.set_str(name, property.clone_for_php_storage());
-        }
-    });
+    let mut result = super::custom_properties(value, &SERIALIZED_KEYS, eg);
     result.set_str("timezone_type", Value::long(description.kind));
     result.set_str("timezone", Value::string(description.name));
     Some(Value::array(result))
@@ -741,6 +701,8 @@ fn name_from_abbreviation(abbreviation: &str, offset: i64, is_dst: i64) -> Optio
         (-14_400, 0) => Some("America/Halifax"),
         (3_600, 1) => Some("Europe/London"),
         (-7_200, 1) => Some("America/Sao_Paulo"),
+        (19_800, 0) => Some("Asia/Kolkata"),
+        (28_800, 0) => Some("Asia/Shanghai"),
         _ => None,
     } {
         return Some(preferred);
@@ -953,15 +915,11 @@ pub(crate) fn fn_date_time_zone_serialize(
     let mut result = PhpArray::new();
     result.set_str("timezone_type", Value::long(description.kind));
     result.set_str("timezone", Value::string(description.name));
-    if let Some(object) = arg!(ed, 0).as_object() {
-        object.for_each_property(|name, property| {
-            if name != "timezone_type" && name != "timezone" && !property.is_undef() {
-                result.set_str(name, property.clone_for_php_storage());
-            }
-        });
-    }
+    super::append_custom_properties(&mut result, arg!(ed, 0), &SERIALIZED_KEYS, eg);
     ret!(rv, Value::array(result));
 }
+
+const SERIALIZED_KEYS: [&str; 2] = ["timezone_type", "timezone"];
 
 fn invalid_serialization(eg: &mut ExecutorGlobals) {
     eg.exception = Some(crate::value::make_error_value(
@@ -1008,16 +966,7 @@ pub(crate) fn fn_date_time_zone_unserialize(
         return Ok(());
     };
     install_description(arg!(ed, 0), description);
-    if let Some(mut object) = arg!(ed, 0).as_object_mut() {
-        for (key, value) in data.iter() {
-            let ArrayKey::String(name) = key else {
-                continue;
-            };
-            if name != "timezone_type" && name != "timezone" {
-                object.set_property(&name, value.clone_for_php_storage());
-            }
-        }
-    }
+    super::restore_custom_properties(arg!(ed, 0), &data, &SERIALIZED_KEYS, eg);
     Ok(())
 }
 

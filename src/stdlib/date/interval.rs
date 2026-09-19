@@ -105,6 +105,16 @@ pub(super) fn parse_iso_duration(input: &str) -> Option<DateIntervalState> {
     (found && number_start == position).then_some(result)
 }
 
+fn parse_absolute_pair(input: &str, eg: &ExecutorGlobals) -> Option<DateIntervalState> {
+    let (start, end) = input.split_once('/').or_else(|| input.split_once(' '))?;
+    if start.is_empty() || end.is_empty() {
+        return None;
+    }
+    let start = parser::parse_datetime(start, None, None, eg).ok()?.state;
+    let end = parser::parse_datetime(end, None, None, eg).ok()?.state;
+    Some(difference(&start, &end, false))
+}
+
 fn from_relative(input: &str) -> Option<DateIntervalState> {
     let relative = parser::parse_relative(input)?;
     Some(DateIntervalState {
@@ -711,8 +721,14 @@ pub(crate) fn fn_date_interval_construct(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let input = arg_str!(ed, 1);
-    let Some(state) = parse_iso_duration(input.as_ref()) else {
-        let message = if input.contains('/') {
+    let state = parse_iso_duration(input.as_ref()).or_else(|| parse_absolute_pair(&input, eg));
+    let Some(state) = state else {
+        let looks_like_complete_date = input.len() >= 20
+            && input.as_bytes().get(4) == Some(&b'-')
+            && input.as_bytes().get(7) == Some(&b'-')
+            && input.as_bytes().get(10) == Some(&b'T');
+        let message = if input.ends_with('/') || (!input.contains('/') && looks_like_complete_date)
+        {
             format!("Failed to parse interval ({input})")
         } else {
             format!("Unknown or bad format ({input})")
@@ -828,7 +844,46 @@ pub(crate) fn fn_date_interval_serialize(
     ret!(rv, Value::array(result));
 }
 
-fn state_from_array(data: &PhpArray) -> Result<DateIntervalState, String> {
+fn serialized_integer(data: &PhpArray, name: &str, fallback: i64) -> i64 {
+    let Some(value) = data.get_str(name) else {
+        return fallback;
+    };
+    let value = value.dereferenced();
+    match value.value_type() {
+        ValueType::Long => value.as_long().unwrap_or(fallback),
+        ValueType::True => 1,
+        ValueType::False | ValueType::Null => 0,
+        ValueType::Double => value.as_double().unwrap_or_default() as i64,
+        ValueType::String => value
+            .as_str()
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .unwrap_or(0),
+        _ => fallback,
+    }
+}
+
+fn serialized_fraction(data: &PhpArray) -> (f64, Option<f64>) {
+    let Some(value) = data.get_str("f") else {
+        return (0.0, None);
+    };
+    let value = value.dereferenced();
+    let raw = value
+        .as_double()
+        .or_else(|| value.as_long().map(|value| value as f64))
+        .or_else(|| value.as_str().and_then(|value| value.trim().parse().ok()))
+        .unwrap_or(0.0);
+    let scaled = raw * 1_000_000.0;
+    let overflow = (!scaled.is_finite()
+        || !(-(i64::MAX as f64)..i64::MAX as f64).contains(&scaled))
+    .then_some(scaled);
+    // timelib stores fractional seconds as signed microseconds. The legacy
+    // unserialization path performs the historical wrapping cast before
+    // projecting it back to a PHP float.
+    let microseconds = (scaled.trunc() as i128) as i64;
+    (microseconds as f64 / 1_000_000.0, overflow)
+}
+
+fn state_from_array(data: &PhpArray) -> Result<(DateIntervalState, Option<f64>), String> {
     let from_string = data
         .get_str("from_string")
         .and_then(|value| {
@@ -852,45 +907,63 @@ fn state_from_array(data: &PhpArray) -> Result<DateIntervalState, String> {
                 .get(10)
                 .is_none_or(|byte| *byte == b' ')
         {
-            return Ok(DateIntervalState {
-                from_string: true,
-                date_string: Some(date_string.to_string()),
-                initialized: true,
-                ..DateIntervalState::default()
-            });
+            return Ok((
+                DateIntervalState {
+                    from_string: true,
+                    date_string: Some(date_string.to_string()),
+                    initialized: true,
+                    ..DateIntervalState::default()
+                },
+                None,
+            ));
         }
-        return from_relative(date_string).ok_or_else(|| relative_parse_message(date_string, true));
+        return from_relative(date_string)
+            .map(|state| (state, None))
+            .ok_or_else(|| relative_parse_message(date_string, true));
     }
-    let integer = |name: &str, fallback: i64| {
-        data.get_str(name)
-            .and_then(Value::as_long)
-            .unwrap_or(fallback)
+    let (fraction, overflow) = serialized_fraction(data);
+    let days = match data.get_str("days") {
+        Some(value) if value.dereferenced().value_type() == ValueType::False => None,
+        Some(_) => Some(serialized_integer(data, "days", -1)),
+        None => Some(-1),
     };
-    Ok(DateIntervalState {
-        y: integer("y", -1),
-        m: integer("m", -1),
-        d: integer("d", -1),
-        h: integer("h", -1),
-        i: integer("i", -1),
-        s: integer("s", -1),
-        f: data
-            .get_str("f")
-            .and_then(|value| {
-                value
-                    .as_double()
-                    .or_else(|| value.as_long().map(|v| v as f64))
-            })
-            .unwrap_or(0.0),
-        invert: integer("invert", 0),
-        days: match data.get_str("days") {
-            Some(value) => value.as_long(),
-            None => Some(-1),
+    Ok((
+        DateIntervalState {
+            y: serialized_integer(data, "y", -1),
+            m: serialized_integer(data, "m", -1),
+            d: serialized_integer(data, "d", -1),
+            h: serialized_integer(data, "h", -1),
+            i: serialized_integer(data, "i", -1),
+            s: serialized_integer(data, "s", -1),
+            f: fraction,
+            invert: serialized_integer(data, "invert", 0),
+            days,
+            from_string: false,
+            date_string: None,
+            initialized: true,
+            relative: None,
         },
-        from_string: false,
-        date_string: None,
-        initialized: true,
-        relative: None,
-    })
+        overflow,
+    ))
+}
+
+fn report_fraction_overflow(
+    overflow: Option<f64>,
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(number) = overflow else {
+        return Ok(());
+    };
+    let rendered = Value::double(number).echo_to_string_with_precision(-1);
+    super::super::report_internal_diagnostic(
+        eg,
+        ed,
+        2,
+        "Warning",
+        &format!("The float {rendered} is not representable as an int, cast occurred"),
+    )
+    .map(|_| ())
 }
 
 fn install(receiver: &Value, state: DateIntervalState) -> bool {
@@ -911,7 +984,11 @@ pub(crate) fn fn_date_interval_unserialize(
         return Ok(());
     };
     match state_from_array(&data) {
-        Ok(state) => {
+        Ok((state, overflow)) => {
+            report_fraction_overflow(overflow, ed, eg)?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
             if install(arg!(ed, 0), state) {
                 super::restore_custom_properties(arg!(ed, 0), &data, &SERIALIZED_KEYS, eg);
             }
@@ -986,7 +1063,11 @@ pub(crate) fn fn_date_interval_set_state(
         return Ok(());
     };
     match state_from_array(&data) {
-        Ok(state) => {
+        Ok((state, overflow)) => {
+            report_fraction_overflow(overflow, ed, eg)?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
             if let Some(value) = allocate(eg, state) {
                 ret!(rv, value);
             }

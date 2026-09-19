@@ -1600,7 +1600,7 @@ pub(super) fn parse_from_format(
                 year = sign * read_digits(input, &mut input_position, 4, 19).unwrap_or(year);
             }
             'm' | 'd' | 'H' | 'h' | 'i' | 's' => {
-                let value = read_digits(input, &mut input_position, 2, 2);
+                let value = read_digits(input, &mut input_position, 1, 2);
                 match (token, value) {
                     ('m', Some(value)) => {
                         month = value;
@@ -1772,10 +1772,34 @@ pub(super) fn parse_from_format(
             'O' | 'P' | 'p' | 'T' | 'e' => {
                 fields.timezone = true;
                 let start = input_position;
-                while input_position < input.len()
-                    && !input.as_bytes()[input_position].is_ascii_whitespace()
-                {
-                    input_position += 1;
+                match token {
+                    'P' | 'p' if input.as_bytes().get(input_position) == Some(&b'Z') => {
+                        input_position += 1;
+                    }
+                    'O' | 'P' | 'p' => {
+                        if input
+                            .as_bytes()
+                            .get(input_position)
+                            .is_some_and(|byte| matches!(byte, b'+' | b'-'))
+                        {
+                            input_position += 1;
+                        }
+                        while input
+                            .as_bytes()
+                            .get(input_position)
+                            .is_some_and(|byte| byte.is_ascii_digit() || *byte == b':')
+                        {
+                            input_position += 1;
+                        }
+                    }
+                    _ => {
+                        while input_position < input.len()
+                            && !input.as_bytes()[input_position].is_ascii_whitespace()
+                            && !(token == 'e' && input.as_bytes()[input_position] == b']')
+                        {
+                            input_position += 1;
+                        }
+                    }
                 }
                 let zone = &input[start..input_position];
                 let zone = if token == 'p' && zone == "Z" {

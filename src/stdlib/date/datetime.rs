@@ -306,10 +306,34 @@ pub(super) fn state_format(state: &DateTimeState, format: &str) -> String {
 
 pub(super) fn serialized_state(state: &DateTimeState) -> Value {
     let mut result = PhpArray::new();
-    result.set_str("date", Value::string(state_format(state, "Y-m-d H:i:s.u")));
+    result.set_str("date", Value::string(serialized_date(state)));
     result.set_str("timezone_type", Value::long(state.timezone.kind));
     result.set_str("timezone", Value::string(&state.timezone.name));
     Value::array(result)
+}
+
+fn serialized_date(state: &DateTimeState) -> String {
+    let (year, ..) = local_parts(state);
+    state_format(
+        state,
+        if (0..=9_999).contains(&year) {
+            "Y-m-d H:i:s.u"
+        } else {
+            "X-m-d H:i:s.u"
+        },
+    )
+}
+
+fn legacy_serialized_date(state: &DateTimeState) -> String {
+    let (year, ..) = local_parts(state);
+    state_format(
+        state,
+        if (0..=9_999).contains(&year) {
+            "Y-m-d H:i:s"
+        } else {
+            "X-m-d H:i:s"
+        },
+    )
 }
 
 const SERIALIZED_KEYS: [&str; 3] = ["date", "timezone_type", "timezone"];
@@ -360,12 +384,11 @@ pub(crate) fn comparison(left: &Value, right: &Value, eg: &mut ExecutorGlobals) 
     )
 }
 
-fn malformed(
-    eg: &mut ExecutorGlobals,
+fn malformed_message(
     input: &str,
     diagnostics: &DateParseDiagnostics,
     function: Option<&str>,
-) {
+) -> String {
     let (position, reason) = diagnostics
         .errors
         .first()
@@ -375,12 +398,21 @@ fn malformed(
         .get(position..)
         .and_then(|suffix| suffix.chars().next())
         .unwrap_or(' ');
+    format!(
+        "{}Failed to parse time string ({input}) at position {position} ({character}): {reason}",
+        function.map_or_else(String::new, |function| format!("{function}(): "))
+    )
+}
+
+fn malformed(
+    eg: &mut ExecutorGlobals,
+    input: &str,
+    diagnostics: &DateParseDiagnostics,
+    function: Option<&str>,
+) {
     eg.exception = Some(crate::value::make_error_value(
         "DateMalformedStringException",
-        &format!(
-            "{}Failed to parse time string ({input}) at position {position} ({character}): {reason}",
-            function.map_or_else(String::new, |function| format!("{function}(): "))
-        ),
+        &malformed_message(input, diagnostics, function),
     ));
 }
 
@@ -591,21 +623,26 @@ fn serialized_fields_state(
     }
     let mut timezone = timezone::parse_timezone(timezone_name)?;
     timezone.kind = timezone_type;
-    parse_absolute(date, Some(timezone), eg)
+    let state = parse_absolute(date, Some(timezone), eg)?;
+    (serialized_date(&state) == date || legacy_serialized_date(&state) == date).then_some(state)
+}
+
+fn serialization_class_name(receiver: &Value, eg: &ExecutorGlobals) -> &'static str {
+    receiver
+        .as_object()
+        .filter(|object| eg.class_is_a(object.class_name.as_ref(), "DateTimeImmutable"))
+        .map_or("DateTime", |_| "DateTimeImmutable")
 }
 
 fn unserialize_into(receiver: &Value, data: &PhpArray, eg: &mut ExecutorGlobals) -> bool {
-    let class_name = receiver
-        .as_object()
-        .map(|object| object.class_name.to_string())
-        .unwrap_or_else(|| "DateTime".to_string());
+    let class_name = serialization_class_name(receiver, eg);
     let Some(state) = serialized_fields_state(
         data.get_str("date"),
         data.get_str("timezone_type"),
         data.get_str("timezone"),
         eg,
     ) else {
-        invalid_serialization(eg, &class_name);
+        invalid_serialization(eg, class_name);
         return false;
     };
     if !install_state(receiver, state) {
@@ -635,7 +672,7 @@ pub(crate) fn fn_date_time_wakeup(
     let Some(object) = receiver.as_object() else {
         return Ok(());
     };
-    let class_name = object.class_name.to_string();
+    let class_name = serialization_class_name(&receiver, eg);
     let date = object.get_property("date").cloned();
     let timezone_type = object.get_property("timezone_type").cloned();
     let timezone_name = object.get_property("timezone").cloned();
@@ -646,7 +683,7 @@ pub(crate) fn fn_date_time_wakeup(
         timezone_name.as_ref(),
         eg,
     ) else {
-        invalid_serialization(eg, &class_name);
+        invalid_serialization(eg, class_name);
         return Ok(());
     };
     install_state(&receiver, state);
@@ -749,9 +786,12 @@ pub(crate) fn fn_date_time_set_time(
     let second = arg_opt!(ed, 3).and_then(Value::as_long).unwrap_or(0);
     let microsecond = arg_opt!(ed, 4).and_then(Value::as_long).unwrap_or(0);
     if !(0..=999_999).contains(&microsecond) {
+        let owner = receiver_method_owner(arg!(ed, 0), eg);
         eg.exception = Some(crate::value::make_error_value(
             "DateRangeError",
-            "DateTime::setTime(): Argument #4 ($microsecond) must be between 0 and 999999",
+            &format!(
+                "{owner}::setTime(): Argument #4 ($microsecond) must be between 0 and 999999, {microsecond} given"
+            ),
         ));
         return Ok(());
     }
@@ -772,9 +812,12 @@ pub(crate) fn fn_date_time_set_microsecond(
 ) -> Result<(), VmError> {
     let microsecond = arg_long!(ed, 1);
     if !(0..=999_999).contains(&microsecond) {
+        let owner = receiver_method_owner(arg!(ed, 0), eg);
         eg.exception = Some(crate::value::make_error_value(
             "DateRangeError",
-            "DateTime::setMicrosecond(): Argument #1 ($microsecond) must be between 0 and 999999",
+            &format!(
+                "{owner}::setMicrosecond(): Argument #1 ($microsecond) must be between 0 and 999999, {microsecond} given"
+            ),
         ));
         return Ok(());
     }
@@ -784,6 +827,13 @@ pub(crate) fn fn_date_time_set_microsecond(
         return Ok(());
     };
     ret!(rv, result);
+}
+
+fn receiver_method_owner(receiver: &Value, eg: &ExecutorGlobals) -> &'static str {
+    receiver
+        .as_object()
+        .filter(|object| eg.class_is_a(object.class_name.as_ref(), "DateTimeImmutable"))
+        .map_or("DateTime", |_| "DateTimeImmutable")
 }
 
 pub(crate) fn fn_date_time_set_iso_date(
@@ -1193,6 +1243,18 @@ fn modify_value(
     eg: &mut ExecutorGlobals,
 ) -> Option<Value> {
     let base = state_snapshot(receiver, eg)?;
+    if input.is_empty() {
+        let diagnostics = DateParseDiagnostics {
+            warnings: Vec::new(),
+            errors: vec![(0, "Empty string".to_string())],
+        };
+        if throw_on_error {
+            let owner = receiver_method_owner(receiver, eg);
+            malformed(eg, input, &diagnostics, Some(&format!("{owner}::modify")));
+        }
+        eg.set_date_parse_diagnostics(diagnostics);
+        return None;
+    }
     match super::parser::parse_datetime(input, None, Some(&base), eg) {
         Ok(parsed) => {
             eg.set_date_parse_diagnostics(parsed.diagnostics);
@@ -1200,11 +1262,8 @@ fn modify_value(
         }
         Err(diagnostics) => {
             if throw_on_error {
-                let class = receiver
-                    .as_object()
-                    .map(|object| object.class_name.to_string())
-                    .unwrap_or_else(|| "DateTime".to_string());
-                malformed(eg, input, &diagnostics, Some(&format!("{class}::modify")));
+                let owner = receiver_method_owner(receiver, eg);
+                malformed(eg, input, &diagnostics, Some(&format!("{owner}::modify")));
             }
             eg.set_date_parse_diagnostics(diagnostics);
             None
@@ -1231,8 +1290,16 @@ pub(crate) fn fn_date_modify(
 ) -> Result<(), VmError> {
     let receiver = arg!(ed, 0).clone();
     let input = arg_str!(ed, 1);
-    let result =
-        modify_value(&receiver, input.as_ref(), false, eg).unwrap_or_else(|| Value::bool(false));
+    let result = modify_value(&receiver, input.as_ref(), false, eg);
+    if result.is_none() && eg.exception.is_none() {
+        let warning = eg
+            .date_parse_diagnostics()
+            .map(|diagnostics| malformed_message(&input, diagnostics, Some("date_modify")));
+        if let Some(warning) = warning {
+            super::super::report_internal_diagnostic(eg, ed, 2, "Warning", &warning)?;
+        }
+    }
+    let result = result.unwrap_or_else(|| Value::bool(false));
     ret!(rv, result)
 }
 

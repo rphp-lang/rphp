@@ -99,15 +99,28 @@ pub(super) fn restore_custom_properties(
     eg: &mut ExecutorGlobals,
 ) -> bool {
     let mut properties = PhpArray::new();
-    for (key, value) in data.iter() {
-        if !is_native_serialized_key(&key, native_keys) {
-            properties.set(key, value.clone_for_php_storage());
-        }
-    }
     let class_name = receiver
         .as_object()
         .map(|object| object.class_name.to_string())
         .unwrap_or_default();
+    for (key, value) in data.iter() {
+        if is_native_serialized_key(&key, native_keys) {
+            continue;
+        }
+        if let ArrayKey::String(name) = &key
+            && let Some((scope, _)) = name
+                .strip_prefix('\0')
+                .and_then(|name| name.split_once('\0'))
+            && scope != "*"
+            && !eg.class_is_a(&class_name, scope)
+        {
+            // Native date unserializers ignore private properties attributed
+            // to an unrelated/non-existent class instead of projecting them
+            // onto a same-named private property of the receiving subclass.
+            continue;
+        }
+        properties.set(key, value.clone_for_php_storage());
+    }
     super::serialization::populate_object_properties(eg, receiver, &class_name, &properties).is_ok()
 }
 

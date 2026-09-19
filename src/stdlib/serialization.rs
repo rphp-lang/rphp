@@ -1276,7 +1276,15 @@ impl<'a> Parser<'a> {
     }
 
     fn expect(&mut self, expected: u8) -> Result<(), ()> {
-        (self.byte()? == expected).then_some(()).ok_or(())
+        let actual = self.byte()?;
+        if actual == expected {
+            Ok(())
+        } else {
+            // PHP reports the byte that violated the grammar, not the cursor
+            // position after consuming it.
+            self.position -= 1;
+            Err(())
+        }
     }
 
     fn token(&mut self, delimiter: u8) -> Result<&'a [u8], ()> {
