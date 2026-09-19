@@ -5950,6 +5950,27 @@ impl ExecutorGlobals {
             .map_or_else(String::new, |file| {
                 format!(" in {file} on line {}", class_def.declaration_line)
             });
+        let direct_interfaces = class_def
+            .implements
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let inherits_throwable_class = class_def
+            .parent
+            .as_deref()
+            .is_some_and(|parent| self.class_is_a(parent, "Throwable"));
+        if class_def.source_file.is_some()
+            && !inherits_throwable_class
+            && self
+                .interface_closure_for_roots(&direct_interfaces)
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("Throwable"))
+        {
+            return Err(format!(
+                "Class {} cannot implement interface Throwable, extend Exception or Error instead{location}",
+                class_def.name
+            ));
+        }
         let is_backed_enum = class_def.is_enum
             && class_def
                 .implements
@@ -7547,6 +7568,20 @@ impl ExecutorGlobals {
                             .map(|(_, definition)| std::rc::Rc::clone(definition))
                     });
             if let Some(trait_def) = trait_definition {
+                if class_def.is_readonly
+                    && let Some(property) = trait_def
+                        .properties
+                        .iter()
+                        .chain(trait_def.static_properties.iter())
+                        .find(|property| !property.is_readonly)
+                {
+                    return Err(format!(
+                        "Readonly class {class_name} cannot use trait with a non-readonly property {}::${}{}",
+                        property.declaring_class,
+                        property.name,
+                        declaration_location()
+                    ));
+                }
                 let trait_deferred_defaults = trait_def
                     .deferred_instance_defaults
                     .as_ref()

@@ -3761,6 +3761,33 @@ impl Compiler {
                         *line,
                     ));
                 }
+                if self.loop_stack[target_idx].is_switch {
+                    let statement = if depth == 1 {
+                        "\"continue\"".to_string()
+                    } else {
+                        format!("\"continue {depth}\"")
+                    };
+                    let equivalent = if depth == 1 {
+                        "\"break\"".to_string()
+                    } else {
+                        format!("\"break {depth}\"")
+                    };
+                    let suggestion = self.loop_stack[..target_idx]
+                        .iter()
+                        .any(|context| !context.is_switch)
+                        .then(|| format!(". Did you mean to use \"continue {}\"?", depth + 1))
+                        .unwrap_or_default();
+                    self.compile_deprecations
+                        .borrow_mut()
+                        .push(CompileDeprecation {
+                            message: format!(
+                                "{statement} targeting switch is equivalent to {equivalent}{suggestion}"
+                            ),
+                            file: self.source_file.clone(),
+                            line: *line,
+                            warning: true,
+                        });
+                }
                 let ctx = &mut self.loop_stack[target_idx];
                 if ctx.is_switch {
                     // PHP: "continue" targeting switch is equivalent to "break"

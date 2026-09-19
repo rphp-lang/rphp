@@ -87,10 +87,10 @@ use crate::vm::instruction::{
     FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT,
     INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, JMP_NZ_RELEASE_TEMPS,
     KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
-    NEW_FLAG_PREPARE_ONLY, NEW_FLAG_PREPARED, NEW_FLAG_UNPACKED_ARGUMENTS,
-    NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE, NEW_FLAG_VALIDATE_ONLY, OBJ_PROP_FUNC_ARG,
-    OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OBJ_PROP_TEMPORARY_RECEIVER, OpType,
-    PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
+    NEW_FLAG_NAMED_ARGUMENTS, NEW_FLAG_PREPARE_ONLY, NEW_FLAG_PREPARED,
+    NEW_FLAG_UNPACKED_ARGUMENTS, NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE, NEW_FLAG_VALIDATE_ONLY,
+    OBJ_PROP_FUNC_ARG, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OBJ_PROP_TEMPORARY_RECEIVER,
+    OpType, PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
     REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, RELEASE_TEMPS_NESTED_OBJECTS,
     RELEASE_TEMPS_ON_RETURN, RELEASE_TEMPS_RETURN_COMPLETION_SITE, RELEASE_TEMPS_SUBEXPRESSION,
     SEND_FLAG_GLOBALS, SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE,
@@ -8350,6 +8350,65 @@ impl Compiler {
     ) -> Result<(), String> {
         use crate::parser::TypeHint;
 
+        fn confusable_type_name(hint: &TypeHint) -> Option<&str> {
+            match hint {
+                TypeHint::ClassName(name)
+                    if !name.contains('\\')
+                        && matches!(
+                            name.to_ascii_lowercase().as_str(),
+                            "integer" | "double" | "boolean" | "resource"
+                        ) =>
+                {
+                    Some(name)
+                }
+                TypeHint::Nullable(inner) | TypeHint::GenericParameter { erased: inner, .. } => {
+                    confusable_type_name(inner)
+                }
+                TypeHint::Union(parts) | TypeHint::Intersection(parts) => {
+                    parts.iter().find_map(confusable_type_name)
+                }
+                TypeHint::GenericApplication { base, arguments } => (!base.contains('\\')
+                    && matches!(
+                        base.to_ascii_lowercase().as_str(),
+                        "integer" | "double" | "boolean" | "resource"
+                    ))
+                .then_some(base.as_str())
+                .or_else(|| arguments.iter().find_map(confusable_type_name)),
+                _ => None,
+            }
+        }
+
+        if let Some(name) = hint.as_ref().and_then(confusable_type_name) {
+            let lower = name.to_ascii_lowercase();
+            if !self.class_import_map.contains_key(&lower) {
+                let meaning = match lower.as_str() {
+                    "integer" => " will be interpreted as a class name. Did you mean \"int\"?",
+                    "double" => " will be interpreted as a class name. Did you mean \"float\"?",
+                    "boolean" => " will be interpreted as a class name. Did you mean \"bool\"?",
+                    "resource" => {
+                        " is not a supported builtin type and will be interpreted as a class name."
+                    }
+                    _ => unreachable!("guarded confusable type spelling"),
+                };
+                let suppression = self.current_namespace.as_ref().map_or_else(
+                    || format!("Write \"\\{name}\" to suppress this warning"),
+                    |namespace| {
+                        format!(
+                            "Write \"\\{namespace}\\{name}\" or import the class with \"use\" to suppress this warning"
+                        )
+                    },
+                );
+                self.compile_deprecations
+                    .borrow_mut()
+                    .push(CompileDeprecation {
+                        message: format!("\"{name}\"{meaning} {suppression}"),
+                        file: self.source_file.clone(),
+                        line,
+                        warning: true,
+                    });
+            }
+        }
+
         fn standalone_type_error(hint: &TypeHint) -> Option<&'static str> {
             match hint {
                 TypeHint::Nullable(inner) => match inner.as_ref() {
@@ -14999,7 +15058,15 @@ impl Compiler {
         invoke.result = result;
         invoke.result_type = OpType::Tmp;
         invoke.extended_value = args.len() as u32;
-        invoke._pad = NEW_FLAG_PREPARED;
+        let named_arguments = args
+            .iter()
+            .any(|argument| matches!(argument, CallArg::Named { .. }));
+        invoke._pad = NEW_FLAG_PREPARED
+            | if named_arguments {
+                NEW_FLAG_NAMED_ARGUMENTS
+            } else {
+                0
+            };
         if unpacked {
             let (arguments, argument_type) =
                 self.compile_mixed_unpacked_call_arguments(args, 0, None);
@@ -15044,7 +15111,12 @@ impl Compiler {
         }
         if self.instructions.len() == prepare_ip + 1 {
             let prepare = &mut self.instructions[prepare_ip];
-            prepare._pad = flags;
+            prepare._pad = flags
+                | if named_arguments {
+                    NEW_FLAG_NAMED_ARGUMENTS
+                } else {
+                    0
+                };
             prepare.extended_value = args.len() as u32;
         } else {
             self.push_instruction_at_line(invoke, line);

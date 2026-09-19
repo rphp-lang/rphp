@@ -219,8 +219,8 @@ fn merge_interface_constant_definitions(
                 }
                 if visibility_rank(existing.visibility) < visibility_rank(inherited.visibility) {
                     return Err(format!(
-                        "Access level to constant {}::{} must be {:?} or weaker{}",
-                        owner, existing.name, inherited.visibility, location
+                        "Access level to {}::{} must be public (as in interface {}){}",
+                        owner, existing.name, inherited.declaring_class, location
                     ));
                 }
                 if !class_constant_type_is_covariant(

@@ -10337,7 +10337,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Instanceof => {
-                op_instanceof(eg, frame, op_array, opline);
+                match op_instanceof(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(new_frame, new_op_array) => {
+                        resume_activation!(new_frame, new_op_array);
+                    }
+                    ColdResult::Unhandled(exception) => {
+                        eg.exception = Some(exception);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
             }
 
             OpCode::FetchConst => {

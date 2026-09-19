@@ -45,6 +45,58 @@ fn declaration_and_expression_keywords_are_ascii_case_insensitive() {
 }
 
 #[test]
+fn user_classes_cannot_implement_the_engine_throwable_interface_directly() {
+    let (status, stdout, stderr) =
+        run_stdin("<?php\nclass DirectFailure implements Throwable {}\n");
+    assert_eq!(status, 255);
+    assert_eq!(stdout, "");
+    assert_eq!(
+        stderr,
+        "\nFatal error: Class DirectFailure cannot implement interface Throwable, extend Exception or Error instead in Standard input code on line 2\n"
+    );
+
+    let (status, stdout, stderr) = run_stdin(
+        "<?php\nclass SupportedFailure extends Exception {}\necho (new SupportedFailure) instanceof Throwable ? 'ok' : 'bad';\n",
+    );
+    assert_eq!(status, 0);
+    assert_eq!(stdout, "ok");
+    assert_eq!(stderr, "");
+
+    let (status, stdout, stderr) = run_stdin(
+        "<?php\ninterface DomainThrowable extends Throwable {}\nclass DomainFailure extends RuntimeException implements DomainThrowable {}\necho (new DomainFailure) instanceof DomainThrowable ? 'domain' : 'bad';\n",
+    );
+    assert_eq!(status, 0);
+    assert_eq!(stdout, "domain");
+    assert_eq!(stderr, "");
+}
+
+#[test]
+fn interface_constants_report_the_interface_visibility_contract() {
+    let (status, stdout, stderr) = run_stdin(
+        "<?php\ninterface PublicValues { public const VALUE = 1; }\nclass HiddenValue implements PublicValues { private const VALUE = 1; }\n",
+    );
+    assert_eq!(status, 255);
+    assert_eq!(stdout, "");
+    assert_eq!(
+        stderr,
+        "Fatal error: Access level to HiddenValue::VALUE must be public (as in interface PublicValues) in Standard input code on line 3\n"
+    );
+}
+
+#[test]
+fn confusable_pseudo_types_warn_but_explicit_class_spellings_do_not() {
+    let (status, stdout, stderr) = run_stdin(
+        "<?php\nnamespace { function globalInteger(integer $value): void {}\nfunction explicitInteger(\\integer $value): void {} }\nnamespace Namespaced { function localBoolean(boolean $value): void {} }\n",
+    );
+    assert_eq!(status, 0);
+    assert_eq!(
+        stdout,
+        "\nWarning: \"integer\" will be interpreted as a class name. Did you mean \"int\"? Write \"\\integer\" to suppress this warning in Standard input code on line 2\n\nWarning: \"boolean\" will be interpreted as a class name. Did you mean \"bool\"? Write \"\\Namespaced\\boolean\" or import the class with \"use\" to suppress this warning in Standard input code on line 4\n"
+    );
+    assert_eq!(stderr, "");
+}
+
+#[test]
 fn a_self_extending_interface_fails_at_the_declaration_without_reaching_instanceof() {
     let (status, stdout, stderr) = run_stdin(
         "<?php\ninterface RecursiveFooFar extends RecursiveFooFar {}\nclass A implements RecursiveFooFar {}\n$a = new A();\nvar_dump($a InStAnCeOf A);\necho \"ok\\n\";\n",

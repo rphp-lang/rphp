@@ -641,6 +641,17 @@ impl Parser {
                         line,
                     );
                 }
+                for (index, argument) in args.iter().enumerate() {
+                    let CallArg::Named { name, .. } = argument else {
+                        continue;
+                    };
+                    if args[..index].iter().any(
+                        |previous| matches!(previous, CallArg::Named { name: previous, .. } if previous == name),
+                    ) {
+                        self.compile_error(&format!("Duplicate named parameter ${name}"), line);
+                        break;
+                    }
+                }
                 attributes.push(Attribute {
                     name,
                     args,
@@ -1413,10 +1424,10 @@ impl Parser {
     fn parse_base_type_hint(&mut self) -> Result<TypeHint, String> {
         match self.advance() {
             Token::Identifier(name, _) => match name.as_str() {
-                "int" | "integer" => Ok(TypeHint::Int),
-                "float" | "double" => Ok(TypeHint::Float),
+                "int" => Ok(TypeHint::Int),
+                "float" => Ok(TypeHint::Float),
                 "string" => Ok(TypeHint::String),
-                "bool" | "boolean" => Ok(TypeHint::Bool),
+                "bool" => Ok(TypeHint::Bool),
                 "callable" => Ok(TypeHint::Callable),
                 "null" => Ok(TypeHint::Null),
                 "void" => Ok(TypeHint::Void),

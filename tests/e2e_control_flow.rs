@@ -305,7 +305,7 @@ fn test_e2e_switch_continue_acts_as_break() {
         run_php(
             "<?php $x = 1; switch ($x) { case 1: echo 'a'; continue; echo 'X'; case 2: echo 'b'; }"
         ),
-        "a"
+        "\nWarning: \"continue\" targeting switch is equivalent to \"break\" in  on line 1\na"
     );
 }
 
@@ -316,7 +316,7 @@ fn test_e2e_switch_continue_in_loop_context() {
         run_php(
             "<?php $r = ''; for ($i = 0; $i < 3; $i++) { switch ($i) { case 0: $r .= 'skip'; continue; default: $r .= $i; } } echo $r;"
         ),
-        "skip12"
+        "\nWarning: \"continue\" targeting switch is equivalent to \"break\". Did you mean to use \"continue 2\"? in  on line 1\nskip12"
     );
 }
 

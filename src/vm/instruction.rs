@@ -430,6 +430,11 @@ pub const NEW_FLAG_PREPARE_ONLY: u16 = 1 << 7;
 /// Invoke construction on the already published op1/result receiver. No class
 /// resolution, allocation or instance-default evaluation is repeated.
 pub const NEW_FLAG_PREPARED: u16 = 1 << 8;
+/// A prepared constructor call contains at least one source-level named
+/// argument. Constructorless classes accept surplus positional values for PHP
+/// compatibility but reject the first named value through the ordinary Error
+/// path after all argument expressions have been evaluated.
+pub const NEW_FLAG_NAMED_ARGUMENTS: u16 = 1 << 9;
 
 /// CallUserFuncArray was emitted for PHP source-level `...` syntax. Its op2 is
 /// an internal argument list whose array aliases and Traversable value markers

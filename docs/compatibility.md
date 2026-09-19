@@ -7,6 +7,35 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The accepted `declaration-runtime-boundaries` checkpoint over `c704a1f3`
+adds **10 exact PHP 8.5 passes without losses**. The shared declaration and
+runtime slice covers direct versus inherited `Throwable` implementation,
+readonly-class trait properties and unserialize writes, depth-aware
+`continue`-to-`switch` warnings, duplicate attribute arguments, constructorless
+named arguments, attribute instantiation, interface-constant visibility,
+confusable type names and `instanceof self` outside class scope. Evaluation
+order and catchable/fatal staging match the PHP 8.5 oracle.
+
+The 8,258-case supported ledger is now **7,518 pass / 267 fail / 194 skip /
+276 unsupported / 3 XFAIL**. Zend/lang advances to **5,066 pass / 238 fail /
+115 skip / 180 unsupported**, exact **+10/-0**; strings/array remains **1,470
+pass / 8 fail / 67 skip / 30 unsupported** with an identical pass set. The
+combined 7,174-case stable core is **6,536 pass / 246 fail / 182 skip / 210
+unsupported**, with no timeout or crash.
+
+Five Cargo configurations and all-target compilation pass. Composer S0,
+Symfony S1--S3, formatting and unsafe policy are green; unsafe inventory stays
+at **1,626 blocks / 289 functions**. Cumulative performance work remains
+deferred to the larger correctness-sweep boundary.
+
+SHA-256 evidence:
+
+- Release candidate: `08feedba17db39a395e6b45d1076b92374d4fa02763665282eeae1eb3d90788b`.
+- Combined manifest / pass set: `aad25cd7f2552bbe9f8fd0d135e86d23164041e64535c57ce03e8436d839795e` / `3442a29c3df4110cc85fd07e823596ad1a8880751bebbd2046021084ba081eb4`.
+- Focused ten-case manifest: `51bdb3fb5845759c393c3f06a5541a221304825ee2b4d5f43d3186c7925ef526`.
+
+### Preceding PCRE UTF byte-semantics checkpoint
+
 The accepted `pcre-utf-byte-semantics` checkpoint over `6983b212` advances
 RPHP's own Rust PCRE-compatible engine without linking, FFI or delegation to
 PCRE2. The `/u` path now validates the selected subject suffix as UTF-8,

@@ -126,3 +126,16 @@ fn valid_multilevel_loop_control_keeps_its_existing_execution_path() {
     assert_eq!(stdout, "after");
     assert_eq!(stderr, "");
 }
+
+#[test]
+fn continue_targeting_switch_warns_with_depth_aware_loop_suggestions() {
+    let (status, stdout, stderr) = run_stdin(
+        "<?php\nfunction warnings() {\n    switch (1) { case 1: continue; }\n    while (false) { switch (1) { case 1: continue; } }\n    switch (1) { case 1: while (false) { continue 2; } }\n    while (false) { switch (1) { case 1: while (false) { continue 2; } } }\n}\n",
+    );
+    assert_eq!(status, 0);
+    assert_eq!(
+        stdout,
+        "\nWarning: \"continue\" targeting switch is equivalent to \"break\" in Standard input code on line 3\n\nWarning: \"continue\" targeting switch is equivalent to \"break\". Did you mean to use \"continue 2\"? in Standard input code on line 4\n\nWarning: \"continue 2\" targeting switch is equivalent to \"break 2\" in Standard input code on line 5\n\nWarning: \"continue 2\" targeting switch is equivalent to \"break 2\". Did you mean to use \"continue 3\"? in Standard input code on line 6\n"
+    );
+    assert_eq!(stderr, "");
+}

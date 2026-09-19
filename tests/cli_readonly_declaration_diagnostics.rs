@@ -127,3 +127,26 @@ echo $explicit->method(), '|', $explicit->renamed();
     assert_eq!(stdout, "42|method|trait");
     assert_eq!(stderr, "");
 }
+
+#[test]
+fn readonly_classes_reject_mutable_trait_properties_before_composition() {
+    let (status, stdout, stderr) = run_stdin(
+        "<?php\ntrait MutableState { public int $value; }\nreadonly class Snapshot { use MutableState; }\n",
+    );
+    assert_eq!(status, 255);
+    assert_eq!(stdout, "");
+    assert_eq!(
+        stderr,
+        "\nFatal error: Readonly class Snapshot cannot use trait with a non-readonly property MutableState::$value in Standard input code on line 3\n"
+    );
+}
+
+#[test]
+fn readonly_unserialization_rejects_dynamic_state_without_partial_mutation() {
+    let (status, stdout, stderr) = run_stdin(
+        "<?php\nreadonly class Snapshot {}\ntry { unserialize('O:8:\"Snapshot\":1:{s:5:\"extra\";i:1;}'); } catch (Error $error) { echo $error->getMessage(); }\n",
+    );
+    assert_eq!(status, 0);
+    assert_eq!(stdout, "Cannot create dynamic property Snapshot::$extra");
+    assert_eq!(stderr, "");
+}

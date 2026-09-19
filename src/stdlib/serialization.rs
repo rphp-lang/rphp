@@ -772,6 +772,21 @@ fn populate_object_properties(
             let slot = object.property_slot(&storage_key);
             (storage_key, slot)
         };
+        if slot.is_none()
+            && eg
+                .find_class(class_name)
+                .is_some_and(|class| class.is_readonly)
+        {
+            let property = key
+                .strip_prefix('\0')
+                .and_then(|key| key.split_once('\0').map(|(_, name)| name))
+                .unwrap_or(&key);
+            eg.exception = Some(crate::value::make_error_value(
+                "Error",
+                &format!("Cannot create dynamic property {class_name}::${property}"),
+            ));
+            return Err(());
+        }
         let mut stored = clone_unserialized_storage_value(value);
         let definition = slot
             .and_then(|slot| eg.instance_property_definition(class_id, slot))

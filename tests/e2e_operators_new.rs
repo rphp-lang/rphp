@@ -20,6 +20,22 @@ fn test_standalone_print_statement() {
 }
 
 #[test]
+fn relative_instanceof_outside_class_throws_after_evaluating_the_object() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$probe = function () {
+    try { new stdClass instanceof self; }
+    catch (Error $error) { echo $error->getMessage(); }
+};
+$probe();
+"#
+        ),
+        "Cannot access \"self\" when no class scope is active"
+    );
+}
+
+#[test]
 fn test_spaceship() {
     assert_eq!(
         run_php(

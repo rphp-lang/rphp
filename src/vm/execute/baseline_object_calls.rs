@@ -539,6 +539,31 @@ fn new_object_validation_error<'a>(
 }
 
 #[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zconstructor"))]
+fn constructorless_named_argument_error<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    ip: usize,
+) -> Result<ColdResult<'a>, VmError> {
+    let name = op_array.instructions[ip + 1..]
+        .iter()
+        .take_while(|instruction| instruction.opcode != OpCode::DoFcall)
+        .find(|instruction| instruction.opcode == OpCode::SendNamed)
+        .and_then(|instruction| op_array.literals.get(instruction.op2 as usize))
+        .and_then(Value::as_str)
+        .expect("named constructor flag requires a SendNamed operand");
+    new_object_validation_error(
+        eg,
+        frame,
+        op_array,
+        ip,
+        &format!("Unknown named parameter ${name}"),
+    )
+}
+
+#[cold]
 fn attach_constant_expression_origin(
     throwable: &Value,
     definition: &crate::compiler::compile::DeferredPropertyDefault,
@@ -1334,6 +1359,9 @@ fn op_begin_constructor<'a>(
     }
     if opline._pad & NEW_FLAG_PREPARE_ONLY != 0 {
         return Ok(ColdResult::Done);
+    }
+    if func_ptr.is_null() && opline._pad & NEW_FLAG_NAMED_ARGUMENTS != 0 {
+        return constructorless_named_argument_error(eg, frame, op_array, ip);
     }
     #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
     let generic_constructor_contract = if func_ptr.is_null() {

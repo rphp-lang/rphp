@@ -5082,12 +5082,12 @@ fn resolve_static_property(
 }
 
 #[inline(never)]
-fn op_instanceof(
-    eg: &ExecutorGlobals,
+fn op_instanceof<'a>(
+    eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
-) {
+) -> Result<ColdResult<'a>, VmError> {
     // SAFETY: both operands are compiler-owned slots in the same live frame
     // and remain immutable for this non-reentrant instanceof check.
     let (obj_val, class_name) = unsafe {
@@ -5106,9 +5106,26 @@ fn op_instanceof(
         .as_deref()
         .or_else(|| class_name.as_str())
         .unwrap_or("");
-    let dynamic_target = (opline._pad & INSTANCEOF_DYNAMIC_STATIC_SCOPE != 0)
-        .then(|| resolve_static_call_class(eg, frame, raw_target, true))
-        .flatten();
+    let dynamic_target = if opline._pad & INSTANCEOF_DYNAMIC_STATIC_SCOPE != 0 {
+        let Some(target) = resolve_static_call_class(eg, frame, raw_target, true) else {
+            let ip = (opline as *const Instruction as usize
+                - op_array.instructions.as_ptr() as usize)
+                / std::mem::size_of::<Instruction>();
+            return new_object_validation_error(
+                eg,
+                frame,
+                op_array,
+                ip,
+                &format!(
+                    "Cannot access \"{}\" when no class scope is active",
+                    raw_target.to_ascii_lowercase()
+                ),
+            );
+        };
+        Some(target)
+    } else {
+        None
+    };
     let target = dynamic_target.as_deref().unwrap_or(raw_target);
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
     let is_instance = if obj_val.value_type() == ValueType::Closure {
@@ -5119,6 +5136,7 @@ fn op_instanceof(
             .is_some_and(|object| eg.class_is_a(&object.class_name, target))
     };
     unsafe { frame_result_set(frame, result_ptr, opline.result_type, Value::bool(is_instance)) };
+    Ok(ColdResult::Done)
 }
 
 #[inline(never)]

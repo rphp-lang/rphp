@@ -555,3 +555,29 @@ echo 'done';
         )
     );
 }
+
+#[test]
+fn constructorless_classes_reject_named_but_accept_surplus_positional_arguments() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class NoConstructor {}
+function argument() { echo 'evaluated|'; return 1; }
+try { new NoConstructor(literal: 1); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+foreach ([stdClass::class, NoConstructor::class] as $class) {
+    try { new $class(extra: argument()); }
+    catch (Error $error) { echo $error->getMessage(), "\n"; }
+    echo get_class(new $class(argument())), "\n";
+}
+"#
+        ),
+        concat!(
+            "Unknown named parameter $literal\n",
+            "evaluated|Unknown named parameter $extra\n",
+            "evaluated|stdClass\n",
+            "evaluated|Unknown named parameter $extra\n",
+            "evaluated|NoConstructor\n"
+        )
+    );
+}

@@ -36,6 +36,27 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The accepted `declaration-runtime-boundaries` checkpoint over `c704a1f3` adds
+**10 PHP 8.5 passes without losses**. The 8,258-case supported ledger is now
+**7,518 pass / 267 fail / 194 skip / 276 unsupported / three XFAIL**.
+Zend/lang reaches 5,066/238, while strings/array remains exactly 1,470/8.
+
+One shared boundary now aligns declaration validation, named-argument
+materialization, readonly object writes, interface constants, confusable type
+diagnostics and relative `instanceof` scope. Five Cargo configurations,
+all-target compilation, exact no-loss families, Composer/Symfony S0--S3 and
+unsafe policy pass. The unsafe ratchet remains 1,626/289 and performance work
+remains deferred to the aggregate sweep boundary.
+
+Continue the supported-failure sweep from **267 to zero**. Re-cluster the
+fresh 238 Zend/lang failures and 21 failures in other admitted supported
+families by common root cause, then take the largest coherent safe slice.
+Prefer a 10--30-case train, but do not withhold a smaller independently green
+semantic fix when it is already part of the same continuous sweep. Preserve
+the exact 5,066 and 1,470 parent pass sets.
+
+### Preceding PCRE UTF byte-semantics checkpoint
+
 The accepted `pcre-utf-byte-semantics` checkpoint over `6983b212` adds **14 PHP
 8.5 PCRE passes without losses**. The 8,258-case supported ledger is now
 **7,508 pass / 277 fail / 194 skip / 276 unsupported / three XFAIL**. The

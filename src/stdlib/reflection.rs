@@ -3129,6 +3129,18 @@ fn instantiate_attribute_definition_at_use(
     let Some((_, visibility, _, _, constructor, _)) =
         find_reflected_method(eg, &name, "__construct")
     else {
+        if let Some(name) = arguments.as_array().and_then(|arguments| {
+            arguments.iter().find_map(|(key, _)| match key {
+                ArrayKey::String(name) => Some(name),
+                ArrayKey::Int(_) => None,
+            })
+        }) {
+            eg.exception = Some(make_error_value(
+                "Error",
+                &format!("Unknown named parameter ${name}"),
+            ));
+            return Ok(());
+        }
         return return_value(rv, object);
     };
     if visibility != Visibility::Public {

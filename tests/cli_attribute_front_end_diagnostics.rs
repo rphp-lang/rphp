@@ -129,3 +129,21 @@ fn namespaced_imported_class_constants_remain_valid_attribute_arguments() {
     assert_eq!(stdout, "AttributeFront\\ValidProbe:41:1\n");
     assert!(stderr.is_empty(), "{stderr:?}");
 }
+
+#[test]
+fn duplicate_named_attribute_arguments_fail_at_the_attribute_site() {
+    assert_diagnostic(
+        "<?php\n#[Marker(value: 1, value: 2)]\nclass DuplicateArgument {}\n",
+        "Fatal error: Duplicate named parameter $value in Standard input code on line 2\n",
+    );
+}
+
+#[test]
+fn constructorless_attribute_classes_reject_named_arguments_on_instantiation() {
+    let (status, stdout, stderr) = run_stdin(
+        "<?php\n#[Attribute]\nclass Marker {}\n#[Marker(extra: 1)]\nclass Target {}\ntry { (new ReflectionClass(Target::class))->getAttributes()[0]->newInstance(); } catch (Error $error) { echo $error->getMessage(); }\n",
+    );
+    assert_eq!(status, 0, "{stderr:?}");
+    assert_eq!(stdout, "Unknown named parameter $extra");
+    assert!(stderr.is_empty(), "{stderr:?}");
+}
