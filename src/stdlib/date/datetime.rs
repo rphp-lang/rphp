@@ -72,7 +72,7 @@ pub(super) fn parse_fraction(value: &str) -> Option<u32> {
 
 pub(super) fn parse_timestamp(value: &str) -> Option<(i64, u32)> {
     let number = value.parse::<f64>().ok()?;
-    if !number.is_finite() || number < i64::MIN as f64 || number > i64::MAX as f64 {
+    if !number.is_finite() || number < i64::MIN as f64 || number >= i64::MAX as f64 {
         return None;
     }
     let seconds = number.floor();
@@ -217,10 +217,18 @@ pub(super) fn state_snapshot(value: &Value, eg: &mut ExecutorGlobals) -> Option<
         .as_object()
         .map(|object| object.class_name.to_string())
         .unwrap_or_else(|| "DateTime".to_string());
+    let base = if eg.class_is_a(&class, "DateTimeImmutable") {
+        "DateTimeImmutable"
+    } else {
+        "DateTime"
+    };
+    let inheritance = (!class.eq_ignore_ascii_case(base))
+        .then(|| format!(" (inheriting {base})"))
+        .unwrap_or_default();
     eg.exception = Some(crate::value::make_error_value(
         "DateObjectError",
         &format!(
-            "Object of type {class} has not been correctly initialized by calling parent::__construct() in its constructor"
+            "Object of type {class}{inheritance} has not been correctly initialized by calling parent::__construct() in its constructor"
         ),
     ));
     None
@@ -249,6 +257,13 @@ pub(super) fn allocate(
     Some(Value::object(object))
 }
 
+fn called_date_class(ed: *mut ExecuteData, eg: &ExecutorGlobals, base_class: &str) -> String {
+    crate::vm::execute::called_class_name_for_internal_call(eg, ed)
+        .filter(|class_name| eg.class_is_a(class_name, base_class))
+        .unwrap_or(base_class)
+        .to_string()
+}
+
 pub(super) fn state_format(state: &DateTimeState, format: &str) -> String {
     let (abbreviation, offset, is_dst) =
         timezone::description_state(&state.timezone, state.timestamp);
@@ -271,10 +286,22 @@ pub(super) fn serialized_state(state: &DateTimeState) -> Value {
     Value::array(result)
 }
 
-pub(crate) fn debug_projection(value: &Value) -> Option<Value> {
+const SERIALIZED_KEYS: [&str; 3] = ["date", "timezone_type", "timezone"];
+
+pub(crate) fn debug_projection(value: &Value, eg: &ExecutorGlobals) -> Option<Value> {
     let object = value.as_object()?;
     let state = object.native_object_state::<DateTimeState>()?;
-    state.initialized.then(|| serialized_state(state))
+    state.initialized.then(|| {
+        let mut result = super::custom_properties(value, &SERIALIZED_KEYS, eg);
+        let serialized = serialized_state(state);
+        let native = serialized
+            .as_array()
+            .expect("DateTime serialized state is an array");
+        for (key, value) in native.iter() {
+            result.set(key, value.clone_for_php_storage());
+        }
+        Value::array(result)
+    })
 }
 
 pub(crate) fn comparison(left: &Value, right: &Value) -> Option<i32> {
@@ -483,7 +510,12 @@ pub(crate) fn fn_date_time_serialize(
     let Some(state) = state_snapshot(arg!(ed, 0), eg) else {
         return Ok(());
     };
-    ret!(rv, serialized_state(&state));
+    let mut result = serialized_state(&state)
+        .as_array()
+        .expect("DateTime serialized state is an array")
+        .clone();
+    super::append_custom_properties(&mut result, arg!(ed, 0), &SERIALIZED_KEYS, eg);
+    ret!(rv, Value::array(result));
 }
 
 fn invalid_serialization(eg: &mut ExecutorGlobals, class_name: &str) {
@@ -524,7 +556,10 @@ fn unserialize_into(receiver: &Value, data: &PhpArray, eg: &mut ExecutorGlobals)
         invalid_serialization(eg, &class_name);
         return false;
     };
-    install_state(receiver, state)
+    if !install_state(receiver, state) {
+        return false;
+    }
+    super::restore_custom_properties(receiver, data, &SERIALIZED_KEYS, eg)
 }
 
 pub(crate) fn fn_date_time_unserialize(
@@ -584,7 +619,9 @@ fn set_state(
         invalid_serialization(eg, class_name);
         return Ok(());
     };
-    if let Some(value) = allocate(eg, class_name, state) {
+    let class_name = called_date_class(ed, eg, class_name);
+    if let Some(value) = allocate(eg, &class_name, state) {
+        super::restore_custom_properties(&value, &data, &SERIALIZED_KEYS, eg);
         ret!(rv, value);
     }
     Ok(())
@@ -727,9 +764,22 @@ fn create_from_timestamp(
         .or_else(|| value.as_double())
         .unwrap_or_default();
     let Some((timestamp, microsecond)) = parse_timestamp(&number.to_string()) else {
+        let supplied = if number.is_nan() {
+            "NAN".to_string()
+        } else if number == f64::INFINITY {
+            "INF".to_string()
+        } else if number == f64::NEG_INFINITY {
+            "-INF".to_string()
+        } else {
+            number.to_string()
+        };
         eg.exception = Some(crate::value::make_error_value(
             "DateRangeError",
-            "DateTime::createFromTimestamp(): Argument #1 ($timestamp) is out of range",
+            &format!(
+                "{class_name}::createFromTimestamp(): Argument #1 ($timestamp) must be a finite number between {} and {}.999999, {supplied} given",
+                i64::MIN,
+                i64::MAX,
+            ),
         ));
         return Ok(());
     };
@@ -742,7 +792,8 @@ fn create_from_timestamp(
         },
         initialized: true,
     };
-    if let Some(result) = allocate(eg, class_name, state) {
+    let class_name = called_date_class(ed, eg, class_name);
+    if let Some(result) = allocate(eg, &class_name, state) {
         ret!(rv, result);
     }
     Ok(())
@@ -927,10 +978,44 @@ pub(crate) fn fn_timezone_offset_get(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(timezone) = timezone::object_description(arg!(ed, 0)) else {
+    let timezone_value = arg!(ed, 0).dereferenced();
+    let timezone_class = timezone_value
+        .as_object()
+        .map(|object| object.class_name.to_string());
+    if !timezone_class
+        .as_deref()
+        .is_some_and(|class| eg.class_is_a(class, "DateTimeZone"))
+    {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "timezone_offset_get(): Argument #1 ($object) must be of type DateTimeZone, {} given",
+                timezone_value.diagnostic_type_name()
+            ),
+        ));
+        return Ok(());
+    }
+    let datetime_value = arg!(ed, 1).dereferenced();
+    let datetime_class = datetime_value
+        .as_object()
+        .map(|object| object.class_name.to_string());
+    if !datetime_class
+        .as_deref()
+        .is_some_and(|class| eg.class_is_a(class, "DateTimeInterface"))
+    {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "timezone_offset_get(): Argument #2 ($datetime) must be of type DateTimeInterface, {} given",
+                datetime_value.diagnostic_type_name()
+            ),
+        ));
+        return Ok(());
+    }
+    let Some(timezone) = timezone::checked_object_description(timezone_value, eg) else {
         return Ok(());
     };
-    let Some(datetime) = state_snapshot(arg!(ed, 1), eg) else {
+    let Some(datetime) = state_snapshot(datetime_value, eg) else {
         return Ok(());
     };
     ret!(
@@ -975,7 +1060,8 @@ fn create_from_format_handler(
     let format = arg_str!(ed, 1);
     let input = arg_str!(ed, 2);
     let timezone = parse_timezone_argument(arg_opt!(ed, 3));
-    let result = create_from_format(class_name, format.as_ref(), input.as_ref(), timezone, eg)
+    let class_name = called_date_class(ed, eg, class_name);
+    let result = create_from_format(&class_name, format.as_ref(), input.as_ref(), timezone, eg)
         .unwrap_or_else(|| Value::bool(false));
     ret!(rv, result)
 }
@@ -1090,9 +1176,19 @@ fn add_or_subtract(
     receiver: &Value,
     interval_value: &Value,
     subtract: bool,
+    function: &str,
     eg: &mut ExecutorGlobals,
 ) -> Option<Value> {
     let interval = super::interval::snapshot(interval_value, eg)?;
+    if subtract && super::interval::subtraction_is_unsupported(&interval) {
+        eg.exception = Some(crate::value::make_error_value(
+            "DateInvalidOperationException",
+            &format!(
+                "{function}(): Only non-special relative time specifications are supported for subtraction"
+            ),
+        ));
+        return None;
+    }
     mutate(receiver, eg, |state| {
         super::interval::apply_to_datetime(state, &interval, subtract)
     })
@@ -1103,7 +1199,7 @@ pub(crate) fn fn_date_time_add(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    if let Some(result) = add_or_subtract(arg!(ed, 0), arg!(ed, 1), false, eg) {
+    if let Some(result) = add_or_subtract(arg!(ed, 0), arg!(ed, 1), false, "DateTime::add", eg) {
         ret!(rv, result);
     }
     Ok(())
@@ -1114,7 +1210,13 @@ pub(crate) fn fn_date_time_sub(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    if let Some(result) = add_or_subtract(arg!(ed, 0), arg!(ed, 1), true, eg) {
+    let class = arg!(ed, 0)
+        .as_object()
+        .map(|object| object.class_name.to_string())
+        .unwrap_or_else(|| "DateTime".to_string());
+    if let Some(result) =
+        add_or_subtract(arg!(ed, 0), arg!(ed, 1), true, &format!("{class}::sub"), eg)
+    {
         ret!(rv, result);
     }
     Ok(())
@@ -1126,7 +1228,7 @@ pub(crate) fn fn_date_add(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let receiver = arg!(ed, 0).clone();
-    if let Some(result) = add_or_subtract(&receiver, arg!(ed, 1), false, eg) {
+    if let Some(result) = add_or_subtract(&receiver, arg!(ed, 1), false, "date_add", eg) {
         ret!(rv, result);
     }
     Ok(())
@@ -1138,7 +1240,7 @@ pub(crate) fn fn_date_sub(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let receiver = arg!(ed, 0).clone();
-    if let Some(result) = add_or_subtract(&receiver, arg!(ed, 1), true, eg) {
+    if let Some(result) = add_or_subtract(&receiver, arg!(ed, 1), true, "date_sub", eg) {
         ret!(rv, result);
     }
     Ok(())
@@ -1353,10 +1455,38 @@ pub(crate) fn fn_strtotime(
 fn create_from_interface(
     source: &Value,
     class_name: &str,
+    ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
 ) -> Option<Value> {
     let state = state_snapshot(source, eg)?;
-    allocate(eg, class_name, state)
+    let class_name = called_date_class(ed, eg, class_name);
+    allocate(eg, &class_name, state)
+}
+
+fn require_date_source(
+    source: &Value,
+    required_class: &str,
+    method: &str,
+    eg: &mut ExecutorGlobals,
+) -> bool {
+    let supplied_class = source
+        .dereferenced()
+        .as_object()
+        .map(|object| object.class_name.to_string());
+    if supplied_class
+        .as_deref()
+        .is_some_and(|class_name| eg.class_is_a(class_name, required_class))
+    {
+        return true;
+    }
+    let supplied = supplied_class.unwrap_or_else(|| source.diagnostic_type_name().to_string());
+    eg.exception = Some(crate::value::make_error_value(
+        "TypeError",
+        &format!(
+            "{method}(): Argument #1 ($object) must be of type {required_class}, {supplied} given"
+        ),
+    ));
+    false
 }
 
 pub(crate) fn fn_date_time_create_from_interface(
@@ -1364,7 +1494,7 @@ pub(crate) fn fn_date_time_create_from_interface(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    if let Some(result) = create_from_interface(arg!(ed, 1), "DateTime", eg) {
+    if let Some(result) = create_from_interface(arg!(ed, 1), "DateTime", ed, eg) {
         ret!(rv, result);
     }
     Ok(())
@@ -1375,7 +1505,7 @@ pub(crate) fn fn_date_time_immutable_create_from_interface(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    if let Some(result) = create_from_interface(arg!(ed, 1), "DateTimeImmutable", eg) {
+    if let Some(result) = create_from_interface(arg!(ed, 1), "DateTimeImmutable", ed, eg) {
         ret!(rv, result);
     }
     Ok(())
@@ -1386,6 +1516,14 @@ pub(crate) fn fn_date_time_create_from_immutable(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if !require_date_source(
+        arg!(ed, 1),
+        "DateTimeImmutable",
+        "DateTime::createFromImmutable",
+        eg,
+    ) {
+        return Ok(());
+    }
     fn_date_time_create_from_interface(ed, rv, eg)
 }
 
@@ -1394,6 +1532,14 @@ pub(crate) fn fn_date_time_immutable_create_from_mutable(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if !require_date_source(
+        arg!(ed, 1),
+        "DateTime",
+        "DateTimeImmutable::createFromMutable",
+        eg,
+    ) {
+        return Ok(());
+    }
     fn_date_time_immutable_create_from_interface(ed, rv, eg)
 }
 

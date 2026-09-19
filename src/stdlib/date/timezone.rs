@@ -279,6 +279,77 @@ pub(super) fn object_description(value: &Value) -> Option<TimezoneDescription> {
     Some(TimezoneDescription { kind, name })
 }
 
+pub(super) fn checked_object_description(
+    value: &Value,
+    eg: &mut ExecutorGlobals,
+) -> Option<TimezoneDescription> {
+    if let Some(description) = object_description(value) {
+        return Some(description);
+    }
+    let class = value
+        .as_object()
+        .map(|object| object.class_name.to_string())
+        .unwrap_or_else(|| "DateTimeZone".to_string());
+    let inheritance = (!class.eq_ignore_ascii_case("DateTimeZone"))
+        .then_some(" (inheriting DateTimeZone)")
+        .unwrap_or_default();
+    eg.exception = Some(crate::value::make_error_value(
+        "DateObjectError",
+        &format!(
+            "Object of type {class}{inheritance} has not been correctly initialized by calling parent::__construct() in its constructor"
+        ),
+    ));
+    None
+}
+
+pub(crate) fn debug_projection(value: &Value, eg: &ExecutorGlobals) -> Option<Value> {
+    let object = value.as_object()?;
+    let description = object_description(value)?;
+    let mut result = PhpArray::new();
+    let mut hierarchy = Vec::new();
+    let mut class = eg.class_by_id(object.class_id);
+    while let Some(definition) = class {
+        hierarchy.push(definition.name.clone());
+        class = definition
+            .parent
+            .as_deref()
+            .and_then(|parent| eg.find_class(parent));
+    }
+    hierarchy.reverse();
+    let mut declared = std::collections::HashSet::new();
+    for class_name in hierarchy {
+        let Some(definition) = eg.find_class(&class_name) else {
+            continue;
+        };
+        for property in &definition.properties {
+            if !property.declaring_class.eq_ignore_ascii_case(&class_name)
+                || matches!(property.name.as_str(), "timezone_type" | "timezone")
+                || !declared.insert(property.name.clone())
+            {
+                continue;
+            }
+            if let Some(value) = object
+                .get_property(&property.name)
+                .filter(|value| !value.is_undef())
+            {
+                result.set_str(&property.name, value.clone_for_php_storage());
+            }
+        }
+    }
+    object.for_each_dynamic_property(|name, property| {
+        if name != "timezone_type"
+            && name != "timezone"
+            && !declared.contains(name)
+            && !property.is_undef()
+        {
+            result.set_str(name, property.clone_for_php_storage());
+        }
+    });
+    result.set_str("timezone_type", Value::long(description.kind));
+    result.set_str("timezone", Value::string(description.name));
+    Some(Value::array(result))
+}
+
 pub(crate) fn comparison(left: &Value, right: &Value, eg: &mut ExecutorGlobals) -> Option<i32> {
     let left_class = left.as_object()?.class_name.to_string();
     let right_class = right.as_object()?.class_name.to_string();
@@ -612,12 +683,19 @@ pub(crate) fn fn_timezone_version_get(
 pub(crate) fn fn_timezone_identifiers_list(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let group = arg_opt!(ed, 0).and_then(Value::as_long).unwrap_or(ALL);
     let country = arg_opt!(ed, 1)
         .filter(|value| value.value_type() != ValueType::Null)
         .and_then(Value::as_str);
+    if group == PER_COUNTRY && country.is_none_or(|country| country.len() != 2) {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "timezone_identifiers_list(): Argument #2 ($countryCode) must be a two-letter ISO 3166-1 compatible country code when argument #1 ($timezoneGroup) is DateTimeZone::PER_COUNTRY",
+        ));
+        return Ok(());
+    }
     ret!(rv, identifier_array(group, country));
 }
 
@@ -673,34 +751,41 @@ pub(crate) fn fn_timezone_open(
 pub(crate) fn fn_timezone_name_get(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let name = object_description(arg!(ed, 0))
-        .map(|description| description.name)
-        .unwrap_or_default();
+    let Some(name) =
+        checked_object_description(arg!(ed, 0), eg).map(|description| description.name)
+    else {
+        return Ok(());
+    };
     ret!(rv, Value::string(name));
 }
 
 pub(crate) fn fn_timezone_location_get(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let result = object_description(arg!(ed, 0)).and_then(|value| timezone_location(&value));
+    let Some(description) = checked_object_description(arg!(ed, 0), eg) else {
+        return Ok(());
+    };
+    let result = timezone_location(&description);
     ret!(rv, result.unwrap_or_else(|| Value::bool(false)));
 }
 
 pub(crate) fn fn_timezone_transitions_get(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let begin = arg_opt!(ed, 1).and_then(Value::as_long).unwrap_or(i64::MIN);
+    let begin = arg_opt!(ed, 1).map(Value::to_long_val).unwrap_or(i64::MIN);
     let end = arg_opt!(ed, 2)
-        .and_then(Value::as_long)
+        .map(Value::to_long_val)
         .unwrap_or(i64::from(i32::MAX));
-    let result =
-        object_description(arg!(ed, 0)).and_then(|value| transition_array(&value, begin, end));
+    let Some(description) = checked_object_description(arg!(ed, 0), eg) else {
+        return Ok(());
+    };
+    let result = transition_array(&description, begin, end);
     ret!(rv, result.unwrap_or_else(|| Value::bool(false)));
 }
 
@@ -759,28 +844,41 @@ pub(crate) fn fn_date_time_zone_list_abbreviations(
 pub(crate) fn fn_date_time_zone_list_identifiers(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     // Static internal methods reserve CV 0; explicit parameters start at 1.
     let group = arg_opt!(ed, 1).and_then(Value::as_long).unwrap_or(ALL);
     let country = arg_opt!(ed, 2)
         .filter(|value| value.value_type() != ValueType::Null)
         .and_then(Value::as_str);
+    if group == PER_COUNTRY && country.is_none_or(|country| country.len() != 2) {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "DateTimeZone::listIdentifiers(): Argument #2 ($countryCode) must be a two-letter ISO 3166-1 compatible country code when argument #1 ($timezoneGroup) is DateTimeZone::PER_COUNTRY",
+        ));
+        return Ok(());
+    }
     ret!(rv, identifier_array(group, country));
 }
 
 pub(crate) fn fn_date_time_zone_serialize(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let description = object_description(arg!(ed, 0)).unwrap_or(TimezoneDescription {
-        kind: 3,
-        name: "UTC".to_string(),
-    });
+    let Some(description) = checked_object_description(arg!(ed, 0), eg) else {
+        return Ok(());
+    };
     let mut result = PhpArray::new();
     result.set_str("timezone_type", Value::long(description.kind));
     result.set_str("timezone", Value::string(description.name));
+    if let Some(object) = arg!(ed, 0).as_object() {
+        object.for_each_property(|name, property| {
+            if name != "timezone_type" && name != "timezone" && !property.is_undef() {
+                result.set_str(name, property.clone_for_php_storage());
+            }
+        });
+    }
     ret!(rv, Value::array(result));
 }
 
@@ -829,6 +927,16 @@ pub(crate) fn fn_date_time_zone_unserialize(
         return Ok(());
     };
     install_description(arg!(ed, 0), description);
+    if let Some(mut object) = arg!(ed, 0).as_object_mut() {
+        for (key, value) in data.iter() {
+            let ArrayKey::String(name) = key else {
+                continue;
+            };
+            if name != "timezone_type" && name != "timezone" {
+                object.set_property(&name, value.clone_for_php_storage());
+            }
+        }
+    }
     Ok(())
 }
 

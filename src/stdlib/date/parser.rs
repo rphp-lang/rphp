@@ -15,6 +15,7 @@ pub(super) struct RelativeAdjustment {
     pub hours: i64,
     pub minutes: i64,
     pub seconds: i64,
+    pub business_days: i64,
     pub weekday: Option<(i64, i8)>,
     pub first_day: bool,
     pub last_day: bool,
@@ -420,6 +421,7 @@ pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
             "fortnight" => result.days += amount.saturating_mul(14),
             "week" => result.days += amount.saturating_mul(7),
             "day" => result.days += amount,
+            "weekday" => result.business_days += amount,
             "hour" => result.hours += amount,
             "minute" | "min" => result.minutes += amount,
             "second" | "sec" => result.seconds += amount,
@@ -450,6 +452,27 @@ pub(super) fn apply_relative(state: &mut datetime::DateTimeState, relative: &Rel
         day = super::super::days_in_month(normalized_year, normalized_month);
     }
     datetime::set_local(state, year, month, day, hour, minute, second);
+    if relative.business_days != 0 {
+        let direction = relative.business_days.signum();
+        let mut remaining = relative.business_days.unsigned_abs();
+        while remaining != 0 {
+            let (year, month, day, hour, minute, second) = datetime::local_parts(state);
+            datetime::set_local(
+                state,
+                year,
+                month,
+                day.saturating_add(direction),
+                hour,
+                minute,
+                second,
+            );
+            let offset = timezone::description_state(&state.timezone, state.timestamp).1;
+            let weekday = super::super::unix_to_parts(state.timestamp.saturating_add(offset)).6;
+            if !matches!(weekday, 0 | 6) {
+                remaining -= 1;
+            }
+        }
+    }
     if let Some((wanted, direction)) = relative.weekday {
         let offset = timezone::description_state(&state.timezone, state.timestamp).1;
         let current = super::super::unix_to_parts(state.timestamp.saturating_add(offset)).6;
@@ -642,7 +665,10 @@ pub(super) fn parse_from_format(
     };
     let (mut year, mut month, mut day, mut hour, mut minute, mut second) =
         datetime::local_parts(&base);
-    let mut microsecond = now_microsecond;
+    // timelib initializes the fractional field to zero for createFromFormat;
+    // unspecified clock fields inherit the current wall clock, but fractions
+    // are present only when `u` or `v` explicitly parses them.
+    let mut microsecond = 0;
     let mut timezone = fallback;
     let mut reset = false;
     let mut reset_unparsed = false;

@@ -7,6 +7,7 @@
 use super::*;
 use crate::compiler::compile::ClassDef;
 use crate::value::make_error_value;
+use crate::vm::function::{AttributeArgument, AttributeDefinition, AttributeEvaluationScope};
 use crate::vm::instruction::{
     FETCH_DIM_COMPOUND, FETCH_DIM_EMPTY, FETCH_DIM_MUTABLE, FETCH_DIM_UNSET,
 };
@@ -3749,7 +3750,34 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         "W3C",
     ] {
         date_time_interface.constants.push(ClassConstantDefinition {
-            attributes: Vec::new(),
+            attributes: if name == "RFC7231" {
+                vec![AttributeDefinition {
+                    name: "Deprecated".to_string(),
+                    arguments: vec![
+                        AttributeArgument {
+                            name: Some("since".to_string()),
+                            value: Ok(Value::string("8.5")),
+                            runtime_factory: None,
+                            deferred_expression: None,
+                        },
+                        AttributeArgument {
+                            name: Some("message".to_string()),
+                            value: Ok(Value::string(
+                                "as this format ignores the associated timezone and always uses GMT",
+                            )),
+                            runtime_factory: None,
+                            deferred_expression: None,
+                        },
+                    ],
+                    evaluation_scope: std::rc::Rc::new(AttributeEvaluationScope::default()),
+                    target: 16,
+                    source_file: String::new(),
+                    source_line: 0,
+                    strict_types: false,
+                }]
+            } else {
+                Vec::new()
+            },
             name: name.to_string(),
             value: crate::builtin_class_constant("DateTimeInterface", name)
                 .expect("DateTimeInterface constant has a builtin value"),

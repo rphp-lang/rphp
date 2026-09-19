@@ -2471,6 +2471,12 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
             ic_mut.set_dynamic_property_read(obj.property_layout_ptr(), dynamic_position);
         }
         drop(obj); // Release borrow before potential magic method call
+        if found_val.is_none()
+            && property_accessible
+            && eg.class_is_a(&class_name, "DateInterval")
+        {
+            found_val = crate::stdlib::date_interval_virtual_property(obj_val, &name);
+        }
         let explicitly_unset_uses_missing_path = explicitly_unset_declared
             && (typed_property_slot.is_none()
                 || (has_magic_get

@@ -254,7 +254,10 @@ pub(crate) use builtin_classes::{
     prepare_file_info_clone, prepare_native_deque_consumer, resolve_iterator_delegated_method,
     uses_native_iterator_protocol, validate_recursive_iterator_start,
 };
-pub(crate) use date::{datetime_comparison, datetime_debug_projection, timezone_comparison};
+pub(crate) use date::{
+    date_interval_virtual_property, datetime_comparison, datetime_debug_projection,
+    timezone_comparison,
+};
 
 /// Read a raw internal-call CV without following a PHP reference.
 ///
@@ -20111,7 +20114,8 @@ fn var_dump_value_inner(
                 .filter(|state| !state.initializing);
             let initialized_proxy = lazy_state.and_then(|state| state.proxy_instance.clone());
             let projection = builtin_classes::fixed_array::debug_projection(val, eg)
-                .or_else(|| builtin_classes::array_object::debug_projection(val, eg));
+                .or_else(|| builtin_classes::array_object::debug_projection(val, eg))
+                .or_else(|| datetime_debug_projection(val, eg));
             let output = if let Some(projection) = projection {
                 drop(object);
                 var_dump_projected_object(

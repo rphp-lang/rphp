@@ -17,6 +17,7 @@ pub(super) struct DateIntervalState {
     pub from_string: bool,
     pub date_string: Option<String>,
     pub initialized: bool,
+    relative: Option<parser::RelativeAdjustment>,
 }
 
 impl Default for DateIntervalState {
@@ -34,6 +35,7 @@ impl Default for DateIntervalState {
             from_string: false,
             date_string: None,
             initialized: false,
+            relative: None,
         }
     }
 }
@@ -115,8 +117,71 @@ fn from_relative(input: &str) -> Option<DateIntervalState> {
         from_string: true,
         date_string: Some(input.to_string()),
         initialized: true,
+        relative: Some(relative),
         ..DateIntervalState::default()
     })
+}
+
+fn contains_non_relative_elements(input: &str) -> bool {
+    let lower = input.to_ascii_lowercase();
+    let has_relative_unit = [
+        " year", " month", " week", " day", " hour", " minute", " second", " weekday",
+    ]
+    .iter()
+    .any(|unit| lower.contains(unit));
+    has_relative_unit
+        && (lower.contains(':')
+            || lower.contains(" noon")
+            || lower.ends_with(" utc")
+            || [
+                " january",
+                " february",
+                " march",
+                " april",
+                " may",
+                " june",
+                " july",
+                " august",
+                " september",
+                " october",
+                " november",
+                " december",
+            ]
+            .iter()
+            .any(|month| lower.contains(month)))
+}
+
+fn relative_parse_message(input: &str, unserializing: bool) -> String {
+    let (position, character, reason) = if input.is_empty() {
+        (0, ' ', "Empty string")
+    } else if input.len() > 10
+        && input.as_bytes().get(4) == Some(&b'-')
+        && input.as_bytes().get(7) == Some(&b'-')
+        && input.as_bytes().get(10) == Some(&b'-')
+    {
+        (10, '-', "Unexpected character")
+    } else {
+        (
+            0,
+            input.chars().next().unwrap_or(' '),
+            "The timezone could not be found in the database",
+        )
+    };
+    format!(
+        "Unknown or bad format ({input}) at position {position} ({character}){}: {reason}",
+        if unserializing {
+            " while unserializing"
+        } else {
+            ""
+        }
+    )
+}
+
+fn parse_relative_interval(input: &str) -> Result<DateIntervalState, String> {
+    if contains_non_relative_elements(input) {
+        return Err(format!("String '{input}' contains non-relative elements"));
+    }
+    from_relative(input).ok_or_else(|| relative_parse_message(input, false))
 }
 
 fn set_property(object: &mut PhpObject, name: &str, value: Value) {
@@ -188,10 +253,13 @@ pub(super) fn snapshot(value: &Value, eg: &mut ExecutorGlobals) -> Option<DateIn
     let Some(native) = object.native_object_state::<DateIntervalState>() else {
         let class = object.class_name.to_string();
         drop(object);
+        let inheritance = (!class.eq_ignore_ascii_case("DateInterval"))
+            .then_some(" (inheriting DateInterval)")
+            .unwrap_or_default();
         eg.exception = Some(crate::value::make_error_value(
             "DateObjectError",
             &format!(
-                "Object of type {class} has not been correctly initialized by calling parent::__construct() in its constructor"
+                "Object of type {class}{inheritance} has not been correctly initialized by calling parent::__construct() in its constructor"
             ),
         ));
         return None;
@@ -199,10 +267,13 @@ pub(super) fn snapshot(value: &Value, eg: &mut ExecutorGlobals) -> Option<DateIn
     if !native.initialized {
         let class = object.class_name.to_string();
         drop(object);
+        let inheritance = (!class.eq_ignore_ascii_case("DateInterval"))
+            .then_some(" (inheriting DateInterval)")
+            .unwrap_or_default();
         eg.exception = Some(crate::value::make_error_value(
             "DateObjectError",
             &format!(
-                "Object of type {class} has not been correctly initialized by calling parent::__construct() in its constructor"
+                "Object of type {class}{inheritance} has not been correctly initialized by calling parent::__construct() in its constructor"
             ),
         ));
         return None;
@@ -222,44 +293,97 @@ pub(super) fn snapshot(value: &Value, eg: &mut ExecutorGlobals) -> Option<DateIn
     Some(result)
 }
 
-pub(crate) fn debug_projection(value: &Value) -> Option<Value> {
+pub(crate) fn virtual_property(value: &Value, name: &str) -> Option<Value> {
     let object = value.as_object()?;
     let state = object.native_object_state::<DateIntervalState>()?;
-    state.initialized.then(|| {
-        let mut array = PhpArray::new();
-        if state.from_string {
-            array.set_str("from_string", Value::bool(true));
-            array.set_str(
-                "date_string",
-                Value::string(state.date_string.as_deref().unwrap_or_default()),
-            );
-        } else {
-            for (name, value) in [
-                ("y", value_long(&object, "y", state.y)),
-                ("m", value_long(&object, "m", state.m)),
-                ("d", value_long(&object, "d", state.d)),
-                ("h", value_long(&object, "h", state.h)),
-                ("i", value_long(&object, "i", state.i)),
-                ("s", value_long(&object, "s", state.s)),
-            ] {
-                array.set_str(name, Value::long(value));
-            }
-            array.set_str("f", Value::double(value_double(&object, "f", state.f)));
-            array.set_str(
-                "invert",
-                Value::long(value_long(&object, "invert", state.invert)),
-            );
-            array.set_str(
-                "days",
-                object
-                    .get_property("days")
-                    .cloned()
-                    .unwrap_or_else(|| state.days.map_or_else(|| Value::bool(false), Value::long)),
-            );
-            array.set_str("from_string", Value::bool(false));
+    state.initialized.then_some(())?;
+    let integer = match name {
+        "y" => state.y,
+        "m" => state.m,
+        "d" => state.d,
+        "h" => state.h,
+        "i" => state.i,
+        "s" => state.s,
+        "invert" => state.invert,
+        _ => {
+            return match name {
+                "f" => Some(Value::double(state.f)),
+                "days" => Some(state.days.map_or_else(|| Value::bool(false), Value::long)),
+                "from_string" => Some(Value::bool(state.from_string)),
+                "date_string" if state.from_string => Some(Value::string(
+                    state.date_string.as_deref().unwrap_or_default(),
+                )),
+                _ => None,
+            };
         }
-        Value::array(array)
-    })
+    };
+    Some(Value::long(integer))
+}
+
+const SERIALIZED_KEYS: [&str; 12] = [
+    "y",
+    "m",
+    "d",
+    "h",
+    "i",
+    "s",
+    "f",
+    "invert",
+    "days",
+    "from_string",
+    "date_string",
+    "relative",
+];
+
+fn native_projection(value: &Value, state: &DateIntervalState) -> Option<PhpArray> {
+    let object = value.as_object()?;
+    let mut array = PhpArray::new();
+    if state.from_string {
+        array.set_str("from_string", Value::bool(true));
+        array.set_str(
+            "date_string",
+            Value::string(state.date_string.as_deref().unwrap_or_default()),
+        );
+    } else {
+        for (name, value) in [
+            ("y", value_long(&object, "y", state.y)),
+            ("m", value_long(&object, "m", state.m)),
+            ("d", value_long(&object, "d", state.d)),
+            ("h", value_long(&object, "h", state.h)),
+            ("i", value_long(&object, "i", state.i)),
+            ("s", value_long(&object, "s", state.s)),
+        ] {
+            array.set_str(name, Value::long(value));
+        }
+        array.set_str("f", Value::double(value_double(&object, "f", state.f)));
+        array.set_str(
+            "invert",
+            Value::long(value_long(&object, "invert", state.invert)),
+        );
+        array.set_str(
+            "days",
+            object
+                .get_property("days")
+                .cloned()
+                .unwrap_or_else(|| state.days.map_or_else(|| Value::bool(false), Value::long)),
+        );
+        array.set_str("from_string", Value::bool(false));
+    }
+    Some(array)
+}
+
+pub(crate) fn debug_projection(value: &Value, eg: &ExecutorGlobals) -> Option<Value> {
+    let object = value.as_object()?;
+    let state = object.native_object_state::<DateIntervalState>()?;
+    if !state.initialized {
+        return None;
+    }
+    let mut result = super::custom_properties(value, &SERIALIZED_KEYS, eg);
+    let native = native_projection(value, state)?;
+    for (key, value) in native.iter() {
+        result.set(key, value.clone_for_php_storage());
+    }
+    Some(Value::array(result))
 }
 
 fn format(state: &DateIntervalState, format: &str) -> String {
@@ -323,20 +447,46 @@ pub(super) fn apply_to_datetime(
     if subtract {
         sign = -sign;
     }
+    let relative = interval.relative.clone().map_or_else(
+        || parser::RelativeAdjustment {
+            years: interval.y,
+            months: interval.m,
+            days: interval.d,
+            hours: interval.h,
+            minutes: interval.i,
+            seconds: interval.s,
+            ..parser::RelativeAdjustment::default()
+        },
+        |relative| relative,
+    );
     let relative = parser::RelativeAdjustment {
-        years: sign * interval.y,
-        months: sign * interval.m,
-        days: sign * interval.d,
-        hours: sign * interval.h,
-        minutes: sign * interval.i,
-        seconds: sign * interval.s,
-        ..parser::RelativeAdjustment::default()
+        years: sign * relative.years,
+        months: sign * relative.months,
+        days: sign * relative.days,
+        hours: sign * relative.hours,
+        minutes: sign * relative.minutes,
+        seconds: sign * relative.seconds,
+        business_days: sign * relative.business_days,
+        weekday: relative
+            .weekday
+            .map(|(weekday, direction)| (weekday, direction.saturating_mul(sign as i8))),
+        first_day: relative.first_day,
+        last_day: relative.last_day,
     };
     parser::apply_relative(state, &relative);
     let micros = (interval.f * 1_000_000.0).round() as i64 * sign;
     let total = i64::from(state.microsecond) + micros;
     state.timestamp = state.timestamp.saturating_add(total.div_euclid(1_000_000));
     state.microsecond = total.rem_euclid(1_000_000) as u32;
+}
+
+pub(super) fn subtraction_is_unsupported(interval: &DateIntervalState) -> bool {
+    interval.relative.as_ref().is_some_and(|relative| {
+        relative.business_days != 0
+            || relative.weekday.is_some()
+            || relative.first_day
+            || relative.last_day
+    })
 }
 
 pub(super) fn difference(
@@ -412,9 +562,14 @@ pub(crate) fn fn_date_interval_construct(
 ) -> Result<(), VmError> {
     let input = arg_str!(ed, 1);
     let Some(state) = parse_iso_duration(input.as_ref()) else {
+        let message = if input.contains('/') {
+            format!("Failed to parse interval ({input})")
+        } else {
+            format!("Unknown or bad format ({input})")
+        };
         eg.exception = Some(crate::value::make_error_value(
             "DateMalformedIntervalStringException",
-            &format!("Unknown or bad format ({input})"),
+            &message,
         ));
         return Ok(());
     };
@@ -431,11 +586,31 @@ pub(crate) fn fn_date_interval_create_from_date_string(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let input = arg_str!(ed, 1);
-    let result = from_relative(input.as_ref())
-        .and_then(|state| allocate(eg, state))
-        .unwrap_or_else(|| Value::bool(false));
-    ret!(rv, result)
+    let Some(input) = super::super::typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "DateInterval::createFromDateString",
+        1,
+        "datetime",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    match parse_relative_interval(input.as_str().unwrap_or_default()) {
+        Ok(state) => {
+            if let Some(result) = allocate(eg, state) {
+                ret!(rv, result);
+            }
+        }
+        Err(message) => {
+            eg.exception = Some(crate::value::make_error_value(
+                "DateMalformedIntervalStringException",
+                &message,
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn fn_date_interval_create_from_date_string_global(
@@ -443,11 +618,37 @@ pub(crate) fn fn_date_interval_create_from_date_string_global(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let input = arg_str!(ed, 0);
-    let result = from_relative(input.as_ref())
-        .and_then(|state| allocate(eg, state))
-        .unwrap_or_else(|| Value::bool(false));
-    ret!(rv, result)
+    let Some(input) = super::super::typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "date_interval_create_from_date_string",
+        0,
+        "datetime",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    match parse_relative_interval(input.as_str().unwrap_or_default()) {
+        Ok(state) => {
+            if let Some(result) = allocate(eg, state) {
+                ret!(rv, result);
+            }
+        }
+        Err(message) => {
+            super::super::report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("date_interval_create_from_date_string(): {message}"),
+            )?;
+            if eg.exception.is_none() {
+                ret!(rv, Value::bool(false));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn fn_date_interval_format(
@@ -467,16 +668,17 @@ pub(crate) fn fn_date_interval_serialize(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(_state) = snapshot(arg!(ed, 0), eg) else {
+    let Some(state) = snapshot(arg!(ed, 0), eg) else {
         return Ok(());
     };
-    if let Some(projection) = debug_projection(arg!(ed, 0)) {
-        ret!(rv, projection);
-    }
-    Ok(())
+    let Some(mut result) = native_projection(arg!(ed, 0), &state) else {
+        return Ok(());
+    };
+    super::append_custom_properties(&mut result, arg!(ed, 0), &SERIALIZED_KEYS, eg);
+    ret!(rv, Value::array(result));
 }
 
-fn state_from_array(data: &PhpArray) -> DateIntervalState {
+fn state_from_array(data: &PhpArray) -> Result<DateIntervalState, String> {
     let from_string = data
         .get_str("from_string")
         .and_then(|value| {
@@ -487,24 +689,34 @@ fn state_from_array(data: &PhpArray) -> DateIntervalState {
             .then(|| value.dereferenced().is_truthy())
         })
         .unwrap_or(false);
-    if from_string {
+    if from_string || data.get_str("date_string").is_some() {
         let date_string = data
             .get_str("date_string")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        return from_relative(date_string).unwrap_or(DateIntervalState {
-            from_string: true,
-            date_string: Some(date_string.to_string()),
-            initialized: true,
-            ..DateIntervalState::default()
-        });
+        if date_string.len() >= 10
+            && date_string.as_bytes().get(4) == Some(&b'-')
+            && date_string.as_bytes().get(7) == Some(&b'-')
+            && date_string
+                .as_bytes()
+                .get(10)
+                .is_none_or(|byte| *byte == b' ')
+        {
+            return Ok(DateIntervalState {
+                from_string: true,
+                date_string: Some(date_string.to_string()),
+                initialized: true,
+                ..DateIntervalState::default()
+            });
+        }
+        return from_relative(date_string).ok_or_else(|| relative_parse_message(date_string, true));
     }
     let integer = |name: &str, fallback: i64| {
         data.get_str(name)
             .and_then(Value::as_long)
             .unwrap_or(fallback)
     };
-    DateIntervalState {
+    Ok(DateIntervalState {
         y: integer("y", -1),
         m: integer("m", -1),
         d: integer("d", -1),
@@ -527,7 +739,8 @@ fn state_from_array(data: &PhpArray) -> DateIntervalState {
         from_string: false,
         date_string: None,
         initialized: true,
-    }
+        relative: None,
+    })
 }
 
 fn install(receiver: &Value, state: DateIntervalState) -> bool {
@@ -542,12 +755,21 @@ fn install(receiver: &Value, state: DateIntervalState) -> bool {
 pub(crate) fn fn_date_interval_unserialize(
     ed: *mut ExecuteData,
     _rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let Some(data) = arg!(ed, 1).dereferenced().as_array() else {
         return Ok(());
     };
-    install(arg!(ed, 0), state_from_array(&data));
+    match state_from_array(&data) {
+        Ok(state) => {
+            if install(arg!(ed, 0), state) {
+                super::restore_custom_properties(arg!(ed, 0), &data, &SERIALIZED_KEYS, eg);
+            }
+        }
+        Err(message) => {
+            eg.exception = Some(crate::value::make_error_value("Error", &message));
+        }
+    }
     Ok(())
 }
 
@@ -596,6 +818,7 @@ pub(crate) fn fn_date_interval_wakeup(
                 None => Some(-1),
             },
             initialized: true,
+            relative: None,
             ..DateIntervalState::default()
         }
     };
@@ -612,8 +835,15 @@ pub(crate) fn fn_date_interval_set_state(
     let Some(data) = arg!(ed, 1).dereferenced().as_array() else {
         return Ok(());
     };
-    if let Some(value) = allocate(eg, state_from_array(&data)) {
-        ret!(rv, value);
+    match state_from_array(&data) {
+        Ok(state) => {
+            if let Some(value) = allocate(eg, state) {
+                ret!(rv, value);
+            }
+        }
+        Err(message) => {
+            eg.exception = Some(crate::value::make_error_value("Error", &message));
+        }
     }
     Ok(())
 }

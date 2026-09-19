@@ -101,3 +101,48 @@ foreach ([[$a, $b], [$b, $a], [$c, $d], [$a, clone $a]] as [$left, $right]) {
         "0:1:0:-1\n0:0:1:1\n1:0:0:0\n1:0:0:0\n"
     );
 }
+
+#[test]
+fn date_subclasses_preserve_custom_state_and_late_static_factories() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+date_default_timezone_set('UTC');
+class CustomDate extends DateTime { public bool $marker = true; }
+class CustomImmutable extends DateTimeImmutable { public bool $marker = true; }
+class CustomInterval extends DateInterval { public bool $marker = true; }
+class CustomPeriod extends DatePeriod { public bool $marker = true; }
+
+$objects = [
+    new CustomDate('2024-01-02'),
+    new CustomImmutable('2024-01-02'),
+    new CustomInterval('P1D'),
+    new CustomPeriod(new DateTimeImmutable('2024-01-02'), new DateInterval('P1D'), 1),
+];
+foreach ($objects as $object) {
+    $copy = unserialize(serialize($object));
+    echo get_class($copy), ':', (int) $copy->marker, "\n";
+}
+echo get_class(CustomDate::createFromImmutable(new DateTimeImmutable('@0'))), "\n";
+echo get_class(CustomImmutable::createFromMutable(new DateTime('@0'))), "\n";
+
+set_error_handler(function (int $severity, string $message): bool {
+    echo $severity, ':', $message, "\n";
+    return true;
+});
+var_dump(DATE_RFC7231 === DateTimeInterface::RFC7231);
+"#,
+        ),
+        concat!(
+            "CustomDate:1\n",
+            "CustomImmutable:1\n",
+            "CustomInterval:1\n",
+            "CustomPeriod:1\n",
+            "CustomDate\n",
+            "CustomImmutable\n",
+            "8192:Constant DATE_RFC7231 is deprecated since 8.5, as this format ignores the associated timezone and always uses GMT\n",
+            "16384:Constant DateTimeInterface::RFC7231 is deprecated since 8.5, as this format ignores the associated timezone and always uses GMT\n",
+            "bool(true)\n",
+        )
+    );
+}

@@ -53,13 +53,65 @@ pub(crate) use period::{
 };
 
 pub(crate) fn datetime_debug_projection(value: &Value, eg: &ExecutorGlobals) -> Option<Value> {
-    datetime_state_debug_projection(value)
-        .or_else(|| date_interval_debug_projection(value))
+    datetime_state_debug_projection(value, eg)
+        .or_else(|| timezone::debug_projection(value, eg))
+        .or_else(|| date_interval_debug_projection(value, eg))
         .or_else(|| date_period_debug_projection(value, eg))
+}
+
+fn is_native_serialized_key(key: &ArrayKey, native_keys: &[&str]) -> bool {
+    matches!(key, ArrayKey::String(name) if native_keys.contains(&name.as_str()))
+}
+
+pub(super) fn append_custom_properties(
+    output: &mut PhpArray,
+    receiver: &Value,
+    native_keys: &[&str],
+    eg: &ExecutorGlobals,
+) {
+    let properties = super::serialization::ordinary_object_properties(receiver, eg);
+    for (key, value) in properties.iter() {
+        if !is_native_serialized_key(&key, native_keys) {
+            output.set(key, value.clone_for_php_storage());
+        }
+    }
+}
+
+pub(super) fn custom_properties(
+    receiver: &Value,
+    native_keys: &[&str],
+    eg: &ExecutorGlobals,
+) -> PhpArray {
+    let mut result = PhpArray::new();
+    append_custom_properties(&mut result, receiver, native_keys, eg);
+    result
+}
+
+pub(super) fn restore_custom_properties(
+    receiver: &Value,
+    data: &PhpArray,
+    native_keys: &[&str],
+    eg: &mut ExecutorGlobals,
+) -> bool {
+    let mut properties = PhpArray::new();
+    for (key, value) in data.iter() {
+        if !is_native_serialized_key(&key, native_keys) {
+            properties.set(key, value.clone_for_php_storage());
+        }
+    }
+    let class_name = receiver
+        .as_object()
+        .map(|object| object.class_name.to_string())
+        .unwrap_or_default();
+    super::serialization::populate_object_properties(eg, receiver, &class_name, &properties).is_ok()
 }
 
 pub(crate) fn datetime_comparison(left: &Value, right: &Value) -> Option<i32> {
     datetime_state_comparison(left, right)
+}
+
+pub(crate) fn date_interval_virtual_property(value: &Value, name: &str) -> Option<Value> {
+    interval::virtual_property(value, name)
 }
 
 pub(crate) fn timezone_comparison(

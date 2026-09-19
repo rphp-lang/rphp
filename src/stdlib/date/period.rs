@@ -92,16 +92,16 @@ fn install(receiver: &Value, state: DatePeriodState, eg: &ExecutorGlobals) -> bo
     true
 }
 
-fn allocate(eg: &ExecutorGlobals, state: DatePeriodState) -> Option<Value> {
-    let class = eg.find_class("DatePeriod")?;
+fn allocate_as(eg: &ExecutorGlobals, class_name: &str, state: DatePeriodState) -> Option<Value> {
+    let class = eg.find_class(class_name)?;
     let mut object = PhpObject::with_layout(
         class.class_id,
         class.property_layout.clone(),
         class.property_defaults.to_vec(),
     );
-    publish_properties(&mut object, &state, eg);
-    *object.native_object_state_mut::<DatePeriodState>() = state;
-    Some(Value::object(object))
+    *object.native_object_state_mut::<DatePeriodState>() = state.clone();
+    let value = Value::object(object);
+    install(&value, state, eg).then_some(value)
 }
 
 fn state_object(eg: &ExecutorGlobals, class_name: &str, state: datetime::DateTimeState) -> Value {
@@ -189,10 +189,33 @@ fn serialized(state: &DatePeriodState, eg: &ExecutorGlobals) -> Value {
     Value::array(result)
 }
 
+const SERIALIZED_KEYS: [&str; 7] = [
+    "start",
+    "current",
+    "end",
+    "interval",
+    "recurrences",
+    "include_start_date",
+    "include_end_date",
+];
+
 pub(crate) fn debug_projection(value: &Value, eg: &ExecutorGlobals) -> Option<Value> {
     let object = value.as_object()?;
     let state = object.native_object_state::<DatePeriodState>()?;
-    state.initialized.then(|| serialized(state, eg))
+    if !state.initialized {
+        return None;
+    }
+    let mut result = super::custom_properties(value, &SERIALIZED_KEYS, eg);
+    for name in SERIALIZED_KEYS {
+        result.set_str(
+            name,
+            object
+                .get_property(name)
+                .cloned()
+                .unwrap_or_else(Value::null),
+        );
+    }
+    Some(Value::array(result))
 }
 
 fn options(value: Option<&Value>) -> (bool, bool) {
@@ -227,7 +250,14 @@ fn from_iso(
     if parts.len() != 2 || recurrence.is_none() {
         return None;
     }
-    let start = parser::parse_datetime(parts[0], None, None, eg).ok()?.state;
+    let mut start = parser::parse_datetime(parts[0], None, None, eg).ok()?.state;
+    // ISO repeating intervals normalize the `Z` designator to the numeric
+    // zero-offset representation even though ordinary DateTime construction
+    // retains `Z` as an abbreviation timezone.
+    if start.timezone.kind == 2 && start.timezone.name == "Z" {
+        start.timezone.kind = 1;
+        start.timezone.name = "+00:00".to_string();
+    }
     let interval = interval::parse_iso_duration(parts[1])?;
     let (include_start, include_end) = options(option_value);
     Some(DatePeriodState {
@@ -250,6 +280,14 @@ pub(crate) fn fn_date_period_construct(
 ) -> Result<(), VmError> {
     let first = arg!(ed, 1).dereferenced();
     if let Some(specification) = first.as_str() {
+        super::super::report_internal_deprecation(
+            eg,
+            ed,
+            "Calling DatePeriod::__construct(string $isostr, int $options = 0) is deprecated, use DatePeriod::createFromISO8601String() instead",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
         let Some(state) = from_iso(specification, arg_opt!(ed, 2), eg) else {
             malformed_period(eg, specification);
             return Ok(());
@@ -309,11 +347,24 @@ pub(crate) fn fn_date_period_create_from_iso(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let specification = arg_str!(ed, 1);
+    if specification.starts_with('R') && specification.matches('/').count() == 1 {
+        eg.exception = Some(crate::value::make_error_value(
+            "DateMalformedPeriodStringException",
+            &format!(
+                "DatePeriod::createFromISO8601String(): ISO interval must contain an interval, \"{specification}\" given"
+            ),
+        ));
+        return Ok(());
+    }
     let Some(state) = from_iso(specification.as_ref(), arg_opt!(ed, 2), eg) else {
         malformed_period(eg, specification.as_ref());
         return Ok(());
     };
-    if let Some(result) = allocate(eg, state) {
+    let class_name = crate::vm::execute::called_class_name_for_internal_call(eg, ed)
+        .filter(|class_name| eg.class_is_a(class_name, "DatePeriod"))
+        .unwrap_or("DatePeriod")
+        .to_string();
+    if let Some(result) = allocate_as(eg, &class_name, state) {
         ret!(rv, result);
     }
     Ok(())
@@ -393,7 +444,12 @@ pub(crate) fn fn_date_period_serialize(
     let Some(state) = snapshot(arg!(ed, 0), eg) else {
         return Ok(());
     };
-    ret!(rv, serialized(&state, eg));
+    let mut result = serialized(&state, eg)
+        .as_array()
+        .expect("DatePeriod serialized state is an array")
+        .clone();
+    super::append_custom_properties(&mut result, arg!(ed, 0), &SERIALIZED_KEYS, eg);
+    ret!(rv, Value::array(result));
 }
 
 fn invalid_serialization(eg: &mut ExecutorGlobals) {
@@ -498,7 +554,9 @@ pub(crate) fn fn_date_period_unserialize(
         }
         return Ok(());
     };
-    install(arg!(ed, 0), state, eg);
+    if install(arg!(ed, 0), state, eg) {
+        super::restore_custom_properties(arg!(ed, 0), &data, &SERIALIZED_KEYS, eg);
+    }
     Ok(())
 }
 
@@ -550,7 +608,11 @@ pub(crate) fn fn_date_period_set_state(
         }
         return Ok(());
     };
-    if let Some(value) = allocate(eg, state) {
+    let class_name = crate::vm::execute::called_class_name_for_internal_call(eg, ed)
+        .filter(|class_name| eg.class_is_a(class_name, "DatePeriod"))
+        .unwrap_or("DatePeriod")
+        .to_string();
+    if let Some(value) = allocate_as(eg, &class_name, state) {
         ret!(rv, value);
     }
     Ok(())

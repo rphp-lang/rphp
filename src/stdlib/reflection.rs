@@ -1731,6 +1731,9 @@ pub(crate) fn report_deprecated_global_constant_use(
         "FILTER_SANITIZE_STRIPPED" => Some(
             "Constant FILTER_SANITIZE_STRIPPED is deprecated since 8.1, use htmlspecialchars() instead",
         ),
+        "DATE_RFC7231" => Some(
+            "Constant DATE_RFC7231 is deprecated since 8.5, as this format ignores the associated timezone and always uses GMT",
+        ),
         _ => None,
     };
     if let Some(message) = builtin_message {
@@ -1812,6 +1815,15 @@ pub(crate) fn report_deprecated_class_constant_use(
                 return Ok(());
             }
         }
+        let display_class = if definition.name == "RFC7231"
+            && definition
+                .declaring_class
+                .eq_ignore_ascii_case("DateTimeInterface")
+        {
+            definition.declaring_class.as_str()
+        } else {
+            display_class
+        };
         emit_deprecated_symbol_diagnostic(
             &definition.attributes,
             &format!("Constant {display_class}::{}", definition.name),

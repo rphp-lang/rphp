@@ -14375,7 +14375,10 @@ impl Compiler {
                     .any(|name| {
                         matches!(
                             name,
-                            "E_STRICT" | "FILTER_SANITIZE_STRING" | "FILTER_SANITIZE_STRIPPED"
+                            "E_STRICT"
+                                | "FILTER_SANITIZE_STRING"
+                                | "FILTER_SANITIZE_STRIPPED"
+                                | "DATE_RFC7231"
                         )
                     });
                 let name_idx = self.add_literal(Value::string(runtime_name));

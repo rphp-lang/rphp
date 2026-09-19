@@ -161,7 +161,7 @@ fn serialized_property_key(eg: &ExecutorGlobals, object: &PhpObject, storage_key
     }
 }
 
-fn ordinary_object_properties(value: &Value, eg: &ExecutorGlobals) -> PhpArray {
+pub(crate) fn ordinary_object_properties(value: &Value, eg: &ExecutorGlobals) -> PhpArray {
     let mut properties = PhpArray::new();
     if let Some(object) = value.as_object() {
         if !object.has_detached_property_table() {
@@ -755,7 +755,7 @@ fn unserialized_virtual_property_name(
         .then(|| definition.name.clone())
 }
 
-fn populate_object_properties(
+pub(crate) fn populate_object_properties(
     eg: &mut ExecutorGlobals,
     object: &Value,
     class_name: &str,
