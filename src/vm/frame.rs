@@ -83,6 +83,8 @@ impl ExecuteData {
     const DETACHED_STRICT_CALL: u8 = 1 << 2;
     const MAGIC_CALL: u8 = 1 << 3;
     const CLOSURE_SCOPE: u8 = 1 << 4;
+    const EXPLICIT_CLOSURE_INVOKE: u8 = 1 << 5;
+    const EXPLICIT_CLOSURE_METHOD_SOURCE: u8 = 1 << 6;
 
     /// The final compiler-reserved TMP contains this anonymous activation's
     /// lexical class ID. A separate flag distinguishes scope zero from a frame
@@ -156,6 +158,41 @@ impl ExecuteData {
     #[inline(always)]
     pub fn is_magic_call(&self) -> bool {
         self.call_kind_flags & Self::MAGIC_CALL != 0
+    }
+
+    /// Mark the source-level `Closure->__invoke()` / `[$closure, '__invoke']`
+    /// boundary. It executes the underlying closure body directly, but PHP
+    /// omits the ordinary caller suffix from its pre-entry argument errors.
+    #[inline(always)]
+    pub(crate) fn set_explicit_closure_invoke(&mut self) {
+        self.call_kind_flags |= Self::EXPLICIT_CLOSURE_INVOKE;
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_explicit_closure_invoke(&self) -> bool {
+        self.call_kind_flags & Self::EXPLICIT_CLOSURE_INVOKE != 0
+    }
+
+    /// Method-call sends are compiled one slot after the implicit receiver.
+    /// An explicit `Closure->__invoke()` enters the underlying closure without
+    /// that receiver, so the cold call boundary must compact the sent prefix.
+    #[inline(always)]
+    pub(crate) fn set_explicit_closure_method_source(&mut self) {
+        self.call_kind_flags |= Self::EXPLICIT_CLOSURE_METHOD_SOURCE;
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_explicit_closure_method_source(&self) -> bool {
+        self.call_kind_flags & Self::EXPLICIT_CLOSURE_METHOD_SOURCE != 0
+    }
+
+    /// Consume the one-shot source-layout marker before a Closure method call
+    /// can enter either the fast or full user-call path.
+    #[inline(always)]
+    pub(crate) fn take_explicit_closure_method_source(&mut self) -> bool {
+        let marked = self.is_explicit_closure_method_source();
+        self.call_kind_flags &= !Self::EXPLICIT_CLOSURE_METHOD_SOURCE;
+        marked
     }
 
     /// Recover a late-called class stored in the unused half of the heap

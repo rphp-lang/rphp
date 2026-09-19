@@ -1588,7 +1588,6 @@ fn pending_call_argument_is_ref(
         let call = (*frame).call;
         debug_assert!(!call.is_null());
         let common = &*(*call).func;
-
         // An all-value signature cannot acquire a reference through a name,
         // variadic position or forwarding index. Wrapper signatures which
         // need to inspect the wrapped callable have nonzero reference masks.
@@ -2433,6 +2432,7 @@ fn op_check_default_type<'a>(
                 &source,
                 caller_op_array,
                 &caller_op_array.instructions[call_index],
+                (*frame).is_explicit_closure_invoke(),
             )
         };
         // Keep the default-expression source position as the Throwable origin;

@@ -5725,6 +5725,10 @@ fn op_init_method_call<'a>(
         }
         .as_str()
         .unwrap_or("");
+        if method.eq_ignore_ascii_case("__invoke") {
+            init_closure_dynamic_call(eg, frame, opline.extended_value, obj_val, true, 1);
+            return Ok(ColdResult::Done);
+        }
         let Some(func_ptr) = eg.find_function(&format!("Closure::{method}")) else {
             let error = make_error_value(
                 "Error",
@@ -6061,7 +6065,7 @@ fn try_init_iterator_delegated_call(
     explicit_args: u32,
 ) -> bool {
     let Some(resolved) = crate::stdlib::resolve_iterator_delegated_method(eg, receiver, method) else { return false; };
-    init_resolved_user_call(eg, frame, explicit_args, resolved);
+    init_resolved_user_call(eg, frame, explicit_args, resolved, false);
     true
 }
 
@@ -7290,7 +7294,27 @@ fn op_init_user_call<'a>(
         });
     }
 
-    init_resolved_user_call(eg, frame, opline.extended_value, resolved);
+    let (callback, _) = dynamic_call_operand(frame, op_array, opline);
+    let explicit_closure_invoke = callback
+        .dereferenced()
+        .as_array()
+        .is_some_and(|array| {
+            array.len() == 2
+                && array
+                    .get_value_at(0)
+                    .is_some_and(|owner| owner.value_type() == ValueType::Closure)
+                && array
+                    .get_value_at(1)
+                    .and_then(Value::as_str)
+                    .is_some_and(|method| method.eq_ignore_ascii_case("__invoke"))
+        });
+    init_resolved_user_call(
+        eg,
+        frame,
+        opline.extended_value,
+        resolved,
+        explicit_closure_invoke,
+    );
     Ok(ColdResult::Done)
 }
 
@@ -7490,8 +7514,17 @@ fn init_resolved_user_call(
     frame: *mut ExecuteData,
     explicit_args: u32,
     resolved: crate::stdlib::ResolvedCallback,
+    explicit_closure_invoke: bool,
 ) {
-    init_resolved_user_call_mode(eg, frame, explicit_args, resolved, false);
+    init_resolved_user_call_mode(
+        eg,
+        frame,
+        explicit_args,
+        resolved,
+        false,
+        explicit_closure_invoke,
+        0,
+    );
 }
 
 /// Keep the complete callback descriptor and its move/drop temporaries out of
@@ -7507,7 +7540,7 @@ fn try_init_resolved_callback_at_opline(
     let Some(resolved) = resolve_user_call_at_opline(eg, frame, op_array, opline) else {
         return false;
     };
-    init_resolved_user_call(eg, frame, opline.extended_value, resolved);
+    init_resolved_user_call(eg, frame, opline.extended_value, resolved, false);
     true
 }
 
@@ -7518,7 +7551,9 @@ fn init_resolved_user_call_mode(
     explicit_args: u32,
     mut resolved: crate::stdlib::ResolvedCallback,
     defer_method_receiver: bool,
-) {
+    explicit_closure_invoke: bool,
+    source_argument_offset: u32,
+) -> *mut ExecuteData {
     let trait_scope_class_id = if resolved.common().plan.needs_trait_class_scope() {
         resolved
             .bound_this
@@ -7543,6 +7578,15 @@ fn init_resolved_user_call_mode(
     } else {
         0
     };
+    let (this_offset, parameter_cv_count, is_variadic, public_arity) = {
+        let signature = &resolved.common().sig;
+        (
+            signature.this_offset,
+            signature.parameter_cv_count(),
+            signature.is_variadic,
+            signature.public_arity(),
+        )
+    };
     let magic_method = if resolved.is_magic_call {
         debug_assert_eq!(resolved.use_vars.len(), 1);
         resolved.use_vars.pop()
@@ -7552,25 +7596,34 @@ fn init_resolved_user_call_mode(
     let called_scope_class_id = resolved.called_scope_class_id;
     let mut bound_this = resolved.bound_this;
     let closure_static_vars = resolved.closure_static_vars;
-    let signature = unsafe { &(*resolved.func_ptr).sig };
-    let public_end = signature.this_offset + explicit_args;
-    let parameter_cv_count = signature.parameter_cv_count();
+    let public_end = this_offset + explicit_args;
+    let source_public_end = source_argument_offset + explicit_args;
     let capture_end = parameter_cv_count + resolved.use_vars.len() as u32;
-    let storage_slots = public_end.max(capture_end);
-    let pending_call = unsafe { (*frame).call };
-    let call = eg.vm_stack.push_call_frame(
-        resolved.func_ptr,
-        storage_slots,
-        explicit_args,
-        frame,
-        pending_call,
-    );
-    unsafe {
+    let storage_slots = public_end.max(source_public_end).max(capture_end);
+    // SAFETY: the live caller owns its pending-call chain. The freshly
+    // allocated activation is linked exactly once before any send can access
+    // it, and the marker flags describe only this new frame.
+    let call = unsafe {
+        let pending_call = (*frame).call;
+        let call = eg.vm_stack.push_call_frame(
+            resolved.func_ptr,
+            storage_slots,
+            explicit_args,
+            frame,
+            pending_call,
+        );
         (*frame).call = call;
         if magic_method.is_some() {
             (*call).set_magic_call(true);
         }
-    }
+        if explicit_closure_invoke {
+            (*call).set_explicit_closure_invoke();
+        }
+        if source_argument_offset != 0 {
+            (*call).set_explicit_closure_method_source();
+        }
+        call
+    };
     if called_scope_class_id != 0 {
         publish_late_static_call_class_id(eg, call, called_scope_class_id);
     }
@@ -7611,7 +7664,13 @@ fn init_resolved_user_call_mode(
 
     if (!resolved.use_vars.is_empty()
         || (resolved.closure_scope_class_id.is_some() && bound_this.is_some()))
-        && (signature.is_variadic || explicit_args > signature.public_arity())
+        && (is_variadic
+            || explicit_args > public_arity
+            // Explicit Closure method syntax writes its source arguments one
+            // slot to the right. That staging prefix may overlap the closure
+            // capture/bound-this suffix even at exact arity, so publish those
+            // bindings only after DoFcall compacts the arguments.
+            || source_argument_offset != 0)
     {
         // Variadic storage and tolerated extra user arguments can occupy the
         // CV range where a closure body expects its captures and bound $this.
@@ -7634,6 +7693,7 @@ fn init_resolved_user_call_mode(
     }
     initialize_bound_this_frame(call, resolved.func_ptr, bound_this, resolved.closure_scope_class_id);
     initialize_trait_class_scope(eg, call, resolved.func_ptr, trait_scope_class_id);
+    call
 }
 
 #[cold]
@@ -7670,6 +7730,9 @@ fn unresolved_array_callable_message(
     let Some(class) = class else {
         return "Array is not callable".to_string();
     };
+    let diagnostic_class = eg
+        .find_public_class(&class)
+        .map_or(class.as_str(), |definition| definition.name.as_str());
     if let Some((defining, declared_method)) =
         find_abstract_method_declaration(eg, &class, method)
     {
@@ -7693,7 +7756,7 @@ fn unresolved_array_callable_message(
             .map_or(class.as_str(), |definition| definition.name.as_str());
         return format!("Cannot call abstract method {diagnostic_class}::{method}()");
     }
-    format!("Call to undefined method {class}::{method}()")
+    format!("Call to undefined method {diagnostic_class}::{method}()")
 }
 
 #[inline]
@@ -7901,7 +7964,7 @@ fn op_init_dynamic_static_member_call<'a>(
             &message,
         )?);
     };
-    init_resolved_user_call_mode(eg, frame, opline.extended_value, resolved, true);
+    init_resolved_user_call_mode(eg, frame, opline.extended_value, resolved, true, false, 0);
     Ok(ColdResult::Done)
 }
 
@@ -7927,6 +7990,8 @@ fn init_closure_dynamic_call(
     frame: *mut ExecuteData,
     explicit_args: u32,
     callable: &Value,
+    explicit_invoke: bool,
+    source_argument_offset: u32,
 ) {
     let closure = callable
         .as_closure()
@@ -7946,9 +8011,22 @@ fn init_closure_dynamic_call(
     if is_method {
         resolved.prepend_args = vec![resolved.bound_this.clone().unwrap_or_else(Value::null)];
     }
-    init_resolved_user_call_mode(eg, frame, explicit_args, resolved, is_method);
-    // SAFETY: the live frame owns the call initialized immediately above.
-    let call = unsafe { (*frame).call };
+    let call = init_resolved_user_call_mode(
+        eg,
+        frame,
+        explicit_args,
+        resolved,
+        is_method,
+        explicit_invoke,
+        source_argument_offset,
+    );
+    // First-class callable wrappers around named functions are Closure
+    // objects, but PHP does not consider their target body to be executing
+    // "inside a closure" for Closure::getCurrent().  Only source anonymous
+    // closures publish their exact active owner.
+    if closure.is_anonymous() {
+        eg.publish_active_closure_owner(call as usize, callable.clone());
+    }
     // A generator closure's short creation frame is retired before its body
     // first runs. PHP nevertheless keeps the originating Closure observable
     // through WeakReference until the Generator object itself is released.
@@ -8014,7 +8092,7 @@ fn op_init_dynamic_call<'a>(
                 .as_str()
                 .is_some_and(|method| method.eq_ignore_ascii_case("__invoke"))
         {
-            init_closure_dynamic_call(eg, frame, opline.extended_value, callback_owner);
+            init_closure_dynamic_call(eg, frame, opline.extended_value, callback_owner, true, 0);
             return Ok(ColdResult::Done);
         }
         if !closure_receiver
@@ -8145,7 +8223,7 @@ fn op_init_dynamic_call<'a>(
         // Dynamic-call sends start at CV 0 because the compiler cannot know
         // that this callable is a method. Defer the hidden receiver until
         // DoFcall, which shifts the supplied positional prefix by one.
-        init_resolved_user_call_mode(eg, frame, opline.extended_value, resolved, true);
+        init_resolved_user_call_mode(eg, frame, opline.extended_value, resolved, true, false, 0);
         return Ok(ColdResult::Done);
     }
 
@@ -8153,12 +8231,21 @@ fn op_init_dynamic_call<'a>(
         // Dynamic sends start at CV 0. A first-class method closure retains
         // the hidden receiver slot, so the shared initializer defers it until
         // DoFcall shifts the explicit argument prefix.
-        init_closure_dynamic_call(eg, frame, opline.extended_value, callable);
+        init_closure_dynamic_call(eg, frame, opline.extended_value, callable, false, 0);
         return Ok(ColdResult::Done);
     } else if let Some(func_name) = callable.as_str() {
         // Simple string function call: $func = "my_func"; $func()
         if let Some((class_name, method)) = func_name.rsplit_once("::") {
             let class_name = class_name.trim_start_matches('\\');
+            if class_name.is_empty() {
+                return Ok(throw_located_call_error(
+                    eg,
+                    frame,
+                    op_array,
+                    instruction_index,
+                    "Class \"\" not found",
+                )?);
+            }
             if class_callback_requires_instance(
                 eg,
                 class_name,
@@ -8174,6 +8261,57 @@ fn op_init_dynamic_call<'a>(
                     method,
                 )?);
             }
+            if eg.find_class(class_name).is_none() {
+                let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, class_name)?;
+                if let Some(exception) = eg.exception.take() {
+                    return Ok(match throw_in_frame(eg, frame, exception)? {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            ColdResult::NewFrame(new_frame, new_op_array)
+                        }
+                        ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+                    });
+                }
+                if !loaded {
+                    return Ok(throw_located_call_error(
+                        eg,
+                        frame,
+                        op_array,
+                        instruction_index,
+                        &format!("Class \"{class_name}\" not found"),
+                    )?);
+                }
+            }
+            let caller_class = get_caller_class(frame, eg);
+            let resolved = crate::stdlib::resolve_callback_with_cache(
+                callable,
+                eg,
+                caller_class.as_deref(),
+                None,
+            );
+            let Some(resolved) = resolved else {
+                let message = crate::stdlib::first_class_callable_error(
+                    callable,
+                    eg,
+                    caller_class.as_deref(),
+                );
+                return Ok(throw_located_call_error(
+                    eg,
+                    frame,
+                    op_array,
+                    instruction_index,
+                    &message,
+                )?);
+            };
+            init_resolved_user_call_mode(
+                eg,
+                frame,
+                opline.extended_value,
+                resolved,
+                true,
+                false,
+                0,
+            );
+            return Ok(ColdResult::Done);
         }
         if let Some(normalized) = scope_introspection_function_name(func_name) {
             let error = make_error_value(

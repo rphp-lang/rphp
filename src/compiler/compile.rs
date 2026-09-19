@@ -12960,6 +12960,7 @@ impl Compiler {
                 }
                 let (obj_op, obj_type) = self.compile_expr(object);
                 let mut receiver_patches = self.take_nullsafe_receiver_patches(obj_op, obj_type);
+                self.emit_temporary_dimension_source_release(obj_op, obj_type, *line);
                 let tmp = self.alloc_tmp();
 
                 let nullsafe_patch = if *nullsafe {
@@ -15429,6 +15430,39 @@ impl Compiler {
         release.op1 = receiver;
         release.op1_type = OpType::Tmp;
         release.op2 = receiver + 1;
+        release.op2_type = OpType::Tmp;
+        release._pad |= RELEASE_TEMPS_SUBEXPRESSION;
+        self.push_instruction_at_line(release, line);
+    }
+
+    /// A read from a temporary container clones the selected PHP value into
+    /// its own TMP. When that value immediately becomes a method receiver,
+    /// Zend retires the source container before entering the method. Besides
+    /// destructor order, this controls observable object-handle reuse for the
+    /// unselected members of temporary Reflection arrays.
+    fn emit_temporary_dimension_source_release(
+        &mut self,
+        receiver: u16,
+        receiver_type: OpType,
+        line: usize,
+    ) {
+        if receiver_type != OpType::Tmp {
+            return;
+        }
+        let source = self.instructions.iter().rev().find_map(|instruction| {
+            (instruction.opcode == OpCode::FetchDimR
+                && instruction.result == receiver
+                && instruction.result_type == OpType::Tmp
+                && instruction.op1_type == OpType::Tmp)
+                .then_some(instruction.op1)
+        });
+        let Some(source) = source else {
+            return;
+        };
+        let mut release = Instruction::new(OpCode::ReleaseTemps);
+        release.op1 = source;
+        release.op1_type = OpType::Tmp;
+        release.op2 = source + 1;
         release.op2_type = OpType::Tmp;
         release._pad |= RELEASE_TEMPS_SUBEXPRESSION;
         self.push_instruction_at_line(release, line);

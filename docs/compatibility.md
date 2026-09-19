@@ -7,6 +7,46 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The `closure-invocation-contracts` checkpoint over `34eb1e86` adds **12 exact
+PHP 8.5 passes without loss**, reducing measured supported failures from
+**237 to 225**. Explicit `Closure->__invoke()` calls now normalize their
+source-level receiver slot before every user-call strategy, preserve
+positional and named variadic arguments, reference identity and by-reference
+diagnostics, and expose the exact active anonymous closure through
+`Closure::getCurrent()`. Callable arrays and strings also retain PHP's class
+lookup, canonical diagnostic names and throwable source origins.
+
+The 8,258-case supported ledger is **7,560 pass / 225 fail / 194 skip / 276
+unsupported / three XFAIL**. The stable 7,174-case core is **6,562 pass / 220
+fail / 182 skip / 210 unsupported**, with no timeout or crash. Zend/lang is
+**5,092/212/115/180**, exact **+12/-0**; strings/array preserves the exact
+1,470-pass set at **1,470/8/67/30**. The focused regression packet is 13/13.
+Default, no-default, erased, reified, all-features and all-targets Cargo gates,
+Composer/Symfony S0--S3, formatting and the unsafe ratchet pass. Network and
+socket integration tests must run outside the restricted development sandbox;
+the same tests are green there. Performance remains deferred to the aggregate
+correctness-sweep boundary.
+
+The multi-minute 20,000-level JSON container stress case is explicitly ignored
+with a TODO to move it to an opt-in stress lane; it is not counted as a pass or
+used for any compatibility claim.
+
+SHA-256 evidence: candidate
+`f8b4469d14da41a4c46fb62aa7426c7b4518d930c5cbacd92d1d8cf085f5b86e`;
+focused manifest
+`c50617843a960d79fe70b29910dd30a703e6fd32b3744cd72ccc5ccb333d7cbd`;
+stable-core status/pass sets
+`c1fd14330709a398f1946085ba863b313279b9a77067b19acb09e5c6ceba6a47` /
+`3579fa5bac0bf3eb8cf9502fb07ee9f647d8e09d1d9f202b41c552d8201bb463`;
+Zend/lang manifest/pass set
+`381536349b1157eb9d3126d2606d30786ba868fd39cf63217b6740446dd5b4e9` /
+`5e03f259198ae261ade3630df7dd0e3ed3b5c8dacb4c2e25a7c2f093db88b929`;
+strings/array manifest/pass set
+`ef45624907a717308973f8aa393dfd8c9c68a7ba120b2250f3702e0bd5172c2d` /
+`e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
+
+### Preceding lazy-object checkpoint
+
 The `lazy-object-contracts` checkpoint over `dda6b461` adds **9 exact PHP 8.5
 passes without loss**, reducing measured supported failures from **246 to
 237**. Reflection lazy objects now reject internal-class storage, validate

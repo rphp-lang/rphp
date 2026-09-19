@@ -36,6 +36,30 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `closure-invocation-contracts` checkpoint over `34eb1e86` reduces
+supported failure debt from **237 to 225**, exact **+12/-0**. The 8,258-case
+supported ledger is **7,560/225/194/276 with three XFAIL**. The 7,174-case
+stable core is **6,562/220/182/210**; Zend/lang reaches
+**5,092/212/115/180**, while strings/array preserves its exact 1,470-pass set
+at **1,470/8/67/30**.
+
+The shared call boundary compacts source-level `Closure->__invoke()` argument
+staging before fast or full dispatch, preserves reference and variadic
+materialization, publishes the active anonymous closure and aligns callable
+lookup and diagnostic origins. Default, no-default, erased, reified,
+all-features/all-targets, exact no-loss families, Composer/Symfony S0--S3,
+formatting and unsafe gates are green. The multi-minute deep-JSON stress case
+is explicitly ignored pending relocation to an opt-in stress lane and is not
+counted as compatibility evidence.
+
+Continue the shared-cause supported-failure sweep from **225 to zero**. The
+complete Date/DateTime surface remains owned by the separate Date workstream.
+Select a 10--30-case non-Date cluster from the current 212 Zend/lang failures,
+preserve the exact 5,092 and 1,470 parent pass sets, and keep aggregate
+performance optimization deferred by user direction.
+
+### Preceding lazy-object checkpoint
+
 The `lazy-object-contracts` checkpoint over `dda6b461` reduces supported
 failure debt from **246 to 237**, exact **+9/-0**. The 8,258-case supported
 ledger is **7,548/237/194/276 with three XFAIL**. The 7,174-case stable core is

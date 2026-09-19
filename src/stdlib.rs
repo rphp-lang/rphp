@@ -26494,10 +26494,6 @@ fn fn_forward_static_call_array(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let callback = arg!(ed, 0);
-    let Some(resolved) = forwarded_static_callback(callback, eg, ed, "forward_static_call_array")?
-    else {
-        return Ok(());
-    };
     let arguments = arg!(ed, 1);
     let Some(arguments) = arguments.as_array() else {
         eg.exception = Some(crate::value::make_error_value(
@@ -26509,6 +26505,57 @@ fn fn_forward_static_call_array(
         ));
         return Ok(());
     };
+    let Some(mut resolved) = resolve_callback_at_callsite_checked(callback, eg, ed)? else {
+        if eg.exception.is_none() {
+            let reason = ordinary_callback_invalid_reason(callback, eg);
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                &format!(
+                    "forward_static_call_array(): Argument #1 ($callback) must be a valid callback, {reason}"
+                ),
+            ));
+        }
+        return Ok(());
+    };
+    let mut seen_named = false;
+    for (key, _) in arguments.iter() {
+        match key {
+            ArrayKey::String(_) => seen_named = true,
+            ArrayKey::Int(_) if seen_named => {
+                eg.exception = Some(crate::value::make_error_value(
+                    "Error",
+                    "Cannot use positional argument after named argument",
+                ));
+                return Ok(());
+            }
+            ArrayKey::Int(_) => {}
+        }
+    }
+    let Some(lexical_class) = crate::vm::execute::lexical_class_name_for_internal_call(eg, ed)
+    else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "Cannot call forward_static_call_array() when no class scope is active",
+        ));
+        return Ok(());
+    };
+    let called_class =
+        crate::vm::execute::called_class_name_for_internal_call(eg, ed).map(str::to_owned);
+    let target_scope = eg
+        .declaring_class_of(resolved.func_ptr)
+        .or_else(|| {
+            callback
+                .as_array()
+                .and_then(|array| array.get_value_at(0))
+                .and_then(Value::as_str)
+                .map(|class| class.trim_start_matches('\\'))
+        })
+        .unwrap_or(lexical_class.as_str());
+    if let Some(called_class) = called_class
+        && eg.class_is_a(&called_class, target_scope)
+    {
+        resolved.called_scope_class_id = eg.class_id_of(&called_class);
+    }
     let result = call_resolved_with_php_array(eg, resolved, arguments, true)?;
     if eg.exception.is_none() {
         ret!(rv, result);

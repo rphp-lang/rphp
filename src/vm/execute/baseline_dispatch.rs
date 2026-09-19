@@ -5584,7 +5584,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     .diagnostic_parameter_name(parameter_index as u32)
                                     .map(|name| format!(" (${name})"))
                                     .unwrap_or_default();
-                                let function_name = displayed_frame_function_name(eg, call);
+                                let function_name =
+                                    displayed_argument_reference_function_name(
+                                        eg,
+                                        call,
+                                        (*call).is_explicit_closure_invoke(),
+                                    );
                                 make_error_value(
                                     "Error",
                                     &format!(
@@ -5710,7 +5715,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             .diagnostic_parameter_name(parameter_index as u32)
                             .map(|name| format!(" (${name})"))
                             .unwrap_or_default();
-                        let function_name = displayed_frame_function_name(eg, call);
+                        let function_name =
+                            displayed_argument_reference_function_name(
+                                eg,
+                                call,
+                                (*call).is_explicit_closure_invoke(),
+                            );
                         let error = make_error_value(
                             "Error",
                             &format!(
@@ -5950,11 +5960,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // SAFETY: a non-null resolved pending activation always owns a
                 // registered descriptor for the duration of DoFcall. A user
                 // descriptor begins with FunctionCommon by the VM ABI.
-                let (func_common_fast, user_callee_fast) = unsafe {
+                // SAFETY: `call` remains the non-null activation resolved
+                // above; its descriptor and frame header stay live until this
+                // DoFcall path enters or explicitly discards the activation.
+                let (
+                    func_common_fast,
+                    user_callee_fast,
+                    call_named_args_used,
+                    call_num_args,
+                ) = unsafe {
                     let common = &*(*call).func;
                     let user = (common.fn_type == FunctionType::User)
                         .then(|| &*((*call).func as *const UserFunction));
-                    (common, user)
+                    (common, user, (*call).named_args_used, (*call).num_args)
                 };
                 if func_common_fast.plan.has_deprecated_attribute() {
                     let reported = report_deprecated_user_call(
@@ -6036,6 +6054,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 > = None;
                 #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
                 let has_generic_member_contract = false;
+
+                // Explicit Closure method syntax has a one-slot source prefix.
+                // Normalize it before selecting any user-call strategy so the
+                // optimized paths cannot enter the body with stale CV 0.
+                if !call_named_args_used {
+                    compact_explicit_closure_method_arguments(call, call_num_args);
+                }
 
                 // ── FastScalar path: tightest call protocol ──
                 // Preconditions guaranteed at compile time: fixed arity, no by-ref,

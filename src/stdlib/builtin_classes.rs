@@ -793,8 +793,31 @@ fn bind_closure_value(
         return Ok(());
     }
     let mut rebound = source.clone();
+    let method_origin = source
+        .common()
+        .is_some_and(|common| common.sig.this_offset == 1)
+        .then(|| eg.declaring_class_of(source.func).map(str::to_owned))
+        .flatten()
+        .map(|declaring_class| {
+            let display = crate::vm::execute::displayed_function_name(eg, source.func);
+            let method = display
+                .rsplit_once("::")
+                .map_or(display.as_str(), |(_, method)| method)
+                .to_string();
+            (declaring_class, method)
+        });
 
     if new_this.value_type() == ValueType::Null && source.bound_this.is_some() {
+        if method_origin.is_some() {
+            super::report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                "Cannot unbind $this of method, this will be an error in PHP 9",
+            )?;
+            ret!(rv, Value::null());
+        }
         let uses_this = source.user_function().is_some_and(|function| {
             let this_cv = function
                 .op_array
@@ -848,23 +871,13 @@ fn bind_closure_value(
         }
     };
 
-    if let Some(function) = source
-        .user_function()
-        .filter(|function| function.common.sig.this_offset == 1)
-        && let Some(declaring_class) = eg.declaring_class_of(source.func).map(str::to_owned)
-    {
-        let method = function
-            .op_array
-            .name
-            .rsplit_once("::")
-            .map_or(function.op_array.name.as_str(), |(_, method)| method)
-            .to_string();
+    if let Some((declaring_class, method)) = method_origin.as_ref() {
         if let Some(receiver_class) = rebound.bound_this.as_ref().map(|receiver| {
             receiver.as_object().map_or_else(
                 || "Closure".to_string(),
                 |object| object.class_name.to_string(),
             )
-        }) && !eg.class_is_a(&receiver_class, &declaring_class)
+        }) && !eg.class_is_a(&receiver_class, declaring_class)
         {
             super::report_internal_diagnostic(
                 eg,
@@ -889,10 +902,10 @@ fn bind_closure_value(
                 ValueType::String => scope
                     .as_str()
                     .and_then(|scope| eg.find_class(scope))
-                    .is_some_and(|class| class.name.eq_ignore_ascii_case(&declaring_class)),
+                    .is_some_and(|class| class.name.eq_ignore_ascii_case(declaring_class)),
                 ValueType::Object => scope
                     .as_object()
-                    .is_some_and(|object| object.class_name.eq_ignore_ascii_case(&declaring_class)),
+                    .is_some_and(|object| object.class_name.eq_ignore_ascii_case(declaring_class)),
                 _ => false,
             };
             if !preserves_method_scope {
@@ -942,7 +955,10 @@ fn bind_closure_value(
                 };
                 let class_name = class.name.clone();
                 let class_id = class.class_id;
-                if eg.class_is_internal(&class_name) {
+                let preserves_method_scope = method_origin
+                    .as_ref()
+                    .is_some_and(|(declaring, _)| class_name.eq_ignore_ascii_case(declaring));
+                if eg.class_is_internal(&class_name) && !preserves_method_scope {
                     super::report_internal_diagnostic(
                         eg,
                         ed,
@@ -963,7 +979,10 @@ fn bind_closure_value(
                     || "Closure".to_string(),
                     |object| object.class_name.to_string(),
                 );
-                if eg.class_is_internal(&class_name) {
+                let preserves_method_scope = method_origin
+                    .as_ref()
+                    .is_some_and(|(declaring, _)| class_name.eq_ignore_ascii_case(declaring));
+                if eg.class_is_internal(&class_name) && !preserves_method_scope {
                     super::report_internal_diagnostic(
                         eg,
                         ed,
@@ -1064,6 +1083,25 @@ fn fn_closure_bind_to(
         1,
         2,
     )
+}
+
+#[cold]
+#[inline(never)]
+fn fn_closure_get_current(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let caller = crate::vm::execute::caller_frame_for_internal_call(ed);
+    let current = caller.and_then(|caller| eg.active_closure_owner(caller as usize));
+    if let Some(current) = current {
+        ret!(rv, current);
+    }
+    eg.exception = Some(crate::value::make_error_value(
+        "Error",
+        "Current function is not a closure",
+    ));
+    Ok(())
 }
 
 fn existing_closure_callable(callable: &Value) -> Option<Value> {
@@ -1373,6 +1411,9 @@ fn fn_closure_invoke(
     } else {
         call_resolved_with_array(eg, &resolved, &arguments)?
     };
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     ret!(rv, result);
 }
 
@@ -2926,6 +2967,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         "newThis",
         "newScope"
     );
+    reg_static_method!("Closure", "getCurrent", fn_closure_get_current, 1, 0,);
     reg_static_method!(
         "Closure",
         "fromCallable",

@@ -2114,6 +2114,7 @@ fn release_return_foreach_sources(
 unsafe fn pop_call_storage(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
     eg.discard_late_static_scope(call as usize);
     eg.discard_closure_static_vars(call as usize);
+    eg.discard_active_closure_owner(call as usize);
     eg.discard_dynamic_scope(call as usize);
     eg.end_error_suppression(call as usize);
     eg.discard_finally_exceptions(call as usize);
@@ -2134,6 +2135,7 @@ fn pop_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
         eg.discard_late_static_scope(call as usize);
     }
     eg.discard_closure_static_vars(call as usize);
+    eg.discard_active_closure_owner(call as usize);
     if !eg.dynamic_scope_owners.is_empty() || !eg.dynamic_variables.is_empty() {
         eg.discard_dynamic_scope(call as usize);
     }
@@ -2310,6 +2312,46 @@ fn pending_magic_call_name(eg: &ExecutorGlobals, call_key: usize) -> Option<Stri
     }
 }
 
+/// Compact arguments emitted by source-level `Closure->__invoke()` syntax.
+///
+/// Method sends start one slot after an implicit receiver, while the resolved
+/// anonymous closure body has no receiver CV. This must happen before call
+/// strategy selection so fast and full user-call paths observe the same ABI.
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn compact_explicit_closure_method_arguments(call: *mut ExecuteData, source_positional: u32) {
+    // SAFETY: the live pending frame reserved the source prefix one slot to
+    // the right and each Send opcode initialized exactly these slots.
+    unsafe {
+        if !(*call).take_explicit_closure_method_source() {
+            return;
+        }
+        for index in 0..source_positional {
+            let source = (*call).cv_mut(index + 1) as *mut Value;
+            let total = (*call).num_cvs + (*call).num_temps;
+            let value = if total <= 64 && (*source).needs_cleanup() {
+                let source_index = slot_idx(call, source);
+                if (*call).heap_bitmap & (1u64 << source_index) == 0 {
+                    let owned = (*source).clone_closure_capture();
+                    source.write(Value::undef());
+                    owned
+                } else {
+                    frame_tmp_take!(call, source)
+                }
+            } else {
+                frame_tmp_take!(call, source)
+            };
+            let destination = (*call).cv_mut(index) as *mut Value;
+            if index == 0 {
+                frame_slot_init(call, destination, value);
+            } else {
+                frame_slot_set(call, destination, value);
+            }
+        }
+    }
+}
+
 /// Initialize the sparse argument ABI on the first named send. Keeping this
 /// work out of `op_send_named` prevents a correctness-only cold path from
 /// displacing the quick-dispatch working set.
@@ -2321,7 +2363,13 @@ fn prepare_named_call_frame(
     call: *mut ExecuteData,
     func_common: &FunctionCommon,
     positional: u32,
+    source_positional: u32,
 ) {
+    // Explicit Closure method syntax compiled preceding positional sends one
+    // slot after the implicit receiver. The resolved anonymous closure has no
+    // receiver, so compact that prefix before binding named destinations.
+    compact_explicit_closure_method_arguments(call, source_positional);
+
     // Dynamic object calls are compiled before the runtime knows that the
     // target is `__invoke`, so their positional prefix initially starts at CV
     // 0. Shift only that prefix; named destinations already include `$this`.

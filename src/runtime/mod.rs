@@ -946,6 +946,10 @@ pub struct ExecutorGlobals {
     /// Closure captures and bound receivers cannot enter overlapping CVs
     /// until DoFcall has snapshotted/packed extra or variadic arguments.
     pub(crate) pending_closure_captures: HashMap<usize, PendingClosureBindings>,
+    /// Exact Closure values for active closure frames. This sparse table is
+    /// allocated only after Closure invocation so ordinary calls do not pay
+    /// for Closure::getCurrent() support.
+    active_closure_owners: Option<HashMap<usize, Value>>,
     /// Original public arguments of active user calls. Extra arguments occupy
     /// slots that compiled TMP operands may reuse, so argument-introspection
     /// functions need stable storage for the lifetime of the call frame.
@@ -2036,6 +2040,7 @@ impl ExecutorGlobals {
             output_handler_depth: Cell::new(0),
             pending_named_variadic: HashMap::new(),
             pending_closure_captures: HashMap::new(),
+            active_closure_owners: None,
             function_argument_state: FunctionArgumentState::new(),
             active_generator: None,
             fiber_runtime: None,
@@ -2167,6 +2172,7 @@ impl ExecutorGlobals {
             output_handler_depth: Cell::new(0),
             pending_named_variadic: HashMap::new(),
             pending_closure_captures: HashMap::new(),
+            active_closure_owners: None,
             function_argument_state: FunctionArgumentState::new(),
             active_generator: None,
             fiber_runtime: None,
@@ -2953,6 +2959,32 @@ impl ExecutorGlobals {
             .as_ref()
             .and_then(|frames| frames.get(&frame))
             .cloned()
+    }
+
+    #[cold]
+    pub(crate) fn publish_active_closure_owner(&mut self, frame: usize, owner: Value) {
+        self.active_closure_owners
+            .get_or_insert_with(HashMap::new)
+            .insert(frame, owner);
+    }
+
+    #[inline]
+    pub(crate) fn active_closure_owner(&self, frame: usize) -> Option<Value> {
+        self.active_closure_owners
+            .as_ref()
+            .and_then(|owners| owners.get(&frame))
+            .cloned()
+    }
+
+    #[cold]
+    pub(crate) fn discard_active_closure_owner(&mut self, frame: usize) {
+        let Some(owners) = self.active_closure_owners.as_mut() else {
+            return;
+        };
+        owners.remove(&frame);
+        if owners.is_empty() {
+            self.active_closure_owners = None;
+        }
     }
 
     #[inline]

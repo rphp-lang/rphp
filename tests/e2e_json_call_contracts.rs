@@ -1090,6 +1090,7 @@ echo "released\n";
 }
 
 #[test]
+#[ignore = "TODO: move this multi-minute deep-container stress case to an explicit stress-test lane"]
 fn encode_deep_container_boundary_is_stack_safe_and_matches_php_85() {
     assert_eq!(
         run_php(

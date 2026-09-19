@@ -9,6 +9,7 @@ fn named_argument_reference_error(
     call: *mut ExecuteData,
     func_common: &FunctionCommon,
     parameter_index: u32,
+    explicit_closure_invoke: bool,
 ) -> Value {
     let error = if opline._pad & SEND_FLAG_TEMPORARY_WRITE_ERROR != 0 {
         make_error_value(
@@ -21,7 +22,11 @@ fn named_argument_reference_error(
             .diagnostic_parameter_name(parameter_index)
             .map(|name| format!(" (${name})"))
             .unwrap_or_default();
-        let function_name = displayed_frame_function_name(eg, call);
+        let function_name = displayed_argument_reference_function_name(
+            eg,
+            call,
+            explicit_closure_invoke,
+        );
         make_error_value(
             "Error",
             &format!(
@@ -32,6 +37,21 @@ fn named_argument_reference_error(
             ),
         )
     };
+    let instruction_index = call_argument_diagnostic_origin_index(op_array, opline);
+    attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+    error
+}
+
+#[cold]
+fn located_named_argument_error(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    class: &str,
+    message: String,
+) -> Value {
+    let error = make_error_value(class, &message);
     let instruction_index = call_argument_diagnostic_origin_index(op_array, opline);
     attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
     error
@@ -123,8 +143,15 @@ fn op_send_named<'a>(
     let name = name_val.as_str().unwrap_or("");
     let call = unsafe { (*frame).call };
     debug_assert!(!call.is_null());
-    let (func_common, pending_magic_call) =
-        unsafe { (&*(*call).func, (*call).is_magic_call()) };
+    // SAFETY: the live caller owns this non-null pending activation; its
+    // immutable descriptor and call-kind flags remain valid for SendNamed.
+    let (func_common, pending_magic_call, explicit_closure_invoke) = unsafe {
+        (
+            &*(*call).func,
+            (*call).is_magic_call(),
+            (*call).is_explicit_closure_invoke(),
+        )
+    };
     let yield_snapshot = opline._pad & SEND_FLAG_YIELD_SNAPSHOT != 0;
     let call_key = call as usize;
 
@@ -134,7 +161,13 @@ fn op_send_named<'a>(
         } else {
             opline.extended_value.min(func_common.sig.public_arity())
         };
-        prepare_named_call_frame(eg, call, func_common, positional);
+        prepare_named_call_frame(
+            eg,
+            call,
+            func_common,
+            positional,
+            opline.extended_value,
+        );
     }
 
     // Find the parameter position by name
@@ -168,15 +201,26 @@ fn op_send_named<'a>(
                 || (internal_function && !forwards_named_arguments))
         {
             let err = if internal_function && func_common.sig.is_variadic {
-                make_error_value(
+                located_named_argument_error(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
                     "ArgumentCountError",
-                    &format!(
+                    format!(
                         "{}() does not accept unknown named parameters",
                         registered_name.as_deref().unwrap_or("unknown")
                     ),
                 )
             } else {
-                make_error_value("Error", &format!("Unknown named parameter ${}", name))
+                located_named_argument_error(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
+                    "Error",
+                    format!("Unknown named parameter ${}", name),
+                )
             };
             // SAFETY: `call` is the non-null pending call owned by this live frame;
             // the error path consumes and retires it exactly once.
@@ -229,6 +273,7 @@ fn op_send_named<'a>(
                         call,
                         func_common,
                         variadic_index,
+                        explicit_closure_invoke,
                     );
                     return cleanup_named_call_and_throw(eg, frame, call, error);
                 }
@@ -245,6 +290,7 @@ fn op_send_named<'a>(
                         call,
                         func_common,
                         variadic_index,
+                        explicit_closure_invoke,
                     );
                     return cleanup_named_call_and_throw(eg, frame, call, error);
                 } else {
@@ -322,6 +368,7 @@ fn op_send_named<'a>(
                                 call,
                                 func_common,
                                 idx,
+                                explicit_closure_invoke,
                             );
                             return cleanup_named_call_and_throw(eg, frame, call, error);
                         }
@@ -338,6 +385,7 @@ fn op_send_named<'a>(
                                 call,
                                 func_common,
                                 idx,
+                                explicit_closure_invoke,
                             );
                             return cleanup_named_call_and_throw(eg, frame, call, error);
                         } else {
@@ -374,9 +422,14 @@ fn op_send_named<'a>(
                 }
             }
             None => {
-                let err = make_error_value("Error", &format!(
-                    "Unknown named parameter ${}", name
-                ));
+                let err = located_named_argument_error(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
+                    "Error",
+                    format!("Unknown named parameter ${}", name),
+                );
                 // SAFETY: `call` is the non-null pending call owned by this live frame;
                 // the unknown-argument path consumes and retires it exactly once.
                 match unsafe { cleanup_call_and_throw(eg, frame, call, err) }? {

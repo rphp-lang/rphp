@@ -464,7 +464,9 @@ pub(crate) fn receiver_for_internal_call(internal_frame: *mut ExecuteData) -> Op
     }
 }
 
-fn caller_frame_for_internal_call(internal_frame: *mut ExecuteData) -> Option<*mut ExecuteData> {
+pub(crate) fn caller_frame_for_internal_call(
+    internal_frame: *mut ExecuteData,
+) -> Option<*mut ExecuteData> {
     internal_call_context(internal_frame).map(|context| context.caller)
 }
 
@@ -3430,6 +3432,22 @@ pub(crate) fn displayed_frame_function_name(
     }
 }
 
+/// Explicit invocation keeps the underlying closure name for type errors,
+/// but PHP attributes non-referenceable argument errors to the public method
+/// boundary that received the argument.
+#[cold]
+fn displayed_argument_reference_function_name(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    explicit_closure_invoke: bool,
+) -> String {
+    if explicit_closure_invoke {
+        "Closure::__invoke".to_string()
+    } else {
+        displayed_frame_function_name(eg, frame)
+    }
+}
+
 #[cold]
 fn static_site_called_class_id(
     eg: &ExecutorGlobals,
@@ -3704,6 +3722,7 @@ fn argument_type_error(
     value: &Value,
     caller_op_array: &crate::compiler::OpArray,
     call_instruction: &Instruction,
+    explicit_closure_invoke: bool,
 ) -> Value {
     let name = displayed_frame_function_name(eg, call);
     let parameter = common
@@ -3726,7 +3745,13 @@ fn argument_type_error(
         hint.diagnostic_display_name(),
         declared_type_error_value_name(value)
     );
-    if common.fn_type == FunctionType::User && !is_synthesized_enum_method(eg, function) {
+    if common.fn_type == FunctionType::User
+        && !is_synthesized_enum_method(eg, function)
+        // An explicit Closure method/callback wrapper is a real call
+        // boundary, but Zend projects the underlying closure's argument
+        // TypeError without the ordinary source-level caller suffix.
+        && !explicit_closure_invoke
+    {
         let instruction_index = caller_op_array
             .instructions
             .iter()
@@ -4155,6 +4180,7 @@ fn execute_full_call<'a>(
                     &value,
                     op_array,
                     opline,
+                    (*call).is_explicit_closure_invoke(),
                 ));
                 break;
             }
@@ -4458,7 +4484,6 @@ fn execute_full_call<'a>(
         }
         initialize_bound_this_frame(call, func_common, bound_this, None);
     }
-
     if let Some(arguments) = original_user_arguments {
         eg.publish_function_arguments(call_key, arguments);
     }
