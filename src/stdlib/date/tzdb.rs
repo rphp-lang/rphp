@@ -18,6 +18,12 @@ pub(super) struct ZoneState {
     pub(super) is_dst: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ZoneTransition {
+    pub(super) timestamp: i64,
+    pub(super) state: ZoneState,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct EncodedState {
     offset: i32,
@@ -90,7 +96,6 @@ pub(super) fn fixed_state(identifier: &str) -> Option<ZoneState> {
     })
 }
 
-#[cfg(test)]
 pub(super) fn version() -> &'static str {
     database().version
 }
@@ -98,6 +103,70 @@ pub(super) fn version() -> &'static str {
 #[cfg(test)]
 pub(super) fn identifier_count() -> usize {
     database().identifiers.len()
+}
+
+pub(super) fn identifiers() -> impl Iterator<Item = &'static str> {
+    database()
+        .identifiers
+        .iter()
+        .map(|identifier| identifier.name)
+}
+
+pub(super) fn states(identifier: &str) -> Option<Vec<ZoneState>> {
+    if let Some(state) = fixed_state(identifier) {
+        return Some(vec![state]);
+    }
+    let database = database();
+    let zone = lookup_zone_in(database, identifier)?;
+    let mut states = Vec::with_capacity(zone.transitions.len().saturating_add(1));
+    states.push(decode_state(database, zone.initial));
+    for transition in &zone.transitions {
+        let state = decode_state(database, transition.state);
+        if !states.contains(&state) {
+            states.push(state);
+        }
+    }
+    Some(states)
+}
+
+/// Return PHP's transition projection for `[begin, end)`: the state active at
+/// the left edge followed by every actual transition strictly inside it.
+pub(super) fn transitions(identifier: &str, begin: i64, end: i64) -> Option<Vec<ZoneTransition>> {
+    if begin >= end {
+        return Some(Vec::new());
+    }
+    if let Some(state) = fixed_state(identifier) {
+        return Some(vec![ZoneTransition {
+            timestamp: begin,
+            state,
+        }]);
+    }
+    let database = database();
+    let zone = lookup_zone_in(database, identifier)?;
+    let active = zone
+        .transitions
+        .partition_point(|transition| transition.timestamp <= begin)
+        .checked_sub(1)
+        .map(|index| zone.transitions[index].state)
+        .unwrap_or(zone.initial);
+    let mut result = Vec::new();
+    result.push(ZoneTransition {
+        timestamp: begin,
+        state: decode_state(database, active),
+    });
+    let first = zone
+        .transitions
+        .partition_point(|transition| transition.timestamp <= begin);
+    for transition in &zone.transitions[first..] {
+        if transition.timestamp >= end {
+            break;
+        }
+        result.push(ZoneTransition {
+            timestamp: transition.timestamp,
+            state: decode_state(database, transition.state),
+        });
+    }
+    Some(result)
 }
 
 fn lookup_zone(identifier: &str) -> Option<&'static Zone> {

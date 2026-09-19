@@ -7,7 +7,17 @@
 
 use super::*;
 
+mod timezone;
 mod tzdb;
+
+pub(super) use timezone::{
+    fn_date_time_zone_construct, fn_date_time_zone_get_location, fn_date_time_zone_get_name,
+    fn_date_time_zone_get_transitions, fn_date_time_zone_list_abbreviations,
+    fn_date_time_zone_list_identifiers, fn_date_time_zone_serialize,
+    fn_timezone_abbreviations_list, fn_timezone_identifiers_list, fn_timezone_location_get,
+    fn_timezone_name_from_abbr, fn_timezone_name_get, fn_timezone_open,
+    fn_timezone_transitions_get, fn_timezone_version_get,
+};
 
 const WEEKDAYS: [&str; 7] = [
     "Sunday",

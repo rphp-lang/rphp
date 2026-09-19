@@ -8,6 +8,7 @@ function unsupported_rphp_ini_directives(string $section): array
     $supported = [
         'allow_url_fopen' => true,
         'assert.exception' => true,
+        'date.timezone' => true,
         'error_reporting' => true,
         'highlight.comment' => true,
         'highlight.default' => true,

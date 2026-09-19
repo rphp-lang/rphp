@@ -2451,6 +2451,101 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String],
         ParamTypeHint::Bool
     );
+    reg_typed!(
+        "timezone_version_get",
+        date::fn_timezone_version_get,
+        0,
+        0,
+        [],
+        [],
+        ParamTypeHint::String
+    );
+    reg_typed!(
+        "timezone_identifiers_list",
+        date::fn_timezone_identifiers_list,
+        2,
+        0,
+        ["timezoneGroup", "countryCode"],
+        [
+            ParamTypeHint::Int,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+        ],
+        ParamTypeHint::Array
+    );
+    reg_typed!(
+        "timezone_abbreviations_list",
+        date::fn_timezone_abbreviations_list,
+        0,
+        0,
+        [],
+        [],
+        ParamTypeHint::Array
+    );
+    reg_typed!(
+        "timezone_name_from_abbr",
+        date::fn_timezone_name_from_abbr,
+        3,
+        1,
+        ["abbr", "utcOffset", "isDST"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::Int
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    reg_typed!(
+        "timezone_open",
+        date::fn_timezone_open,
+        1,
+        1,
+        ["timezone"],
+        [ParamTypeHint::String],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::ClassName("DateTimeZone".to_string()),
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    reg_typed!(
+        "timezone_name_get",
+        date::fn_timezone_name_get,
+        1,
+        1,
+        ["object"],
+        [ParamTypeHint::ClassName("DateTimeZone".to_string())],
+        ParamTypeHint::String
+    );
+    reg_typed!(
+        "timezone_location_get",
+        date::fn_timezone_location_get,
+        1,
+        1,
+        ["object"],
+        [ParamTypeHint::ClassName("DateTimeZone".to_string())],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    reg_typed!(
+        "timezone_transitions_get",
+        date::fn_timezone_transitions_get,
+        3,
+        1,
+        ["object", "timestampBegin", "timestampEnd"],
+        [
+            ParamTypeHint::ClassName("DateTimeZone".to_string()),
+            ParamTypeHint::Int,
+            ParamTypeHint::Int,
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
     let nullable_timestamp_defaults = vec![None, Some(Value::null())];
     for (name, defaults) in [
         ("time", vec![]),
@@ -2487,6 +2582,27 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ("getdate", vec![Some(Value::null())]),
         ("date_default_timezone_get", vec![]),
         ("date_default_timezone_set", vec![None]),
+        ("timezone_version_get", vec![]),
+        (
+            "timezone_identifiers_list",
+            vec![Some(Value::long(0x07ff)), Some(Value::null())],
+        ),
+        ("timezone_abbreviations_list", vec![]),
+        (
+            "timezone_name_from_abbr",
+            vec![None, Some(Value::long(-1)), Some(Value::long(-1))],
+        ),
+        ("timezone_open", vec![None]),
+        ("timezone_name_get", vec![None]),
+        ("timezone_location_get", vec![None]),
+        (
+            "timezone_transitions_get",
+            vec![
+                None,
+                Some(Value::long(i64::MIN)),
+                Some(Value::long(i64::from(i32::MAX))),
+            ],
+        ),
     ] {
         let function = eg
             .find_function(name)

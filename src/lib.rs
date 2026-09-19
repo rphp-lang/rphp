@@ -882,7 +882,20 @@ pub fn builtin_class_constant(class: &str, constant: &str) -> Option<value::Valu
         }
     } else if class.eq_ignore_ascii_case("DateTimeZone") {
         match constant {
+            "AFRICA" => 1,
+            "AMERICA" => 2,
+            "ANTARCTICA" => 4,
+            "ARCTIC" => 8,
+            "ASIA" => 16,
+            "ATLANTIC" => 32,
+            "AUSTRALIA" => 64,
+            "EUROPE" => 128,
+            "INDIAN" => 256,
+            "PACIFIC" => 512,
+            "UTC" => 1024,
             "ALL" => 0x07ff,
+            "ALL_WITH_BC" => 0x0fff,
+            "PER_COUNTRY" => 0x1000,
             _ => return None,
         }
     } else {

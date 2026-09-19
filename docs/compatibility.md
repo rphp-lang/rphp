@@ -308,6 +308,74 @@ implemented.  `date.timezone` CLI-INI admission, the textual/relative parser,
 DateTime/DateTimeImmutable/DateInterval/DatePeriod object state and methods are
 not claimed.  Consequently `extension_loaded('date')` remains false.
 
+### Separate Date timezone-introspection checkpoint
+
+The follow-up `date-timezone-introspection` checkpoint keeps the independent
+IANA 2026a core and admits `date.timezone` on the CLI/PHPT path, including the
+PHP startup warning and UTC fallback for an invalid final value.  Eight new
+procedural functions expose the same PHP 8.5 call shapes:
+`timezone_version_get()`, `timezone_identifiers_list()`,
+`timezone_abbreviations_list()`, `timezone_name_from_abbr()`,
+`timezone_open()`, `timezone_name_get()`, `timezone_location_get()` and
+`timezone_transitions_get()`.  The global Date inventory is therefore **19 of
+48** functions; all nineteen have exact argument shapes, seventeen are fully
+metadata-exact, and the remaining two differ only because Reflection currently
+renders the values rather than the names of the defaults `DateTimeZone::ALL`
+and `PHP_INT_MIN`.
+
+`DateTimeZone` now owns all fourteen PHP group constants and the independently
+implemented constructor, name, location, transition, identifier,
+abbreviation and serialization projections.  Region, abbreviation and fixed-
+offset objects preserve PHP's three distinct `timezone_type` values.  Canonical
+transition timestamps use PHP-compatible extended ISO years across the complete
+signed 64-bit range, including the default `PHP_INT_MIN` boundary.  Canonical
+group membership and coordinates are parsed from the repository-owned IANA
+`zone.tab`; `ALL_WITH_BC` deliberately exposes the complete embedded 2026a
+inventory (**598** identifiers), while `ALL` contains the **419** canonical
+zones.  The 144-key abbreviation table is derived from IANA states plus the
+standard legacy/military rows rather than copied from PHP or delegated to the
+host.
+
+With the newly admitted INI directive, the unmodified 688-case `ext/date`
+suite is **80 pass / 593 fail / 12 skip / 3 unsupported**.  Against the same
+updated runner the immutable parent is 56/617/12/3, so the exact accepted delta
+is **+24/-0**, with no timeout or crash.  Eight original E2E cases cover PHP
+signatures, every class constant, group inventories, region/abbreviation/fixed
+offset objects, locations, transitions, abbreviation resolution, diagnostics
+and startup INI behavior.  The on-demand builtin audit records 19 present and
+29 missing Date globals.
+
+The five Cargo configurations are green at
+5,900/5,568/5,971/5,993/6,044 passes with zero failures, plus all-targets.
+Zend/lang retains the identical 5,093-entry pass set and strings/array the
+identical 1,470-entry pass set. Composer S0, all four Symfony S1 gates, warmed
+S2 and cold S3 pass.  Two fixed-parent CPU-2 32-pair runs have identical
+outputs; paired medians are startup **+0.974%/+0.318%**, ordinary
+**-1.480%/-1.427%**, UTC `date()` **-2.248%/-1.355%** and UTC `mktime()`
+**+2.738%/+0.464%**, all below the five-percent ceiling.
+
+SHA-256 evidence: release
+`95c1f9f8e3281c0a5fab9a405e26f677ab1c289643d74967322952b22530af69`;
+Date manifest/pass set
+`4cac8c7024af885d70d9574636b1b230761bc67558cb26eaca04f2db1591e8a1` /
+`a80977f0b99ea3b51b1805a9707f7fc64e5615a56d490b11a80b56846fb6031e`;
+Zend/lang manifest/pass set
+`bed50d6522e5d7b298bb40ba87124c243a3cebaa95e7148d7461f5bfbf74df9b` /
+`ddf0760deff584b81a1fb505ca8a750581854b27dad6ac2a28a11f107ceac337`;
+strings/array manifest/pass set
+`55ebbf05a55b186a48da90890b0cf2bcb2844d23b86bc4f96be370483220ab27` /
+`e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`;
+performance runs
+`e1f1f59035c7f445f2e46e858b1f0facc1a3ff479b1f83fa3a507ad28b851ffb` /
+`335e50b0f04cb9c799e21c702e9a878f95e496e1958f2743507e0fed26562814`;
+matrix `9cfe2058d7ad722d3a3476121a0b567371c76622638b01fb3c0ae7866c0a8307`;
+builtin audit `790cc2a46afde2c099d0425a4bb012c7ece7647f9933513b9d7f1b1e22421c61`.
+
+This is still intentionally not a complete Date extension.  The shared
+textual/relative parser (`strtotime()`, `date_parse*()`), `timezone_offset_get()`
+and the real DateTime/DateTimeImmutable/DateInterval/DatePeriod state machines
+remain explicit non-claims, so `extension_loaded('date')` stays false.
+
 ### Preceding core property-receiver checkpoint
 
 The `core-property-receiver-contracts` checkpoint over `279a6d43` adds **5
