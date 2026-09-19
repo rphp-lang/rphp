@@ -674,7 +674,7 @@ impl Compiler {
                 ..
             } => {
                 let (object, object_type) = self.compile_property_modify_base(object);
-                let (property, property_type) = self.compile_expr(property);
+                let (property, property_type) = self.compile_dynamic_property_name(property);
                 let mut bind = Instruction::new(OpCode::BindObjPropRef);
                 bind.op1 = object;
                 bind.op1_type = object_type;
@@ -756,7 +756,7 @@ impl Compiler {
             } => {
                 let temporary_receiver = self.nonreferenceable_call_argument_line(object).is_some();
                 let (object, object_type) = self.compile_property_modify_base(object);
-                let (property, property_type) = self.compile_expr(property);
+                let (property, property_type) = self.compile_dynamic_property_name(property);
                 (
                     object,
                     object_type,
@@ -926,7 +926,7 @@ impl Compiler {
                 line,
             } => {
                 let (object, object_type) = self.compile_property_modify_base(object);
-                let (property, property_type) = self.compile_expr(property);
+                let (property, property_type) = self.compile_dynamic_property_name(property);
                 let current = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchObjR);
                 fetch.op1 = object;
@@ -1357,7 +1357,7 @@ impl Compiler {
                 line,
             } => {
                 let (object, object_type) = self.compile_property_modify_base(object);
-                let (property, property_type) = self.compile_expr(property);
+                let (property, property_type) = self.compile_dynamic_property_name(property);
                 let current = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchObjR);
                 fetch.op1 = object;
@@ -1703,7 +1703,7 @@ impl Compiler {
             } => {
                 let (object, object_type, deferred_fetches) =
                     self.prepare_property_modify_base(object);
-                let (property, property_type) = self.compile_expr(property);
+                let (property, property_type) = self.compile_dynamic_property_name(property);
                 WriteTarget::Object {
                     object,
                     object_type,
@@ -1782,7 +1782,7 @@ impl Compiler {
                 } => {
                     let (object, object_type, deferred_fetches) =
                         self.prepare_property_modify_base(object);
-                    let (property, property_type) = self.compile_expr(property);
+                    let (property, property_type) = self.compile_dynamic_property_name(property);
                     let array = self.alloc_tmp();
                     WriteTarget::DeferredObjectAppend {
                         object,
@@ -2223,7 +2223,7 @@ impl Compiler {
                 line: _,
             } => {
                 let (object, object_type) = self.compile_property_modify_base(object);
-                let (property, property_type) = self.compile_expr(property);
+                let (property, property_type) = self.compile_dynamic_property_name(property);
                 Ok(CoalesceWrite::ObjectProperty {
                     object,
                     object_type,
@@ -2615,7 +2615,7 @@ impl Compiler {
                 } else {
                     self.compile_property_modify_base(object)
                 };
-                let (property, property_type) = self.compile_expr(property);
+                let (property, property_type) = self.compile_dynamic_property_name(property);
                 let container = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchObjR);
                 fetch.op1 = object;
@@ -4214,7 +4214,8 @@ impl Compiler {
                     } => {
                         let (object, object_type, deferred_fetches) =
                             self.prepare_property_modify_base(object);
-                        let (property, property_type) = self.compile_expr(property);
+                        let (property, property_type) =
+                            self.compile_dynamic_property_name(property);
                         Some((
                             object,
                             object_type,
@@ -4747,7 +4748,8 @@ impl Compiler {
                             {
                                 fetch._pad |= STATIC_PROP_SILENT;
                             }
-                            let (property, property_type) = self.compile_expr(property);
+                            let (property, property_type) =
+                                self.compile_dynamic_property_name(property);
                             for (fetch, fetch_line) in deferred_fetches {
                                 self.push_instruction_at_line(fetch, fetch_line);
                             }
@@ -8406,29 +8408,6 @@ impl Compiler {
             }
         }
 
-        let callable_factories = constants
-            .iter()
-            .map(|constant| {
-                constant_expression_contains_runtime_callable(&constant.value).then(|| {
-                    self.compile_runtime_callable_constant_factory(
-                        &constant.value,
-                        Some(owner),
-                        parent,
-                    )
-                })
-            })
-            .map(|factory| {
-                factory.transpose().map(|factory| {
-                    factory.map(|(name, lexical_functions)| {
-                        std::rc::Rc::new(RuntimeCallableConstantFactory::new(
-                            name,
-                            lexical_functions,
-                        ))
-                    })
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
         let mut known = self.known_constants.clone();
         known.insert("self::class".into(), Value::string(owner.to_string()));
         let owner_prefix = format!("{owner}::");
@@ -8447,6 +8426,41 @@ impl Compiler {
             }
         }
 
+        let runtime_integer_diagnostics = constants
+            .iter()
+            .map(|constant| {
+                constant_expression_contains_runtime_integer_diagnostic(
+                    &constant.value,
+                    &|expression| self.eval_const_expr_in_source(expression, &known),
+                )
+            })
+            .collect::<Vec<_>>();
+        let callable_factories = constants
+            .iter()
+            .zip(runtime_integer_diagnostics)
+            .map(|(constant, runtime_integer_diagnostic)| {
+                (constant_expression_contains_runtime_callable(&constant.value)
+                    || runtime_integer_diagnostic)
+                    .then(|| {
+                        self.compile_runtime_callable_constant_factory(
+                            &constant.value,
+                            Some(owner),
+                            parent,
+                        )
+                    })
+            })
+            .map(|factory| {
+                factory.transpose().map(|factory| {
+                    factory.map(|(name, lexical_functions)| {
+                        std::rc::Rc::new(RuntimeCallableConstantFactory::new(
+                            name,
+                            lexical_functions,
+                        ))
+                    })
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
         let mut values = vec![None; constants.len()];
         let mut evaluation_errors = vec![None; constants.len()];
         let mut deferred_values = callable_factories
@@ -8460,8 +8474,7 @@ impl Compiler {
                 if values[index].is_some() || deferred_values[index] {
                     continue;
                 }
-                let Ok(value) = self.eval_const_expr_in_source(&constant.value, &known)
-                else {
+                let Ok(value) = self.eval_const_expr_in_source(&constant.value, &known) else {
                     continue;
                 };
                 known.insert(format!("self::{}", constant.name), value.clone());

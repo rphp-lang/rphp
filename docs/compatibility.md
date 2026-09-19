@@ -7,6 +7,37 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The `class-constant-resolution-contracts` checkpoint over `fc249c6c` adds
+**10 exact PHP 8.5 passes without loss**, reducing measured supported failures
+from **175 to 165**. Class-constant operands now validate dynamic owners before
+the name expression, retain source origins and throw catchable `Error` with
+PHP's evaluation order. Relative class names distinguish global, class and
+trait scope; constant initializers expose the correct empty magic names;
+inherited constant diagnostics are emitted once; and block-local `const`
+declarations are rejected without excluding direct bracketed-namespace
+declarations.
+
+The 8,258-case supported ledger is **7,620 pass / 165 fail / 194 skip / 276
+unsupported / three XFAIL**. The stable 7,174-case core is **6,622 pass / 160
+fail / 182 skip / 210 unsupported**, with no timeout or crash. Zend/lang is
+**5,152/152/115/180**, exact **+10/-0**; strings/array remains byte-identical at
+**1,470/8/67/30**. Five Cargo configurations and all-targets, exact no-loss,
+Composer/Symfony S0--S3, formatting, PHPT runner tooling and the unsafe ratchet
+pass. Performance remains deferred to the aggregate correctness-sweep
+boundary.
+
+SHA-256 evidence: candidate
+`901985f06f5873e865a2bef2ab82d09ddb290e44e840b7e64ccc602d15744cbc`;
+target manifest `8ad035049056c0d0099e5696d4299c9ef0a7432b39f941a0e938945737f2988c`;
+Zend/lang manifest/pass set
+`f531c60ba68d627bf20d877435ed1f0f34ecf1d008c74a24e1bfd111afc33a69` /
+`6dac73982e623e9e0a269fb93cd6ce2e60117e653b7ff0d1d49d4f5aed73559b`;
+strings/array manifest/pass set
+`c782b93935c1aaba8789c0bc84b3fe98f347c01d15cdc3e187cdb09412357115` /
+`e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
+
+### Preceding type-declaration checkpoint
+
 The `type-declaration-call-contracts` checkpoint over `5b70cb78` adds **18
 exact PHP 8.5 passes without loss**, reducing measured supported failures from
 **193 to 175**. Callable arguments now resolve class scope at the caller while

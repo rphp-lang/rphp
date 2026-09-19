@@ -430,6 +430,7 @@ pub enum Expr {
         // ClassName::{$constant}
         class_name: String,
         constant: Box<Expr>,
+        line: usize,
     },
     Throw {
         expr: Box<Expr>,

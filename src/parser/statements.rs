@@ -57,6 +57,7 @@ impl Parser {
             new_postfix_error_suffix: None,
             last_primary_line: None,
             outermost_scope: true,
+            global_constant_scope: true,
             assertion_source_capture: false,
             halted: false,
         }
@@ -470,7 +471,7 @@ impl Parser {
                     self.advance(); // consume '{'
                     let mut body = Vec::new();
                     while self.peek() != Token::RBrace && self.peek() != Token::Eof {
-                        body.push(self.parse_stmt_in_scope(false)?);
+                        body.push(self.parse_stmt_in_namespace_scope()?);
                     }
                     if self.halted && self.at_eof() {
                         return Err(self.source_error("Unclosed '{'", 1));
@@ -641,6 +642,12 @@ impl Parser {
                 })
             }
             Token::Const => {
+                if !self.global_constant_scope {
+                    return Err(self.source_error(
+                        "syntax error, unexpected token \"const\"",
+                        self.current_token_source_line(),
+                    ));
+                }
                 self.advance(); // consume 'const'
                 let mut declarations = Vec::new();
                 let mut const_line = 0;
@@ -1992,9 +1999,23 @@ impl Parser {
 
     fn parse_stmt_in_scope(&mut self, outermost: bool) -> Result<Stmt, String> {
         let previous = self.outermost_scope;
+        let previous_global_constant_scope = self.global_constant_scope;
         self.outermost_scope = outermost;
+        self.global_constant_scope = outermost;
         let result = self.parse_stmt();
         self.outermost_scope = previous;
+        self.global_constant_scope = previous_global_constant_scope;
+        result
+    }
+
+    fn parse_stmt_in_namespace_scope(&mut self) -> Result<Stmt, String> {
+        let previous_outermost = self.outermost_scope;
+        let previous_global_constant_scope = self.global_constant_scope;
+        self.outermost_scope = false;
+        self.global_constant_scope = true;
+        let result = self.parse_stmt();
+        self.outermost_scope = previous_outermost;
+        self.global_constant_scope = previous_global_constant_scope;
         result
     }
 

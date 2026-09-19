@@ -217,6 +217,11 @@ pub const CLASS_CONST_CONSTANT_EXPRESSION: u16 = 1 << 4;
 /// than the standalone pseudo-constant diagnostic.
 pub const CLASS_CONST_DYNAMIC_CALL_OWNER: u16 = 1 << 5;
 
+/// A dynamic-name class-constant fetch first validates and snapshots its
+/// runtime owner. PHP rejects a non-object/non-string owner before evaluating
+/// the braced constant-name expression.
+pub const CLASS_CONST_VALIDATE_DYNAMIC_OWNER: u16 = 1 << 6;
+
 /// `FetchObjR` used only to reach the terminal operand of `isset()`. A null or
 /// scalar intermediate produces null without the ordinary read diagnostic.
 pub const FETCH_OBJ_SILENT: u16 = 1;

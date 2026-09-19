@@ -3071,6 +3071,44 @@ fn static_property_throw<'a>(
     })
 }
 
+#[cold]
+#[inline(never)]
+fn class_constant_throw<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    class: &str,
+    message: String,
+) -> Result<ColdResult<'a>, VmError> {
+    let error = make_error_value(class, &message);
+    throw_class_constant_value(eg, frame, op_array, opline, error)
+}
+
+#[cold]
+#[inline(never)]
+fn throw_class_constant_value<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    error: Value,
+) -> Result<ColdResult<'a>, VmError> {
+    let instruction_index = unsafe {
+        // SAFETY: `opline` is the currently executing instruction borrowed
+        // from this exact `op_array.instructions` allocation by the dispatch
+        // loop, so both pointers share one allocation and the offset is valid.
+        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    };
+    attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+    Ok(match throw_in_frame(eg, frame, error)? {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+    })
+}
+
 /// A failed typed write creates its TypeError while the rejected RHS is still
 /// live, then releases that RHS before binding the exception into a catch CV.
 /// The ordering matches Zend's observable object-handle recycling contract.
@@ -3366,6 +3404,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     let compile_time_name = opline._pad & CLASS_CONST_COMPILE_TIME_NAME != 0;
     let constant_expression = opline._pad & CLASS_CONST_CONSTANT_EXPRESSION != 0;
     let dynamic_call_owner = opline._pad & CLASS_CONST_DYNAMIC_CALL_OWNER != 0;
+    let validate_dynamic_owner = opline._pad & CLASS_CONST_VALIDATE_DYNAMIC_OWNER != 0;
     let raw_class = class_value.as_str().unwrap_or("");
     let constant = constant_value.as_str();
 
@@ -3373,28 +3412,38 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
         if !dynamic_name
             && constant.is_some_and(|name| name.eq_ignore_ascii_case("class"))
         {
-            return Ok(static_property_throw(
+            return Ok(class_constant_throw(
                 eg,
                 frame,
+                op_array,
+                opline,
                 "TypeError",
                 format!("Cannot use \"::class\" on {}", class_value.type_name()),
             )?);
         }
-        return Ok(static_property_throw(
+        return Ok(class_constant_throw(
             eg,
             frame,
+            op_array,
+            opline,
             "Error",
             "Class name must be a valid object or a string".to_string(),
         )?);
+    }
+    if validate_dynamic_owner {
+        set_result(class_value.clone());
+        return Ok(ColdResult::Done);
     }
     if dynamic_owner
         && !dynamic_name
         && class_value.as_str().is_some()
         && constant.is_some_and(|name| name.eq_ignore_ascii_case("class"))
     {
-        return Ok(static_property_throw(
+        return Ok(class_constant_throw(
             eg,
             frame,
+            op_array,
+            opline,
             "TypeError",
             "Cannot use \"::class\" on string".to_string(),
         )?);
@@ -3417,14 +3466,19 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
         && !scoped_owner
         && eg.find_class(raw_class).is_none()
     {
-        let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, raw_class)?;
+        match crate::stdlib::autoload::ensure_symbol_loaded(eg, raw_class) {
+            Ok(_) => {}
+            Err(VmError::Fatal(message)) => {
+                return Ok(class_constant_throw(
+                    eg, frame, op_array, opline, "Error", message,
+                )?);
+            }
+            Err(error) => return Err(error),
+        }
         if let Some(exception) = eg.exception.take() {
-            return Ok(match throw_in_frame(eg, frame, exception)? {
-                ThrowResult::Handled(new_frame, new_op_array) => {
-                    ColdResult::NewFrame(new_frame, new_op_array)
-                }
-                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-            });
+            return Ok(throw_class_constant_value(
+                eg, frame, op_array, opline, exception,
+            )?);
         }
     }
     // SAFETY: `opline` belongs to this op-array, and cache has one stable entry
@@ -3449,46 +3503,42 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     } else {
         static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class)
     };
-
     if class_id == 0 && scoped_owner {
+        let keyword = raw_class.to_ascii_lowercase();
         let message = if constant.is_some_and(|name| name.eq_ignore_ascii_case("class"))
             && !dynamic_call_owner
         {
-            format!(
-                "Cannot use \"{}\" in the global scope",
-                raw_class.to_ascii_lowercase()
-            )
-        } else {
-            format!(
-                "Cannot access \"{}\" when no class scope is active",
-                raw_class.to_ascii_lowercase()
-            )
-        };
-        let error = make_error_value("Error", &message);
-        let instruction_index = unsafe {
-            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
-        };
-        attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-        return Ok(match throw_in_frame(eg, frame, error)? {
-            ThrowResult::Handled(new_frame, new_op_array) => {
-                ColdResult::NewFrame(new_frame, new_op_array)
+            if keyword == "parent" && caller_class_id(frame, eg) != 0 {
+                "Cannot use \"parent\" when current class scope has no parent".to_string()
+            } else if constant_expression {
+                format!("Cannot use \"{keyword}\" when no class scope is active")
+            } else {
+                format!("Cannot use \"{keyword}\" in the global scope")
             }
-            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-        });
+        } else {
+            format!("Cannot access \"{keyword}\" when no class scope is active")
+        };
+        return Ok(class_constant_throw(
+            eg, frame, op_array, opline, "Error", message,
+        )?);
     }
 
     let Some(class) = eg.class_by_id(class_id) else {
-        return Ok(static_property_throw(
+        return Ok(class_constant_throw(
             eg,
             frame,
+            op_array,
+            opline,
             "Error",
             format!("Class \"{}\" not found", raw_class),
         )?);
     };
     let Some(constant) = constant else {
-        return Ok(static_property_throw(
+        return Ok(class_constant_throw(
             eg,
             frame,
+            op_array,
+            opline,
             "TypeError",
             format!(
                 "Cannot use value of type {} as class constant name",
@@ -3587,9 +3637,11 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                     .map(|(_, case)| (class.name.clone(), case.clone()))
             });
             let Some((class_name, case)) = resolved_case else {
-                return Ok(static_property_throw(
+                return Ok(class_constant_throw(
                     eg,
                     frame,
+                    op_array,
+                    opline,
                     "Error",
                     "Cached enum case metadata is unavailable".to_string(),
                 )?);
@@ -3617,7 +3669,9 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
 
     if class.is_trait {
         let message = format!("Cannot access trait constant {}::{} directly", class.name, constant);
-        return Ok(static_property_throw(eg, frame, "Error", message)?);
+        return Ok(class_constant_throw(
+            eg, frame, op_array, opline, "Error", message,
+        )?);
     }
     let display_class = class.name.clone();
     let Some((constant_index, definition)) = eg.find_class_constant(class_id, constant) else {
@@ -3648,9 +3702,11 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                 && !constant_expression
                 && let Some(error) = class.enum_backing_error.as_ref()
             {
-                return Ok(static_property_throw(
+                return Ok(class_constant_throw(
                     eg,
                     frame,
+                    op_array,
+                    opline,
                     error.exception_class(),
                     error.message().to_string(),
                 )?);
@@ -3683,9 +3739,11 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             set_result(value);
             return Ok(ColdResult::Done);
         }
-        return Ok(static_property_throw(
+        return Ok(class_constant_throw(
             eg,
             frame,
+            op_array,
+            opline,
             "Error",
             format!("Undefined constant {}::{}", display_class, constant),
         )?);
@@ -3703,9 +3761,11 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             eg.publish_backed_enum_case_handles(class_id);
         }
         if let Some(error) = class.enum_backing_error.as_ref() {
-            return Ok(static_property_throw(
+            return Ok(class_constant_throw(
                 eg,
                 frame,
+                op_array,
+                opline,
                 error.exception_class(),
                 error.message().to_string(),
             )?);
@@ -3722,9 +3782,11 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             Visibility::Protected => "protected",
             Visibility::Public => unreachable!(),
         };
-        return Ok(static_property_throw(
+        return Ok(class_constant_throw(
             eg,
             frame,
+            op_array,
+            opline,
             "Error",
             format!(
                 "Cannot access {} constant {}::{}",

@@ -257,6 +257,9 @@ impl Parser {
     /// Parse a statically named member after a class-like owner. The shared
     /// postfix loop in `parse_power` continues the resulting expression.
     fn parse_named_static_access(&mut self, class_name: String) -> Result<Expr, String> {
+        let owner_line = self
+            .last_primary_line
+            .unwrap_or_else(|| self.closest_token_source_line());
         self.expect(&Token::DoubleColon)?;
         if matches!(self.peek(), Token::LBrace(_)) {
             self.advance();
@@ -295,6 +298,7 @@ impl Parser {
             return Ok(Expr::DynamicNamedClassConstant {
                 class_name,
                 constant: Box::new(constant),
+                line: owner_line,
             });
         }
         if matches!(self.peek(), Token::Dollar(_)) {
@@ -639,7 +643,8 @@ impl Parser {
                         class: Box::new(expr),
                         constant: Box::new(constant),
                         dynamic_name,
-                        line: expression_line.unwrap_or(0),
+                        line: expression_line
+                            .unwrap_or_else(|| self.closest_token_source_line()),
                     };
                 }
                 Token::Arrow | Token::NullSafe => {

@@ -2184,6 +2184,7 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
             Expr::DynamicNamedClassConstant {
                 class_name,
                 constant,
+                ..
             } => (
                 format!("{class_name}::{{{}}}", render(constant, 0, false)?),
                 100,

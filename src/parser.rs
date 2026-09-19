@@ -61,6 +61,12 @@ pub struct Parser {
     /// Whether the current statement is parsed in the source unit's outermost
     /// scope, the only context where __halt_compiler() is legal.
     outermost_scope: bool,
+    /// Global constants may be declared directly in a source unit or in a
+    /// bracketed namespace body, but never in an ordinary statement block.
+    /// This differs from `outermost_scope`: a bracketed namespace is not the
+    /// source unit's outermost scope, while its direct declarations are still
+    /// namespace-level declarations.
+    global_constant_scope: bool,
     /// Preserve otherwise reflection-flattened attribute group boundaries
     /// only while parsing assert()'s retained first-argument syntax.
     assertion_source_capture: bool,

@@ -36,25 +36,31 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `type-declaration-call-contracts` checkpoint over `5b70cb78` reduces
-supported failure debt from **193 to 175**, exact **+18/-0**. The 8,258-case
-supported ledger is **7,610/175/194/276 with three XFAIL**. The 7,174-case
-stable core is **6,612/170/182/210**; Zend/lang reaches
-**5,142/162/115/180**, while strings/array preserves its exact 1,470-pass set
+The `class-constant-resolution-contracts` checkpoint over `fc249c6c` reduces
+supported failure debt from **175 to 165**, exact **+10/-0**. The 8,258-case
+supported ledger is **7,620/165/194/276 with three XFAIL**. The 7,174-case
+stable core is **6,622/160/182/210**; Zend/lang reaches
+**5,152/152/115/180**, while strings/array preserves its exact 1,470-pass set
 at **1,470/8/67/30**.
 
-The shared compiler/runtime slice aligns caller-scope callable validation,
-resolved relative-type diagnostics, declaration-origin arity failures,
-main-scope global-reference identity, typed reference increment, ArrayIterator
-typed/readonly references and by-reference `void` declaration deprecations.
-Five Cargo configurations/all-targets, exact no-loss families,
+The shared parser/compiler/VM slice aligns dynamic class-constant owner
+validation, source-aware catchable errors, relative class scope, constant
+initializer magic names, once-only inherited diagnostics and declaration
+placement. Five Cargo configurations/all-targets, exact no-loss families,
 Composer/Symfony S0--S3, formatting, tooling and unsafe gates are green.
 
-Continue the shared-cause supported-failure sweep from **175 to zero**. Keep
+Continue the shared-cause supported-failure sweep from **165 to zero**. Keep
 the complete Date/DateTime surface out of this stream. Select another 10--30
-case non-Date cluster from the current 162 Zend/lang failures, preserve the
-exact 5,142 and 1,470 parent pass sets, and keep aggregate performance
+case non-Date cluster from the current 152 Zend/lang failures, preserve the
+exact 5,152 and 1,470 parent pass sets, and keep aggregate performance
 optimization deferred by user direction.
+
+### Preceding type-declaration checkpoint
+
+The `type-declaration-call-contracts` checkpoint over `5b70cb78` reduced
+supported failure debt from **193 to 175**, exact **+18/-0**. It aligned
+callable scope, resolved type diagnostics, declaration origins, global
+reference identity and typed reference boundaries.
 
 ### Preceding declaration-object checkpoint
 

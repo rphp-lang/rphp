@@ -9,6 +9,48 @@ fn echo(expressions: Vec<Expr>) -> Stmt {
 }
 
 #[test]
+fn chained_dynamic_class_constants_retain_their_source_line() {
+    let tokens = Lexer::new("<?php\ny::{5}::y;").tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let Stmt::ExprStmt(Expr::DynamicClassConstant {
+        class,
+        line: outer_line,
+        ..
+    }) = &statements[0]
+    else {
+        panic!("expected outer dynamic class constant");
+    };
+    let Expr::DynamicNamedClassConstant {
+        line: inner_line, ..
+    } = class.as_ref()
+    else {
+        panic!("expected nested named dynamic class constant, got {class:#?}");
+    };
+
+    assert_eq!((*inner_line, *outer_line), (2, 2));
+}
+
+#[test]
+fn constants_are_rejected_in_statement_blocks_but_allowed_in_namespaces() {
+    let tokens = Lexer::new("<?php\nfunction f() { #[Marker] const VALUE = 1; }")
+        .tokenize()
+        .unwrap();
+    let error = Parser::new(tokens)
+        .with_source_name("/virtual/local-const.php")
+        .parse()
+        .unwrap_err();
+    assert_eq!(
+        error,
+        "syntax error, unexpected token \"const\" in /virtual/local-const.php on line 2"
+    );
+
+    let tokens = Lexer::new("<?php namespace Example { const VALUE = 1; }")
+        .tokenize()
+        .unwrap();
+    Parser::new(tokens).parse().unwrap();
+}
+
+#[test]
 fn test_parse_echo_42() {
     let tokens = Lexer::new("<?php echo 42;").tokenize().unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();

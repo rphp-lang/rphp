@@ -889,6 +889,37 @@ fn deferred_class_constant(
     eg: &mut ExecutorGlobals,
 ) -> Result<Value, DeferredAttributeError> {
     let source_class_name = class_name;
+    let relative = source_class_name.to_ascii_lowercase();
+    let trait_scope = scope
+        .lexical_class
+        .as_deref()
+        .and_then(|class| eg.find_class(class))
+        .is_some_and(|class| class.is_trait);
+    if relative == "parent" && scope.lexical_parent.is_none() && !trait_scope {
+        let verb = if constant.eq_ignore_ascii_case("class") {
+            "use"
+        } else {
+            "access"
+        };
+        let context = if scope.lexical_class.is_some() {
+            "current class scope has no parent"
+        } else {
+            "no class scope is active"
+        };
+        return Err(DeferredAttributeError::Message(format!(
+            "Cannot {verb} \"parent\" when {context}"
+        )));
+    }
+    if matches!(relative.as_str(), "self" | "static") && scope.lexical_class.is_none() {
+        let verb = if constant.eq_ignore_ascii_case("class") {
+            "use"
+        } else {
+            "access"
+        };
+        return Err(DeferredAttributeError::Message(format!(
+            "Cannot {verb} \"{relative}\" when no class scope is active"
+        )));
+    }
     let class_name = resolve_attribute_class_name(class_name, scope);
     if constant.eq_ignore_ascii_case("class") {
         let public_name = eg
@@ -1150,6 +1181,7 @@ fn evaluate_deferred_attribute_expression(
         Expr::DynamicNamedClassConstant {
             class_name,
             constant,
+            ..
         } => {
             let constant =
                 evaluate_deferred_attribute_expression(constant, scope, source_file, eg)?;
@@ -2068,6 +2100,7 @@ fn report_deprecated_expression_references(
         Expr::DynamicNamedClassConstant {
             class_name,
             constant,
+            ..
         } => {
             let value = evaluate_deferred_attribute_expression(constant, scope, source_file, eg);
             if let Ok(value) = value

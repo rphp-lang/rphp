@@ -80,28 +80,28 @@ use crate::vm::instruction::{
     CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS,
     CALL_FLAG_RETURN_EXPLICITLY_IGNORED, CALL_USER_FUNC_ARRAY_SOURCE_UNPACK,
     CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_CALL_OWNER,
-    CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES,
-    EVAL_FLAG_ERROR_SUPPRESS, FETCH_CV_LIVE_UNPACK_SOURCE, FETCH_DIM_COMPOUND,
-    FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_EMPTY_TERMINAL, FETCH_DIM_ERROR_SUPPRESS,
-    FETCH_DIM_FUNC_ARG, FETCH_DIM_FUNC_ARG_NAMED, FETCH_DIM_FUNC_ARG_ROOT_CV, FETCH_DIM_INCDEC,
-    FETCH_DIM_ISSET, FETCH_DIM_MUTABLE, FETCH_DIM_OBJECT, FETCH_DIM_REFERENCE_SOURCE,
-    FETCH_DIM_SILENT, FETCH_DIM_UNSET, FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME,
-    FETCH_DYNAMIC_SILENT, FETCH_GLOBAL_WARN_UNDEFINED, FETCH_OBJ_COMPOUND,
-    FETCH_OBJ_COMPOUND_RECEIVER, FETCH_OBJ_CONSTANT_EXPRESSION, FETCH_OBJ_ERROR_SUPPRESS,
-    FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT,
-    INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, JMP_NZ_RELEASE_TEMPS,
-    KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
-    NEW_FLAG_NAMED_ARGUMENTS, NEW_FLAG_PREPARE_ONLY, NEW_FLAG_PREPARED,
-    NEW_FLAG_UNPACKED_ARGUMENTS, NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE, NEW_FLAG_VALIDATE_ONLY,
-    OBJ_PROP_FUNC_ARG, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OBJ_PROP_TEMPORARY_RECEIVER,
-    OpType, PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
-    REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, RELEASE_TEMPS_NESTED_OBJECTS,
-    RELEASE_TEMPS_ON_RETURN, RELEASE_TEMPS_RETURN_COMPLETION_SITE, RELEASE_TEMPS_SUBEXPRESSION,
-    SEND_FLAG_GLOBALS, SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE,
-    SEND_FLAG_PREPARED_PROPERTY_ARGUMENT, SEND_FLAG_TEMPORARY_WRITE_ERROR,
-    SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
-    STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH,
-    STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, CLASS_CONST_VALIDATE_DYNAMIC_OWNER,
+    CLONE_OBJ_WITH_PROPERTIES, EVAL_FLAG_ERROR_SUPPRESS, FETCH_CV_LIVE_UNPACK_SOURCE,
+    FETCH_DIM_COMPOUND, FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_EMPTY_TERMINAL,
+    FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_FUNC_ARG, FETCH_DIM_FUNC_ARG_NAMED,
+    FETCH_DIM_FUNC_ARG_ROOT_CV, FETCH_DIM_INCDEC, FETCH_DIM_ISSET, FETCH_DIM_MUTABLE,
+    FETCH_DIM_OBJECT, FETCH_DIM_REFERENCE_SOURCE, FETCH_DIM_SILENT, FETCH_DIM_UNSET,
+    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT,
+    FETCH_GLOBAL_WARN_UNDEFINED, FETCH_OBJ_COMPOUND, FETCH_OBJ_COMPOUND_RECEIVER,
+    FETCH_OBJ_CONSTANT_EXPRESSION, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY,
+    FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache,
+    Instruction, JMP_NZ_RELEASE_TEMPS, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME,
+    NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_NAMED_ARGUMENTS, NEW_FLAG_PREPARE_ONLY,
+    NEW_FLAG_PREPARED, NEW_FLAG_UNPACKED_ARGUMENTS, NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE,
+    NEW_FLAG_VALIDATE_ONLY, OBJ_PROP_FUNC_ARG, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND,
+    OBJ_PROP_TEMPORARY_RECEIVER, OpType, PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT,
+    REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE,
+    RELEASE_TEMPS_NESTED_OBJECTS, RELEASE_TEMPS_ON_RETURN, RELEASE_TEMPS_RETURN_COMPLETION_SITE,
+    RELEASE_TEMPS_SUBEXPRESSION, SEND_FLAG_GLOBALS, SEND_FLAG_INDIRECT_TEMPORARY,
+    SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_PREPARED_PROPERTY_ARGUMENT,
+    SEND_FLAG_TEMPORARY_WRITE_ERROR, SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME,
+    STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND,
+    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -160,6 +160,7 @@ pub(crate) fn expression_source_line(expression: &Expr) -> usize {
         | Expr::DynamicStaticProperty { line, .. }
         | Expr::ClassConstant { line, .. }
         | Expr::DynamicClassConstant { line, .. }
+        | Expr::DynamicNamedClassConstant { line, .. }
         | Expr::Throw { line, .. }
         | Expr::ListAssign { line, .. }
         | Expr::DynamicCall { line, .. }
@@ -2216,6 +2217,63 @@ fn constant_expression_contains_runtime_callable(expression: &Expr) -> bool {
             constant_expression_contains_runtime_callable(object)
                 || constant_expression_contains_runtime_callable(property)
         }
+        _ => false,
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn constant_expression_contains_runtime_integer_diagnostic<E>(
+    expression: &Expr,
+    evaluate: &E,
+) -> bool
+where
+    E: Fn(&Expr) -> Result<Value, String>,
+{
+    let recurse =
+        |expression| constant_expression_contains_runtime_integer_diagnostic(expression, evaluate);
+    match expression {
+        Expr::BinaryOp {
+            op, left, right, ..
+        } => {
+            let own_diagnostic = matches!(op, BinOp::Mod | BinOp::ShiftLeft | BinOp::ShiftRight)
+                && evaluate(left).ok().is_some_and(|value| {
+                    crate::vm::execute::integer_operator_operand(&value)
+                        .is_ok_and(|operand| operand.emits_diagnostic())
+                })
+                || matches!(op, BinOp::Mod | BinOp::ShiftLeft | BinOp::ShiftRight)
+                    && evaluate(right).ok().is_some_and(|value| {
+                        crate::vm::execute::integer_operator_operand(&value)
+                            .is_ok_and(|operand| operand.emits_diagnostic())
+                    });
+            own_diagnostic || recurse(left) || recurse(right)
+        }
+        Expr::NullCoalesce { left, right } | Expr::Elvis { left, right } => {
+            recurse(left) || recurse(right)
+        }
+        Expr::Not(inner)
+        | Expr::UnaryPlus(inner)
+        | Expr::UnaryMinus(inner)
+        | Expr::BitwiseNot { expr: inner, .. }
+        | Expr::ErrorSuppress(inner)
+        | Expr::Cast { expr: inner, .. } => recurse(inner),
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => recurse(condition) || recurse(then_expr) || recurse(else_expr),
+        Expr::ArrayLiteral(elements) => elements
+            .iter()
+            .any(|element| element.key.as_ref().is_some_and(&recurse) || recurse(&element.value)),
+        Expr::ArrayAccess { array, index, .. } => recurse(array) || recurse(index),
+        Expr::PropertyAccess { object, .. } => recurse(object),
+        Expr::DynamicPropertyAccess {
+            object, property, ..
+        } => recurse(object) || recurse(property),
+        Expr::DynamicNamedClassConstant { constant, .. } => recurse(constant),
+        Expr::DynamicClassConstant {
+            class, constant, ..
+        } => recurse(class) || recurse(constant),
         _ => false,
     }
 }
@@ -7393,6 +7451,13 @@ impl Compiler {
                         .get("__PROPERTY__")
                         .cloned()
                         .unwrap_or_else(|| Value::string("")))
+                } else if name.eq_ignore_ascii_case("__METHOD__")
+                    || name.eq_ignore_ascii_case("__FUNCTION__")
+                {
+                    // Class/global constant initializers have no active
+                    // function context. PHP materializes these two names as
+                    // the empty string rather than rejecting the expression.
+                    Ok(Value::string(""))
                 } else if name.eq_ignore_ascii_case("__CLASS__") {
                     known.get("__CLASS__").cloned().ok_or_else(|| {
                         "magic constant __CLASS__ requires the active compilation context"
@@ -7425,6 +7490,7 @@ impl Compiler {
             Expr::DynamicNamedClassConstant {
                 class_name,
                 constant,
+                ..
             } => {
                 let constant = Self::eval_const_expr_with_context_and_enum_classes(
                     constant,
@@ -9478,6 +9544,28 @@ impl Compiler {
         (operand, operand_type)
     }
 
+    /// PHP folds a fully constant array used as a dynamic object-property
+    /// name and emits its conversion warning with the compilation unit's
+    /// diagnostics, before any source statement executes. Arrays containing
+    /// runtime work keep the ordinary evaluation and warning order.
+    fn compile_dynamic_property_name(&mut self, property: &Expr) -> (u16, OpType) {
+        if self
+            .eval_const_expr_in_source(property, &self.known_constants)
+            .is_ok_and(|value| value.value_type() == ValueType::Array)
+        {
+            self.compile_deprecations
+                .borrow_mut()
+                .push(CompileDeprecation {
+                    message: "Array to string conversion".to_string(),
+                    file: self.source_file.clone(),
+                    line: expression_source_line(property),
+                    warning: true,
+                });
+            return (self.add_literal(Value::string("Array")), OpType::Const);
+        }
+        self.compile_expr(property)
+    }
+
     /// Prepare a mutable receiver chain while deferring the property fetches
     /// until the assignment value has been evaluated. PHP evaluates the base
     /// and dynamic names first, then the RHS, and only then reports that an
@@ -9543,7 +9631,7 @@ impl Compiler {
                         silent_undefined_root,
                         *line,
                     );
-                let (property, property_type) = self.compile_expr(property);
+                let (property, property_type) = self.compile_dynamic_property_name(property);
                 let result = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchObjR);
                 fetch.op1 = object;
@@ -9742,7 +9830,7 @@ impl Compiler {
                 line,
             } => {
                 let (object_op, object_type) = self.compile_isset_object_base(object);
-                let (property_op, property_type) = self.compile_expr(property);
+                let (property_op, property_type) = self.compile_dynamic_property_name(property);
                 let result = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchObjR);
                 fetch.op1 = object_op;
@@ -10551,7 +10639,8 @@ impl Compiler {
                                     fetch._pad |= FETCH_OBJ_COMPOUND_RECEIVER;
                                 }
                             }
-                            let (property, property_type) = self.compile_expr(property);
+                            let (property, property_type) =
+                                self.compile_dynamic_property_name(property);
                             let left = self.alloc_tmp();
                             let mut fetch = Instruction::new(OpCode::FetchObjR);
                             fetch.op1 = object;
@@ -11917,13 +12006,38 @@ impl Compiler {
                         return (null, OpType::Const);
                     }
                 }
-                if !class_keyword && Self::is_illegal_literal_class_owner(class) {
+                if self.compiling_constant_expression
+                    && *dynamic_name
+                    && Self::is_illegal_literal_class_owner(class)
+                {
+                    self.deferred_error = Some(
+                        self.goto_error("Class name must be a valid object or a string", *line),
+                    );
+                    let null = self.add_literal(Value::null());
+                    return (null, OpType::Const);
+                }
+                if !class_keyword && !*dynamic_name && Self::is_illegal_literal_class_owner(class) {
                     self.deferred_error = Some(self.goto_error("Illegal class name", *line));
                     let null = self.add_literal(Value::null());
                     return (null, OpType::Const);
                 }
-                let (class_op, class_type) = self.compile_expr(class);
+                let (mut class_op, mut class_type) = self.compile_expr(class);
                 let receiver_patches = self.take_nullsafe_receiver_patches(class_op, class_type);
+                if *dynamic_name {
+                    let validated_owner = self.alloc_tmp();
+                    let placeholder = self.add_literal(Value::string(""));
+                    let mut validate = Instruction::new(OpCode::FetchDynamicClassConst);
+                    validate._pad |= CLASS_CONST_DYNAMIC_OWNER | CLASS_CONST_VALIDATE_DYNAMIC_OWNER;
+                    validate.op1 = class_op;
+                    validate.op1_type = class_type;
+                    validate.op2 = placeholder;
+                    validate.op2_type = OpType::Const;
+                    validate.result = validated_owner;
+                    validate.result_type = OpType::Tmp;
+                    self.push_instruction_at_line(validate, *line);
+                    class_op = validated_owner;
+                    class_type = OpType::Tmp;
+                }
                 let (constant_op, constant_type) = self.compile_expr(constant);
                 let tmp = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchDynamicClassConst);
@@ -11950,6 +12064,7 @@ impl Compiler {
             Expr::DynamicNamedClassConstant {
                 class_name,
                 constant,
+                line,
             } => {
                 let (resolved, dynamic_static_scope) = self.resolve_static_member_owner(class_name);
                 let class_op = self.add_literal(Value::string(resolved));
@@ -11973,7 +12088,7 @@ impl Compiler {
                 fetch.op2_type = constant_type;
                 fetch.result = tmp;
                 fetch.result_type = OpType::Tmp;
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(fetch, *line);
                 (tmp, OpType::Tmp)
             }
             Expr::UnaryMinus(inner) => {
@@ -12987,7 +13102,7 @@ impl Compiler {
                 } else {
                     None
                 };
-                let (property_op, property_type) = self.compile_expr(property);
+                let (property_op, property_type) = self.compile_dynamic_property_name(property);
                 let mut fetch = Instruction::new(OpCode::FetchObjR);
                 fetch.op1 = obj_op;
                 fetch.op1_type = obj_type;
@@ -13706,7 +13821,8 @@ impl Compiler {
                         line,
                     } => {
                         let (object, object_type) = self.compile_property_modify_base(object);
-                        let (property, property_type) = self.compile_expr(property);
+                        let (property, property_type) =
+                            self.compile_dynamic_property_name(property);
                         let mut bind = Instruction::new(OpCode::BindObjPropRef);
                         bind.op1 = object;
                         bind.op1_type = object_type;
@@ -16041,7 +16157,7 @@ impl Compiler {
                 ..
             } => {
                 let (object, object_type) = self.compile_property_modify_base(object);
-                let (property, property_type) = self.compile_expr(property);
+                let (property, property_type) = self.compile_dynamic_property_name(property);
                 let mut assign = Instruction::new(OpCode::AssignObjProp);
                 assign.op1 = object;
                 assign.op1_type = object_type;
