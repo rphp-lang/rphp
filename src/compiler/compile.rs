@@ -3406,7 +3406,7 @@ impl Compiler {
         if self.is_zend_special_builtin_write_result(expr) {
             return Some(expression_source_line(expr));
         }
-        if Self::array_access_has_nonreferenceable_root(expr) {
+        if self.array_access_has_nonreferenceable_root(expr) {
             return Some(expression_source_line(expr));
         }
         Self::nullsafe_chain_line(expr).or_else(|| match expr {
@@ -3465,7 +3465,7 @@ impl Compiler {
         })
     }
 
-    fn array_access_has_nonreferenceable_root(expression: &Expr) -> bool {
+    fn array_access_has_nonreferenceable_root(&self, expression: &Expr) -> bool {
         let Expr::ArrayAccess { .. } = expression else {
             return false;
         };
@@ -3473,28 +3473,29 @@ impl Compiler {
         while let Expr::ArrayAccess { array, .. } = root {
             root = array;
         }
-        !matches!(
-            root,
-            Expr::Variable { .. }
-                | Expr::DynamicVariable { .. }
-                | Expr::Globals { .. }
-                | Expr::ArrayAppendArgument { .. }
-                | Expr::PropertyAccess {
-                    nullsafe: false,
-                    ..
-                }
-                | Expr::DynamicPropertyAccess {
-                    nullsafe: false,
-                    ..
-                }
-                | Expr::StaticProperty { .. }
-                | Expr::DynamicNamedStaticProperty { .. }
-                | Expr::DynamicStaticProperty { .. }
-        ) && !Self::is_array_write_call_result(root)
+        self.is_zend_special_builtin_write_result(root)
+            || (!matches!(
+                root,
+                Expr::Variable { .. }
+                    | Expr::DynamicVariable { .. }
+                    | Expr::Globals { .. }
+                    | Expr::ArrayAppendArgument { .. }
+                    | Expr::PropertyAccess {
+                        nullsafe: false,
+                        ..
+                    }
+                    | Expr::DynamicPropertyAccess {
+                        nullsafe: false,
+                        ..
+                    }
+                    | Expr::StaticProperty { .. }
+                    | Expr::DynamicNamedStaticProperty { .. }
+                    | Expr::DynamicStaticProperty { .. }
+            ) && !Self::is_array_write_call_result(root))
     }
 
     fn temporary_write_error_call_argument_line(&self, expression: &Expr) -> Option<usize> {
-        if Self::array_access_has_nonreferenceable_root(expression) {
+        if self.array_access_has_nonreferenceable_root(expression) {
             return Some(expression_source_line(expression));
         }
         match expression {
@@ -3523,8 +3524,8 @@ impl Compiler {
         }
     }
 
-    fn is_mutable_call_reference_source(expr: &Expr) -> bool {
-        if Self::array_access_has_nonreferenceable_root(expr) {
+    fn is_mutable_call_reference_source(&self, expr: &Expr) -> bool {
+        if self.array_access_has_nonreferenceable_root(expr) {
             return false;
         }
         matches!(
@@ -11261,18 +11262,18 @@ impl Compiler {
                 }
 
                 let resolved = self.resolve_function_name(name);
+                let resolved_refs = self.lookup_ref_args(&resolved);
+                let has_exact_function = self
+                    .functions
+                    .iter()
+                    .any(|(function, _)| function.eq_ignore_ascii_case(&resolved))
+                    || self
+                        .known_ref_args
+                        .keys()
+                        .any(|function| function.eq_ignore_ascii_case(&resolved));
                 let ref_args = {
-                    let resolved_refs = self.lookup_ref_args(&resolved);
-                    let has_exact_user_function = self
-                        .functions
-                        .iter()
-                        .any(|(function, _)| function.eq_ignore_ascii_case(&resolved))
-                        || self
-                            .known_ref_args
-                            .keys()
-                            .any(|function| function.eq_ignore_ascii_case(&resolved));
                     if resolved_refs == 0
-                        && !has_exact_user_function
+                        && !has_exact_function
                         && self.current_namespace.is_some()
                         && !name.contains('\\')
                         && !self.has_function_import(name)
@@ -11282,6 +11283,23 @@ impl Compiler {
                         resolved_refs
                     }
                 };
+                // An unresolved direct target needs the runtime signature only
+                // when argument lowering itself depends on value-vs-reference
+                // context.  Keep ordinary scalar/property sends on the proven
+                // compact path: treating every zero-ref builtin as unresolved
+                // would unnecessarily route the entire global-call surface
+                // through SendVarEx and change snapshot/writeback semantics.
+                let runtime_reference_check = resolved_refs == 0
+                    && !has_exact_function
+                    && self.instructions.iter().any(|instruction| {
+                        matches!(instruction.opcode, OpCode::Include | OpCode::Eval)
+                    })
+                    && args.iter().any(|argument| {
+                        matches!(
+                            argument.expr(),
+                            Expr::ArrayAccess { .. } | Expr::ArrayAppendArgument { .. }
+                        )
+                    });
                 let variadic_ref_start = self.lookup_variadic_ref_start(&resolved);
                 let name_idx = self.add_literal(Value::string(resolved.clone()));
 
@@ -11335,7 +11353,7 @@ impl Compiler {
                             .nonreferenceable_call_argument_line(arg.expr())
                             .is_none())
                         || (named_reference_args[index]
-                            && matches!(arg, CallArg::Named { value, .. } if Self::is_mutable_call_reference_source(value)))
+                            && matches!(arg, CallArg::Named { value, .. } if self.is_mutable_call_reference_source(value)))
                 });
                 let contains_yield = args.iter().any(CallArg::contains_yield);
                 let mut reference_writebacks = Vec::new();
@@ -11425,7 +11443,7 @@ impl Compiler {
                                 }
                                 CallArg::Named { name, value }
                                     if named_reference_args[index]
-                                        && Self::is_mutable_call_reference_source(value) =>
+                                        && self.is_mutable_call_reference_source(value) =>
                                 {
                                     match self.compile_call_array_element_reference_source(value) {
                                         Ok(op) => {
@@ -11461,8 +11479,14 @@ impl Compiler {
                             .collect(),
                     )
                 } else {
-                    contains_yield
-                        .then(|| self.compile_call_args(args, ref_args, variadic_ref_start, false))
+                    contains_yield.then(|| {
+                        self.compile_call_args(
+                            args,
+                            ref_args,
+                            variadic_ref_start,
+                            runtime_reference_check,
+                        )
+                    })
                 };
 
                 let runtime_generic_check = self.emit_generic_check(
@@ -11495,11 +11519,18 @@ impl Compiler {
                         0,
                         ref_args,
                         variadic_ref_start,
-                        false,
-                        false,
+                        runtime_reference_check,
+                        runtime_reference_check,
                     );
                 } else {
-                    self.emit_call_args(args, 0, ref_args, variadic_ref_start, false, false);
+                    self.emit_call_args(
+                        args,
+                        0,
+                        ref_args,
+                        variadic_ref_start,
+                        runtime_reference_check,
+                        runtime_reference_check,
+                    );
                 }
 
                 if compiled_args.is_none()
@@ -14510,6 +14541,19 @@ impl Compiler {
     ) {
         for (i, arg) in args.iter().enumerate() {
             match arg {
+                CallArg::Positional(Expr::ArrayAppendArgument { target, .. }) if use_var_ex => {
+                    let source = self
+                        .compile_runtime_array_append_argument(target, i)
+                        .expect("runtime append argument must have a writable container");
+                    let mut send = Instruction::new(OpCode::SendVarEx);
+                    send.op1 = source;
+                    send.op1_type = OpType::Cv;
+                    send.op2 = (i as u32 + cv_offset) as u16;
+                    if set_extended_value {
+                        send.extended_value = i as u32;
+                    }
+                    self.instructions.push(send);
+                }
                 CallArg::Positional(Expr::ArrayAccess { array, index, .. })
                     if matches!(array.as_ref(), Expr::ArrayAppendArgument { .. })
                         && !Self::positional_argument_is_ref(ref_args, variadic_ref_start, i) =>
@@ -14670,9 +14714,7 @@ impl Compiler {
                     }
                     self.instructions.push(send);
                 }
-                CallArg::Positional(expr @ Expr::ArrayAccess { .. })
-                    if use_var_ex && cv_offset == 0 =>
-                {
+                CallArg::Positional(expr @ Expr::ArrayAccess { .. }) if use_var_ex => {
                     if let Some(source) = self.compile_runtime_call_array_argument(expr, i, None) {
                         let mut send = Instruction::new(OpCode::SendVarEx);
                         send.op1 = source;
@@ -14684,6 +14726,7 @@ impl Compiler {
                         self.instructions.push(send);
                     } else {
                         let (op, op_type) = self.compile_expr(expr);
+                        let nonreferenceable_line = self.nonreferenceable_call_argument_line(expr);
                         let mut send = Instruction::new(Self::positional_opcode(
                             ref_args,
                             variadic_ref_start,
@@ -14697,7 +14740,22 @@ impl Compiler {
                         if set_extended_value {
                             send.extended_value = i as u32;
                         }
-                        self.instructions.push(send);
+                        if nonreferenceable_line.is_some() {
+                            send.opcode = OpCode::SendVal;
+                            send._pad |= SEND_FLAG_NONREFERENCEABLE;
+                            send.extended_value = i as u32;
+                        }
+                        if self
+                            .temporary_write_error_call_argument_line(expr)
+                            .is_some()
+                        {
+                            send._pad |= SEND_FLAG_TEMPORARY_WRITE_ERROR;
+                        }
+                        if let Some(line) = nonreferenceable_line {
+                            self.push_instruction_at_line(send, line);
+                        } else {
+                            self.instructions.push(send);
+                        }
                     }
                 }
                 CallArg::Positional(expr) | CallArg::Unpack(expr) => {
@@ -14841,25 +14899,31 @@ impl Compiler {
             reversed_dimensions.push((index.as_ref(), *line));
             root = array.as_ref();
         }
-        let Expr::Variable { name, .. } = root else {
-            return None;
+        let (mut current, mut current_type, root_is_cv) = match root {
+            Expr::Variable { name, .. } => (self.resolve_cv(name), OpType::Cv, true),
+            call if Self::is_array_write_call_result(call)
+                && !self.is_zend_special_builtin_write_result(call) =>
+            {
+                let (operand, operand_type) = self.compile_expr(call);
+                (operand, operand_type, false)
+            }
+            _ => return None,
         };
         reversed_dimensions.reverse();
 
-        let mut current = self.resolve_cv(name);
         for (dimension, (index, line)) in reversed_dimensions.into_iter().enumerate() {
             let (key, key_type) = self.compile_expr(index);
             let result =
                 self.resolve_cv(&format!("\0function_argument_dimension_{}", self.next_cv));
             let mut fetch = Instruction::new(OpCode::FetchDimR);
             fetch.op1 = current;
-            fetch.op1_type = OpType::Cv;
+            fetch.op1_type = current_type;
             fetch.op2 = key;
             fetch.op2_type = key_type;
             fetch.result = result;
             fetch.result_type = OpType::Cv;
             fetch._pad |= FETCH_DIM_FUNC_ARG;
-            if dimension == 0 {
+            if dimension == 0 && root_is_cv {
                 fetch._pad |= FETCH_DIM_FUNC_ARG_ROOT_CV;
             }
             fetch.extended_value = if let Some(name_literal) = name_literal {
@@ -14870,6 +14934,7 @@ impl Compiler {
             };
             self.push_instruction_at_line(fetch, line);
             current = result;
+            current_type = OpType::Cv;
         }
         Some(current)
     }
@@ -15115,6 +15180,30 @@ impl Compiler {
             invoke._pad |= NEW_FLAG_UNPACKED_ARGUMENTS;
             self.push_instruction_at_line(invoke, line);
             self.emit_constructor_argument_release(result + 1, self.next_tmp, call_line);
+            return (result, OpType::Tmp);
+        }
+        let runtime_lvalue_arguments = args.iter().any(|argument| {
+            matches!(
+                argument.expr(),
+                Expr::ArrayAccess { .. } | Expr::ArrayAppendArgument { .. }
+            )
+        }) && known_class
+            .is_none_or(|name| self.known_constructor_is_by_value(name) != Some(true));
+        if runtime_lvalue_arguments {
+            // The validation/allocation half above has already resolved the
+            // class and constructor accessibility. Publish the prepared call
+            // now so FUNC_ARG dimension fetches can select value versus
+            // reference context before they materialize missing array paths.
+            // The constructor body still cannot run until the trailing
+            // DoFcall, so source-order argument evaluation is unchanged.
+            self.push_instruction_at_line(invoke, line);
+            self.emit_call_args(args, 1, 0, None, true, true);
+            let argument_end = self.next_tmp;
+            let mut call = Instruction::new(OpCode::DoFcall);
+            call.result = self.alloc_tmp();
+            call.result_type = OpType::Tmp;
+            self.push_instruction_at_line(call, call_line);
+            self.emit_constructor_argument_release(result + 1, argument_end, call_line);
             return (result, OpType::Tmp);
         }
         // A later expression may mutate an earlier CV. Keep compact CV sends

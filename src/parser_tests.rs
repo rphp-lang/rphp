@@ -245,6 +245,25 @@ fn array_append_reference_uses_the_reference_ast_without_displacing_plain_pushes
 }
 
 #[test]
+fn array_append_reference_binds_before_surrounding_binary_operators() {
+    let tokens = Lexer::new("<?php $a[] =& $a == $a =& $b > gc_collect_cycles();")
+        .tokenize()
+        .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+
+    assert!(matches!(
+        &statements[0],
+        Stmt::ExprStmt(Expr::BinaryOp { left, .. })
+            if matches!(
+                left.as_ref(),
+                Expr::AssignTargetReference { target, source }
+                    if matches!(target.as_ref(), Expr::ArrayAppendArgument { .. })
+                        && matches!(source.as_ref(), Expr::Variable { name, .. } if name == "a")
+            )
+    ));
+}
+
+#[test]
 fn excessive_mixed_syntax_nesting_reports_memory_exhaustion() {
     let pairs = 140;
     let source = format!(

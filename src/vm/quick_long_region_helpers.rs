@@ -282,7 +282,9 @@ impl InvariantJsonProjectionState {
         let mut instruction = *op_array.instructions.get(*cursor)?;
         while instruction.opcode == OpCode::FetchDimR {
             let array = long_slot(instruction.op1_type, instruction.op1)?;
-            if instruction.result_type != OpType::Tmp
+            let deferred_runtime_argument = instruction.result_type == OpType::Cv
+                && instruction._pad & crate::vm::instruction::FETCH_DIM_FUNC_ARG != 0;
+            if (!deferred_runtime_argument && instruction.result_type != OpType::Tmp)
                 || !self.extend_fetch(op_array, instruction, array, total_slots)?
             {
                 return None;

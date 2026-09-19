@@ -286,6 +286,20 @@ impl Compiler {
         contains_reference: bool,
         assignment_line: usize,
     ) -> Result<(u16, OpType, ForeachArrayWriteback, bool), String> {
+        // A by-reference destructuring target requires the source dimension
+        // itself to be referenceable.  Reject a nullsafe chain before
+        // compiling any of its receivers: PHP reports this as the dedicated
+        // nullsafe-reference compile error, without first reading an
+        // undefined root or degrading it to the generic non-referenceable
+        // value diagnostic.
+        if contains_reference
+            && let Some(line) = Self::nullsafe_chain_line(source)
+        {
+            return Err(self.goto_error(
+                "Cannot take reference of a nullsafe chain",
+                line,
+            ));
+        }
         let mutable = matches!(
             source,
             Expr::Variable { .. }
@@ -447,6 +461,34 @@ impl Compiler {
             false,
             expression_source_line(target),
         ))
+    }
+
+    /// Prepare `array[]` while the pending call owns the definitive parameter
+    /// contract. Method, static and dynamic calls cannot decide at compile
+    /// time whether the argument is a writable reference or an illegal read.
+    /// The VM therefore performs the append only for a by-reference parameter
+    /// and raises `Cannot use [] for reading` otherwise.
+    pub(super) fn compile_runtime_array_append_argument(
+        &mut self,
+        target: &Expr,
+        parameter_index: usize,
+    ) -> Result<u16, String> {
+        let (array, array_type, writeback) =
+            self.compile_array_append_source(target, true, false)?;
+        let appended = self.resolve_cv(&format!(
+            "\0runtime_array_append_argument_{}",
+            self.next_cv
+        ));
+        let mut bind = Instruction::new(OpCode::BindArrayAppendRef);
+        bind.op1 = array;
+        bind.op1_type = array_type;
+        bind.result = appended;
+        bind.result_type = OpType::Cv;
+        bind._pad |= REFERENCE_RESULT_INTERNAL | FETCH_DIM_FUNC_ARG;
+        bind.extended_value = u32::try_from(parameter_index).unwrap_or(u32::MAX - 1) + 1;
+        self.push_instruction_at_line(bind, expression_source_line(target));
+        self.emit_array_append_source_writeback(writeback, array, array_type);
+        Ok(appended)
     }
 
     pub(super) fn emit_prepared_array_append_argument_reference(
@@ -1349,6 +1391,15 @@ impl Compiler {
                         false,
                         expression_source_line(target),
                     )?;
+                    // `??=` uses ArrayAccess::offsetExists() before reading
+                    // each object-backed dimension.  The shared EMPTY marker
+                    // already implements the required exists-then-get
+                    // protocol; apply it to both intermediate mutable probes
+                    // and the terminal fetch instead of calling offsetGet()
+                    // directly under the merely-silent read flag.
+                    for &instruction in &path.mutable_fetches {
+                        self.instructions[instruction]._pad |= FETCH_DIM_EMPTY;
+                    }
                     let &(container, container_type) = path.containers.last().unwrap();
                     let &(key, key_type) = path.keys.last().unwrap();
                     let current = self.alloc_tmp();
@@ -1359,7 +1410,7 @@ impl Compiler {
                     fetch.op2_type = key_type;
                     fetch.result = current;
                     fetch.result_type = OpType::Tmp;
-                    fetch._pad |= FETCH_DIM_SILENT;
+                    fetch._pad |= FETCH_DIM_SILENT | FETCH_DIM_EMPTY;
                     self.instructions.push(fetch);
                     (current, OpType::Tmp, CoalesceWrite::Array(path))
                 }
@@ -1459,7 +1510,8 @@ impl Compiler {
                 }
                 self.push_instruction_at_line(assign, line);
             }
-            CoalesceWrite::Array(path) => {
+            CoalesceWrite::Array(mut path) => {
+                self.rematerialize_coalesce_array_path(&mut path);
                 let &(container, container_type) = path.containers.last().unwrap();
                 let &(key, key_type) = path.keys.last().unwrap();
                 let mut assign = Instruction::new(OpCode::AssignDim);
@@ -2718,6 +2770,37 @@ impl Compiler {
             }
             self.push_instruction_at_line(rebuild, path.source_line);
         }
+    }
+
+    /// Re-enter the already-evaluated mutable path for the write half of a
+    /// nested `??=`. PHP performs the initial EMPTY probes to decide whether
+    /// the RHS is needed, then fetches each parent dimension again before the
+    /// assignment. Reuse the normalized key operands so their expressions and
+    /// side effects still run exactly once.
+    fn rematerialize_coalesce_array_path(&mut self, path: &mut MutableArrayPath) {
+        if path.containers.len() <= 1 {
+            return;
+        }
+
+        let mut containers = Vec::with_capacity(path.containers.len());
+        containers.push(path.root);
+        for position in 0..path.keys.len() - 1 {
+            let (container, container_type) = *containers.last().unwrap();
+            let (key, key_type) = path.keys[position];
+            let child = self.alloc_tmp();
+            let mut fetch = Instruction::new(OpCode::FetchDimR);
+            fetch.op1 = container;
+            fetch.op1_type = container_type;
+            fetch.op2 = key;
+            fetch.op2_type = key_type;
+            fetch.result = child;
+            fetch.result_type = OpType::Tmp;
+            fetch._pad |= FETCH_DIM_SILENT | FETCH_DIM_MUTABLE;
+            path.mutable_fetches.push(self.instructions.len());
+            self.push_instruction_at_line(fetch, path.source_line);
+            containers.push((child, OpType::Tmp));
+        }
+        path.containers = containers;
     }
 
     fn rebuild_mutable_array_path_after_unset(

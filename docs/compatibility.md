@@ -7,43 +7,54 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `closure-invocation-contracts` checkpoint over `34eb1e86` adds **12 exact
-PHP 8.5 passes without loss**, reducing measured supported failures from
-**237 to 225**. Explicit `Closure->__invoke()` calls now normalize their
-source-level receiver slot before every user-call strategy, preserve
-positional and named variadic arguments, reference identity and by-reference
-diagnostics, and expose the exact active anonymous closure through
-`Closure::getCurrent()`. Callable arrays and strings also retain PHP's class
-lookup, canonical diagnostic names and throwable source origins.
+The `lvalue-reference-materialization` checkpoint over `2ba729ae` adds **11
+exact PHP 8.5 passes without loss**, reducing measured supported failures from
+**225 to 214**. Runtime-resolved functions, methods, static calls and
+constructors now choose value versus reference context before materializing
+append or nested array dimensions. Nested `ArrayAccess` coalescing preserves
+exists/get/write ordering without evaluating keys twice, nullsafe reference
+destructuring fails at compilation, reference-assignment precedence matches
+PHP, and rejected negative string-offset assignment preserves both its null
+result and original storage.
 
-The 8,258-case supported ledger is **7,560 pass / 225 fail / 194 skip / 276
-unsupported / three XFAIL**. The stable 7,174-case core is **6,562 pass / 220
+The 8,258-case supported ledger is **7,571 pass / 214 fail / 194 skip / 276
+unsupported / three XFAIL**. The stable 7,174-case core is **6,573 pass / 209
 fail / 182 skip / 210 unsupported**, with no timeout or crash. Zend/lang is
-**5,092/212/115/180**, exact **+12/-0**; strings/array preserves the exact
-1,470-pass set at **1,470/8/67/30**. The focused regression packet is 13/13.
-Default, no-default, erased, reified, all-features and all-targets Cargo gates,
-Composer/Symfony S0--S3, formatting and the unsafe ratchet pass. Network and
-socket integration tests must run outside the restricted development sandbox;
-the same tests are green there. Performance remains deferred to the aggregate
-correctness-sweep boundary.
+**5,103/201/115/180**, exact **+11/-0**; strings/array preserves the exact
+1,470-pass set at **1,470/8/67/30**. The selected upstream packet is 11/18;
+the seven remaining cases stay visible for separate isset, typed-property and
+undefined-variable clusters. Default, no-default, erased, reified,
+all-features and all-targets Cargo gates, Composer/Symfony S0--S3, formatting
+and the unsafe ratchet pass. Network and socket integration tests must run
+outside the restricted development sandbox; the same tests are green there.
+Performance remains deferred to the aggregate correctness-sweep boundary.
 
 The multi-minute 20,000-level JSON container stress case is explicitly ignored
 with a TODO to move it to an opt-in stress lane; it is not counted as a pass or
 used for any compatibility claim.
 
 SHA-256 evidence: candidate
-`f8b4469d14da41a4c46fb62aa7426c7b4518d930c5cbacd92d1d8cf085f5b86e`;
+`94edc29cb6f14baf05b8b04519cec58dc322d4218bd084efac1bcc460b45a417`;
 focused manifest
-`c50617843a960d79fe70b29910dd30a703e6fd32b3744cd72ccc5ccb333d7cbd`;
+`98a666a885afad2efc007571e351e6346d475dd2604cf73103e083f4641bf710`;
 stable-core status/pass sets
-`c1fd14330709a398f1946085ba863b313279b9a77067b19acb09e5c6ceba6a47` /
-`3579fa5bac0bf3eb8cf9502fb07ee9f647d8e09d1d9f202b41c552d8201bb463`;
+`e81c171134f2529a68a0123ac2f338fda5bffcbe608447e00d2f02875bef8f4c` /
+`6fe2eb865e87303ae11bd27e041303554e4dd097e45dfaaf17c7d1675dfacd81`;
 Zend/lang manifest/pass set
-`381536349b1157eb9d3126d2606d30786ba868fd39cf63217b6740446dd5b4e9` /
-`5e03f259198ae261ade3630df7dd0e3ed3b5c8dacb4c2e25a7c2f093db88b929`;
+`8af80937e14dffedbbe7b6afb804a06cd3b4df97066436cd6d5f2173345c81a7` /
+`d78b988fe4c5195a0fd1505dc2e62c8b79fdf4287420f107819c17237fab3621`;
 strings/array manifest/pass set
-`ef45624907a717308973f8aa393dfd8c9c68a7ba120b2250f3702e0bd5172c2d` /
+`c782b93935c1aaba8789c0bc84b3fe98f347c01d15cdc3e187cdb09412357115` /
 `e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
+
+### Preceding closure invocation checkpoint
+
+The `closure-invocation-contracts` checkpoint over `34eb1e86` added 12 exact
+passes without loss, reaching 7,560 pass / 225 fail in the supported ledger.
+Explicit `Closure->__invoke()` normalizes its receiver, preserves variadic and
+reference identity, and exposes the active anonymous closure through
+`Closure::getCurrent()`; callable arrays and strings retain PHP lookup and
+diagnostic origins.
 
 ### Preceding lazy-object checkpoint
 

@@ -142,7 +142,7 @@ impl Parser {
             .is_none()
             .then(|| self.array_write_root_error(&target))
             .flatten();
-        self.expect_lbracket()?;
+        let bracket_line = self.expect_lbracket()?;
         self.expect(&Token::RBracket)?;
         self.expect(&Token::Assign)?;
         let by_ref = if matches!(self.peek(), Token::Ampersand(_)) {
@@ -160,6 +160,15 @@ impl Parser {
         }
         if let Expr::Globals { line } = target {
             return Ok(self.compile_error("Cannot append to $GLOBALS", line));
+        }
+        if by_ref && matches!(expr, Expr::BinaryOp { .. }) {
+            return Ok(self.finish_reference_assignment_precedence(
+                Expr::ArrayAppendArgument {
+                    target: Box::new(target),
+                    line: bracket_line,
+                },
+                expr,
+            ));
         }
         Ok(Expr::ArrayAppendAssign {
             target: Box::new(target),
@@ -344,6 +353,7 @@ impl Parser {
             &target,
             Expr::DynamicVariable { .. }
                 | Expr::ArrayAccess { .. }
+                | Expr::ArrayAppendArgument { .. }
                 | Expr::PropertyAccess {
                     nullsafe: false,
                     ..

@@ -450,6 +450,14 @@ fn nullsafe_reference_unset_and_foreach_targets_fail_during_compilation() {
             "Cannot take reference of a nullsafe chain",
         ),
         (
+            "[&$ref] = $foo?->bar;",
+            "Cannot take reference of a nullsafe chain",
+        ),
+        (
+            "[&$ref] = $foo->bar?->baz;",
+            "Cannot take reference of a nullsafe chain",
+        ),
+        (
             "unset($foo?->bar->baz);",
             "Can't use nullsafe operator in write context",
         ),

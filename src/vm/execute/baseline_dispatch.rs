@@ -8305,6 +8305,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             suppressed,
                         )?;
                         finish_string_assignment_warning!();
+                        if opline._pad & crate::vm::instruction::ASSIGN_DIM_RESULT_VALUE != 0 {
+                            diagnostic_frame_action(
+                                frame,
+                                op_array,
+                                DiagnosticFrameAction::Store {
+                                    destination: opline.result,
+                                    destination_type: opline.result_type,
+                                    value: Value::null(),
+                                },
+                            );
+                        }
                         break 'assign_dim;
                     };
                     if position >= bytes.len() {
@@ -8690,6 +8701,33 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::BindArrayAppendRef => 'bind_array_append: {
+                if opline._pad & FETCH_DIM_FUNC_ARG != 0
+                    && !fetch_dim_function_argument_is_ref(frame, op_array, opline)
+                {
+                    let error = make_error_value("Error", "Cannot use [] for reading");
+                    let instruction_index = (opline_ptr as usize
+                        - op_array.instructions.as_ptr() as usize)
+                        / std::mem::size_of::<Instruction>();
+                    attach_throwable_origin(
+                        &error,
+                        eg,
+                        frame,
+                        op_array,
+                        instruction_index,
+                    );
+                    // SAFETY: this opcode executes only after an Init*Call
+                    // established the pending activation inspected above.
+                    unsafe { cleanup_pending_calls(eg, frame) };
+                    match throw_in_frame(eg, frame, error)? {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            resume_activation!(new_frame, new_op_array);
+                        }
+                        ThrowResult::Unhandled(exception) => {
+                            eg.exception = Some(exception);
+                            return Ok(());
+                        }
+                    }
+                }
                 let conversion = if operand_is_false(frame, opline.op1, opline.op1_type) {
                     convert_false_array_location(
                         eg,
