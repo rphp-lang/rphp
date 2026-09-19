@@ -7897,6 +7897,50 @@ fn class_new_lazy_ghost(
 const LAZY_SKIP_INITIALIZATION_ON_SERIALIZE: i64 = 8;
 const LAZY_SKIP_DESTRUCTOR: i64 = 16;
 
+#[cold]
+fn lazy_internal_class_boundary(eg: &ExecutorGlobals, owner: &str) -> Option<(String, bool)> {
+    let mut class = eg.find_class(owner)?;
+    if eg.class_id_is_internal(class.class_id) && !class.name.eq_ignore_ascii_case("stdClass") {
+        return Some((class.name.clone(), false));
+    }
+    while let Some(parent) = class.parent.as_deref() {
+        let parent_class = eg.find_class(parent)?;
+        if eg.class_id_is_internal(parent_class.class_id)
+            && !parent_class.name.eq_ignore_ascii_case("stdClass")
+        {
+            return Some((parent_class.name.clone(), true));
+        }
+        class = parent_class;
+    }
+    None
+}
+
+#[cold]
+fn lazy_proxy_classes_are_compatible(
+    eg: &ExecutorGlobals,
+    proxy_class: &str,
+    real_class: &str,
+) -> bool {
+    if !eg.class_is_a(proxy_class, real_class) {
+        return false;
+    }
+    let (Some(proxy), Some(real)) = (eg.find_class(proxy_class), eg.find_class(real_class)) else {
+        return proxy_class.eq_ignore_ascii_case(real_class);
+    };
+    if proxy.property_layout.len() != real.property_layout.len() {
+        return false;
+    }
+    ["__destruct", "__clone"].iter().all(|method| {
+        let proxy_declaration = eg
+            .find_method_info(proxy_class, method)
+            .map(|(_, _, declaring)| declaring);
+        let real_declaration = eg
+            .find_method_info(real_class, method)
+            .map(|(_, _, declaring)| declaring);
+        proxy_declaration == real_declaration
+    })
+}
+
 fn lazy_object_options(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
@@ -7957,11 +8001,15 @@ fn class_new_lazy_object(
             "Class {owner} cannot be instantiated as a lazy object"
         )));
     }
-    if eg.class_is_internal(&owner) && !owner.eq_ignore_ascii_case("stdClass") {
-        reflection_exception(
-            eg,
-            format!("Class {owner} is an internal class and cannot be lazy"),
-        );
+    if let Some((internal, inherited)) = lazy_internal_class_boundary(eg, &owner) {
+        let message = if inherited {
+            format!(
+                "Cannot make instance of internal class lazy: {owner} inherits internal class {internal}"
+            )
+        } else {
+            format!("Cannot make instance of internal class lazy: {internal} is internal")
+        };
+        eg.exception = Some(make_error_value("Error", &message));
         return Ok(());
     }
     let class_id = class.class_id;
@@ -7995,22 +8043,102 @@ fn class_new_lazy_proxy(
     class_new_lazy_object(ed, rv, eg, LazyObjectStrategy::Proxy)
 }
 
-fn restore_lazy_property_defaults(eg: &ExecutorGlobals, object: &Value, lazy_slots: &[usize]) {
+fn lazy_property_defaults(
+    eg: &mut ExecutorGlobals,
+    class_name: &str,
+) -> Result<Option<std::rc::Rc<[Value]>>, VmError> {
+    let Some((class_id, entries, base_defaults, resolved)) =
+        eg.find_class(class_name).and_then(|class| {
+            class.deferred_instance_defaults.as_ref().map(|deferred| {
+                (
+                    class.class_id,
+                    deferred.entries(),
+                    class.property_defaults.clone(),
+                    deferred.resolved(),
+                )
+            })
+        })
+    else {
+        return Ok(None);
+    };
+    if let Some(resolved) = resolved {
+        return Ok(Some(resolved));
+    }
+
+    let outermost = eg
+        .class_by_id(class_id)
+        .and_then(|class| class.deferred_instance_defaults.as_ref())
+        .is_some_and(|deferred| deferred.begin_evaluation());
+    let evaluated = (|| {
+        let mut defaults = base_defaults.as_ref().to_vec();
+        for deferred in entries.iter() {
+            let Some(value) = evaluate_deferred_property_default_value(deferred, eg)? else {
+                return Ok(None);
+            };
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            let definition = eg
+                .class_by_id(class_id)
+                .and_then(|class| class.properties.get(deferred.property_index))
+                .cloned()
+                .ok_or_else(|| VmError::Fatal("Invalid lazy property default slot".into()))?;
+            let value = match crate::vm::execute::prepare_property_assignment(
+                value,
+                &definition,
+                eg,
+                true,
+                class_name,
+            ) {
+                Ok(value) => value,
+                Err(message) => {
+                    eg.exception = Some(make_error_value("TypeError", &message));
+                    return Ok(None);
+                }
+            };
+            let Some(slot) = defaults.get_mut(deferred.property_index) else {
+                return Err(VmError::Fatal(
+                    "Invalid lazy property default template slot".into(),
+                ));
+            };
+            *slot = value;
+        }
+        Ok(Some(std::rc::Rc::<[Value]>::from(defaults)))
+    })();
+    if let Some(deferred) = eg
+        .class_by_id(class_id)
+        .and_then(|class| class.deferred_instance_defaults.as_ref())
+    {
+        deferred.end_evaluation();
+        if outermost && let Ok(Some(resolved)) = &evaluated {
+            deferred.cache_resolved(resolved.clone());
+        }
+    }
+    evaluated
+}
+
+fn restore_lazy_property_defaults(
+    eg: &mut ExecutorGlobals,
+    object: &Value,
+    lazy_slots: &[usize],
+) -> Result<(), VmError> {
     let Some((class_name, property_count)) = object
         .as_object()
         .map(|object| (object.class_name.clone(), object.property_values.len()))
     else {
-        return;
+        return Ok(());
     };
-    let Some(defaults) = eg
+    let Some(class_defaults) = eg
         .find_class(class_name.as_ref())
         .map(|class| class.property_defaults.clone())
     else {
-        return;
+        return Ok(());
     };
+    let resolved = lazy_property_defaults(eg, class_name.as_ref())?;
+    let defaults = resolved.as_deref().unwrap_or(class_defaults.as_ref());
     debug_assert_eq!(defaults.len(), property_count);
     let Some(mut object) = object.as_object_mut() else {
-        return;
+        return Ok(());
     };
     for &slot in lazy_slots {
         if object
@@ -8021,6 +8149,7 @@ fn restore_lazy_property_defaults(eg: &ExecutorGlobals, object: &Value, lazy_slo
             object.property_values[slot] = defaults[slot].clone();
         }
     }
+    Ok(())
 }
 
 type LazyPropertySnapshot = (Vec<Value>, Option<Box<DynamicPropertyMap>>);
@@ -8096,6 +8225,46 @@ fn detach_lazy_proxy_shell_reference_constraints(object: &Value) {
     }
 }
 
+#[cold]
+fn publish_lazy_release_error(eg: &mut ExecutorGlobals, released: bool) {
+    if !released {
+        return;
+    }
+    let displaced = eg.exception.take();
+    let error = make_error_value("Error", "Lazy object was released during initialization");
+    if let Some(displaced) = displaced.as_ref() {
+        crate::vm::execute::append_replaced_exception(&error, displaced, eg);
+    }
+    eg.exception = Some(error);
+}
+
+#[cold]
+fn finish_released_lazy_object(
+    eg: &mut ExecutorGlobals,
+    object: &Value,
+    released: bool,
+) -> Result<(), VmError> {
+    if !released {
+        return Ok(());
+    }
+    let has_destructor = object.as_object().is_some_and(|object| {
+        eg.find_method_info(&object.class_name, "__destruct")
+            .is_some()
+    });
+    if has_destructor && object.mark_object_destructed() {
+        let _ = crate::stdlib::call_object_public_method(eg, object, "__destruct", &[])?;
+    }
+    if let Some(destructor_error) = eg.exception.take() {
+        let release_error =
+            make_error_value("Error", "Lazy object was released during initialization");
+        crate::vm::execute::append_replaced_exception(&destructor_error, &release_error, eg);
+        eg.exception = Some(destructor_error);
+    } else {
+        publish_lazy_release_error(eg, true);
+    }
+    Ok(())
+}
+
 /// Initialize one Reflection lazy object at the property-access boundary.
 /// Ghosts return their original identity; proxies return their real instance.
 pub(crate) fn initialize_lazy_object(
@@ -8130,9 +8299,17 @@ pub(crate) fn initialize_lazy_object(
     // declared defaults are observable inside the initializer itself. Proxy
     // shells keep their lazy storage; their factory produces the real object.
     if strategy == LazyObjectStrategy::Ghost {
-        restore_lazy_property_defaults(eg, object, &lazy_slots_before);
+        restore_lazy_property_defaults(eg, object, &lazy_slots_before)?;
+        if eg.exception.is_some() {
+            if let Some(state) = eg.lazy_object_state_mut(object) {
+                state.initializing = false;
+                state.lazy_slots = lazy_slots_before;
+            }
+            return Ok(object.clone());
+        }
     }
 
+    let strong_before_initializer = object.object_strong_count();
     let result = match strategy {
         LazyObjectStrategy::Ghost => crate::stdlib::call_resolved_with_values(
             eg,
@@ -8145,6 +8322,14 @@ pub(crate) fn initialize_lazy_object(
             std::slice::from_ref(object),
         )?,
     };
+    // The VM retains one operation-local handle while the initializer runs;
+    // property writeback may retain a second. Releasing the last user handle
+    // therefore appears as a two-to-one or three-to-two transition. A live
+    // foreach-by-reference target starts with four handles, while a self-cycle
+    // keeps its count stable, so neither is mistaken for a released object.
+    let released_during_initialization = strong_before_initializer
+        .zip(object.object_strong_count())
+        .is_some_and(|(before, after)| before <= 3 && after + 1 == before);
     if eg.exception.is_some() {
         if strategy == LazyObjectStrategy::Ghost
             && let Some(snapshot) = property_snapshot
@@ -8155,6 +8340,7 @@ pub(crate) fn initialize_lazy_object(
             state.initializing = false;
             state.lazy_slots = lazy_slots_before.clone();
         }
+        publish_lazy_release_error(eg, released_during_initialization);
         return Ok(object.clone());
     }
 
@@ -8174,16 +8360,25 @@ pub(crate) fn initialize_lazy_object(
                     "TypeError",
                     "Lazy object initializer must return NULL or no value",
                 ));
+                publish_lazy_release_error(eg, released_during_initialization);
                 return Ok(object.clone());
             }
             eg.take_lazy_object_state(object);
+            finish_released_lazy_object(eg, object, released_during_initialization)?;
             Ok(object.clone())
         }
         LazyObjectStrategy::Proxy => {
-            let valid_instance = result.as_object().is_some_and(|instance| {
-                object
-                    .as_object()
-                    .is_some_and(|lazy| eg.class_is_a(&lazy.class_name, &instance.class_name))
+            let lazy_class = object
+                .as_object()
+                .map(|object| object.class_name.to_string())
+                .unwrap_or_default();
+            let real_class = result
+                .as_object()
+                .map(|object| object.class_name.to_string());
+            let same_object = result.object_identity().is_some()
+                && result.object_identity() == object.object_identity();
+            let valid_instance = real_class.as_deref().is_some_and(|real_class| {
+                !same_object && lazy_proxy_classes_are_compatible(eg, &lazy_class, real_class)
             });
             if !valid_instance {
                 if strategy == LazyObjectStrategy::Ghost
@@ -8198,10 +8393,29 @@ pub(crate) fn initialize_lazy_object(
                     state.initializing = false;
                     state.lazy_slots = lazy_slots_before.clone();
                 }
-                eg.exception = Some(make_error_value(
-                    "TypeError",
-                    "Lazy proxy factory must return an instance of the reflected class",
-                ));
+                let (class, message) = if same_object {
+                    (
+                        "Error",
+                        "Lazy proxy factory must return a non-lazy object".to_string(),
+                    )
+                } else if let Some(real_class) = real_class {
+                    (
+                        "TypeError",
+                        format!(
+                            "The real instance class {real_class} is not compatible with the proxy class {lazy_class}. The proxy must be a instance of the same class as the real instance, or a sub-class with no additional properties, and no overrides of the __destructor or __clone methods."
+                        ),
+                    )
+                } else {
+                    (
+                        "TypeError",
+                        format!(
+                            "Lazy proxy factory must return an instance of a class compatible with {lazy_class}, {} returned",
+                            result.type_name()
+                        ),
+                    )
+                };
+                eg.exception = Some(make_error_value(class, &message));
+                publish_lazy_release_error(eg, released_during_initialization);
                 return Ok(object.clone());
             }
             if let Some(state) = eg.lazy_object_state_mut(object) {
@@ -8211,6 +8425,7 @@ pub(crate) fn initialize_lazy_object(
                 state.lazy_slots.clear();
                 state.proxy_instance = Some(result.clone());
             }
+            finish_released_lazy_object(eg, object, released_during_initialization)?;
             Ok(result)
         }
     }
@@ -8343,7 +8558,10 @@ fn class_mark_lazy_object_as_initialized(
         return Ok(());
     };
     if let Some(state) = eg.take_lazy_object_state(&object) {
-        restore_lazy_property_defaults(eg, &object, &state.lazy_slots);
+        restore_lazy_property_defaults(eg, &object, &state.lazy_slots)?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
     }
     return_value(rv, object)
 }
@@ -9311,7 +9529,10 @@ fn property_skip_lazy_initialization(
     let Some(became_initialized) = became_initialized else {
         return Ok(());
     };
-    restore_lazy_property_defaults(eg, &target, std::slice::from_ref(&slot));
+    restore_lazy_property_defaults(eg, &target, std::slice::from_ref(&slot))?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     if became_initialized {
         eg.take_lazy_object_state(&target);
     }

@@ -3357,12 +3357,20 @@ impl Compiler {
 
                 // Collect any nested function declarations
                 self.functions.extend(func_compiler.functions);
+                self.function_declaration_keys
+                    .extend(func_compiler.function_declaration_keys);
                 self.class_declaration_keys
                     .extend(func_compiler.class_declaration_keys);
                 self.class_defs.extend(func_compiler.class_defs);
                 self.generic_declarations
                     .extend(nested_generic_declarations);
+                let declaration_key =
+                    self.emit_named_function_declaration(&resolved_name, *line);
                 self.functions.push((resolved_name, user_func));
+                self.function_declaration_keys.push(Some((
+                    declaration_key,
+                    self.class_declarations_are_runtime,
+                )));
             }
             Stmt::Return { expr, line } => {
                 if let Some(value) = expr {
@@ -5781,6 +5789,8 @@ impl Compiler {
                         })
                         .collect();
                     self.functions.extend(func_compiler.functions);
+                    self.function_declaration_keys
+                        .extend(func_compiler.function_declaration_keys);
                     self.class_declaration_keys
                         .extend(func_compiler.class_declaration_keys);
                     self.class_defs.extend(func_compiler.class_defs);
@@ -6570,6 +6580,8 @@ impl Compiler {
                         })
                         .collect();
                     self.functions.extend(func_compiler.functions);
+                    self.function_declaration_keys
+                        .extend(func_compiler.function_declaration_keys);
                     self.class_declaration_keys
                         .extend(func_compiler.class_declaration_keys);
                     self.class_defs.extend(func_compiler.class_defs);
@@ -6934,6 +6946,8 @@ impl Compiler {
                         })
                         .collect();
                     self.functions.extend(func_compiler.functions);
+                    self.function_declaration_keys
+                        .extend(func_compiler.function_declaration_keys);
                     self.class_declaration_keys
                         .extend(func_compiler.class_declaration_keys);
                     self.class_defs.extend(func_compiler.class_defs);
@@ -7882,6 +7896,8 @@ impl Compiler {
                         })
                         .collect();
                     self.functions.extend(func_compiler.functions);
+                    self.function_declaration_keys
+                        .extend(func_compiler.function_declaration_keys);
                     self.class_declaration_keys
                         .extend(func_compiler.class_declaration_keys);
                     self.class_defs.extend(func_compiler.class_defs);
@@ -8075,6 +8091,17 @@ impl Compiler {
         let declaration_key = format!("{class_name}@declaration#{declaration_id}");
         let key_literal = self.add_literal(Value::string(declaration_key.clone()));
         let mut instruction = Instruction::new(OpCode::DeclareClass);
+        instruction.op1 = key_literal;
+        instruction.op1_type = OpType::Const;
+        self.push_instruction_at_line(instruction, line);
+        declaration_key
+    }
+
+    fn emit_named_function_declaration(&mut self, function_name: &str, line: usize) -> String {
+        let declaration_id = FUNCTION_DECLARATION_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let declaration_key = format!("{function_name}@function-declaration#{declaration_id}");
+        let key_literal = self.add_literal(Value::string(declaration_key.clone()));
+        let mut instruction = Instruction::new(OpCode::DeclareFunction);
         instruction.op1 = key_literal;
         instruction.op1_type = OpType::Const;
         self.push_instruction_at_line(instruction, line);

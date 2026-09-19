@@ -15,6 +15,10 @@ static ANONYMOUS_CLASS_COUNTER: AtomicU32 = AtomicU32::new(0);
 /// Runtime declaration markers must remain unique across separately compiled
 /// includes and evals that share one executor.
 static CLASS_DECLARATION_COUNTER: AtomicU32 = AtomicU32::new(0);
+/// Runtime function declarations use the same request-wide uniqueness rule as
+/// runtime class markers. Includes and evals compile independently but may
+/// publish into one executor.
+static FUNCTION_DECLARATION_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) const OBJECT_OFFSET_CONSTANT_EXPRESSION_ERROR: &str =
     "Cannot use [] on objects in constant expression";
@@ -263,6 +267,11 @@ pub struct CompileResult {
     pub main: OpArray,
     pub compiler_halt_offset: Option<i64>,
     pub functions: Vec<(String, UserFunction)>,
+    /// Named functions whose declaration belongs to a child op-array or
+    /// conditional control-flow region. Their descriptors remain owned by the
+    /// executor, but enter the public function table only when execution
+    /// reaches the matching declaration marker.
+    pub runtime_functions: Vec<(String, String, UserFunction)>,
     pub class_defs: Vec<ClassDef>,
     /// Named classes whose trait composition must happen at their executable
     /// declaration marker rather than during source-unit setup.
@@ -292,6 +301,9 @@ impl CompileResult {
         }
         relocate_op_array_generic_use_sites(&mut self.main, base)?;
         for (_, function) in &mut self.functions {
+            relocate_op_array_generic_use_sites(&mut function.op_array, base)?;
+        }
+        for (_, _, function) in &mut self.runtime_functions {
             relocate_op_array_generic_use_sites(&mut function.op_array, base)?;
         }
         for class in &mut self.class_defs {
@@ -3134,6 +3146,10 @@ pub struct Compiler {
     trait_class_scope_tmp: Option<u16>,
     /// Collected function declarations
     functions: Vec<(String, UserFunction)>,
+    /// Runtime marker aligned one-for-one with `functions`. `None` belongs to
+    /// compiler-private closures; named declarations retain a unique key and
+    /// whether publication must wait until the marker executes.
+    function_declaration_keys: Vec<Option<(String, bool)>>,
     /// Loop context stack for break/continue
     loop_stack: Vec<LoopContext>,
     labels: HashMap<String, GotoLabel>,
@@ -3589,6 +3605,7 @@ impl Compiler {
             next_tmp: 0,
             trait_class_scope_tmp: None,
             functions: Vec::new(),
+            function_declaration_keys: Vec::new(),
             loop_stack: Vec::new(),
             labels: HashMap::new(),
             goto_patches: Vec::new(),
@@ -3965,12 +3982,15 @@ impl Compiler {
             .map(|(name, _)| name.clone())
             .collect();
         self.functions.extend(factory.functions);
+        self.function_declaration_keys
+            .extend(factory.function_declaration_keys);
         self.class_declaration_keys
             .extend(factory.class_declaration_keys);
         self.class_defs.extend(factory.class_defs);
         self.generic_declarations
             .extend(nested_generic_declarations);
         self.functions.push((registry_name.clone(), user_function));
+        self.function_declaration_keys.push(None);
         Ok((registry_name, lexical_functions))
     }
 
@@ -6031,6 +6051,21 @@ impl Compiler {
             generic_use_sites,
         );
         generic_metadata.validate_variance()?;
+        debug_assert_eq!(self.functions.len(), self.function_declaration_keys.len());
+        let mut functions = Vec::with_capacity(self.functions.len());
+        let mut runtime_functions = Vec::new();
+        for ((name, function), declaration) in self
+            .functions
+            .into_iter()
+            .zip(self.function_declaration_keys)
+        {
+            if let Some((declaration_key, true)) = declaration {
+                runtime_functions.push((declaration_key, name, function));
+            } else {
+                functions.push((name, function));
+            }
+        }
+
         Ok(CompileResult {
             main: OpArray {
                 num_cvs: self.next_cv,
@@ -6064,7 +6099,8 @@ impl Compiler {
                 ip_to_block: Vec::new(),
             },
             compiler_halt_offset: self.compiler_halt_offset,
-            functions: self.functions,
+            functions,
+            runtime_functions,
             class_defs,
             runtime_class_defs,
             constant_attributes: self.constant_attributes.borrow().clone(),
@@ -12414,6 +12450,8 @@ impl Compiler {
                     user_func.set_captured_typed_long_plan(captured_plan);
                 }
                 self.functions.extend(func_compiler.functions);
+                self.function_declaration_keys
+                    .extend(func_compiler.function_declaration_keys);
                 self.class_declaration_keys
                     .extend(func_compiler.class_declaration_keys);
                 self.class_defs.extend(func_compiler.class_defs);
@@ -12422,6 +12460,7 @@ impl Compiler {
                 let has_static_vars = !user_func.op_array.static_vars.is_empty();
                 let binds_trait_class_scope = user_func.common.plan.needs_trait_class_scope();
                 self.functions.push((closure_name.clone(), user_func));
+                self.function_declaration_keys.push(None);
 
                 // A nested non-static closure inherits the current bound
                 // receiver even when this intermediate body never reads

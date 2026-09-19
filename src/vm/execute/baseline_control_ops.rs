@@ -398,6 +398,21 @@ fn op_declare_class<'a>(
     Ok(ColdResult::Done)
 }
 
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn op_declare_function(
+    eg: &mut ExecutorGlobals,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    let declaration_key = op_array.literals[opline.op1 as usize]
+        .as_str()
+        .expect("DeclareFunction key must be a string literal");
+    eg.declare_runtime_function(declaration_key)
+        .map_err(VmError::Fatal)
+}
+
 fn include_parse_error(
     eg: &mut ExecutorGlobals,
     caller_present: bool,
@@ -864,6 +879,10 @@ fn execute_source_unit_inner(
         {
             return Err(VmError::Fatal(error));
         }
+    }
+    for (declaration_key, name, function) in compile_result.runtime_functions {
+        eg.register_runtime_function_declaration(declaration_key, name, function)
+            .map_err(VmError::Fatal)?;
     }
     for (declaration_key, class_def) in
         std::mem::take(&mut compile_result.runtime_class_defs)

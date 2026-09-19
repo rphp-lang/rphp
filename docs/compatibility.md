@@ -7,6 +7,49 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The `lazy-object-contracts` checkpoint over `dda6b461` adds **9 exact PHP 8.5
+passes without loss**, reducing measured supported failures from **246 to
+237**. Reflection lazy objects now reject internal-class storage, validate
+proxy layout and lifecycle compatibility, materialize deferred property
+defaults before initialization, preserve initializer/destructor exception
+ordering and detect release during initialization. Recursive magic-reference
+access retains PHP's dynamic-property boundary. A shared runtime declaration
+marker also keeps nested functions unpublished until execution reaches their
+declaration and raises the canonical redeclaration fatal on a second reach;
+reference assignment now binds before following binary operators.
+
+The 8,258-case supported ledger is **7,548 pass / 237 fail / 194 skip / 276
+unsupported / three XFAIL**. The stable 7,174-case core is **6,550 pass / 232
+fail / 182 skip / 210 unsupported**, with no timeout or crash. Zend/lang is
+**5,080/224/115/180**, exact **+9/-0**; strings/array remains byte-identical at
+**1,470/8/67/30**. Five Cargo configurations, all-target compilation,
+Composer/Symfony S0--S3, formatting, runner/tooling checks, HTML entity data
+and the unsafe ratchet pass. Performance remains deferred to the aggregate
+correctness-sweep boundary.
+
+The focused lazy-object packet is **221 pass / 2 fail**. One remaining case
+reaches the separately owned `DateTime::diff()` surface, so the complete
+Date/DateTime area is explicitly outside this checkpoint. The other is a
+php-src expectation mismatch: installed PHP 8.5.10 agrees with RPHP's result
+for `jit_assign_obj_op_dynamic.phpt`.
+
+SHA-256 evidence: candidate
+`500bd5c5749641c6032d487772d4a25bc149c67ab94081c55b3572b0d04f049d`;
+focused manifest/pass set
+`78d349f64af93d5cad787b3c2f17e0a396fc7519fea23b68aaca08b304ef7b56` /
+`4b3fe26ba938219e4368dfad82ac59c8ad1191a80728da8c76cae2240bd9f765`;
+stable-core manifest/pass set
+`8b51f5090f9eff6ab9cdbf0e7ba0bb8745f49458eb431e00b9db8d37287947f8` /
+`34be528c4a82353f14fec49ff82415bffbee876ff37c2d5ac555af48712c6648`;
+Zend/lang manifest/pass set
+`bbd2927baa1f0b4369e3927b7f930fbc6724533dcc7ae41722f0a2fa1f06396f` /
+`f8a00e7594516f133848c8d14508d36d8c9e98adf891822c88071aeaf6517208`;
+strings/array manifest/pass set
+`c782b93935c1aaba8789c0bc84b3fe98f347c01d15cdc3e187cdb09412357115` /
+`e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
+
+### Preceding core property-receiver checkpoint
+
 The `core-property-receiver-contracts` checkpoint over `279a6d43` adds **5
 exact PHP 8.5 passes without loss**, reducing measured supported failures from
 **251 to 246**. Scalar property-read diagnostics now preserve `true` and

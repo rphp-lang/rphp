@@ -36,6 +36,29 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `lazy-object-contracts` checkpoint over `dda6b461` reduces supported
+failure debt from **246 to 237**, exact **+9/-0**. The 8,258-case supported
+ledger is **7,548/237/194/276 with three XFAIL**. The 7,174-case stable core is
+**6,550/232/182/210**; Zend/lang reaches **5,080/224/115/180**, while
+strings/array remains byte-identical at **1,470/8/67/30**.
+
+The shared slice completes the remaining admitted lazy-object storage,
+initializer, proxy-compatibility, recursive magic-reference and release/error
+boundaries. It also publishes nested functions only when execution reaches
+their declaration marker, preserves canonical redeclaration errors, evaluates
+deferred lazy property defaults and aligns reference-assignment precedence.
+The full five-configuration Cargo matrix, all-targets, exact no-loss families,
+Composer/Symfony S0--S3, format/tooling/data and unsafe gates are green.
+
+Continue the shared-cause supported-failure sweep from **237 to zero**. The
+complete Date/DateTime surface is owned by the separate Date workstream and is
+not a candidate for this stream. Prefer another 10--30-case non-Date cluster
+from the current 224 Zend/lang failures and preserve the exact 5,080 and 1,470
+parent pass sets. Performance optimization remains deferred to the aggregate
+sweep boundary by user direction.
+
+### Preceding core property-receiver checkpoint
+
 The `core-property-receiver-contracts` checkpoint over `279a6d43` reduces the
 supported failure debt from **251 to 246**, exact **+5/-0**. The 8,258-case
 supported ledger is **7,539/246/194/276 with three XFAIL**. The 7,174-case

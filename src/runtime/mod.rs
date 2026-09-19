@@ -800,6 +800,11 @@ pub struct ExecutorGlobals {
     /// Compiler-owned helpers that must never participate in user function
     /// lookup, callable checks, Reflection or get_defined_functions().
     private_function_table: HashMap<String, *const FunctionCommon>,
+    /// Compiler-unique declaration marker to the owned descriptor and public
+    /// PHP name. Child/conditional functions stay absent from ordinary lookup
+    /// until execution reaches their marker; retaining the entry makes a
+    /// second execution reproduce PHP's redeclaration fatal.
+    runtime_function_declarations: HashMap<String, (String, *const FunctionCommon)>,
     /// Class table — name/alias → shared ClassDef. `Rc` keeps metadata and
     /// inline-cache pointers stable while aliases reuse the exact identity.
     pub class_table: HashMap<String, std::rc::Rc<ClassDef>>,
@@ -1957,6 +1962,7 @@ impl ExecutorGlobals {
             ),
             function_table: HashMap::new(),
             private_function_table: HashMap::new(),
+            runtime_function_declarations: HashMap::new(),
             class_table: HashMap::new(),
             pending_anonymous_classes: HashMap::new(),
             pending_runtime_classes: HashMap::new(),
@@ -2087,6 +2093,7 @@ impl ExecutorGlobals {
             ),
             function_table: HashMap::new(),
             private_function_table: HashMap::new(),
+            runtime_function_declarations: HashMap::new(),
             class_table: HashMap::new(),
             pending_anonymous_classes: HashMap::new(),
             pending_runtime_classes: HashMap::new(),
@@ -9957,6 +9964,45 @@ impl ExecutorGlobals {
                 Ok(())
             }
         }
+    }
+
+    /// Retain one child/conditional function descriptor without publishing
+    /// its PHP name. The owned box keeps the pointer stable across subsequent
+    /// source-unit loads and vector growth.
+    pub fn register_runtime_function_declaration(
+        &mut self,
+        declaration_key: String,
+        name: String,
+        function: crate::vm::function::UserFunction,
+    ) -> Result<(), String> {
+        if self
+            .runtime_function_declarations
+            .contains_key(&declaration_key)
+        {
+            return Err("Duplicate runtime function declaration marker".to_string());
+        }
+        let function = Box::new(function);
+        let pointer = &function.common as *const FunctionCommon;
+        self.included_functions.push(function);
+        self.runtime_function_declarations
+            .insert(declaration_key, (name, pointer));
+        Ok(())
+    }
+
+    /// Publish a retained declaration at its executable source marker. The
+    /// mapping deliberately remains live so re-entering the containing scope
+    /// checks the same function name again and raises the canonical fatal.
+    pub(crate) fn declare_runtime_function(&mut self, declaration_key: &str) -> Result<(), String> {
+        let Some((name, function)) = self
+            .runtime_function_declarations
+            .get(declaration_key)
+            .cloned()
+        else {
+            // Eager top-level functions share the marker opcode so the hot
+            // compiler path need not specialize statement emission.
+            return Ok(());
+        };
+        self.register_function(&name, function)
     }
 
     pub(crate) fn find_private_function(&self, name: &str) -> Option<*const FunctionCommon> {

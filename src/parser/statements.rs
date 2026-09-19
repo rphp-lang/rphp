@@ -841,27 +841,12 @@ impl Parser {
                             if var_name == "GLOBALS" {
                                 return Ok(Stmt::ExprStmt(self.globals_modification_error(line)));
                             }
-                            if let Expr::Globals { line } = &target {
-                                return Ok(Stmt::ExprStmt(
-                                    self.compile_error(
-                                        "Cannot acquire reference to $GLOBALS",
-                                        *line,
-                                    ),
-                                ));
-                            }
-                            if let Some(line) = Self::nullsafe_chain_line(&target) {
-                                return Ok(Stmt::ExprStmt(self.nullsafe_reference_error(line)));
-                            }
-                            if matches!(&target, Expr::ArrayAccess { .. })
-                                && let Some((message, line)) =
-                                    self.array_write_root_error(&target)
-                            {
-                                return Ok(Stmt::ExprStmt(self.compile_error(message, line)));
-                            }
-                            return Ok(Stmt::ExprStmt(Expr::AssignReference {
-                                var: var_name,
-                                target: Box::new(target),
-                            }));
+                            return Ok(Stmt::ExprStmt(
+                                self.finish_reference_assignment_precedence(
+                                    Self::variable_expression(var_name, line),
+                                    target,
+                                ),
+                            ));
                         }
                         if !matches!(
                             &target,

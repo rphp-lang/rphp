@@ -255,13 +255,6 @@ impl Parser {
             _ => None,
         };
         let expr = Box::new(self.parse_assignment_or_yield()?);
-        let reference_write_root_error = if by_reference
-            && matches!(expr.as_ref(), Expr::ArrayAccess { .. })
-        {
-            self.array_write_root_error(expr.as_ref())
-        } else {
-            None
-        };
         if let Expr::Cast {
             cast_type: CastType::Void,
             line,
@@ -288,43 +281,10 @@ impl Parser {
         if let Expr::Globals { line } = target {
             return Ok(self.globals_modification_error(line));
         }
-        if by_reference && let Expr::Globals { line } = expr.as_ref() {
-            return Ok(self.compile_error("Cannot acquire reference to $GLOBALS", *line));
-        }
-        if by_reference && let Some(line) = Self::nullsafe_chain_line(expr.as_ref()) {
-            return Ok(self.nullsafe_reference_error(line));
-        }
-        if let Some((message, line)) = reference_write_root_error {
-            return Ok(self.compile_error(message, line));
-        }
-        if by_reference
-            && matches!(
-                &target,
-                Expr::DynamicVariable { .. }
-                    | Expr::ArrayAccess { .. }
-                    | Expr::PropertyAccess {
-                        nullsafe: false,
-                        ..
-                    }
-                    | Expr::DynamicPropertyAccess {
-                        nullsafe: false,
-                        ..
-                    }
-                    | Expr::StaticProperty { .. }
-                    | Expr::DynamicNamedStaticProperty { .. }
-                    | Expr::DynamicStaticProperty { .. }
-            )
-        {
-            return Ok(Expr::AssignTargetReference {
-                target: Box::new(target),
-                source: expr,
-            });
+        if by_reference {
+            return Ok(self.finish_reference_assignment_precedence(target, *expr));
         }
         match target {
-            Expr::Variable { name: var, .. } if by_reference => Ok(Expr::AssignReference {
-                var,
-                target: expr,
-            }),
             Expr::Variable { name: var, .. } => Ok(Expr::Assign { var, expr }),
             Expr::DynamicVariable { .. }
             | Expr::ArrayAccess { .. }
@@ -341,6 +301,72 @@ impl Parser {
                 expr,
             }),
             other => Err(format!("Invalid assignment target: {other:?}")),
+        }
+    }
+
+    /// PHP binds `=&` to the first reference-capable operand on its right,
+    /// before the surrounding binary expression. Thus `$a =& $b - $c` means
+    /// `($a =& $b) - $c`, unlike an ordinary value assignment. Keeping the
+    /// outer operators in the AST also preserves their later side effects and
+    /// diagnostics while the reference identity comes only from the leftmost
+    /// operand.
+    fn finish_reference_assignment_precedence(&mut self, target: Expr, source: Expr) -> Expr {
+        let source = match source {
+            Expr::BinaryOp {
+                op,
+                left,
+                right,
+                line,
+            } => {
+                return Expr::BinaryOp {
+                    op,
+                    left: Box::new(self.finish_reference_assignment_precedence(target, *left)),
+                    right,
+                    line,
+                };
+            }
+            source => source,
+        };
+
+        if let Expr::Globals { line } = &source {
+            return self.compile_error("Cannot acquire reference to $GLOBALS", *line);
+        }
+        if let Some(line) = Self::nullsafe_chain_line(&source) {
+            return self.nullsafe_reference_error(line);
+        }
+        if matches!(source, Expr::ArrayAccess { .. })
+            && let Some((message, line)) = self.array_write_root_error(&source)
+        {
+            return self.compile_error(message, line);
+        }
+
+        if matches!(
+            &target,
+            Expr::DynamicVariable { .. }
+                | Expr::ArrayAccess { .. }
+                | Expr::PropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
+                | Expr::DynamicPropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
+                | Expr::StaticProperty { .. }
+                | Expr::DynamicNamedStaticProperty { .. }
+                | Expr::DynamicStaticProperty { .. }
+        ) {
+            return Expr::AssignTargetReference {
+                target: Box::new(target),
+                source: Box::new(source),
+            };
+        }
+        match target {
+            Expr::Variable { name: var, .. } => Expr::AssignReference {
+                var,
+                target: Box::new(source),
+            },
+            other => self.compile_error(format!("Invalid assignment target: {other:?}"), 0),
         }
     }
 

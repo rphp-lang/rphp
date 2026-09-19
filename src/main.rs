@@ -317,6 +317,13 @@ fn main() {
                 std::process::exit(255);
             });
     }
+    for (declaration_key, name, function) in result.runtime_functions {
+        eg.register_runtime_function_declaration(declaration_key, name, function)
+            .unwrap_or_else(|error| {
+                eprintln!("Fatal error: {error}");
+                std::process::exit(255);
+            });
+    }
 
     for (declaration_key, class_def) in result.runtime_class_defs {
         if let Err(e) = eg.register_runtime_class_declaration(declaration_key, class_def) {

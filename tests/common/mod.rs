@@ -108,6 +108,10 @@ fn run_php_with_compiler_bytes_mode(
         eg.register_function(name, &func.common as *const FunctionCommon)
             .unwrap();
     }
+    for (declaration_key, name, function) in result.runtime_functions {
+        eg.register_runtime_function_declaration(declaration_key, name, function)
+            .unwrap();
+    }
     for (declaration_key, class_def) in result.runtime_class_defs {
         eg.register_runtime_class_declaration(declaration_key, class_def)
             .unwrap();
@@ -144,6 +148,10 @@ pub fn run_php_silent(source: &str) {
     let _stdlib = stdlib::register_stdlib(&mut eg);
     for (name, func) in &result.functions {
         eg.register_function(name, &func.common as *const FunctionCommon)
+            .unwrap();
+    }
+    for (declaration_key, name, function) in result.runtime_functions {
+        eg.register_runtime_function_declaration(declaration_key, name, function)
             .unwrap();
     }
     for (declaration_key, class_def) in result.runtime_class_defs {
@@ -190,6 +198,10 @@ impl PreparedPhp {
         let stdlib = stdlib::register_stdlib(&mut eg);
         for (name, func) in &result.functions {
             eg.register_function(name, &func.common as *const FunctionCommon)
+                .unwrap();
+        }
+        for (declaration_key, name, function) in result.runtime_functions {
+            eg.register_runtime_function_declaration(declaration_key, name, function)
                 .unwrap();
         }
         for (declaration_key, class_def) in result.runtime_class_defs {
@@ -256,6 +268,13 @@ fn run_php_expect_error_with_compiler(source: &str, compiler: Compiler) -> execu
     for (name, func) in &result.functions {
         if let Err(e) = eg.register_function(name, &func.common as *const FunctionCommon) {
             return execute::VmError::Fatal(format!("{}", e));
+        }
+    }
+    for (declaration_key, name, function) in result.runtime_functions {
+        if let Err(error) =
+            eg.register_runtime_function_declaration(declaration_key, name, function)
+        {
+            return execute::VmError::Fatal(error);
         }
     }
     for (declaration_key, class_def) in result.runtime_class_defs {

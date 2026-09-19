@@ -266,6 +266,9 @@ pub enum OpCode {
     /// A lexical PHP statement tick. extended_value is the positive interval;
     /// absent from ordinary source units and never polled by the dispatch loop.
     Tick = 177,
+    /// Publish one child/conditional function at its executable declaration
+    /// marker. Eager top-level declarations use the same cold no-op marker.
+    DeclareFunction = 178,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

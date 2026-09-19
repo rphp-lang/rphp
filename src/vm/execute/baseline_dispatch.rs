@@ -11223,6 +11223,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::DeclareFunction => {
+                op_declare_function(eg, op_array, opline)?;
+            }
+
             OpCode::DeclarationCompileFatal => {
                 let message = op_array.literals[opline.op1 as usize]
                     .as_str()

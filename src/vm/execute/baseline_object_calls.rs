@@ -3902,7 +3902,10 @@ fn op_bind_obj_prop_ref<'a>(
                     .is_some_and(|object| {
                         object.get_dynamic_property_with_position(&key).is_none()
                     });
-        if missing_property && lazy_magic_get_related_guarded {
+        if missing_property
+            && lazy_magic_get_related_guarded
+            && opline._pad & OBJ_PROP_REFERENCE_BIND == 0
+        {
             let receiver_class = receiver
                 .as_object()
                 .map(|object| object.class_name.to_string())
@@ -4089,9 +4092,16 @@ fn op_bind_obj_prop_ref<'a>(
                         .is_some_and(|class_def| class_def.allow_dynamic_properties),
             )
         };
-        let has_magic_get = eg
-            .find_function(&format!("{}::__get", class_name.to_ascii_lowercase()))
-            .is_some();
+        // A recursive access to the same magic property is an ordinary
+        // dynamic-property operation. This includes a proxy shell reached
+        // from its real instance's active __get(): re-entering magic would
+        // recurse, while treating it as a missing read would lose the
+        // reference target that PHP publishes on the shell.
+        let has_magic_get = !lazy_magic_get_directly_guarded
+            && !lazy_magic_get_related_guarded
+            && eg
+                .find_function(&format!("{}::__get", class_name.to_ascii_lowercase()))
+                .is_some();
         if creates_dynamic_property
             && !has_magic_get
             && (internal_class_forbids_dynamic_properties(&class_name)
@@ -4131,7 +4141,10 @@ fn op_bind_obj_prop_ref<'a>(
                 op_array,
             ))
                 .dereferenced();
-            if live_receiver.object_identity() != receiver.object_identity() {
+            if live_receiver.object_identity() != receiver.object_identity()
+                && !lazy_magic_get_directly_guarded
+                && !lazy_magic_get_related_guarded
+            {
                 return Ok(object_property_throw_at(
                     eg,
                     frame,

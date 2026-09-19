@@ -47,6 +47,15 @@
 - Never delete source snapshots, exact baselines used by an active gate, or
   user files as part of automatic cleanup.
 
+## Test environment hygiene
+
+- Run network, DNS and socket integration tests in the ordinary host
+  environment, not in the restricted command sandbox. In particular,
+  `tests/e2e_coroutine_resolver.rs` can time out when the sandbox blocks its
+  system-facing operations even though the exact same binary passes on the
+  host. Treat a sandbox-only failure as an environment result and rerun the
+  same focused gate on the host before investigating it as a regression.
+
 ## Public repository hygiene
 
 - Treat every tracked file, commit message, diff, test fixture, benchmark log,
