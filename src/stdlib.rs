@@ -30217,7 +30217,13 @@ pub(crate) fn format_php_date_with_microseconds(
             '\\' => {
                 escape = true;
             }
-            'Y' => out.push_str(&format!("{:04}", year)),
+            'Y' => {
+                if year < 0 {
+                    out.push_str(&format!("-{:04}", year.unsigned_abs()));
+                } else {
+                    out.push_str(&format!("{year:04}"));
+                }
+            }
             'X' => out.push_str(&format!("{year:+05}")),
             'x' => {
                 if (0..=9_999).contains(&year) {
@@ -30278,7 +30284,11 @@ pub(crate) fn format_php_date_with_microseconds(
             'O' => out.push_str(&date::format_timezone_offset(offset, false)),
             'P' => out.push_str(&date::format_timezone_offset(offset, true)),
             'p' => {
-                if offset == 0 {
+                if offset == 0
+                    && (matches!(timezone_id, "UTC" | "Etc/UTC" | "Z")
+                        || timezone_id.starts_with('+')
+                        || timezone_id.starts_with('-'))
+                {
                     out.push('Z');
                 } else {
                     out.push_str(&date::format_timezone_offset(offset, true));

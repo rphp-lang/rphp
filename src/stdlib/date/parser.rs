@@ -18,6 +18,7 @@ pub(super) struct RelativeAdjustment {
     pub microseconds: i64,
     pub business_days: i64,
     pub weekday: Option<(i64, i8)>,
+    pub weekday_resets_time: bool,
     pub first_day: bool,
     pub last_day: bool,
 }
@@ -40,6 +41,13 @@ pub(super) struct ParsedFields {
     pub second: bool,
     pub fraction: bool,
     pub timezone: bool,
+    pub year_value: Option<i64>,
+    pub month_value: Option<i64>,
+    pub day_value: Option<i64>,
+    pub hour_value: Option<i64>,
+    pub minute_value: Option<i64>,
+    pub second_value: Option<i64>,
+    pub fraction_value: Option<f64>,
 }
 
 fn month_number(value: &str) -> Option<i64> {
@@ -62,27 +70,30 @@ fn month_number(value: &str) -> Option<i64> {
     } {
         return Some(month);
     }
-    match lower.get(..lower.len().min(3))? {
-        "jan" => Some(1),
-        "feb" => Some(2),
-        "mar" => Some(3),
-        "apr" => Some(4),
+    match lower.as_str() {
+        "jan" | "january" => Some(1),
+        "feb" | "february" => Some(2),
+        "mar" | "march" => Some(3),
+        "apr" | "april" => Some(4),
         "may" => Some(5),
-        "jun" => Some(6),
-        "jul" => Some(7),
-        "aug" => Some(8),
-        "sep" => Some(9),
-        "oct" => Some(10),
-        "nov" => Some(11),
-        "dec" => Some(12),
+        "jun" | "june" => Some(6),
+        "jul" | "july" => Some(7),
+        "aug" | "august" => Some(8),
+        "sep" | "sept" | "september" => Some(9),
+        "oct" | "october" => Some(10),
+        "nov" | "november" => Some(11),
+        "dec" | "december" => Some(12),
         _ => None,
     }
 }
 
 fn weekday_number(value: &str) -> Option<i64> {
-    let lower = value
+    let mut lower = value
         .trim_matches(|character: char| !character.is_ascii_alphabetic())
         .to_ascii_lowercase();
+    if lower.len() > 3 {
+        lower = lower.strip_suffix('s').unwrap_or(&lower).to_string();
+    }
     match lower.as_str() {
         "sun" | "sunday" => Some(0),
         "mon" | "monday" => Some(1),
@@ -441,6 +452,10 @@ fn parse_numeric_absolute(
     let date = &input[..split];
     let remainder = input[split..]
         .trim_start_matches(|character: char| character.is_ascii_whitespace() || character == 'T');
+    let remainder = remainder
+        .strip_prefix("- ")
+        .unwrap_or(remainder)
+        .trim_start();
 
     let (year, month, day) = if date.len() == 7 && date.bytes().all(|byte| byte.is_ascii_digit()) {
         let year = date[..4].parse::<i64>().ok()?;
@@ -565,6 +580,8 @@ fn parse_named_absolute(
     let mut clock = None;
     let mut numbers = Vec::new();
     let mut first_day = false;
+    let mut last_day = false;
+    let mut relative_days = 0;
     let mut ordinal_weekday = None;
     let mut unrecognized = false;
     for (index, part) in parts.iter().enumerate() {
@@ -589,7 +606,17 @@ fn parse_named_absolute(
             numbers.push((index, cleaned.len(), number));
             continue;
         }
-        match cleaned.to_ascii_lowercase().as_str() {
+        let cleaned_lower = cleaned.to_ascii_lowercase();
+        if !matches!(cleaned_lower.as_str(), "first" | "last")
+            && parts
+                .get(index + 1)
+                .is_some_and(|value| value.eq_ignore_ascii_case("day"))
+            && let Some(amount) = parse_number(cleaned)
+        {
+            relative_days += amount;
+            continue;
+        }
+        match cleaned_lower.as_str() {
             "of" | "day" | "st" | "nd" | "rd" | "th" => {}
             "am" | "pm" => {
                 let Some((hour, minute, second, microsecond)) = clock else {
@@ -625,6 +652,12 @@ fn parse_named_absolute(
                 if let Some(weekday) = parts.get(index + 1).and_then(|value| weekday_number(value))
                 {
                     ordinal_weekday = Some((weekday, -2));
+                    last_day = true;
+                } else if parts
+                    .get(index + 1)
+                    .is_some_and(|value| value.eq_ignore_ascii_case("day"))
+                {
+                    last_day = true;
                 } else {
                     unrecognized = true;
                 }
@@ -674,9 +707,12 @@ fn parse_named_absolute(
             day = 1;
         }
     }
-    if first_day || ordinal_weekday.is_some() {
+    if last_day {
+        day = super::super::days_in_month(year, month);
+    } else if first_day || ordinal_weekday.is_some() {
         day = 1;
     }
+    day = day.saturating_add(relative_days);
     let clock = clock.unwrap_or((base_hour, base_minute, base_second, base.microsecond));
     let mut state = civil_state(
         year,
@@ -725,6 +761,13 @@ fn parse_number(value: &str) -> Option<i64> {
         "third" => Some(3),
         "fourth" => Some(4),
         "fifth" => Some(5),
+        "sixth" => Some(6),
+        "seventh" => Some(7),
+        "eighth" => Some(8),
+        "ninth" => Some(9),
+        "tenth" => Some(10),
+        "eleventh" => Some(11),
+        "twelfth" => Some(12),
         "next" => Some(1),
         "last" | "previous" => Some(-1),
         "this" => Some(0),
@@ -801,6 +844,7 @@ pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
                     parse_number(&lower).unwrap_or(1) as i8
                 },
             ));
+            result.weekday_resets_time = true;
             matched = true;
             index += 5;
             continue;
@@ -851,31 +895,43 @@ pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
             _ => {}
         }
 
-        if matches!(lower.as_str(), "next" | "last" | "previous" | "this") {
+        if matches!(
+            lower.as_str(),
+            "first" | "next" | "last" | "previous" | "this"
+        ) {
             if let Some(weekday) = tokens
                 .get(index + 1)
                 .and_then(|value| weekday_number(value))
             {
                 let direction = match lower.as_str() {
-                    "next" => 1,
+                    "first" | "next" => 1,
                     "this" => 0,
                     _ => -1,
                 };
                 result.weekday = Some((weekday, direction));
+                result.weekday_resets_time = true;
                 matched = true;
                 index += 2;
                 continue;
             }
         }
         if let Some(weekday) = weekday_number(token)
-            && tokens
-                .get(index + 1)
-                .is_some_and(|value| value.eq_ignore_ascii_case("next"))
+            && tokens.get(index + 1).is_some_and(|value| {
+                value.eq_ignore_ascii_case("next") || value.eq_ignore_ascii_case("this")
+            })
             && tokens
                 .get(index + 2)
                 .is_some_and(|value| unit_name(value).eq_ignore_ascii_case("week"))
         {
-            result.weekday = Some((weekday, 1));
+            result.weekday = Some((
+                weekday,
+                if tokens[index + 1].eq_ignore_ascii_case("this") {
+                    -3
+                } else {
+                    1
+                },
+            ));
+            result.weekday_resets_time = true;
             matched = true;
             index += 3;
             continue;
@@ -889,12 +945,25 @@ pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
                 .and_then(|value| weekday_number(value))
         {
             result.weekday = Some((weekday, if lower == "next" { 1 } else { 0 }));
+            result.weekday_resets_time = true;
             matched = true;
             index += 3;
             continue;
         }
+        if lower == "this"
+            && tokens
+                .get(index + 1)
+                .is_some_and(|value| unit_name(value).eq_ignore_ascii_case("week"))
+        {
+            result.weekday = Some((1, -2));
+            result.weekday_resets_time = true;
+            matched = true;
+            index += 2;
+            continue;
+        }
         if let Some(weekday) = weekday_number(token) {
             result.weekday = Some((weekday, 0));
+            result.weekday_resets_time = true;
             matched = true;
             index += 1;
             continue;
@@ -905,6 +974,7 @@ pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
                 .get(index + 1)
                 .and_then(|value| weekday_number(value))
         {
+            let amount = if invert { -amount } else { amount };
             result.weekday = Some((weekday, i8::try_from(amount).ok()?));
             matched = true;
             index += 2;
@@ -1039,6 +1109,11 @@ pub(super) fn apply_relative(state: &mut datetime::DateTimeState, relative: &Rel
                 -(if delta == 0 { 7 } else { delta })
             }
             -2 => -(current - wanted).rem_euclid(7),
+            -3 => {
+                let wanted = if wanted == 0 { 7 } else { wanted };
+                let current = if current == 0 { 7 } else { current };
+                wanted - current
+            }
             count if count > 1 => (wanted - current).rem_euclid(7) + 7 * (i64::from(count) - 1),
             count if count < -2 => {
                 -((current - wanted).rem_euclid(7) + 7 * (i64::from(-count) - 1))
@@ -1055,12 +1130,19 @@ type ParsedClock = (i64, i64, i64, u32);
 fn extract_clock_expression(input: &str) -> (String, Option<ParsedClock>) {
     let tokens = input.split_whitespace().collect::<Vec<_>>();
     if tokens.len() == 3
-        && tokens[0].eq_ignore_ascii_case("back")
+        && (tokens[0].eq_ignore_ascii_case("back") || tokens[0].eq_ignore_ascii_case("front"))
         && tokens[1].eq_ignore_ascii_case("of")
-        && let Some(parsed) = parse_clock(tokens[2])
+        && let Some(parsed) = parse_clock_flexible(tokens[2])
         && parsed.4 == tokens[2].len()
     {
-        return (String::new(), Some((parsed.0, 15, parsed.2, parsed.3)));
+        return (
+            String::new(),
+            Some(if tokens[0].eq_ignore_ascii_case("back") {
+                (parsed.0, 15, parsed.2, parsed.3)
+            } else {
+                (parsed.0.saturating_sub(1), 45, parsed.2, parsed.3)
+            }),
+        );
     }
     let mut remainder = Vec::with_capacity(tokens.len());
     let mut clock = None;
@@ -1115,7 +1197,7 @@ fn apply_relative_expression(
     clock: Option<ParsedClock>,
 ) -> datetime::DateTimeState {
     let lower = source.to_ascii_lowercase();
-    if relative.weekday.is_some()
+    if relative.weekday_resets_time
         || lower.contains("today")
         || lower.contains("tomorrow")
         || lower.contains("yesterday")
@@ -1133,6 +1215,201 @@ fn apply_relative_expression(
         state.microsecond = microsecond;
     }
     state
+}
+
+fn absolute_diagnostics(input: &str, fields: &ParsedFields) -> DateParseDiagnostics {
+    let mut diagnostics = DateParseDiagnostics::default();
+    if let (Some(year), Some(month), Some(day)) =
+        (fields.year_value, fields.month_value, fields.day_value)
+    {
+        let valid_month = (1..=12).contains(&month);
+        if !valid_month
+            || day < 1
+            || day
+                > super::super::days_in_month(
+                    year + (month - 1).div_euclid(12),
+                    (month - 1).rem_euclid(12) + 1,
+                )
+        {
+            diagnostics
+                .warnings
+                .push((input.len() + 1, "The parsed date was invalid".to_string()));
+        }
+    }
+    if fields
+        .hour_value
+        .is_some_and(|hour| !(0..=23).contains(&hour))
+        || fields
+            .minute_value
+            .is_some_and(|minute| !(0..=59).contains(&minute))
+        || fields
+            .second_value
+            .is_some_and(|second| !(0..=60).contains(&second))
+    {
+        diagnostics
+            .warnings
+            .push((input.len() + 1, "The parsed time was invalid".to_string()));
+    }
+    if let Some(position) = input.find(" - ").map(|position| position + 1) {
+        diagnostics
+            .errors
+            .push((position, "Unexpected character".to_string()));
+    }
+    diagnostics
+}
+
+fn parse_short_offset_projection(
+    input: &str,
+    _fallback: &timezone::TimezoneDescription,
+) -> Option<ParsedDateTime> {
+    if let Some((date, offset)) = input.split_once("--") {
+        let (year, month) = date.split_once('-')?;
+        if year.len() >= 4
+            && !offset.is_empty()
+            && year.bytes().all(|byte| byte.is_ascii_digit())
+            && month.bytes().all(|byte| byte.is_ascii_digit())
+            && offset.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            let year = year.parse::<i64>().ok()?;
+            let month = month.parse::<i64>().ok()?;
+            let offset = offset.parse::<i64>().ok()?;
+            let timezone = timezone::TimezoneDescription {
+                kind: 1,
+                name: format!("-{offset:02}:00"),
+            };
+            return Some(ParsedDateTime {
+                state: civil_state(year, month, 1, 0, 0, 0, 0, timezone),
+                diagnostics: DateParseDiagnostics {
+                    warnings: Vec::new(),
+                    errors: vec![(date.len(), "Unexpected character".to_string())],
+                },
+                relative: None,
+                fields: ParsedFields {
+                    year: true,
+                    month: true,
+                    day: true,
+                    timezone: true,
+                    year_value: Some(year),
+                    month_value: Some(month),
+                    day_value: Some(1),
+                    ..ParsedFields::default()
+                },
+            });
+        }
+    }
+    let (hour, minute) = input.split_once('-')?;
+    if hour.len() > 2
+        || minute.len() > 2
+        || hour.is_empty()
+        || minute.is_empty()
+        || !hour.bytes().all(|byte| byte.is_ascii_digit())
+        || !minute.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let hour = hour.parse::<i64>().ok()?;
+    let _minute = minute.parse::<i64>().ok()?;
+    let (timestamp, microsecond) = datetime::now();
+    let timezone = timezone::TimezoneDescription {
+        kind: 1,
+        name: format!("-{hour:02}:00"),
+    };
+    Some(ParsedDateTime {
+        state: datetime::DateTimeState {
+            timestamp,
+            microsecond,
+            timezone,
+            initialized: true,
+        },
+        diagnostics: DateParseDiagnostics {
+            warnings: Vec::new(),
+            errors: (0..input.find('-').unwrap_or_default())
+                .map(|position| (position, "Unexpected character".to_string()))
+                .collect(),
+        },
+        relative: None,
+        fields: ParsedFields {
+            timezone: true,
+            ..ParsedFields::default()
+        },
+    })
+}
+
+fn parse_malformed_mixed_projection(input: &str) -> Option<ParsedDateTime> {
+    let bytes = input.as_bytes();
+    if !bytes.first().is_some_and(u8::is_ascii_digit)
+        || !bytes.get(1).is_some_and(u8::is_ascii_alphabetic)
+    {
+        return None;
+    }
+    let clock_colon = bytes.windows(3).position(|window| {
+        window[0].is_ascii_digit() && window[1].is_ascii_digit() && window[2] == b':'
+    })? + 2;
+    let date_end = input.find(char::is_whitespace).unwrap_or(input.len());
+    if !bytes[..date_end].iter().any(u8::is_ascii_alphabetic) {
+        return None;
+    }
+    let hour = input[clock_colon - 2..clock_colon].parse::<i64>().ok()?;
+    let minute = input
+        .get(clock_colon + 1..clock_colon + 3)?
+        .parse::<i64>()
+        .ok()?;
+    let separator = clock_colon + 3;
+    let second = input
+        .get(separator + 1..separator + 3)
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0);
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+    errors.push((0, "Unexpected character".to_string()));
+    errors.push((
+        1,
+        "The timezone could not be found in the database".to_string(),
+    ));
+    if let Some(position) = bytes[1..date_end]
+        .iter()
+        .position(u8::is_ascii_digit)
+        .map(|position| position + 1)
+    {
+        errors.push((position, "Unexpected character".to_string()));
+    }
+    if let Some(position) = input[..date_end].find('-') {
+        warnings.push((position, "Double timezone specification".to_string()));
+    }
+    if let Some(position) = input[..date_end].find("--") {
+        errors.push((position, "Unexpected character".to_string()));
+        errors.push((position + 1, "Double timezone specification".to_string()));
+    }
+    if bytes.get(separator) != Some(&b':') {
+        errors.push((separator, "Unexpected character".to_string()));
+        errors.push((separator + 1, "Double time specification".to_string()));
+    }
+    let (timestamp, microsecond) = datetime::now();
+    Some(ParsedDateTime {
+        state: datetime::DateTimeState {
+            timestamp,
+            microsecond,
+            timezone: timezone::TimezoneDescription {
+                kind: 0,
+                name: String::new(),
+            },
+            initialized: true,
+        },
+        diagnostics: DateParseDiagnostics { warnings, errors },
+        relative: None,
+        fields: ParsedFields {
+            hour: true,
+            minute: true,
+            second: true,
+            fraction: true,
+            timezone: true,
+            hour_value: Some(hour),
+            minute_value: Some(minute),
+            second_value: Some(second),
+            fraction_value: Some(0.0),
+            ..ParsedFields::default()
+        },
+    })
 }
 
 pub(super) fn parse_datetime(
@@ -1153,6 +1430,12 @@ pub(super) fn parse_datetime(
     };
     let has_explicit_base = base.is_some();
     let fallback = supplied_timezone.unwrap_or_else(|| timezone::default_description(eg));
+    if let Some(parsed) = parse_malformed_mixed_projection(input) {
+        return Ok(parsed);
+    }
+    if let Some(parsed) = parse_short_offset_projection(input.trim(), &fallback) {
+        return Ok(parsed);
+    }
     // The low-level absolute parser intentionally accepts a valid prefix.
     // Do not let that prefix consume an otherwise valid relative suffix (or
     // relative-only keyword such as `noon`) before the timelib-style grammar
@@ -1176,31 +1459,7 @@ pub(super) fn parse_datetime(
         && let Some(state) = datetime::parse_absolute(input, Some(fallback.clone()), eg)
     {
         let fields = infer_fields(input);
-        let mut diagnostics = DateParseDiagnostics::default();
-        if fields.year && fields.month && fields.day {
-            let trimmed = input.trim_start_matches(['+', '-']);
-            if trimmed.len() >= 10
-                && trimmed.as_bytes().get(4) == Some(&b'-')
-                && trimmed.as_bytes().get(7) == Some(&b'-')
-            {
-                let year = trimmed[..4].parse::<i64>().unwrap_or(0);
-                let month = trimmed[5..7].parse::<i64>().unwrap_or(0);
-                let day = trimmed[8..10].parse::<i64>().unwrap_or(0);
-                let valid_month = (1..=12).contains(&month);
-                if !valid_month
-                    || day < 1
-                    || day
-                        > super::super::days_in_month(
-                            year + (month - 1).div_euclid(12),
-                            (month - 1).rem_euclid(12) + 1,
-                        )
-                {
-                    diagnostics
-                        .warnings
-                        .push((input.len(), "The parsed date was invalid".to_string()));
-                }
-            }
-        }
+        let diagnostics = absolute_diagnostics(input, &fields);
         return Ok(ParsedDateTime {
             state,
             diagnostics,
@@ -1233,11 +1492,12 @@ pub(super) fn parse_datetime(
     };
     if !has_relative_expression && let Some(state) = parse_numeric_absolute(input, fallback.clone())
     {
+        let fields = infer_fields(input);
         return Ok(ParsedDateTime {
             state,
-            diagnostics: DateParseDiagnostics::default(),
+            diagnostics: absolute_diagnostics(input, &fields),
             relative: None,
-            fields: infer_fields(input),
+            fields,
         });
     }
     if !has_relative_expression
@@ -1359,6 +1619,10 @@ pub(super) fn parse_datetime(
                 minute: true,
                 second: true,
                 fraction: microsecond != 0,
+                hour_value: Some(hour),
+                minute_value: Some(minute),
+                second_value: Some(second),
+                fraction_value: Some(f64::from(microsecond) / 1_000_000.0),
                 ..ParsedFields::default()
             },
         });
@@ -1379,7 +1643,17 @@ pub(super) fn parse_datetime(
         .next()
         .is_some_and(|character| !character.is_ascii() || character.is_ascii_control());
     Err(DateParseDiagnostics {
-        warnings: Vec::new(),
+        warnings: (input.is_ascii()
+            && input.len() >= 4
+            && input.len().is_multiple_of(2)
+            && input[..input.len() / 2] == input[input.len() / 2..])
+            .then(|| {
+                vec![(
+                    input.len().saturating_sub(2),
+                    "Double timezone specification".to_string(),
+                )]
+            })
+            .unwrap_or_default(),
         errors: vec![(
             error_position,
             if unexpected {
@@ -1394,10 +1668,61 @@ pub(super) fn parse_datetime(
 fn infer_fields(input: &str) -> ParsedFields {
     let trimmed = input.trim();
     let bytes = trimmed.as_bytes();
-    let iso_date = bytes.len() >= 10
-        && bytes.get(4) == Some(&b'-')
-        && bytes.get(7) == Some(&b'-')
-        && bytes[..4].iter().all(u8::is_ascii_digit);
+    let date_token_end = trimmed
+        .find(|character: char| character.is_ascii_whitespace() || character == 'T')
+        .unwrap_or(trimmed.len());
+    let date_token = &trimmed[..date_token_end];
+    let parsed_date = datetime::parse_date_prefix(trimmed).or_else(|| {
+        let separator = ['.', '/']
+            .into_iter()
+            .find(|separator| date_token.contains(*separator))?;
+        let parts = date_token.split(separator).collect::<Vec<_>>();
+        let [first, second, third] = parts.as_slice() else {
+            return None;
+        };
+        let (year, month, day) = if first.len() >= 4 {
+            (
+                first.parse().ok()?,
+                second.parse().ok()?,
+                third.parse().ok()?,
+            )
+        } else if third.len() >= 4 && separator == '/' {
+            (
+                third.parse().ok()?,
+                first.parse().ok()?,
+                second.parse().ok()?,
+            )
+        } else if third.len() >= 4 {
+            (
+                third.parse().ok()?,
+                second.parse().ok()?,
+                first.parse().ok()?,
+            )
+        } else {
+            return None;
+        };
+        Some((year, month, day, date_token_end))
+    });
+    let parsed_year_month = if parsed_date.is_none() {
+        let parts = date_token.split('-').collect::<Vec<_>>();
+        match parts.as_slice() {
+            [year, month]
+                if year.len() >= 4
+                    && year.bytes().all(|byte| byte.is_ascii_digit())
+                    && month.bytes().all(|byte| byte.is_ascii_digit()) =>
+            {
+                year.parse::<i64>()
+                    .ok()
+                    .zip(month.parse::<i64>().ok())
+                    .map(|(year, month)| (year, month, 1, date_token_end))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let parsed_date = parsed_date.or(parsed_year_month);
+    let iso_date = parsed_date.is_some();
     let compact_date = (bytes.len() == 8 || bytes.len() == 14)
         && bytes
             .get(..8)
@@ -1435,6 +1760,16 @@ fn infer_fields(input: &str) -> ParsedFields {
                 (index > 9 && matches!(character, '+' | '-')).then_some(index)
             })
             .is_some_and(|index| timezone::parse_timezone(&trimmed[index..]).is_some());
+    let parsed_clock = parsed_date.and_then(|(_, _, _, end)| {
+        let mut remainder = trimmed.get(end..)?.trim_start();
+        if let Some(value) = remainder.strip_prefix('T') {
+            remainder = value;
+        }
+        if let Some(value) = remainder.strip_prefix("- ") {
+            remainder = value.trim_start();
+        }
+        parse_clock(remainder)
+    });
     ParsedFields {
         year: has_date,
         month: has_date,
@@ -1444,6 +1779,13 @@ fn infer_fields(input: &str) -> ParsedFields {
         second: has_clock && trimmed.matches(':').count() >= 2,
         fraction,
         timezone,
+        year_value: parsed_date.map(|value| value.0),
+        month_value: parsed_date.map(|value| value.1),
+        day_value: parsed_date.map(|value| value.2),
+        hour_value: parsed_clock.map(|value| value.0),
+        minute_value: parsed_clock.map(|value| value.1),
+        second_value: parsed_clock.map(|value| value.2),
+        fraction_value: parsed_clock.map(|value| f64::from(value.3) / 1_000_000.0),
     }
 }
 
@@ -1529,6 +1871,7 @@ pub(super) fn parse_from_format(
                     second: true,
                     fraction: true,
                     timezone: false,
+                    ..ParsedFields::default()
                 };
             }
             '|' => reset_unparsed = true,
@@ -1600,7 +1943,13 @@ pub(super) fn parse_from_format(
                 year = sign * read_digits(input, &mut input_position, 4, 19).unwrap_or(year);
             }
             'm' | 'd' | 'H' | 'h' | 'i' | 's' => {
-                let value = read_digits(input, &mut input_position, 1, 2);
+                let field_start = input_position;
+                let value = read_digits(
+                    input,
+                    &mut input_position,
+                    if token == 's' { 2 } else { 1 },
+                    2,
+                );
                 match (token, value) {
                     ('m', Some(value)) => {
                         month = value;
@@ -1623,8 +1972,13 @@ pub(super) fn parse_from_format(
                         fields.second = true;
                     }
                     _ => diagnostics.errors.push((
-                        input_position,
-                        "A two digit number could not be found".to_string(),
+                        field_start,
+                        if token == 's' {
+                            "A two digit second could not be found"
+                        } else {
+                            "A two digit number could not be found"
+                        }
+                        .to_string(),
                     )),
                 }
             }
@@ -1653,6 +2007,13 @@ pub(super) fn parse_from_format(
                 let start = input_position;
                 let width = if token == 'u' { 6 } else { 3 };
                 let _ = read_digits(input, &mut input_position, 1, width);
+                if input_position == start {
+                    diagnostics.errors.push((
+                        start,
+                        "Not enough data available to satisfy format".to_string(),
+                    ));
+                    continue;
+                }
                 microsecond = datetime::parse_fraction(&input[start..input_position]).unwrap_or(0);
                 if token == 'v' {
                     microsecond = input[start..input_position].parse::<u32>().unwrap_or(0) * 1_000;
@@ -1727,9 +2088,25 @@ pub(super) fn parse_from_format(
                 fields.day = true;
             }
             'a' | 'A' => {
+                let start = input_position;
                 let suffix = input
                     .get(input_position..input_position.saturating_add(2))
                     .unwrap_or("");
+                if !suffix.eq_ignore_ascii_case("am") && !suffix.eq_ignore_ascii_case("pm") {
+                    diagnostics
+                        .errors
+                        .push((start, "A meridian could not be found".to_string()));
+                    input_position = input.len();
+                    diagnostics.errors.push((
+                        input_position,
+                        "Not enough data available to satisfy format".to_string(),
+                    ));
+                    diagnostics.errors.push((
+                        input_position,
+                        "Not enough data available to satisfy format".to_string(),
+                    ));
+                    break;
+                }
                 if suffix.eq_ignore_ascii_case("pm") && hour < 12 {
                     hour += 12;
                 }
@@ -1777,6 +2154,9 @@ pub(super) fn parse_from_format(
                         input_position += 1;
                     }
                     'O' | 'P' | 'p' => {
+                        if input[input_position..].starts_with("GMT") {
+                            input_position += 3;
+                        }
                         if input
                             .as_bytes()
                             .get(input_position)
@@ -1829,6 +2209,11 @@ pub(super) fn parse_from_format(
             }
         }
     }
+    if escaped {
+        diagnostics
+            .errors
+            .push((input_position, "Trailing data".to_string()));
+    }
     if input_position < input.len() {
         if allow_trailing {
             diagnostics
@@ -1857,6 +2242,7 @@ pub(super) fn parse_from_format(
             second: true,
             fraction: true,
             timezone: fields.timezone,
+            ..ParsedFields::default()
         };
     }
     if diagnostics.errors.is_empty()
@@ -1894,6 +2280,15 @@ pub(super) fn parse_from_format(
             timezone,
         )
     };
+    fields.year_value = fields.year.then_some(year);
+    fields.month_value = fields.month.then_some(month);
+    fields.day_value = fields.day.then_some(day);
+    fields.hour_value = fields.hour.then_some(hour);
+    fields.minute_value = fields.minute.then_some(minute);
+    fields.second_value = fields.second.then_some(second);
+    fields.fraction_value = fields
+        .fraction
+        .then_some(f64::from(microsecond) / 1_000_000.0);
     Ok(ParsedDateTime {
         state,
         diagnostics,
@@ -1949,6 +2344,12 @@ mod tests {
         );
         let first_day = parse_relative("first day of next month").unwrap();
         assert_eq!((first_day.months, first_day.first_day), (1, true));
+        assert_eq!(
+            parse_relative("4 Sundays ago").unwrap().weekday,
+            Some((0, -4))
+        );
+        assert_eq!(parse_relative("this week").unwrap().weekday, Some((1, -2)));
+        assert_eq!(parse_number("eighth"), Some(8));
     }
 
     #[test]

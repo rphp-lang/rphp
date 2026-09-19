@@ -524,9 +524,6 @@ fn format(state: &DateIntervalState, format: &str) -> String {
             }
         }
     }
-    if escaped {
-        output.push('%');
-    }
     output
 }
 
@@ -567,6 +564,7 @@ pub(super) fn apply_to_datetime(
         weekday: relative
             .weekday
             .map(|(weekday, direction)| (weekday, direction.saturating_mul(sign as i8))),
+        weekday_resets_time: relative.weekday_resets_time,
         first_day: relative.first_day,
         last_day: relative.last_day,
     };

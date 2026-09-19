@@ -19,6 +19,7 @@ echo $d->format('%R%y/%m/%d %h:%i:%s.%F %a'), "\n";
 $mutable = new DateInterval('P7D');
 var_dump($mutable->invert = true, $mutable->invert);
 echo (new DateTimeImmutable('2009-01-14 UTC'))->add($mutable)->format('Y-m-d'), "\n";
+echo '[', (new DateInterval('P1D'))->format('%'), "]\n";
 var_dump(DateInterval::createFromDateString('2 weeks 3 days 4 hours')->__serialize());
 "#,
         ),
@@ -28,6 +29,7 @@ var_dump(DateInterval::createFromDateString('2 weeks 3 days 4 hours')->__seriali
             "+1/2/3 4:5:6.250000 428\n",
             "bool(true)\nint(1)\n",
             "2009-01-07\n",
+            "[]\n",
             "array(2) {\n",
             "  [\"from_string\"]=>\n  bool(true)\n",
             "  [\"date_string\"]=>\n  string(22) \"2 weeks 3 days 4 hours\"\n",
@@ -157,6 +159,11 @@ foreach (['+1 ms', '-2 msec', '+7 usecs', '-10 µs', '+8 msec -2 µsec'] as $inp
 echo (new DateTimeImmutable('2008-01-17 last Monday'))->format('Y-m-d H:i:s'), "\n";
 echo (new DateTimeImmutable('Monday next week 13:00'))->format('l H:i:s'), "\n";
 echo (new DateTimeImmutable('first day of January 2011'))->format('Y-m-d H:i:s.u'), "\n";
+echo (new DateTimeImmutable('March 1 eighth day 2009'))->format('Y-m-d'), "\n";
+echo (new DateTimeImmutable('last Wednesday of April 2015'))->format('Y-m-d'), "\n";
+echo (new DateTimeImmutable('2010-05-27 19:18 UTC'))->modify('4 Sundays ago')->format('Y-m-d H:i:s'), "\n";
+echo (new DateTimeImmutable('2015-07-05 00:00 UTC'))->modify('this week')->format('Y-m-d H:i:s'), "\n";
+echo (new DateTimeImmutable('@1121710200 +0912'))->format('D, d M Y H:i:s T'), "\n";
 $special = DateInterval::createFromDateString('third Tuesday of next month');
 echo (new DateTimeImmutable('2010-03-07 13:21:38 UTC'))->add($special)->format('c'), "\n";
 "#,
@@ -178,6 +185,11 @@ echo (new DateTimeImmutable('2010-03-07 13:21:38 UTC'))->add($special)->format('
             "2008-01-14 00:00:00\n",
             "Monday 13:00:00\n",
             "2011-01-01 00:00:00.000000\n",
+            "2009-03-09\n",
+            "2015-04-29\n",
+            "2010-05-02 19:18:00\n",
+            "2015-06-29 00:00:00\n",
+            "Mon, 18 Jul 2005 18:10:00 GMT+0000\n",
             "2010-04-20T13:21:38+00:00\n",
         )
     );

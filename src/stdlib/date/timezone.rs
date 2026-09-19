@@ -485,43 +485,32 @@ pub(super) fn description_local_to_utc(description: &TimezoneDescription, local:
     ) {
         return local;
     }
-    let mut offsets = [0_i64; 3];
-    let mut count = 0;
-    for probe in [
-        local.saturating_sub(86_400),
-        local,
-        local.saturating_add(86_400),
-    ] {
-        let Some(state) = tzdb::state_at(&description.name, probe) else {
-            return local;
-        };
-        let offset = i64::from(state.offset);
-        if !offsets[..count].contains(&offset) {
-            offsets[count] = offset;
-            count += 1;
-        }
-    }
-
-    let mut valid = [0_i64; 3];
-    let mut valid_count = 0;
-    let mut gap_candidate = i64::MIN;
-    for offset in offsets[..count].iter().copied() {
-        let candidate = local.saturating_sub(offset);
-        gap_candidate = gap_candidate.max(candidate);
-        if tzdb::state_at(&description.name, candidate)
-            .is_some_and(|state| i64::from(state.offset) == offset)
-        {
-            valid[valid_count] = candidate;
-            valid_count += 1;
-        }
-    }
-    if valid_count == 0 {
-        gap_candidate
+    // Resolve the wall clock the same way as PHP's transition-aware civil
+    // conversion.  Looking up the local scalar itself and then the candidate
+    // UTC scalar is significant: western overlaps select the pre-transition
+    // (usually DST) copy while European overlaps select the post-transition
+    // standard copy.  Choosing the numerically first candidate cannot model
+    // both families.
+    let Some((current, _)) = tzdb::state_and_transition_at(&description.name, local) else {
+        return local;
+    };
+    let current_offset = i64::from(current.offset);
+    let candidate = local.saturating_sub(current_offset);
+    let Some((actual, transition_time)) =
+        tzdb::state_and_transition_at(&description.name, candidate)
+    else {
+        return candidate;
+    };
+    let actual_offset = i64::from(actual.offset);
+    let actual_candidate = local.saturating_sub(actual_offset);
+    let in_transition = transition_time != i64::MIN
+        && actual_candidate
+            >= transition_time.saturating_add(current_offset.saturating_sub(actual_offset))
+        && actual_candidate < transition_time;
+    if current_offset != actual_offset && !in_transition {
+        actual_candidate
     } else {
-        *valid[..valid_count]
-            .iter()
-            .min()
-            .expect("a valid wall-clock representation exists")
+        candidate
     }
 }
 
@@ -659,6 +648,38 @@ fn abbreviations_array() -> Value {
     let mut result = PhpArray::new();
     for (abbreviation, records) in abbreviations() {
         let mut values = PhpArray::new();
+        let php_utc_records = [
+            AbbreviationRecord {
+                dst: false,
+                offset: 0,
+                timezone_id: Some("Etc/Universal"),
+            },
+            AbbreviationRecord {
+                dst: false,
+                offset: 0,
+                timezone_id: Some("Etc/UTC"),
+            },
+            AbbreviationRecord {
+                dst: false,
+                offset: 0,
+                timezone_id: Some("Etc/Zulu"),
+            },
+            AbbreviationRecord {
+                dst: false,
+                offset: 0,
+                timezone_id: Some("UTC"),
+            },
+            AbbreviationRecord {
+                dst: false,
+                offset: 0,
+                timezone_id: Some("UTC"),
+            },
+        ];
+        let records: &[AbbreviationRecord] = if abbreviation == "utc" {
+            &php_utc_records
+        } else {
+            records
+        };
         for record in records {
             let mut row = PhpArray::new();
             row.set_str("dst", Value::bool(record.dst));
@@ -700,6 +721,7 @@ fn name_from_abbreviation(abbreviation: &str, offset: i64, is_dst: i64) -> Optio
         (-14_400, 1) => Some("America/New_York"),
         (-14_400, 0) => Some("America/Halifax"),
         (3_600, 1) => Some("Europe/London"),
+        (3_600, 0) => Some("Europe/Paris"),
         (-7_200, 1) => Some("America/Sao_Paulo"),
         (19_800, 0) => Some("Asia/Kolkata"),
         (28_800, 0) => Some("Asia/Shanghai"),
@@ -760,8 +782,8 @@ pub(crate) fn fn_timezone_name_from_abbr(
     else {
         return Ok(());
     };
-    let offset = arg_opt!(ed, 1).and_then(Value::as_long).unwrap_or(-1);
-    let is_dst = arg_opt!(ed, 2).and_then(Value::as_long).unwrap_or(-1);
+    let offset = arg_opt!(ed, 1).map(Value::to_long_val).unwrap_or(-1);
+    let is_dst = arg_opt!(ed, 2).map(Value::to_long_val).unwrap_or(-1);
     match name_from_abbreviation(&abbreviation, offset, is_dst) {
         Some(identifier) => ret!(rv, Value::string(identifier)),
         None => ret!(rv, Value::bool(false)),
@@ -778,6 +800,13 @@ pub(crate) fn fn_timezone_open(
     else {
         return Ok(());
     };
+    if timezone.contains('\0') {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "timezone_open(): Argument #1 ($timezone) must not contain any null bytes",
+        ));
+        return Ok(());
+    }
     let Some(description) = parse_timezone(&timezone) else {
         super::report_internal_diagnostic(
             eg,
@@ -838,10 +867,31 @@ pub(crate) fn fn_date_time_zone_construct(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let timezone = arg_str!(ed, 1);
+    if timezone.contains('\0') {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "DateTimeZone::__construct(): Argument #1 ($timezone) must not contain any null bytes",
+        ));
+        return Ok(());
+    }
     let Some(description) = parse_timezone(&timezone) else {
+        let offset_like = timezone
+            .as_bytes()
+            .split_first()
+            .is_some_and(|(sign, rest)| {
+                matches!(sign, b'+' | b'-')
+                    && !rest.is_empty()
+                    && rest
+                        .iter()
+                        .all(|byte| byte.is_ascii_digit() || *byte == b':')
+            });
         eg.exception = Some(crate::value::make_error_value(
             "DateInvalidTimeZoneException",
-            &format!("DateTimeZone::__construct(): Unknown or bad timezone ({timezone})"),
+            &if offset_like {
+                format!("DateTimeZone::__construct(): Timezone offset is out of range ({timezone})")
+            } else {
+                format!("DateTimeZone::__construct(): Unknown or bad timezone ({timezone})")
+            },
         ));
         return Ok(());
     };

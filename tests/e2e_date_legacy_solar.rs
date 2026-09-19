@@ -10,6 +10,7 @@ fn legacy_strftime_uses_the_request_timezone_without_libc() {
 date_default_timezone_set('Europe/Prague');
 echo strftime('%Y-%m-%d %H:%M:%S %A %B %z %Z %% %s', 0), "\n";
 echo gmstrftime('%Y-%m-%d %H:%M:%S %A %B %z %Z %% %s', 0), "\n";
+var_dump(strftime('', 0));
 "#,
         ),
         concat!(
@@ -17,6 +18,8 @@ echo gmstrftime('%Y-%m-%d %H:%M:%S %A %B %z %Z %% %s', 0), "\n";
             "1970-01-01 01:00:00 Thursday January +0100 CET % 0\n",
             "\nDeprecated: Function gmstrftime() is deprecated since 8.1, use IntlDateFormatter::format() instead in <main> on line 4\n",
             "1970-01-01 00:00:00 Thursday January +0000 GMT % -3600\n",
+            "\nDeprecated: Function strftime() is deprecated since 8.1, use IntlDateFormatter::format() instead in <main> on line 5\n",
+            "bool(false)\n",
         )
     );
 }

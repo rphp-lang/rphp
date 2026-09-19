@@ -128,6 +128,9 @@ fn strftime_handler(
         return Ok(());
     }
     let format = arg_str!(ed, 0);
+    if format.is_empty() {
+        ret!(rv, Value::bool(false));
+    }
     let timestamp = arg_opt!(ed, 1)
         .filter(|value| value.value_type() != ValueType::Null)
         .and_then(Value::as_long)

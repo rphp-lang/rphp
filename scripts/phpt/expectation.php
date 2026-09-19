@@ -80,6 +80,11 @@ function output_excerpt(string $output): string
 
 function normalized_runtime_output(string $output): string
 {
+    $output = preg_replace(
+        '/^PHP Warning:\s+PHP Startup:/m',
+        'Warning: PHP Startup:',
+        $output,
+    ) ?? $output;
     return preg_replace(
         "/thread 'main' \\(\\d+\\)/",
         "thread 'main' (<id>)",

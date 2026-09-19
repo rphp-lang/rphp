@@ -98,10 +98,19 @@ pub(super) fn parse_date_prefix(value: &str) -> Option<(i64, i64, i64, usize)> {
         value.find('-')?
     };
     let month_end = value[year_end + 1..].find('-')? + year_end + 1;
-    let end = month_end + 3;
+    let day_start = month_end + 1;
+    let day_width = value[day_start..]
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .take(2)
+        .count();
+    if day_width == 0 {
+        return None;
+    }
+    let end = day_start + day_width;
     let year = value.get(..year_end)?.parse::<i64>().ok()?;
     let month = value.get(year_end + 1..month_end)?.parse::<i64>().ok()?;
-    let day = value.get(month_end + 1..end)?.parse::<i64>().ok()?;
+    let day = value.get(day_start..end)?.parse::<i64>().ok()?;
     Some((year, month, day, end))
 }
 
@@ -146,7 +155,12 @@ pub(super) fn parse_absolute(
             initialized: true,
         });
     }
-    if let Some(timestamp) = input.strip_prefix('@').and_then(parse_timestamp) {
+    let epoch_token = input
+        .strip_prefix('@')
+        .and_then(|value| value.split_whitespace().next());
+    if let Some(timestamp) = epoch_token.and_then(parse_timestamp)
+        && (input.split_whitespace().count() == 1 || !epoch_token.is_some_and(|v| v.contains('.')))
+    {
         return Some(DateTimeState {
             timestamp: timestamp.0,
             microsecond: timestamp.1,
@@ -199,12 +213,24 @@ pub(super) fn parse_absolute(
 
 pub(super) fn parse_timezone_argument(
     value: Option<&Value>,
+    eg: &mut ExecutorGlobals,
 ) -> Option<timezone::TimezoneDescription> {
     let value = value?.dereferenced();
     if value.value_type() == ValueType::Null || value.value_type() == ValueType::Undef {
         return None;
     }
-    timezone::object_description(value)
+    let description = timezone::object_description(value);
+    if description.is_none()
+        && value
+            .as_object()
+            .is_some_and(|object| eg.class_is_a(object.class_name.as_ref(), "DateTimeZone"))
+    {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "The DateTimeZone object has not been correctly initialized by its constructor",
+        ));
+    }
+    description
 }
 
 pub(super) fn state_snapshot(value: &Value, eg: &mut ExecutorGlobals) -> Option<DateTimeState> {
@@ -522,7 +548,10 @@ pub(crate) fn fn_date_time_construct(
         .filter(|value| value.value_type() != ValueType::Undef)
         .and_then(Value::as_str)
         .unwrap_or("now");
-    let timezone = parse_timezone_argument(arg_opt!(ed, 2));
+    let timezone = parse_timezone_argument(arg_opt!(ed, 2), eg);
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     construct(arg!(ed, 0), input, timezone, eg);
     Ok(())
 }
@@ -925,7 +954,10 @@ pub(crate) fn fn_date_create(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let input = arg_opt!(ed, 0).and_then(Value::as_str).unwrap_or("now");
-    let timezone = parse_timezone_argument(arg_opt!(ed, 1));
+    let timezone = parse_timezone_argument(arg_opt!(ed, 1), eg);
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     match create("DateTime", input, timezone, eg) {
         Some(result) => ret!(rv, result),
         None => ret!(rv, Value::bool(false)),
@@ -938,7 +970,10 @@ pub(crate) fn fn_date_create_immutable(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let input = arg_opt!(ed, 0).and_then(Value::as_str).unwrap_or("now");
-    let timezone = parse_timezone_argument(arg_opt!(ed, 1));
+    let timezone = parse_timezone_argument(arg_opt!(ed, 1), eg);
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     match create("DateTimeImmutable", input, timezone, eg) {
         Some(result) => ret!(rv, result),
         None => ret!(rv, Value::bool(false)),
@@ -1133,7 +1168,33 @@ pub(crate) fn fn_date_time_zone_get_offset(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    fn_timezone_offset_get(ed, rv, eg)
+    let datetime_value = arg!(ed, 1).dereferenced();
+    let datetime_class = datetime_value
+        .as_object()
+        .map(|object| object.class_name.to_string());
+    if !datetime_class
+        .as_deref()
+        .is_some_and(|class| eg.class_is_a(class, "DateTimeInterface"))
+    {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "DateTimeZone::getOffset(): Argument #1 ($datetime) must be of type DateTimeInterface, {} given",
+                datetime_value.diagnostic_type_name()
+            ),
+        ));
+        return Ok(());
+    }
+    let Some(timezone) = timezone::checked_object_description(arg!(ed, 0), eg) else {
+        return Ok(());
+    };
+    let Some(datetime) = state_snapshot(datetime_value, eg) else {
+        return Ok(());
+    };
+    ret!(
+        rv,
+        Value::long(timezone::description_state(&timezone, datetime.timestamp).1)
+    );
 }
 
 fn create_from_format(
@@ -1170,7 +1231,10 @@ fn create_from_format_handler(
     };
     let format = arg_str!(ed, 1);
     let input = arg_str!(ed, 2);
-    let timezone = parse_timezone_argument(arg_opt!(ed, 3));
+    let timezone = parse_timezone_argument(arg_opt!(ed, 3), eg);
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     let result = create_from_format(&target_class, format.as_ref(), input.as_ref(), timezone, eg)
         .unwrap_or_else(|| Value::bool(false));
     ret!(rv, result)
@@ -1199,7 +1263,10 @@ pub(crate) fn fn_date_create_from_format(
 ) -> Result<(), VmError> {
     let format = arg_str!(ed, 0);
     let input = arg_str!(ed, 1);
-    let timezone = parse_timezone_argument(arg_opt!(ed, 2));
+    let timezone = parse_timezone_argument(arg_opt!(ed, 2), eg);
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     let result = create_from_format("DateTime", format.as_ref(), input.as_ref(), timezone, eg)
         .unwrap_or_else(|| Value::bool(false));
     ret!(rv, result)
@@ -1212,7 +1279,10 @@ pub(crate) fn fn_date_create_immutable_from_format(
 ) -> Result<(), VmError> {
     let format = arg_str!(ed, 0);
     let input = arg_str!(ed, 1);
-    let timezone = parse_timezone_argument(arg_opt!(ed, 2));
+    let timezone = parse_timezone_argument(arg_opt!(ed, 2), eg);
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     let result = create_from_format(
         "DateTimeImmutable",
         format.as_ref(),
@@ -1449,12 +1519,20 @@ fn parse_projection(
     } else if let Some(state) = state.as_ref() {
         let (year, month, day, hour, minute, second) = local_parts(state);
         for (name, value, present) in [
-            ("year", year, fields.year),
-            ("month", month, fields.month),
-            ("day", day, fields.day),
-            ("hour", hour, fields.hour),
-            ("minute", minute, fields.minute),
-            ("second", second, fields.second),
+            ("year", fields.year_value.unwrap_or(year), fields.year),
+            ("month", fields.month_value.unwrap_or(month), fields.month),
+            ("day", fields.day_value.unwrap_or(day), fields.day),
+            ("hour", fields.hour_value.unwrap_or(hour), fields.hour),
+            (
+                "minute",
+                fields.minute_value.unwrap_or(minute),
+                fields.minute,
+            ),
+            (
+                "second",
+                fields.second_value.unwrap_or(second),
+                fields.second,
+            ),
         ] {
             result.set_str(
                 name,
@@ -1467,8 +1545,12 @@ fn parse_projection(
         }
         result.set_str(
             "fraction",
-            if fields.fraction {
-                Value::double(f64::from(state.microsecond) / 1_000_000.0)
+            if fields.fraction || fields.second {
+                Value::double(
+                    fields
+                        .fraction_value
+                        .unwrap_or_else(|| f64::from(state.microsecond) / 1_000_000.0),
+                )
             } else {
                 Value::bool(false)
             },
@@ -1539,6 +1621,26 @@ pub(crate) fn fn_date_parse(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let input = arg_str!(ed, 0);
+    if input.is_empty() {
+        let (timestamp, microsecond) = now();
+        ret!(
+            rv,
+            parse_projection(Ok(super::parser::ParsedDateTime {
+                state: DateTimeState {
+                    timestamp,
+                    microsecond,
+                    timezone: timezone::default_description(eg),
+                    initialized: true,
+                },
+                diagnostics: crate::runtime::DateParseDiagnostics {
+                    warnings: Vec::new(),
+                    errors: vec![(0, "Empty string".to_string())],
+                },
+                relative: None,
+                fields: super::parser::ParsedFields::default(),
+            }))
+        );
+    }
     let result = parse_projection(super::parser::parse_datetime(
         input.as_ref(),
         None,
@@ -1570,10 +1672,26 @@ pub(crate) fn fn_strtotime(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let input = arg_str!(ed, 0);
-    let base_timestamp = arg_opt!(ed, 1)
-        .filter(|value| value.value_type() != ValueType::Null)
-        .and_then(Value::as_long)
-        .unwrap_or_else(super::current_timestamp);
+    let base_timestamp = match arg_opt!(ed, 1) {
+        None => super::current_timestamp(),
+        Some(value) if value.dereferenced().value_type() == ValueType::Null => {
+            super::current_timestamp()
+        }
+        Some(_) => {
+            let Some(timestamp) = super::super::typed_internal_int_argument_expected(
+                ed,
+                eg,
+                "strtotime",
+                1,
+                "baseTimestamp",
+                "?int",
+            )?
+            else {
+                return Ok(());
+            };
+            timestamp
+        }
+    };
     let base = DateTimeState {
         timestamp: base_timestamp,
         microsecond: 0,

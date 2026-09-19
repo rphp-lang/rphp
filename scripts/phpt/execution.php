@@ -180,6 +180,16 @@ function run_test(
                 return $result;
             }
             $skipOutput = normalized_output(normalized_runtime_output($skip['output']), false);
+            if ($kind === 'rphp') {
+                // run-tests.php does not let the test's expected module-startup
+                // warning turn an otherwise silent SKIPIF probe into a failure.
+                // The warning remains observable when the FILE section runs.
+                $skipOutput = trim(preg_replace(
+                    "/^Warning: PHP Startup: Invalid date\\.timezone value .* using 'UTC' instead in .* on line \\d+\\n?/m",
+                    '',
+                    $skipOutput,
+                ) ?? $skipOutput);
+            }
             if (preg_match('/^skip(?:\s|$)/i', $skipOutput) === 1) {
                 $result['status'] = 'skip';
                 $result['category'] = 'skipif';
